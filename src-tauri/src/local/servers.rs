@@ -891,6 +891,42 @@ async fn ensure_bridge_ready(
     Ok(())
 }
 
+/// Verify that a runtime binary can actually execute by running `<binary> --version`.
+///
+/// On macOS, a bundled binary may exist on disk but get SIGKILL'd (exit 137)
+/// if its code-signing identity doesn't match the enclosing app bundle.
+/// This check catches that scenario so we can fall through to system runtimes.
+fn verify_runtime_executable(binary_path: &str) -> bool {
+    match StdCommand::new(binary_path)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+    {
+        Ok(status) => {
+            if status.success() {
+                true
+            } else {
+                warn!(
+                    binary = %binary_path,
+                    exit_code = status.code().unwrap_or(-1),
+                    "Runtime binary exited with non-zero status"
+                );
+                false
+            }
+        }
+        Err(e) => {
+            warn!(
+                binary = %binary_path,
+                error = %e,
+                "Runtime binary failed to execute"
+            );
+            false
+        }
+    }
+}
+
 fn resolve_js_runtime(
     entry_point: &str,
     bundled_bun_path: Option<&str>,
@@ -914,9 +950,16 @@ fn resolve_js_runtime(
                     }
                 }
             }
-            debug!(bun_path = %bun_path, "Using bundled bun runtime");
-            let bun_static: &'static str = Box::leak(bun_path.to_string().into_boxed_str());
-            return (bun_static, vec![entry_point.to_string()]);
+
+            // Verify the binary can actually execute. On macOS, code-signing
+            // mismatches between the app bundle and the bundled binary cause
+            // SIGKILL (exit 137). Fall through to system runtimes if so.
+            if verify_runtime_executable(bun_path) {
+                debug!(bun_path = %bun_path, "Using bundled bun runtime");
+                let bun_static: &'static str = Box::leak(bun_path.to_string().into_boxed_str());
+                return (bun_static, vec![entry_point.to_string()]);
+            }
+            warn!(bun_path = %bun_path, "Bundled bun failed verification, falling back to system runtime");
         }
     }
 

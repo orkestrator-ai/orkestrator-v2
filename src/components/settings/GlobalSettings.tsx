@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/select";
 import { useConfigStore } from "@/stores";
 import * as tauri from "@/lib/tauri";
-import { Loader2, Eye, EyeOff, Key, Github, Shield, CheckCircle2, XCircle, AlertCircle, Code2, Check, Terminal, Bot } from "lucide-react";
+import { Loader2, Eye, EyeOff, Key, Github, Shield, CheckCircle2, XCircle, AlertCircle, Code2, Check, Terminal, Bot, Bug, FolderOpen } from "lucide-react";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -75,6 +75,8 @@ export function GlobalSettings({ onSaveSuccess }: GlobalSettingsProps) {
       ? global.terminalScrollback
       : DEFAULT_TERMINAL_SCROLLBACK
   );
+  const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
+  const [logDirectory, setLogDirectory] = useState<string | null>(null);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showGithubToken, setShowGithubToken] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -108,7 +110,13 @@ export function GlobalSettings({ onSaveSuccess }: GlobalSettingsProps) {
         ? global.terminalScrollback
         : DEFAULT_TERMINAL_SCROLLBACK
     );
+    setDebugLogging(global.debugLogging ?? false);
   }, [global]);
+
+  // Fetch log directory path once on mount
+  useEffect(() => {
+    tauri.getLogDirectory().then(setLogDirectory).catch(() => {});
+  }, []);
 
   // Check for changes (compare local state to store)
   useEffect(() => {
@@ -128,13 +136,14 @@ export function GlobalSettings({ onSaveSuccess }: GlobalSettingsProps) {
       terminalFontFamily !== terminalAppearance.fontFamily ||
       terminalFontSize !== terminalAppearance.fontSize ||
       terminalBackgroundColor !== terminalAppearance.backgroundColor ||
-      terminalScrollback !== (global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK);
+      terminalScrollback !== (global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK) ||
+      debugLogging !== (global.debugLogging ?? false);
     setHasChanges(changed);
     // Reset success state when user makes new changes
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, debugLogging, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -227,6 +236,7 @@ export function GlobalSettings({ onSaveSuccess }: GlobalSettingsProps) {
         claudeMode: ClaudeMode;
         terminalAppearance: TerminalAppearance;
         terminalScrollback: number;
+        debugLogging: boolean;
       } = {
         containerResources: {
           cpuCores,
@@ -247,6 +257,7 @@ export function GlobalSettings({ onSaveSuccess }: GlobalSettingsProps) {
           backgroundColor: terminalBackgroundColor,
         },
         terminalScrollback,
+        debugLogging,
       };
 
       // Only add optional fields if they have values
@@ -328,6 +339,7 @@ export function GlobalSettings({ onSaveSuccess }: GlobalSettingsProps) {
         ? global.terminalScrollback
         : DEFAULT_TERMINAL_SCROLLBACK
     );
+    setDebugLogging(global.debugLogging ?? false);
   };
 
   return (
@@ -917,6 +929,73 @@ export function GlobalSettings({ onSaveSuccess }: GlobalSettingsProps) {
                 ))}
               </div>
             )}
+          </CardContent>
+        </Card>
+
+        {/* Debug Logging */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Bug className="h-4 w-4" />
+              Save Logs for Debugging
+            </CardTitle>
+            <CardDescription>
+              Write application logs to disk for troubleshooting
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <button
+              type="button"
+              onClick={() => setDebugLogging(!debugLogging)}
+              className={cn(
+                "w-full p-3 rounded-lg border-2 text-left transition-colors",
+                debugLogging
+                  ? "border-primary bg-primary/5"
+                  : "border-muted hover:border-muted-foreground/50"
+              )}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-sm">
+                  {debugLogging ? "Enabled" : "Disabled"}
+                </span>
+                <div
+                  className={cn(
+                    "w-9 h-5 rounded-full transition-colors relative",
+                    debugLogging ? "bg-primary" : "bg-muted-foreground/30"
+                  )}
+                >
+                  <div
+                    className={cn(
+                      "absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform",
+                      debugLogging ? "translate-x-4" : "translate-x-0.5"
+                    )}
+                  />
+                </div>
+              </div>
+            </button>
+            {debugLogging && logDirectory && (
+              <div className="space-y-1.5">
+                <p className="text-xs text-muted-foreground">
+                  Logs will be saved to:
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (logDirectory) {
+                      tauri.revealInFileManager(logDirectory).catch(() => {});
+                    }
+                  }}
+                  className="flex items-center gap-1.5 text-xs text-primary hover:underline font-mono truncate max-w-full"
+                  title={logDirectory}
+                >
+                  <FolderOpen className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{logDirectory}</span>
+                </button>
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground/60">
+              Requires app restart to take effect
+            </p>
           </CardContent>
         </Card>
       </div>

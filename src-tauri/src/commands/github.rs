@@ -250,6 +250,16 @@ pub async fn open_in_browser(app: tauri::AppHandle, url: String) -> Result<(), S
         .map_err(|e| format!("Failed to open browser: {}", e))
 }
 
+/// Reveal a file or directory in the system file manager (Finder / Explorer)
+#[tauri::command]
+pub async fn reveal_in_file_manager(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    app.opener()
+        .reveal_item_in_dir(std::path::Path::new(&path))
+        .map_err(|e| format!("Failed to reveal path: {}", e))
+}
+
 /// Get the PR URL for an environment (reads from storage)
 #[tauri::command]
 pub async fn get_environment_pr_url(environment_id: String) -> Result<Option<String>, String> {

@@ -195,10 +195,18 @@ export async function updateRepositoryConfig(
   return invoke<AppConfig>("update_repository_config", { projectId, repoConfig });
 }
 
+export async function getLogDirectory(): Promise<string> {
+  return invoke<string>("get_log_directory");
+}
+
 // --- GitHub Commands ---
 
 export async function openInBrowser(url: string): Promise<void> {
   return invoke("open_in_browser", { url });
+}
+
+export async function revealInFileManager(path: string): Promise<void> {
+  return invoke("reveal_in_file_manager", { path });
 }
 
 export async function getEnvironmentPrUrl(environmentId: string): Promise<string | null> {

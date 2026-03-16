@@ -94,6 +94,12 @@ pub async fn update_repository_config(
     Ok(config)
 }
 
+/// Get the path where debug logs are written
+#[tauri::command]
+pub async fn get_log_directory() -> Result<String, String> {
+    Ok(crate::log_dir_path().to_string_lossy().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

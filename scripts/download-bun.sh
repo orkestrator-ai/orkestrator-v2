@@ -49,6 +49,19 @@ chmod +x "$BINARIES_DIR/bun"
 # Cleanup
 rm -rf "$TEMP_DIR"
 
+# Re-sign the binary with an ad-hoc signature.
+# The official bun binary is signed by the bun team (Developer ID) with the
+# hardened runtime flag. When it is embedded inside a Tauri app bundle that
+# uses a *different* signing identity (ad-hoc or another Developer ID),
+# macOS kills the process with SIGKILL (exit 137) because the team
+# identifiers don't match. Stripping the original signature and applying a
+# fresh ad-hoc signature resolves the mismatch.
+if [[ "$PLATFORM" == "darwin" ]]; then
+    echo "Re-signing bun binary with ad-hoc signature for macOS app bundling..."
+    codesign --remove-signature "$BINARIES_DIR/bun" 2>/dev/null || true
+    codesign --sign - --force "$BINARIES_DIR/bun"
+fi
+
 echo "Bun binary downloaded to $BINARIES_DIR/bun"
 
 # Verify it works

@@ -194,6 +194,8 @@ export interface GlobalConfig {
   terminalAppearance: TerminalAppearance;
   /** Terminal scrollback buffer size (lines) */
   terminalScrollback: number;
+  /** Enable debug logging to disk (requires app restart) */
+  debugLogging?: boolean;
 }
 
 export interface RepositoryConfig {

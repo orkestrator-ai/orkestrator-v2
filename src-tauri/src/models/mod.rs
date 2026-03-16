@@ -708,6 +708,9 @@ pub struct GlobalConfig {
     /// Terminal scrollback buffer size (lines)
     #[serde(default = "default_terminal_scrollback")]
     pub terminal_scrollback: u32,
+    /// Enable debug logging to a file on disk (requires app restart)
+    #[serde(default)]
+    pub debug_logging: bool,
 }
 
 impl Default for GlobalConfig {
@@ -727,6 +730,7 @@ impl Default for GlobalConfig {
             claude_mode: ClaudeMode::default(),
             terminal_appearance: TerminalAppearance::default(),
             terminal_scrollback: default_terminal_scrollback(),
+            debug_logging: false,
         }
     }
 }

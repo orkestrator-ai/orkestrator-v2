@@ -196,7 +196,6 @@ Containers have restricted network access via iptables firewall:
 | File | Purpose |
 |------|---------|
 | `src/components/terminal/TerminalContainer.tsx` | Main terminal container with tabs |
-| `src/components/terminal/TerminalTab.tsx` | xterm.js terminal integration |
 | `src/components/terminal/PersistentTerminal.tsx` | Terminal session persistence |
 | `src/components/terminal/ComposeBar.tsx` | Terminal compose bar |
 | `src/stores/terminalSessionStore.ts` | Terminal session state |

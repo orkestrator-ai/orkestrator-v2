@@ -188,6 +188,7 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
           tabType={tab.type}
           containerId={containerId}
           environmentId={environmentId}
+          isEnvironmentVisible={environmentId === activeEnvironmentId}
           isActive={isActive}
           isFocused={isFocused}
           isFirstTab={tabId === "default" && paneId === "default"}

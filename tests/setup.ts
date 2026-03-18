@@ -7,9 +7,12 @@ GlobalRegistrator.register();
 // Mock @tauri-apps/api modules
 import { mock } from "bun:test";
 
-// Mock the core invoke function
+// Mock the core invoke function and Resource class
 mock.module("@tauri-apps/api/core", () => ({
   invoke: mock(() => Promise.resolve()),
+  Resource: class Resource {
+    close() { return Promise.resolve(); }
+  },
 }));
 
 // Mock the event listener

@@ -3,7 +3,7 @@ import { X, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { readImage } from "@tauri-apps/plugin-clipboard-manager";
-import { writeContainerFile } from "@/lib/tauri";
+import { writeContainerFile, writeLocalFile } from "@/lib/tauri";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
 import { toast } from "sonner";
 import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
@@ -22,6 +22,8 @@ interface ComposeBarProps {
   onClose: () => void;
   onSend: (images: ImageAttachment[], text: string) => void;
   containerId: string | null;
+  /** Worktree path for local environments (alternative to containerId) */
+  worktreePath?: string | null;
 }
 
 const MAX_LINES = 10;
@@ -43,7 +45,7 @@ function generateImageFilename(): string {
   return `clipboard-${timestamp}-${random}.png`;
 }
 
-export function ComposeBar({ sessionKey, isOpen, onClose, onSend, containerId }: ComposeBarProps) {
+export function ComposeBar({ sessionKey, isOpen, onClose, onSend, containerId, worktreePath }: ComposeBarProps) {
   const text = useTerminalSessionStore((state) => state.composeDraftText.get(sessionKey) ?? "");
   const images = useTerminalSessionStore((state) => state.composeDraftImages.get(sessionKey) ?? EMPTY_IMAGES);
   const setComposeDraftText = useTerminalSessionStore((state) => state.setComposeDraftText);
@@ -173,18 +175,23 @@ export function ComposeBar({ sessionKey, isOpen, onClose, onSend, containerId }:
 
     setIsSending(true);
     try {
-      // Save images to container and get file paths.
+      // Save images to container or local worktree and get file paths.
       // Note: We reuse the ImageAttachment type but repurpose the `id` field to store
-      // the container file path. This path is then written to the terminal by the caller.
-      // For local environments (no containerId), we skip image saving to container.
+      // the file path. This path is then written to the terminal by the caller.
       const savedImages: ImageAttachment[] = [];
-      if (containerId) {
+      if (containerId || worktreePath) {
         for (const img of images) {
           try {
             const filename = generateImageFilename();
             const filePath = `.orkestrator/clipboard/${filename}`;
-            await writeContainerFile(containerId, filePath, img.base64Data);
-            savedImages.push({ ...img, id: `/workspace/${filePath}` });
+            let fullPath: string;
+            if (containerId) {
+              await writeContainerFile(containerId, filePath, img.base64Data);
+              fullPath = `/workspace/${filePath}`;
+            } else {
+              fullPath = await writeLocalFile(worktreePath!, filePath, img.base64Data);
+            }
+            savedImages.push({ ...img, id: fullPath });
           } catch (imgError) {
             console.error("[ComposeBar] Failed to save image:", imgError);
             // Continue with remaining images rather than failing entirely

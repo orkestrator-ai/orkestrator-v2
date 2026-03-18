@@ -1,13 +1,17 @@
 import { useEffect, useCallback, useRef } from "react";
 import { readImage, readText } from "@tauri-apps/plugin-clipboard-manager";
-import { writeContainerFile } from "@/lib/tauri";
+import { writeContainerFile, writeLocalFile } from "@/lib/tauri";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
+
+type AsyncPasteCallback<T> = (value: T) => void | Promise<void>;
 
 interface UseClipboardImagePasteOptions {
   containerId: string | null;
+  /** Worktree path for local environments (alternative to containerId) */
+  worktreePath?: string | null;
   isActive: boolean;
-  onImageSaved?: (filePath: string) => void;
-  onError?: (error: string) => void;
+  onImageSaved?: AsyncPasteCallback<string>;
+  onError?: AsyncPasteCallback<string>;
 }
 
 /** Maximum image size in bytes (8MB) */
@@ -33,9 +37,9 @@ function generateImageFilename(): string {
  */
 export async function processClipboardPaste(
   containerId: string,
-  onImageSaved?: (filePath: string) => void,
-  onTextPaste?: (text: string) => void,
-  onError?: (error: string) => void
+  onImageSaved?: AsyncPasteCallback<string>,
+  onTextPaste?: AsyncPasteCallback<string>,
+  onError?: AsyncPasteCallback<string>
 ): Promise<boolean> {
   try {
     // First, try to read an image from clipboard
@@ -82,14 +86,14 @@ export async function processClipboardPaste(
 
       // Write to container
       const fullPath = await writeContainerFile(containerId, filePath, imageData);
-      onImageSaved?.(fullPath);
+      await onImageSaved?.(fullPath);
       return true;
     } else {
       // No image - try to paste text instead
       try {
         const text = await readText();
         if (text) {
-          onTextPaste?.(text);
+          await onTextPaste?.(text);
           return true;
         }
       } catch {
@@ -99,7 +103,73 @@ export async function processClipboardPaste(
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to process paste";
     console.error("[processClipboardPaste] Error:", message);
-    onError?.(message);
+    await onError?.(message);
+  }
+  return false;
+}
+
+/**
+ * Process clipboard content for local environments - tries image first, then falls back to text.
+ * Same as processClipboardPaste but writes to the local filesystem via worktree path.
+ */
+export async function processLocalClipboardPaste(
+  worktreePath: string,
+  onImageSaved?: AsyncPasteCallback<string>,
+  onTextPaste?: AsyncPasteCallback<string>,
+  onError?: AsyncPasteCallback<string>
+): Promise<boolean> {
+  try {
+    let imageData: string | null = null;
+    try {
+      const image = await readImage();
+      const rgba = await image.rgba();
+      const { width, height } = await image.size();
+
+      let canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        const imageDataObj = new ImageData(new Uint8ClampedArray(rgba), width, height);
+        ctx.putImageData(imageDataObj, 0, 0);
+        canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
+        const dataUrl = canvas.toDataURL("image/png");
+        imageData = dataUrl.split(",")[1] || null;
+      }
+      canvas.width = 0;
+      canvas.height = 0;
+    } catch {
+      // No image in clipboard or processing failed - we'll try text
+    }
+
+    if (imageData) {
+      const estimatedSize = (imageData.length * 3) / 4;
+      if (estimatedSize > MAX_IMAGE_SIZE) {
+        const sizeMB = (estimatedSize / 1024 / 1024).toFixed(1);
+        throw new Error(`Image too large (${sizeMB}MB). Maximum size is 8MB.`);
+      }
+
+      const filename = generateImageFilename();
+      const filePath = `.orkestrator/clipboard/${filename}`;
+
+      const fullPath = await writeLocalFile(worktreePath, filePath, imageData);
+      await onImageSaved?.(fullPath);
+      return true;
+    } else {
+      try {
+        const text = await readText();
+        if (text) {
+          await onTextPaste?.(text);
+          return true;
+        }
+      } catch {
+        // No text either - nothing to paste
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to process paste";
+    console.error("[processLocalClipboardPaste] Error:", message);
+    await onError?.(message);
   }
   return false;
 }
@@ -114,6 +184,7 @@ export async function processClipboardPaste(
  */
 export function useClipboardImagePaste({
   containerId,
+  worktreePath,
   isActive,
   onImageSaved,
   onError,
@@ -123,8 +194,8 @@ export function useClipboardImagePaste({
   // Handle DOM paste events (for right-click paste menu)
   const handlePaste = useCallback(
     async (event: ClipboardEvent) => {
-      // Only handle when active and container is available
-      if (!isActive || !containerId) return;
+      // Only handle when active and a target is available (container or worktree)
+      if (!isActive || (!containerId && !worktreePath)) return;
 
       // Don't process if focus is within a compose bar (it handles its own paste)
       if (document.activeElement?.closest("[data-compose-bar]")) return;
@@ -180,19 +251,26 @@ export function useClipboardImagePaste({
         const filename = generateImageFilename();
         const filePath = `.orkestrator/clipboard/${filename}`;
 
-        // Write to container
-        const fullPath = await writeContainerFile(containerId, filePath, base64Data);
-        onImageSaved?.(fullPath);
+        // Write to container or local worktree
+        let fullPath: string;
+        if (containerId) {
+          fullPath = await writeContainerFile(containerId, filePath, base64Data);
+        } else if (worktreePath) {
+          fullPath = await writeLocalFile(worktreePath, filePath, base64Data);
+        } else {
+          throw new Error("No target for image save (no containerId or worktreePath)");
+        }
+        await onImageSaved?.(fullPath);
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Failed to save image";
         console.error("[useClipboardImagePaste] Error:", message);
-        onError?.(message);
+        await onError?.(message);
       } finally {
         isProcessingRef.current = false;
       }
     },
-    [containerId, isActive, onImageSaved, onError]
+    [containerId, worktreePath, isActive, onImageSaved, onError]
   );
 
   useEffect(() => {

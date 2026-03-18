@@ -4,7 +4,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useTerminal } from "@/hooks/useTerminal";
 import { useClaudeState } from "@/hooks/useClaudeState";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
-import { handleTerminalPaste } from "@/lib/terminal-paste";
+import { escapePathForTerminalInput, handleTerminalPaste } from "@/lib/terminal-paste";
 import { useTerminalSessionStore, createSessionKey, useConfigStore, usePaneLayoutStore, useEnvironmentStore } from "@/stores";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useTerminalPortalStore, createTerminalKey, type PersistentTerminalData } from "@/stores/terminalPortalStore";
@@ -26,6 +26,10 @@ import {
   SETUP_COMPLETE_MARKER,
 } from "@/lib/terminal-utils";
 import {
+  forceTerminalVisibilityRedraw,
+  shouldTriggerEnvironmentVisibilityRedraw,
+} from "./persistent-terminal-redraw";
+import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
@@ -46,6 +50,8 @@ interface PersistentTerminalProps {
   tabType: TabType;
   containerId: string | null;
   environmentId: string;
+  /** Whether this environment is currently shown in the app */
+  isEnvironmentVisible: boolean;
   isActive: boolean;
   /** Whether this terminal is focused (active tab in the active pane) */
   isFocused?: boolean;
@@ -60,7 +66,7 @@ interface PersistentTerminalProps {
 /**
  * PersistentTerminal component - handles PTY connection for a pre-created xterm.js Terminal.
  *
- * Unlike TerminalTab, this component:
+ * This component:
  * - Receives a pre-created Terminal instance (doesn't create its own)
  * - Attaches the terminal to DOM only once
  * - Survives pane moves without destruction
@@ -71,6 +77,7 @@ export function PersistentTerminal({
   tabType,
   containerId,
   environmentId,
+  isEnvironmentVisible,
   isActive,
   isFocused = false,
   isFirstTab,
@@ -152,6 +159,11 @@ export function PersistentTerminal({
     (state) => state.getEnvironmentById(environmentId)?.environmentType === "local"
   );
 
+  // Get worktree path for local environments (needed for image paste)
+  const worktreePath = useEnvironmentStore(
+    (state) => state.getEnvironmentById(environmentId)?.worktreePath ?? null
+  );
+
   // Extract terminal and addons from terminalData
   const { terminal, fitAddon, serializeAddon } = terminalData;
 
@@ -167,9 +179,10 @@ export function PersistentTerminal({
 
   // Clipboard image paste handler
   const handleImageSaved = useCallback(async (filePath: string) => {
-    await writeRef.current(filePath + " ");
+    const terminalPath = isLocalEnvironment ? escapePathForTerminalInput(filePath) : filePath;
+    await writeRef.current(terminalPath + " ");
     terminal.focus();
-  }, [terminal]);
+  }, [isLocalEnvironment, terminal]);
 
   const handleImageError = useCallback((error: string) => {
     console.error("[PersistentTerminal] Clipboard image error:", error);
@@ -177,6 +190,7 @@ export function PersistentTerminal({
 
   useClipboardImagePaste({
     containerId,
+    worktreePath,
     isActive: isFocused && !isComposeBarOpen,
     onImageSaved: handleImageSaved,
     onError: handleImageError,
@@ -200,11 +214,12 @@ export function PersistentTerminal({
   const handlePaste = useCallback(async () => {
     await handleTerminalPaste({
       containerId,
+      worktreePath,
       writeToTerminal: writeRef.current,
       focusTerminal: () => terminal.focus(),
       componentName: "PersistentTerminal",
     });
-  }, [containerId, terminal]);
+  }, [containerId, worktreePath, terminal]);
 
   // Keep compose bar ref in sync with state for synchronous access in key handler
   useEffect(() => {
@@ -228,9 +243,10 @@ export function PersistentTerminal({
       const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
       // Send each image one by one with a delay to let Claude Code process each.
-      // The img.id contains the container file path (set by ComposeBar.handleSend).
+      // The img.id contains the saved attachment path (set by ComposeBar.handleSend).
       for (const img of images) {
-        await writeRef.current(img.id);
+        const terminalPath = isLocalEnvironment ? escapePathForTerminalInput(img.id) : img.id;
+        await writeRef.current(terminalPath);
         await writeRef.current("\r");
         await delay(CLAUDE_CODE_INPUT_DELAY_MS);
       }
@@ -245,7 +261,7 @@ export function PersistentTerminal({
       // Keep compose bar open but refocus terminal
       terminal.focus();
     },
-    [terminal]
+    [isLocalEnvironment, terminal]
   );
 
   // Track mount lifecycle - reset restoration flag on mount
@@ -884,6 +900,44 @@ export function PersistentTerminal({
     wasActiveRef.current = isActive;
   }, [isActive, terminalIsOpened, tabId, fitAddon, terminal]);
 
+  // Force a real PTY resize when returning to a hidden environment.
+  // Claude's TUI can keep a stale canvas until it receives the equivalent of a
+  // tiny window resize, so bounce the PTY size once and then restore it.
+  const wasEnvironmentVisibleRef = useRef(isEnvironmentVisible);
+  useEffect(() => {
+    if (!terminal || !fitAddon) return;
+
+    const becameVisible = shouldTriggerEnvironmentVisibilityRedraw({
+      isEnvironmentVisible,
+      wasEnvironmentVisible: wasEnvironmentVisibleRef.current,
+      isActive,
+      terminalIsOpened,
+      isConnected,
+    });
+    wasEnvironmentVisibleRef.current = isEnvironmentVisible;
+
+    if (!becameVisible) {
+      return;
+    }
+
+    let cancelled = false;
+    let redrawCleanup: { cancel: () => void } | null = null;
+
+    void forceTerminalVisibilityRedraw({
+      terminal,
+      fitAddon,
+      resize,
+      isCancelled: () => cancelled,
+    }).then((cleanup) => {
+      redrawCleanup = cleanup;
+    });
+
+    return () => {
+      cancelled = true;
+      redrawCleanup?.cancel();
+    };
+  }, [isEnvironmentVisible, isActive, terminalIsOpened, isConnected, fitAddon, terminal, resize]);
+
   // Update terminal appearance when settings change
   useEffect(() => {
     if (!terminal || !terminalAppearance) return;
@@ -1039,6 +1093,7 @@ export function PersistentTerminal({
           }}
           onSend={handleComposeSend}
           containerId={containerId}
+          worktreePath={worktreePath}
         />
       )}
     </>

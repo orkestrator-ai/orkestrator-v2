@@ -1,4 +1,4 @@
-import type { OpenCodeMessagePart } from "./opencode-client";
+import type { NativeMessagePart } from "./chat/native-message-types";
 import { appendLatestTodoSnapshot, getLatestTimestamp } from "./todo-tool";
 
 export interface CodexReasoningOption {
@@ -87,7 +87,7 @@ export interface CodexMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  parts: OpenCodeMessagePart[];
+  parts: NativeMessagePart[];
   createdAt: string;
 }
 

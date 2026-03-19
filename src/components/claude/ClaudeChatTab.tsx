@@ -1095,8 +1095,13 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
               )}
             </div>
           ) : (
-            session?.messages.map((message) => (
-              <ClaudeMessage key={message.id} message={message} isStreaming={session?.isLoading} />
+            session?.messages.map((message, index) => (
+              <ClaudeMessage
+                key={message.id}
+                message={message}
+                previousMessage={index > 0 ? session.messages[index - 1] ?? null : null}
+                isStreaming={session?.isLoading}
+              />
             ))
           )}
 

@@ -1,8 +1,7 @@
 import { memo, useCallback, useState, useMemo, useRef, useEffect, type AnchorHTMLAttributes } from "react";
 import { createPortal } from "react-dom";
 import { Brain, FileText, ChevronRight, Wrench, AlertCircle, Pencil, ExternalLink as ExternalLinkIcon, Layers, Image as ImageIcon, X, Plug, FileCode } from "lucide-react";
-import Markdown, { type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { type Components } from "react-markdown";
 import { cn } from "@/lib/utils";
 import { openInBrowser, readFileBase64 } from "@/lib/tauri";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -15,6 +14,8 @@ import { processPartsInOrder } from "@/lib/claude-task-utils";
 import { isEditTool } from "@/lib/tool-names";
 import { TodoToolPart, TOOL_STATE_COLORS } from "@/components/todo/TodoToolPart";
 import { isTodoTool } from "@/lib/todo-tool";
+import { MessageErrorAlert, MessageShell } from "@/components/chat/MessageShell";
+import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 
 /** Parsed attachment from XML tags */
 interface ParsedAttachment {
@@ -182,6 +183,7 @@ const markdownComponents: Components = {
 
 interface ClaudeMessageProps {
   message: ClaudeMessageType;
+  previousMessage?: ClaudeMessageType | null;
   /** Whether the session is still actively streaming (turn in progress) */
   isStreaming?: boolean;
 }
@@ -234,9 +236,12 @@ function ThinkingPart({ content, isComplete }: { content: string; isComplete: bo
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="mt-1 rounded-md bg-muted/20 p-3 border border-border/30">
-          <div className="text-sm text-muted-foreground/80 leading-relaxed prose prose-sm prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-headings:text-muted-foreground prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-pre:my-1 prose-code:text-xs prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:bg-muted prose-pre:p-2 prose-pre:rounded-md prose-table:text-xs">
-            <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</Markdown>
-          </div>
+          <MessageMarkdown
+            content={content}
+            components={markdownComponents}
+            className="text-muted-foreground/80 prose-invert prose-p:my-1 prose-headings:my-2 prose-headings:text-muted-foreground prose-ul:my-1 prose-ol:my-1 prose-pre:my-1 prose-pre:p-2"
+            enableBreaks={false}
+          />
         </div>
       </CollapsibleContent>
     </Collapsible>
@@ -1089,9 +1094,7 @@ function AttachmentsList({ attachments }: { attachments: ParsedAttachment[] }) {
 /** Render a text content part with markdown support */
 function TextPart({ content }: { content: string }) {
   return (
-    <div className="text-sm text-foreground leading-relaxed prose prose-sm dark:prose-invert max-w-none prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-pre:my-2 prose-code:text-xs prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:bg-muted prose-pre:p-3 prose-pre:rounded-md prose-table:text-xs prose-table:my-2">
-      <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</Markdown>
-    </div>
+    <MessageMarkdown content={content} components={markdownComponents} />
   );
 }
 
@@ -1102,11 +1105,19 @@ function TextPart({ content }: { content: string }) {
 
 export const ClaudeMessage = memo(function ClaudeMessage({
   message,
+  previousMessage = null,
   isStreaming = false,
 }: ClaudeMessageProps) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
   const isError = message.id.startsWith(ERROR_MESSAGE_PREFIX);
+  const isContinuation =
+    !isUser &&
+    !isSystem &&
+    !isError &&
+    previousMessage?.role === "assistant" &&
+    !previousMessage.id.startsWith(ERROR_MESSAGE_PREFIX) &&
+    isSameMinute(previousMessage.timestamp, message.timestamp);
 
   // For user messages, parse out attachment XML tags
   const { cleanContent, attachments } = useMemo(() => {
@@ -1130,19 +1141,10 @@ export const ClaudeMessage = memo(function ClaudeMessage({
   // Render error messages with special styling
   if (isError) {
     return (
-      <div className="px-4 py-3">
-        <div className="max-w-3xl mx-auto">
-          <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/20">
-            <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <div className="text-sm text-destructive">{message.content}</div>
-              <div className="text-[10px] text-destructive/60 mt-1">
-                {formatTime(message.timestamp)}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      <MessageErrorAlert
+        content={message.content}
+        timestampLabel={formatTime(message.timestamp)}
+      />
     );
   }
 
@@ -1160,123 +1162,99 @@ export const ClaudeMessage = memo(function ClaudeMessage({
   }
 
   return (
-    <div
-      className={cn(
-        "px-4 py-3",
-        isUser ? "bg-muted/30" : "bg-transparent"
-      )}
+    <MessageShell
+      isUser={isUser}
+      authorLabel={isUser ? "You" : "Claude"}
+      timestampLabel={formatTime(message.timestamp)}
+      showHeader={!isContinuation}
+      className={cn(!isUser && isContinuation ? "pt-0 pb-3" : undefined)}
     >
-      <div className="max-w-3xl mx-auto">
-        {/* Role indicator with timestamp */}
-        <div className="mb-1.5">
-          <span
-            className={cn(
-              "text-xs font-medium",
-              isUser ? "text-primary" : "text-muted-foreground"
-            )}
-          >
-            {isUser ? "You" : "Claude"}
-          </span>
-          <span className="text-[10px] text-muted-foreground/60 ml-2">
-            {formatTime(message.timestamp)}
-          </span>
-        </div>
-
-        {/* Message content - render parts in their natural order */}
-        <div className="space-y-2">
-          {/* For user messages, render cleanContent (with XML stripped) instead of raw parts */}
-          {isUser ? (
-            <>
-              {cleanContent && <TextPart content={cleanContent} />}
-            </>
-          ) : (
-            <>
-              {processedParts.map((processed, i) => {
-                switch (processed.type) {
-                  case "thinking":
-                    return (
-                      <ThinkingPart
-                        key={`thinking-${i}`}
-                        content={processed.part?.content || ""}
-                        isComplete={thinkingComplete}
-                      />
-                    );
-                  case "text":
-                    return <TextPart key={`text-${i}`} content={processed.part?.content || ""} />;
-                  case "file":
-                    return <FilePart key={`file-${i}`} path={processed.part?.content || ""} />;
-                  case "task-group":
-                    return (
-                      <TaskToolPart
-                        key={`task-${i}`}
-                        toolName={processed.part?.toolName}
-                        toolState={processed.part?.toolState}
-                        toolArgs={processed.part?.toolArgs}
-                        toolOutput={processed.part?.toolOutput}
-                        toolError={processed.part?.toolError}
-                        childTools={processed.childTools || []}
-                      />
-                    );
-                  case "tool-group":
-                    // Use specialized EditToolPart for edit/write tools
-                    if (isEditTool(processed.part?.toolName)) {
-                      return (
-                        <EditToolPart
-                          key={`edit-${i}`}
-                          toolName={processed.part?.toolName}
-                          toolState={processed.part?.toolState}
-                          toolTitle={processed.part?.toolTitle}
-                          toolOutput={processed.part?.toolOutput}
-                          toolError={processed.part?.toolError}
-                          toolDiff={processed.part?.toolDiff}
-                        />
-                      );
-                    }
-                    // Use specialized TodoToolPart for TodoWrite tools
-                    if (isTodoTool(processed.part?.toolName)) {
-                      return (
-                        <TodoToolPart
-                          key={`todo-${i}`}
-                          toolName={processed.part?.toolName}
-                          toolState={processed.part?.toolState}
-                          toolArgs={processed.part?.toolArgs}
-                          toolOutput={processed.part?.toolOutput}
-                          toolError={processed.part?.toolError}
-                        />
-                      );
-                    }
-                    return (
-                      <ToolPart
-                        key={`tool-${i}`}
-                        toolName={processed.part?.toolName}
-                        toolState={processed.part?.toolState}
-                        toolTitle={processed.part?.toolTitle}
-                        toolArgs={processed.part?.toolArgs}
-                        toolOutput={processed.part?.toolOutput}
-                        toolError={processed.part?.toolError}
-                        isMcpTool={processed.part?.isMcpTool}
-                        mcpServerName={processed.part?.mcpServerName}
-                      />
-                    );
-                  default:
-                    return null;
+      {isUser ? (
+        <>
+          {cleanContent && <TextPart content={cleanContent} />}
+        </>
+      ) : (
+        <>
+          {processedParts.map((processed, i) => {
+            switch (processed.type) {
+              case "thinking":
+                return (
+                  <ThinkingPart
+                    key={`thinking-${i}`}
+                    content={processed.part?.content || ""}
+                    isComplete={thinkingComplete}
+                  />
+                );
+              case "text":
+                return <TextPart key={`text-${i}`} content={processed.part?.content || ""} />;
+              case "file":
+                return <FilePart key={`file-${i}`} path={processed.part?.content || ""} />;
+              case "task-group":
+                return (
+                  <TaskToolPart
+                    key={`task-${i}`}
+                    toolName={processed.part?.toolName}
+                    toolState={processed.part?.toolState}
+                    toolArgs={processed.part?.toolArgs}
+                    toolOutput={processed.part?.toolOutput}
+                    toolError={processed.part?.toolError}
+                    childTools={processed.childTools || []}
+                  />
+                );
+              case "tool-group":
+                if (isEditTool(processed.part?.toolName)) {
+                  return (
+                    <EditToolPart
+                      key={`edit-${i}`}
+                      toolName={processed.part?.toolName}
+                      toolState={processed.part?.toolState}
+                      toolTitle={processed.part?.toolTitle}
+                      toolOutput={processed.part?.toolOutput}
+                      toolError={processed.part?.toolError}
+                      toolDiff={processed.part?.toolDiff}
+                    />
+                  );
                 }
-              })}
+                if (isTodoTool(processed.part?.toolName)) {
+                  return (
+                    <TodoToolPart
+                      key={`todo-${i}`}
+                      toolName={processed.part?.toolName}
+                      toolState={processed.part?.toolState}
+                      toolArgs={processed.part?.toolArgs}
+                      toolOutput={processed.part?.toolOutput}
+                      toolError={processed.part?.toolError}
+                    />
+                  );
+                }
+                return (
+                  <ToolPart
+                    key={`tool-${i}`}
+                    toolName={processed.part?.toolName}
+                    toolState={processed.part?.toolState}
+                    toolTitle={processed.part?.toolTitle}
+                    toolArgs={processed.part?.toolArgs}
+                    toolOutput={processed.part?.toolOutput}
+                    toolError={processed.part?.toolError}
+                    isMcpTool={processed.part?.isMcpTool}
+                    mcpServerName={processed.part?.mcpServerName}
+                  />
+                );
+              default:
+                return null;
+            }
+          })}
 
-              {/* Fallback to raw content if no parts were processed */}
-              {processedParts.length === 0 && message.content && (
-                <TextPart content={message.content} />
-              )}
-            </>
+          {processedParts.length === 0 && message.content && (
+            <TextPart content={message.content} />
           )}
+        </>
+      )}
 
-          {/* Show attachments for user messages */}
-          {isUser && attachments.length > 0 && (
-            <AttachmentsList attachments={attachments} />
-          )}
-        </div>
-      </div>
-    </div>
+      {isUser && attachments.length > 0 && (
+        <AttachmentsList attachments={attachments} />
+      )}
+    </MessageShell>
   );
 });
 
@@ -1289,5 +1267,26 @@ function formatTime(isoString: string): string {
     });
   } catch {
     return "";
+  }
+}
+
+function isSameMinute(a: string, b: string): boolean {
+  try {
+    const first = new Date(a);
+    const second = new Date(b);
+
+    if (Number.isNaN(first.getTime()) || Number.isNaN(second.getTime())) {
+      return false;
+    }
+
+    return (
+      first.getFullYear() === second.getFullYear() &&
+      first.getMonth() === second.getMonth() &&
+      first.getDate() === second.getDate() &&
+      first.getHours() === second.getHours() &&
+      first.getMinutes() === second.getMinutes()
+    );
+  } catch {
+    return false;
   }
 }

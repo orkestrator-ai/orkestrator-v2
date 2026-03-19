@@ -32,7 +32,7 @@ import {
   startLocalCodexServer,
   updateGlobalConfig,
 } from "@/lib/tauri";
-import { OpenCodeMessage } from "@/components/opencode/OpenCodeMessage";
+import { NativeMessage } from "@/components/chat/NativeMessage";
 import { CodexComposeBar } from "./CodexComposeBar";
 import { CodexResumeSessionDialog } from "./CodexResumeSessionDialog";
 import { hasPendingInitialPrompt } from "./reconcile-guards";
@@ -963,7 +963,7 @@ export function CodexChatTab({
             </div>
           ) : (
             sessionMessages.map((message, index) => (
-              <OpenCodeMessage
+              <NativeMessage
                 key={message.id}
                 message={message}
                 previousMessage={index > 0 ? sessionMessages[index - 1] ?? null : null}

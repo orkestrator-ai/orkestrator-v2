@@ -46,7 +46,7 @@ import {
   type OpenCodeModelRef,
   type OpenCodeModelPreferences,
 } from "@/lib/tauri";
-import { OpenCodeMessage } from "./OpenCodeMessage";
+import { NativeMessage } from "@/components/chat/NativeMessage";
 import { OpenCodeComposeBar } from "./OpenCodeComposeBar";
 import { OpenCodePermissionCard } from "./OpenCodePermissionCard";
 import { OpenCodeQuestionCard } from "./OpenCodeQuestionCard";
@@ -1305,10 +1305,11 @@ export function OpenCodeChatTab({
             </div>
           ) : (
             session?.messages.map((message, index, messages) => (
-              <OpenCodeMessage
+              <NativeMessage
                 key={message.id}
                 message={message}
                 previousMessage={index > 0 ? messages[index - 1] : null}
+                assistantLabel="OpenCode"
               />
             ))
           )}

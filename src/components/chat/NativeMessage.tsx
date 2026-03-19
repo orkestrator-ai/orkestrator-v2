@@ -18,8 +18,7 @@ import {
   Pencil,
   ExternalLink as ExternalLinkIcon,
 } from "lucide-react";
-import Markdown, { type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { type Components } from "react-markdown";
 import { cn } from "@/lib/utils";
 import { openInBrowser } from "@/lib/tauri";
 import { readFileBase64 } from "@/lib/tauri";
@@ -32,12 +31,16 @@ import { Button } from "@/components/ui/button";
 import { useTerminalContext } from "@/contexts/TerminalContext";
 import {
   ERROR_MESSAGE_PREFIX,
-  type OpenCodeMessage as OpenCodeMessageType,
-  type OpenCodeMessagePart,
   type ToolDiffMetadata,
 } from "@/lib/opencode-client";
 import { isEditTool } from "@/lib/tool-names";
 import { TodoToolPart } from "@/components/todo/TodoToolPart";
+import { MessageErrorAlert, MessageShell } from "@/components/chat/MessageShell";
+import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
+import {
+  type NativeMessage as NativeMessageType,
+  type NativeMessagePart,
+} from "@/lib/chat/native-message-types";
 
 /** Custom link component that opens URLs in the system browser */
 function ExternalLink({
@@ -50,7 +53,7 @@ function ExternalLink({
       e.preventDefault();
       if (href) {
         openInBrowser(href).catch((err) => {
-          console.error("[OpenCodeMessage] Failed to open link:", err);
+          console.error("[NativeMessage] Failed to open link:", err);
         });
       }
     },
@@ -74,9 +77,9 @@ const markdownComponents: Components = {
   a: ExternalLink,
 };
 
-interface OpenCodeMessageProps {
-  message: OpenCodeMessageType;
-  previousMessage?: OpenCodeMessageType | null;
+interface NativeMessageProps {
+  message: NativeMessageType;
+  previousMessage?: NativeMessageType | null;
   assistantLabel?: string;
 }
 
@@ -722,7 +725,7 @@ function FilePart({ path, fileUrl }: { path: string; fileUrl?: string }) {
       setImageSrc(`data:${mimeType};base64,${base64}`);
       setPreviewOpen(true);
     } catch (err) {
-      console.error("[OpenCodeMessage] Failed to load image preview:", err, {
+      console.error("[NativeMessage] Failed to load image preview:", err, {
         path,
         fileUrl,
       });
@@ -773,11 +776,7 @@ function FilePart({ path, fileUrl }: { path: string; fileUrl?: string }) {
 /** Render a text content part with markdown support */
 function TextPart({ content }: { content: string }) {
   return (
-    <div className="text-sm text-foreground leading-relaxed prose prose-sm dark:prose-invert max-w-none prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-pre:my-2 prose-code:text-xs prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:bg-muted prose-pre:p-3 prose-pre:rounded-md prose-table:text-xs prose-table:my-2">
-      <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-        {content}
-      </Markdown>
-    </div>
+    <MessageMarkdown content={content} components={markdownComponents} />
   );
 }
 
@@ -790,10 +789,10 @@ function isTodoTool(toolName?: string): boolean {
 }
 
 /** Render a single message part based on its type */
-function MessagePart({ part }: { part: OpenCodeMessagePart }) {
+function MessagePart({ part }: { part: NativeMessagePart }) {
   switch (part.type) {
     case "thinking":
-      // Thinking parts are typically rendered directly in OpenCodeMessage with isComplete
+      // Thinking parts are typically rendered directly in NativeMessage with isComplete
       // If rendered through MessagePart, assume complete (collapsed by default)
       return <ThinkingPart content={part.content} />;
     case "text":
@@ -845,11 +844,11 @@ function MessagePart({ part }: { part: OpenCodeMessagePart }) {
   }
 }
 
-export const OpenCodeMessage = memo(function OpenCodeMessage({
+export const NativeMessage = memo(function NativeMessage({
   message,
   previousMessage = null,
-  assistantLabel = "OpenCode",
-}: OpenCodeMessageProps) {
+  assistantLabel = "Assistant",
+}: NativeMessageProps) {
   const isUser = message.role === "user";
   const isError = message.id.startsWith(ERROR_MESSAGE_PREFIX);
   const isContinuation =
@@ -864,66 +863,30 @@ export const OpenCodeMessage = memo(function OpenCodeMessage({
   // Render error messages with special styling
   if (isError) {
     return (
-      <div className="px-4 py-3">
-        <div className="max-w-3xl mx-auto">
-          <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/20">
-            <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <div className="text-sm text-destructive whitespace-pre-wrap break-words">
-                {message.content}
-              </div>
-              <div className="text-[10px] text-destructive/60 mt-1">
-                {formatTime(message.createdAt)}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      <MessageErrorAlert
+        content={message.content}
+        timestampLabel={formatTime(message.createdAt)}
+      />
     );
   }
 
   return (
-    <div
-      className={cn(
-        "px-4",
-        isUser ? "bg-muted/30 py-3" : "bg-transparent",
-        !isUser && (isContinuation ? "pt-0 pb-3" : "py-3"),
-      )}
+    <MessageShell
+      isUser={isUser}
+      authorLabel={isUser ? "You" : assistantLabel}
+      timestampLabel={formatTime(message.createdAt)}
+      showHeader={!isContinuation}
+      className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
     >
-      <div className="max-w-3xl mx-auto">
-        {/* Role indicator with timestamp */}
-        {!isContinuation && (
-          <div className="mb-1.5">
-            <span
-              className={cn(
-                "text-xs font-medium",
-                isUser ? "text-primary" : "text-muted-foreground",
-              )}
-            >
-              {isUser ? "You" : assistantLabel}
-            </span>
-            <span className="text-[10px] text-muted-foreground/60 ml-2">
-              {formatTime(message.createdAt)}
-            </span>
-          </div>
-        )}
+      {message.parts.map((part, index) => (
+        <MessagePart
+          key={`${message.id}-part-${index}-${part.type}`}
+          part={part}
+        />
+      ))}
 
-        {/* Message content - preserve the source order of structured parts */}
-        <div className="space-y-2">
-          {message.parts.map((part, index) => (
-            <MessagePart
-              key={`${message.id}-part-${index}-${part.type}`}
-              part={part}
-            />
-          ))}
-
-          {/* Fallback to raw content if no text parts were parsed */}
-          {!hasTextParts && message.content && (
-            <TextPart content={message.content} />
-          )}
-        </div>
-      </div>
-    </div>
+      {!hasTextParts && message.content && <TextPart content={message.content} />}
+    </MessageShell>
   );
 });
 

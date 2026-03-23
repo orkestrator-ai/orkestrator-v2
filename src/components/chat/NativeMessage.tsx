@@ -77,6 +77,8 @@ const markdownComponents: Components = {
   a: ExternalLink,
 };
 
+const TASK_LIST_SYNTAX_PATTERN = /(^|\n)\s*(?:[-*+]|\d+\.)\s+\[(?: |x|X)\]\s+/m;
+
 interface NativeMessageProps {
   message: NativeMessageType;
   previousMessage?: NativeMessageType | null;
@@ -85,6 +87,46 @@ interface NativeMessageProps {
 
 /** Render a thinking/reasoning part inline */
 function ThinkingPart({ content }: { content: string }) {
+  const hasTaskList = useMemo(
+    () => TASK_LIST_SYNTAX_PATTERN.test(content),
+    [content],
+  );
+  const [isOpen, setIsOpen] = useState(false);
+
+  if (hasTaskList) {
+    return (
+      <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
+        <CollapsibleTrigger
+          className="flex items-center gap-2 w-full text-xs text-muted-foreground py-2 px-3 bg-muted/50 rounded-md hover:bg-muted/70 transition-colors cursor-pointer"
+        >
+          <ChevronRight
+            className={cn(
+              "w-3 h-3 transition-transform shrink-0",
+              isOpen && "rotate-90",
+            )}
+          />
+          <Brain className="h-3.5 w-3.5 shrink-0" />
+          <span className="font-medium shrink-0">thinking</span>
+          {!isOpen && (
+            <span className="font-mono text-muted-foreground/80 truncate min-w-0">
+              task list
+            </span>
+          )}
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="mt-1 rounded-md border border-border/30 bg-muted/20 p-3">
+            <MessageMarkdown
+              content={content}
+              components={markdownComponents}
+              className="text-muted-foreground/80 prose-invert prose-p:my-1 prose-headings:my-2 prose-headings:text-muted-foreground prose-ul:my-1 prose-ol:my-1 prose-pre:my-1 prose-pre:p-2"
+              enableBreaks={false}
+            />
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+    );
+  }
+
   return (
     <div className="my-1.5 flex items-center gap-2 w-full text-xs text-muted-foreground py-2 px-3 bg-muted/50 rounded-md">
       <Brain className="w-3.5 h-3.5 shrink-0" />

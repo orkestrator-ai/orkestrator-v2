@@ -54,7 +54,13 @@ type ConnectionState = "connecting" | "connected" | "error";
 export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
+  // Initialize as "connected" if we already have a client and session from a previous init.
+  // This avoids even a single frame of spinner when switching back to an already-connected env.
+  const [connectionState, setConnectionState] = useState<ConnectionState>(() => {
+    const hasClient = useClaudeStore.getState().clients.has(environmentId);
+    const hasSession = useClaudeStore.getState().sessions.has(createClaudeSessionKey(environmentId, tabId));
+    return hasClient && hasSession ? "connected" : "connecting";
+  });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [serverLog, setServerLog] = useState<string | null>(null);
   const [showLog, setShowLog] = useState(false);
@@ -200,7 +206,99 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
 
     async function initialize() {
       try {
-        console.debug("[ClaudeChatTab] Initializing", {
+        // Fast path: if we already have a client and session from a previous init,
+        // skip all expensive steps (server status, health check, models fetch) and
+        // reconnect instantly. This makes environment switching near-instant.
+        const existingClient = useClaudeStore.getState().clients.get(environmentId);
+        const existingSession = useClaudeStore.getState().sessions.get(sessionKey);
+        if (existingClient && existingSession?.sessionId) {
+          console.debug("[ClaudeChatTab] Fast reconnect - reusing existing client and session", {
+            tabId,
+            environmentId,
+            sessionId: existingSession.sessionId,
+          });
+          tabSessionIdRef.current = existingSession.sessionId;
+          isInitializedRef.current = true;
+          lastInitTimeRef.current = Date.now();
+          setConnectionState("connected");
+          setErrorMessage(null);
+
+          // Ensure SSE subscription is still active
+          if (!hasActiveEventSubscription(environmentId)) {
+            startSharedEventSubscription(existingClient);
+          }
+
+          // Non-blocking background health check - if server crashed while we were
+          // on another env, fall through to full init
+          checkHealth(existingClient).then((healthy) => {
+            if (!mounted || healthy) return;
+            console.warn("[ClaudeChatTab] Background health check failed, re-initializing");
+            // Clear stale client so next activation does full init
+            setClient(environmentId, null);
+            setConnectionState("error");
+            setErrorMessage("Bridge server disconnected. Click retry to reconnect.");
+          }).catch(() => {
+            if (!mounted) return;
+            setClient(environmentId, null);
+            setConnectionState("error");
+            setErrorMessage("Bridge server disconnected. Click retry to reconnect.");
+          });
+          return;
+        }
+
+        // Warm path: client exists for this environment (another tab already initialized)
+        // but no session for this specific tab. Skip server status/health/models and
+        // jump straight to session creation using the existing client.
+        if (existingClient) {
+          console.debug("[ClaudeChatTab] Warm path - reusing existing client, creating new session", {
+            tabId,
+            environmentId,
+          });
+          lastInitTimeRef.current = Date.now();
+          setConnectionState("connecting");
+          setErrorMessage(null);
+
+          const bridgeClient = existingClient;
+
+          // Reuse models from store if available, otherwise fetch
+          let resolvedModels = models;
+          if (resolvedModels.length === 0) {
+            resolvedModels = await getModels(bridgeClient);
+            if (!mounted) return;
+            setModels(resolvedModels);
+          }
+
+          const currentSelectedModel = getSelectedModel(sessionKey);
+          const firstModel = resolvedModels[0];
+          if (!currentSelectedModel && firstModel) {
+            setSelectedModel(sessionKey, firstModel.id);
+          }
+
+          const newSession = await createSession(bridgeClient);
+          if (!mounted) return;
+
+          if (!newSession) {
+            throw new Error("Failed to create session");
+          }
+
+          tabSessionIdRef.current = newSession.sessionId;
+          isInitializedRef.current = true;
+
+          setSession(sessionKey, {
+            sessionId: newSession.sessionId,
+            messages: [],
+            isLoading: false,
+          });
+
+          setConnectionState("connected");
+
+          if (!hasActiveEventSubscription(environmentId)) {
+            startSharedEventSubscription(bridgeClient);
+          }
+          return;
+        }
+
+        console.debug("[ClaudeChatTab] Cold start - full initialization", {
           tabId,
           environmentId,
           isLocal,

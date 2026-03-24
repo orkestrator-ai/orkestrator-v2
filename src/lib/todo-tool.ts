@@ -147,5 +147,13 @@ export function appendLatestTodoSnapshot<
     return baseMessages;
   }
 
+  // Don't append snapshot when all todos are finished (completed or cancelled)
+  const hasActiveTodos = latestTodo.todos.some(
+    (todo) => todo.status !== "completed" && todo.status !== "cancelled",
+  );
+  if (!hasActiveTodos) {
+    return baseMessages;
+  }
+
   return [...baseMessages, createMessage(latestTodo)];
 }

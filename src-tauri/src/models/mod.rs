@@ -234,7 +234,7 @@ fn default_branch() -> String {
 
 /// Sanitize a string for use as a git branch name
 /// Replaces invalid characters with hyphens and ensures valid format
-fn sanitize_branch_name(name: &str) -> String {
+pub fn sanitize_branch_name(name: &str) -> String {
     let mut result = String::with_capacity(name.len());
     let mut last_was_hyphen = false;
 

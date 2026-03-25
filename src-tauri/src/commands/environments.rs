@@ -15,8 +15,8 @@ use crate::local::{
     stop_all_local_servers,
 };
 use crate::models::{
-    ClaudeMode, DefaultAgent, Environment, EnvironmentStatus, EnvironmentType, NetworkAccessMode,
-    OpenCodeMode, PortMapping, PrState,
+    sanitize_branch_name, ClaudeMode, DefaultAgent, Environment, EnvironmentStatus,
+    EnvironmentType, NetworkAccessMode, OpenCodeMode, PortMapping, PrState,
 };
 use crate::storage::{get_config, get_storage, StorageError};
 use serde::{Deserialize, Serialize};
@@ -172,35 +172,50 @@ pub async fn reorder_environments(
         .map_err(storage_error_to_string)
 }
 
-/// Generate a unique environment name by appending an integer suffix if needed.
-/// Checks both environment names and branch names to ensure uniqueness.
-fn make_unique_name(base_name: &str, existing_environments: &[Environment]) -> String {
-    // Check if base name is already in use (by name or branch)
-    let is_name_taken = |name: &str| -> bool {
-        existing_environments
-            .iter()
-            .any(|e| e.name == name || e.branch == name)
-    };
-
-    if !is_name_taken(base_name) {
-        return base_name.to_string();
+/// Generate a unique string by appending an integer suffix if needed.
+/// The `is_taken` predicate determines whether a candidate is already in use.
+fn make_unique(base: &str, is_taken: impl Fn(&str) -> bool) -> String {
+    if !is_taken(base) {
+        return base.to_string();
     }
 
-    // Find the next available suffix
     let mut suffix = 2;
     loop {
-        let candidate = format!("{}-{}", base_name, suffix);
-        if !is_name_taken(&candidate) {
+        let candidate = format!("{}-{}", base, suffix);
+        if !is_taken(&candidate) {
             return candidate;
         }
         suffix += 1;
         // Safety limit to prevent infinite loops
         if suffix > 1000 {
-            // Fall back to timestamp-based name
             let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-            return format!("{}-{}", base_name, timestamp);
+            return format!("{}-{}", base, timestamp);
         }
     }
+}
+
+/// Generate a unique environment name by appending an integer suffix if needed.
+/// Checks both environment names and branch names to ensure uniqueness.
+fn make_unique_name(base_name: &str, existing_environments: &[Environment]) -> String {
+    make_unique(base_name, |name| {
+        existing_environments
+            .iter()
+            .any(|e| e.name == name || e.branch == name)
+    })
+}
+
+/// Generate a unique branch name by appending an integer suffix if needed.
+/// Checks against existing environment branch names and an optional set of
+/// extra branch names (e.g. actual git branches in the repository).
+fn make_unique_branch(
+    base_branch: &str,
+    existing_environments: &[Environment],
+    extra_branches: &[String],
+) -> String {
+    make_unique(base_branch, |branch| {
+        existing_environments.iter().any(|e| e.branch == branch)
+            || extra_branches.iter().any(|b| b == branch)
+    })
 }
 
 /// Create a new environment for a project
@@ -346,6 +361,35 @@ pub async fn create_environment(
     Ok(created_environment)
 }
 
+/// List all git branch names in the repository that owns the given environment.
+/// Returns an empty vec on any error (best-effort).
+async fn list_repo_git_branches(
+    storage: &crate::storage::Storage,
+    environment_id: &str,
+) -> Vec<String> {
+    let repo_path = (|| -> Option<String> {
+        let env = storage.get_environment(environment_id).ok()??;
+        let project = storage.get_project(&env.project_id).ok()??;
+        project.local_path
+    })();
+
+    let Some(path) = repo_path else {
+        return Vec::new();
+    };
+
+    match tokio::process::Command::new("git")
+        .args(["-C", &path, "branch", "--format=%(refname:short)"])
+        .output()
+        .await
+    {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|l| l.to_string())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Background task to generate a name via Claude CLI and rename the environment
 async fn background_rename_environment(
     app_handle: tauri::AppHandle,
@@ -393,12 +437,25 @@ async fn background_rename_environment(
     };
 
     let unique_name = make_unique_name(&generated_name, &existing_environments);
-    debug!(environment_id = %environment_id, unique_name = %unique_name, "Unique name determined");
+    // Sanitize the branch name separately - the display name may contain spaces/special
+    // chars that are invalid in git branch names. This mirrors what happens during
+    // environment creation (models::sanitize_branch_name).
+    let sanitized_branch = sanitize_branch_name(&unique_name);
+
+    // Gather actual git branches from the repo so we don't collide with branches
+    // that exist in git but have no corresponding environment in storage.
+    let git_branches = list_repo_git_branches(&storage, &environment_id).await;
+
+    // Ensure the sanitized branch is also unique (two different names could sanitize to the
+    // same branch, e.g. "My Feature!" and "My Feature?" both become "My-Feature")
+    let unique_branch =
+        make_unique_branch(&sanitized_branch, &existing_environments, &git_branches);
+    debug!(environment_id = %environment_id, unique_name = %unique_name, unique_branch = %unique_branch, "Unique name and branch determined");
 
     // Update environment name and branch in storage
     if let Err(e) = storage.update_environment(
         &environment_id,
-        json!({ "name": &unique_name, "branch": &unique_name }),
+        json!({ "name": &unique_name, "branch": &unique_branch }),
     ) {
         warn!(environment_id = %environment_id, error = %e, "Failed to update environment");
         return;
@@ -422,7 +479,7 @@ async fn background_rename_environment(
                         "-m",
                         "--",
                         &old_branch,
-                        &unique_name,
+                        &unique_branch,
                     ])
                     .output()
                     .await
@@ -435,7 +492,7 @@ async fn background_rename_environment(
                             warn!(
                                 environment_id = %environment_id,
                                 old_branch = %old_branch,
-                                new_branch = %unique_name,
+                                new_branch = %unique_branch,
                                 stderr = %stderr,
                                 "Failed to rename git branch in local worktree"
                             );
@@ -445,7 +502,7 @@ async fn background_rename_environment(
                         warn!(
                             environment_id = %environment_id,
                             old_branch = %old_branch,
-                            new_branch = %unique_name,
+                            new_branch = %unique_branch,
                             error = %e,
                             "Failed to execute git branch rename command"
                         );
@@ -495,7 +552,7 @@ async fn background_rename_environment(
                                 "-m",
                                 "--",
                                 &old_branch,
-                                &unique_name,
+                                &unique_branch,
                             ],
                         )
                         .await
@@ -507,7 +564,7 @@ async fn background_rename_environment(
                             warn!(
                                 environment_id = %environment_id,
                                 old_branch = %old_branch,
-                                new_branch = %unique_name,
+                                new_branch = %unique_branch,
                                 error = %e,
                                 "Failed to rename git branch - branch may not exist or may have a different name"
                             );
@@ -534,7 +591,7 @@ async fn background_rename_environment(
     let payload = EnvironmentRenamedPayload {
         environment_id: environment_id.clone(),
         new_name: unique_name.clone(),
-        new_branch: unique_name.clone(),
+        new_branch: unique_branch.clone(),
     };
 
     if let Err(e) = app_handle.emit("environment-renamed", payload) {
@@ -1925,5 +1982,71 @@ mod tests {
     fn test_resolve_container_github_token_prefers_configured_token() {
         let token = resolve_container_github_token(Some("  ghp-configured  "), "env-123");
         assert_eq!(token, Some("ghp-configured".to_string()));
+    }
+
+    fn env_with_branch(name: &str, branch: &str) -> Environment {
+        let mut env = Environment::with_name("proj".to_string(), name.to_string());
+        env.branch = branch.to_string();
+        env
+    }
+
+    #[test]
+    fn test_make_unique_returns_base_when_available() {
+        let result = make_unique("hello", |_| false);
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn test_make_unique_appends_suffix_when_taken() {
+        let taken = vec!["feat".to_string(), "feat-2".to_string()];
+        let result = make_unique("feat", |name| taken.contains(&name.to_string()));
+        assert_eq!(result, "feat-3");
+    }
+
+    #[test]
+    fn test_make_unique_name_avoids_name_and_branch_collisions() {
+        let envs = vec![
+            env_with_branch("my-feature", "my-feature"),
+            env_with_branch("other", "my-feature-2"),
+        ];
+        let result = make_unique_name("my-feature", &envs);
+        // "my-feature" taken by name, "my-feature-2" taken by branch
+        assert_eq!(result, "my-feature-3");
+    }
+
+    #[test]
+    fn test_make_unique_branch_avoids_env_branches() {
+        let envs = vec![
+            env_with_branch("A", "My-Feature"),
+            env_with_branch("B", "My-Feature-2"),
+        ];
+        let result = make_unique_branch("My-Feature", &envs, &[]);
+        assert_eq!(result, "My-Feature-3");
+    }
+
+    #[test]
+    fn test_make_unique_branch_avoids_extra_git_branches() {
+        let envs = vec![env_with_branch("A", "feat")];
+        let git_branches = vec!["feat-2".to_string(), "feat-3".to_string()];
+        let result = make_unique_branch("feat", &envs, &git_branches);
+        // "feat" taken by env, "feat-2" and "feat-3" taken by git
+        assert_eq!(result, "feat-4");
+    }
+
+    #[test]
+    fn test_make_unique_branch_returns_base_when_available() {
+        let envs = vec![env_with_branch("A", "other-branch")];
+        let result = make_unique_branch("my-branch", &envs, &[]);
+        assert_eq!(result, "my-branch");
+    }
+
+    #[test]
+    fn test_sanitize_then_unique_branch_handles_collision() {
+        // Two different display names that sanitize to the same branch
+        let envs = vec![env_with_branch("My Feature!", "My-Feature")];
+        let sanitized = sanitize_branch_name("My Feature?");
+        assert_eq!(sanitized, "My-Feature");
+        let result = make_unique_branch(&sanitized, &envs, &[]);
+        assert_eq!(result, "My-Feature-2");
     }
 }

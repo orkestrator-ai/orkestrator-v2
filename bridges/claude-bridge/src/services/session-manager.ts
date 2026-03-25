@@ -796,10 +796,12 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
     finalPrompt = planModeInstruction + displayPrompt;
   }
 
-  // Add user message with displayPrompt (what the user sees, without planning mode instruction)
+  // Add user message with displayPrompt (what the user sees, without planning mode instruction).
+  // Re-prompts (e.g. after plan rejection) use role "system" so they don't appear as user-typed.
+  const messageRole = options?._isReprompt ? "system" : "user";
   const userMessage: NormalizedMessage = {
     id: generateMessageId(),
-    role: "user",
+    role: messageRole,
     content: displayPrompt,
     parts: [{ type: "text", content: displayPrompt }],
     timestamp: new Date().toISOString(),
@@ -997,8 +999,9 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
               planApprovalResolvers.set(approvalId, { resolve, reject });
             });
 
+            let approvalTimeoutId: ReturnType<typeof setTimeout> | undefined;
             const timeoutPromise = new Promise<never>((_, reject) => {
-              setTimeout(() => {
+              approvalTimeoutId = setTimeout(() => {
                 reject(new Error("Plan approval timed out after 5 minutes"));
               }, PLAN_APPROVAL_TIMEOUT_MS);
             });
@@ -1020,13 +1023,23 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
                   updatedInput: input,
                 };
               } else {
-                // User rejected - deny the tool and include feedback if provided
+                // User rejected - deny the tool and include feedback if provided.
+                // Also capture the feedback so we can re-prompt Claude if the SDK
+                // ends the turn after the denial (ExitPlanMode denial may terminate
+                // the agent loop without Claude generating a revision).
                 const feedbackMessage = response.feedback
                   ? `User feedback: "${response.feedback}"`
                   : "No specific feedback was provided.";
+                const denyMessage = `User rejected the plan. ${feedbackMessage} Please revise your approach based on this feedback.`;
+
+                // Store the raw feedback for potential re-prompt
+                pendingPlanRejectionFeedback = response.feedback
+                  ? `I've reviewed the plan and I'd like changes: ${response.feedback}\n\nPlease revise the plan based on this feedback.`
+                  : `I've reviewed the plan and I don't approve it as-is. Please revise your approach.`;
+
                 return {
                   behavior: "deny" as const,
-                  message: `User rejected the plan. ${feedbackMessage} Please revise your approach based on this feedback.`,
+                  message: denyMessage,
                 };
               }
             } catch (error) {
@@ -1036,6 +1049,7 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
               return { behavior: "deny" as const, message: errorMessage };
             } finally {
               // Cleanup
+              if (approvalTimeoutId) clearTimeout(approvalTimeoutId);
               pendingPlanApprovals.delete(approvalId);
               planApprovalResolvers.delete(approvalId);
             }
@@ -1091,6 +1105,11 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
     // - Replace parts during streaming (same UUID)
     // - Accumulate parts across multiple assistant messages in a turn (different UUID)
     let lastAssistantMessageUuid: string | null = null;
+
+    // Track plan rejection feedback so we can re-prompt Claude after the turn ends.
+    // When ExitPlanMode is denied, the SDK may end the turn without Claude seeing
+    // the feedback. We capture it here and re-send as a follow-up prompt.
+    let pendingPlanRejectionFeedback: string | null = null;
 
     // Process the async generator
     for await (const message of queryIterator) {
@@ -1220,6 +1239,14 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
           });
         }
       } else if (message.type === "assistant") {
+        // If we receive a new assistant message after a plan denial, it means
+        // the SDK continued the agent loop and Claude did see the feedback.
+        // Clear the pending feedback so we don't re-prompt unnecessarily.
+        if (pendingPlanRejectionFeedback) {
+          console.log("[session-manager] Claude responded after plan denial, clearing re-prompt feedback", { sessionId });
+          pendingPlanRejectionFeedback = null;
+        }
+
         // Assistant message - parse content and register tools with tracker
         const { content, orderedParts, newTaskIds } = parseMessageContent(
           message,
@@ -1350,6 +1377,39 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
         // For now, we rely on full assistant messages
       }
       // Note: AskUserQuestion tool handling is done in the canUseTool callback above
+    }
+
+    // If a plan was rejected with feedback but the SDK ended the turn without
+    // Claude revising, re-send the feedback as a follow-up prompt so Claude
+    // actually sees it and generates a revised plan.
+    // Guard: only re-prompt once (skip if this call is itself a re-prompt).
+    if (pendingPlanRejectionFeedback && !abortController.signal.aborted && !options?._isReprompt) {
+      const feedbackPrompt = pendingPlanRejectionFeedback;
+      pendingPlanRejectionFeedback = null;
+
+      console.log("[session-manager] Re-prompting with plan rejection feedback", { sessionId });
+
+      // Reset status to idle temporarily so sendPrompt can be called
+      session.status = "idle";
+      session.abortController = undefined;
+
+      // Re-prompt with plan mode preserved, attachments stripped, and _isReprompt
+      // set to prevent infinite recursion if this re-prompt also gets rejected.
+      const repromptOptions: PromptOptions = {
+        model: options?.model,
+        thinking: options?.thinking,
+        permissionMode: "plan",
+        _isReprompt: true,
+      };
+
+      try {
+        await sendPrompt(sessionId, feedbackPrompt, repromptOptions);
+        // sendPrompt handles setting idle status and emitting events, so return early
+        return;
+      } catch (repromptError) {
+        console.error("[session-manager] Failed to re-prompt with plan feedback:", repromptError);
+        // Fall through to normal idle handling
+      }
     }
 
     // Generate a session title from the first user message if title is still the default

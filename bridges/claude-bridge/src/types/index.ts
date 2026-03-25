@@ -217,6 +217,10 @@ export interface PromptOptions {
     dataUrl?: string;
     filename?: string;
   }>;
+  /** Internal flag: set when sendPrompt is called as an automatic re-prompt
+   *  (e.g. after plan rejection). Prevents infinite recursion and marks the
+   *  message as system-generated so it doesn't appear as user-typed. */
+  _isReprompt?: boolean;
 }
 
 /** API responses */

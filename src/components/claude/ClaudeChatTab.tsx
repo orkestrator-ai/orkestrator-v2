@@ -10,6 +10,7 @@ import {
   createClient,
   getModels,
   createSession,
+  getSession,
   getSessionMessages,
   sendPrompt,
   abortSession,
@@ -229,16 +230,43 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
           }
 
           // Non-blocking background health check - if server crashed while we were
-          // on another env, fall through to full init
-          checkHealth(existingClient).then((healthy) => {
-            if (!mounted || healthy) return;
-            console.warn("[ClaudeChatTab] Background health check failed, re-initializing");
-            // Clear stale client so next activation does full init
-            setClient(environmentId, null);
-            setConnectionState("error");
-            setErrorMessage("Bridge server disconnected. Click retry to reconnect.");
-          }).catch(() => {
+          // on another env, fall through to full init. If healthy, re-sync session
+          // state to pick up any messages missed while the tab was inactive.
+          checkHealth(existingClient).then(async (healthy) => {
             if (!mounted) return;
+            if (!healthy) {
+              console.warn("[ClaudeChatTab] Background health check failed, re-initializing");
+              setClient(environmentId, null);
+              setConnectionState("error");
+              setErrorMessage("Bridge server disconnected. Click retry to reconnect.");
+              return;
+            }
+
+            // Re-sync session state from the server.
+            // If SSE events were missed while this tab was inactive (e.g. due to
+            // an EventSource error killing the subscription), messages and loading
+            // state can be stale.
+            const serverSession = await getSession(existingClient, existingSession.sessionId);
+            if (!mounted || !serverSession) return;
+            const messages = await getSessionMessages(existingClient, existingSession.sessionId);
+            if (!mounted) return;
+
+            // Only apply fetched messages if they are more complete than what
+            // the store currently has (SSE may have already delivered newer data).
+            const currentMessages = useClaudeStore.getState().sessions.get(sessionKey)?.messages ?? [];
+            if (messages.length >= currentMessages.length) {
+              setMessages(sessionKey, messages);
+            }
+
+            // Reconcile loading state with server - re-read from store to avoid
+            // acting on the stale snapshot captured at the start of this block.
+            const currentSession = useClaudeStore.getState().sessions.get(sessionKey);
+            if (serverSession.status !== "running" && currentSession?.isLoading) {
+              setSessionLoading(sessionKey, false);
+            }
+          }).catch((err) => {
+            if (!mounted) return;
+            console.debug("[ClaudeChatTab] Background health check / re-sync failed:", err);
             setClient(environmentId, null);
             setConnectionState("error");
             setErrorMessage("Bridge server disconnected. Click retry to reconnect.");

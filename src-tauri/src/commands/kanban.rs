@@ -43,11 +43,13 @@ pub async fn update_kanban_task(
     description: Option<String>,
     acceptance_criteria: Option<String>,
     status: Option<KanbanStatus>,
+    environment_id: Option<String>,
+    build_pipeline_id: Option<String>,
 ) -> Result<KanbanTask, String> {
     debug!(task_id = %task_id, "Updating kanban task");
     let storage = get_storage().map_err(storage_error_to_string)?;
     storage
-        .update_kanban_task(&task_id, title, description, acceptance_criteria, status)
+        .update_kanban_task(&task_id, title, description, acceptance_criteria, status, environment_id, build_pipeline_id)
         .map_err(storage_error_to_string)
 }
 

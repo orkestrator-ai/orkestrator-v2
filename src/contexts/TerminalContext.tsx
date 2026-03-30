@@ -10,7 +10,8 @@ export type TabType =
   | "file"
   | "opencode-native"
   | "claude-native"
-  | "codex-native";
+  | "codex-native"
+  | "claude-build";
 
 // Maximum number of tabs allowed (matches Ctrl+1-9 shortcuts)
 export const MAX_TABS = 9;

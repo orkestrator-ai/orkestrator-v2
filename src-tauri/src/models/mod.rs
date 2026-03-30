@@ -428,6 +428,12 @@ pub struct KanbanTask {
     pub comments: Vec<KanbanComment>,
     pub created_at: DateTime<Utc>,
     pub order: i32,
+    /// Linked build environment ID
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_id: Option<String>,
+    /// Active build pipeline ID
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_pipeline_id: Option<String>,
 }
 
 impl KanbanTask {
@@ -442,6 +448,8 @@ impl KanbanTask {
             comments: Vec::new(),
             created_at: Utc::now(),
             order: 0,
+            environment_id: None,
+            build_pipeline_id: None,
         }
     }
 }

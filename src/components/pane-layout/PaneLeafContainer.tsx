@@ -10,6 +10,7 @@ import { FileViewerTab } from "@/components/terminal/FileViewerTab";
 import { OpenCodeChatTab } from "@/components/opencode";
 import { ClaudeChatTab } from "@/components/claude/ClaudeChatTab";
 import { CodexChatTab } from "@/components/codex";
+import { BuildChatTab } from "@/components/build-pipeline";
 import { DraggableTabBar } from "./DraggableTabBar";
 import { DropZoneOverlay } from "./DropZoneOverlay";
 
@@ -94,6 +95,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
         || tab.type === "opencode-native"
         || tab.type === "claude-native"
         || tab.type === "codex-native"
+        || tab.type === "claude-build"
       ) {
         continue;
       }
@@ -245,6 +247,24 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   data={tab.codexNativeData}
                   isActive={isTabActive && isActive}
                   initialPrompt={tab.initialPrompt}
+                />
+              </div>
+            );
+          }
+
+          // Build pipeline tabs
+          if (tab.type === "claude-build" && tab.buildTabData) {
+            return (
+              <div
+                key={tab.id}
+                className={cn(
+                  "absolute inset-0",
+                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden"
+                )}
+              >
+                <BuildChatTab
+                  data={tab.buildTabData}
+                  isActive={isTabActive && isActive}
                 />
               </div>
             );

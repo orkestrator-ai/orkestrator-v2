@@ -72,6 +72,18 @@ export interface CodexNativeData {
   isLocal?: boolean;
 }
 
+// Data for build pipeline tabs
+export interface BuildTabData {
+  /** Environment ID */
+  environmentId: string;
+  /** Build pipeline ID (links to buildPipelineStore) */
+  pipelineId: string;
+  /** Kanban task ID */
+  taskId: string;
+  /** Whether this is a local environment (no container) */
+  isLocal?: boolean;
+}
+
 // Tab information stored in pane leaves
 export interface TabInfo {
   id: string;
@@ -83,6 +95,8 @@ export interface TabInfo {
   claudeNativeData?: ClaudeNativeData;
   /** Data for codex-native tabs */
   codexNativeData?: CodexNativeData;
+  /** Data for claude-build tabs */
+  buildTabData?: BuildTabData;
   /** Initial prompt to send to agent (only for claude/opencode tabs) */
   initialPrompt?: string;
   /** Initial commands to execute (only for plain terminal tabs) */

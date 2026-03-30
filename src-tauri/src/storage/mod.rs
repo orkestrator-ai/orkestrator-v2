@@ -1118,6 +1118,8 @@ impl Storage {
         description: Option<String>,
         acceptance_criteria: Option<String>,
         status: Option<KanbanStatus>,
+        environment_id: Option<String>,
+        build_pipeline_id: Option<String>,
     ) -> Result<KanbanTask, StorageError> {
         let mut tasks = self.load_kanban_tasks()?;
         let task_index = tasks
@@ -1146,6 +1148,12 @@ impl Storage {
                 tasks[task_index].status = new_status;
                 tasks[task_index].order = max_order + 1;
             }
+        }
+        if let Some(environment_id) = environment_id {
+            tasks[task_index].environment_id = if environment_id.is_empty() { None } else { Some(environment_id) };
+        }
+        if let Some(build_pipeline_id) = build_pipeline_id {
+            tasks[task_index].build_pipeline_id = if build_pipeline_id.is_empty() { None } else { Some(build_pipeline_id) };
         }
 
         let updated = tasks[task_index].clone();

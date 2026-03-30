@@ -10,9 +10,11 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Trash2, Send, CheckCircle2 } from "lucide-react";
+import { Trash2, Send, CheckCircle2, Container, FolderGit2, ExternalLink, Loader2 } from "lucide-react";
 import type { KanbanTask, KanbanStatus } from "@/stores/kanbanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 
 const STATUS_LABELS: Record<KanbanStatus, string> = {
   backlog: "Backlog",
@@ -35,6 +37,10 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
   const addTaskStore = useKanbanStore((s) => s.addTask);
   const addComment = useKanbanStore((s) => s.addComment);
   const deleteComment = useKanbanStore((s) => s.deleteComment);
+
+  const { startBuild, navigateToBuild } = useBuildPipeline();
+  const getPipelineByTaskId = useBuildPipelineStore((s) => s.getPipelineByTaskId);
+  const [isBuildStarting, setIsBuildStarting] = useState(false);
 
   const isCreateMode = !!createForProjectId;
 
@@ -292,6 +298,87 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
             </div>
           )}
         </div>
+
+        <Separator />
+
+        {/* Build Actions */}
+        {(() => {
+          const existingPipeline = getPipelineByTaskId(task.id);
+          const hasActiveBuild = existingPipeline && !["complete", "failed"].includes(existingPipeline.phase);
+
+          return (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                {!task.environmentId ? (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-1.5 flex-1"
+                      disabled={isBuildStarting || !!hasActiveBuild}
+                      onClick={async () => {
+                        setIsBuildStarting(true);
+                        try {
+                          await startBuild(task, "containerized");
+                          handleOpenChange(false);
+                        } finally {
+                          setIsBuildStarting(false);
+                        }
+                      }}
+                    >
+                      {isBuildStarting ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Container className="h-3.5 w-3.5" />
+                      )}
+                      Build Container
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-1.5 flex-1"
+                      disabled={isBuildStarting || !!hasActiveBuild}
+                      onClick={async () => {
+                        setIsBuildStarting(true);
+                        try {
+                          await startBuild(task, "local");
+                          handleOpenChange(false);
+                        } finally {
+                          setIsBuildStarting(false);
+                        }
+                      }}
+                    >
+                      {isBuildStarting ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <FolderGit2 className="h-3.5 w-3.5" />
+                      )}
+                      Build Local
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1.5"
+                    onClick={() => {
+                      navigateToBuild(task);
+                      handleOpenChange(false);
+                    }}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    View Build
+                    {existingPipeline && (
+                      <span className="text-xs text-muted-foreground ml-1">
+                        ({existingPipeline.phase})
+                      </span>
+                    )}
+                  </Button>
+                )}
+              </div>
+            </div>
+          );
+        })()}
 
         <Separator />
 

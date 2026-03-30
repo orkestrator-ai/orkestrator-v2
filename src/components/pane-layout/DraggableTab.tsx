@@ -1,6 +1,6 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { FileCode, Terminal as TerminalIcon, X } from "lucide-react";
+import { FileCode, Terminal as TerminalIcon, X, Hammer } from "lucide-react";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import {
   Tooltip,
@@ -19,6 +19,7 @@ import type { TabInfo } from "@/types/paneLayout";
 import { createDraggableTabId } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFileDirtyStore } from "@/stores";
 import type { TabType } from "@/contexts";
 
@@ -33,6 +34,9 @@ const isClaudeTab = (type: TabType): boolean =>
 /** Check if a tab type is a Codex variant */
 const isCodexTab = (type: TabType): boolean =>
   type === "codex" || type === "codex-native";
+
+/** Check if a tab type is a build pipeline tab */
+const isBuildTab = (type: TabType): boolean => type === "claude-build";
 
 interface DraggableTabProps {
   tab: TabInfo;
@@ -96,6 +100,13 @@ export function DraggableTab({
     return state.sessions.get(key)?.title;
   });
 
+  // Get build pipeline title for claude-build tabs
+  const buildPipelineTitle = useBuildPipelineStore((state) => {
+    if (tab.type !== "claude-build" || !tab.buildTabData) return undefined;
+    const pipeline = state.pipelines.get(tab.buildTabData.pipelineId);
+    return pipeline?.taskTitle;
+  });
+
   // Check if file tab has unsaved changes
   const isDirty = useFileDirtyStore((state) =>
     tab.type === "file" ? state.isDirty(tab.id) : false,
@@ -126,11 +137,17 @@ export function DraggableTab({
       return claudeSessionTitle;
     }
 
+    // Build pipeline tab title
+    if (isBuildTab(tab.type) && buildPipelineTitle) {
+      return `Build: ${buildPipelineTitle}`;
+    }
+
     // Default names
     if (tab.type === "plain") return `Terminal ${tabNumber}`;
     if (isClaudeTab(tab.type)) return `Claude ${tabNumber}`;
     if (isOpenCodeTab(tab.type)) return `OpenCode ${tabNumber}`;
     if (isCodexTab(tab.type)) return `Codex ${tabNumber}`;
+    if (isBuildTab(tab.type)) return `Build ${tabNumber}`;
     if (tab.type === "root") return `ROOT ${tabNumber}`;
     return `Tab ${tabNumber}`;
   };
@@ -148,6 +165,9 @@ export function DraggableTab({
     }
     if (isCodexTab(tab.type)) {
       return <CodexIcon className="h-3 w-3 shrink-0 text-emerald-400" />;
+    }
+    if (isBuildTab(tab.type)) {
+      return <Hammer className="h-3 w-3 shrink-0 text-yellow-400" />;
     }
     return <TerminalIcon className="h-3 w-3 shrink-0" />;
   };

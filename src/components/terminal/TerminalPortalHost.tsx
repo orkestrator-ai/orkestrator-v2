@@ -94,8 +94,8 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
     const map = new Map<string, { tab: TabInfo; paneId: string }>();
     for (const leaf of leaves) {
       for (const tab of leaf.tabs) {
-        // Only handle terminal tabs (not file tabs)
-        if (tab.type !== "file") {
+        // Only handle terminal tabs (not file, native, or build tabs)
+        if (tab.type !== "file" && tab.type !== "claude-build") {
           map.set(tab.id, { tab, paneId: leaf.id });
         }
       }

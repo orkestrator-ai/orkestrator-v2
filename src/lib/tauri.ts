@@ -1061,6 +1061,10 @@ export interface KanbanTask {
   comments: KanbanComment[];
   createdAt: string;
   order: number;
+  /** Linked build environment ID */
+  environmentId?: string;
+  /** Active build pipeline ID */
+  buildPipelineId?: string;
 }
 
 export interface ProjectNotes {
@@ -1086,9 +1090,11 @@ export async function updateKanbanTask(
   title?: string,
   description?: string,
   acceptanceCriteria?: string,
-  status?: KanbanStatus
+  status?: KanbanStatus,
+  environmentId?: string,
+  buildPipelineId?: string,
 ): Promise<KanbanTask> {
-  return invoke<KanbanTask>("update_kanban_task", { taskId, title, description, acceptanceCriteria, status });
+  return invoke<KanbanTask>("update_kanban_task", { taskId, title, description, acceptanceCriteria, status, environmentId, buildPipelineId });
 }
 
 export async function deleteKanbanTask(taskId: string): Promise<void> {

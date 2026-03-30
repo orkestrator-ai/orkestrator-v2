@@ -295,36 +295,52 @@ export function PersistentTerminal({
       const text = new TextDecoder().decode(data);
 
       // For first tab only: detect environment ready state
-      // IMPORTANT: For the first tab, we ONLY detect explicit completion markers.
-      // We must NOT use shell prompt fallbacks because:
-      // 1. Shell prompts (➜) appear between setup commands
-      // 2. Git clone output contains "workspace", "main", etc.
-      // 3. We need to wait for ALL setup scripts in orkestrator-ai.json to complete
       if (isFirstTab && !isEnvironmentReady) {
         dataBufferRef.current += text;
         const strippedBuffer = stripAnsi(dataBufferRef.current);
 
-        // Only detect explicit completion markers
-        // These appear at the END of workspace-setup.sh after ALL scripts finish
-        const readyDetected =
-          strippedBuffer.includes(ENVIRONMENT_READY_MARKER) ||
-          dataBufferRef.current.includes(ENVIRONMENT_READY_MARKER) ||
-          // Also check for alternate marker formats (with different delimiters)
-          strippedBuffer.includes(ENVIRONMENT_READY_MARKER_ALT_TILDE) ||
-          strippedBuffer.includes(ENVIRONMENT_READY_MARKER_ALT_DASH) ||
-          // Setup complete marker appears right before "Workspace Ready"
-          strippedBuffer.includes(SETUP_COMPLETE_MARKER);
+        if (isLocalEnvironment) {
+          // Local environments: detect shell prompt readiness (no Docker markers exist)
+          const hasShellPrompt = strippedBuffer.includes("➜") || strippedBuffer.includes("❯");
+          // Match "$ " or "% " only at line start or after whitespace to avoid false positives on command output
+          const hasGenericPrompt = /(?:^|\n)\s*[$%] /m.test(strippedBuffer);
+          // Length fallback: only trigger if buffer ends with a newline (prompt line fully rendered)
+          const hasLengthFallback = strippedBuffer.length > 500 && strippedBuffer.trimEnd().endsWith("\n");
 
-        if (readyDetected) {
-          console.log("[PersistentTerminal] Environment ready detected for tab:", tabId, "isFirstTab:", isFirstTab);
-          setIsEnvironmentReady(true);
-          dataBufferRef.current = "";
-          onReady?.();
-        }
+          if (hasShellPrompt || hasGenericPrompt || hasLengthFallback) {
+            console.log("[PersistentTerminal] Local environment ready detected for first tab:", tabId);
+            setIsEnvironmentReady(true);
+            dataBufferRef.current = "";
+            onReady?.();
+          } else if (dataBufferRef.current.length > 1024) {
+            dataBufferRef.current = dataBufferRef.current.slice(-512);
+          }
+        } else {
+          // Container environments: wait for explicit completion markers from workspace-setup.sh
+          // IMPORTANT: We must NOT use shell prompt fallbacks because:
+          // 1. Shell prompts (➜) appear between setup commands
+          // 2. Git clone output contains "workspace", "main", etc.
+          // 3. We need to wait for ALL setup scripts in orkestrator-ai.json to complete
+          const readyDetected =
+            strippedBuffer.includes(ENVIRONMENT_READY_MARKER) ||
+            dataBufferRef.current.includes(ENVIRONMENT_READY_MARKER) ||
+            // Also check for alternate marker formats (with different delimiters)
+            strippedBuffer.includes(ENVIRONMENT_READY_MARKER_ALT_TILDE) ||
+            strippedBuffer.includes(ENVIRONMENT_READY_MARKER_ALT_DASH) ||
+            // Setup complete marker appears right before "Workspace Ready"
+            strippedBuffer.includes(SETUP_COMPLETE_MARKER);
 
-        // Keep buffer from growing indefinitely, but use a larger window to catch markers
-        if (dataBufferRef.current.length > 4096) {
-          dataBufferRef.current = dataBufferRef.current.slice(-2048);
+          if (readyDetected) {
+            console.log("[PersistentTerminal] Environment ready detected for tab:", tabId, "isFirstTab:", isFirstTab);
+            setIsEnvironmentReady(true);
+            dataBufferRef.current = "";
+            onReady?.();
+          }
+
+          // Keep buffer from growing indefinitely, but use a larger window to catch markers
+          if (dataBufferRef.current.length > 4096) {
+            dataBufferRef.current = dataBufferRef.current.slice(-2048);
+          }
         }
       }
 
@@ -347,7 +363,7 @@ export function PersistentTerminal({
         }
       }
     },
-    [terminal, isFirstTab, isEnvironmentReady, tabId, onReady]
+    [terminal, isFirstTab, isLocalEnvironment, isEnvironmentReady, tabId, onReady]
   );
 
   // Determine user based on tab type - root tabs connect as orkroot

@@ -139,14 +139,8 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
     });
   }, [pipeline, sessionsMap]);
 
-  // Scroll trigger - use total message count across all sessions
-  const totalMessageCount = useMemo(
-    () => allSessionMessages.reduce((sum, s) => sum + s.messages.length, 0),
-    [allSessionMessages]
-  );
-
   const { isAtBottom, scrollToBottom } = useScrollLock(scrollRef, {
-    scrollTrigger: totalMessageCount,
+    scrollTrigger: allSessionMessages,
     mountTrigger: connectionState,
     isActive,
     persistKey: `build-${pipelineId}`,

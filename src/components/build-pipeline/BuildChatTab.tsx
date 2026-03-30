@@ -435,7 +435,6 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
       addMessage(reviewSession.sessionKey, userMessage);
 
       const success = await sendPrompt(client, reviewSession.sdkSessionId, userMessage.content, {
-        thinking: true,
         permissionMode: "bypassPermissions",
       });
 
@@ -545,7 +544,6 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
       setSessionLoading(result.sessionKey, true);
 
       const success = await sendPrompt(client, result.sdkSessionId, taskDescription, {
-        thinking: true,
         permissionMode: "bypassPermissions",
       });
 
@@ -584,7 +582,6 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
       setSessionLoading(result.sessionKey, true);
 
       const success = await sendPrompt(client, result.sdkSessionId, reviewPrompt, {
-        thinking: true,
         permissionMode: "bypassPermissions",
       });
 
@@ -631,7 +628,6 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
       setSessionLoading(result.sessionKey, true);
 
       const success = await sendPrompt(client, result.sdkSessionId, verifyPrompt, {
-        thinking: true,
         permissionMode: "bypassPermissions",
       });
 
@@ -677,7 +673,6 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
       setSessionLoading(result.sessionKey, true);
 
       const success = await sendPrompt(client, result.sdkSessionId, fixPrompt, {
-        thinking: true,
         permissionMode: "bypassPermissions",
       });
 

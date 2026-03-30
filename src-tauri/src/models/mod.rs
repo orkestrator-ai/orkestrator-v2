@@ -819,6 +819,12 @@ pub struct RepositoryConfig {
     /// Additional files to copy from local project path to environments (relative paths)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files_to_copy: Option<Vec<String>>,
+    /// Default model ID for the configured default agent (e.g. "claude-sonnet-4-6")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+    /// Default effort/thinking level for the configured default agent
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_effort: Option<String>,
 }
 
 impl Default for RepositoryConfig {
@@ -828,6 +834,8 @@ impl Default for RepositoryConfig {
             pr_base_branch: "main".to_string(),
             default_port_mappings: None,
             files_to_copy: None,
+            default_model: None,
+            default_effort: None,
         }
     }
 }

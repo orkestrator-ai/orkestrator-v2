@@ -284,7 +284,7 @@ describe("buildPipelineStore", () => {
     useBuildPipelineStore.getState().addSession(id, session);
     const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
     expect(pipeline.sessions).toHaveLength(1);
-    expect(pipeline.sessions[0].sdkSessionId).toBe("sdk-1");
+    expect(pipeline.sessions[0]!.sdkSessionId).toBe("sdk-1");
     expect(pipeline.currentSessionIndex).toBe(0);
   });
 
@@ -309,7 +309,7 @@ describe("buildPipelineStore", () => {
 
     useBuildPipelineStore.getState().markSessionIdle(id, "sdk-1");
     const session = useBuildPipelineStore.getState().pipelines.get(id)!.sessions[0];
-    expect(session.status).toBe("idle");
+    expect(session!.status).toBe("idle");
   });
 
   test("incrementIteration increments iteration count", () => {

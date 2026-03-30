@@ -24,8 +24,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useConfigStore } from "@/stores";
+import { useClaudeStore } from "@/stores/claudeStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { useCodexStore } from "@/stores/codexStore";
 import * as tauri from "@/lib/tauri";
-import { Loader2, Network, Plus, Trash2, ChevronDown, FolderOpen, ExternalLink, FileText } from "lucide-react";
+import type { ClaudeModel, ClaudeEffortLevel } from "@/lib/claude-client";
+import type { OpenCodeModel } from "@/lib/opencode-client";
+import type { CodexReasoningEffort } from "@/lib/codex-client";
+import { CODEX_MODELS } from "@/lib/codex-client";
+import { Loader2, Network, Plus, Trash2, ChevronDown, FolderOpen, ExternalLink, FileText, Bot } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { cn } from "@/lib/utils";
 import type { Project, RepositoryConfig, PortMapping, PortProtocol } from "@/types";
@@ -42,13 +49,44 @@ const DEFAULT_CONFIG: RepositoryConfig = {
   prBaseBranch: "main",
 };
 
+/** Fallback Claude models when no bridge server is running */
+const FALLBACK_CLAUDE_MODELS: ClaudeModel[] = [
+  { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high"] },
+  { id: "claude-opus-4-6", name: "Claude Opus 4.6", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high"] },
+  { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high"] },
+];
+
+const CLAUDE_EFFORT_LEVELS: { value: ClaudeEffortLevel; label: string }[] = [
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "max", label: "Max" },
+];
+
+const CODEX_EFFORT_LEVELS: { value: CodexReasoningEffort; label: string }[] = [
+  { value: "minimal", label: "Minimal" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra High" },
+];
+
+/** OpenCode uses model variants for effort/thinking levels */
+const OPENCODE_DEFAULT_VARIANTS = ["low", "high", "xhigh"];
+
 export function RepositorySettings({
   project,
   open,
   onOpenChange,
   onUpdateProject,
 }: RepositorySettingsProps) {
-  const { getRepositoryConfig, setRepositoryConfig, setConfig } = useConfigStore();
+  const { getRepositoryConfig, setRepositoryConfig, setConfig, config } = useConfigStore();
+  const defaultAgent = config.global.defaultAgent || "claude";
+
+  // Pull cached models from stores
+  const claudeModels = useClaudeStore((s) => s.models);
+  const openCodeModelsMap = useOpenCodeStore((s) => s.models);
+  const codexModels = useCodexStore((s) => s.models);
 
   const existingConfig = getRepositoryConfig(project.id);
   const initialConfig = existingConfig ?? DEFAULT_CONFIG;
@@ -69,6 +107,8 @@ export function RepositorySettings({
     initialConfig.filesToCopy ?? []
   );
   const [showFilesConfig, setShowFilesConfig] = useState(false);
+  const [defaultModel, setDefaultModel] = useState(initialConfig.defaultModel ?? "");
+  const [defaultEffort, setDefaultEffort] = useState(initialConfig.defaultEffort ?? "");
   const [isSaving, setIsSaving] = useState(false);
 
   // Reset form when project changes or dialog opens
@@ -87,6 +127,8 @@ export function RepositorySettings({
       setShowPortConfig((config.defaultPortMappings ?? []).length > 0);
       setFilesToCopy(config.filesToCopy ?? []);
       setShowFilesConfig((config.filesToCopy ?? []).length > 0);
+      setDefaultModel(config.defaultModel ?? "");
+      setDefaultEffort(config.defaultEffort ?? "");
     }
   }, [open, project.id, project.name, project.localPath, getRepositoryConfig]);
 
@@ -288,6 +330,8 @@ export function RepositorySettings({
         prBaseBranch,
         defaultPortMappings: portMappings.length > 0 ? portMappings : undefined,
         filesToCopy: cleanedFilesToCopy.length > 0 ? cleanedFilesToCopy : undefined,
+        defaultModel: defaultModel || undefined,
+        defaultEffort: defaultEffort || undefined,
       };
 
       // Update backend
@@ -320,6 +364,8 @@ export function RepositorySettings({
     setPrBaseBranch(config.prBaseBranch);
     setPortMappings(config.defaultPortMappings ?? []);
     setFilesToCopy(config.filesToCopy ?? []);
+    setDefaultModel(config.defaultModel ?? "");
+    setDefaultEffort(config.defaultEffort ?? "");
     onOpenChange(false);
   };
 
@@ -332,6 +378,68 @@ export function RepositorySettings({
     () => filesToCopy.filter((f) => f.trim() !== "").length,
     [filesToCopy]
   );
+
+  // Compute available models and effort levels based on the global default agent
+  const availableModels = useMemo((): { id: string; name: string }[] => {
+    switch (defaultAgent) {
+      case "claude": {
+        const models = claudeModels.length > 0 ? claudeModels : FALLBACK_CLAUDE_MODELS;
+        return models.map((m) => ({ id: m.id, name: m.name }));
+      }
+      case "opencode": {
+        // Flatten all cached opencode models from any environment
+        const allModels: OpenCodeModel[] = [];
+        const seenIds = new Set<string>();
+        for (const models of openCodeModelsMap.values()) {
+          for (const m of models) {
+            if (!seenIds.has(m.id)) {
+              seenIds.add(m.id);
+              allModels.push(m);
+            }
+          }
+        }
+        return allModels.map((m) => ({ id: m.id, name: m.name }));
+      }
+      case "codex": {
+        const models = codexModels.length > 0 ? codexModels : CODEX_MODELS;
+        return models.map((m) => ({ id: m.id, name: m.name }));
+      }
+      default:
+        return [];
+    }
+  }, [defaultAgent, claudeModels, openCodeModelsMap, codexModels]);
+
+  const availableEffortLevels = useMemo((): { value: string; label: string }[] => {
+    switch (defaultAgent) {
+      case "claude": {
+        // If we have a selected model with specific effort levels, use those
+        const allModels = claudeModels.length > 0 ? claudeModels : FALLBACK_CLAUDE_MODELS;
+        const selectedClaudeModel = allModels.find((m) => m.id === defaultModel);
+        if (selectedClaudeModel?.supportedEffortLevels) {
+          return CLAUDE_EFFORT_LEVELS.filter((e) =>
+            selectedClaudeModel.supportedEffortLevels!.includes(e.value)
+          );
+        }
+        return CLAUDE_EFFORT_LEVELS;
+      }
+      case "opencode": {
+        // Find the selected model and use its variants
+        for (const models of openCodeModelsMap.values()) {
+          const model = models.find((m) => m.id === defaultModel);
+          if (model?.variants && model.variants.length > 0) {
+            return model.variants.map((v) => ({ value: v, label: v.charAt(0).toUpperCase() + v.slice(1) }));
+          }
+        }
+        return OPENCODE_DEFAULT_VARIANTS.map((v) => ({ value: v, label: v.charAt(0).toUpperCase() + v.slice(1) }));
+      }
+      case "codex":
+        return CODEX_EFFORT_LEVELS;
+      default:
+        return [];
+    }
+  }, [defaultAgent, defaultModel, claudeModels, openCodeModelsMap]);
+
+  const agentLabel = defaultAgent === "claude" ? "Claude" : defaultAgent === "opencode" ? "OpenCode" : "Codex";
 
   const hasErrors = projectNameError !== null || !portValidationResult.valid || !filesValidationResult.valid;
 
@@ -438,6 +546,74 @@ export function RepositorySettings({
             <p className="text-xs text-muted-foreground">
               The target branch for pull requests
             </p>
+          </div>
+
+          {/* Default Agent Model & Effort */}
+          <div className="border-t border-border my-2" />
+
+          <div className="grid gap-2">
+            <div className="flex items-center gap-2">
+              <Bot className="h-4 w-4 text-muted-foreground" />
+              <Label className="text-sm font-medium">Default Agent Settings</Label>
+              <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                {agentLabel}
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Default model and effort level for new sessions. Agent type is configured in global settings.
+            </p>
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="defaultModel">Default Model</Label>
+            {availableModels.length > 0 ? (
+              <Select
+                value={defaultModel}
+                onValueChange={setDefaultModel}
+                disabled={isSaving}
+              >
+                <SelectTrigger id="defaultModel">
+                  <SelectValue placeholder="Use agent default" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableModels.map((model) => (
+                    <SelectItem key={model.id} value={model.id}>
+                      {model.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <p className="text-xs text-muted-foreground italic">
+                Start an environment to load available models
+              </p>
+            )}
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="defaultEffort">Default Effort Level</Label>
+            {availableEffortLevels.length > 0 ? (
+              <Select
+                value={defaultEffort}
+                onValueChange={setDefaultEffort}
+                disabled={isSaving}
+              >
+                <SelectTrigger id="defaultEffort">
+                  <SelectValue placeholder="Use agent default" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableEffortLevels.map((level) => (
+                    <SelectItem key={level.value} value={level.value}>
+                      {level.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <p className="text-xs text-muted-foreground italic">
+                No effort levels available for this agent
+              </p>
+            )}
           </div>
 
           {/* Default Port Configuration */}

@@ -205,6 +205,10 @@ export interface RepositoryConfig {
   defaultPortMappings?: PortMapping[];
   /** Additional files to copy from local project path to environments (relative paths) */
   filesToCopy?: string[];
+  /** Default model ID for the configured default agent (e.g. "claude-sonnet-4-6") */
+  defaultModel?: string;
+  /** Default effort/thinking level for the configured default agent */
+  defaultEffort?: string;
 }
 
 export interface AppConfig {

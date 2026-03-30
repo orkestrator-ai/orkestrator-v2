@@ -401,7 +401,7 @@ function ToolPart({
         <CollapsibleContent className="mt-1">
           <div className="rounded-md bg-muted/30 border border-border/50 overflow-hidden">
             {/* Agent tool prompt rendered as markdown */}
-            {isAgentTool && toolArgs?.prompt && (
+            {isAgentTool && !!toolArgs?.prompt && (
               <div className={cn(
                 "px-3 py-2 border-b border-border/30",
                 "prose prose-sm prose-invert max-w-none text-xs",

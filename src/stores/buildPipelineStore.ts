@@ -5,16 +5,18 @@ import type { EnvironmentType } from "@/types";
 export type BuildPhase =
   | "creating-environment"
   | "starting-environment"
+  | "waiting-for-setup"
   | "building"
   | "reviewing"
   | "addressing"
   | "verifying"
   | "fixing"
   | "creating-pr"
+  | "resolving-conflicts"
   | "complete"
   | "failed";
 
-export type PipelineSessionPhase = "build" | "review" | "verify" | "fix" | "pr";
+export type PipelineSessionPhase = "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
 
 export interface PipelineSession {
   phase: PipelineSessionPhase;

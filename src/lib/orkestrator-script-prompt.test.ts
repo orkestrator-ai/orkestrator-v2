@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createOrkestratorScriptPrompt } from "./orkestrator-script-prompt";
+import { createOrkestratorScriptPrompt } from "@/prompts";
 
 describe("createOrkestratorScriptPrompt", () => {
   test("includes local-environment guidance", () => {

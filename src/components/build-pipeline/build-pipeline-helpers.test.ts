@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import {
-  parseVerificationResult,
-  buildReviewPrompt,
-  buildBuildPrompt,
-  buildVerificationPrompt,
-  buildFixPrompt,
-} from "./BuildChatTab";
+  createBuildReviewPrompt,
+  createBuildPrompt,
+  createVerificationPrompt,
+  createFixPrompt,
+} from "@/prompts";
+import { parseVerificationResult } from "@/lib/parse-verification-result";
 import type { ClaudeMessage } from "@/lib/claude-client";
 
 // --- parseVerificationResult ---
@@ -144,9 +144,9 @@ describe("parseVerificationResult", () => {
   });
 });
 
-// --- buildReviewPrompt ---
+// --- createBuildReviewPrompt ---
 
-describe("buildReviewPrompt", () => {
+describe("createBuildReviewPrompt", () => {
   const baseTask = {
     title: "Add dark mode",
     description: "Implement dark mode toggle",
@@ -155,25 +155,25 @@ describe("buildReviewPrompt", () => {
   };
 
   test("includes commit step", () => {
-    const result = buildReviewPrompt(null, "");
+    const result = createBuildReviewPrompt(null, "");
     expect(result).toContain("## Step 1: Commit Changes");
     expect(result).toContain("conventional commit format");
     expect(result).toContain("Do NOT reference Claude");
   });
 
   test("includes code review step with git diff against target branch", () => {
-    const result = buildReviewPrompt(null, "", "main");
+    const result = createBuildReviewPrompt(null, "", "main");
     expect(result).toContain("## Step 2: Code Review");
     expect(result).toContain("git diff origin/main...HEAD");
   });
 
   test("includes review instructions when task is null", () => {
-    const result = buildReviewPrompt(null, "");
+    const result = createBuildReviewPrompt(null, "");
     expect(result).toContain("Code Review");
   });
 
   test("includes all review categories", () => {
-    const result = buildReviewPrompt(null, "");
+    const result = createBuildReviewPrompt(null, "");
     expect(result).toContain("Logic and correctness");
     expect(result).toContain("Readability");
     expect(result).toContain("Performance");
@@ -181,7 +181,7 @@ describe("buildReviewPrompt", () => {
   });
 
   test("includes structured output format", () => {
-    const result = buildReviewPrompt(baseTask, "");
+    const result = createBuildReviewPrompt(baseTask, "");
     expect(result).toContain("## Output Format");
     expect(result).toContain("File and line number(s)");
     expect(result).toContain("Code snippet");
@@ -189,7 +189,7 @@ describe("buildReviewPrompt", () => {
   });
 
   test("includes ticket context when task is provided", () => {
-    const result = buildReviewPrompt(baseTask, "");
+    const result = createBuildReviewPrompt(baseTask, "");
     expect(result).toContain("**Title**: Add dark mode");
     expect(result).toContain("**Description**: Implement dark mode toggle");
     expect(result).toContain("**Acceptance Criteria**:");
@@ -198,50 +198,50 @@ describe("buildReviewPrompt", () => {
 
   test("includes comments when present", () => {
     const task = { ...baseTask, comments: [{ text: "Use CSS variables" }, { text: "Support system preference" }] };
-    const result = buildReviewPrompt(task, "");
+    const result = createBuildReviewPrompt(task, "");
     expect(result).toContain("**Comments**:");
     expect(result).toContain("1. Use CSS variables");
     expect(result).toContain("2. Support system preference");
   });
 
   test("includes project notes when provided", () => {
-    const result = buildReviewPrompt(baseTask, "We use Tailwind for styling");
+    const result = createBuildReviewPrompt(baseTask, "We use Tailwind for styling");
     expect(result).toContain("**Project Notes**:");
     expect(result).toContain("We use Tailwind for styling");
   });
 
   test("omits empty description", () => {
     const task = { ...baseTask, description: "" };
-    const result = buildReviewPrompt(task, "");
+    const result = createBuildReviewPrompt(task, "");
     expect(result).not.toContain("**Description**:");
   });
 
   test("includes git diff instruction", () => {
-    const result = buildReviewPrompt(baseTask, "");
+    const result = createBuildReviewPrompt(baseTask, "");
     expect(result).toContain("git diff");
   });
 
   test("does not include ticket context when task is null", () => {
-    const result = buildReviewPrompt(null, "");
+    const result = createBuildReviewPrompt(null, "");
     expect(result).not.toContain("**Title**:");
     expect(result).not.toContain("**Acceptance Criteria**:");
   });
 
   test("includes project notes even when task is null", () => {
-    const result = buildReviewPrompt(null, "We use Tailwind for styling");
+    const result = createBuildReviewPrompt(null, "We use Tailwind for styling");
     expect(result).toContain("**Project Notes**:");
     expect(result).toContain("We use Tailwind for styling");
   });
 
   test("uses the provided target branch", () => {
-    const result = buildReviewPrompt(null, "", "develop");
+    const result = createBuildReviewPrompt(null, "", "develop");
     expect(result).toContain("git diff origin/develop...HEAD");
   });
 });
 
-// --- buildBuildPrompt ---
+// --- createBuildPrompt ---
 
-describe("buildBuildPrompt", () => {
+describe("createBuildPrompt", () => {
   const baseTask = {
     title: "Add dark mode",
     description: "Implement dark mode toggle",
@@ -250,51 +250,51 @@ describe("buildBuildPrompt", () => {
   };
 
   test("returns fallback when task is null", () => {
-    const result = buildBuildPrompt(null, "");
+    const result = createBuildPrompt(null, "");
     expect(result).toBe("Build the feature as described.");
   });
 
   test("includes title and description", () => {
-    const result = buildBuildPrompt(baseTask, "");
+    const result = createBuildPrompt(baseTask, "");
     expect(result).toContain("**Title**: Add dark mode");
     expect(result).toContain("**Description**: Implement dark mode toggle");
   });
 
   test("includes acceptance criteria", () => {
-    const result = buildBuildPrompt(baseTask, "");
+    const result = createBuildPrompt(baseTask, "");
     expect(result).toContain("**Acceptance Criteria**:");
     expect(result).toContain("Toggle switch exists");
   });
 
   test("includes comments when present", () => {
     const task = { ...baseTask, comments: [{ text: "Use CSS variables" }, { text: "Support system preference" }] };
-    const result = buildBuildPrompt(task, "");
+    const result = createBuildPrompt(task, "");
     expect(result).toContain("**Comments**:");
     expect(result).toContain("1. Use CSS variables");
     expect(result).toContain("2. Support system preference");
   });
 
   test("includes project notes when provided", () => {
-    const result = buildBuildPrompt(baseTask, "We use Tailwind for styling");
+    const result = createBuildPrompt(baseTask, "We use Tailwind for styling");
     expect(result).toContain("**Project Notes**:");
     expect(result).toContain("We use Tailwind for styling");
   });
 
   test("omits empty description", () => {
     const task = { ...baseTask, description: "" };
-    const result = buildBuildPrompt(task, "");
+    const result = createBuildPrompt(task, "");
     expect(result).not.toContain("**Description**:");
   });
 
   test("ends with instruction to build without questions", () => {
-    const result = buildBuildPrompt(baseTask, "");
+    const result = createBuildPrompt(baseTask, "");
     expect(result).toContain("Do not ask any questions");
   });
 });
 
-// --- buildVerificationPrompt ---
+// --- createVerificationPrompt ---
 
-describe("buildVerificationPrompt", () => {
+describe("createVerificationPrompt", () => {
   const baseTask = {
     title: "Add search",
     description: "Full-text search",
@@ -303,27 +303,27 @@ describe("buildVerificationPrompt", () => {
   };
 
   test("returns fallback when task is null", () => {
-    const result = buildVerificationPrompt(null, "");
+    const result = createVerificationPrompt(null, "");
     expect(result).toContain("acceptance criteria");
   });
 
   test("asks for JSON response format", () => {
-    const result = buildVerificationPrompt(baseTask, "");
+    const result = createVerificationPrompt(baseTask, "");
     expect(result).toContain('"complete"');
     expect(result).toContain('"rationale"');
     expect(result).toContain("JSON");
   });
 
   test("includes ticket context", () => {
-    const result = buildVerificationPrompt(baseTask, "");
+    const result = createVerificationPrompt(baseTask, "");
     expect(result).toContain("**Title**: Add search");
     expect(result).toContain("Search box visible");
   });
 });
 
-// --- buildFixPrompt ---
+// --- createFixPrompt ---
 
-describe("buildFixPrompt", () => {
+describe("createFixPrompt", () => {
   const baseTask = {
     title: "Fix login",
     description: "Login page broken",
@@ -332,20 +332,20 @@ describe("buildFixPrompt", () => {
   };
 
   test("returns fallback with feedback when task is null", () => {
-    const result = buildFixPrompt(null, "", "Missing error messages");
+    const result = createFixPrompt(null, "", "Missing error messages");
     expect(result).toContain("Missing error messages");
     expect(result).toContain("Do not ask any questions");
   });
 
   test("includes ticket context and failure reason", () => {
-    const result = buildFixPrompt(baseTask, "", "Error message not displayed on invalid password");
+    const result = createFixPrompt(baseTask, "", "Error message not displayed on invalid password");
     expect(result).toContain("**Title**: Fix login");
     expect(result).toContain("NOT been fully satisfied");
     expect(result).toContain("Error message not displayed on invalid password");
   });
 
   test("includes project notes", () => {
-    const result = buildFixPrompt(baseTask, "Auth uses JWT tokens", "Session not persisted");
+    const result = createFixPrompt(baseTask, "Auth uses JWT tokens", "Session not persisted");
     expect(result).toContain("Auth uses JWT tokens");
   });
 });

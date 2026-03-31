@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
-import { useConfigStore } from "@/stores";
+import { useConfigStore, useEnvironmentStore } from "@/stores";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import type { BuildPhase, PipelineSession } from "@/stores/buildPipelineStore";
 import {
@@ -29,9 +29,19 @@ import { ClaudeMessage } from "@/components/claude/ClaudeMessage";
 import type { BuildTabData } from "@/types/paneLayout";
 import { extractContextUsage } from "@/lib/context-usage";
 import { cn } from "@/lib/utils";
-import { buildPRPrompt } from "@/lib/pr-prompts";
+import {
+  createPRPrompt,
+  createResolveConflictsPrompt,
+  createBuildReviewPrompt,
+  createBuildPrompt,
+  createVerificationPrompt,
+  createFixPrompt,
+} from "@/prompts";
+import { parseVerificationResult } from "@/lib/parse-verification-result";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import { useEnvironmentStore } from "@/stores";
+import * as tauri from "@/lib/tauri";
 
 // Reference to kanban store for non-reactive reads
 const kanbanStoreRef = useKanbanStore;
@@ -46,12 +56,14 @@ type ConnectionState = "connecting" | "connected" | "error";
 const PHASE_LABELS: Record<BuildPhase, string> = {
   "creating-environment": "Creating Environment",
   "starting-environment": "Starting Environment",
+  "waiting-for-setup": "Waiting for Setup",
   building: "Building",
   reviewing: "Reviewing",
   addressing: "Addressing Issues",
   verifying: "Verifying",
   fixing: "Fixing Issues",
   "creating-pr": "Creating PR",
+  "resolving-conflicts": "Resolving Conflicts",
   complete: "Complete",
   failed: "Failed",
 };
@@ -59,12 +71,14 @@ const PHASE_LABELS: Record<BuildPhase, string> = {
 const PHASE_COLORS: Record<BuildPhase, string> = {
   "creating-environment": "text-blue-400",
   "starting-environment": "text-blue-400",
+  "waiting-for-setup": "text-yellow-400",
   building: "text-orange-400",
   reviewing: "text-amber-400",
   addressing: "text-amber-400",
   verifying: "text-purple-400",
   fixing: "text-red-400",
   "creating-pr": "text-cyan-400",
+  "resolving-conflicts": "text-yellow-400",
   complete: "text-green-400",
   failed: "text-red-500",
 };
@@ -75,6 +89,7 @@ const SESSION_PHASE_LABELS: Record<string, string> = {
   verify: "Verification Session",
   fix: "Fix Session",
   pr: "PR Creation Session",
+  "resolve-conflicts": "Conflict Resolution Session",
 };
 
 function SessionDivider({ session, index }: { session: PipelineSession; index: number }) {
@@ -130,6 +145,18 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
   } = useClaudeStore();
 
   const client = useMemo(() => clientsMap.get(environmentId), [clientsMap, environmentId]);
+
+  // Subscribe to setup script state from environment store
+  // Used to gate build start until setup scripts have completed
+  const setupScriptsRunning = useEnvironmentStore(
+    (state) => state.setupScriptsRunning.has(environmentId)
+  );
+  const setupCommandsResolved = useEnvironmentStore(
+    (state) => state.setupCommandsResolved.has(environmentId)
+  );
+  const hasPendingSetupCommands = useEnvironmentStore(
+    (state) => state.pendingSetupCommands.has(environmentId)
+  );
 
   // Collect all messages across all pipeline sessions for rendering
   const allSessionMessages = useMemo(() => {
@@ -424,8 +451,27 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
             break;
 
           case "pr":
-            // PR creation complete -> pipeline is done
-            setPhase(pipelineId, "complete");
+            // PR creation complete -> check for merge conflicts before completing
+            {
+              const hasConflicts = await checkPRMergeConflicts();
+              if (hasConflicts) {
+                await startResolveConflictsSession(currentPipeline);
+              } else {
+                setPhase(pipelineId, "complete");
+              }
+            }
+            break;
+
+          case "resolve-conflicts":
+            // Conflict resolution complete -> verify conflicts are actually resolved
+            {
+              const stillConflicting = await checkPRMergeConflicts();
+              if (stillConflicting) {
+                setPipelineError(pipelineId, "Merge conflicts could not be fully resolved automatically");
+              } else {
+                setPhase(pipelineId, "complete");
+              }
+            }
             break;
 
           case "verify": {
@@ -672,7 +718,7 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
 
       const repoConfig = config.repositories[currentPipeline.projectId];
       const targetBranch = repoConfig?.prBaseBranch || "main";
-      const reviewPrompt = buildReviewPrompt(task, projectNotes, targetBranch);
+      const reviewPrompt = createBuildReviewPrompt(task, projectNotes, targetBranch);
 
       const userMessage: ClaudeMessageType = {
         id: crypto.randomUUID(),
@@ -717,7 +763,7 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
         projectNotes = notes.content;
       } catch (e) { console.debug("Failed to load project notes for verification:", e); }
 
-      const verifyPrompt = buildVerificationPrompt(task, projectNotes);
+      const verifyPrompt = createVerificationPrompt(task, projectNotes);
 
       const userMessage: ClaudeMessageType = {
         id: crypto.randomUUID(),
@@ -761,7 +807,7 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
         projectNotes = notes.content;
       } catch (e) { console.debug("Failed to load project notes for fix:", e); }
 
-      const fixPrompt = buildFixPrompt(task, projectNotes, feedback);
+      const fixPrompt = createFixPrompt(task, projectNotes, feedback);
 
       const userMessage: ClaudeMessageType = {
         id: crypto.randomUUID(),
@@ -805,7 +851,7 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
 
       const repoConfig = config.repositories[currentPipeline.projectId];
       const targetBranch = repoConfig?.prBaseBranch || "main";
-      const prPrompt = buildPRPrompt(targetBranch);
+      const prPrompt = createPRPrompt(targetBranch);
 
       const userMessage: ClaudeMessageType = {
         id: crypto.randomUUID(),
@@ -826,6 +872,78 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
       }
     },
     [client, pipelineId, environmentId, config.repositories, createPipelineSession, addMessage, setPhase, setPipelineError]
+  );
+
+  // Check if the PR has merge conflicts after creation
+  const checkPRMergeConflicts = useCallback(
+    async (): Promise<boolean> => {
+      const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+      if (!environment) return false;
+
+      const isLocal = environment.environmentType === "local";
+      const containerId = environment.containerId ?? null;
+
+      if (!isLocal && !containerId) {
+        console.warn("[BuildChatTab] Container environment missing containerId, cannot check PR conflicts");
+        return false;
+      }
+
+      const result = isLocal
+        ? await tauri.detectPrLocal(environmentId, environment.branch)
+        : await tauri.detectPr(containerId!, environment.branch);
+
+      if (result) {
+        // Update environment store with latest PR state
+        useEnvironmentStore.getState().setEnvironmentPR(
+          environmentId,
+          result.url,
+          result.state,
+          result.hasMergeConflicts
+        );
+        return result.hasMergeConflicts;
+      }
+
+      return false;
+    },
+    [environmentId]
+  );
+
+  // Start merge conflict resolution session (auto-launched after PR creation detects conflicts)
+  const startResolveConflictsSession = useCallback(
+    async (currentPipeline: NonNullable<typeof pipeline>) => {
+      if (!client) return;
+
+      setPhase(pipelineId, "resolving-conflicts");
+
+      const result = await createPipelineSession("resolve-conflicts", currentPipeline.iteration, "Conflict Resolution Session");
+      if (!result) {
+        setPipelineError(pipelineId, "Failed to create conflict resolution session");
+        return;
+      }
+
+      const repoConfig = config.repositories[currentPipeline.projectId];
+      const targetBranch = repoConfig?.prBaseBranch || "main";
+      const resolvePrompt = createResolveConflictsPrompt(targetBranch);
+
+      const userMessage: ClaudeMessageType = {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: resolvePrompt,
+        parts: [{ type: "text", content: resolvePrompt }],
+        timestamp: new Date().toISOString(),
+      };
+
+      addMessage(result.sessionKey, userMessage);
+
+      const success = await sendPrompt(client, result.sdkSessionId, resolvePrompt, {
+        permissionMode: "bypassPermissions",
+      });
+
+      if (!success) {
+        setPipelineError(pipelineId, "Failed to send conflict resolution prompt");
+      }
+    },
+    [client, pipelineId, config.repositories, createPipelineSession, addMessage, setPhase, setPipelineError]
   );
 
   // Stop the pipeline - abort all sessions to ensure nothing keeps running
@@ -854,14 +972,49 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
     setServerStatus(environmentId, { running: false, hostPort: null });
   }, [environmentId, setClient, setServerStatus]);
 
-  // Expose startBuildSession to the pipeline orchestration
-  // This is called externally via the hook when the pipeline is ready
+  // When the bridge server is connected and environment is starting, transition phase.
+  // For local environments: move to waiting-for-setup so we gate on setup scripts.
+  // For container environments: setup runs inside the container before the bridge connects,
+  // so skip waiting-for-setup and go straight to building.
   useEffect(() => {
     if (connectionState !== "connected" || !client || !pipeline) return;
     if (pipeline.phase !== "starting-environment") return;
     if (pipeline.sessions.length > 0) return;
 
-    // Pipeline is ready and waiting for build to start
+    if (isLocal) {
+      setPhase(pipelineId, "waiting-for-setup");
+    } else {
+      // Container setup already completed — start build immediately
+      const task = getKanbanTaskSnapshot(pipeline.taskId);
+      if (!task) {
+        setPipelineError(pipelineId, "Task not found");
+        return;
+      }
+      getProjectNotes(pipeline.projectId).then((notes) => {
+        const prompt = buildBuildPrompt(task, notes.content);
+        startBuildSession(prompt);
+      }).catch(() => {
+        const prompt = buildBuildPrompt(task, "");
+        startBuildSession(prompt);
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionState, client, pipeline?.phase, pipeline?.sessions.length, isLocal]);
+
+  // Once in waiting-for-setup, start the build only after setup scripts have finished.
+  // We check three conditions to handle the race between setup command resolution and execution:
+  // 1. setupCommandsResolved: we know what commands exist (if any)
+  // 2. hasPendingSetupCommands: TerminalContainer hasn't consumed them yet
+  // 3. setupScriptsRunning: setup tab is still executing commands
+  useEffect(() => {
+    if (connectionState !== "connected" || !client || !pipeline) return;
+    if (pipeline.phase !== "waiting-for-setup") return;
+    if (pipeline.sessions.length > 0) return;
+
+    // Wait until setup commands are resolved and not pending/running
+    if (!setupCommandsResolved || hasPendingSetupCommands || setupScriptsRunning) return;
+
+    // Setup is complete (or there were no setup commands) — start the build
     const task = getKanbanTaskSnapshot(pipeline.taskId);
     if (!task) {
       setPipelineError(pipelineId, "Task not found");
@@ -869,20 +1022,44 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
     }
 
     getProjectNotes(pipeline.projectId).then((notes) => {
-      const prompt = buildBuildPrompt(task, notes.content);
+      const prompt = createBuildPrompt(task, notes.content);
       startBuildSession(prompt);
     }).catch(() => {
-      const prompt = buildBuildPrompt(task, "");
+      const prompt = createBuildPrompt(task, "");
       startBuildSession(prompt);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionState, client, pipeline?.phase, pipeline?.sessions.length]);
+  }, [connectionState, client, pipeline?.phase, pipeline?.sessions.length, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning]);
 
   if (connectionState === "connecting") {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
         <Loader2 className="w-8 h-8 animate-spin" />
         <p className="text-sm">Connecting to Claude bridge server...</p>
+      </div>
+    );
+  }
+
+  if (pipeline?.phase === "waiting-for-setup" && (setupScriptsRunning || hasPendingSetupCommands || !setupCommandsResolved)) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
+        <Loader2 className="w-8 h-8 animate-spin text-yellow-400" />
+        <p className="text-sm">Waiting for setup scripts to complete...</p>
+        <p className="text-xs">Build will start automatically once setup finishes</p>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mt-2 text-xs text-muted-foreground"
+          onClick={() => {
+            // Force-resolve setup state so the build-start effect can proceed
+            useEnvironmentStore.getState().setSetupScriptsRunning(environmentId, false);
+            useEnvironmentStore.getState().setSetupCommandsResolved(environmentId, true);
+            // Clear any pending commands so hasPendingSetupCommands becomes false
+            useEnvironmentStore.getState().consumePendingSetupCommands(environmentId);
+          }}
+        >
+          Skip waiting
+        </Button>
       </div>
     );
   }
@@ -991,14 +1168,7 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
   );
 }
 
-// --- Helper functions (exported for testing) ---
-
-export type TaskSnapshot = {
-  title: string;
-  description: string;
-  acceptanceCriteria: string;
-  comments: Array<{ text: string }>;
-};
+// --- Helper functions ---
 
 function getKanbanTaskSnapshot(taskId: string) {
   // Read directly from store to avoid stale closures
@@ -1006,182 +1176,3 @@ function getKanbanTaskSnapshot(taskId: string) {
   return tasks.find((t) => t.id === taskId) ?? null;
 }
 
-export function buildReviewPrompt(task: TaskSnapshot | null, projectNotes: string, targetBranch: string = "main"): string {
-  const parts: string[] = [];
-
-  if (task) {
-    parts.push("You are reviewing changes for the following ticket:\n");
-    parts.push(`**Title**: ${task.title}`);
-    if (task.description) parts.push(`\n**Description**: ${task.description}`);
-    if (task.acceptanceCriteria) parts.push(`\n**Acceptance Criteria**:\n${task.acceptanceCriteria}`);
-
-    if (task.comments.length > 0) {
-      parts.push("\n**Comments**:");
-      task.comments.forEach((c, i) => parts.push(`${i + 1}. ${c.text}`));
-    }
-
-    parts.push("");
-  }
-
-  if (projectNotes) {
-    parts.push(`**Project Notes**:\n${projectNotes}\n`);
-  }
-
-  parts.push(`## Step 1: Commit Changes
-
-Based on the current git status and diff, create a single git commit:
-1. Run \`git status --porcelain\` and \`git diff HEAD\` to see all changes
-2. Add any untracked files that should be committed: \`git add <files>\`
-3. Create a commit with a well-formatted message following conventional commit format
-4. Do NOT reference Claude or add Claude as a contributor
-5. Use this format for the commit message:
-   - First line: type(scope): brief description
-   - Blank line
-   - Bullet points describing the changes
-
-## Step 2: Code Review
-
-Compare the current branch against the remote \`${targetBranch}\` branch and conduct a thorough code review:
-1. Run \`git diff origin/${targetBranch}...HEAD\` to see all changes since branching
-2. Review the diff focusing on:
-   - **Logic and correctness**: Check for bugs, edge cases, and potential issues
-   - **Readability**: Is the code clear and maintainable? Does it follow repository patterns?
-   - **Performance**: Are there obvious performance concerns or optimizations?
-   - **Test coverage**: If the repo has testing patterns, are there adequate tests?
-3. Ask clarifying questions if needed about unclear changes
-
-## Output Format
-
-After completing both steps:
-1. Confirm the commit was created with its message
-2. Provide a summary overview of the general code quality
-3. List any identified issues in numbered sections with:
-   - Title
-   - File and line number(s)
-   - Description of the issue
-   - Code snippet (if relevant)
-   - Potential solution(s)
-4. If no issues found, state that the code meets best practices
-
-Begin by running the git commands to understand the current state.`);
-
-  return parts.join("\n");
-}
-
-export function buildBuildPrompt(task: TaskSnapshot | null, projectNotes: string): string {
-  if (!task) return "Build the feature as described.";
-
-  const parts = [
-    "You are building a feature. Here is the ticket:\n",
-    `**Title**: ${task.title}`,
-    task.description ? `\n**Description**: ${task.description}` : "",
-    task.acceptanceCriteria ? `\n**Acceptance Criteria**:\n${task.acceptanceCriteria}` : "",
-  ];
-
-  if (task.comments.length > 0) {
-    parts.push("\n**Comments**:");
-    task.comments.forEach((c, i) => parts.push(`${i + 1}. ${c.text}`));
-  }
-
-  if (projectNotes) {
-    parts.push(`\n**Project Notes**:\n${projectNotes}`);
-  }
-
-  parts.push("\n\nBuild this feature completely. Do not ask any questions - make your best judgment for any ambiguous requirements. Just go ahead and implement everything needed.");
-
-  return parts.join("\n");
-}
-
-export function buildVerificationPrompt(task: TaskSnapshot | null, projectNotes: string): string {
-  if (!task) return "Do the changes satisfy the acceptance criteria?";
-
-  const parts = [
-    "Review the current state of the codebase against the following ticket context:\n",
-    `**Title**: ${task.title}`,
-    task.description ? `\n**Description**: ${task.description}` : "",
-    task.acceptanceCriteria ? `\n**Acceptance Criteria**:\n${task.acceptanceCriteria}` : "",
-  ];
-
-  if (task.comments.length > 0) {
-    parts.push("\n**Comments**:");
-    task.comments.forEach((c, i) => parts.push(`${i + 1}. ${c.text}`));
-  }
-
-  if (projectNotes) {
-    parts.push(`\n**Project Notes**:\n${projectNotes}`);
-  }
-
-  parts.push(`\n\nDo the changes implemented satisfy ALL acceptance criteria according to the context above?
-
-Respond with ONLY a JSON object in the following format (no other text before or after):
-
-\`\`\`json
-{"complete": true, "rationale": "Your explanation here"}
-\`\`\`
-
-Set "complete" to true if ALL acceptance criteria are satisfied, or false if any are not met. In "rationale", provide a detailed explanation of your reasoning.`);
-
-  return parts.join("\n");
-}
-
-export function buildFixPrompt(task: TaskSnapshot | null, projectNotes: string, feedback: string): string {
-  if (!task) return `Fix the following issues:\n\n${feedback}\n\nDo not ask any questions.`;
-
-  const parts = [
-    "The following acceptance criteria have NOT been fully satisfied. Here is the ticket context:\n",
-    `**Title**: ${task.title}`,
-    task.description ? `\n**Description**: ${task.description}` : "",
-    task.acceptanceCriteria ? `\n**Acceptance Criteria**:\n${task.acceptanceCriteria}` : "",
-  ];
-
-  if (task.comments.length > 0) {
-    parts.push("\n**Comments**:");
-    task.comments.forEach((c, i) => parts.push(`${i + 1}. ${c.text}`));
-  }
-
-  if (projectNotes) {
-    parts.push(`\n**Project Notes**:\n${projectNotes}`);
-  }
-
-  parts.push(`\n\n**Why the acceptance criteria are not satisfied**:\n${feedback}`);
-  parts.push("\n\nPlease fix the issues above to satisfy the acceptance criteria. Do not ask any questions - make sensible assumptions and go ahead.");
-
-  return parts.join("\n");
-}
-
-export function parseVerificationResult(messages: ClaudeMessageType[]): { verdict: "pass" | "fail"; feedback: string } {
-  const lastAssistant = messages.filter((m) => m.role === "assistant").pop();
-  if (!lastAssistant) return { verdict: "fail", feedback: "No verification response received" };
-
-  const text = lastAssistant.parts
-    .filter((p) => p.type === "text")
-    .map((p) => p.content)
-    .join("\n")
-    .trim();
-
-  // Try JSON format first: { "complete": true/false, "rationale": "..." }
-  try {
-    // Prefer ```json block, then bare ``` block, then raw JSON object
-    const jsonMatch =
-      text.match(/```json\s*\n([\s\S]*?)\n\s*```/) ??
-      text.match(/```\s*\n([\s\S]*?)\n\s*```/) ??
-      text.match(/(\{"complete"\s*:\s*(?:true|false)\s*,\s*"rationale"\s*:\s*"[\s\S]*?"\s*\})/);
-    if (jsonMatch?.[1]) {
-      const parsed = JSON.parse(jsonMatch[1]);
-      if (typeof parsed.complete === "boolean") {
-        return {
-          verdict: parsed.complete ? "pass" : "fail",
-          feedback: typeof parsed.rationale === "string" ? parsed.rationale : text,
-        };
-      }
-    }
-  } catch {
-    // Fall through to legacy parsing
-  }
-
-  // Legacy fallback: check for YES/NO on first line
-  const firstLine = text.split("\n")[0]?.trim().toUpperCase() ?? "";
-  const verdict = firstLine.startsWith("YES") ? "pass" : "fail";
-
-  return { verdict, feedback: text };
-}

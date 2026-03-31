@@ -1,3 +1,7 @@
+/**
+ * Prompt for creating/updating the orkestrator-ai.json configuration file.
+ */
+
 export function createOrkestratorScriptPrompt(isLocalEnvironment: boolean): string {
   const environmentGuidance = isLocalEnvironment
     ? "- This is a local environment, so include useful setup commands in `setupLocal`."

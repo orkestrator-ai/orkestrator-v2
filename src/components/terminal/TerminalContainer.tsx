@@ -28,7 +28,7 @@ import {
 import { FilePlus2, Play, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { shouldAutoResolveSetupCommands } from "@/lib/setup-commands";
-import { createOrkestratorScriptPrompt } from "@/lib/orkestrator-script-prompt";
+import { createOrkestratorScriptPrompt } from "@/prompts";
 import { PaneTree } from "@/components/pane-layout";
 import { TerminalPortalHost } from "./TerminalPortalHost";
 import { InitializationLogs } from "./InitializationLogs";

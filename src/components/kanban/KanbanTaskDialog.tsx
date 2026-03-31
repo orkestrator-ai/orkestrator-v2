@@ -169,7 +169,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
   if (isCreateMode) {
     return (
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent className="sm:max-w-[560px] max-h-[85vh] flex flex-col">
+        <DialogContent className="sm:max-w-[560px] max-h-[85vh] flex flex-col" onInteractOutside={(e) => e.preventDefault()}>
           <DialogHeader>
             <div className="flex items-center gap-2">
               <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">
@@ -229,7 +229,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-[560px] max-h-[85vh] flex flex-col">
+      <DialogContent className="sm:max-w-[560px] max-h-[85vh] flex flex-col" onInteractOutside={(e) => e.preventDefault()}>
         <DialogHeader>
           <div className="flex items-center justify-between pr-6">
             <div className="flex items-center gap-2">

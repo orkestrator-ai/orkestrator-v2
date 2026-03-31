@@ -101,6 +101,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
   const loadTasks = useKanbanStore((s) => s.loadTasks);
   const moveTask = useKanbanStore((s) => s.moveTask);
   const getProjectById = useProjectStore((s) => s.getProjectById);
+
   const buildPhaseRecord = useBuildPipelineStore(
     useShallow((s) => {
       const record: Record<string, BuildPhase> = {};

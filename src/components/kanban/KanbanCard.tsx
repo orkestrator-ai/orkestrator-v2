@@ -5,6 +5,35 @@ import type { KanbanTask } from "@/stores/kanbanStore";
 import type { BuildPhase } from "@/stores/buildPipelineStore";
 import { cn } from "@/lib/utils";
 
+function getBuildPhaseDisplay(phase: BuildPhase): { label: string; className: string } {
+  switch (phase) {
+    case "creating-environment":
+      return { label: "Creating Env", className: "bg-blue-500/15 text-blue-400 border-blue-500/30" };
+    case "starting-environment":
+      return { label: "Starting Env", className: "bg-blue-500/15 text-blue-400 border-blue-500/30" };
+    case "waiting-for-setup":
+      return { label: "Setting Up", className: "bg-blue-500/15 text-blue-400 border-blue-500/30" };
+    case "building":
+      return { label: "Building", className: "bg-amber-500/15 text-amber-400 border-amber-500/30" };
+    case "reviewing":
+      return { label: "Reviewing", className: "bg-purple-500/15 text-purple-400 border-purple-500/30" };
+    case "addressing":
+      return { label: "Addressing", className: "bg-amber-500/15 text-amber-400 border-amber-500/30" };
+    case "verifying":
+      return { label: "Verifying", className: "bg-cyan-500/15 text-cyan-400 border-cyan-500/30" };
+    case "fixing":
+      return { label: "Fixing", className: "bg-orange-500/15 text-orange-400 border-orange-500/30" };
+    case "creating-pr":
+      return { label: "Creating PR", className: "bg-indigo-500/15 text-indigo-400 border-indigo-500/30" };
+    case "resolving-conflicts":
+      return { label: "Resolving", className: "bg-orange-500/15 text-orange-400 border-orange-500/30" };
+    case "complete":
+      return { label: "Complete", className: "bg-green-500/15 text-green-400 border-green-500/30" };
+    case "failed":
+      return { label: "Failed", className: "bg-red-500/15 text-red-400 border-red-500/30" };
+  }
+}
+
 interface KanbanCardProps {
   task: KanbanTask;
   onClick: () => void;
@@ -51,10 +80,8 @@ export function KanbanCard({ task, onClick, isDragOverlay, buildPhase }: KanbanC
     ? { transform: `translate(${transform.x}px, ${transform.y}px)` }
     : undefined;
 
-  const isFailed = buildPhase === "failed";
-  const isBuilding = buildPhase && !["complete", "failed"].includes(buildPhase);
-  const isComplete = buildPhase === "complete";
-  const hasBuildStatus = isBuilding || isComplete || isFailed;
+  const phaseDisplay = buildPhase ? getBuildPhaseDisplay(buildPhase) : null;
+  const isActivelyBuilding = buildPhase && !["complete", "failed"].includes(buildPhase);
 
   return (
     <div
@@ -62,22 +89,30 @@ export function KanbanCard({ task, onClick, isDragOverlay, buildPhase }: KanbanC
       style={style}
       className={cn(
         "group rounded-lg border bg-card p-3 shadow-sm cursor-grab active:cursor-grabbing",
-        "hover:shadow-md transition-[border-color,box-shadow,ring-color]",
-        // Build status borders
-        isBuilding && "border-yellow-500 ring-2 ring-yellow-500/40",
-        isComplete && "border-green-500 ring-2 ring-green-500/40",
-        isFailed && "border-red-500 ring-2 ring-red-500/40",
-        !hasBuildStatus && "border-border hover:border-primary/50",
+        "hover:shadow-md transition-[border-color,box-shadow]",
+        "border-border hover:border-primary/50",
         isDragging && "opacity-30",
-        isDragOverlay && !hasBuildStatus && "shadow-lg border-primary/50 rotate-2",
-        isDragOverlay && hasBuildStatus && "shadow-lg rotate-2"
+        isDragOverlay && "shadow-lg border-primary/50 rotate-2"
       )}
       {...attributes}
       {...listeners}
       onClick={handleClick}
     >
       <div className="flex-1 min-w-0">
-        <h4 className="text-sm font-medium text-foreground truncate">{task.title}</h4>
+        <div className="flex items-start justify-between gap-2">
+          <h4 className="text-sm font-medium text-foreground truncate">{task.title}</h4>
+          {phaseDisplay && (
+            <span
+              className={cn(
+                "inline-flex items-center shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold leading-none",
+                phaseDisplay.className,
+                isActivelyBuilding && "animate-pulse"
+              )}
+            >
+              {phaseDisplay.label}
+            </span>
+          )}
+        </div>
         {task.description && (
           <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
             {task.description}

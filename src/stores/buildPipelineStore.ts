@@ -5,6 +5,7 @@ import type { EnvironmentType } from "@/types";
 export type BuildPhase =
   | "creating-environment"
   | "starting-environment"
+  | "waiting-for-setup"
   | "building"
   | "reviewing"
   | "addressing"

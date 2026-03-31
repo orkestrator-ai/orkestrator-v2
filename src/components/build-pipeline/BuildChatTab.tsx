@@ -45,6 +45,23 @@ import * as tauri from "@/lib/tauri";
 // Reference to kanban store for non-reactive reads
 const kanbanStoreRef = useKanbanStore;
 
+/**
+ * Determines whether setup is still pending for a given environment type.
+ * Used to gate build start and show the "waiting for setup" UI.
+ */
+export function isSetupPending(params: {
+  isLocal: boolean;
+  setupCommandsResolved: boolean;
+  hasPendingSetupCommands: boolean;
+  setupScriptsRunning: boolean;
+  workspaceReady: boolean;
+}): boolean {
+  if (params.isLocal) {
+    return params.setupScriptsRunning || params.hasPendingSetupCommands || !params.setupCommandsResolved;
+  }
+  return !params.workspaceReady;
+}
+
 interface BuildChatTabProps {
   data: BuildTabData;
   isActive: boolean;
@@ -155,6 +172,12 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
   );
   const hasPendingSetupCommands = useEnvironmentStore(
     (state) => state.pendingSetupCommands.has(environmentId)
+  );
+  // For container environments, workspace-setup.sh (which runs setupContainer scripts)
+  // must complete before the build starts. workspaceReady is set when the terminal
+  // shell prompt appears, which happens after workspace-setup.sh finishes.
+  const workspaceReady = useEnvironmentStore(
+    (state) => state.workspaceReadyEnvironments.has(environmentId)
   );
 
   // Collect all messages across all pipeline sessions for rendering
@@ -973,47 +996,35 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
     setServerStatus(environmentId, { running: false, hostPort: null });
   }, [environmentId, setClient, setServerStatus]);
 
-  // When the bridge server is connected and environment is starting, transition phase.
-  // For local environments: move to waiting-for-setup so we gate on setup scripts.
-  // For container environments: setup runs inside the container before the bridge connects,
-  // so skip waiting-for-setup and go straight to building.
+  // When the bridge server is connected and environment is starting, transition to
+  // waiting-for-setup. Both local and container environments must complete their setup
+  // scripts (setupLocal / setupContainer in orkestrator-ai.json) before the build starts.
   useEffect(() => {
     if (connectionState !== "connected" || !client || !pipeline) return;
     if (pipeline.phase !== "starting-environment") return;
     if (pipeline.sessions.length > 0) return;
 
-    if (isLocal) {
-      setPhase(pipelineId, "waiting-for-setup");
-    } else {
-      // Container setup already completed — start build immediately
-      const task = getKanbanTaskSnapshot(pipeline.taskId);
-      if (!task) {
-        setPipelineError(pipelineId, "Task not found");
-        return;
-      }
-      getProjectNotes(pipeline.projectId).then((notes) => {
-        const prompt = createBuildPrompt(task, notes.content);
-        startBuildSession(prompt);
-      }).catch(() => {
-        const prompt = createBuildPrompt(task, "");
-        startBuildSession(prompt);
-      });
-    }
+    setPhase(pipelineId, "waiting-for-setup");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionState, client, pipeline?.phase, pipeline?.sessions.length, isLocal]);
+  }, [connectionState, client, pipeline?.phase, pipeline?.sessions.length]);
 
   // Once in waiting-for-setup, start the build only after setup scripts have finished.
+  //
+  // Local environments: setupLocal commands are run in a frontend terminal tab.
   // We check three conditions to handle the race between setup command resolution and execution:
-  // 1. setupCommandsResolved: we know what commands exist (if any)
-  // 2. hasPendingSetupCommands: TerminalContainer hasn't consumed them yet
-  // 3. setupScriptsRunning: setup tab is still executing commands
+  //   1. setupCommandsResolved: we know what commands exist (if any)
+  //   2. hasPendingSetupCommands: TerminalContainer hasn't consumed them yet
+  //   3. setupScriptsRunning: setup tab is still executing commands
+  //
+  // Container environments: setupContainer commands are run inside the container by
+  // workspace-setup.sh. The workspaceReady flag is set when the terminal shell prompt
+  // appears, which happens only after workspace-setup.sh (including setupContainer) finishes.
   useEffect(() => {
     if (connectionState !== "connected" || !client || !pipeline) return;
     if (pipeline.phase !== "waiting-for-setup") return;
     if (pipeline.sessions.length > 0) return;
 
-    // Wait until setup commands are resolved and not pending/running
-    if (!setupCommandsResolved || hasPendingSetupCommands || setupScriptsRunning) return;
+    if (isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady })) return;
 
     // Setup is complete (or there were no setup commands) — start the build
     const task = getKanbanTaskSnapshot(pipeline.taskId);
@@ -1030,7 +1041,7 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
       startBuildSession(prompt);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionState, client, pipeline?.phase, pipeline?.sessions.length, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning]);
+  }, [connectionState, client, pipeline?.phase, pipeline?.sessions.length, isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady]);
 
   if (connectionState === "connecting") {
     return (
@@ -1041,7 +1052,9 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
     );
   }
 
-  if (pipeline?.phase === "waiting-for-setup" && (setupScriptsRunning || hasPendingSetupCommands || !setupCommandsResolved)) {
+  const setupPending = isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady });
+
+  if (pipeline?.phase === "waiting-for-setup" && setupPending) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
         <Loader2 className="w-8 h-8 animate-spin text-yellow-400" />
@@ -1052,11 +1065,19 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
           size="sm"
           className="mt-2 text-xs text-muted-foreground"
           onClick={() => {
-            // Force-resolve setup state so the build-start effect can proceed
-            useEnvironmentStore.getState().setSetupScriptsRunning(environmentId, false);
-            useEnvironmentStore.getState().setSetupCommandsResolved(environmentId, true);
-            // Clear any pending commands so hasPendingSetupCommands becomes false
-            useEnvironmentStore.getState().consumePendingSetupCommands(environmentId);
+            // Re-derive environment type from store at click time to avoid stale closures
+            const env = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+            const isLocalEnv = env?.environmentType === "local";
+            if (isLocalEnv) {
+              // Force-resolve local setup state so the build-start effect can proceed
+              useEnvironmentStore.getState().setSetupScriptsRunning(environmentId, false);
+              useEnvironmentStore.getState().setSetupCommandsResolved(environmentId, true);
+              // Clear any pending commands so hasPendingSetupCommands becomes false
+              useEnvironmentStore.getState().consumePendingSetupCommands(environmentId);
+            } else {
+              // Force-resolve container workspace ready state
+              useEnvironmentStore.getState().setWorkspaceReady(environmentId, true);
+            }
           }}
         >
           Skip waiting

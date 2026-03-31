@@ -8,6 +8,7 @@ import {
 } from "@/prompts";
 import { parseVerificationResult } from "@/lib/parse-verification-result";
 import type { ClaudeMessage } from "@/lib/claude-client";
+import { isSetupPending } from "./BuildChatTab";
 
 // --- parseVerificationResult ---
 
@@ -581,5 +582,61 @@ describe("buildPipelineStore", () => {
     store.setPipelineError("nonexistent", "error");
 
     expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+  });
+});
+
+// --- isSetupPending ---
+
+describe("isSetupPending", () => {
+  const defaults = {
+    isLocal: true,
+    setupCommandsResolved: true,
+    hasPendingSetupCommands: false,
+    setupScriptsRunning: false,
+    workspaceReady: true,
+  };
+
+  // --- Local environment ---
+
+  test("local: returns false when setup commands resolved, none pending, none running", () => {
+    expect(isSetupPending({ ...defaults, isLocal: true })).toBe(false);
+  });
+
+  test("local: returns true when setup commands not yet resolved", () => {
+    expect(isSetupPending({ ...defaults, isLocal: true, setupCommandsResolved: false })).toBe(true);
+  });
+
+  test("local: returns true when setup commands are pending", () => {
+    expect(isSetupPending({ ...defaults, isLocal: true, hasPendingSetupCommands: true })).toBe(true);
+  });
+
+  test("local: returns true when setup scripts are still running", () => {
+    expect(isSetupPending({ ...defaults, isLocal: true, setupScriptsRunning: true })).toBe(true);
+  });
+
+  test("local: ignores workspaceReady flag", () => {
+    // Even if workspaceReady is false, local envs only care about setup commands
+    expect(isSetupPending({ ...defaults, isLocal: true, workspaceReady: false })).toBe(false);
+  });
+
+  // --- Container environment ---
+
+  test("container: returns false when workspace is ready", () => {
+    expect(isSetupPending({ ...defaults, isLocal: false, workspaceReady: true })).toBe(false);
+  });
+
+  test("container: returns true when workspace is not ready", () => {
+    expect(isSetupPending({ ...defaults, isLocal: false, workspaceReady: false })).toBe(true);
+  });
+
+  test("container: ignores local setup command flags", () => {
+    // Even if local setup flags indicate pending, container only cares about workspaceReady
+    expect(isSetupPending({
+      isLocal: false,
+      setupCommandsResolved: false,
+      hasPendingSetupCommands: true,
+      setupScriptsRunning: true,
+      workspaceReady: true,
+    })).toBe(false);
   });
 });

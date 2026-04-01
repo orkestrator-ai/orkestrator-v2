@@ -52,7 +52,7 @@ Compare the current branch against the remote \`${targetBranch}\` branch and con
    - **Readability**: Is the code clear and maintainable? Does it follow repository patterns?
    - **Performance**: Are there obvious performance concerns or optimizations?
    - **Test coverage**: If the repo has testing patterns, are there adequate tests?
-3. Ask clarifying questions if needed about unclear changes
+3. Do not ask clarifying questions about unclear changes as this is an automated pipeline. Make your best judgment for any ambiguous points.
 
 ## Output Format
 

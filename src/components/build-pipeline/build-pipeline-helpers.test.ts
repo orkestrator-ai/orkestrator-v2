@@ -417,10 +417,10 @@ describe("buildPipelineStore", () => {
       taskSnapshot: snapshot,
     });
 
-    const pipeline = useBuildPipelineStore.getState().pipelines.get(id);
-    expect(pipeline!.taskSnapshot).toEqual(snapshot);
-    expect(pipeline!.taskSnapshot.comments).toHaveLength(2);
-    expect(pipeline!.taskSnapshot.comments[0].text).toBe("Use CSS variables");
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+    expect(pipeline.taskSnapshot).toEqual(snapshot);
+    expect(pipeline.taskSnapshot.comments).toHaveLength(2);
+    expect(pipeline.taskSnapshot.comments[0]?.text).toBe("Use CSS variables");
   });
 
   test("setPipelineEnvironment links environment", () => {

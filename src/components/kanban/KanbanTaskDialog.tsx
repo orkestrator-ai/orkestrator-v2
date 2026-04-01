@@ -21,6 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Trash2, Send, CheckCircle2, Container, FolderGit2, ExternalLink, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import type { KanbanTask, KanbanStatus } from "@/stores/kanbanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
@@ -166,6 +167,43 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
     }
   };
 
+  const handleCreateAndBuild = async (type: "containerized" | "local") => {
+    if (!editTitle.trim() || !createForProjectId) return;
+
+    const title = editTitle.trim();
+    const description = editDescription.trim();
+    const ac = editAC.trim();
+
+    setIsBuildStarting(true);
+    try {
+      const newTaskId = await addTaskStore(createForProjectId, title, description);
+      if (!newTaskId) {
+        toast.error("Failed to create task");
+        return;
+      }
+
+      if (ac) {
+        try {
+          await updateTask(newTaskId, { acceptanceCriteria: ac });
+        } catch {
+          toast.error("Task created but acceptance criteria could not be saved");
+        }
+      }
+
+      const newTask = useKanbanStore.getState().tasks.find((t) => t.id === newTaskId);
+      if (!newTask) {
+        toast.error("Task created but could not start build");
+        handleOpenChange(false);
+        return;
+      }
+
+      await startBuild(newTask, type);
+      handleOpenChange(false);
+    } finally {
+      setIsBuildStarting(false);
+    }
+  };
+
   if (isCreateMode) {
     return (
       <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -213,8 +251,36 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
 
           {/* Create Actions */}
           <div className="flex gap-2 pt-2">
-            <Button size="sm" onClick={handleCreate} disabled={!editTitle.trim()}>
+            <Button size="sm" onClick={handleCreate} disabled={!editTitle.trim() || isBuildStarting}>
               Create Task
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              disabled={!editTitle.trim() || isBuildStarting}
+              onClick={() => void handleCreateAndBuild("containerized")}
+            >
+              {isBuildStarting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Container className="h-3.5 w-3.5" />
+              )}
+              Build Container
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              disabled={!editTitle.trim() || isBuildStarting}
+              onClick={() => void handleCreateAndBuild("local")}
+            >
+              {isBuildStarting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FolderGit2 className="h-3.5 w-3.5" />
+              )}
+              Build Local
             </Button>
             <Button size="sm" variant="ghost" onClick={() => handleOpenChange(false)}>
               Cancel

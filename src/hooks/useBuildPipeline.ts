@@ -78,7 +78,7 @@ export function useBuildPipeline() {
         });
 
         // 2. Create environment named after the ticket
-        const envName = `Build: ${task.title}`.slice(0, 60);
+        const envName = task.title.slice(0, 60);
 
         const environment = await createEnvironment(
           task.projectId,

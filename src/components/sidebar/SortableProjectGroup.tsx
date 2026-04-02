@@ -124,7 +124,7 @@ export function SortableProjectGroup({
               <div
                 {...attributes}
                 {...listeners}
-                className="relative flex items-center group/project cursor-grab active:cursor-grabbing pr-2"
+                className="relative flex items-center group/project cursor-grab active:cursor-grabbing pl-1 pr-2"
                 onMouseEnter={() => setIsHovered(true)}
                 onMouseLeave={() => setIsHovered(false)}
               >

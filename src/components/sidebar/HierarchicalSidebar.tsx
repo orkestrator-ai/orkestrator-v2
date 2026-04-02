@@ -17,7 +17,6 @@ import {
 } from "@dnd-kit/sortable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import { Plus, FolderGit2, Square, Trash2, RotateCw } from "lucide-react";
 import { SortableProjectGroup } from "./SortableProjectGroup";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
@@ -496,7 +495,7 @@ export function HierarchicalSidebar() {
   return (
     <div className="flex h-full flex-col">
       {/* Header - switches between normal and multi-select mode */}
-      <div className="flex h-12 items-center justify-between px-4 bg-zinc-900/80">
+      <div className="flex h-12 items-center justify-between pl-3 pr-2 bg-zinc-900/80 border-b border-border">
         {isMultiSelectMode ? (
           <>
             <span className="text-sm font-medium text-foreground">
@@ -547,7 +546,6 @@ export function HierarchicalSidebar() {
           </>
         )}
       </div>
-      <Separator />
 
       {/* Projects List */}
       <ScrollArea className="flex-1">

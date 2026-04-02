@@ -2,6 +2,8 @@
 // Handles session state and interacts with Claude Agent SDK
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { ImageBlockParam, TextBlockParam, ContentBlockParam } from "@anthropic-ai/sdk/resources/messages/messages";
 import type {
   SessionState,
   NormalizedMessage,
@@ -25,6 +27,7 @@ import { getPluginsForSdk } from "./plugin-config.js";
 import type { McpToolMetadata } from "../types/mcp.js";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -740,6 +743,90 @@ function buildMessageParts(
 }
 
 /**
+ * Detect image media type from file extension.
+ */
+function getImageMediaType(filePath: string): "image/jpeg" | "image/png" | "image/gif" | "image/webp" {
+  const ext = filePath.split(".").pop()?.toLowerCase();
+  switch (ext) {
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "gif":
+      return "image/gif";
+    case "webp":
+      return "image/webp";
+    default:
+      return "image/png";
+  }
+}
+
+/**
+ * Build the SDK prompt. When image attachments are present, returns an
+ * AsyncIterable<SDKUserMessage> with inline base64 image content blocks so
+ * the API receives them natively (up to 8000x8000) instead of relying on the
+ * Read tool (which has a 2000x2000 limit).
+ *
+ * For text-only prompts (or prompts with only file attachments), returns a
+ * plain string as before.
+ */
+async function buildSdkPrompt(
+  finalPrompt: string,
+  attachments?: PromptOptions["attachments"]
+): Promise<string | AsyncIterable<SDKUserMessage>> {
+  const imageAttachments = attachments?.filter((att) => att.type === "image") ?? [];
+  if (imageAttachments.length === 0) {
+    return finalPrompt;
+  }
+
+  // Build content blocks: text first, then images
+  const contentBlocks: ContentBlockParam[] = [
+    { type: "text", text: finalPrompt } as TextBlockParam,
+  ];
+
+  for (const att of imageAttachments) {
+    let base64Data: string | null = null;
+
+    // Prefer dataUrl from the frontend (already base64-encoded)
+    if (att.dataUrl) {
+      const commaIdx = att.dataUrl.indexOf(",");
+      base64Data = commaIdx !== -1 ? att.dataUrl.slice(commaIdx + 1) : att.dataUrl;
+    } else if (att.path && existsSync(att.path)) {
+      // Fall back to reading from disk (async to avoid blocking the event loop)
+      const buffer = await readFile(att.path);
+      base64Data = buffer.toString("base64");
+    }
+
+    if (base64Data) {
+      const mediaType = getImageMediaType(att.path || att.filename || "image.png");
+      contentBlocks.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: mediaType,
+          data: base64Data,
+        },
+      } as ImageBlockParam);
+    }
+  }
+
+  // Wrap in an async iterable yielding a single SDKUserMessage
+  const userMessage: SDKUserMessage = {
+    type: "user",
+    message: {
+      role: "user",
+      content: contentBlocks,
+    },
+    parent_tool_use_id: null,
+  };
+
+  async function* singleMessage(): AsyncIterable<SDKUserMessage> {
+    yield userMessage;
+  }
+
+  return singleMessage();
+}
+
+/**
  * Send a prompt to a session and process the response
  */
 export async function sendPrompt(
@@ -762,7 +849,7 @@ export async function sendPrompt(
   session.status = "running";
   session.lastActivity = new Date();
 
-  // Build the display prompt (what the user sees) - includes attachment references
+  // Build the display prompt (what the user sees) - includes all attachment references
   let displayPrompt = prompt;
   if (options?.attachments && options.attachments.length > 0) {
     const attachmentTags = options.attachments
@@ -771,8 +858,20 @@ export async function sendPrompt(
     displayPrompt = `${prompt}\n\n<attached-files>\n${attachmentTags}\n</attached-files>`;
   }
 
+  // Build the SDK text prompt - excludes image attachments since those are sent as
+  // inline base64 content blocks (bypassing the Read tool's 2000x2000 pixel limit).
+  // File attachments are still included as XML tags so Claude can read them.
+  let sdkTextPrompt = prompt;
+  const fileAttachments = options?.attachments?.filter((att) => att.type !== "image") ?? [];
+  if (fileAttachments.length > 0) {
+    const fileTags = fileAttachments
+      .map((att) => `<attachment type="${att.type}" path="${att.path}" filename="${att.filename || ""}" />`)
+      .join("\n");
+    sdkTextPrompt = `${prompt}\n\n<attached-files>\n${fileTags}\n</attached-files>`;
+  }
+
   // Build the final prompt for the SDK - includes planning mode instruction if enabled
-  let finalPrompt = displayPrompt;
+  let finalPrompt = sdkTextPrompt;
 
   // If plan mode is enabled, instruct Claude to use the EnterPlanMode tool
   // This uses Claude's native planning mode which allows read-only exploration
@@ -793,7 +892,7 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
 </system-reminder>
 
 `;
-    finalPrompt = planModeInstruction + displayPrompt;
+    finalPrompt = planModeInstruction + sdkTextPrompt;
   }
 
   // Add user message with displayPrompt (what the user sees, without planning mode instruction).
@@ -864,8 +963,9 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
     });
     const envPath = process.env.PATH;
     console.log("[session-manager] SDK env PATH", { path: envPath });
+    const sdkPrompt = await buildSdkPrompt(finalPrompt, options?.attachments);
     const queryIterator = query({
-      prompt: finalPrompt,
+      prompt: sdkPrompt,
       options: {
         cwd,
         model: options?.model,

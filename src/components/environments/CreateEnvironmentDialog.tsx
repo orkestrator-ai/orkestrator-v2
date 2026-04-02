@@ -41,6 +41,8 @@ import { useConfigStore } from "@/stores";
 // Stable empty array reference to prevent infinite re-renders when no default port mappings are provided
 const EMPTY_PORT_MAPPINGS: PortMapping[] = [];
 
+const UNSELECTED_CARD_CLASSES = "border-transparent bg-zinc-900 hover:border-zinc-600";
+
 export interface ClaudeOptions {
   environmentType: EnvironmentType;
   environmentName: string;
@@ -247,7 +249,7 @@ export function CreateEnvironmentDialog({
                   "p-3 rounded-lg border-2 text-left transition-colors",
                   environmentType === "containerized"
                     ? "border-primary bg-primary/5"
-                    : "border-muted hover:border-muted-foreground/50",
+                    : UNSELECTED_CARD_CLASSES,
                   isLoading && "opacity-50 cursor-not-allowed"
                 )}
               >
@@ -268,7 +270,7 @@ export function CreateEnvironmentDialog({
                   "p-3 rounded-lg border-2 text-left transition-colors",
                   environmentType === "local"
                     ? "border-primary bg-primary/5"
-                    : "border-muted hover:border-muted-foreground/50",
+                    : UNSELECTED_CARD_CLASSES,
                   isLoading && "opacity-50 cursor-not-allowed"
                 )}
               >
@@ -318,7 +320,7 @@ export function CreateEnvironmentDialog({
                       "p-2 rounded-lg border-2 text-left transition-colors",
                       networkAccessMode === "restricted"
                         ? "border-primary bg-primary/5"
-                        : "border-muted hover:border-muted-foreground/50",
+                        : UNSELECTED_CARD_CLASSES,
                       isLoading && "opacity-50 cursor-not-allowed"
                     )}
                   >
@@ -336,7 +338,7 @@ export function CreateEnvironmentDialog({
                       "p-2 rounded-lg border-2 text-left transition-colors",
                       networkAccessMode === "full"
                         ? "border-primary bg-primary/5"
-                        : "border-muted hover:border-muted-foreground/50",
+                        : UNSELECTED_CARD_CLASSES,
                       isLoading && "opacity-50 cursor-not-allowed"
                     )}
                   >
@@ -409,7 +411,7 @@ export function CreateEnvironmentDialog({
                         "p-2 rounded-lg border-2 text-left transition-colors",
                         (agentType === "claude" ? claudeMode : opencodeMode) === "terminal"
                           ? "border-primary bg-primary/5"
-                          : "border-muted hover:border-muted-foreground/50",
+                          : UNSELECTED_CARD_CLASSES,
                         (isLoading || !launchAgent) && "opacity-50 cursor-not-allowed"
                       )}
                     >
@@ -433,7 +435,7 @@ export function CreateEnvironmentDialog({
                         "p-2 rounded-lg border-2 text-left transition-colors",
                         (agentType === "claude" ? claudeMode : opencodeMode) === "native"
                           ? "border-primary bg-primary/5"
-                          : "border-muted hover:border-muted-foreground/50",
+                          : UNSELECTED_CARD_CLASSES,
                         (isLoading || !launchAgent) && "opacity-50 cursor-not-allowed"
                       )}
                     >
@@ -463,7 +465,7 @@ export function CreateEnvironmentDialog({
                   "p-3 rounded-lg border-2 text-left transition-colors",
                   agentType === "claude"
                     ? "border-primary bg-primary/5"
-                    : "border-muted hover:border-muted-foreground/50",
+                    : UNSELECTED_CARD_CLASSES,
                   (isLoading || !launchAgent) && "opacity-50 cursor-not-allowed"
                 )}
               >
@@ -481,7 +483,7 @@ export function CreateEnvironmentDialog({
                   "p-3 rounded-lg border-2 text-left transition-colors",
                   agentType === "opencode"
                     ? "border-primary bg-primary/5"
-                    : "border-muted hover:border-muted-foreground/50",
+                    : UNSELECTED_CARD_CLASSES,
                   (isLoading || !launchAgent) && "opacity-50 cursor-not-allowed"
                 )}
               >
@@ -499,7 +501,7 @@ export function CreateEnvironmentDialog({
                   "p-3 rounded-lg border-2 text-left transition-colors",
                   agentType === "codex"
                     ? "border-primary bg-primary/5"
-                    : "border-muted hover:border-muted-foreground/50",
+                    : UNSELECTED_CARD_CLASSES,
                   (isLoading || !launchAgent) && "opacity-50 cursor-not-allowed"
                 )}
               >

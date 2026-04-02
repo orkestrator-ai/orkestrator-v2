@@ -30,3 +30,20 @@ export const shouldAutoResolveSetupCommands = ({
   isLocalEnvironmentReady &&
   !setupCommandsResolved &&
   !hasPendingCommands;
+
+/**
+ * Determines whether setup is still pending for a given environment type.
+ * Used to gate agent initialization and show the "waiting for setup" UI.
+ */
+export function isSetupPending(params: {
+  isLocal: boolean;
+  setupCommandsResolved: boolean;
+  hasPendingSetupCommands: boolean;
+  setupScriptsRunning: boolean;
+  workspaceReady: boolean;
+}): boolean {
+  if (params.isLocal) {
+    return params.setupScriptsRunning || params.hasPendingSetupCommands || !params.setupCommandsResolved;
+  }
+  return !params.workspaceReady;
+}

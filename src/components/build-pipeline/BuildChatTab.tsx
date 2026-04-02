@@ -38,29 +38,13 @@ import {
   createFixPrompt,
 } from "@/prompts";
 import { parseVerificationResult } from "@/lib/parse-verification-result";
+import { isSetupPending } from "@/lib/setup-commands";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import * as tauri from "@/lib/tauri";
 
 // Reference to kanban store for non-reactive reads
 const kanbanStoreRef = useKanbanStore;
-
-/**
- * Determines whether setup is still pending for a given environment type.
- * Used to gate build start and show the "waiting for setup" UI.
- */
-export function isSetupPending(params: {
-  isLocal: boolean;
-  setupCommandsResolved: boolean;
-  hasPendingSetupCommands: boolean;
-  setupScriptsRunning: boolean;
-  workspaceReady: boolean;
-}): boolean {
-  if (params.isLocal) {
-    return params.setupScriptsRunning || params.hasPendingSetupCommands || !params.setupCommandsResolved;
-  }
-  return !params.workspaceReady;
-}
 
 interface BuildChatTabProps {
   data: BuildTabData;

@@ -41,6 +41,8 @@ import { ClaudeQuestionCard } from "./ClaudeQuestionCard";
 import { ClaudePlanApprovalCard } from "./ClaudePlanApprovalCard";
 import { ResumeSessionDialog } from "./ResumeSessionDialog";
 import type { ClaudeNativeData } from "@/types/paneLayout";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import { isSetupPending } from "@/lib/setup-commands";
 import type { ClaudeAttachment } from "@/stores/claudeStore";
 
 interface ClaudeChatTabProps {
@@ -161,6 +163,20 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
     useCallback((state) => state.messageQueue.get(sessionKey)?.length ?? 0, [sessionKey])
   );
 
+  // Setup completion awareness - block initialization until setup scripts finish
+  const setupScriptsRunning = useEnvironmentStore(
+    (state) => state.setupScriptsRunning.has(environmentId)
+  );
+  const setupCommandsResolved = useEnvironmentStore(
+    (state) => state.setupCommandsResolved.has(environmentId)
+  );
+  const hasPendingSetupCommands = useEnvironmentStore(
+    (state) => state.pendingSetupCommands.has(environmentId)
+  );
+  const workspaceReady = useEnvironmentStore(
+    (state) => state.workspaceReadyEnvironments.has(environmentId)
+  );
+
   const lastInitTimeRef = useRef<number>(0);
   const INIT_DEBOUNCE_MS = 1000;
 
@@ -193,6 +209,11 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
   }, [environmentId, removeContainerState]);
 
   useEffect(() => {
+    // Block initialization until setup scripts finish (local environments with orkestrator-ai.json)
+    if (isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady })) {
+      return;
+    }
+
     const now = Date.now();
     const timeSinceLastInit = now - lastInitTimeRef.current;
     if (timeSinceLastInit < INIT_DEBOUNCE_MS && isInitializedRef.current) {
@@ -632,7 +653,7 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
       slashCmdCleanupRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [containerId, environmentId, tabId, isLocal]);
+  }, [containerId, environmentId, tabId, isLocal, setupScriptsRunning, setupCommandsResolved, hasPendingSetupCommands, workspaceReady]);
 
   const startSharedEventSubscription = useCallback(
     async (bridgeClient: ReturnType<typeof createClient>) => {
@@ -1157,6 +1178,16 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
     },
     [client, sessionKey, setSession]
   );
+
+  if (isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady })) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
+        <Loader2 className="w-8 h-8 animate-spin text-yellow-400" />
+        <p className="text-sm">Waiting for setup scripts to complete...</p>
+        <p className="text-xs">Claude will connect automatically once setup finishes</p>
+      </div>
+    );
+  }
 
   if (connectionState === "connecting") {
     return (

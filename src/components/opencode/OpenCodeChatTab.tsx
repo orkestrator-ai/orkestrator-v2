@@ -16,6 +16,7 @@ import {
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useClaudeActivityStore } from "@/stores/claudeActivityStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { isSetupPending } from "@/lib/setup-commands";
 import {
   createClient,
   getModelsWithDefaults,
@@ -240,6 +241,20 @@ export function OpenCodeChatTab({
     ),
   );
 
+  // Setup completion awareness - block initialization until setup scripts finish
+  const setupScriptsRunning = useEnvironmentStore(
+    (state) => state.setupScriptsRunning.has(environmentId)
+  );
+  const setupCommandsResolved = useEnvironmentStore(
+    (state) => state.setupCommandsResolved.has(environmentId)
+  );
+  const hasPendingSetupCommands = useEnvironmentStore(
+    (state) => state.pendingSetupCommands.has(environmentId)
+  );
+  const workspaceReady = useEnvironmentStore(
+    (state) => state.workspaceReadyEnvironments.has(environmentId)
+  );
+
   const slashCommandDirectory = resolveSlashCommandDirectory(
     isLocal ?? false,
     worktreePath,
@@ -374,6 +389,11 @@ export function OpenCodeChatTab({
   // Initialize connection on mount
   useEffect(() => {
     if (!isActive) {
+      return;
+    }
+
+    // Block initialization until setup scripts finish (local environments with orkestrator-ai.json)
+    if (isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady })) {
       return;
     }
 
@@ -712,6 +732,10 @@ export function OpenCodeChatTab({
     getSelectedVariant,
     setSelectedModel,
     setSelectedVariant,
+    setupScriptsRunning,
+    setupCommandsResolved,
+    hasPendingSetupCommands,
+    workspaceReady,
   ]);
 
   useEffect(() => {
@@ -1296,6 +1320,16 @@ export function OpenCodeChatTab({
   );
 
   // Render loading state
+  if (isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady })) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
+        <Loader2 className="w-8 h-8 animate-spin text-yellow-400" />
+        <p className="text-sm">Waiting for setup scripts to complete...</p>
+        <p className="text-xs">OpenCode will connect automatically once setup finishes</p>
+      </div>
+    );
+  }
+
   if (connectionState === "connecting") {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">

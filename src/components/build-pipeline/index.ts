@@ -1,1 +1,1 @@
-export { BuildChatTab, isSetupPending } from "./BuildChatTab";
+export { BuildChatTab } from "./BuildChatTab";

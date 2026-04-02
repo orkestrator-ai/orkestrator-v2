@@ -24,7 +24,9 @@ import {
   ENVIRONMENT_READY_MARKER_ALT_TILDE,
   ENVIRONMENT_READY_MARKER_ALT_DASH,
   SETUP_COMPLETE_MARKER,
-  SETUP_SCRIPTS_DONE_MARKER,
+  SETUP_DONE_OSC_ID,
+  SETUP_DONE_OSC_DATA,
+  SETUP_DONE_PRINTF_CMD,
 } from "@/lib/terminal-utils";
 import {
   forceTerminalVisibilityRedraw,
@@ -99,7 +101,6 @@ export function PersistentTerminal({
   const [isComposeBarOpen, setIsComposeBarOpen] = useState(false);
   const composeBarOpenRef = useRef(false); // Ref for synchronous access in key handler
   const dataBufferRef = useRef<string>("");
-  const setupBufferRef = useRef<string>("");
   const setupCompleteRef = useRef(false);
   const hasLaunchedCommandRef = useRef(false);
   const hasInitiatedConnectionRef = useRef(false);
@@ -369,32 +370,27 @@ export function PersistentTerminal({
           dataBufferRef.current = dataBufferRef.current.slice(-512);
         }
       }
-
-      // For setup tabs: detect when setup scripts have finished executing.
-      // The marker must appear on its own line to avoid false positives from the
-      // shell echo of the command (e.g., `$ (cmd); echo "MARKER"` contains the
-      // marker mid-line, but the actual echo output is just `MARKER` on its own line).
-      if (isSetupTab && !setupCompleteRef.current) {
-        setupBufferRef.current += text;
-        const strippedSetup = stripAnsi(setupBufferRef.current);
-        const lines = strippedSetup.split("\n");
-        const markerFound = lines.some(
-          (line) => line.replace(/\r/g, "").trim() === SETUP_SCRIPTS_DONE_MARKER
-        );
-        if (markerFound) {
-          console.log("[PersistentTerminal] Setup scripts completed for tab:", tabId);
-          setupCompleteRef.current = true;
-          setupBufferRef.current = "";
-          onSetupComplete?.();
-        }
-        // Keep buffer from growing indefinitely
-        if (setupBufferRef.current.length > 4096) {
-          setupBufferRef.current = setupBufferRef.current.slice(-2048);
-        }
-      }
     },
-    [terminal, isFirstTab, isLocalEnvironment, isEnvironmentReady, tabId, onReady, isSetupTab, onSetupComplete]
+    [terminal, isFirstTab, isLocalEnvironment, isEnvironmentReady, tabId, onReady]
   );
+
+  // Register an invisible OSC escape handler for setup completion detection.
+  // When the setup command finishes, it emits an OSC sequence that xterm.js
+  // intercepts without rendering — no visible marker in the terminal.
+  useEffect(() => {
+    if (!isSetupTab) return;
+
+    const disposable = terminal.parser.registerOscHandler(SETUP_DONE_OSC_ID, (data) => {
+      if (data === SETUP_DONE_OSC_DATA && !setupCompleteRef.current) {
+        console.log("[PersistentTerminal] Setup scripts completed (OSC) for tab:", tabId);
+        setupCompleteRef.current = true;
+        onSetupComplete?.();
+      }
+      return true;
+    });
+
+    return () => disposable.dispose();
+  }, [terminal, isSetupTab, tabId, onSetupComplete]);
 
   // Determine user based on tab type - root tabs connect as orkroot
   const terminalUser = tabType === "root" ? ROOT_TERMINAL_USER : undefined;
@@ -1078,8 +1074,9 @@ export function PersistentTerminal({
           // Join all commands with && to run sequentially
           const combinedCommand = initialCommands.join(" && ");
           if (isSetupTab) {
-            // Wrap in subshell so the completion marker always echoes, even on failure
-            writeRef.current(`(${combinedCommand}); echo "${SETUP_SCRIPTS_DONE_MARKER}"\n`);
+            // Wrap in subshell so the completion signal always fires, even on failure.
+            // The printf emits an invisible OSC escape sequence detected by xterm.js.
+            writeRef.current(`(${combinedCommand}); ${SETUP_DONE_PRINTF_CMD}\n`);
           } else {
             writeRef.current(combinedCommand + "\n");
           }

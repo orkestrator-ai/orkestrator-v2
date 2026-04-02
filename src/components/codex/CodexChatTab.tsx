@@ -44,6 +44,8 @@ import {
   resolveCodexPreferenceSelection,
   resolveReasoningEffort,
 } from "./codex-preferences";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import { isSetupPending } from "@/lib/setup-commands";
 import type { CodexNativeData } from "@/types/paneLayout";
 import type { CodexAttachment } from "@/stores/codexStore";
 
@@ -130,6 +132,20 @@ export function CodexChatTab({
     () => clientsMap.get(environmentId),
     [clientsMap, environmentId],
   );
+  // Setup completion awareness - block initialization until setup scripts finish
+  const setupScriptsRunning = useEnvironmentStore(
+    (state) => state.setupScriptsRunning.has(environmentId)
+  );
+  const setupCommandsResolved = useEnvironmentStore(
+    (state) => state.setupCommandsResolved.has(environmentId)
+  );
+  const hasPendingSetupCommands = useEnvironmentStore(
+    (state) => state.pendingSetupCommands.has(environmentId)
+  );
+  const workspaceReady = useEnvironmentStore(
+    (state) => state.workspaceReadyEnvironments.has(environmentId)
+  );
+
   const session = useMemo(
     () => sessionsMap.get(sessionKey),
     [sessionsMap, sessionKey],
@@ -397,6 +413,12 @@ export function CodexChatTab({
 
   useEffect(() => {
     if (!isActive) return;
+
+    // Block initialization until setup scripts finish (local environments with orkestrator-ai.json)
+    if (isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady })) {
+      return;
+    }
+
     const now = Date.now();
     if (now - lastInitTimeRef.current < 1000 && isInitializedRef.current) return;
     lastInitTimeRef.current = now;
@@ -625,6 +647,10 @@ export function CodexChatTab({
     setSelectedModel,
     setServerStatus,
     setSession,
+    setupScriptsRunning,
+    setupCommandsResolved,
+    hasPendingSetupCommands,
+    workspaceReady,
   ]);
 
   const syncSessionConfig = useCallback(
@@ -1043,6 +1069,16 @@ export function CodexChatTab({
     session?.sessionId,
     tabId,
   ]);
+
+  if (isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady })) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
+        <Loader2 className="w-8 h-8 animate-spin text-yellow-400" />
+        <p className="text-sm">Waiting for setup scripts to complete...</p>
+        <p className="text-xs">Codex will connect automatically once setup finishes</p>
+      </div>
+    );
+  }
 
   if (connectionState === "connecting") {
     return (

@@ -9,7 +9,7 @@ import {
 } from "@/prompts";
 import { parseVerificationResult } from "@/lib/parse-verification-result";
 import type { ClaudeMessage } from "@/lib/claude-client";
-import { isSetupPending } from "./BuildChatTab";
+import { isSetupPending } from "@/lib/setup-commands";
 import { waitForSetupInitiation } from "@/hooks/useBuildPipeline";
 
 // --- parseVerificationResult ---

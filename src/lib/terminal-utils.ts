@@ -35,8 +35,19 @@ export const ENVIRONMENT_READY_MARKER_ALT_DASH = "--- Workspace Ready ---";
 /** Marker that appears right before "Workspace Ready" in setup scripts */
 export const SETUP_COMPLETE_MARKER = "Container setup completed successfully!";
 
-/** Marker echoed after setup scripts finish (local environments) */
-export const SETUP_SCRIPTS_DONE_MARKER = "__ORKESTRATOR_SETUP_DONE__";
+/** OSC identifier used for invisible setup-complete signalling via xterm.js */
+export const SETUP_DONE_OSC_ID = 9999;
+
+/** The data payload sent inside the OSC sequence */
+export const SETUP_DONE_OSC_DATA = "setup_done";
+
+/**
+ * Shell command that emits an invisible OSC escape sequence to signal setup completion.
+ * xterm.js consumes OSC sequences without rendering them, so the marker is invisible.
+ * The shell echo of the printf command shows literal text, not escape bytes, so it
+ * cannot trigger the OSC handler — only the actual execution does.
+ */
+export const SETUP_DONE_PRINTF_CMD = `printf '\\033]${SETUP_DONE_OSC_ID};${SETUP_DONE_OSC_DATA}\\007'`;
 
 /** Patterns that indicate a shell prompt is ready */
 export const SHELL_PROMPT_PATTERNS: (string | RegExp)[] = [

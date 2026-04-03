@@ -77,6 +77,7 @@ export function HierarchicalSidebar() {
     setMultiSelection,
     clearMultiSelection,
     collapseEmptyProjects,
+    setProjectCollapsed,
   } = useUIStore();
 
   const { setSetupCommandsResolved } = useEnvironmentStore();
@@ -294,6 +295,9 @@ export function HierarchicalSidebar() {
         agentType: options.agentType,
         initialPrompt: options.initialPrompt,
       });
+
+      // Expand the project if collapsed so the new environment is visible
+      setProjectCollapsed(createEnvProjectId, false);
 
       // Always select the newly created environment
       selectProjectAndEnvironment(createEnvProjectId, configuredEnvironment.id);

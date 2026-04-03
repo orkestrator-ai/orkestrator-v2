@@ -141,7 +141,7 @@ export function SortableProjectGroup({
                         <FolderGit2 className="h-4 w-4 shrink-0" />
                         <span className="truncate font-medium">{project.name}</span>
                         {environments.length > 0 && (
-                          <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] bg-zinc-600 text-zinc-300">
+                          <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] bg-zinc-800 text-zinc-300">
                             {environments.length}
                           </span>
                         )}

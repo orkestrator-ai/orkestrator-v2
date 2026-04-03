@@ -990,10 +990,12 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
         abortController,
         // Resume session if we have a previous SDK session ID
         resume: session.sdkSessionId,
-        // Use Claude Code system prompt
+        // Use Claude Code system prompt with additional instructions
         systemPrompt: {
           type: "preset",
           preset: "claude_code",
+          append:
+            "IMPORTANT: You MUST read a file before editing or writing to it. The Edit and Write tools will fail if you have not first used the Read tool to read the file in this conversation. Always read files before attempting to modify them.",
         },
         // Load user settings (from ~/.claude.json including MCP servers) and project settings (CLAUDE.md files)
         // Using "user" lets the SDK handle MCP server loading natively, which supports all transport types

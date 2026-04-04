@@ -23,9 +23,15 @@ pub struct PortAllocation {
     pub codex_port: u16,
 }
 
-/// Check if a port is available for binding
+/// Check if a port is available for binding.
+///
+/// Checks both the loopback and wildcard addresses because on macOS a process
+/// bound to `0.0.0.0:port` does not prevent a separate bind to `127.0.0.1:port`,
+/// which can lead to two processes listening on the same port and
+/// non-deterministic connection routing.
 pub fn is_port_available(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_ok()
+        && TcpListener::bind(("0.0.0.0", port)).is_ok()
 }
 
 /// Get all ports currently in use by local environments
@@ -117,6 +123,24 @@ mod tests {
         let port = 59999;
         // Just check that the function doesn't panic
         let _ = is_port_available(port);
+    }
+
+    #[test]
+    fn test_is_port_available_detects_loopback_bind() {
+        // Bind on 127.0.0.1 and verify the port is reported as unavailable
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(!is_port_available(port));
+    }
+
+    #[test]
+    fn test_is_port_available_detects_wildcard_bind() {
+        // Bind on 0.0.0.0 (wildcard) and verify the port is reported as unavailable.
+        // Before the fix, is_port_available only checked 127.0.0.1 and would
+        // miss wildcard binds, causing port collisions with stale processes.
+        let listener = TcpListener::bind(("0.0.0.0", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(!is_port_available(port));
     }
 
     #[test]

@@ -795,6 +795,14 @@ pub async fn get_local_codex_status(
     }
 }
 
+/// Kill every tracked local server process across all environments.
+/// Called during app shutdown to prevent orphaned processes.
+pub async fn shutdown_all_local_servers() {
+    info!("Shutting down all local server processes");
+    let manager = get_process_manager();
+    manager.shutdown_all().await;
+}
+
 /// Stop all local servers for an environment
 pub async fn stop_all_local_servers(environment_id: &str) -> Result<(), String> {
     info!(environment_id = %environment_id, "Stopping all local servers");

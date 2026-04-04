@@ -474,9 +474,6 @@ export function CodexChatTab({
             mode: resolvedMode,
           });
           if (!mounted) return;
-          if (!created) {
-            throw new Error("Failed to create Codex session");
-          }
 
           isInitializedRef.current = true;
           setSession(sessionKey, {
@@ -566,9 +563,6 @@ export function CodexChatTab({
             modelReasoningEffort: resolvedReasoningEffort,
             mode: resolvedMode,
           });
-          if (!created) {
-            throw new Error("Failed to create Codex session");
-          }
           setSession(sessionKey, {
             sessionId: created.sessionId,
             messages: [],
@@ -602,7 +596,8 @@ export function CodexChatTab({
         setErrorMessage(message);
         try {
           if (isLocal) {
-            setServerLog("Local Codex bridge failed to start");
+            const detail = error instanceof Error ? error.message : String(error);
+            setServerLog(`Local Codex bridge error: ${detail}`);
           } else if (containerId) {
             setServerLog(await getCodexServerLog(containerId));
           }

@@ -1534,7 +1534,8 @@ pub async fn stop_environment(environment_id: String) -> Result<(), String> {
                 json!({
                     "status": "stopped",
                     "opencodePid": null,
-                    "claudeBridgePid": null
+                    "claudeBridgePid": null,
+                    "codexBridgePid": null
                 }),
             )
             .map_err(storage_error_to_string)?;

@@ -1035,6 +1035,8 @@ mod tests {
                 pr_base_branch: "main".to_string(),
                 default_port_mappings: None,
                 files_to_copy: None,
+                default_model: None,
+                default_effort: None,
             },
         );
 

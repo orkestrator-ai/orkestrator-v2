@@ -200,6 +200,9 @@ export function useClipboardImagePaste({
       // Don't process if focus is within a compose bar (it handles its own paste)
       if (document.activeElement?.closest("[data-compose-bar]")) return;
 
+      // Don't process if focus is within a dialog (e.g., Kanban task dialog handles its own paste)
+      if (document.activeElement?.closest("[role='dialog']")) return;
+
       // Check for image in clipboard
       const clipboardItems = event.clipboardData?.items;
       if (!clipboardItems) return;

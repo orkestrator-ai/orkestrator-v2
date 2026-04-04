@@ -57,7 +57,7 @@ export function useBuildPipeline() {
   const { createEnvironment, startEnvironment } = useEnvironments(null, { listenForRenameEvents: false });
   const { createPipeline, setPipelineEnvironment, setPhase, setPipelineError } = useBuildPipelineStore();
   const { updateTask } = useKanbanStore();
-  const { selectProjectAndEnvironment } = useUIStore();
+  const { selectProjectAndEnvironment, setProjectCollapsed } = useUIStore();
   const { setOptions } = useClaudeOptionsStore();
 
   const startBuild = useCallback(
@@ -129,7 +129,8 @@ export function useBuildPipeline() {
           buildPipelineId: pipelineId,
         });
 
-        // 6. Select the environment in the UI
+        // 6. Expand the project if collapsed and select the environment in the UI
+        setProjectCollapsed(task.projectId, false);
         selectProjectAndEnvironment(task.projectId, configuredEnvironment.id);
 
         // 7. Start the environment
@@ -169,13 +170,14 @@ export function useBuildPipeline() {
         });
       }
     },
-    [createPipeline, createEnvironment, setPipelineEnvironment, setPhase, setPipelineError, updateTask, selectProjectAndEnvironment, setOptions, startEnvironment]
+    [createPipeline, createEnvironment, setPipelineEnvironment, setPhase, setPipelineError, updateTask, selectProjectAndEnvironment, setProjectCollapsed, setOptions, startEnvironment]
   );
 
   const navigateToBuild = useCallback(
     async (task: KanbanTask) => {
       if (!task.environmentId) return;
 
+      setProjectCollapsed(task.projectId, false);
       selectProjectAndEnvironment(task.projectId, task.environmentId);
 
       // Poll for the pane state to be available, then find and activate the build tab
@@ -193,7 +195,7 @@ export function useBuildPipeline() {
         await new Promise((r) => setTimeout(r, 50));
       }
     },
-    [selectProjectAndEnvironment]
+    [selectProjectAndEnvironment, setProjectCollapsed]
   );
 
   return { startBuild, navigateToBuild };

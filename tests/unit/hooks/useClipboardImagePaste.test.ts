@@ -1,27 +1,19 @@
 import { describe, test, expect, mock, beforeEach } from "bun:test";
 
+// Use shared clipboard mocks registered centrally in tests/setup.ts.
+// Do NOT call mock.module() for @tauri-apps/plugin-clipboard-manager here.
+import { mockReadImage, mockReadText } from "../../mocks/clipboard";
+
 // Mock image data
 const mockRgba = new Uint8Array([255, 0, 0, 255, 0, 255, 0, 255]); // 2 pixels
 const mockImageSize = { width: 2, height: 1 };
 
-const mockReadImage = mock(() =>
-  Promise.resolve({
-    rgba: () => Promise.resolve(mockRgba),
-    size: () => Promise.resolve(mockImageSize),
-  })
-);
-const mockReadText = mock(() => Promise.resolve("clipboard text"));
 const mockWriteContainerFile = mock<
   (containerId: string, filePath: string, base64Data: string) => Promise<string>
 >(() => Promise.resolve("/workspace/.orkestrator/clipboard/test.png"));
 const mockWriteLocalFile = mock<
   (worktreePath: string, filePath: string, base64Data: string) => Promise<string>
 >(() => Promise.resolve("/tmp/worktrees/env/.orkestrator/clipboard/test.png"));
-
-mock.module("@tauri-apps/plugin-clipboard-manager", () => ({
-  readImage: mockReadImage,
-  readText: mockReadText,
-}));
 
 mock.module("@/lib/tauri", () => ({
   writeContainerFile: mockWriteContainerFile,

@@ -205,6 +205,30 @@ impl LocalProcessManager {
         Ok(())
     }
 
+    /// Kill every tracked process across all environments.
+    /// Called during app shutdown to prevent orphaned processes.
+    pub async fn shutdown_all(&self) {
+        let mut processes = self.processes.lock().await;
+        for (environment_id, mut env_processes) in processes.drain() {
+            for (process_type, mut handle) in env_processes.drain() {
+                info!(
+                    environment_id = %environment_id,
+                    process_type = %process_type,
+                    pid = handle.pid,
+                    "Killing local server process (app shutdown)"
+                );
+                if let Err(e) = handle.kill().await {
+                    warn!(
+                        environment_id = %environment_id,
+                        process_type = %process_type,
+                        error = %e,
+                        "Failed to kill process during shutdown"
+                    );
+                }
+            }
+        }
+    }
+
     /// Kill all processes for an environment
     pub async fn kill_all(&self, environment_id: &str) -> Result<(), std::io::Error> {
         let mut processes = self.processes.lock().await;

@@ -167,39 +167,16 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
   }, []);
 
   // Handle paste events for image attachment
+  // Uses Tauri readImage() directly (like the compose bars) so native screenshots
+  // from the system clipboard are reliably detected.
   const handlePaste = useCallback(async (e: ClipboardEvent) => {
-    // First try the standard web clipboard API (works for in-browser copies)
-    const items = e.clipboardData?.items;
-    if (items) {
-      for (const item of items) {
-        if (item.type.startsWith("image/")) {
-          e.preventDefault();
-          const file = item.getAsFile();
-          if (!file) continue;
+    // Only handle if focus is within this dialog
+    const activeEl = document.activeElement;
+    if (!activeEl || !dialogContentRef.current?.contains(activeEl)) return;
 
-          const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-          const ext = file.type.split("/")[1] || "png";
-          const renamedFile = new File([file], `clipboard-${timestamp}.${ext}`, { type: file.type });
-
-          const result = await processImageFile(renamedFile);
-          if (!result) continue;
-
-          if (isCreateMode || !task) {
-            setPendingImages((prev) => [...prev, { id: crypto.randomUUID(), ...result }]);
-          } else {
-            void addImage(task.id, result.filename, result.data);
-          }
-          toast.success("Image pasted");
-          return;
-        }
-      }
-    }
-
-    // If clipboard clearly contains text, skip the Tauri image fallback
-    if (e.clipboardData?.types?.includes("text/plain")) return;
-
-    // Fallback: use Tauri's clipboard plugin for system clipboard images
-    // (standard web API doesn't reliably expose images from native apps in Tauri's webview)
+    // No early-return for text/plain clipboard — in Tauri's webview, native
+    // screenshots may report text/plain without any image/* type, so we must
+    // always attempt readImage(). This matches the compose bar pattern.
     try {
       const image = await readImage();
       const rgba = await image.rgba();
@@ -232,13 +209,15 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
       }
 
       e.preventDefault();
+      // stopImmediatePropagation prevents other document-level capture handlers
+      // (compose bars) from also calling readImage() for the same event.
+      e.stopImmediatePropagation();
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
       const filename = `clipboard-${timestamp}.png`;
-      const previewUrl = dataUrl;
 
       if (isCreateMode || !task) {
-        setPendingImages((prev) => [...prev, { id: crypto.randomUUID(), filename, data: base64Data, previewUrl }]);
+        setPendingImages((prev) => [...prev, { id: crypto.randomUUID(), filename, data: base64Data, previewUrl: dataUrl }]);
       } else {
         void addImage(task.id, filename, base64Data);
       }
@@ -246,17 +225,16 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
     } catch {
       // No image on clipboard — let the event propagate for text paste
     }
-  }, [isCreateMode, task, addImage, processImageFile]);
+  }, [isCreateMode, task, addImage]);
 
-  // Register paste listener on the dialog content
+  // Register paste listener at document level with capture phase
+  // (matches the pattern used by compose bars for reliable native clipboard access)
   useEffect(() => {
     if (!open) return;
-    const el = dialogContentRef.current;
-    if (!el) return;
 
     const listener = (e: Event) => { void handlePaste(e as ClipboardEvent); };
-    el.addEventListener("paste", listener);
-    return () => el.removeEventListener("paste", listener);
+    document.addEventListener("paste", listener, { capture: true });
+    return () => document.removeEventListener("paste", listener, { capture: true });
   }, [open, handlePaste]);
 
   // Hidden file input ref for attaching images
@@ -579,6 +557,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                   onChange={(e) => setEditDescription(e.target.value)}
                   placeholder="Description..."
                   rows={3}
+                  className="max-h-[calc(10lh+1rem)] overflow-y-auto"
                 />
               </div>
             </DialogHeader>
@@ -596,6 +575,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                 onChange={(e) => setEditAC(e.target.value)}
                 placeholder="Define what 'done' looks like..."
                 rows={4}
+                className="max-h-[calc(10lh+1rem)] overflow-y-auto"
               />
             </div>
 
@@ -686,6 +666,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                   onChange={(e) => setEditDescription(e.target.value)}
                   placeholder="Description..."
                   rows={3}
+                  className="max-h-[calc(10lh+1rem)] overflow-y-auto"
                 />
                 <div className="flex gap-2">
                   <Button size="sm" onClick={handleSaveEdit}>Save</Button>
@@ -723,6 +704,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                   onChange={(e) => setEditAC(e.target.value)}
                   placeholder="Define what 'done' looks like..."
                   rows={4}
+                  className="max-h-[calc(10lh+1rem)] overflow-y-auto"
                   autoFocus
                 />
                 <div className="flex gap-2">

@@ -78,7 +78,14 @@ Based on the current git status and diff, create a single git commit:
    - Blank line
    - Bullet points describing the changes
 
-## Step 2: Code Review
+## Step 2: Run Tests
+
+Run the project's full test suite to ensure nothing is broken:
+1. Identify the project's test runner (check package.json scripts, Makefile, etc.)
+2. Run the full test suite
+3. If any tests fail, record every failure with the test name, file, and error message
+
+## Step 3: Code Review
 
 Compare the current branch against the remote \`${targetBranch}\` branch and conduct a thorough code review:
 1. Run \`git diff origin/${targetBranch}...HEAD\` to see all changes since branching
@@ -86,22 +93,35 @@ Compare the current branch against the remote \`${targetBranch}\` branch and con
    - **Logic and correctness**: Check for bugs, edge cases, and potential issues
    - **Readability**: Is the code clear and maintainable? Does it follow repository patterns?
    - **Performance**: Are there obvious performance concerns or optimizations?
-   - **Test coverage**: If the repo has testing patterns, are there adequate tests?
 3. Ask clarifying questions if needed about unclear changes
 4. Run typechecking and build validation to ensure the changes are valid as appropriate for the project.
 
+## Step 4: Test Coverage Review
+
+Review test coverage for every file impacted by the changes (not just the changed lines):
+1. From the diff in Step 3, identify all files that were added or modified
+2. For each impacted file, find its corresponding test file(s)
+3. If an impacted file has no test file, flag it as lacking test coverage
+4. For each impacted file that does have tests, review the **entire file** (not just the changed code) and verify:
+   - All public functions and methods have test coverage
+   - Edge cases and error paths are tested
+   - Any complex logic branches are covered
+5. List any gaps in test coverage, including for code that was not modified in this change
+
 ## Output Format
 
-After completing both steps:
+After completing all steps:
 1. Confirm the commit was created with its message
-2. Provide a summary overview of the general code quality
-3. List any identified issues in numbered sections with:
+2. Report test suite results: total tests run, passed, and failed. List every failing test with details.
+3. Provide a summary overview of the general code quality
+4. List any identified code review issues in numbered sections with:
    - Title
    - File and line number(s)
    - Description of the issue
    - Code snippet (if relevant)
    - Potential solution(s)
-4. If no issues found, state that the code meets best practices
+5. List any test coverage gaps found in impacted files, including untested code that was not part of this change
+6. If no issues found, state that the code meets best practices and has adequate test coverage
 
 If issues are found and the user asks to fix them, make sure typechecking and build validation are run to ensure the changes are valid as appropriate for the project.
 

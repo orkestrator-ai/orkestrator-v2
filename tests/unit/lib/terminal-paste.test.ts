@@ -1,34 +1,19 @@
 import { describe, test, expect, mock, beforeEach } from "bun:test";
 
-// Track calls to the process functions
-const mockProcessClipboardPaste = mock<
-  (
-    containerId: string,
-    onImageSaved?: (filePath: string) => void | Promise<void>,
-    onTextPaste?: (text: string) => void | Promise<void>,
-    onError?: (error: string) => void
-  ) => Promise<boolean>
->(() => Promise.resolve(true));
+// @tauri-apps/plugin-clipboard-manager is centrally mocked in tests/setup.ts.
+// Import the shared mock function for readText.
+import { mockReadText } from "../../mocks/clipboard";
 
-const mockProcessLocalClipboardPaste = mock<
-  (
-    worktreePath: string,
-    onImageSaved?: (filePath: string) => void | Promise<void>,
-    onTextPaste?: (text: string) => void | Promise<void>,
-    onError?: (error: string) => void
-  ) => Promise<boolean>
->(() => Promise.resolve(true));
+// @/hooks/useClipboardImagePaste must be mocked per-file (not in setup.ts)
+// because useClipboardImagePaste.test.ts needs the real module.
+import {
+  mockProcessClipboardPaste,
+  mockProcessLocalClipboardPaste,
+} from "../../mocks/clipboard-paste";
 
-const mockReadText = mock<() => Promise<string>>(() => Promise.resolve("pasted text"));
-
-// Mock dependencies before importing
 mock.module("@/hooks/useClipboardImagePaste", () => ({
   processClipboardPaste: mockProcessClipboardPaste,
   processLocalClipboardPaste: mockProcessLocalClipboardPaste,
-}));
-
-mock.module("@tauri-apps/plugin-clipboard-manager", () => ({
-  readText: mockReadText,
 }));
 
 import { escapePathForTerminalInput, handleTerminalPaste } from "../../../src/lib/terminal-paste";
@@ -43,6 +28,9 @@ describe("handleTerminalPaste", () => {
     mockReadText.mockClear();
     mockWriteToTerminal.mockClear();
     mockFocusTerminal.mockClear();
+    // Set default implementations for this test file
+    mockProcessClipboardPaste.mockImplementation(async () => true);
+    mockProcessLocalClipboardPaste.mockImplementation(async () => true);
     mockReadText.mockImplementation(() => Promise.resolve("pasted text"));
   });
 

@@ -1,9 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { cleanup, render, waitFor } from "@testing-library/react";
 
-mock.module("@tauri-apps/plugin-clipboard-manager", () => ({
-  writeText: mock(async () => {}),
-}));
+// Mock modules that require a real Tauri runtime or have side effects.
+// IMPORTANT: Do NOT mock @/stores (barrel) or @/lib/tauri here — doing so
+// pollutes the Bun module cache and breaks other test files that share
+// those modules.  Instead we use the real stores with controlled state and
+// let @/lib/tauri fall through to the global @tauri-apps/api/core mock
+// registered in tests/setup.ts.
+
+// @tauri-apps/plugin-clipboard-manager is centrally mocked in tests/setup.ts.
+// @/hooks/useClipboardImagePaste is NOT mocked — it loads the real module
+// whose clipboard dependencies are satisfied by the central mock above.
 
 const resizeMock = mock(async () => {});
 const connectMock = mock(async () => {});
@@ -25,115 +32,11 @@ mock.module("@/hooks/useAgentState", () => ({
   useAgentState: () => {},
 }));
 
-mock.module("@/hooks/useClipboardImagePaste", () => ({
-  useClipboardImagePaste: () => {},
-  processClipboardPaste: mock(async () => false),
-  processLocalClipboardPaste: mock(async () => false),
-}));
+// @/lib/terminal-paste is NOT mocked — let the real module load.
+// Its dependencies (@tauri-apps/plugin-clipboard-manager and
+// @/hooks/useClipboardImagePaste) are centrally mocked in tests/setup.ts.
 
-mock.module("@/lib/terminal-paste", () => ({
-  handleTerminalPaste: mock(async () => {}),
-  escapePathForTerminalInput: (p: string) => p,
-}));
-
-const sessionStoreState = {
-  sessions: new Map<string, {
-    sessionId?: string;
-    serializedBuffer?: string;
-    hasLaunchedCommand?: boolean;
-    persistentSessionId?: string;
-  }>(),
-  setSession: mock(() => {}),
-  setSerializedBuffer: mock(() => {}),
-  setHasLaunchedCommand: mock(() => {}),
-  setPersistentSessionId: mock(() => {}),
-};
-
-const useTerminalSessionStoreMock = Object.assign(
-  <T,>(selector: (state: typeof sessionStoreState) => T) => selector(sessionStoreState),
-  {
-    getState: () => sessionStoreState,
-  }
-);
-
-const configState = {
-  config: {
-    global: {
-      terminalAppearance: {
-        fontFamily: "Fira Code",
-        fontSize: 14,
-        backgroundColor: "#000000",
-      },
-      terminalScrollback: 5000,
-    },
-  },
-};
-
-const paneLayoutState = {
-  setActivePane: mock(() => {}),
-};
-
-const environmentState = {
-  environments: [] as unknown[],
-  isLoading: false,
-  error: null,
-  getEnvironmentById: () => ({ environmentType: "container" as const }),
-  setEnvironmentPR: mock(() => {}),
-  setupCommandsResolved: new Set<string>(),
-  pendingSetupCommands: new Map<string, string[]>(),
-  setupScriptsRunning: new Set<string>(),
-  workspaceReadyEnvironments: new Set<string>(),
-  isSetupCommandsResolved: () => false,
-  isWorkspaceReady: () => false,
-  setWorkspaceReady: mock(() => {}),
-  setSetupScriptsRunning: mock(() => {}),
-  setSetupCommandsResolved: mock(() => {}),
-  consumePendingSetupCommands: () => undefined,
-  updateEnvironment: mock(() => {}),
-  isDeleting: () => false,
-};
-
-// Mock @/stores barrel — includes stubs for ALL re-exports to prevent polluting the
-// Bun module cache for subsequent test files in the same process.
-const noopStore = () => ({});
-const noopStoreWithSelector = <T,>(selector?: (s: Record<string, unknown>) => T) =>
-  selector ? selector({}) : {};
-
-mock.module("@/stores", () => ({
-  useTerminalSessionStore: useTerminalSessionStoreMock,
-  createSessionKey: (containerId: string | null, tabId: string, environmentId: string) =>
-    `${containerId ?? environmentId}:${tabId}`,
-  useConfigStore: <T,>(selector: (state: typeof configState) => T) => selector(configState),
-  usePaneLayoutStore: <T,>(selector: (state: typeof paneLayoutState) => T) => selector(paneLayoutState),
-  useEnvironmentStore: Object.assign(
-    <T,>(selector: (state: typeof environmentState) => T) => selector(environmentState),
-    {
-      getState: () => environmentState,
-      setState: (partial: Partial<typeof environmentState>) => Object.assign(environmentState, partial),
-      subscribe: () => () => {},
-    }
-  ),
-  // Stubs for stores not used by this test but required by other files
-  useUIStore: noopStoreWithSelector,
-  useProjectStore: Object.assign(noopStoreWithSelector, { getState: noopStore, setState: noopStore, subscribe: () => () => {} }),
-  useAgentActivityStore: noopStoreWithSelector,
-  useClaudeOptionsStore: noopStore,
-  useFilesPanelStore: noopStoreWithSelector,
-  useTerminalPortalStore: noopStoreWithSelector,
-  useErrorDialogStore: noopStore,
-  useFileDirtyStore: noopStoreWithSelector,
-  useKanbanStore: noopStoreWithSelector,
-  usePrMonitorStore: noopStoreWithSelector,
-  useBuildPipelineStore: Object.assign(noopStoreWithSelector, { getState: noopStore, setState: noopStore, subscribe: () => () => {} }),
-  useEnvironmentDiffStore: noopStoreWithSelector,
-  useCodexStore: noopStoreWithSelector,
-  createCodexSessionKey: () => "",
-  getAllLeaves: () => [],
-  PR_MONITOR_INTERVALS: {},
-  PR_MONITOR_TIMEOUTS: {},
-  PR_MONITOR_BACKOFF: {},
-  getEffectiveInterval: () => 0,
-}));
+// --- Stores that need custom mock behavior (unique paths, no conflicts) ---
 
 const persistentSessionStore = {
   createSession: mock(async () => ({ id: "persistent-1" })),
@@ -141,7 +44,25 @@ const persistentSessionStore = {
   getSessionsByEnvironment: () => [],
   updateSessionStatus: mock(async () => {}),
   isLoadingEnvironment: () => false,
-  loadSessionsForEnvironment: mock(() => {}),
+  loadSessionsForEnvironment: mock(async () => {}),
+  // Functions used by useEnvironments.ts (must be present to avoid undefined errors)
+  disconnectEnvironmentSessions: mock(async () => {}),
+  deleteSessionsByEnvironment: mock(async () => {}),
+  deleteSession: mock(async () => {}),
+  saveSessionBuffer: mock(async () => {}),
+  loadSessionBuffer: mock(async () => null),
+  syncSessionsWithContainer: mock(async () => {}),
+  renameSession: mock(async () => {}),
+  reorderSessions: mock(async () => {}),
+  clearAllSessions: mock(() => {}),
+  setError: mock(() => {}),
+  addSession: mock(() => {}),
+  updateSession: mock(() => {}),
+  removeSession: mock(() => {}),
+  getSession: mock(() => undefined),
+  sessions: new Map(),
+  loadingEnvironments: new Set(),
+  error: null,
 };
 
 mock.module("@/stores/sessionStore", () => ({
@@ -174,11 +95,6 @@ mock.module("@/stores/terminalPortalStore", () => ({
   },
 }));
 
-mock.module("@/lib/tauri", () => ({
-  loadSessionBuffer: mock(async () => null),
-  setSessionHasLaunchedCommand: mock(async () => {}),
-}));
-
 mock.module("@/components/ui/context-menu", () => ({
   ContextMenu: ({ children }: { children: React.ReactNode }) => children,
   ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => children,
@@ -190,6 +106,11 @@ mock.module("@/components/ui/context-menu", () => ({
 mock.module("@/components/terminal/ComposeBar", () => ({
   ComposeBar: () => null,
 }));
+
+// --- Real stores: import directly and control via setState in beforeEach ---
+import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
+import { useConfigStore } from "@/stores/configStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 
 const { PersistentTerminal } = await import("./PersistentTerminal");
 
@@ -268,6 +189,64 @@ describe("PersistentTerminal", () => {
     portalStoreActions.setTerminalContainer.mockClear();
     portalStoreActions.setTerminalPane.mockClear();
     portalStoreActions.recreateTerminal.mockClear();
+
+    // Reset real stores to controlled state
+    useTerminalSessionStore.setState({
+      sessions: new Map(),
+      composeDraftText: new Map(),
+      composeDraftImages: new Map(),
+    });
+
+    useConfigStore.setState({
+      config: {
+        version: "1.0",
+        global: {
+          containerResources: { cpuCores: 2, memoryGb: 4 },
+          envFilePatterns: [],
+          allowedDomains: [],
+          defaultAgent: "claude",
+          opencodeModel: "",
+          codexModel: "",
+          codexReasoningEffort: "medium",
+          opencodeMode: "terminal",
+          claudeMode: "terminal",
+          terminalAppearance: {
+            fontFamily: "Fira Code",
+            fontSize: 14,
+            backgroundColor: "#000000",
+          },
+          terminalScrollback: 5000,
+        },
+        repositories: {},
+      },
+    });
+
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "test-env",
+          branch: "main",
+          containerId: "container-1",
+          status: "running",
+          prUrl: null,
+          prState: null,
+          hasMergeConflicts: null,
+          createdAt: "2024-01-01T00:00:00.000Z",
+          networkAccessMode: "restricted",
+          order: 0,
+          environmentType: "containerized",
+        },
+      ],
+      isLoading: false,
+      error: null,
+      workspaceReadyEnvironments: new Set<string>(),
+      deletingEnvironments: new Set<string>(),
+      pendingSetupCommands: new Map<string, string[]>(),
+      setupCommandsResolved: new Set<string>(),
+      setupScriptsRunning: new Set<string>(),
+    });
   });
 
   afterEach(() => {

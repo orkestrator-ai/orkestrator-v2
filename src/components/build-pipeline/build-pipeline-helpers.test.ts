@@ -165,9 +165,15 @@ describe("createBuildReviewPrompt", () => {
     expect(result).toContain("Do NOT reference Claude");
   });
 
+  test("includes test run step", () => {
+    const result = createBuildReviewPrompt(null, "");
+    expect(result).toContain("## Step 2: Run Tests");
+    expect(result).toContain("Run the project's full test suite");
+  });
+
   test("includes code review step with git diff against target branch", () => {
     const result = createBuildReviewPrompt(null, "", "main");
-    expect(result).toContain("## Step 2: Code Review");
+    expect(result).toContain("## Step 3: Code Review");
     expect(result).toContain("git diff origin/main...HEAD");
   });
 
@@ -181,7 +187,13 @@ describe("createBuildReviewPrompt", () => {
     expect(result).toContain("Logic and correctness");
     expect(result).toContain("Readability");
     expect(result).toContain("Performance");
-    expect(result).toContain("Test coverage");
+  });
+
+  test("includes test coverage review step", () => {
+    const result = createBuildReviewPrompt(null, "");
+    expect(result).toContain("## Step 4: Test Coverage Review");
+    expect(result).toContain("entire file");
+    expect(result).toContain("not modified in this change");
   });
 
   test("includes structured output format", () => {

@@ -232,26 +232,27 @@ fn default_branch() -> String {
     "main".to_string()
 }
 
-/// Sanitize a string for use as a git branch name
-/// Replaces invalid characters with hyphens and ensures valid format
-pub fn sanitize_branch_name(name: &str) -> String {
+/// Sanitize a string into a URL/identifier-safe slug.
+///
+/// Keeps ASCII alphanumerics and underscores, replaces spaces, dots, slashes,
+/// and hyphens with a single hyphen, drops everything else, and trims leading/
+/// trailing hyphens and dots. Returns `fallback` when the result would be empty.
+/// Truncates to `max_len` characters (on a char boundary, without a trailing hyphen).
+pub fn sanitize_slug(name: &str, fallback: &str, max_len: usize) -> String {
     let mut result = String::with_capacity(name.len());
     let mut last_was_hyphen = false;
 
     for c in name.chars() {
-        // Valid git branch characters: alphanumeric, hyphen, underscore, forward slash, dot
-        // But we avoid slashes and dots for simplicity
         if c.is_ascii_alphanumeric() || c == '_' {
             result.push(c);
             last_was_hyphen = false;
         } else if c == '-' || c == ' ' || c == '.' || c == '/' {
-            // Replace spaces, dots, slashes with hyphens, avoiding consecutive hyphens
             if !last_was_hyphen && !result.is_empty() {
                 result.push('-');
                 last_was_hyphen = true;
             }
         }
-        // Other characters (like ~, ^, :, ?, *, [, etc.) are silently dropped
+        // Other characters are silently dropped
     }
 
     // Remove trailing hyphens
@@ -259,17 +260,30 @@ pub fn sanitize_branch_name(name: &str) -> String {
         result.pop();
     }
 
-    // Ensure the branch name doesn't start with a hyphen
-    if result.starts_with('-') {
-        result = result.trim_start_matches('-').to_string();
+    // Ensure the name doesn't start with a hyphen or dot
+    result = result
+        .trim_start_matches(|c: char| c == '-' || c == '.')
+        .to_string();
+
+    // Truncate to max_len on a char boundary, then trim any trailing hyphen
+    if max_len > 0 && result.len() > max_len {
+        result.truncate(max_len);
+        while result.ends_with('-') {
+            result.pop();
+        }
     }
 
-    // Fallback if result is empty
     if result.is_empty() {
-        result = "env".to_string();
+        result = fallback.to_string();
     }
 
     result
+}
+
+/// Sanitize a string for use as a git branch name.
+/// Delegates to [`sanitize_slug`] with a branch-appropriate fallback.
+pub fn sanitize_branch_name(name: &str) -> String {
+    sanitize_slug(name, "env", 0)
 }
 
 impl Environment {
@@ -1082,6 +1096,29 @@ mod tests {
         // Empty input gets fallback
         assert_eq!(sanitize_branch_name(""), "env");
         assert_eq!(sanitize_branch_name("~~~"), "env");
+    }
+
+    #[test]
+    fn test_sanitize_slug_truncation() {
+        // Truncates to max_len
+        let result = sanitize_slug(&"a".repeat(50), "fallback", 20);
+        assert_eq!(result.len(), 20);
+
+        // Strips trailing hyphen after truncation
+        // "aaaa...a word" => "aaaa...-word", truncate at 11 => "aaaa...aaaa-" => strip => "aaaa...aaaa"
+        let result = sanitize_slug(&format!("{} word", "a".repeat(10)), "fb", 11);
+        assert!(!result.ends_with('-'));
+        assert!(result.len() <= 11);
+
+        // max_len of 0 means no limit
+        let result = sanitize_slug(&"b".repeat(500), "fb", 0);
+        assert_eq!(result.len(), 500);
+    }
+
+    #[test]
+    fn test_sanitize_slug_custom_fallback() {
+        assert_eq!(sanitize_slug("", "my-fallback", 0), "my-fallback");
+        assert_eq!(sanitize_slug("!@#", "other", 0), "other");
     }
 
     #[test]

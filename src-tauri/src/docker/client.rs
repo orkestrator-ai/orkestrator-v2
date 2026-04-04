@@ -21,6 +21,19 @@ use futures::StreamExt;
 use std::collections::HashMap;
 use thiserror::Error;
 use tokio::sync::mpsc;
+use tracing::debug;
+
+use crate::models::sanitize_slug;
+
+/// Maximum length for Docker container names (Docker has no official limit,
+/// but 128 chars keeps names practical in logs, CLI output, and UIs).
+const MAX_CONTAINER_NAME_LEN: usize = 128;
+
+/// Sanitize a string for use as a Docker container name.
+/// Docker only allows `[a-zA-Z0-9][a-zA-Z0-9_.-]`.
+fn sanitize_container_name(name: &str) -> String {
+    sanitize_slug(name, "container", MAX_CONTAINER_NAME_LEN)
+}
 
 #[derive(Error, Debug)]
 pub enum DockerError {
@@ -194,8 +207,13 @@ impl DockerClient {
 
         config.host_config = Some(host_config);
 
+        let sanitized_name = sanitize_container_name(name);
+        if sanitized_name != name {
+            debug!(original = %name, sanitized = %sanitized_name, "Sanitized container name for Docker");
+        }
+
         let options = CreateContainerOptions {
-            name,
+            name: sanitized_name.as_str(),
             platform: None,
         };
 
@@ -249,7 +267,13 @@ impl DockerClient {
         container_id: &str,
         new_name: &str,
     ) -> Result<(), DockerError> {
-        let options = RenameContainerOptions { name: new_name };
+        let sanitized_name = sanitize_container_name(new_name);
+        if sanitized_name != new_name {
+            debug!(original = %new_name, sanitized = %sanitized_name, "Sanitized container rename for Docker");
+        }
+        let options = RenameContainerOptions {
+            name: &sanitized_name,
+        };
         self.docker.rename_container(container_id, options).await?;
         Ok(())
     }
@@ -875,5 +899,67 @@ mod tests {
         let client = DockerClient::new();
         // Just check that we can create the client
         assert!(client.is_ok() || client.is_err());
+    }
+
+    #[test]
+    fn test_sanitize_container_name_with_spaces() {
+        assert_eq!(sanitize_container_name("link in the middle"), "link-in-the-middle");
+    }
+
+    #[test]
+    fn test_sanitize_container_name_alphanumeric() {
+        assert_eq!(sanitize_container_name("my-container"), "my-container");
+    }
+
+    #[test]
+    fn test_sanitize_container_name_special_chars() {
+        assert_eq!(sanitize_container_name("feat: add login!"), "feat-add-login");
+    }
+
+    #[test]
+    fn test_sanitize_container_name_consecutive_spaces() {
+        assert_eq!(sanitize_container_name("a   b"), "a-b");
+    }
+
+    #[test]
+    fn test_sanitize_container_name_leading_trailing() {
+        assert_eq!(sanitize_container_name(" hello "), "hello");
+    }
+
+    #[test]
+    fn test_sanitize_container_name_empty() {
+        assert_eq!(sanitize_container_name(""), "container");
+    }
+
+    #[test]
+    fn test_sanitize_container_name_only_special() {
+        assert_eq!(sanitize_container_name("!@#$%"), "container");
+    }
+
+    #[test]
+    fn test_sanitize_container_name_dots_and_slashes() {
+        assert_eq!(sanitize_container_name("feat/my.task"), "feat-my-task");
+    }
+
+    #[test]
+    fn test_sanitize_container_name_underscores_preserved() {
+        assert_eq!(sanitize_container_name("my_container_name"), "my_container_name");
+    }
+
+    #[test]
+    fn test_sanitize_container_name_truncates_long_names() {
+        let long_name = "a".repeat(200);
+        let result = sanitize_container_name(&long_name);
+        assert_eq!(result.len(), MAX_CONTAINER_NAME_LEN);
+    }
+
+    #[test]
+    fn test_sanitize_container_name_truncation_strips_trailing_hyphen() {
+        // 127 a's + space + more => after sanitization "aaa...aaa-more"
+        // truncation at 128 might land on the hyphen, which should be stripped
+        let name = format!("{} more", "a".repeat(127));
+        let result = sanitize_container_name(&name);
+        assert!(!result.ends_with('-'));
+        assert!(result.len() <= MAX_CONTAINER_NAME_LEN);
     }
 }

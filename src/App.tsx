@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { exit } from "@tauri-apps/plugin-process";
 import { AppShell } from "@/components/layout";
@@ -7,6 +7,8 @@ import { TerminalContainer } from "@/components/terminal";
 import { KanbanBoard } from "@/components/kanban";
 import { TerminalProvider } from "@/contexts";
 import { useUIStore, useEnvironmentStore, useConfigStore, useClaudeOptionsStore } from "@/stores";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { getBackgroundPipelineEnvironments } from "@/lib/background-pipelines";
 import { cn } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
@@ -54,6 +56,15 @@ function App() {
   const projectEnvironments = selectedProjectId
     ? environments.filter((env) => env.projectId === selectedProjectId)
     : [];
+
+  // Environments with active pipelines that aren't currently visible in the main content.
+  // These must stay mounted so their SSE subscriptions and pipeline advancement effects
+  // continue running in the background even when the user navigates away.
+  const pipelines = useBuildPipelineStore((state) => state.pipelines);
+  const backgroundPipelineEnvironments = useMemo(
+    () => getBackgroundPipelineEnvironments(pipelines, environments, selectedEnvironmentId, projectEnvironments),
+    [pipelines, environments, selectedEnvironmentId, projectEnvironments],
+  );
 
   // Debug logging
   console.log("[App] selectedEnvironmentId:", selectedEnvironmentId);
@@ -303,6 +314,9 @@ function App() {
     [clearClaudeOptions, startEnvironment]
   );
 
+  // Stable no-op callbacks for background pipeline environments (avoids new references each render)
+  const noop = useCallback(() => {}, []);
+
   const handleCreateScriptFromOverlay = useCallback(
     async (environmentId: string, initialPrompt: string) => {
       const environment = getEnvironmentById(environmentId);
@@ -369,6 +383,27 @@ function App() {
                   Add a project to get started, then create an environment to begin coding.
                 </p>
               </div>
+            </div>
+          )}
+
+          {/* Background pipeline environments: kept mounted (but hidden) so their
+              SSE subscriptions and pipeline-advancement effects continue running
+              even when the user navigates to a different project or kanban view. */}
+          {backgroundPipelineEnvironments.length > 0 && (
+            <div className="hidden" aria-hidden="true">
+              {backgroundPipelineEnvironments.map((environment) => (
+                <TerminalContainer
+                  key={`bg-pipeline-${environment.id}`}
+                  environmentId={environment.id}
+                  containerId={environment.containerId ?? null}
+                  isContainerRunning={environment.status === "running"}
+                  isContainerCreating={environment.status === "creating"}
+                  isActive={false}
+                  className="h-full"
+                  onStartContainer={noop}
+                  onCreateScript={noop}
+                />
+              ))}
             </div>
           )}
         </AppShell>

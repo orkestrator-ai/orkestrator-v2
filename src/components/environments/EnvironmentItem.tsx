@@ -18,7 +18,8 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { Trash2, Play, Square, Container, Laptop, Shield, Globe, Settings2, RotateCw, Loader2, Network } from "lucide-react";
+import { Trash2, Play, Square, Container, Laptop, Shield, Globe, Settings2, RotateCw, Loader2, Network, Copy } from "lucide-react";
+import { toast } from "sonner";
 import type { Environment } from "@/types";
 import { useAgentActivityStore, useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore } from "@/stores";
 import { EnvironmentSettingsDialog } from "./EnvironmentSettingsDialog";
@@ -136,6 +137,17 @@ export function EnvironmentItem({
     }
   };
 
+  const localAddress = environment.hostEntryPort ? `localhost:${environment.hostEntryPort}` : null;
+
+  const copyAddress = () => {
+    if (!localAddress) return;
+    navigator.clipboard.writeText(localAddress).then(() => {
+      toast.success("Copied address", { description: localAddress });
+    }).catch(() => {
+      toast.error("Failed to copy address");
+    });
+  };
+
   const createdDate = new Date(environment.createdAt).toLocaleDateString();
 
   return (
@@ -238,7 +250,11 @@ export function EnvironmentItem({
                 <p className="text-xs text-muted-foreground flex items-center gap-1">
                   <Network className="h-3 w-3" />
                   {environment.hostEntryPort
-                    ? <>Port: localhost:{environment.hostEntryPort} → {environment.entryPort}/tcp</>
+                    ? <>Port: <span
+                        role="button"
+                        className="underline decoration-dotted cursor-pointer hover:text-foreground transition-colors"
+                        onClick={(e) => { e.stopPropagation(); copyAddress(); }}
+                      >localhost:{environment.hostEntryPort}</span> → {environment.entryPort}/tcp</>
                     : <>Port: {environment.entryPort}/tcp (not mapped)</>
                   }
                 </p>
@@ -269,6 +285,12 @@ export function EnvironmentItem({
             <Settings2 className="h-4 w-4 mr-2" />
             Settings
           </ContextMenuItem>
+          {localAddress && (
+            <ContextMenuItem onClick={copyAddress}>
+              <Copy className="h-4 w-4 mr-2" />
+              Copy Address
+            </ContextMenuItem>
+          )}
           {/* Start/Stop/Restart only applicable for containerized environments */}
           {!isLocalEnvironment && (
             <>

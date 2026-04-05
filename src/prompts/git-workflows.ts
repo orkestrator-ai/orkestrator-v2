@@ -93,6 +93,7 @@ Compare the current branch against the remote \`${targetBranch}\` branch and con
    - **Logic and correctness**: Check for bugs, edge cases, and potential issues
    - **Readability**: Is the code clear and maintainable? Does it follow repository patterns?
    - **Performance**: Are there obvious performance concerns or optimizations?
+   - **Security**: Are there any security vulnerabilities or potential security issues? Has the change weakened security in any way?
 3. Ask clarifying questions if needed about unclear changes
 4. Run typechecking and build validation to ensure the changes are valid as appropriate for the project.
 

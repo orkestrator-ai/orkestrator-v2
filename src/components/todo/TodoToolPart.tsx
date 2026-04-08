@@ -55,7 +55,9 @@ export function TodoToolPart({
           )}
         />
         <ListTodo className="h-3.5 w-3.5 shrink-0" />
-        <span className="shrink-0 font-medium">{toolName || "TodoWrite"}</span>
+        <span className="shrink-0 font-medium">
+          {toolName === "todo_list" ? "Todo List" : toolName || "TodoWrite"}
+        </span>
         {totalCount > 0 && (
           <span className="flex-1 text-left text-muted-foreground/80">
             {completedCount}/{totalCount} complete

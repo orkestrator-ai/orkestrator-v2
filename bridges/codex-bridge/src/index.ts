@@ -18,11 +18,12 @@ import {
   type ThreadOptions,
   type UserInput,
 } from "@openai/codex-sdk";
+import { summarizeTodoList, mapTodoArgs } from "./todo-helpers.js";
 
 type ToolState = "success" | "failure" | "pending";
 type MessageRole = "user" | "assistant" | "system";
 
-interface NormalizedPart {
+export interface NormalizedPart {
   type: "text" | "thinking" | "tool-invocation" | "tool-result" | "file";
   content: string;
   fileUrl?: string;
@@ -136,7 +137,7 @@ interface SessionStatusResponse {
   error?: string;
 }
 
-interface ToolDiffMetadata {
+export interface ToolDiffMetadata {
   filePath?: string;
   additions?: number;
   deletions?: number;
@@ -469,13 +470,7 @@ function createAssistantMessage(): NormalizedMessage {
   };
 }
 
-function summarizeTodoList(item: Extract<ThreadItem, { type: "todo_list" }>): string {
-  return item.items
-    .map((todo) => `${todo.completed ? "[x]" : "[ ]"} ${todo.text}`)
-    .join("\n");
-}
-
-function stringifyUnknown(value: unknown): string | undefined {
+export function stringifyUnknown(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value === "string") return value;
   try {
@@ -1318,7 +1313,7 @@ async function getFileChangeDiffMetadata(
   };
 }
 
-async function itemToParts(
+export async function itemToParts(
   item: ThreadItem,
   cwd: string,
 ): Promise<NormalizedPart[]> {
@@ -1383,11 +1378,12 @@ async function itemToParts(
     case "todo_list":
       return [{
         type: "tool-invocation",
-        content: summarizeTodoList(item),
+        content: summarizeTodoList(item.items),
         toolName: "todo_list",
         toolState: "success",
         toolTitle: "Todo List",
-        toolOutput: summarizeTodoList(item),
+        toolArgs: mapTodoArgs(item.items),
+        toolOutput: summarizeTodoList(item.items),
       }];
     case "error":
       return [{

@@ -59,7 +59,7 @@ export function getTodoItems(
   return parseTodosFromOutput(toolOutput);
 }
 
-const TODO_TOOL_NAMES = new Set(["TodoWrite", "todowrite"]);
+const TODO_TOOL_NAMES = new Set(["TodoWrite", "todowrite", "todo_list"]);
 
 export function isTodoTool(toolName?: string): boolean {
   return typeof toolName === "string" && TODO_TOOL_NAMES.has(toolName);

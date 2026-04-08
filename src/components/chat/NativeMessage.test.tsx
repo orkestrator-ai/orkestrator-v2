@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render, screen, fireEvent } from "@testing-library/react";
+import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { NativeMessage } from "./NativeMessage";
 
 function makeMessage(
-  parts: Array<{ type: "thinking" | "text"; content: string }>,
+  parts: Array<NativeMessagePart>,
   overrides?: Partial<{
     id: string;
     role: "user" | "assistant";
@@ -123,5 +124,78 @@ describe("NativeMessage task list rendering", () => {
       '[data-task-list-icon="true"]',
     );
     expect(checkboxIcons.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  test("routes TodoWrite tool-invocation to TodoToolPart", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName: "TodoWrite",
+        toolState: "success",
+        toolArgs: {
+          todos: [
+            { content: "First task", status: "completed" },
+            { content: "Second task", status: "pending" },
+          ],
+        },
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    // Should render the TodoToolPart with completion count
+    expect(container.textContent).toContain("TodoWrite");
+    expect(container.textContent).toContain("1/2 complete");
+    expect(container.textContent).toContain("success");
+  });
+
+  test("routes todo_list tool-invocation to TodoToolPart with friendly label", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName: "todo_list",
+        toolState: "success",
+        toolArgs: {
+          todos: [
+            { content: "Check tests", status: "completed" },
+            { content: "Fix bug", status: "pending" },
+          ],
+        },
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    // Should render using TodoToolPart with "Todo List" label
+    expect(container.textContent).toContain("Todo List");
+    expect(container.textContent).not.toContain("todo_list");
+    expect(container.textContent).toContain("1/2 complete");
+  });
+
+  test("does not route non-todo tools to TodoToolPart", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName: "Read",
+        toolState: "success",
+        toolArgs: { file_path: "/workspace/test.ts" },
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    // Should NOT render TodoToolPart completion count
+    expect(container.textContent).not.toContain("complete");
+    // Should render generic tool part with tool name
+    expect(container.textContent).toContain("Read");
   });
 });

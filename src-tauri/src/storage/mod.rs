@@ -1139,6 +1139,9 @@ impl Storage {
         status: Option<KanbanStatus>,
         environment_id: Option<String>,
         build_pipeline_id: Option<String>,
+        pr_url: Option<String>,
+        pr_state: Option<String>,
+        pr_merge_commented: Option<bool>,
     ) -> Result<KanbanTask, StorageError> {
         let mut tasks = self.load_kanban_tasks()?;
         let task_index = tasks
@@ -1173,6 +1176,15 @@ impl Storage {
         }
         if let Some(build_pipeline_id) = build_pipeline_id {
             tasks[task_index].build_pipeline_id = if build_pipeline_id.is_empty() { None } else { Some(build_pipeline_id) };
+        }
+        if let Some(pr_url) = pr_url {
+            tasks[task_index].pr_url = if pr_url.is_empty() { None } else { Some(pr_url) };
+        }
+        if let Some(pr_state) = pr_state {
+            tasks[task_index].pr_state = if pr_state.is_empty() { None } else { Some(pr_state) };
+        }
+        if let Some(pr_merge_commented) = pr_merge_commented {
+            tasks[task_index].pr_merge_commented = pr_merge_commented;
         }
 
         let updated = tasks[task_index].clone();
@@ -2085,5 +2097,120 @@ mod tests {
         let storage = create_test_storage();
         let sessions = storage.load_sessions().unwrap();
         assert!(sessions.is_empty());
+    }
+
+    // --- Kanban PR Metadata Tests ---
+
+    #[test]
+    fn test_kanban_task_pr_fields_default() {
+        let task = KanbanTask::new("proj-1".to_string(), "title".to_string(), "desc".to_string());
+        assert!(task.pr_url.is_none());
+        assert!(task.pr_state.is_none());
+        assert!(!task.pr_merge_commented);
+    }
+
+    #[test]
+    fn test_update_kanban_task_pr_url() {
+        let storage = create_test_storage();
+        let task = KanbanTask::new("proj-1".to_string(), "title".to_string(), "desc".to_string());
+        let saved = storage.add_kanban_task(task).unwrap();
+
+        let updated = storage.update_kanban_task(
+            &saved.id, None, None, None, None, None, None,
+            Some("https://github.com/test/repo/pull/42".to_string()),
+            Some("open".to_string()),
+            None,
+        ).unwrap();
+
+        assert_eq!(updated.pr_url, Some("https://github.com/test/repo/pull/42".to_string()));
+        assert_eq!(updated.pr_state, Some("open".to_string()));
+        assert!(!updated.pr_merge_commented);
+
+        // Verify persistence
+        let tasks = storage.get_kanban_tasks_by_project("proj-1").unwrap();
+        assert_eq!(tasks[0].pr_url, Some("https://github.com/test/repo/pull/42".to_string()));
+    }
+
+    #[test]
+    fn test_update_kanban_task_pr_merge_commented() {
+        let storage = create_test_storage();
+        let task = KanbanTask::new("proj-1".to_string(), "title".to_string(), "desc".to_string());
+        let saved = storage.add_kanban_task(task).unwrap();
+
+        let updated = storage.update_kanban_task(
+            &saved.id, None, None, None, None, None, None,
+            Some("https://github.com/test/repo/pull/1".to_string()),
+            Some("merged".to_string()),
+            Some(true),
+        ).unwrap();
+
+        assert_eq!(updated.pr_state, Some("merged".to_string()));
+        assert!(updated.pr_merge_commented);
+    }
+
+    #[test]
+    fn test_update_kanban_task_pr_url_empty_clears() {
+        let storage = create_test_storage();
+        let task = KanbanTask::new("proj-1".to_string(), "title".to_string(), "desc".to_string());
+        let saved = storage.add_kanban_task(task).unwrap();
+
+        // Set a PR URL
+        storage.update_kanban_task(
+            &saved.id, None, None, None, None, None, None,
+            Some("https://github.com/test/repo/pull/1".to_string()),
+            Some("open".to_string()),
+            None,
+        ).unwrap();
+
+        // Clear it by passing empty string
+        let cleared = storage.update_kanban_task(
+            &saved.id, None, None, None, None, None, None,
+            Some(String::new()),
+            Some(String::new()),
+            None,
+        ).unwrap();
+
+        assert!(cleared.pr_url.is_none());
+        assert!(cleared.pr_state.is_none());
+    }
+
+    #[test]
+    fn test_kanban_task_pr_fields_serialization() {
+        let mut task = KanbanTask::new("proj-1".to_string(), "title".to_string(), "desc".to_string());
+        task.pr_url = Some("https://github.com/test/repo/pull/99".to_string());
+        task.pr_state = Some("merged".to_string());
+        task.pr_merge_commented = true;
+
+        let json = serde_json::to_string(&task).unwrap();
+        assert!(json.contains("\"prUrl\":"));
+        assert!(json.contains("\"prState\":"));
+        assert!(json.contains("\"prMergeCommented\":true"));
+
+        let deserialized: KanbanTask = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.pr_url, Some("https://github.com/test/repo/pull/99".to_string()));
+        assert_eq!(deserialized.pr_state, Some("merged".to_string()));
+        assert!(deserialized.pr_merge_commented);
+    }
+
+    #[test]
+    fn test_kanban_task_pr_fields_deserialization_defaults() {
+        // Simulate loading a task JSON that was saved before the PR fields existed
+        let json = r#"{
+            "id": "test-id",
+            "projectId": "proj-1",
+            "title": "Old task",
+            "description": "desc",
+            "acceptanceCriteria": "",
+            "status": "backlog",
+            "comments": [],
+            "images": [],
+            "createdAt": "2026-01-01T00:00:00Z",
+            "order": 0
+        }"#;
+
+        let task: KanbanTask = serde_json::from_str(json).unwrap();
+        assert!(task.pr_url.is_none());
+        assert!(task.pr_state.is_none());
+        assert!(!task.pr_merge_commented);
     }
 }

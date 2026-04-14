@@ -27,7 +27,8 @@ import { useKanbanStore } from "@/stores/kanbanStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { readImage } from "@tauri-apps/plugin-clipboard-manager";
-import { getKanbanImageData } from "@/lib/tauri";
+import { getKanbanImageData, detectPr, detectPrLocal, openInBrowser } from "@/lib/tauri";
+import { useEnvironmentStore } from "@/stores";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
 
 const STATUS_LABELS: Record<KanbanStatus, string> = {
@@ -65,6 +66,29 @@ interface PendingImage {
   filename: string;
   data: string; // base64
   previewUrl: string; // data URL for display
+}
+
+/** Renders comment text with clickable URLs */
+function CommentText({ text }: { text: string }) {
+  const parts = text.split(/(https?:\/\/[^\s]+)/g);
+  if (parts.length === 1) return <>{text}</>;
+  return (
+    <>
+      {parts.map((part, i) =>
+        i % 2 === 1 ? (
+          <button
+            key={i}
+            className="text-blue-400 hover:underline cursor-pointer inline"
+            onClick={(e) => { e.preventDefault(); void openInBrowser(part); }}
+          >
+            {part}
+          </button>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </>
+  );
 }
 
 interface KanbanTaskDialogProps {
@@ -130,6 +154,46 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- imageUrlCache intentionally excluded to avoid re-fetch loop
   }, [open, task]);
+
+  // Check PR state when dialog opens for a task with a PR that hasn't been merge-commented yet.
+  // This handles the case where a PR was merged or closed outside the app.
+  useEffect(() => {
+    if (!open || !task || !task.prUrl || task.prMergeCommented) return;
+    // Only check if PR state is not already known as merged/closed
+    if (task.prState === "merged" || task.prState === "closed") return;
+    if (!task.environmentId) return;
+
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const env = useEnvironmentStore.getState().getEnvironmentById(task.environmentId!);
+        if (!env) return;
+
+        const isLocal = env.environmentType === "local";
+        const isRunning = isLocal ? !!env.worktreePath : env.status === "running";
+        if (!isRunning) return;
+
+        const result = isLocal
+          ? await detectPrLocal(task.environmentId!, env.branch)
+          : env.containerId ? await detectPr(env.containerId, env.branch) : null;
+
+        if (cancelled || !result) return;
+
+        if (result.state === "merged" || result.state === "closed") {
+          const commentText = result.state === "merged" ? "🎉 PR merged" : "❌ PR closed";
+          await addComment(task.id, commentText);
+          await updateTask(task.id, { prState: result.state, prMergeCommented: true });
+          console.log(`[KanbanTaskDialog] PR ${result.state} detected on open, added comment to task ${task.id}`);
+        }
+      } catch (error) {
+        console.warn("[KanbanTaskDialog] Failed to check PR state on dialog open:", error);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, task?.id, task?.prUrl, task?.prMergeCommented, task?.prState]);
 
   // Reset create mode fields when dialog opens in create mode
   const handleOpenChange = (newOpen: boolean) => {
@@ -823,7 +887,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
                     className="group/comment rounded-md bg-muted/50 p-2.5 text-sm"
                   >
                     <div className="flex items-start justify-between gap-2">
-                      <p className="whitespace-pre-wrap text-foreground flex-1">{comment.text}</p>
+                      <p className="whitespace-pre-wrap text-foreground flex-1"><CommentText text={comment.text} /></p>
                       <Button
                         variant="ghost"
                         size="icon"

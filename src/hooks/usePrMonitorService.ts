@@ -18,8 +18,7 @@ import {
   getEffectiveInterval,
 } from "@/stores/prMonitorStore";
 import { useEnvironmentStore, useUIStore, useAgentActivityStore } from "@/stores";
-import { useKanbanStore } from "@/stores/kanbanStore";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
 import * as tauri from "@/lib/tauri";
 import type { PrDetectionResult } from "@/lib/tauri";
 import type { PrState } from "@/types";
@@ -205,18 +204,10 @@ export function usePrMonitorService(): void {
           environment.prState !== "merged"
         ) {
           try {
-            // Find the task via kanban store (by environmentId) or build pipeline store
-            const kanbanState = useKanbanStore.getState();
-            const taskInStore = kanbanState.tasks.find((t) => t.environmentId === environmentId);
-            let taskId = taskInStore?.id;
-
-            if (!taskId) {
-              const pipeline = Array.from(useBuildPipelineStore.getState().pipelines.values())
-                .find((p) => p.environmentId === environmentId);
-              taskId = pipeline?.taskId;
-            }
+            const { task: taskInStore, taskId } = findTaskForEnvironment(environmentId);
 
             if (taskId) {
+              const kanbanState = useKanbanStore.getState();
               // Only advance tasks that are currently in-progress to avoid
               // regressing tasks that have already moved to "done".
               const currentStatus = taskInStore?.status;
@@ -228,9 +219,35 @@ export function usePrMonitorService(): void {
                 await kanbanState.updateTask(taskId, { status: "review" });
                 console.log(`[PrMonitorService] PR merged, moved task ${taskId} to review (via pipeline)`);
               }
+
+              // Add "PR merged" comment if not already added (avoids duplicates from in-app merge)
+              if (!taskInStore?.prMergeCommented) {
+                await kanbanState.addComment(taskId, "🎉 PR merged");
+                await kanbanState.updateTask(taskId, { prState: "merged", prMergeCommented: true });
+                console.log(`[PrMonitorService] Added PR merged comment to task ${taskId}`);
+              }
             }
           } catch (error) {
             console.warn("[PrMonitorService] Failed to move task to review after PR merge:", error);
+          }
+        }
+
+        // When a PR transitions to "closed", add a comment to the associated ticket
+        if (
+          detectionResult.status === "success" &&
+          detectionResult.data.state === "closed" &&
+          environment.prState !== "closed"
+        ) {
+          try {
+            const { task: taskInStore, taskId } = findTaskForEnvironment(environmentId);
+            if (taskId && !taskInStore?.prMergeCommented) {
+              const kanbanState = useKanbanStore.getState();
+              await kanbanState.addComment(taskId, "❌ PR closed");
+              await kanbanState.updateTask(taskId, { prState: "closed", prMergeCommented: true });
+              console.log(`[PrMonitorService] Added PR closed comment to task ${taskId}`);
+            }
+          } catch (error) {
+            console.warn("[PrMonitorService] Failed to add PR closed comment:", error);
           }
         }
 
@@ -241,6 +258,20 @@ export function usePrMonitorService(): void {
         if (currentMode === "create-pending" && detectionResult.status === "success") {
           console.log(`[PrMonitorService] PR detected, transitioning ${environmentId} from create-pending to normal`);
           setMonitoringMode(environmentId, "normal");
+
+          // Store PR URL on associated ticket metadata when first detected
+          try {
+            const { task: taskInStore, taskId } = findTaskForEnvironment(environmentId);
+            if (taskId && !taskInStore?.prUrl) {
+              await useKanbanStore.getState().updateTask(taskId, {
+                prUrl: detectionResult.data.url,
+                prState: detectionResult.data.state,
+              });
+              console.log(`[PrMonitorService] Stored PR URL on task ${taskId}`);
+            }
+          } catch (error) {
+            console.warn("[PrMonitorService] Failed to store PR URL on task:", error);
+          }
         }
 
         // merge-pending → normal: When PR state becomes merged/closed

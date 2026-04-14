@@ -1082,6 +1082,12 @@ export interface KanbanTask {
   environmentId?: string;
   /** Active build pipeline ID */
   buildPipelineId?: string;
+  /** PR URL associated with this task */
+  prUrl?: string;
+  /** PR state (open, merged, closed) */
+  prState?: PrState;
+  /** Whether a merge/close comment has already been added */
+  prMergeCommented?: boolean;
 }
 
 export interface ProjectNotes {
@@ -1110,8 +1116,11 @@ export async function updateKanbanTask(
   status?: KanbanStatus,
   environmentId?: string,
   buildPipelineId?: string,
+  prUrl?: string,
+  prState?: PrState,
+  prMergeCommented?: boolean,
 ): Promise<KanbanTask> {
-  return invoke<KanbanTask>("update_kanban_task", { taskId, title, description, acceptanceCriteria, status, environmentId, buildPipelineId });
+  return invoke<KanbanTask>("update_kanban_task", { taskId, title, description, acceptanceCriteria, status, environmentId, buildPipelineId, prUrl, prState, prMergeCommented });
 }
 
 export async function deleteKanbanTask(taskId: string): Promise<void> {

@@ -38,6 +38,7 @@ import { RepositorySettings, SettingsPage } from "@/components/settings";
 import { EnvironmentSettingsDialog } from "@/components/environments/EnvironmentSettingsDialog";
 import { DockerStatsDialog } from "@/components/docker";
 import * as tauri from "@/lib/tauri";
+import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
 
 export function ActionBar() {
   const { selectedEnvironmentId, selectedProjectId } = useUIStore();
@@ -482,6 +483,18 @@ export function ActionBar() {
         // State save failed but merge succeeded - log warning and continue
         // The monitor service may still detect the merged state eventually
         console.warn("[ActionBar] Failed to save merged state:", saveErr);
+      }
+
+      // Add "PR merged" comment to the associated ticket
+      try {
+        const { task, taskId } = findTaskForEnvironment(selectedEnvironmentId);
+        if (taskId && !task?.prMergeCommented) {
+          const kanbanState = useKanbanStore.getState();
+          await kanbanState.addComment(taskId, "🎉 PR merged");
+          await kanbanState.updateTask(taskId, { prState: "merged", prMergeCommented: true });
+        }
+      } catch (commentErr) {
+        console.warn("[ActionBar] Failed to add PR merged comment:", commentErr);
       }
 
       // Clear the merging spinner

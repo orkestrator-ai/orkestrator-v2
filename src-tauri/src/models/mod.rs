@@ -485,6 +485,15 @@ pub struct KanbanTask {
     /// Active build pipeline ID
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_pipeline_id: Option<String>,
+    /// PR URL associated with this task (set when PR is created during build)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_url: Option<String>,
+    /// PR state (open, merged, closed) - mirrors PrState but stored on the task
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_state: Option<String>,
+    /// Whether a merge/close comment has already been added (prevents duplicate comments)
+    #[serde(default)]
+    pub pr_merge_commented: bool,
 }
 
 impl KanbanTask {
@@ -502,6 +511,9 @@ impl KanbanTask {
             order: 0,
             environment_id: None,
             build_pipeline_id: None,
+            pr_url: None,
+            pr_state: None,
+            pr_merge_commented: false,
         }
     }
 }
@@ -1247,6 +1259,39 @@ mod tests {
             Environment::with_name("project-2".to_string(), "container-env".to_string());
         assert!(!container_env.is_local());
         assert!(container_env.is_containerized());
+    }
+
+    #[test]
+    fn test_kanban_task_pr_fields_default() {
+        let task = KanbanTask::new("proj-1".to_string(), "title".to_string(), "desc".to_string());
+        assert!(task.pr_url.is_none());
+        assert!(task.pr_state.is_none());
+        assert!(!task.pr_merge_commented);
+    }
+
+    #[test]
+    fn test_kanban_task_pr_fields_roundtrip() {
+        let mut task = KanbanTask::new("proj-1".to_string(), "title".to_string(), "desc".to_string());
+        task.pr_url = Some("https://github.com/org/repo/pull/5".to_string());
+        task.pr_state = Some("open".to_string());
+        task.pr_merge_commented = false;
+
+        let json = serde_json::to_string(&task).unwrap();
+        let deser: KanbanTask = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.pr_url, task.pr_url);
+        assert_eq!(deser.pr_state, task.pr_state);
+        assert_eq!(deser.pr_merge_commented, task.pr_merge_commented);
+    }
+
+    #[test]
+    fn test_kanban_task_pr_fields_omitted_in_json_when_none() {
+        let task = KanbanTask::new("proj-1".to_string(), "title".to_string(), "desc".to_string());
+        let json = serde_json::to_string(&task).unwrap();
+        // pr_url and pr_state should be omitted (skip_serializing_if = "Option::is_none")
+        assert!(!json.contains("\"prUrl\""));
+        assert!(!json.contains("\"prState\""));
+        // pr_merge_commented is always serialized (no skip_serializing_if)
+        assert!(json.contains("\"prMergeCommented\""));
     }
 
     #[test]

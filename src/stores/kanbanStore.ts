@@ -17,7 +17,23 @@ import {
   type ProjectNotes,
 } from "@/lib/tauri";
 
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+
 export type { KanbanTask, KanbanStatus, KanbanComment, KanbanImage, ProjectNotes };
+
+/**
+ * Find the kanban task ID associated with an environment.
+ * Checks the kanban store first, then falls back to the build pipeline store.
+ * Returns the task (if found in kanban store) and the task ID.
+ */
+export function findTaskForEnvironment(environmentId: string): { task: KanbanTask | undefined; taskId: string | undefined } {
+  const kanbanState = useKanbanStore.getState();
+  const task = kanbanState.tasks.find((t) => t.environmentId === environmentId);
+  if (task) return { task, taskId: task.id };
+  const pipeline = Array.from(useBuildPipelineStore.getState().pipelines.values())
+    .find((p) => p.environmentId === environmentId);
+  return { task: undefined, taskId: pipeline?.taskId };
+}
 
 interface KanbanState {
   tasks: KanbanTask[];
@@ -30,7 +46,7 @@ interface KanbanState {
   // Task actions
   loadTasks: (projectId: string) => Promise<void>;
   addTask: (projectId: string, title: string, description: string) => Promise<string | undefined>;
-  updateTask: (taskId: string, updates: Partial<Pick<KanbanTask, "title" | "description" | "acceptanceCriteria" | "status" | "environmentId" | "buildPipelineId">>) => Promise<void>;
+  updateTask: (taskId: string, updates: Partial<Pick<KanbanTask, "title" | "description" | "acceptanceCriteria" | "status" | "environmentId" | "buildPipelineId" | "prUrl" | "prState" | "prMergeCommented">>) => Promise<void>;
   deleteTask: (taskId: string) => Promise<void>;
   moveTask: (taskId: string, newStatus: KanbanStatus) => Promise<void>;
   addComment: (taskId: string, text: string) => Promise<void>;
@@ -88,6 +104,9 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
         updates.status,
         updates.environmentId,
         updates.buildPipelineId,
+        updates.prUrl,
+        updates.prState,
+        updates.prMergeCommented,
       );
       set((state) => ({
         tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),

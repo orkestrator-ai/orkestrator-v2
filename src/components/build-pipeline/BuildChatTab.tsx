@@ -201,7 +201,7 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
     persistKey: `build-${pipelineId}`,
   });
 
-  // Auto-move kanban card when pipeline phase changes
+  // Auto-move kanban card and add automated comments when pipeline phase changes
   const prevPhaseRef = useRef<BuildPhase | null>(null);
   useEffect(() => {
     if (!pipeline) return;
@@ -212,11 +212,12 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
     // Skip on first render or if phase hasn't changed
     if (prevPhase === null || prevPhase === phase) return;
 
-    const { moveTask } = kanbanStoreRef.getState();
+    const { moveTask, addComment } = kanbanStoreRef.getState();
 
     if (phase === "building") {
-      // Card sent to build → move to in-progress
+      // Card sent to build → move to in-progress + comment
       void moveTask(pipeline.taskId, "in-progress");
+      void addComment(pipeline.taskId, "🔨 Build started");
     } else if (phase === "complete") {
       // Build pipeline finished → move to review
       void moveTask(pipeline.taskId, "review");
@@ -494,8 +495,24 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
             break;
 
           case "pr":
-            // PR creation complete -> check for merge conflicts before completing
+            // PR creation complete -> add comment and store PR on ticket, then check conflicts
             {
+              // Get the PR URL from environment store (set by PR monitor after detection)
+              const env = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+              const prUrl = env?.prUrl;
+              if (prUrl) {
+                void kanbanStoreRef.getState().addComment(
+                  currentPipeline.taskId,
+                  `🔗 PR raised: ${prUrl}`
+                );
+                // Store PR metadata on the ticket
+                void kanbanStoreRef.getState().updateTask(currentPipeline.taskId, {
+                  prUrl,
+                  prState: "open",
+                });
+              } else {
+                void kanbanStoreRef.getState().addComment(currentPipeline.taskId, "🔗 PR raised");
+              }
               const hasConflicts = await checkPRMergeConflicts();
               if (hasConflicts) {
                 await startResolveConflictsSession(currentPipeline);
@@ -561,6 +578,7 @@ export function BuildChatTab({ data, isActive }: BuildChatTabProps) {
             setVerificationResult(pipelineId, result.verdict, result.feedback);
 
             if (result.verdict === "pass") {
+              void kanbanStoreRef.getState().addComment(currentPipeline.taskId, "✅ Validation complete");
               await startPRSession(currentPipeline);
             } else {
               // Check max iterations

@@ -1,6 +1,6 @@
 # Orkestrator AI
 
-A Tauri desktop application for managing isolated development environments for AI coding agents (Claude and OpenCode).
+A Tauri desktop application for managing isolated development environments for AI coding agents (Claude, Codex, and OpenCode).
 
 ## Environment Types
 
@@ -24,13 +24,14 @@ Local environments run directly on the host machine using Git worktrees. These p
 
 ## Agent Modes
 
-Both Claude and OpenCode agents can run in different modes:
+Claude, Codex, and OpenCode agents can run in different modes:
 
 ### Terminal Mode (Standard)
 
 Terminal mode runs the agent's CLI interface inside an xterm.js terminal. This is the traditional command-line experience where you interact with the agent through text input/output in a terminal emulator.
 
 - **Claude**: Runs `claude` CLI in the terminal
+- **Codex**: Runs `codex` CLI in the terminal
 - **OpenCode**: Runs `opencode` CLI in the terminal
 
 ### Native Mode
@@ -38,6 +39,7 @@ Terminal mode runs the agent's CLI interface inside an xterm.js terminal. This i
 Native mode provides a custom chat-style UI that communicates with a backend server instead of running the CLI directly:
 
 - **Claude Native Mode**: Uses a bridge server (`claude-bridge`) that wraps the Claude Agent SDK. The frontend communicates via HTTP/SSE to the bridge server which manages Claude sessions.
+- **Codex Native Mode**: Uses a bridge server (`codex-bridge`) that manages Codex sessions over HTTP/SSE for the custom frontend UI.
 - **OpenCode Native Mode**: Uses the OpenCode server (`opencode serve`) which exposes an HTTP API. The frontend uses `@opencode-ai/sdk` v2 to communicate with the server.
 
 Native mode benefits:
@@ -51,6 +53,7 @@ Native mode benefits:
 - **Frontend**: React 19, TypeScript, Tailwind CSS v4, shadcn/ui, Zustand, xterm.js
 - **Backend**: Rust, Tauri v2, Bollard (Docker client)
 - **Containerization**: Docker with custom base image
+- **Native Bridges**: Node.js bridge servers for Claude and Codex native mode
 - **OpenCode Integration**: `@opencode-ai/sdk` v2 (use `@opencode-ai/sdk/v2/client` import path)
 
 ## Project Structure
@@ -59,6 +62,8 @@ Native mode benefits:
 orkestrator-ai/
 ├── src/                    # React frontend
 │   ├── components/         # UI components (shadcn/ui based)
+│   │   ├── codex/          # Codex Native Mode components
+│   │   ├── opencode/       # OpenCode Native Mode components
 │   ├── hooks/              # React hooks
 │   ├── stores/             # Zustand state stores
 │   ├── contexts/           # React contexts
@@ -117,6 +122,9 @@ bun test
 
 # Run Rust tests
 cd src-tauri && cargo test
+
+# Run TypeScript type checking
+bunx tsc --noEmit
 ```
 
 ### Building
@@ -142,6 +150,8 @@ Default to using Bun instead of Node.js:
 The container includes:
 - Node.js 20
 - Claude Code CLI
+- Codex CLI
+- OpenCode CLI
 - Git and GitHub CLI (gh)
 - Network firewall (iptables/ipset) for security isolation
 - zsh with powerlevel10k theme
@@ -215,6 +225,20 @@ Containers have restricted network access via iptables firewall:
 | `bridges/claude-bridge/src/services/session-manager.ts` | Claude Agent SDK integration |
 | `bridges/claude-bridge/src/routes/session.ts` | Session API endpoints |
 | `bridges/claude-bridge/src/routes/events.ts` | SSE event subscription |
+
+### Codex Native Mode
+
+| File | Purpose |
+|------|---------|
+| `src/components/codex/CodexChatTab.tsx` | Main Codex chat interface |
+| `src/components/codex/CodexComposeBar.tsx` | Message input for Codex sessions |
+| `src/components/codex/CodexPlanModeCard.tsx` | Plan-mode controls for Codex |
+| `src/components/codex/CodexResumeSessionDialog.tsx` | Resume-session UI |
+| `src/lib/codex-client.ts` | Codex bridge client wrapper |
+| `src/stores/codexStore.ts` | Zustand store for Codex sessions |
+| `src-tauri/src/commands/codex.rs` | Codex bridge commands (container) |
+| `src-tauri/src/commands/local_servers.rs` | Local Codex bridge commands |
+| `bridges/codex-bridge/src/index.ts` | Codex bridge entry point |
 
 ## Claude Store Session Identifiers
 
@@ -310,6 +334,28 @@ Files:
 - `config.json` - Global and per-repo settings
 - `projects.json` - Repository metadata
 - `environments.json` - Environment metadata and container IDs
+
+## Bun `mock.module()` Rules
+
+Bun's module mocking is **global at the module-cache level**. In this repo, top-level `mock.module()` calls can leak across test files even when `mock.restore()` is used later.
+
+Use this stable pattern:
+
+1. Put truly shared mocks in `tests/setup.ts`.
+   - Example: `@tauri-apps/api/*` and `@tauri-apps/plugin-clipboard-manager` are registered once there so files do not fight over competing global mocks.
+2. If some tests need a mocked module but other tests need the real module, keep the module real in `tests/setup.ts` and put **shared mock functions** in `tests/mocks/*`.
+   - Example: `tests/mocks/clipboard-paste.ts` exports reusable mock functions, and `terminal-paste.test.ts` wires them up per-file with `mock.module(...)`.
+3. Prefer mocking narrow dependencies, not broad app modules or shared UI components.
+   - Avoid top-level mocks for modules like `@/components/chat/NativeMessage` unless the whole suite should use that fake. These are especially likely to pollute unrelated tests.
+4. Do not assume `mock.restore()` fixes module-cache pollution.
+   - It is useful for resetting function state, but it is not a reliable isolation boundary for `mock.module(...)` in Bun.
+5. Before adding a new `mock.module(...)`, search for existing comments/patterns in `tests/setup.ts` and `tests/mocks/`.
+   - If the same module is mocked in multiple files, centralize it or convert to shared mock functions.
+
+Practical rule:
+- If a mock must be visible to many suites, register it once in `tests/setup.ts`.
+- If only one file should use the mock, keep the `mock.module(...)` local and back it with reusable mock fns from `tests/mocks/*` when helpful.
+- If another suite imports the real module, do **not** add a competing global mock for that module in a random test file.
 
 ## Rust Logging
 

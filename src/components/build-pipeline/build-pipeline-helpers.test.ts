@@ -399,6 +399,7 @@ describe("buildPipelineStore", () => {
       taskId: "task-1",
       projectId: "proj-1",
       environmentType: "local",
+      agentType: "claude",
       taskTitle: "My Feature",
       taskSnapshot: { title: "My Feature", description: "", acceptanceCriteria: "", comments: [], images: [] },
     });
@@ -430,6 +431,7 @@ describe("buildPipelineStore", () => {
       taskId: "task-2",
       projectId: "proj-2",
       environmentType: "local",
+      agentType: "claude",
       taskTitle: "Dark Mode",
       taskSnapshot: snapshot,
     });
@@ -446,6 +448,7 @@ describe("buildPipelineStore", () => {
       taskId: "t1",
       projectId: "p1",
       environmentType: "containerized",
+      agentType: "claude",
       taskTitle: "Test",
       taskSnapshot: { title: "Test", description: "", acceptanceCriteria: "", comments: [], images: [] },
     });
@@ -461,6 +464,7 @@ describe("buildPipelineStore", () => {
       taskId: "t1",
       projectId: "p1",
       environmentType: "local",
+      agentType: "claude",
       taskTitle: "Test",
       taskSnapshot: { title: "Test", description: "", acceptanceCriteria: "", comments: [], images: [] },
     });
@@ -475,6 +479,7 @@ describe("buildPipelineStore", () => {
       taskId: "t1",
       projectId: "p1",
       environmentType: "local",
+      agentType: "claude",
       taskTitle: "Test",
       taskSnapshot: { title: "Test", description: "", acceptanceCriteria: "", comments: [], images: [] },
     });
@@ -502,6 +507,7 @@ describe("buildPipelineStore", () => {
       taskId: "t1",
       projectId: "p1",
       environmentType: "local",
+      agentType: "claude",
       taskTitle: "Test",
       taskSnapshot: { title: "Test", description: "", acceptanceCriteria: "", comments: [], images: [] },
     });
@@ -527,6 +533,7 @@ describe("buildPipelineStore", () => {
       taskId: "t1",
       projectId: "p1",
       environmentType: "local",
+      agentType: "claude",
       taskTitle: "Test",
       taskSnapshot: { title: "Test", description: "", acceptanceCriteria: "", comments: [], images: [] },
     });
@@ -544,6 +551,7 @@ describe("buildPipelineStore", () => {
       taskId: "t1",
       projectId: "p1",
       environmentType: "local",
+      agentType: "claude",
       taskTitle: "Test",
       taskSnapshot: { title: "Test", description: "", acceptanceCriteria: "", comments: [], images: [] },
     });
@@ -560,6 +568,7 @@ describe("buildPipelineStore", () => {
       taskId: "t1",
       projectId: "p1",
       environmentType: "local",
+      agentType: "claude",
       taskTitle: "Test",
       taskSnapshot: { title: "Test", description: "", acceptanceCriteria: "", comments: [], images: [] },
     });
@@ -576,6 +585,7 @@ describe("buildPipelineStore", () => {
       taskId: "task-abc",
       projectId: "p1",
       environmentType: "local",
+      agentType: "claude",
       taskTitle: "Test",
       taskSnapshot: { title: "Test", description: "", acceptanceCriteria: "", comments: [], images: [] },
     });
@@ -596,6 +606,7 @@ describe("buildPipelineStore", () => {
       taskId: "t1",
       projectId: "p1",
       environmentType: "local",
+      agentType: "claude",
       taskTitle: "Test",
       taskSnapshot: { title: "Test", description: "", acceptanceCriteria: "", comments: [], images: [] },
     });
@@ -614,6 +625,7 @@ describe("buildPipelineStore", () => {
       taskId: "t1",
       projectId: "p1",
       environmentType: "local",
+      agentType: "claude",
       taskTitle: "Test",
       taskSnapshot: { title: "Test", description: "", acceptanceCriteria: "", comments: [], images: [] },
     });

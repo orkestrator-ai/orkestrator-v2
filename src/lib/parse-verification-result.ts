@@ -1,12 +1,18 @@
-import type { ClaudeMessage } from "@/lib/claude-client";
+type VerificationMessage = {
+  role: "user" | "assistant" | "system";
+  parts: Array<{
+    type: string;
+    content?: string;
+  }>;
+};
 
-export function parseVerificationResult(messages: ClaudeMessage[]): { verdict: "pass" | "fail"; feedback: string } {
+export function parseVerificationResult(messages: VerificationMessage[]): { verdict: "pass" | "fail"; feedback: string } {
   const lastAssistant = messages.filter((m) => m.role === "assistant").pop();
   if (!lastAssistant) return { verdict: "fail", feedback: "No verification response received" };
 
   const text = lastAssistant.parts
     .filter((p) => p.type === "text")
-    .map((p) => p.content)
+    .map((p) => p.content ?? "")
     .join("\n")
     .trim();
 

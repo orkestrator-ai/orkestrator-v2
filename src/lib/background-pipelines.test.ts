@@ -26,6 +26,7 @@ function makePipeline(
     projectId: "proj-1",
     environmentId,
     environmentType: "local",
+    agentType: "claude",
     phase,
     sessions: [],
     currentSessionIndex: -1,

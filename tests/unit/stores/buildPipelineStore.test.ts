@@ -16,6 +16,7 @@ function createPipelineParams(overrides: Partial<Parameters<typeof useBuildPipel
     taskId: "task-1",
     projectId: "project-1",
     environmentType: "local" as const,
+    agentType: "claude" as const,
     taskTitle: "Test task",
     taskSnapshot: defaultTaskSnapshot,
     ...overrides,
@@ -60,6 +61,7 @@ describe("buildPipelineStore", () => {
       expect(pipeline!.taskId).toBe("task-1");
       expect(pipeline!.projectId).toBe("project-1");
       expect(pipeline!.environmentType).toBe("local");
+      expect(pipeline!.agentType).toBe("claude");
       expect(pipeline!.environmentId).toBe("");
       expect(pipeline!.phase).toBe("creating-environment");
       expect(pipeline!.sessions).toEqual([]);

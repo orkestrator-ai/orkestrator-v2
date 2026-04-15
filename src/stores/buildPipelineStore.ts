@@ -1,6 +1,5 @@
 import { create } from "zustand";
-import type { ClaudeSessionKey } from "@/lib/claude-client";
-import type { EnvironmentType } from "@/types";
+import type { DefaultAgent, EnvironmentType } from "@/types";
 import type { TaskSnapshot } from "@/prompts";
 
 export type BuildPhase =
@@ -23,7 +22,7 @@ export type PipelineSessionPhase = "build" | "review" | "verify" | "fix" | "pr" 
 export interface PipelineSession {
   phase: PipelineSessionPhase;
   iteration: number;
-  sessionKey: ClaudeSessionKey;
+  sessionKey: string;
   sdkSessionId: string;
   status: "running" | "idle" | "error";
   startedAt: string;
@@ -36,6 +35,7 @@ export interface BuildPipeline {
   projectId: string;
   environmentId: string;
   environmentType: EnvironmentType;
+  agentType: DefaultAgent;
   phase: BuildPhase;
   sessions: PipelineSession[];
   currentSessionIndex: number;
@@ -59,6 +59,7 @@ interface BuildPipelineState {
     taskId: string;
     projectId: string;
     environmentType: EnvironmentType;
+    agentType: DefaultAgent;
     taskTitle: string;
     taskSnapshot: TaskSnapshot;
   }) => string;
@@ -86,7 +87,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
   pipelines: new Map(),
   buildEnvironmentIds: new Set<string>(),
 
-  createPipeline: ({ taskId, projectId, environmentType, taskTitle, taskSnapshot }) => {
+  createPipeline: ({ taskId, projectId, environmentType, agentType, taskTitle, taskSnapshot }) => {
     const id = crypto.randomUUID();
     const pipeline: BuildPipeline = {
       id,
@@ -94,6 +95,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
       projectId,
       environmentId: "",
       environmentType,
+      agentType,
       phase: "creating-environment",
       sessions: [],
       currentSessionIndex: -1,

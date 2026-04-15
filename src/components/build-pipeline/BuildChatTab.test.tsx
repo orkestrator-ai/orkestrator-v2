@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, mock } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test, mock } from "bun:test";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
@@ -52,20 +52,6 @@ mock.module("@/lib/claude-client", () => ({
 // Hooks
 mock.module("@/hooks", () => ({
   useScrollLock: () => ({ isAtBottom: true, scrollToBottom: () => {} }),
-}));
-
-// Prompts — return stubs
-mock.module("@/prompts", () => ({
-  createBuildPrompt: () => "build prompt",
-  createBuildReviewPrompt: () => "review prompt",
-  createVerificationPrompt: () => "verify prompt",
-  createFixPrompt: () => "fix prompt",
-  createPRPrompt: () => "pr prompt",
-  createResolveConflictsPrompt: () => "resolve prompt",
-}));
-
-mock.module("@/lib/parse-verification-result", () => ({
-  parseVerificationResult: () => ({ verdict: "pass", feedback: "" }),
 }));
 
 mock.module("@/lib/context-usage", () => ({
@@ -140,6 +126,7 @@ function seedPipeline(phase = "waiting-for-setup" as string) {
           projectId: "project-1",
           environmentId: ENV_ID,
           environmentType: "containerized" as const,
+          agentType: "claude" as const,
           phase: phase as any,
           sessions: [],
           currentSessionIndex: -1,
@@ -268,6 +255,10 @@ function resetStores() {
 // ---------------------------------------------------------------------------
 
 describe("BuildChatTab", () => {
+  afterAll(() => {
+    mock.restore();
+  });
+
   beforeEach(() => {
     cleanup();
     resetStores();

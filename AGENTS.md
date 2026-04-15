@@ -4,7 +4,7 @@ This file provides specific guidance for AI agents working on this codebase.
 
 ## Project Overview
 
-Orkestrator AI is a Tauri desktop application for managing isolated Docker-based development environments for Claude Code and OpenCode.
+Orkestrator AI is a Tauri desktop application for managing isolated Docker-based and local-worktree development environments for Claude Code, Codex, and OpenCode.
 
 ## Tech Stack
 
@@ -21,6 +21,7 @@ Orkestrator AI is a Tauri desktop application for managing isolated Docker-based
 ```
 src/                        # React frontend
 ├── components/             # UI components (shadcn/ui based)
+│   ├── codex/              # Codex Native Mode components
 │   ├── opencode/           # OpenCode Native Mode components
 │   ├── terminal/           # Terminal/xterm.js components
 │   └── ui/                 # shadcn/ui primitives
@@ -33,9 +34,14 @@ src/                        # React frontend
 src-tauri/src/              # Rust backend
 ├── commands/               # Tauri IPC commands
 ├── docker/                 # Bollard Docker client
+├── local/                  # Local environment management (worktrees, local servers)
 ├── pty/                    # Terminal session management
 ├── storage/                # JSON file persistence
 └── models/                 # Data models
+
+bridges/                    # Native-mode bridge servers
+├── claude-bridge/          # Claude Native Mode bridge server
+└── codex-bridge/           # Codex Native Mode bridge server
 
 docker/                     # Docker configuration
 ├── Dockerfile              # Base image definition
@@ -166,9 +172,12 @@ use tracing::*;              // Avoid - imports everything
 
 | File | Purpose |
 |------|---------|
+| `src/components/codex/CodexChatTab.tsx` | Codex Native Mode chat |
 | `src/components/terminal/TerminalContainer.tsx` | xterm.js integration |
 | `src/components/opencode/OpenCodeChatTab.tsx` | OpenCode Native Mode chat |
+| `src/lib/codex-client.ts` | Codex bridge client wrapper |
 | `src/lib/opencode-client.ts` | OpenCode SDK v2 wrapper |
+| `src/stores/codexStore.ts` | Codex state management |
 | `src/stores/openCodeStore.ts` | OpenCode state management |
 | `src/lib/tauri.ts` | Tauri IPC wrappers |
 
@@ -176,9 +185,11 @@ use tracing::*;              // Avoid - imports everything
 
 | File | Purpose |
 |------|---------|
+| `src-tauri/src/commands/codex.rs` | Codex bridge commands |
 | `src-tauri/src/docker/client.rs` | Core Docker API client |
 | `src-tauri/src/docker/container.rs` | Container provisioning |
 | `src-tauri/src/commands/environments.rs` | Environment CRUD commands |
+| `src-tauri/src/local/servers.rs` | Local Claude/Codex/OpenCode server lifecycle |
 | `src-tauri/src/commands/opencode.rs` | OpenCode server management |
 
 ### Docker
@@ -194,6 +205,7 @@ use tracing::*;              // Avoid - imports everything
 The container includes:
 - Node.js 20
 - Claude Code CLI
+- Codex CLI
 - OpenCode CLI
 - Git and GitHub CLI (gh)
 - Network firewall (iptables/ipset) for security isolation
@@ -224,6 +236,28 @@ bun test                      # Frontend tests
 cd src-tauri && cargo test    # Rust tests
 bunx tsc --noEmit             # TypeScript type checking
 ```
+
+### Bun `mock.module()` Rules
+
+Bun's module mocking is **global at the module-cache level**. In this repo, top-level `mock.module()` calls can leak across test files even when `mock.restore()` is used later.
+
+Use this stable pattern:
+
+1. Put truly shared mocks in `tests/setup.ts`.
+   - Example: `@tauri-apps/api/*` and `@tauri-apps/plugin-clipboard-manager` are registered once there so files do not fight over competing global mocks.
+2. If some tests need a mocked module but other tests need the real module, keep the module real in `tests/setup.ts` and put **shared mock functions** in `tests/mocks/*`.
+   - Example: `tests/mocks/clipboard-paste.ts` exports reusable mock functions, and `terminal-paste.test.ts` wires them up per-file with `mock.module(...)`.
+3. Prefer mocking narrow dependencies, not broad app modules or shared UI components.
+   - Avoid top-level mocks for modules like `@/components/chat/NativeMessage` unless the whole suite should use that fake. These are especially likely to pollute unrelated tests.
+4. Do not assume `mock.restore()` fixes module-cache pollution.
+   - It is useful for resetting function state, but it is not a reliable isolation boundary for `mock.module(...)` in Bun.
+5. Before adding a new `mock.module(...)`, search for existing comments/patterns in `tests/setup.ts` and `tests/mocks/`.
+   - If the same module is mocked in multiple files, centralize it or convert to shared mock functions.
+
+Practical rule:
+- If a mock must be visible to many suites, register it once in `tests/setup.ts`.
+- If only one file should use the mock, keep the `mock.module(...)` local and back it with reusable mock fns from `tests/mocks/*` when helpful.
+- If another suite imports the real module, do **not** add a competing global mock for that module in a random test file.
 
 ## Development Commands
 

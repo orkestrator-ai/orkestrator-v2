@@ -120,7 +120,7 @@ export interface SessionState {
 }
 
 /** Effort level for controlling how much thinking/reasoning Claude applies */
-export type EffortLevel = "low" | "medium" | "high" | "max";
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 /** Model info */
 export interface ModelInfo {
@@ -209,7 +209,7 @@ export interface SSEEvent {
 }
 
 /** Permission mode for Claude Agent SDK */
-export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan";
+export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
 
 /** Prompt options */
 export interface PromptOptions {

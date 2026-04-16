@@ -34,12 +34,14 @@ const EFFORT_LABELS: Record<ClaudeEffortLevel, string> = {
   low: "Low",
   medium: "Medium",
   high: "High",
+  xhigh: "Extra High",
   max: "Max",
 };
 const EFFORT_DESCRIPTIONS: Record<ClaudeEffortLevel, string> = {
   low: "Minimal thinking, fastest responses",
   medium: "Moderate thinking for everyday tasks",
   high: "Deep reasoning for complex problems",
+  xhigh: "Deeper reasoning (Opus 4.7 only)",
   max: "Maximum effort (Opus only)",
 };
 

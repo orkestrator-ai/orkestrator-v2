@@ -970,6 +970,8 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
         cwd,
         model: options?.model,
         permissionMode,
+        // Required when using bypassPermissions mode
+        ...(permissionMode === "bypassPermissions" && { allowDangerouslySkipPermissions: true }),
         // Use effort level to control thinking depth (replaces maxThinkingTokens)
         ...(effortLevel && { effort: effortLevel }),
         allowedTools: [
@@ -1680,7 +1682,7 @@ export async function getAvailableModels(): Promise<Array<{
   description?: string;
   supportsFastMode?: boolean;
   supportsEffort?: boolean;
-  supportedEffortLevels?: ("low" | "medium" | "high" | "max")[];
+  supportedEffortLevels?: ("low" | "medium" | "high" | "xhigh" | "max")[];
 }>> {
   try {
     const cwd = process.env.CWD || process.cwd();
@@ -1704,7 +1706,7 @@ export async function getAvailableModels(): Promise<Array<{
       await q.return();
     }
 
-    return models.map((model: { value: string; displayName: string; description?: string; supportsFastMode?: boolean; supportsEffort?: boolean; supportedEffortLevels?: ("low" | "medium" | "high" | "max")[] }) => ({
+    return models.map((model: { value: string; displayName: string; description?: string; supportsFastMode?: boolean; supportsEffort?: boolean; supportedEffortLevels?: ("low" | "medium" | "high" | "xhigh" | "max")[] }) => ({
       id: model.value,
       name: model.displayName,
       description: model.description,

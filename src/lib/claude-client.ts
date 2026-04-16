@@ -100,7 +100,7 @@ export interface ClaudeMessage {
 
 
 /** Effort level for controlling Claude's thinking depth */
-export type ClaudeEffortLevel = "low" | "medium" | "high" | "max";
+export type ClaudeEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ClaudeModel {
   id: string;
@@ -364,7 +364,7 @@ export async function getSessionMessages(
 }
 
 /** Permission mode for Claude Agent SDK */
-export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan";
+export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
 
 /**
  * Send a prompt to a session (async - returns immediately, results via SSE)

@@ -259,6 +259,28 @@ Practical rule:
 - If only one file should use the mock, keep the `mock.module(...)` local and back it with reusable mock fns from `tests/mocks/*` when helpful.
 - If another suite imports the real module, do **not** add a competing global mock for that module in a random test file.
 
+### Snapshot-and-restore pattern for unavoidable sibling-component stubs
+
+When a test *must* stub a sibling component that has its own test file (e.g. `ChatTab.test.tsx` stubbing `./ComposeBar`, when `ComposeBar.test.tsx` needs the real module), snapshot the real module before installing the stub and restore it in `afterAll`. Bun caches the first `mock.module` factory result, but a subsequent `mock.module(path, () => snapshot)` call does override the cache for future imports.
+
+```typescript
+import { afterAll, mock } from "bun:test";
+
+// 1. Snapshot the real module BEFORE any mock.module call that would replace it.
+import * as realComposeBar from "./ComposeBar";
+const realComposeBarSnapshot = { ...realComposeBar };
+
+// 2. Install the stub.
+mock.module("./ComposeBar", () => ({ ComposeBar: () => <button>Stub</button> }));
+
+// 3. Restore when this file's tests finish so later files see the real module.
+afterAll(() => {
+  mock.module("./ComposeBar", () => realComposeBarSnapshot);
+});
+```
+
+Use this only as a last resort — prefer not mocking sibling components at all when feasible (see rule 3 above).
+
 ## Development Commands
 
 ```bash

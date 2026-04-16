@@ -1,7 +1,25 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createOpenCodeSessionKey, useOpenCodeStore } from "@/stores/openCodeStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+
+// Snapshot the real sibling modules before we install stubs so we can restore
+// them when this file finishes. Without this, Bun's global mock.module cache
+// would leak these stubs into other test files (notably OpenCodeComposeBar.test.tsx
+// and slash-command-{directory,registry}.test.ts) and cause them to receive
+// stub modules instead of the real ones.
+import * as realOpenCodeComposeBar from "./OpenCodeComposeBar";
+import * as realOpenCodePermissionCard from "./OpenCodePermissionCard";
+import * as realOpenCodeQuestionCard from "./OpenCodeQuestionCard";
+import * as realOpenCodeResumeSessionDialog from "./OpenCodeResumeSessionDialog";
+import * as realSlashCommandDirectory from "./slash-command-directory";
+import * as realSlashCommandRegistry from "./slash-command-registry";
+const realOpenCodeComposeBarSnapshot = { ...realOpenCodeComposeBar };
+const realOpenCodePermissionCardSnapshot = { ...realOpenCodePermissionCard };
+const realOpenCodeQuestionCardSnapshot = { ...realOpenCodeQuestionCard };
+const realOpenCodeResumeSessionDialogSnapshot = { ...realOpenCodeResumeSessionDialog };
+const realSlashCommandDirectorySnapshot = { ...realSlashCommandDirectory };
+const realSlashCommandRegistrySnapshot = { ...realSlashCommandRegistry };
 
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
 const mockSendPrompt = mock(async () => ({ success: true }));
@@ -164,6 +182,17 @@ function resetStores(name = "20260415-123456") {
     setupScriptsRunning: new Set(),
   });
 }
+
+// Restore the real sibling modules once this file's tests finish so later
+// test files see the real modules.
+afterAll(() => {
+  mock.module("./OpenCodeComposeBar", () => realOpenCodeComposeBarSnapshot);
+  mock.module("./OpenCodePermissionCard", () => realOpenCodePermissionCardSnapshot);
+  mock.module("./OpenCodeQuestionCard", () => realOpenCodeQuestionCardSnapshot);
+  mock.module("./OpenCodeResumeSessionDialog", () => realOpenCodeResumeSessionDialogSnapshot);
+  mock.module("./slash-command-directory", () => realSlashCommandDirectorySnapshot);
+  mock.module("./slash-command-registry", () => realSlashCommandRegistrySnapshot);
+});
 
 describe("OpenCodeChatTab", () => {
   beforeEach(() => {

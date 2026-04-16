@@ -14,11 +14,9 @@ mock.module("sonner", () => ({
   toast: { success: () => {}, error: () => {} },
 }));
 
-mock.module("@tauri-apps/plugin-clipboard-manager", () => ({
-  readImage: mock(() => Promise.reject(new Error("no image"))),
-  readText: mock(() => Promise.resolve("")),
-  writeText: mock(() => Promise.resolve()),
-}));
+// @tauri-apps/plugin-clipboard-manager is centrally mocked in tests/setup.ts.
+// Re-mocking here would replace the shared mock functions and break
+// terminal-paste tests that rely on them.
 
 mock.module("@/components/chat/MentionableInput", () => ({
   MentionableInput: (props: {
@@ -47,13 +45,10 @@ mock.module("@/components/chat/FileMentionMenu", () => ({
   FileMentionMenu: () => null,
 }));
 
-mock.module("@/hooks/useFileSearch", () => ({
-  useFileSearch: () => ({
-    searchFiles: () => [],
-    error: null,
-    refresh: () => {},
-  }),
-}));
+// @/hooks/useFileSearch is NOT mocked here: the top-level mock would leak
+// into useFileSearch.test.ts via Bun's module cache. The hook is a no-op
+// when containerId and worktreePath are both undefined, which is the case
+// in these tests.
 
 mock.module("@/hooks/useFileMentions", () => ({
   useFileMentions: () => ({

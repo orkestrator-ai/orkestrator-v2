@@ -1,9 +1,20 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createCodexSessionKey, useCodexStore } from "@/stores/codexStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+
+// Snapshot the real sibling modules before we install stubs so we can restore
+// them when this file finishes. Without this, Bun's global mock.module cache
+// would leak these stubs into other test files (notably CodexComposeBar.test.tsx)
+// and cause them to receive the stub component instead of the real one.
+import * as realCodexComposeBar from "./CodexComposeBar";
+import * as realCodexPlanModeCard from "./CodexPlanModeCard";
+import * as realCodexResumeSessionDialog from "./CodexResumeSessionDialog";
+const realCodexComposeBarSnapshot = { ...realCodexComposeBar };
+const realCodexPlanModeCardSnapshot = { ...realCodexPlanModeCard };
+const realCodexResumeSessionDialogSnapshot = { ...realCodexResumeSessionDialog };
 
 const MOCK_MODELS = [
   {
@@ -250,6 +261,14 @@ function resetStores() {
   seedPaneLayout();
   seedCodexStore();
 }
+
+// Restore the real sibling modules once this file's tests finish so later
+// test files (e.g. CodexComposeBar.test.tsx) see the real components.
+afterAll(() => {
+  mock.module("./CodexComposeBar", () => realCodexComposeBarSnapshot);
+  mock.module("./CodexPlanModeCard", () => realCodexPlanModeCardSnapshot);
+  mock.module("./CodexResumeSessionDialog", () => realCodexResumeSessionDialogSnapshot);
+});
 
 describe("CodexChatTab", () => {
   beforeEach(() => {

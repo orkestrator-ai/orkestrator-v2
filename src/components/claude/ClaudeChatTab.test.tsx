@@ -26,23 +26,17 @@ mock.module("@/lib/tauri", () => ({
   startLocalClaudeServer: mock(async () => ({ running: true, port: 9999, pid: 1234 })),
   getLocalClaudeServerStatus: mock(async () => ({ running: true, port: 9999, pid: 1234 })),
   renameEnvironmentFromPrompt: mock(async () => {}),
+  // Needed by ClaudeComposeBar/useFileSearch rendered inside ClaudeChatTab
+  writeContainerFile: mock(async () => {}),
+  writeLocalFile: mock(async () => "/tmp/file.png"),
+  getFileTree: mock(async () => []),
+  getLocalFileTree: mock(async () => []),
 }));
 
-mock.module("./ClaudeComposeBar", () => ({
-  ClaudeComposeBar: () => null,
-}));
-
-mock.module("./ClaudeQuestionCard", () => ({
-  ClaudeQuestionCard: () => null,
-}));
-
-mock.module("./ClaudePlanApprovalCard", () => ({
-  ClaudePlanApprovalCard: () => null,
-}));
-
-mock.module("./ResumeSessionDialog", () => ({
-  ResumeSessionDialog: () => null,
-}));
+// Sibling component stubs (ClaudeComposeBar, ClaudeQuestionCard, etc.) were
+// removed: Bun's mock.module is global, so stubbing `./ClaudeComposeBar` here
+// replaces the real module in the cache and leaks into ClaudeComposeBar.test.tsx,
+// causing that test to receive a `() => null` component.
 
 import { ClaudeChatTab } from "./ClaudeChatTab";
 import type { ClaudeNativeData } from "@/types/paneLayout";

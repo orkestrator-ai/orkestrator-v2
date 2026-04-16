@@ -2,13 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, ArrowDown, History, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { useScrollLock } from "@/hooks";
+import { useElapsedTimer } from "@/hooks/useElapsedTimer";
+import { useScrollLock } from "@/hooks/useScrollLock";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useCodexStore, createCodexSessionKey, useConfigStore } from "@/stores";
 import {
   OPTIMISTIC_MESSAGE_PREFIX,
   createOptimisticNativeMessage,
 } from "@/lib/chat/client-only-messages";
+import { formatElapsed } from "@/lib/format-elapsed";
 import {
   type CodexConversationMode,
   type CodexPromptAttachment,
@@ -205,6 +207,10 @@ export function CodexChatTab({
     ),
   );
   const handleSendRef = useRef<CodexSendHandler | null>(null);
+  const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
+    session?.isLoading,
+    session?.sessionId,
+  );
 
   const { isAtBottom, scrollToBottom } = useScrollLock(scrollRef, {
     scrollTrigger: sessionMessages,
@@ -1178,7 +1184,22 @@ export function CodexChatTab({
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   <span className="text-xs">Codex is thinking...</span>
+                  {elapsedSeconds !== null && elapsedSeconds > 0 && (
+                    <span className="text-xs text-muted-foreground/50">
+                      {formatElapsed(elapsedSeconds)}
+                    </span>
+                  )}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {!session?.isLoading && finalElapsedSeconds !== null && (
+            <div className="px-2 @sm:px-4 py-1.5">
+              <div className="mx-auto max-w-3xl min-w-0">
+                <span className="text-[10px] text-muted-foreground/40">
+                  Completed in {formatElapsed(finalElapsedSeconds)}
+                </span>
               </div>
             </div>
           )}

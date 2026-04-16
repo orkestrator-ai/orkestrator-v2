@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createCodexSessionKey, useCodexStore } from "@/stores/codexStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -26,6 +26,13 @@ const mockRenameEnvironmentFromPrompt = mock(async () => {});
 const mockSendPrompt = mock(async () => true);
 const mockGetSessionMessages = mock(async (): Promise<TestCodexMessage[]> => []);
 const mockSubscribeToEvents = mock(() => (async function* () {})());
+
+mock.module("@/hooks/useScrollLock", () => ({
+  useScrollLock: mock(() => ({
+    isAtBottom: true,
+    scrollToBottom: mock(() => {}),
+  })),
+}));
 
 mock.module("@/lib/tauri", () => ({
   getCodexServerLog: mock(async () => ""),
@@ -101,6 +108,13 @@ const TAB_ID = "tab-1";
 const SESSION_ID = "session-1";
 const SESSION_KEY = createCodexSessionKey(ENVIRONMENT_ID, TAB_ID);
 const MOCK_CLIENT = { baseUrl: "http://127.0.0.1:9999" } as const;
+const ORIGINAL_DATE_NOW = Date.now;
+const ORIGINAL_SET_INTERVAL = globalThis.setInterval;
+const ORIGINAL_CLEAR_INTERVAL = globalThis.clearInterval;
+
+let mockedNow = 0;
+let intervalCallback: (() => void) | null = null;
+let clearIntervalCalls = 0;
 
 function createMessage(id: string, content: string): TestCodexMessage {
   return {
@@ -253,12 +267,14 @@ describe("CodexChatTab", () => {
     mockGetSessionMessages.mockClear();
     mockGetSessionMessages.mockImplementation(async () => []);
     mockSubscribeToEvents.mockClear();
+    restoreTimerHarness();
 
     resetStores();
   });
 
   afterEach(() => {
     cleanup();
+    restoreTimerHarness();
     mock.restore();
   });
 
@@ -535,4 +551,98 @@ describe("CodexChatTab", () => {
       ]);
     });
   });
+
+  test("renders timer states from the real elapsed timer hook", async () => {
+    installTimerHarness(1_000_000);
+    act(() => {
+      useCodexStore.setState((state) => ({
+        sessions: new Map(state.sessions).set(SESSION_KEY, {
+          ...state.sessions.get(SESSION_KEY)!,
+          isLoading: true,
+        }),
+      }));
+    });
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    expect(screen.queryByText("0s")).toBeNull();
+    expect(screen.queryByText(/Completed in/)).toBeNull();
+
+    mockedNow = 1_000_999;
+    act(() => {
+      intervalCallback?.();
+    });
+
+    expect(screen.queryByText("0s")).toBeNull();
+    expect(screen.queryByText("Codex is thinking...")).not.toBeNull();
+    expect(screen.queryByText(/Completed in/)).toBeNull();
+
+    mockedNow = 1_001_500;
+    act(() => {
+      intervalCallback?.();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("1s")).not.toBeNull();
+    });
+
+    act(() => {
+      useCodexStore.setState((state) => ({
+        sessions: new Map(state.sessions).set(SESSION_KEY, {
+          ...state.sessions.get(SESSION_KEY)!,
+          isLoading: false,
+        }),
+      }));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Codex is thinking...")).toBeNull();
+      expect(screen.queryByText("Completed in 1s")).not.toBeNull();
+    });
+
+    expect(clearIntervalCalls).toBeGreaterThan(0);
+
+    mockedNow = 1_002_000;
+    act(() => {
+      useCodexStore.setState((state) => ({
+        sessions: new Map(state.sessions).set(SESSION_KEY, {
+          ...state.sessions.get(SESSION_KEY)!,
+          isLoading: true,
+        }),
+      }));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Completed in/)).toBeNull();
+      expect(screen.queryByText("Codex is thinking...")).not.toBeNull();
+    });
+  });
 });
+
+function installTimerHarness(startTime: number) {
+  mockedNow = startTime;
+  intervalCallback = null;
+  clearIntervalCalls = 0;
+  Date.now = () => mockedNow;
+  globalThis.setInterval = (((callback: TimerHandler) => {
+    intervalCallback = callback as () => void;
+    return 1 as unknown as ReturnType<typeof setInterval>;
+  }) as unknown) as typeof setInterval;
+  globalThis.clearInterval = (() => {
+    clearIntervalCalls += 1;
+  }) as typeof clearInterval;
+}
+
+function restoreTimerHarness() {
+  Date.now = ORIGINAL_DATE_NOW;
+  globalThis.setInterval = ORIGINAL_SET_INTERVAL;
+  globalThis.clearInterval = ORIGINAL_CLEAR_INTERVAL;
+  intervalCallback = null;
+  clearIntervalCalls = 0;
+}

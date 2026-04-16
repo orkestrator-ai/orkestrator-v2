@@ -1399,23 +1399,21 @@ pub async fn start_environment(environment_id: String) -> Result<StartEnvironmen
     // Set allowed domains from global config (for restricted network mode)
     container_config.allowed_domains = config.global.allowed_domains.clone();
 
-    // Try to get OAuth credentials from system keychain (preferred)
-    // This creates the .credentials.json file in the Linux container
-    match credentials::get_claude_credentials() {
-        Ok(creds) => {
-            // Serialize credentials directly - avoids second keychain call
-            match serde_json::to_string(&creds) {
-                Ok(creds_json) => {
-                    debug!(environment_id = %environment_id, "Retrieved OAuth credentials from system keychain");
-                    container_config.oauth_credentials_json = Some(creds_json);
-                }
-                Err(e) => {
-                    warn!(environment_id = %environment_id, error = ?e, "Failed to serialize credentials");
-                }
+    // Try to get OAuth credentials from system keychain (preferred), refreshing
+    // if the token is expired or near expiry. This creates the .credentials.json
+    // file in the Linux container via the entrypoint script.
+    match credentials::get_or_refresh_claude_credentials().await {
+        Ok(creds) => match serde_json::to_string(&creds) {
+            Ok(creds_json) => {
+                debug!(environment_id = %environment_id, "Retrieved OAuth credentials from system keychain");
+                container_config.oauth_credentials_json = Some(creds_json);
             }
-        }
+            Err(e) => {
+                warn!(environment_id = %environment_id, error = ?e, "Failed to serialize credentials");
+            }
+        },
         Err(e) => {
-            debug!(environment_id = %environment_id, error = ?e, "Failed to read keychain credentials, will use API key if configured");
+            warn!(environment_id = %environment_id, error = ?e, "Failed to read/refresh keychain credentials; Claude auth in container may fail");
         }
     }
 
@@ -1848,10 +1846,16 @@ pub async fn recreate_environment(environment_id: String) -> Result<(), String> 
     container_config.opencode_model = config.global.opencode_model.clone();
     container_config.allowed_domains = config.global.allowed_domains.clone();
 
-    // Get OAuth credentials
-    if let Ok(creds) = credentials::get_claude_credentials() {
-        if let Ok(creds_json) = serde_json::to_string(&creds) {
-            container_config.oauth_credentials_json = Some(creds_json);
+    // Get OAuth credentials (refresh if near expiry so the rehydrated container
+    // doesn't start with a stale access token).
+    match credentials::get_or_refresh_claude_credentials().await {
+        Ok(creds) => {
+            if let Ok(creds_json) = serde_json::to_string(&creds) {
+                container_config.oauth_credentials_json = Some(creds_json);
+            }
+        }
+        Err(e) => {
+            warn!(environment_id = %environment_id, error = ?e, "Failed to read/refresh keychain credentials; Claude auth in recreated container may fail");
         }
     }
 

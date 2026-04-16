@@ -227,6 +227,14 @@ pub fn run() {
                 local::cleanup_stale_local_servers().await;
             });
 
+            // Keep Claude OAuth credentials in sync between the macOS Keychain
+            // and any running Orkestrator containers. Refreshes expiring tokens
+            // and pushes new ones to containers so they don't hit 401 errors.
+            let sync_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                credentials::sync::run_sync_loop(sync_handle).await;
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

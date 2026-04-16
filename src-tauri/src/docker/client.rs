@@ -537,17 +537,34 @@ impl DockerClient {
     /// Upload a file to a container using Docker's tar-based API
     /// This bypasses shell command length limits and supports files up to 8MB+
     ///
-    /// Note: Files are created with mode 0o644 (rw-r--r--). If you need executable
-    /// permissions, run chmod on the file after upload.
+    /// Note: Files are created with mode 0o644 (rw-r--r--) and owned by root.
+    /// If you need different permissions or ownership, use
+    /// `upload_file_to_container_with_metadata`.
     pub async fn upload_file_to_container(
         &self,
         container_id: &str,
         file_path: &str,
         file_data: Vec<u8>,
     ) -> Result<(), DockerError> {
+        self.upload_file_to_container_with_metadata(container_id, file_path, file_data, 0o644, 0, 0)
+            .await
+    }
+
+    /// Upload a file with explicit mode, uid, and gid on the tar header.
+    /// Docker's daemon honors these when extracting the tar inside the container,
+    /// so this lets us write files owned by non-root users (e.g. uid 1000) without
+    /// a second chown exec.
+    pub async fn upload_file_to_container_with_metadata(
+        &self,
+        container_id: &str,
+        file_path: &str,
+        file_data: Vec<u8>,
+        mode: u32,
+        uid: u64,
+        gid: u64,
+    ) -> Result<(), DockerError> {
         use bollard::container::UploadToContainerOptions;
 
-        // Extract filename and parent directory from path
         let path = std::path::Path::new(file_path);
         let filename = path
             .file_name()
@@ -558,14 +575,14 @@ impl DockerClient {
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "/workspace".to_string());
 
-        // Create a tar archive in memory containing the file
         let mut tar_builder = tar::Builder::new(Vec::new());
 
-        // Create tar header
         let mut header = tar::Header::new_gnu();
         header.set_path(filename)?;
         header.set_size(file_data.len() as u64);
-        header.set_mode(0o644);
+        header.set_mode(mode);
+        header.set_uid(uid);
+        header.set_gid(gid);
         header.set_mtime(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -574,11 +591,9 @@ impl DockerClient {
         );
         header.set_cksum();
 
-        // Add file to tar archive
         tar_builder.append(&header, file_data.as_slice())?;
         let tar_data = tar_builder.into_inner()?;
 
-        // Upload tar archive to container
         let options = UploadToContainerOptions {
             path: parent_dir,
             no_overwrite_dir_non_dir: "false".to_string(),

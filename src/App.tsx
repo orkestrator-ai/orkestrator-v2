@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { exit } from "@tauri-apps/plugin-process";
+import { toast } from "sonner";
 import { AppShell } from "@/components/layout";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TerminalContainer } from "@/components/terminal";
@@ -213,6 +214,34 @@ function App() {
   useEffect(() => {
     document.documentElement.style.zoom = `${zoomLevel}%`;
   }, [zoomLevel]);
+
+  // Surface Claude credential refresh/push failures as a non-blocking toast.
+  // The backend de-dupes (only emits after repeated failures or actual push
+  // problems), but we also guard against toast spam here.
+  const lastCredentialToastAt = useRef(0);
+  useEffect(() => {
+    const unlisten = listen<{ message: string; kind: string }>(
+      "claude-credentials-error",
+      (event) => {
+        const now = Date.now();
+        // Suppress repeated toasts within a 5 minute window.
+        if (now - lastCredentialToastAt.current < 5 * 60 * 1000) return;
+        lastCredentialToastAt.current = now;
+
+        const title =
+          event.payload.kind === "refresh_failed"
+            ? "Claude credentials refresh failed"
+            : "Failed to sync Claude credentials";
+        toast.error(title, {
+          description: event.payload.message,
+          duration: 10_000,
+        });
+      }
+    );
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
 
   // Listen for menu zoom events from Tauri backend
   useEffect(() => {

@@ -9,7 +9,7 @@ import { KanbanBoard } from "@/components/kanban";
 import { TerminalProvider } from "@/contexts";
 import { useUIStore, useEnvironmentStore, useConfigStore, useClaudeOptionsStore } from "@/stores";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import { getBackgroundPipelineEnvironments } from "@/lib/background-pipelines";
+import { getBackgroundProcessingEnvironments } from "@/lib/background-pipelines";
 import { cn } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
@@ -57,14 +57,22 @@ function App() {
   const projectEnvironments = selectedProjectId
     ? environments.filter((env) => env.projectId === selectedProjectId)
     : [];
+  const setupScriptsRunning = useEnvironmentStore((state) => state.setupScriptsRunning);
 
-  // Environments with active pipelines that aren't currently visible in the main content.
-  // These must stay mounted so their SSE subscriptions and pipeline advancement effects
+  // Environments with active background processing that aren't currently visible
+  // in the main content. These must stay mounted so setup completion detection,
+  // terminal listeners, SSE subscriptions, and pipeline advancement effects
   // continue running in the background even when the user navigates away.
   const pipelines = useBuildPipelineStore((state) => state.pipelines);
-  const backgroundPipelineEnvironments = useMemo(
-    () => getBackgroundPipelineEnvironments(pipelines, environments, selectedEnvironmentId, projectEnvironments),
-    [pipelines, environments, selectedEnvironmentId, projectEnvironments],
+  const backgroundProcessingEnvironments = useMemo(
+    () => getBackgroundProcessingEnvironments(
+      pipelines,
+      environments,
+      selectedEnvironmentId,
+      projectEnvironments,
+      setupScriptsRunning,
+    ),
+    [pipelines, environments, selectedEnvironmentId, projectEnvironments, setupScriptsRunning],
   );
 
   // Debug logging
@@ -418,9 +426,9 @@ function App() {
           {/* Background pipeline environments: kept mounted (but hidden) so their
               SSE subscriptions and pipeline-advancement effects continue running
               even when the user navigates to a different project or kanban view. */}
-          {backgroundPipelineEnvironments.length > 0 && (
+          {backgroundProcessingEnvironments.length > 0 && (
             <div className="hidden" aria-hidden="true">
-              {backgroundPipelineEnvironments.map((environment) => (
+              {backgroundProcessingEnvironments.map((environment) => (
                 <TerminalContainer
                   key={`bg-pipeline-${environment.id}`}
                   environmentId={environment.id}

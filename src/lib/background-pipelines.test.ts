@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { getBackgroundPipelineEnvironments } from "./background-pipelines";
+import { getBackgroundProcessingEnvironments } from "./background-pipelines";
 import type { BuildPipeline } from "@/stores/buildPipelineStore";
 import type { Environment } from "@/types";
 
@@ -38,9 +38,9 @@ function makePipeline(
   } as BuildPipeline;
 }
 
-describe("getBackgroundPipelineEnvironments", () => {
+describe("getBackgroundProcessingEnvironments", () => {
   test("returns empty array when there are no pipelines", () => {
-    const result = getBackgroundPipelineEnvironments(
+    const result = getBackgroundProcessingEnvironments(
       new Map(),
       [makeEnv("e1")],
       "e1",
@@ -53,7 +53,7 @@ describe("getBackgroundPipelineEnvironments", () => {
     const pipelines = new Map([
       ["p1", makePipeline("p1", "e1", "complete")],
     ]);
-    const result = getBackgroundPipelineEnvironments(
+    const result = getBackgroundProcessingEnvironments(
       pipelines,
       [makeEnv("e1")],
       null,
@@ -66,7 +66,7 @@ describe("getBackgroundPipelineEnvironments", () => {
     const pipelines = new Map([
       ["p1", makePipeline("p1", "e1", "failed")],
     ]);
-    const result = getBackgroundPipelineEnvironments(
+    const result = getBackgroundProcessingEnvironments(
       pipelines,
       [makeEnv("e1")],
       null,
@@ -79,7 +79,7 @@ describe("getBackgroundPipelineEnvironments", () => {
     const pipelines = new Map([
       ["p1", makePipeline("p1", "", "building")],
     ]);
-    const result = getBackgroundPipelineEnvironments(
+    const result = getBackgroundProcessingEnvironments(
       pipelines,
       [makeEnv("e1")],
       null,
@@ -94,7 +94,7 @@ describe("getBackgroundPipelineEnvironments", () => {
       ["p1", makePipeline("p1", "e1", "building")],
     ]);
     // No selected environment → nothing visible → e1 should be background
-    const result = getBackgroundPipelineEnvironments(
+    const result = getBackgroundProcessingEnvironments(
       pipelines,
       [env1],
       null,
@@ -110,7 +110,7 @@ describe("getBackgroundPipelineEnvironments", () => {
       ["p1", makePipeline("p1", "e1", "building")],
     ]);
     // e1 is in projectEnvironments and selectedEnvironmentId is set → visible
-    const result = getBackgroundPipelineEnvironments(
+    const result = getBackgroundProcessingEnvironments(
       pipelines,
       [env1],
       "e1",
@@ -126,7 +126,7 @@ describe("getBackgroundPipelineEnvironments", () => {
       ["p1", makePipeline("p1", "eA", "reviewing")],
     ]);
     // User is viewing proj-B; envB is the visible project env
-    const result = getBackgroundPipelineEnvironments(
+    const result = getBackgroundProcessingEnvironments(
       pipelines,
       [envA, envB],
       "eB",
@@ -146,7 +146,7 @@ describe("getBackgroundPipelineEnvironments", () => {
       ["p3", makePipeline("p3", "e3", "complete")], // complete — excluded
     ]);
     // User views proj-1, e1 is visible via projectEnvironments
-    const result = getBackgroundPipelineEnvironments(
+    const result = getBackgroundProcessingEnvironments(
       pipelines,
       [env1, env2, env3],
       "e1",
@@ -165,7 +165,7 @@ describe("getBackgroundPipelineEnvironments", () => {
       ["p2", makePipeline("p2", "e2", "creating-pr")],
     ]);
     // No selectedEnvironmentId → kanban or welcome view → nothing visible
-    const result = getBackgroundPipelineEnvironments(
+    const result = getBackgroundProcessingEnvironments(
       pipelines,
       [env1, env2],
       null,
@@ -194,7 +194,7 @@ describe("getBackgroundPipelineEnvironments", () => {
       const pipelines = new Map([
         ["p1", makePipeline("p1", "e1", phase)],
       ]);
-      const result = getBackgroundPipelineEnvironments(pipelines, [env], null, []);
+      const result = getBackgroundProcessingEnvironments(pipelines, [env], null, []);
       expect(result).toHaveLength(1);
     }
   });
@@ -203,12 +203,75 @@ describe("getBackgroundPipelineEnvironments", () => {
     const pipelines = new Map([
       ["p1", makePipeline("p1", "e-orphan", "building")],
     ]);
-    const result = getBackgroundPipelineEnvironments(
+    const result = getBackgroundProcessingEnvironments(
       pipelines,
       [makeEnv("e-other")],
       null,
       [],
     );
     expect(result).toEqual([]);
+  });
+
+  test("returns setup-running environments even without active pipelines", () => {
+    const env = makeEnv("e1");
+
+    const result = getBackgroundProcessingEnvironments(
+      new Map(),
+      [env],
+      null,
+      [],
+      new Set(["e1"]),
+    );
+
+    expect(result).toEqual([env]);
+  });
+
+  test("excludes setup-running environments already visible in the main content", () => {
+    const env = makeEnv("e1");
+
+    const result = getBackgroundProcessingEnvironments(
+      new Map(),
+      [env],
+      "e1",
+      [env],
+      new Set(["e1"]),
+    );
+
+    expect(result).toEqual([]);
+  });
+
+  test("treats paused pipelines as background processing candidates", () => {
+    const env = makeEnv("e1");
+    const pipelines = new Map([
+      ["p1", makePipeline("p1", "e1", "paused")],
+    ]);
+
+    const result = getBackgroundProcessingEnvironments(
+      pipelines,
+      [env],
+      null,
+      [],
+    );
+
+    expect(result).toEqual([env]);
+  });
+
+  test("returns the union of pipeline and setup-running environments without duplicates", () => {
+    const env1 = makeEnv("e1");
+    const env2 = makeEnv("e2");
+    const pipelines = new Map([
+      ["p1", makePipeline("p1", "e1", "building")],
+    ]);
+
+    const result = getBackgroundProcessingEnvironments(
+      pipelines,
+      [env1, env2],
+      null,
+      [],
+      new Set(["e1", "e2"]),
+    );
+
+    const ids = result.map((env) => env.id).sort();
+    expect(ids).toEqual(["e1", "e2"]);
   });
 });

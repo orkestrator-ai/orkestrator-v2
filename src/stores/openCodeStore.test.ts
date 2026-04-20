@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { ERROR_MESSAGE_PREFIX, type OpenCodeMessage, type PermissionRequest } from "../lib/opencode-client";
 import { OPTIMISTIC_MESSAGE_PREFIX } from "../lib/chat/client-only-messages";
 import { type OpenCodeAttachment, useOpenCodeStore } from "./openCodeStore";
@@ -812,5 +812,66 @@ describe("openCodeStore questions and event subscriptions", () => {
 
     expect(store.getQueueLength(queueA)).toBe(0);
     expect(store.getQueueLength(queueB)).toBe(1);
+  });
+
+  test("clearEnvironment removes legacy mode keys and tolerates stream close failures", async () => {
+    const store = useOpenCodeStore.getState();
+    const sessionKeyA = "env-env-1:tab-1";
+    const sessionKeyB = "env-env-2:tab-1";
+    const returnSpy = mock(async () => {
+      throw new Error("stream close failed");
+    });
+
+    const stream: AsyncIterable<any> = {
+      [Symbol.asyncIterator](): AsyncIterableIterator<any> {
+        return {
+          async next(): Promise<IteratorResult<any>> {
+            return { done: true as const, value: undefined };
+          },
+          return: returnSpy,
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+        };
+      },
+    };
+
+    store.setSession(sessionKeyA, {
+      sessionId: "session-a",
+      messages: [],
+      isLoading: false,
+    });
+    store.setSession(sessionKeyB, {
+      sessionId: "session-b",
+      messages: [],
+      isLoading: false,
+    });
+    store.addPendingQuestion({ id: "question-a", sessionID: "session-a" } as any);
+    store.addPendingQuestion({ id: "question-b", sessionID: "session-b" } as any);
+    store.addPendingPermission({ id: "permission-a", sessionID: "session-a" } as any);
+    store.addPendingPermission({ id: "permission-b", sessionID: "session-b" } as any);
+    store.setSelectedMode(sessionKeyA, "plan");
+    store.setSelectedMode(sessionKeyB, "build");
+    useOpenCodeStore.setState((state) => {
+      const selectedMode = new Map(state.selectedMode);
+      selectedMode.set("env-1", "plan");
+      return { selectedMode };
+    });
+
+    store.getOrCreateEventSubscription("env-1");
+    store.setEventStream("env-1", stream);
+
+    store.clearEnvironment("env-1");
+    await Promise.resolve();
+
+    expect(useOpenCodeStore.getState().selectedMode.get("env-1")).toBeUndefined();
+    expect(useOpenCodeStore.getState().selectedMode.get(sessionKeyA)).toBeUndefined();
+    expect(useOpenCodeStore.getState().selectedMode.get(sessionKeyB)).toBe("build");
+    expect(store.getPendingQuestion("question-a")).toBeUndefined();
+    expect(store.getPendingQuestion("question-b")?.id).toBe("question-b");
+    expect(store.getPendingPermission("permission-a")).toBeUndefined();
+    expect(store.getPendingPermission("permission-b")?.id).toBe("permission-b");
+    expect(store.hasActiveEventSubscription("env-1")).toBe(false);
+    expect(returnSpy).toHaveBeenCalledTimes(1);
   });
 });

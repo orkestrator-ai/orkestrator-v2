@@ -14,9 +14,14 @@ import {
   type ClaudeEffortLevel,
 } from "@/lib/claude-client";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
-import { reconcileTimedSession, updateTimedSessionLoading } from "@/lib/session-timer";
 import { createSessionKey } from "@/lib/utils";
-import type { FileMention } from "@/types";
+import {
+  createNativeChatStoreSlice,
+  pruneSessionKeyedMap,
+  type NativeChatStoreSlice,
+  type NativeServerStatus,
+  type NativeSessionState,
+} from "./createNativeChatStore";
 
 /**
  * Creates a unique session key for Claude sessions.
@@ -24,7 +29,6 @@ import type { FileMention } from "@/types";
  */
 export const createClaudeSessionKey = createSessionKey;
 
-// Re-export types for convenience
 export type { ClaudeSessionKey, ClaudeSdkSessionId, ClaudeEffortLevel };
 
 /** Shared event subscription state per environment */
@@ -34,24 +38,9 @@ export interface ClaudeEventSubscriptionState {
   isActive: boolean;
 }
 
-/** Server status for a container */
-export interface ClaudeServerStatus {
-  running: boolean;
-  hostPort: number | null;
-}
+export type ClaudeServerStatus = NativeServerStatus;
+export type ClaudeSessionState = NativeSessionState<ClaudeMessage>;
 
-/** Session state for an environment */
-export interface ClaudeSessionState {
-  sessionId: string;
-  messages: ClaudeMessage[];
-  isLoading: boolean;
-  loadingStartedAt?: number;
-  lastCompletedElapsedSeconds?: number | null;
-  error?: string;
-  title?: string;
-}
-
-/** Attachment types for compose bar */
 export interface ClaudeAttachment {
   id: string;
   type: "file" | "image";
@@ -60,7 +49,6 @@ export interface ClaudeAttachment {
   name: string;
 }
 
-/** Queued message for sending when session becomes idle */
 export interface QueuedMessage {
   id: string;
   text: string;
@@ -69,386 +57,211 @@ export interface QueuedMessage {
   planModeEnabled: boolean;
 }
 
-interface ClaudeState {
-  // State keyed by environmentId (raw environment UUID)
-  serverStatus: Map<string, ClaudeServerStatus>;
-  clients: Map<string, ClaudeClient>;
-  eventSubscriptions: Map<string, ClaudeEventSubscriptionState>;
+/**
+ * Preserve client-only Claude messages (errors and system messages like
+ * compact notifications) when applying a server fetch. These messages exist
+ * only on the client and would be lost otherwise. Insertion is timestamp-based
+ * so they sit in the right place in the history.
+ */
+function mergeClaudeMessagesPreservingClientOnly(
+  existing: ClaudeMessage[],
+  incoming: ClaudeMessage[],
+): ClaudeMessage[] {
+  const existingClientMessages = existing.filter(
+    (m) =>
+      m.id.startsWith(ERROR_MESSAGE_PREFIX) ||
+      m.id.startsWith(SYSTEM_MESSAGE_PREFIX),
+  );
+  if (existingClientMessages.length === 0) return incoming;
 
-  // State keyed by sessionKey (format: "env-{environmentId}:{tabId}")
-  // Use createClaudeSessionKey() to generate these keys
-  sessions: Map<ClaudeSessionKey, ClaudeSessionState>;
-  attachments: Map<ClaudeSessionKey, ClaudeAttachment[]>;
-  draftText: Map<ClaudeSessionKey, string>;
-  draftMentions: Map<ClaudeSessionKey, FileMention[]>;
+  const merged = [...incoming];
+  for (const clientMsg of existingClientMessages) {
+    const clientTime = new Date(clientMsg.timestamp || 0).getTime();
+    let insertIndex = merged.length;
+    for (let i = merged.length - 1; i >= 0; i--) {
+      const msg = merged[i];
+      if (!msg) continue;
+      const msgTime = new Date(msg.timestamp || 0).getTime();
+      if (msgTime <= clientTime) {
+        insertIndex = i + 1;
+        break;
+      }
+      if (i === 0 && msgTime > clientTime) {
+        insertIndex = 0;
+      }
+    }
+    merged.splice(insertIndex, 0, clientMsg);
+  }
+  return merged;
+}
+
+type ClaudeChatSlice = NativeChatStoreSlice<
+  ClaudeClient,
+  ClaudeMessage,
+  ClaudeAttachment,
+  QueuedMessage
+>;
+
+interface ClaudeState extends ClaudeChatSlice {
+  // Agent-specific state
+  models: ClaudeModel[];
+  eventSubscriptions: Map<string, ClaudeEventSubscriptionState>;
   isComposing: Map<ClaudeSessionKey, boolean>;
   effort: Map<ClaudeSessionKey, ClaudeEffortLevel>;
   planMode: Map<ClaudeSessionKey, boolean>;
   selectedModel: Map<ClaudeSessionKey, string>;
-  messageQueue: Map<ClaudeSessionKey, QueuedMessage[]>;
   sessionInitData: Map<string, SessionInitData>;
   contextUsage: Map<ClaudeSessionKey, ContextUsageSnapshot>;
-
-  // State keyed by request/question ID
   pendingQuestions: Map<string, ClaudeQuestionRequest>;
   pendingPlanApprovals: Map<string, ClaudePlanApprovalRequest>;
 
-  // Global state
-  models: ClaudeModel[];
-
-  // Actions - keyed by environmentId
-  setServerStatus: (environmentId: string, status: ClaudeServerStatus) => void;
-  setClient: (environmentId: string, client: ClaudeClient | null) => void;
-  getClient: (environmentId: string) => ClaudeClient | undefined;
+  // Agent-specific actions
   setModels: (models: ClaudeModel[]) => void;
-
-  // Actions - keyed by sessionKey (use createClaudeSessionKey to generate)
   setSelectedModel: (sessionKey: ClaudeSessionKey, modelId: string) => void;
-  setSession: (sessionKey: ClaudeSessionKey, session: ClaudeSessionState | null) => void;
-  addMessage: (sessionKey: ClaudeSessionKey, message: ClaudeMessage) => void;
-  removeMessage: (sessionKey: ClaudeSessionKey, messageId: string) => void;
-  setMessages: (sessionKey: ClaudeSessionKey, messages: ClaudeMessage[]) => void;
-  setSessionLoading: (sessionKey: ClaudeSessionKey, isLoading: boolean) => void;
-  setSessionError: (sessionKey: ClaudeSessionKey, error: string | undefined) => void;
-  setSessionTitle: (sessionKey: ClaudeSessionKey, title: string) => void;
-  addAttachment: (sessionKey: ClaudeSessionKey, attachment: ClaudeAttachment) => void;
-  removeAttachment: (sessionKey: ClaudeSessionKey, attachmentId: string) => void;
-  clearAttachments: (sessionKey: ClaudeSessionKey) => void;
-  setDraftText: (sessionKey: ClaudeSessionKey, text: string) => void;
-  setDraftMentions: (sessionKey: ClaudeSessionKey, mentions: FileMention[]) => void;
   setComposing: (sessionKey: ClaudeSessionKey, isComposing: boolean) => void;
   setEffort: (sessionKey: ClaudeSessionKey, effort: ClaudeEffortLevel) => void;
   setPlanMode: (sessionKey: ClaudeSessionKey, enabled: boolean) => void;
-  setSessionInitData: (environmentId: string, initData: SessionInitData | null) => void;
-  setContextUsage: (sessionKey: ClaudeSessionKey, usage: ContextUsageSnapshot | null) => void;
+  setSessionInitData: (
+    environmentId: string,
+    initData: SessionInitData | null,
+  ) => void;
+  setContextUsage: (
+    sessionKey: ClaudeSessionKey,
+    usage: ContextUsageSnapshot | null,
+  ) => void;
   clearEnvironment: (environmentId: string) => void;
-
-  // Queue actions - keyed by sessionKey
-  addToQueue: (sessionKey: ClaudeSessionKey, message: QueuedMessage) => void;
-  removeFromQueue: (sessionKey: ClaudeSessionKey) => QueuedMessage | undefined;
-  removeQueueItem: (sessionKey: ClaudeSessionKey, messageId: string) => void;
-  moveQueueItem: (sessionKey: ClaudeSessionKey, fromIndex: number, toIndex: number) => void;
-  clearQueue: (sessionKey: ClaudeSessionKey) => void;
-  getQueueLength: (sessionKey: ClaudeSessionKey) => number;
-  getQueuedMessages: (sessionKey: ClaudeSessionKey) => QueuedMessage[];
 
   addPendingQuestion: (question: ClaudeQuestionRequest) => void;
   removePendingQuestion: (requestId: string) => void;
   addPendingPlanApproval: (approval: ClaudePlanApprovalRequest) => void;
   removePendingPlanApproval: (requestId: string) => void;
-  getOrCreateEventSubscription: (environmentId: string) => ClaudeEventSubscriptionState | null;
-  setEventStream: (environmentId: string, stream: AsyncIterable<ClaudeEvent> | null) => void;
+
+  getOrCreateEventSubscription: (
+    environmentId: string,
+  ) => ClaudeEventSubscriptionState | null;
+  setEventStream: (
+    environmentId: string,
+    stream: AsyncIterable<ClaudeEvent> | null,
+  ) => void;
   closeEventSubscription: (environmentId: string) => void;
   hasActiveEventSubscription: (environmentId: string) => boolean;
 
-  // Selectors - keyed by environmentId
-  getServerStatus: (environmentId: string) => ClaudeServerStatus | undefined;
-
-  // Selectors - keyed by sessionKey
-  getSession: (sessionKey: ClaudeSessionKey) => ClaudeSessionState | undefined;
+  // Selectors
   getSelectedModel: (sessionKey: ClaudeSessionKey) => string | undefined;
-  getAttachments: (sessionKey: ClaudeSessionKey) => ClaudeAttachment[];
-  getDraftText: (sessionKey: ClaudeSessionKey) => string;
-  getDraftMentions: (sessionKey: ClaudeSessionKey) => FileMention[];
   isComposingFor: (sessionKey: ClaudeSessionKey) => boolean;
   getEffort: (sessionKey: ClaudeSessionKey) => ClaudeEffortLevel;
   isPlanMode: (sessionKey: ClaudeSessionKey) => boolean;
   getSessionInitData: (environmentId: string) => SessionInitData | undefined;
-  getContextUsage: (sessionKey: ClaudeSessionKey) => ContextUsageSnapshot | undefined;
-
-  // Selectors - keyed by SDK session ID
-  getPendingQuestionsForSession: (sdkSessionId: ClaudeSdkSessionId) => ClaudeQuestionRequest[];
+  getContextUsage: (
+    sessionKey: ClaudeSessionKey,
+  ) => ContextUsageSnapshot | undefined;
+  getPendingQuestionsForSession: (
+    sdkSessionId: ClaudeSdkSessionId,
+  ) => ClaudeQuestionRequest[];
   getPendingQuestion: (requestId: string) => ClaudeQuestionRequest | undefined;
-  getPendingPlanApprovalsForSession: (sdkSessionId: ClaudeSdkSessionId) => ClaudePlanApprovalRequest[];
-  getPendingPlanApproval: (requestId: string) => ClaudePlanApprovalRequest | undefined;
+  getPendingPlanApprovalsForSession: (
+    sdkSessionId: ClaudeSdkSessionId,
+  ) => ClaudePlanApprovalRequest[];
+  getPendingPlanApproval: (
+    requestId: string,
+  ) => ClaudePlanApprovalRequest | undefined;
 
   /**
    * Find the sessionKey (store Map key) for a given SDK session ID.
-   * This is useful when handling SSE events that include the SDK session ID
-   * but need to update state in the store which is keyed by sessionKey.
-   *
-   * @param sdkSessionId - The Claude SDK session ID (e.g., "session-{uuid}")
-   * @returns The sessionKey if found, null otherwise
+   * Useful when handling SSE events that include the SDK session ID but
+   * need to update state keyed by sessionKey.
    */
-  getSessionKeyBySdkSessionId: (sdkSessionId: ClaudeSdkSessionId) => ClaudeSessionKey | null;
+  getSessionKeyBySdkSessionId: (
+    sdkSessionId: ClaudeSdkSessionId,
+  ) => ClaudeSessionKey | null;
 }
 
-export const useClaudeStore = create<ClaudeState>()((set, get) => ({
-  // Initial state
-  serverStatus: new Map(),
-  sessions: new Map(),
-  clients: new Map(),
+export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
+  ...createNativeChatStoreSlice<
+    ClaudeClient,
+    ClaudeMessage,
+    ClaudeAttachment,
+    QueuedMessage
+  >({ mergeMessages: mergeClaudeMessagesPreservingClientOnly })(set, get, api),
+
+  // Agent-specific state
   models: [],
-  selectedModel: new Map(),
-  attachments: new Map(),
-  draftText: new Map(),
-  draftMentions: new Map(),
-  isComposing: new Map(),
-  pendingQuestions: new Map(),
-  pendingPlanApprovals: new Map(),
   eventSubscriptions: new Map(),
+  isComposing: new Map(),
   effort: new Map(),
   planMode: new Map(),
-  messageQueue: new Map(),
+  selectedModel: new Map(),
   sessionInitData: new Map(),
   contextUsage: new Map(),
+  pendingQuestions: new Map(),
+  pendingPlanApprovals: new Map(),
 
-  // Actions
-  setServerStatus: (environmentId, status) =>
-    set((state) => {
-      const newMap = new Map(state.serverStatus);
-      newMap.set(environmentId, status);
-      return { serverStatus: newMap };
-    }),
-
-  setClient: (environmentId, client) =>
-    set((state) => {
-      const newMap = new Map(state.clients);
-      if (client) {
-        newMap.set(environmentId, client);
-      } else {
-        newMap.delete(environmentId);
-      }
-      return { clients: newMap };
-    }),
-
-  getClient: (environmentId) => get().clients.get(environmentId),
-
+  // Agent-specific actions
   setModels: (models) => set({ models }),
 
   setSelectedModel: (sessionKey, modelId) =>
     set((state) => {
-      const newMap = new Map(state.selectedModel);
-      newMap.set(sessionKey, modelId);
-      return { selectedModel: newMap };
-    }),
-
-  setSession: (sessionKey, session) =>
-    set((state) => {
-      const newMap = new Map(state.sessions);
-      if (session) {
-        const previous = state.sessions.get(sessionKey);
-        newMap.set(
-          sessionKey,
-          reconcileTimedSession(
-            previous?.sessionId === session.sessionId ? previous : undefined,
-            session,
-          ),
-        );
-      } else {
-        newMap.delete(sessionKey);
-      }
-      return { sessions: newMap };
-    }),
-
-  addMessage: (sessionKey, message) =>
-    set((state) => {
-      const session = state.sessions.get(sessionKey);
-      if (!session) return state;
-
-      const newMap = new Map(state.sessions);
-      newMap.set(sessionKey, {
-        ...session,
-        messages: [...session.messages, message],
-      });
-      return { sessions: newMap };
-    }),
-
-  removeMessage: (sessionKey, messageId) =>
-    set((state) => {
-      const session = state.sessions.get(sessionKey);
-      if (!session) return state;
-
-      const filtered = session.messages.filter((m) => m.id !== messageId);
-      if (filtered.length === session.messages.length) return state;
-
-      const newMap = new Map(state.sessions);
-      newMap.set(sessionKey, { ...session, messages: filtered });
-      return { sessions: newMap };
-    }),
-
-  setMessages: (sessionKey, messages) =>
-    set((state) => {
-      const session = state.sessions.get(sessionKey);
-      if (!session) return state;
-
-      // Preserve client-side messages (errors and system messages like compact notifications)
-      // These exist only on the client and would be lost when fetching from server
-      const existingClientMessages = session.messages.filter(
-        (m) => m.id.startsWith(ERROR_MESSAGE_PREFIX) || m.id.startsWith(SYSTEM_MESSAGE_PREFIX)
-      );
-
-      if (existingClientMessages.length === 0) {
-        const newMap = new Map(state.sessions);
-        newMap.set(sessionKey, {
-          ...session,
-          messages,
-        });
-        return { sessions: newMap };
-      }
-
-      // Merge client-side messages into server messages based on timestamp
-      const mergedMessages = [...messages];
-      for (const clientMsg of existingClientMessages) {
-        const clientTime = new Date(clientMsg.timestamp || 0).getTime();
-        let insertIndex = mergedMessages.length;
-        for (let i = mergedMessages.length - 1; i >= 0; i--) {
-          const msg = mergedMessages[i];
-          if (!msg) continue;
-          const msgTime = new Date(msg.timestamp || 0).getTime();
-          if (msgTime <= clientTime) {
-            insertIndex = i + 1;
-            break;
-          }
-          if (i === 0 && msgTime > clientTime) {
-            insertIndex = 0;
-          }
-        }
-        mergedMessages.splice(insertIndex, 0, clientMsg);
-      }
-
-      const newMap = new Map(state.sessions);
-      newMap.set(sessionKey, {
-        ...session,
-        messages: mergedMessages,
-      });
-      return { sessions: newMap };
-    }),
-
-  setSessionLoading: (sessionKey, isLoading) =>
-    set((state) => {
-      const session = state.sessions.get(sessionKey);
-      if (!session) return state;
-
-      const newMap = new Map(state.sessions);
-      newMap.set(sessionKey, updateTimedSessionLoading(session, isLoading));
-      return { sessions: newMap };
-    }),
-
-  setSessionError: (sessionKey, error) =>
-    set((state) => {
-      const session = state.sessions.get(sessionKey);
-      if (!session) return state;
-
-      const newMap = new Map(state.sessions);
-      newMap.set(sessionKey, {
-        ...session,
-        error,
-      });
-      return { sessions: newMap };
-    }),
-
-  setSessionTitle: (sessionKey, title) =>
-    set((state) => {
-      const session = state.sessions.get(sessionKey);
-      if (!session) return state;
-
-      const newMap = new Map(state.sessions);
-      newMap.set(sessionKey, {
-        ...session,
-        title,
-      });
-      return { sessions: newMap };
-    }),
-
-  addAttachment: (sessionKey, attachment) =>
-    set((state) => {
-      const current = state.attachments.get(sessionKey) || [];
-      const newMap = new Map(state.attachments);
-      newMap.set(sessionKey, [...current, attachment]);
-      return { attachments: newMap };
-    }),
-
-  removeAttachment: (sessionKey, attachmentId) =>
-    set((state) => {
-      const current = state.attachments.get(sessionKey) || [];
-      const newMap = new Map(state.attachments);
-      newMap.set(
-        sessionKey,
-        current.filter((a) => a.id !== attachmentId)
-      );
-      return { attachments: newMap };
-    }),
-
-  clearAttachments: (sessionKey) =>
-    set((state) => {
-      const newMap = new Map(state.attachments);
-      newMap.set(sessionKey, []);
-      return { attachments: newMap };
-    }),
-
-  setDraftText: (sessionKey, text) =>
-    set((state) => {
-      const newMap = new Map(state.draftText);
-      if (text) {
-        newMap.set(sessionKey, text);
-      } else {
-        newMap.delete(sessionKey);
-      }
-      return { draftText: newMap };
-    }),
-
-  setDraftMentions: (sessionKey, mentions) =>
-    set((state) => {
-      const newMap = new Map(state.draftMentions);
-      if (mentions.length > 0) {
-        newMap.set(sessionKey, mentions);
-      } else {
-        newMap.delete(sessionKey);
-      }
-      return { draftMentions: newMap };
+      const next = new Map(state.selectedModel);
+      next.set(sessionKey, modelId);
+      return { selectedModel: next };
     }),
 
   setComposing: (sessionKey, isComposing) =>
     set((state) => {
-      const newMap = new Map(state.isComposing);
-      newMap.set(sessionKey, isComposing);
-      return { isComposing: newMap };
+      const next = new Map(state.isComposing);
+      next.set(sessionKey, isComposing);
+      return { isComposing: next };
     }),
 
   setEffort: (sessionKey, effortLevel) =>
     set((state) => {
-      const newMap = new Map(state.effort);
-      newMap.set(sessionKey, effortLevel);
-      return { effort: newMap };
+      const next = new Map(state.effort);
+      next.set(sessionKey, effortLevel);
+      return { effort: next };
     }),
 
   setPlanMode: (sessionKey, enabled) =>
     set((state) => {
-      const newMap = new Map(state.planMode);
-      newMap.set(sessionKey, enabled);
-      return { planMode: newMap };
+      const next = new Map(state.planMode);
+      next.set(sessionKey, enabled);
+      return { planMode: next };
     }),
 
   setSessionInitData: (environmentId, initData) =>
     set((state) => {
-      const newMap = new Map(state.sessionInitData);
+      const next = new Map(state.sessionInitData);
       if (initData) {
-        newMap.set(environmentId, initData);
+        next.set(environmentId, initData);
       } else {
-        newMap.delete(environmentId);
+        next.delete(environmentId);
       }
-      return { sessionInitData: newMap };
+      return { sessionInitData: next };
     }),
 
   setContextUsage: (sessionKey, usage) =>
     set((state) => {
-      const newMap = new Map(state.contextUsage);
+      const next = new Map(state.contextUsage);
       if (usage) {
-        newMap.set(sessionKey, usage);
+        next.set(sessionKey, usage);
       } else {
-        newMap.delete(sessionKey);
+        next.delete(sessionKey);
       }
-      return { contextUsage: newMap };
+      return { contextUsage: next };
     }),
 
   clearEnvironment: (environmentId) => {
     // First close the event subscription if it exists
     const subscription = get().eventSubscriptions.get(environmentId);
     if (subscription) {
-      console.log("[claudeStore] Closing event subscription during environment cleanup:", environmentId);
+      console.log(
+        "[claudeStore] Closing event subscription during environment cleanup:",
+        environmentId,
+      );
       subscription.abortController.abort();
-      if (subscription.stream && Symbol.asyncIterator in subscription.stream) {
+      if (
+        subscription.stream &&
+        Symbol.asyncIterator in subscription.stream
+      ) {
         const iterator = subscription.stream[Symbol.asyncIterator]();
         if (iterator.return) {
           iterator.return().catch(() => {});
@@ -456,192 +269,87 @@ export const useClaudeStore = create<ClaudeState>()((set, get) => ({
       }
     }
 
-    // Then clear all state
     set((state) => {
-      // Maps keyed by environmentId (raw UUID)
-      const newServerStatus = new Map(state.serverStatus);
-      const newClients = new Map(state.clients);
-      const newEventSubscriptions = new Map(state.eventSubscriptions);
-      const newSessionInitData = new Map(state.sessionInitData);
+      const nextServerStatus = new Map(state.serverStatus);
+      const nextClients = new Map(state.clients);
+      const nextEventSubscriptions = new Map(state.eventSubscriptions);
+      const nextSessionInitData = new Map(state.sessionInitData);
 
-      newServerStatus.delete(environmentId);
-      newClients.delete(environmentId);
-      newEventSubscriptions.delete(environmentId);
-      newSessionInitData.delete(environmentId);
+      nextServerStatus.delete(environmentId);
+      nextClients.delete(environmentId);
+      nextEventSubscriptions.delete(environmentId);
+      nextSessionInitData.delete(environmentId);
 
-      // Maps keyed by sessionKey (format: "env-{environmentId}:{tabId}")
-      // Must iterate and delete all keys matching this environment
-      const sessionKeyPrefix = `env-${environmentId}:`;
+      const prefix = `env-${environmentId}:`;
 
-      const newSessions = new Map(state.sessions);
-      const newSelectedModel = new Map(state.selectedModel);
-      const newAttachments = new Map(state.attachments);
-      const newDraftText = new Map(state.draftText);
-      const newDraftMentions = new Map(state.draftMentions);
-      const newIsComposing = new Map(state.isComposing);
-      const newEffort = new Map(state.effort);
-      const newPlanMode = new Map(state.planMode);
-      const newMessageQueue = new Map(state.messageQueue);
-      const newContextUsage = new Map(state.contextUsage);
-
-      // Collect session IDs for pending question cleanup before deleting sessions
+      // Collect session IDs for pending question cleanup before pruning sessions
       const sessionIdsToCleanup: string[] = [];
-      for (const [key, session] of newSessions) {
-        if (key.startsWith(sessionKeyPrefix)) {
+      for (const [key, session] of state.sessions) {
+        if (key.startsWith(prefix)) {
           sessionIdsToCleanup.push(session.sessionId);
         }
       }
 
-      // Delete sessionKey-keyed entries for this environment
-      for (const key of newSessions.keys()) {
-        if (key.startsWith(sessionKeyPrefix)) newSessions.delete(key);
-      }
-      for (const key of newSelectedModel.keys()) {
-        if (key.startsWith(sessionKeyPrefix)) newSelectedModel.delete(key);
-      }
-      for (const key of newAttachments.keys()) {
-        if (key.startsWith(sessionKeyPrefix)) newAttachments.delete(key);
-      }
-      for (const key of newDraftText.keys()) {
-        if (key.startsWith(sessionKeyPrefix)) newDraftText.delete(key);
-      }
-      for (const key of newDraftMentions.keys()) {
-        if (key.startsWith(sessionKeyPrefix)) newDraftMentions.delete(key);
-      }
-      for (const key of newIsComposing.keys()) {
-        if (key.startsWith(sessionKeyPrefix)) newIsComposing.delete(key);
-      }
-      for (const key of newEffort.keys()) {
-        if (key.startsWith(sessionKeyPrefix)) newEffort.delete(key);
-      }
-      for (const key of newPlanMode.keys()) {
-        if (key.startsWith(sessionKeyPrefix)) newPlanMode.delete(key);
-      }
-      for (const key of newMessageQueue.keys()) {
-        if (key.startsWith(sessionKeyPrefix)) newMessageQueue.delete(key);
-      }
-      for (const key of newContextUsage.keys()) {
-        if (key.startsWith(sessionKeyPrefix)) newContextUsage.delete(key);
-      }
-
-      // Remove pending questions and plan approvals for this environment's sessions
-      const newPendingQuestions = new Map(state.pendingQuestions);
-      const newPendingPlanApprovals = new Map(state.pendingPlanApprovals);
-
-      for (const [requestId, question] of newPendingQuestions) {
+      const nextPendingQuestions = new Map(state.pendingQuestions);
+      const nextPendingPlanApprovals = new Map(state.pendingPlanApprovals);
+      for (const [requestId, question] of nextPendingQuestions) {
         if (sessionIdsToCleanup.includes(question.sessionId)) {
-          newPendingQuestions.delete(requestId);
+          nextPendingQuestions.delete(requestId);
         }
       }
-      for (const [requestId, approval] of newPendingPlanApprovals) {
+      for (const [requestId, approval] of nextPendingPlanApprovals) {
         if (sessionIdsToCleanup.includes(approval.sessionId)) {
-          newPendingPlanApprovals.delete(requestId);
+          nextPendingPlanApprovals.delete(requestId);
         }
       }
 
       return {
-        serverStatus: newServerStatus,
-        sessions: newSessions,
-        clients: newClients,
-        selectedModel: newSelectedModel,
-        attachments: newAttachments,
-        draftText: newDraftText,
-        draftMentions: newDraftMentions,
-        isComposing: newIsComposing,
-        pendingQuestions: newPendingQuestions,
-        pendingPlanApprovals: newPendingPlanApprovals,
-        eventSubscriptions: newEventSubscriptions,
-        effort: newEffort,
-        planMode: newPlanMode,
-        messageQueue: newMessageQueue,
-        sessionInitData: newSessionInitData,
-        contextUsage: newContextUsage,
+        serverStatus: nextServerStatus,
+        sessions: pruneSessionKeyedMap(state.sessions, prefix),
+        clients: nextClients,
+        selectedModel: pruneSessionKeyedMap(state.selectedModel, prefix),
+        attachments: pruneSessionKeyedMap(state.attachments, prefix),
+        draftText: pruneSessionKeyedMap(state.draftText, prefix),
+        draftMentions: pruneSessionKeyedMap(state.draftMentions, prefix),
+        isComposing: pruneSessionKeyedMap(state.isComposing, prefix),
+        effort: pruneSessionKeyedMap(state.effort, prefix),
+        planMode: pruneSessionKeyedMap(state.planMode, prefix),
+        messageQueue: pruneSessionKeyedMap(state.messageQueue, prefix),
+        contextUsage: pruneSessionKeyedMap(state.contextUsage, prefix),
+        pendingQuestions: nextPendingQuestions,
+        pendingPlanApprovals: nextPendingPlanApprovals,
+        eventSubscriptions: nextEventSubscriptions,
+        sessionInitData: nextSessionInitData,
       };
     });
   },
 
-  // Queue actions
-  addToQueue: (sessionKey, message) =>
-    set((state) => {
-      const current = state.messageQueue.get(sessionKey) || [];
-      const newMap = new Map(state.messageQueue);
-      newMap.set(sessionKey, [...current, message]);
-      return { messageQueue: newMap };
-    }),
-
-  removeFromQueue: (sessionKey) => {
-    const state = get();
-    const current = state.messageQueue.get(sessionKey) || [];
-    if (current.length === 0) return undefined;
-
-    const [first, ...rest] = current;
-    const newMap = new Map(state.messageQueue);
-    newMap.set(sessionKey, rest);
-    set({ messageQueue: newMap });
-    return first;
-  },
-
-  clearQueue: (sessionKey) =>
-    set((state) => {
-      const newMap = new Map(state.messageQueue);
-      newMap.set(sessionKey, []);
-      return { messageQueue: newMap };
-    }),
-
-  getQueueLength: (sessionKey) => {
-    const queue = get().messageQueue.get(sessionKey);
-    return queue?.length || 0;
-  },
-
-  removeQueueItem: (sessionKey, messageId) =>
-    set((state) => {
-      const current = state.messageQueue.get(sessionKey) || [];
-      const newMap = new Map(state.messageQueue);
-      newMap.set(sessionKey, current.filter((m) => m.id !== messageId));
-      return { messageQueue: newMap };
-    }),
-
-  moveQueueItem: (sessionKey, fromIndex, toIndex) =>
-    set((state) => {
-      const current = [...(state.messageQueue.get(sessionKey) || [])];
-      if (fromIndex < 0 || fromIndex >= current.length || toIndex < 0 || toIndex >= current.length) return {};
-      const [item] = current.splice(fromIndex, 1);
-      if (item) current.splice(toIndex, 0, item);
-      const newMap = new Map(state.messageQueue);
-      newMap.set(sessionKey, current);
-      return { messageQueue: newMap };
-    }),
-
-  getQueuedMessages: (sessionKey) => {
-    return get().messageQueue.get(sessionKey) || [];
-  },
-
   addPendingQuestion: (question) =>
     set((state) => {
-      const newMap = new Map(state.pendingQuestions);
-      newMap.set(question.id, question);
-      return { pendingQuestions: newMap };
+      const next = new Map(state.pendingQuestions);
+      next.set(question.id, question);
+      return { pendingQuestions: next };
     }),
 
   removePendingQuestion: (requestId) =>
     set((state) => {
-      const newMap = new Map(state.pendingQuestions);
-      newMap.delete(requestId);
-      return { pendingQuestions: newMap };
+      const next = new Map(state.pendingQuestions);
+      next.delete(requestId);
+      return { pendingQuestions: next };
     }),
 
   addPendingPlanApproval: (approval) =>
     set((state) => {
-      const newMap = new Map(state.pendingPlanApprovals);
-      newMap.set(approval.id, approval);
-      return { pendingPlanApprovals: newMap };
+      const next = new Map(state.pendingPlanApprovals);
+      next.set(approval.id, approval);
+      return { pendingPlanApprovals: next };
     }),
 
   removePendingPlanApproval: (requestId) =>
     set((state) => {
-      const newMap = new Map(state.pendingPlanApprovals);
-      newMap.delete(requestId);
-      return { pendingPlanApprovals: newMap };
+      const next = new Map(state.pendingPlanApprovals);
+      next.delete(requestId);
+      return { pendingPlanApprovals: next };
     }),
 
   getOrCreateEventSubscription: (environmentId) => {
@@ -649,20 +357,26 @@ export const useClaudeStore = create<ClaudeState>()((set, get) => ({
     const existing = state.eventSubscriptions.get(environmentId);
 
     if (existing && existing.isActive) {
-      console.log("[claudeStore] Reusing existing event subscription for environment:", environmentId);
+      console.log(
+        "[claudeStore] Reusing existing event subscription for environment:",
+        environmentId,
+      );
       return existing;
     }
 
-    console.log("[claudeStore] Creating new event subscription for environment:", environmentId);
+    console.log(
+      "[claudeStore] Creating new event subscription for environment:",
+      environmentId,
+    );
     const newSubscription: ClaudeEventSubscriptionState = {
       abortController: new AbortController(),
       stream: null,
       isActive: true,
     };
 
-    const newMap = new Map(state.eventSubscriptions);
-    newMap.set(environmentId, newSubscription);
-    set({ eventSubscriptions: newMap });
+    const next = new Map(state.eventSubscriptions);
+    next.set(environmentId, newSubscription);
+    set({ eventSubscriptions: next });
 
     return newSubscription;
   },
@@ -671,20 +385,21 @@ export const useClaudeStore = create<ClaudeState>()((set, get) => ({
     set((state) => {
       const subscription = state.eventSubscriptions.get(environmentId);
       if (!subscription) return state;
-
-      const newMap = new Map(state.eventSubscriptions);
+      const next = new Map(state.eventSubscriptions);
       const isActive = stream !== null;
-      newMap.set(environmentId, { ...subscription, stream, isActive });
-      return { eventSubscriptions: newMap };
+      next.set(environmentId, { ...subscription, stream, isActive });
+      return { eventSubscriptions: next };
     }),
 
   closeEventSubscription: (environmentId) => {
     const state = get();
     const subscription = state.eventSubscriptions.get(environmentId);
-
     if (!subscription) return;
 
-    console.log("[claudeStore] Closing event subscription for environment:", environmentId);
+    console.log(
+      "[claudeStore] Closing event subscription for environment:",
+      environmentId,
+    );
 
     subscription.abortController.abort();
 
@@ -695,9 +410,9 @@ export const useClaudeStore = create<ClaudeState>()((set, get) => ({
       }
     }
 
-    const newMap = new Map(state.eventSubscriptions);
-    newMap.delete(environmentId);
-    set({ eventSubscriptions: newMap });
+    const next = new Map(state.eventSubscriptions);
+    next.delete(environmentId);
+    set({ eventSubscriptions: next });
   },
 
   hasActiveEventSubscription: (environmentId) => {
@@ -705,33 +420,17 @@ export const useClaudeStore = create<ClaudeState>()((set, get) => ({
     return subscription?.isActive ?? false;
   },
 
-  // Selectors - keyed by environmentId
-  getServerStatus: (environmentId) => get().serverStatus.get(environmentId),
-
-  // Selectors - keyed by sessionKey
-  getSession: (sessionKey) => get().sessions.get(sessionKey),
-
+  // Selectors
   getSelectedModel: (sessionKey) => get().selectedModel.get(sessionKey),
-
-  getAttachments: (sessionKey) => get().attachments.get(sessionKey) || [],
-
-  getDraftText: (sessionKey) => get().draftText.get(sessionKey) || "",
-
-  getDraftMentions: (sessionKey) => get().draftMentions.get(sessionKey) || [],
-
-  isComposingFor: (sessionKey) => get().isComposing.get(sessionKey) || false,
-
+  isComposingFor: (sessionKey) => get().isComposing.get(sessionKey) ?? false,
   // Default to "high" effort if not explicitly set
   getEffort: (sessionKey) => get().effort.get(sessionKey) ?? "high",
-
   // Default to false (plan mode disabled) - uses bypassPermissions by default
   isPlanMode: (sessionKey) => get().planMode.get(sessionKey) ?? false,
-
-  getSessionInitData: (environmentId) => get().sessionInitData.get(environmentId),
-
+  getSessionInitData: (environmentId) =>
+    get().sessionInitData.get(environmentId),
   getContextUsage: (sessionKey) => get().contextUsage.get(sessionKey),
 
-  // Selectors - keyed by SDK session ID
   getPendingQuestionsForSession: (sdkSessionId) => {
     const questions: ClaudeQuestionRequest[] = [];
     for (const question of get().pendingQuestions.values()) {
@@ -754,13 +453,9 @@ export const useClaudeStore = create<ClaudeState>()((set, get) => ({
     return approvals;
   },
 
-  getPendingPlanApproval: (requestId) => get().pendingPlanApprovals.get(requestId),
+  getPendingPlanApproval: (requestId) =>
+    get().pendingPlanApprovals.get(requestId),
 
-  /**
-   * Find the sessionKey (store Map key) for a given SDK session ID.
-   * This is useful when handling SSE events that include the SDK session ID
-   * but need to update state in the store which is keyed by sessionKey.
-   */
   getSessionKeyBySdkSessionId: (sdkSessionId) => {
     const sessions = get().sessions;
     for (const [sessionKey, sessionState] of sessions) {

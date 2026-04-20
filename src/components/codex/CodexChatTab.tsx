@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, ArrowDown, History, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { useElapsedTimer } from "@/hooks/useElapsedTimer";
-import { useScrollLock } from "@/hooks/useScrollLock";
+import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
+import { useElapsedTimer, useVirtuosoScrollState } from "@/hooks";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useCodexStore, createCodexSessionKey, useConfigStore } from "@/stores";
 import {
@@ -79,7 +78,6 @@ export function CodexChatTab({
   initialPrompt,
 }: CodexChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
-  const scrollRef = useRef<HTMLDivElement>(null);
   // Initialize as "connected" if we already have a client and session from a previous init.
   // This avoids even a single frame of spinner when switching back to an already-connected env.
   const [connectionState, setConnectionState] = useState<ConnectionState>(() => {
@@ -214,12 +212,26 @@ export function CodexChatTab({
     session?.lastCompletedElapsedSeconds,
   );
 
-  const { isAtBottom, scrollToBottom } = useScrollLock(scrollRef, {
-    scrollTrigger: sessionMessages,
-    mountTrigger: connectionState,
+  const { isAtBottom, isAtBottomRef, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive,
     persistKey: sessionKey,
   });
+
+  // Auto-scroll when footer content changes while user is at bottom.
+  // Virtuoso's followOutput only fires on data item changes and scrolls to the
+  // last data item — it can fall short of footer content (thinking indicator).
+  // Also re-fire on message count so that after a tool-call message arrives
+  // mid-loading we scroll past the last message into the thinking footer.
+  useEffect(() => {
+    if (isAtBottomRef.current) {
+      const rafId = requestAnimationFrame(() => scrollToBottom());
+      return () => cancelAnimationFrame(rafId);
+    }
+  }, [
+    session?.isLoading,
+    sessionMessages.length,
+    scrollToBottom,
+  ]);
 
   // Activity state tracking is handled globally by useGlobalActivityMonitor
   // (in App.tsx), which derives state from this store's session data.
@@ -1152,74 +1164,79 @@ export function CodexChatTab({
   }
 
   return (
-    <div className="@container flex h-full min-h-0 flex-col bg-background">
-      <ScrollArea ref={scrollRef} className="min-h-0 flex-1">
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-2 @sm:px-4 py-5 min-w-[320px]">
-          {sessionMessages.length === 0 ? (
-            <div className="flex min-h-[200px] flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border/70 bg-muted/15 px-5 py-8 text-center text-sm text-muted-foreground">
-              <p>Codex is ready.</p>
-              {client ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setResumeDialogOpen(true)}
-                >
-                  <History className="mr-2 h-4 w-4" />
-                  Resume Session
-                </Button>
-              ) : null}
-            </div>
-          ) : (
-            sessionMessages.map((message, index) => (
-              <NativeMessage
-                key={message.id}
-                message={message}
-                previousMessage={index > 0 ? sessionMessages[index - 1] ?? null : null}
-                assistantLabel="Codex"
-              />
-            ))
-          )}
-
-          {session?.isLoading && (
-            <div className="px-2 @sm:px-4 py-3">
-              <div className="mx-auto max-w-3xl min-w-0">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span className="text-xs">Codex is thinking...</span>
-                  {elapsedSeconds !== null && elapsedSeconds > 0 && (
-                    <span className="text-xs text-muted-foreground/50">
-                      {formatElapsed(elapsedSeconds)}
-                    </span>
-                  )}
+    <div className="@container flex h-full min-h-0 flex-col bg-background overflow-hidden">
+      {/* Virtualized messages area */}
+      <VirtualizedMessageList
+        messages={sessionMessages}
+        computeItemKey={(_index, msg) => msg.id}
+        renderMessage={(_index, message, prev) => (
+          <NativeMessage
+            message={message}
+            previousMessage={prev}
+            assistantLabel="Codex"
+          />
+        )}
+        emptyState={
+          <div className="flex min-h-[200px] flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border/70 bg-muted/15 px-5 py-8 text-center text-sm text-muted-foreground">
+            <p>Codex is ready.</p>
+            {client ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setResumeDialogOpen(true)}
+              >
+                <History className="mr-2 h-4 w-4" />
+                Resume Session
+              </Button>
+            ) : null}
+          </div>
+        }
+        footer={
+          <>
+            {session?.isLoading && (
+              <div className="px-2 @sm:px-4 py-3">
+                <div className="mx-auto max-w-3xl min-w-0">
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span className="text-xs">Codex is thinking...</span>
+                    {elapsedSeconds !== null && elapsedSeconds > 0 && (
+                      <span className="text-xs text-muted-foreground/50">
+                        {formatElapsed(elapsedSeconds)}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {!session?.isLoading && finalElapsedSeconds !== null && (
-            <div className="px-2 @sm:px-4 py-1.5">
-              <div className="mx-auto max-w-3xl min-w-0">
-                <span className="text-[10px] text-muted-foreground/40">
-                  Completed in {formatElapsed(finalElapsedSeconds)}
-                </span>
+            {!session?.isLoading && finalElapsedSeconds !== null && (
+              <div className="px-2 @sm:px-4 py-1.5">
+                <div className="mx-auto max-w-3xl min-w-0">
+                  <span className="text-[10px] text-muted-foreground/40">
+                    Completed in {formatElapsed(finalElapsedSeconds)}
+                  </span>
+                </div>
               </div>
-            </div>
-          )}
-        </div>
-      </ScrollArea>
+            )}
+          </>
+        }
+        scrollProps={scrollProps}
+        virtuosoRef={virtuosoRef}
+      />
 
-      {!isAtBottom && sessionMessages.length > 0 ? (
-        <div className="pointer-events-none absolute bottom-24 right-6">
-          <Button
-            size="icon"
-            variant="secondary"
-            className="pointer-events-auto rounded-full shadow-sm"
-            onClick={() => scrollToBottom()}
+      {/* Scroll to bottom button - positioned above compose bar */}
+      {!isAtBottom && (
+        <div className="flex justify-end px-4 py-1">
+          <button
+            onClick={scrollToBottom}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 shadow-sm transition-colors"
+            aria-label="Scroll to bottom of conversation"
           >
-            <ArrowDown className="h-4 w-4" />
-          </Button>
+            <ArrowDown className="w-3.5 h-3.5" />
+            <span>Scroll down</span>
+          </button>
         </div>
-      ) : null}
+      )}
 
       {showPlanModeCard ? (
         <CodexPlanModeCard

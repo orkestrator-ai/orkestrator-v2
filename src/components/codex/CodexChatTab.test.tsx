@@ -4,6 +4,7 @@ import { createCodexSessionKey, useCodexStore } from "@/stores/codexStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import * as realHooks from "@/hooks";
 
 // Snapshot the real sibling modules before we install stubs so we can restore
 // them when this file finishes. Without this, Bun's global mock.module cache
@@ -15,6 +16,8 @@ import * as realCodexResumeSessionDialog from "./CodexResumeSessionDialog";
 const realCodexComposeBarSnapshot = { ...realCodexComposeBar };
 const realCodexPlanModeCardSnapshot = { ...realCodexPlanModeCard };
 const realCodexResumeSessionDialogSnapshot = { ...realCodexResumeSessionDialog };
+const realHooksSnapshot = { ...realHooks };
+const mockScrollToBottom = mock(() => {});
 
 const MOCK_MODELS = [
   {
@@ -105,6 +108,17 @@ mock.module("./CodexPlanModeCard", () => ({
 
 mock.module("./CodexResumeSessionDialog", () => ({
   CodexResumeSessionDialog: () => null,
+}));
+
+mock.module("@/hooks", () => ({
+  ...realHooksSnapshot,
+  useVirtuosoScrollState: mock(() => ({
+    isAtBottom: true,
+    isAtBottomRef: { current: true },
+    scrollToBottom: mockScrollToBottom,
+    virtuosoRef: { current: null },
+    scrollProps: {},
+  })),
 }));
 
 import { CodexChatTab } from "./CodexChatTab";
@@ -268,6 +282,7 @@ afterAll(() => {
   mock.module("./CodexComposeBar", () => realCodexComposeBarSnapshot);
   mock.module("./CodexPlanModeCard", () => realCodexPlanModeCardSnapshot);
   mock.module("./CodexResumeSessionDialog", () => realCodexResumeSessionDialogSnapshot);
+  mock.module("@/hooks", () => realHooksSnapshot);
 });
 
 describe("CodexChatTab", () => {
@@ -283,6 +298,7 @@ describe("CodexChatTab", () => {
     mockGetSessionMessages.mockClear();
     mockGetSessionMessages.mockImplementation(async () => []);
     mockSubscribeToEvents.mockClear();
+    mockScrollToBottom.mockClear();
     restoreTimerHarness();
 
     resetStores();
@@ -394,8 +410,14 @@ describe("CodexChatTab", () => {
     fireEvent.click(screen.getByTestId("codex-send"));
 
     await waitFor(() => {
-      expect(screen.queryByText(composeText)).not.toBeNull();
-      expect(screen.queryByText("Naming environment...")).not.toBeNull();
+      const messages =
+        useCodexStore.getState().sessions.get(SESSION_KEY)?.messages ?? [];
+      expect(
+        messages.some((message) => message.content === composeText),
+      ).toBe(true);
+      expect(
+        messages.some((message) => message.content === "Naming environment..."),
+      ).toBe(true);
       expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 
@@ -411,7 +433,11 @@ describe("CodexChatTab", () => {
     });
 
     await waitFor(() => {
-      expect(screen.queryByText("Naming environment...")).toBeNull();
+      const messages =
+        useCodexStore.getState().sessions.get(SESSION_KEY)?.messages ?? [];
+      expect(
+        messages.some((message) => message.content === "Naming environment..."),
+      ).toBe(false);
     });
   });
 
@@ -637,6 +663,59 @@ describe("CodexChatTab", () => {
     await waitFor(() => {
       expect(screen.queryByText(/Completed in/)).toBeNull();
       expect(screen.queryByText("Codex is thinking...")).not.toBeNull();
+    });
+  });
+
+  test("drains queued prompts when the session is idle", async () => {
+    useCodexStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-1",
+      text: "Handle the queued codex prompt",
+      attachments: [],
+      model: MOCK_MODELS[0]!.id,
+      mode: "build",
+      reasoningEffort: "medium",
+    });
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        SESSION_ID,
+        "Handle the queued codex prompt",
+        { attachments: undefined },
+      );
+    });
+  });
+
+  test("scrolls to the footer again when a new message arrives while at the bottom", async () => {
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    mockScrollToBottom.mockClear();
+
+    act(() => {
+      useCodexStore.getState().setSession(SESSION_KEY, {
+        sessionId: SESSION_ID,
+        messages: [createMessage("assistant-1", "Done") as any],
+        isLoading: true,
+        title: "Test session",
+      });
+    });
+
+    await waitFor(() => {
+      expect(mockScrollToBottom).toHaveBeenCalled();
     });
   });
 });

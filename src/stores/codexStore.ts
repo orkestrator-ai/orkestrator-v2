@@ -10,26 +10,20 @@ import {
   type CodexSlashCommand,
 } from "@/lib/codex-client";
 import { mergeNativeMessagesPreservingClientOnly } from "@/lib/chat/client-only-messages";
-import { reconcileTimedSession, updateTimedSessionLoading } from "@/lib/session-timer";
 import { createSessionKey } from "@/lib/utils";
 import type { FileMention } from "@/types";
+import {
+  createNativeChatStoreSlice,
+  pruneSessionKeyedMap,
+  type NativeChatStoreSlice,
+  type NativeServerStatus,
+  type NativeSessionState,
+} from "./createNativeChatStore";
 
 export const createCodexSessionKey = createSessionKey;
 
-export interface CodexServerStatus {
-  running: boolean;
-  hostPort: number | null;
-}
-
-export interface CodexSessionState {
-  sessionId: string;
-  messages: CodexMessage[];
-  isLoading: boolean;
-  loadingStartedAt?: number;
-  lastCompletedElapsedSeconds?: number | null;
-  error?: string;
-  title?: string;
-}
+export type CodexServerStatus = NativeServerStatus;
+export type CodexSessionState = NativeSessionState<CodexMessage>;
 
 export interface CodexAttachment {
   id: string;
@@ -48,42 +42,24 @@ export interface CodexQueuedMessage {
   reasoningEffort: CodexReasoningEffort;
 }
 
-interface CodexState {
+type CodexChatSlice = NativeChatStoreSlice<
+  CodexClient,
+  CodexMessage,
+  CodexAttachment,
+  CodexQueuedMessage
+>;
+
+interface CodexState extends CodexChatSlice {
+  // Agent-specific state
   models: CodexModel[];
-  serverStatus: Map<string, CodexServerStatus>;
-  clients: Map<string, CodexClient>;
-  sessions: Map<string, CodexSessionState>;
   slashCommands: Map<string, CodexSlashCommand[]>;
-  attachments: Map<string, CodexAttachment[]>;
-  draftText: Map<string, string>;
-  draftMentions: Map<string, FileMention[]>;
-  messageQueue: Map<string, CodexQueuedMessage[]>;
   selectedModel: Map<string, string>;
   selectedMode: Map<string, CodexConversationMode>;
   selectedReasoningEffort: Map<string, CodexReasoningEffort>;
+
+  // Agent-specific actions
   setModels: (models: CodexModel[]) => void;
-  setServerStatus: (environmentId: string, status: CodexServerStatus) => void;
-  setClient: (environmentId: string, client: CodexClient | null) => void;
-  setSession: (sessionKey: string, session: CodexSessionState | null) => void;
-  addMessage: (sessionKey: string, message: CodexMessage) => void;
-  removeMessage: (sessionKey: string, messageId: string) => void;
-  setMessages: (sessionKey: string, messages: CodexMessage[]) => void;
   setSlashCommands: (environmentId: string, commands: CodexSlashCommand[]) => void;
-  setSessionLoading: (sessionKey: string, isLoading: boolean) => void;
-  setSessionError: (sessionKey: string, error: string | undefined) => void;
-  setSessionTitle: (sessionKey: string, title: string | undefined) => void;
-  addAttachment: (sessionKey: string, attachment: CodexAttachment) => void;
-  removeAttachment: (sessionKey: string, attachmentId: string) => void;
-  clearAttachments: (sessionKey: string) => void;
-  setDraftText: (sessionKey: string, text: string) => void;
-  setDraftMentions: (sessionKey: string, mentions: FileMention[]) => void;
-  addToQueue: (sessionKey: string, message: CodexQueuedMessage) => void;
-  removeFromQueue: (sessionKey: string) => CodexQueuedMessage | undefined;
-  removeQueueItem: (sessionKey: string, messageId: string) => void;
-  moveQueueItem: (sessionKey: string, fromIndex: number, toIndex: number) => void;
-  clearQueue: (sessionKey: string) => void;
-  getQueueLength: (sessionKey: string) => number;
-  getQueuedMessages: (sessionKey: string) => CodexQueuedMessage[];
   setSelectedModel: (sessionKey: string, model: string) => void;
   setSelectedMode: (sessionKey: string, mode: CodexConversationMode) => void;
   setSelectedReasoningEffort: (
@@ -93,99 +69,23 @@ interface CodexState {
   clearEnvironment: (environmentId: string) => void;
 }
 
-export const useCodexStore = create<CodexState>()((set, get) => ({
+export const useCodexStore = create<CodexState>()((set, get, api) => ({
+  ...createNativeChatStoreSlice<
+    CodexClient,
+    CodexMessage,
+    CodexAttachment,
+    CodexQueuedMessage
+  >({ mergeMessages: mergeNativeMessagesPreservingClientOnly })(set, get, api),
+
+  // Agent-specific state
   models: CODEX_MODELS,
-  serverStatus: new Map(),
-  clients: new Map(),
-  sessions: new Map(),
   slashCommands: new Map(),
-  attachments: new Map(),
-  draftText: new Map(),
-  draftMentions: new Map(),
-  messageQueue: new Map(),
   selectedModel: new Map(),
   selectedMode: new Map(),
   selectedReasoningEffort: new Map(),
 
+  // Agent-specific actions
   setModels: (models) => set({ models: models.length > 0 ? models : CODEX_MODELS }),
-
-  setServerStatus: (environmentId, status) =>
-    set((state) => {
-      const next = new Map(state.serverStatus);
-      next.set(environmentId, status);
-      return { serverStatus: next };
-    }),
-
-  setClient: (environmentId, client) =>
-    set((state) => {
-      const next = new Map(state.clients);
-      if (client) {
-        next.set(environmentId, client);
-      } else {
-        next.delete(environmentId);
-      }
-      return { clients: next };
-    }),
-
-  setSession: (sessionKey, session) =>
-    set((state) => {
-      const next = new Map(state.sessions);
-      if (session) {
-        const previous = state.sessions.get(sessionKey);
-        next.set(
-          sessionKey,
-          reconcileTimedSession(
-            previous?.sessionId === session.sessionId ? previous : undefined,
-            session,
-          ),
-        );
-      } else {
-        next.delete(sessionKey);
-      }
-      return { sessions: next };
-    }),
-
-  addMessage: (sessionKey, message) =>
-    set((state) => {
-      const session = state.sessions.get(sessionKey);
-      if (!session) return state;
-      const next = new Map(state.sessions);
-      next.set(sessionKey, {
-        ...session,
-        messages: [...session.messages, message],
-      });
-      return { sessions: next };
-    }),
-
-  removeMessage: (sessionKey, messageId) =>
-    set((state) => {
-      const session = state.sessions.get(sessionKey);
-      if (!session) return state;
-
-      const filteredMessages = session.messages.filter((message) => message.id !== messageId);
-      if (filteredMessages.length === session.messages.length) {
-        return state;
-      }
-
-      const next = new Map(state.sessions);
-      next.set(sessionKey, {
-        ...session,
-        messages: filteredMessages,
-      });
-      return { sessions: next };
-    }),
-
-  setMessages: (sessionKey, messages) =>
-    set((state) => {
-      const session = state.sessions.get(sessionKey);
-      if (!session) return state;
-      const next = new Map(state.sessions);
-      next.set(sessionKey, {
-        ...session,
-        messages: mergeNativeMessagesPreservingClientOnly(session.messages, messages),
-      });
-      return { sessions: next };
-    }),
 
   setSlashCommands: (environmentId, commands) =>
     set((state) => {
@@ -197,164 +97,6 @@ export const useCodexStore = create<CodexState>()((set, get) => ({
       }
       return { slashCommands: next };
     }),
-
-  setSessionLoading: (sessionKey, isLoading) =>
-    set((state) => {
-      const session = state.sessions.get(sessionKey);
-      if (!session) return state;
-      const next = new Map(state.sessions);
-      next.set(sessionKey, updateTimedSessionLoading(session, isLoading));
-      return { sessions: next };
-    }),
-
-  setSessionError: (sessionKey, error) =>
-    set((state) => {
-      const session = state.sessions.get(sessionKey);
-      if (!session) return state;
-      const next = new Map(state.sessions);
-      next.set(sessionKey, { ...session, error });
-      return { sessions: next };
-    }),
-
-  setSessionTitle: (sessionKey, title) =>
-    set((state) => {
-      const session = state.sessions.get(sessionKey);
-      if (!session) return state;
-      const next = new Map(state.sessions);
-      next.set(sessionKey, { ...session, title });
-      return { sessions: next };
-    }),
-
-  addAttachment: (sessionKey, attachment) =>
-    set((state) => {
-      const current = state.attachments.get(sessionKey) || [];
-      const next = new Map(state.attachments);
-      next.set(sessionKey, [...current, attachment]);
-      return { attachments: next };
-    }),
-
-  removeAttachment: (sessionKey, attachmentId) =>
-    set((state) => {
-      const current = state.attachments.get(sessionKey) || [];
-      const next = new Map(state.attachments);
-      const filtered = current.filter((attachment) => attachment.id !== attachmentId);
-      if (filtered.length > 0) {
-        next.set(sessionKey, filtered);
-      } else {
-        next.delete(sessionKey);
-      }
-      return { attachments: next };
-    }),
-
-  clearAttachments: (sessionKey) =>
-    set((state) => {
-      const next = new Map(state.attachments);
-      next.delete(sessionKey);
-      return { attachments: next };
-    }),
-
-  setDraftText: (sessionKey, text) =>
-    set((state) => {
-      const next = new Map(state.draftText);
-      if (text.length > 0) {
-        next.set(sessionKey, text);
-      } else {
-        next.delete(sessionKey);
-      }
-      return { draftText: next };
-    }),
-
-  setDraftMentions: (sessionKey, mentions) =>
-    set((state) => {
-      const next = new Map(state.draftMentions);
-      if (mentions.length > 0) {
-        next.set(sessionKey, mentions);
-      } else {
-        next.delete(sessionKey);
-      }
-      return { draftMentions: next };
-    }),
-
-  addToQueue: (sessionKey, message) =>
-    set((state) => {
-      const current = state.messageQueue.get(sessionKey) ?? [];
-      const next = new Map(state.messageQueue);
-      next.set(sessionKey, [...current, message]);
-      return { messageQueue: next };
-    }),
-
-  removeFromQueue: (sessionKey) => {
-    let removed: CodexQueuedMessage | undefined;
-    set((state) => {
-      const current = state.messageQueue.get(sessionKey) ?? [];
-      if (current.length === 0) {
-        return state;
-      }
-      const next = new Map(state.messageQueue);
-      removed = current[0];
-      if (current.length === 1) {
-        next.delete(sessionKey);
-      } else {
-        next.set(sessionKey, current.slice(1));
-      }
-      return { messageQueue: next };
-    });
-    return removed;
-  },
-
-  removeQueueItem: (sessionKey, messageId) =>
-    set((state) => {
-      const current = state.messageQueue.get(sessionKey) ?? [];
-      const filtered = current.filter((message) => message.id !== messageId);
-      if (filtered.length === current.length) {
-        return state;
-      }
-      const next = new Map(state.messageQueue);
-      if (filtered.length === 0) {
-        next.delete(sessionKey);
-      } else {
-        next.set(sessionKey, filtered);
-      }
-      return { messageQueue: next };
-    }),
-
-  moveQueueItem: (sessionKey, fromIndex, toIndex) =>
-    set((state) => {
-      const current = state.messageQueue.get(sessionKey) ?? [];
-      if (
-        fromIndex < 0
-        || toIndex < 0
-        || fromIndex >= current.length
-        || toIndex >= current.length
-        || fromIndex === toIndex
-      ) {
-        return state;
-      }
-      const reordered = [...current];
-      const [moved] = reordered.splice(fromIndex, 1);
-      if (!moved) {
-        return state;
-      }
-      reordered.splice(toIndex, 0, moved);
-      const next = new Map(state.messageQueue);
-      next.set(sessionKey, reordered);
-      return { messageQueue: next };
-    }),
-
-  clearQueue: (sessionKey) =>
-    set((state) => {
-      const next = new Map(state.messageQueue);
-      next.delete(sessionKey);
-      return { messageQueue: next };
-    }),
-
-  getQueueLength: (sessionKey) => {
-    return get().messageQueue.get(sessionKey)?.length ?? 0;
-  },
-
-  getQueuedMessages: (sessionKey) => {
-    return get().messageQueue.get(sessionKey) ?? [];
-  },
 
   setSelectedModel: (sessionKey, model) =>
     set((state) => {
@@ -388,77 +130,27 @@ export const useCodexStore = create<CodexState>()((set, get) => ({
       const nextSlashCommands = new Map(state.slashCommands);
       nextSlashCommands.delete(environmentId);
 
-      const nextSessions = new Map(state.sessions);
-      const nextAttachments = new Map(state.attachments);
-      const nextDraftText = new Map(state.draftText);
-      const nextDraftMentions = new Map(state.draftMentions);
-      const nextMessageQueue = new Map(state.messageQueue);
-      const nextSelectedModel = new Map(state.selectedModel);
-      const nextSelectedMode = new Map(state.selectedMode);
-      const nextSelectedReasoningEffort = new Map(state.selectedReasoningEffort);
       const prefix = `env-${environmentId}:`;
-
-      for (const key of nextSessions.keys()) {
-        if (key.startsWith(prefix)) {
-          nextSessions.delete(key);
-        }
-      }
-
-      for (const key of nextAttachments.keys()) {
-        if (key.startsWith(prefix)) {
-          nextAttachments.delete(key);
-        }
-      }
-
-      for (const key of nextDraftText.keys()) {
-        if (key.startsWith(prefix)) {
-          nextDraftText.delete(key);
-        }
-      }
-
-      for (const key of nextDraftMentions.keys()) {
-        if (key.startsWith(prefix)) {
-          nextDraftMentions.delete(key);
-        }
-      }
-
-      for (const key of nextMessageQueue.keys()) {
-        if (key.startsWith(prefix)) {
-          nextMessageQueue.delete(key);
-        }
-      }
-
-      for (const key of nextSelectedModel.keys()) {
-        if (key.startsWith(prefix)) {
-          nextSelectedModel.delete(key);
-        }
-      }
-
-      for (const key of nextSelectedMode.keys()) {
-        if (key.startsWith(prefix)) {
-          nextSelectedMode.delete(key);
-        }
-      }
-
-      for (const key of nextSelectedReasoningEffort.keys()) {
-        if (key.startsWith(prefix)) {
-          nextSelectedReasoningEffort.delete(key);
-        }
-      }
 
       return {
         models: state.models,
         serverStatus: nextServerStatus,
         clients: nextClients,
         slashCommands: nextSlashCommands,
-        sessions: nextSessions,
-        attachments: nextAttachments,
-        draftText: nextDraftText,
-        draftMentions: nextDraftMentions,
-        messageQueue: nextMessageQueue,
-        selectedModel: nextSelectedModel,
-        selectedMode: nextSelectedMode,
-        selectedReasoningEffort: nextSelectedReasoningEffort,
+        sessions: pruneSessionKeyedMap(state.sessions, prefix),
+        attachments: pruneSessionKeyedMap(state.attachments, prefix),
+        draftText: pruneSessionKeyedMap(state.draftText, prefix),
+        draftMentions: pruneSessionKeyedMap(state.draftMentions, prefix),
+        messageQueue: pruneSessionKeyedMap(state.messageQueue, prefix),
+        selectedModel: pruneSessionKeyedMap(state.selectedModel, prefix),
+        selectedMode: pruneSessionKeyedMap(state.selectedMode, prefix),
+        selectedReasoningEffort: pruneSessionKeyedMap(
+          state.selectedReasoningEffort,
+          prefix,
+        ),
       };
     }),
 }));
+
+// Re-export for callers that still import types/helpers from here
+export type { FileMention };

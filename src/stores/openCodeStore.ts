@@ -11,9 +11,14 @@ import {
 } from "@/lib/opencode-client";
 import { mergeNativeMessagesPreservingClientOnly } from "@/lib/chat/client-only-messages";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
-import { reconcileTimedSession, updateTimedSessionLoading } from "@/lib/session-timer";
 import { createSessionKey } from "@/lib/utils";
-import type { FileMention } from "@/types";
+import {
+  createNativeChatStoreSlice,
+  pruneSessionKeyedMap,
+  type NativeChatStoreSlice,
+  type NativeServerStatus,
+  type NativeSessionState,
+} from "./createNativeChatStore";
 
 /**
  * Creates a unique session key for OpenCode sessions.
@@ -23,43 +28,22 @@ export const createOpenCodeSessionKey = createSessionKey;
 
 /** Shared event subscription state per environment */
 export interface EventSubscriptionState {
-  /** Abort controller for the subscription */
   abortController: AbortController;
-  /** Reference to the async iterator for cleanup */
   stream: AsyncIterable<OpenCodeEvent> | null;
-  /** Whether the subscription is active */
   isActive: boolean;
 }
 
-/** Server status for a container */
-export interface OpenCodeServerStatus {
-  running: boolean;
-  hostPort: number | null;
-}
+export type OpenCodeServerStatus = NativeServerStatus;
+export type OpenCodeSessionState = NativeSessionState<OpenCodeMessage>;
 
-/** Session state for an environment */
-export interface OpenCodeSessionState {
-  sessionId: string;
-  messages: OpenCodeMessage[];
-  isLoading: boolean;
-  loadingStartedAt?: number;
-  lastCompletedElapsedSeconds?: number | null;
-  /** Error message to display (cleared when new message is sent) */
-  error?: string;
-}
-
-/** Attachment types for compose bar */
 export interface OpenCodeAttachment {
   id: string;
   type: "file" | "image";
   path: string;
-  /** Preview URL for images */
   previewUrl?: string;
-  /** File name for display */
   name: string;
 }
 
-/** Queued message for sending when session becomes idle */
 export interface OpenCodeQueuedMessage {
   id: string;
   text: string;
@@ -69,453 +53,183 @@ export interface OpenCodeQueuedMessage {
   mode: OpenCodeConversationMode;
 }
 
-interface OpenCodeState {
-  // State per environment (keyed by environmentId)
-  /** Server status per environment */
-  serverStatus: Map<string, OpenCodeServerStatus>;
-  /** Active session per environment */
-  sessions: Map<string, OpenCodeSessionState>;
-  /** SDK client per environment (keyed by environmentId) */
-  clients: Map<string, OpencodeClient>;
-  /** Available models per environment */
+type OpenCodeChatSlice = NativeChatStoreSlice<
+  OpencodeClient,
+  OpenCodeMessage,
+  OpenCodeAttachment,
+  OpenCodeQueuedMessage
+>;
+
+interface OpenCodeState extends OpenCodeChatSlice {
+  // Agent-specific state (per-environment)
   models: Map<string, OpenCodeModel[]>;
-  /** Available slash commands per environment */
   slashCommands: Map<string, OpenCodeSlashCommand[]>;
-  /** Currently selected model per environment */
   selectedModel: Map<string, string>;
-  /** Currently selected variant per environment */
   selectedVariant: Map<string, string>;
-  /** Currently selected mode per tab session key (format: env-{environmentId}:{tabId}) */
-  selectedMode: Map<string, OpenCodeConversationMode>;
-  /** Current attachments per tab session key (format: env-{environmentId}:{tabId}) */
-  attachments: Map<string, OpenCodeAttachment[]>;
-  /** Draft text per tab session key (format: env-{environmentId}:{tabId}) */
-  draftText: Map<string, string>;
-  /** Draft file mentions per tab session key */
-  draftMentions: Map<string, FileMention[]>;
-  /** Queued messages per tab session key */
-  messageQueue: Map<string, OpenCodeQueuedMessage[]>;
-  /** Whether the compose bar is loading per environment */
   isComposing: Map<string, boolean>;
-  /** Pending question requests (keyed by requestId) */
-  pendingQuestions: Map<string, QuestionRequest>;
-  /** Pending permission requests (keyed by requestId) */
-  pendingPermissions: Map<string, PermissionRequest>;
-  /** Shared event subscriptions per environment - only ONE per environment */
   eventSubscriptions: Map<string, EventSubscriptionState>;
-  /** Context usage per tab session key */
+
+  // Agent-specific state (per-session)
+  selectedMode: Map<string, OpenCodeConversationMode>;
   contextUsage: Map<string, ContextUsageSnapshot>;
 
-  // Actions
-  /** Set server status for an environment */
-  setServerStatus: (environmentId: string, status: OpenCodeServerStatus) => void;
-  /** Set the SDK client for an environment */
-  setClient: (environmentId: string, client: OpencodeClient | null) => void;
-  /** Get the SDK client for an environment */
-  getClient: (environmentId: string) => OpencodeClient | undefined;
-  /** Set available models for an environment */
+  // Agent-specific state (per-request)
+  pendingQuestions: Map<string, QuestionRequest>;
+  pendingPermissions: Map<string, PermissionRequest>;
+
+  // Agent-specific actions (per-environment)
   setModels: (environmentId: string, models: OpenCodeModel[]) => void;
-  /** Set available slash commands for an environment */
-  setSlashCommands: (environmentId: string, commands: OpenCodeSlashCommand[]) => void;
-  /** Set selected model for an environment */
+  setSlashCommands: (
+    environmentId: string,
+    commands: OpenCodeSlashCommand[],
+  ) => void;
   setSelectedModel: (environmentId: string, modelId: string) => void;
-  /** Set selected variant for an environment (undefined = use model default) */
-  setSelectedVariant: (environmentId: string, variant: string | undefined) => void;
-  /** Set selected mode for a tab session key */
-  setSelectedMode: (sessionKey: string, mode: OpenCodeConversationMode) => void;
-  /** Set session for an environment */
-  setSession: (environmentId: string, session: OpenCodeSessionState | null) => void;
-  /** Add a message to a session */
-  addMessage: (environmentId: string, message: OpenCodeMessage) => void;
-  /** Remove a message from a session by ID */
-  removeMessage: (environmentId: string, messageId: string) => void;
-  /** Update messages for a session */
-  setMessages: (environmentId: string, messages: OpenCodeMessage[]) => void;
-  /** Set loading state for a session */
-  setSessionLoading: (environmentId: string, isLoading: boolean) => void;
-  /** Set error message for a session */
-  setSessionError: (environmentId: string, error: string | undefined) => void;
-  /** Add attachment to compose bar */
-  addAttachment: (sessionKey: string, attachment: OpenCodeAttachment) => void;
-  /** Remove attachment from compose bar */
-  removeAttachment: (sessionKey: string, attachmentId: string) => void;
-  /** Clear all attachments for a tab session */
-  clearAttachments: (sessionKey: string) => void;
-  /** Set draft text for a tab session */
-  setDraftText: (sessionKey: string, text: string) => void;
-  /** Set draft file mentions for a tab session */
-  setDraftMentions: (sessionKey: string, mentions: FileMention[]) => void;
-  /** Set composing state */
+  setSelectedVariant: (
+    environmentId: string,
+    variant: string | undefined,
+  ) => void;
   setComposing: (environmentId: string, isComposing: boolean) => void;
-  /** Add message to queue for this tab session */
-  addToQueue: (sessionKey: string, message: OpenCodeQueuedMessage) => void;
-  /** Remove and return first queued message for this tab session */
-  removeFromQueue: (sessionKey: string) => OpenCodeQueuedMessage | undefined;
-  /** Clear queued messages for this tab session */
-  clearQueue: (sessionKey: string) => void;
-  /** Remove one queued message by ID for this tab session */
-  removeQueueItem: (sessionKey: string, messageId: string) => void;
-  /** Reorder one queued message within this tab session */
-  moveQueueItem: (sessionKey: string, fromIndex: number, toIndex: number) => void;
-  /** Get number of queued messages for this tab session */
-  getQueueLength: (sessionKey: string) => number;
-  /** Clear all state for an environment (cleanup) */
-  clearEnvironment: (environmentId: string) => void;
-  /** Add a pending question request */
+
+  // Agent-specific actions (per-session)
+  setSelectedMode: (
+    sessionKey: string,
+    mode: OpenCodeConversationMode,
+  ) => void;
+  setContextUsage: (
+    sessionKey: string,
+    usage: ContextUsageSnapshot | null,
+  ) => void;
+
+  // Agent-specific actions (per-request)
   addPendingQuestion: (question: QuestionRequest) => void;
-  /** Remove a pending question request */
   removePendingQuestion: (requestId: string) => void;
-  /** Add a pending permission request */
   addPendingPermission: (permission: PermissionRequest) => void;
-  /** Remove a pending permission request */
   removePendingPermission: (requestId: string) => void;
-  /** Set context usage for a tab session key */
-  setContextUsage: (sessionKey: string, usage: ContextUsageSnapshot | null) => void;
-  /** Get or create event subscription for an environment (returns existing if already active) */
-  getOrCreateEventSubscription: (environmentId: string) => EventSubscriptionState | null;
-  /** Set the event stream for an environment's subscription */
-  setEventStream: (environmentId: string, stream: AsyncIterable<OpenCodeEvent> | null) => void;
-  /** Close and remove event subscription for an environment */
+
+  // Event subscription actions
+  getOrCreateEventSubscription: (
+    environmentId: string,
+  ) => EventSubscriptionState | null;
+  setEventStream: (
+    environmentId: string,
+    stream: AsyncIterable<OpenCodeEvent> | null,
+  ) => void;
   closeEventSubscription: (environmentId: string) => void;
-  /** Check if event subscription exists and is active for an environment */
   hasActiveEventSubscription: (environmentId: string) => boolean;
 
+  clearEnvironment: (environmentId: string) => void;
+
   // Selectors
-  /** Get server status for an environment */
-  getServerStatus: (environmentId: string) => OpenCodeServerStatus | undefined;
-  /** Get session for an environment */
-  getSession: (environmentId: string) => OpenCodeSessionState | undefined;
-  /** Get selected model for an environment */
   getSelectedModel: (environmentId: string) => string | undefined;
-  /** Get available models for an environment */
   getModels: (environmentId: string) => OpenCodeModel[];
-  /** Get available slash commands for an environment */
   getSlashCommands: (environmentId: string) => OpenCodeSlashCommand[];
-  /** Get selected variant for an environment */
   getSelectedVariant: (environmentId: string) => string | undefined;
-  /** Get selected mode for a tab session key */
   getSelectedMode: (sessionKey: string) => OpenCodeConversationMode;
-  /** Get attachments for a tab session */
-  getAttachments: (sessionKey: string) => OpenCodeAttachment[];
-  /** Get draft text for a tab session */
-  getDraftText: (sessionKey: string) => string;
-  /** Get draft file mentions for a tab session */
-  getDraftMentions: (sessionKey: string) => FileMention[];
-  /** Check if composing for an environment */
   isComposingFor: (environmentId: string) => boolean;
-  /** Get pending questions for a session */
   getPendingQuestionsForSession: (sessionId: string) => QuestionRequest[];
-  /** Get a specific pending question by ID */
   getPendingQuestion: (requestId: string) => QuestionRequest | undefined;
-  /** Get pending permissions for a session */
   getPendingPermissionsForSession: (sessionId: string) => PermissionRequest[];
-  /** Get a specific pending permission by ID */
   getPendingPermission: (requestId: string) => PermissionRequest | undefined;
-  /** Get context usage for a tab session key */
   getContextUsage: (sessionKey: string) => ContextUsageSnapshot | undefined;
 }
 
-// Stable empty array constants to prevent infinite re-render loops with useSyncExternalStore.
-// Returning `?? []` creates a new array reference on every getSnapshot call,
-// which React 19 detects as an unstable snapshot and triggers an infinite loop.
+// Stable empty arrays to prevent infinite render loops with useSyncExternalStore.
+// See comment in createNativeChatStore.ts for the same rationale.
 const EMPTY_MODELS: OpenCodeModel[] = [];
 const EMPTY_COMMANDS: OpenCodeSlashCommand[] = [];
-const EMPTY_ATTACHMENTS: OpenCodeAttachment[] = [];
 const EMPTY_QUESTIONS: QuestionRequest[] = [];
 const EMPTY_PERMISSIONS: PermissionRequest[] = [];
 
-export const useOpenCodeStore = create<OpenCodeState>()((set, get) => ({
-  // Initial state
-  serverStatus: new Map(),
-  sessions: new Map(),
-  clients: new Map(),
+export const useOpenCodeStore = create<OpenCodeState>()((set, get, api) => ({
+  ...createNativeChatStoreSlice<
+    OpencodeClient,
+    OpenCodeMessage,
+    OpenCodeAttachment,
+    OpenCodeQueuedMessage
+  >({ mergeMessages: mergeNativeMessagesPreservingClientOnly })(set, get, api),
+
+  // Agent-specific state
   models: new Map(),
   slashCommands: new Map(),
   selectedModel: new Map(),
   selectedVariant: new Map(),
-  selectedMode: new Map(),
-  attachments: new Map(),
-  draftText: new Map(),
-  draftMentions: new Map(),
-  messageQueue: new Map(),
   isComposing: new Map(),
+  eventSubscriptions: new Map(),
+  selectedMode: new Map(),
+  contextUsage: new Map(),
   pendingQuestions: new Map(),
   pendingPermissions: new Map(),
-  eventSubscriptions: new Map(),
-  contextUsage: new Map(),
 
-  // Actions
-  setServerStatus: (environmentId, status) =>
-    set((state) => {
-      const newMap = new Map(state.serverStatus);
-      newMap.set(environmentId, status);
-      return { serverStatus: newMap };
-    }),
-
-  setClient: (environmentId, client) =>
-    set((state) => {
-      const newMap = new Map(state.clients);
-      if (client) {
-        newMap.set(environmentId, client);
-      } else {
-        newMap.delete(environmentId);
-      }
-      return { clients: newMap };
-    }),
-
-  getClient: (environmentId) => get().clients.get(environmentId),
-
+  // Agent-specific actions
   setModels: (environmentId, models) =>
     set((state) => {
-      const newMap = new Map(state.models);
-      newMap.set(environmentId, models);
-      return { models: newMap };
+      const next = new Map(state.models);
+      next.set(environmentId, models);
+      return { models: next };
     }),
 
   setSlashCommands: (environmentId, commands) =>
     set((state) => {
-      const newMap = new Map(state.slashCommands);
-      newMap.set(environmentId, commands);
-      return { slashCommands: newMap };
+      const next = new Map(state.slashCommands);
+      next.set(environmentId, commands);
+      return { slashCommands: next };
     }),
 
   setSelectedModel: (environmentId, modelId) =>
     set((state) => {
-      const newMap = new Map(state.selectedModel);
-      newMap.set(environmentId, modelId);
-      return { selectedModel: newMap };
+      const next = new Map(state.selectedModel);
+      next.set(environmentId, modelId);
+      return { selectedModel: next };
     }),
 
   setSelectedVariant: (environmentId, variant) =>
     set((state) => {
-      const newMap = new Map(state.selectedVariant);
+      const next = new Map(state.selectedVariant);
       if (variant && variant.trim().length > 0) {
-        newMap.set(environmentId, variant);
+        next.set(environmentId, variant);
       } else {
-        newMap.delete(environmentId);
+        next.delete(environmentId);
       }
-      return { selectedVariant: newMap };
+      return { selectedVariant: next };
     }),
 
   setSelectedMode: (sessionKey, mode) =>
     set((state) => {
-      const newMap = new Map(state.selectedMode);
-      newMap.set(sessionKey, mode);
-      return { selectedMode: newMap };
-    }),
-
-  setSession: (environmentId, session) =>
-    set((state) => {
-      const newMap = new Map(state.sessions);
-      if (session) {
-        const previous = state.sessions.get(environmentId);
-        newMap.set(
-          environmentId,
-          reconcileTimedSession(
-            previous?.sessionId === session.sessionId ? previous : undefined,
-            session,
-          ),
-        );
-      } else {
-        newMap.delete(environmentId);
-      }
-      return { sessions: newMap };
-    }),
-
-  addMessage: (environmentId, message) =>
-    set((state) => {
-      const session = state.sessions.get(environmentId);
-      if (!session) return state;
-
-      const newMap = new Map(state.sessions);
-      newMap.set(environmentId, {
-        ...session,
-        messages: [...session.messages, message],
-      });
-      return { sessions: newMap };
-    }),
-
-  removeMessage: (environmentId, messageId) =>
-    set((state) => {
-      const session = state.sessions.get(environmentId);
-      if (!session) return state;
-
-      const filtered = session.messages.filter((m) => m.id !== messageId);
-      if (filtered.length === session.messages.length) return state;
-
-      const newMap = new Map(state.sessions);
-      newMap.set(environmentId, { ...session, messages: filtered });
-      return { sessions: newMap };
-    }),
-
-  setMessages: (environmentId, messages) =>
-    set((state) => {
-      const session = state.sessions.get(environmentId);
-      if (!session) return state;
-
-      const newMap = new Map(state.sessions);
-      newMap.set(environmentId, {
-        ...session,
-        messages: mergeNativeMessagesPreservingClientOnly(session.messages, messages),
-      });
-      return { sessions: newMap };
-    }),
-
-  setSessionLoading: (environmentId, isLoading) =>
-    set((state) => {
-      const session = state.sessions.get(environmentId);
-      if (!session) return state;
-
-      const newMap = new Map(state.sessions);
-      newMap.set(environmentId, updateTimedSessionLoading(session, isLoading));
-      return { sessions: newMap };
-    }),
-
-  setSessionError: (environmentId, error) =>
-    set((state) => {
-      const session = state.sessions.get(environmentId);
-      if (!session) return state;
-
-      const newMap = new Map(state.sessions);
-      newMap.set(environmentId, {
-        ...session,
-        error,
-      });
-      return { sessions: newMap };
-    }),
-
-  addAttachment: (sessionKey, attachment) =>
-    set((state) => {
-      const current = state.attachments.get(sessionKey) || [];
-      const newMap = new Map(state.attachments);
-      newMap.set(sessionKey, [...current, attachment]);
-      return { attachments: newMap };
-    }),
-
-  removeAttachment: (sessionKey, attachmentId) =>
-    set((state) => {
-      const current = state.attachments.get(sessionKey) || [];
-      const newMap = new Map(state.attachments);
-      newMap.set(
-        sessionKey,
-        current.filter((a) => a.id !== attachmentId)
-      );
-      return { attachments: newMap };
-    }),
-
-  clearAttachments: (sessionKey) =>
-    set((state) => {
-      const newMap = new Map(state.attachments);
-      newMap.set(sessionKey, []);
-      return { attachments: newMap };
-    }),
-
-  setDraftText: (sessionKey, text) =>
-    set((state) => {
-      const newMap = new Map(state.draftText);
-      if (text.length > 0) {
-        newMap.set(sessionKey, text);
-      } else {
-        newMap.delete(sessionKey);
-      }
-      return { draftText: newMap };
-    }),
-
-  setDraftMentions: (sessionKey, mentions) =>
-    set((state) => {
-      const newMap = new Map(state.draftMentions);
-      if (mentions.length > 0) {
-        newMap.set(sessionKey, mentions);
-      } else {
-        newMap.delete(sessionKey);
-      }
-      return { draftMentions: newMap };
+      const next = new Map(state.selectedMode);
+      next.set(sessionKey, mode);
+      return { selectedMode: next };
     }),
 
   setComposing: (environmentId, isComposing) =>
     set((state) => {
-      const newMap = new Map(state.isComposing);
-      newMap.set(environmentId, isComposing);
-      return { isComposing: newMap };
+      const next = new Map(state.isComposing);
+      next.set(environmentId, isComposing);
+      return { isComposing: next };
     }),
 
-  addToQueue: (sessionKey, message) =>
+  setContextUsage: (sessionKey, usage) =>
     set((state) => {
-      const current = state.messageQueue.get(sessionKey) || [];
-      const newMap = new Map(state.messageQueue);
-      newMap.set(sessionKey, [...current, message]);
-      return { messageQueue: newMap };
-    }),
-
-  removeFromQueue: (sessionKey) => {
-    const state = get();
-    const current = state.messageQueue.get(sessionKey) || [];
-    if (current.length === 0) return undefined;
-
-    const [first, ...rest] = current;
-    const newMap = new Map(state.messageQueue);
-    newMap.set(sessionKey, rest);
-    set({ messageQueue: newMap });
-    return first;
-  },
-
-  clearQueue: (sessionKey) =>
-    set((state) => {
-      const newMap = new Map(state.messageQueue);
-      newMap.set(sessionKey, []);
-      return { messageQueue: newMap };
-    }),
-
-  removeQueueItem: (sessionKey, messageId) =>
-    set((state) => {
-      const current = state.messageQueue.get(sessionKey) || [];
-      if (current.length === 0) return state;
-
-      const next = current.filter((message) => message.id !== messageId);
-      if (next.length === current.length) return state;
-
-      const newMap = new Map(state.messageQueue);
-      newMap.set(sessionKey, next);
-      return { messageQueue: newMap };
-    }),
-
-  moveQueueItem: (sessionKey, fromIndex, toIndex) =>
-    set((state) => {
-      const current = state.messageQueue.get(sessionKey) || [];
-      if (
-        current.length < 2 ||
-        fromIndex === toIndex ||
-        fromIndex < 0 ||
-        toIndex < 0 ||
-        fromIndex >= current.length ||
-        toIndex >= current.length
-      ) {
-        return state;
+      const next = new Map(state.contextUsage);
+      if (usage) {
+        next.set(sessionKey, usage);
+      } else {
+        next.delete(sessionKey);
       }
-
-      const reordered = [...current];
-      const [item] = reordered.splice(fromIndex, 1);
-      if (!item) return state;
-
-      reordered.splice(toIndex, 0, item);
-
-      const newMap = new Map(state.messageQueue);
-      newMap.set(sessionKey, reordered);
-      return { messageQueue: newMap };
+      return { contextUsage: next };
     }),
-
-  getQueueLength: (sessionKey) => {
-    const queue = get().messageQueue.get(sessionKey);
-    return queue?.length || 0;
-  },
 
   clearEnvironment: (environmentId) => {
-    // First close the event subscription if it exists
     const subscription = get().eventSubscriptions.get(environmentId);
     if (subscription) {
-      console.log("[openCodeStore] Closing event subscription during environment cleanup:", environmentId);
+      console.log(
+        "[openCodeStore] Closing event subscription during environment cleanup:",
+        environmentId,
+      );
       subscription.abortController.abort();
-      if (subscription.stream && Symbol.asyncIterator in subscription.stream) {
+      if (
+        subscription.stream &&
+        Symbol.asyncIterator in subscription.stream
+      ) {
         const iterator = subscription.stream[Symbol.asyncIterator]();
         if (iterator.return) {
           iterator.return().catch(() => {});
@@ -523,83 +237,47 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get) => ({
       }
     }
 
-    // Then clear all state
     set((state) => {
       const newServerStatus = new Map(state.serverStatus);
-      const newSessions = new Map(state.sessions);
       const newClients = new Map(state.clients);
       const newModels = new Map(state.models);
       const newSelectedModel = new Map(state.selectedModel);
       const newSlashCommands = new Map(state.slashCommands);
       const newSelectedVariant = new Map(state.selectedVariant);
-      const newSelectedMode = new Map(state.selectedMode);
-      const newAttachments = new Map(state.attachments);
-      const newDraftText = new Map(state.draftText);
-      const newDraftMentions = new Map(state.draftMentions);
-      const newMessageQueue = new Map(state.messageQueue);
       const newIsComposing = new Map(state.isComposing);
-      const newPendingQuestions = new Map(state.pendingQuestions);
-      const newPendingPermissions = new Map(state.pendingPermissions);
       const newEventSubscriptions = new Map(state.eventSubscriptions);
-      const newContextUsage = new Map(state.contextUsage);
-
-      const sessionKeyPrefix = `env-${environmentId}:`;
-      const environmentSessionIds = new Set<string>();
 
       newServerStatus.delete(environmentId);
-      for (const [sessionKey, sessionState] of state.sessions) {
-        if (sessionKey.startsWith(sessionKeyPrefix)) {
-          newSessions.delete(sessionKey);
-          environmentSessionIds.add(sessionState.sessionId);
-        }
-      }
       newClients.delete(environmentId);
       newModels.delete(environmentId);
       newSelectedModel.delete(environmentId);
       newSlashCommands.delete(environmentId);
       newSelectedVariant.delete(environmentId);
-      // Remove legacy environment-scoped mode key (backward compatibility)
-      newSelectedMode.delete(environmentId);
-      // Remove tab-scoped mode keys for this environment
-      for (const key of newSelectedMode.keys()) {
-        if (key.startsWith(sessionKeyPrefix)) {
-          newSelectedMode.delete(key);
-        }
-      }
-      for (const key of newAttachments.keys()) {
-        if (key.startsWith(sessionKeyPrefix)) {
-          newAttachments.delete(key);
-        }
-      }
-      for (const key of newDraftText.keys()) {
-        if (key.startsWith(sessionKeyPrefix)) {
-          newDraftText.delete(key);
-        }
-      }
-      for (const key of newDraftMentions.keys()) {
-        if (key.startsWith(sessionKeyPrefix)) {
-          newDraftMentions.delete(key);
-        }
-      }
-      for (const key of newMessageQueue.keys()) {
-        if (key.startsWith(sessionKeyPrefix)) {
-          newMessageQueue.delete(key);
-        }
-      }
-      for (const key of newContextUsage.keys()) {
-        if (key.startsWith(sessionKeyPrefix)) {
-          newContextUsage.delete(key);
-        }
-      }
       newIsComposing.delete(environmentId);
       newEventSubscriptions.delete(environmentId);
-      // Remove pending questions for this environment's sessions
+
+      const prefix = `env-${environmentId}:`;
+
+      // Collect session IDs before pruning so we can clean up pending requests
+      const environmentSessionIds = new Set<string>();
+      for (const [key, session] of state.sessions) {
+        if (key.startsWith(prefix)) {
+          environmentSessionIds.add(session.sessionId);
+        }
+      }
+
+      const newSelectedMode = pruneSessionKeyedMap(state.selectedMode, prefix);
+      // Also remove any legacy environment-scoped mode key (backward compat)
+      newSelectedMode.delete(environmentId);
+
+      const newPendingQuestions = new Map(state.pendingQuestions);
       for (const [requestId, question] of newPendingQuestions) {
         if (environmentSessionIds.has(question.sessionID)) {
           newPendingQuestions.delete(requestId);
         }
       }
-      // Remove pending permissions for this environment's sessions
+
+      const newPendingPermissions = new Map(state.pendingPermissions);
       for (const [requestId, permission] of newPendingPermissions) {
         if (environmentSessionIds.has(permission.sessionID)) {
           newPendingPermissions.delete(requestId);
@@ -608,87 +286,79 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get) => ({
 
       return {
         serverStatus: newServerStatus,
-        sessions: newSessions,
+        sessions: pruneSessionKeyedMap(state.sessions, prefix),
         clients: newClients,
         models: newModels,
         selectedModel: newSelectedModel,
         slashCommands: newSlashCommands,
         selectedVariant: newSelectedVariant,
         selectedMode: newSelectedMode,
-        attachments: newAttachments,
-        draftText: newDraftText,
-        draftMentions: newDraftMentions,
-        messageQueue: newMessageQueue,
+        attachments: pruneSessionKeyedMap(state.attachments, prefix),
+        draftText: pruneSessionKeyedMap(state.draftText, prefix),
+        draftMentions: pruneSessionKeyedMap(state.draftMentions, prefix),
+        messageQueue: pruneSessionKeyedMap(state.messageQueue, prefix),
         isComposing: newIsComposing,
         pendingQuestions: newPendingQuestions,
         pendingPermissions: newPendingPermissions,
         eventSubscriptions: newEventSubscriptions,
-        contextUsage: newContextUsage,
+        contextUsage: pruneSessionKeyedMap(state.contextUsage, prefix),
       };
     });
   },
 
   addPendingQuestion: (question) =>
     set((state) => {
-      const newMap = new Map(state.pendingQuestions);
-      newMap.set(question.id, question);
-      return { pendingQuestions: newMap };
+      const next = new Map(state.pendingQuestions);
+      next.set(question.id, question);
+      return { pendingQuestions: next };
     }),
 
   removePendingQuestion: (requestId) =>
     set((state) => {
-      const newMap = new Map(state.pendingQuestions);
-      newMap.delete(requestId);
-      return { pendingQuestions: newMap };
+      const next = new Map(state.pendingQuestions);
+      next.delete(requestId);
+      return { pendingQuestions: next };
     }),
 
   addPendingPermission: (permission) =>
     set((state) => {
-      const newMap = new Map(state.pendingPermissions);
-      newMap.set(permission.id, permission);
-      return { pendingPermissions: newMap };
+      const next = new Map(state.pendingPermissions);
+      next.set(permission.id, permission);
+      return { pendingPermissions: next };
     }),
 
   removePendingPermission: (requestId) =>
     set((state) => {
-      const newMap = new Map(state.pendingPermissions);
-      newMap.delete(requestId);
-      return { pendingPermissions: newMap };
-    }),
-
-  setContextUsage: (sessionKey, usage) =>
-    set((state) => {
-      const newMap = new Map(state.contextUsage);
-      if (usage) {
-        newMap.set(sessionKey, usage);
-      } else {
-        newMap.delete(sessionKey);
-      }
-      return { contextUsage: newMap };
+      const next = new Map(state.pendingPermissions);
+      next.delete(requestId);
+      return { pendingPermissions: next };
     }),
 
   getOrCreateEventSubscription: (environmentId) => {
     const state = get();
     const existing = state.eventSubscriptions.get(environmentId);
 
-    // If we already have an active subscription, return it
     if (existing && existing.isActive) {
-      console.log("[openCodeStore] Reusing existing event subscription for environment:", environmentId);
+      console.log(
+        "[openCodeStore] Reusing existing event subscription for environment:",
+        environmentId,
+      );
       return existing;
     }
 
-    // Create new subscription state
-    console.log("[openCodeStore] Creating new event subscription for environment:", environmentId);
+    console.log(
+      "[openCodeStore] Creating new event subscription for environment:",
+      environmentId,
+    );
     const newSubscription: EventSubscriptionState = {
       abortController: new AbortController(),
       stream: null,
       isActive: true,
     };
 
-    // Store it
-    const newMap = new Map(state.eventSubscriptions);
-    newMap.set(environmentId, newSubscription);
-    set({ eventSubscriptions: newMap });
+    const next = new Map(state.eventSubscriptions);
+    next.set(environmentId, newSubscription);
+    set({ eventSubscriptions: next });
 
     return newSubscription;
   },
@@ -697,39 +367,34 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get) => ({
     set((state) => {
       const subscription = state.eventSubscriptions.get(environmentId);
       if (!subscription) return state;
-
-      const newMap = new Map(state.eventSubscriptions);
-      // When stream is set to null, mark subscription as inactive so a new one can be started
+      const next = new Map(state.eventSubscriptions);
       const isActive = stream !== null;
-      newMap.set(environmentId, { ...subscription, stream, isActive });
-      return { eventSubscriptions: newMap };
+      next.set(environmentId, { ...subscription, stream, isActive });
+      return { eventSubscriptions: next };
     }),
 
   closeEventSubscription: (environmentId) => {
     const state = get();
     const subscription = state.eventSubscriptions.get(environmentId);
-
     if (!subscription) return;
 
-    console.log("[openCodeStore] Closing event subscription for environment:", environmentId);
+    console.log(
+      "[openCodeStore] Closing event subscription for environment:",
+      environmentId,
+    );
 
-    // Abort the controller
     subscription.abortController.abort();
 
-    // Close the stream if it exists
     if (subscription.stream && Symbol.asyncIterator in subscription.stream) {
       const iterator = subscription.stream[Symbol.asyncIterator]();
       if (iterator.return) {
-        iterator.return().catch(() => {
-          // Ignore errors during cleanup
-        });
+        iterator.return().catch(() => {});
       }
     }
 
-    // Remove from map
-    const newMap = new Map(state.eventSubscriptions);
-    newMap.delete(environmentId);
-    set({ eventSubscriptions: newMap });
+    const next = new Map(state.eventSubscriptions);
+    next.delete(environmentId);
+    set({ eventSubscriptions: next });
   },
 
   hasActiveEventSubscription: (environmentId) => {
@@ -738,27 +403,15 @@ export const useOpenCodeStore = create<OpenCodeState>()((set, get) => ({
   },
 
   // Selectors
-  getServerStatus: (environmentId) => get().serverStatus.get(environmentId),
-
-  getSession: (environmentId) => get().sessions.get(environmentId),
-
   getSelectedModel: (environmentId) => get().selectedModel.get(environmentId),
-
-  getModels: (environmentId) => get().models.get(environmentId) ?? EMPTY_MODELS,
-
-  getSlashCommands: (environmentId) => get().slashCommands.get(environmentId) ?? EMPTY_COMMANDS,
-
-  getSelectedVariant: (environmentId) => get().selectedVariant.get(environmentId),
-
+  getModels: (environmentId) =>
+    get().models.get(environmentId) ?? EMPTY_MODELS,
+  getSlashCommands: (environmentId) =>
+    get().slashCommands.get(environmentId) ?? EMPTY_COMMANDS,
+  getSelectedVariant: (environmentId) =>
+    get().selectedVariant.get(environmentId),
   getSelectedMode: (sessionKey) =>
     get().selectedMode.get(sessionKey) || "build",
-
-  getAttachments: (sessionKey) => get().attachments.get(sessionKey) ?? EMPTY_ATTACHMENTS,
-
-  getDraftText: (sessionKey) => get().draftText.get(sessionKey) || "",
-
-  getDraftMentions: (sessionKey) => get().draftMentions.get(sessionKey) ?? [],
-
   isComposingFor: (environmentId) =>
     get().isComposing.get(environmentId) || false,
 

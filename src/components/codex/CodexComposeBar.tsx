@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Check, ChevronDown, ChevronUp, FileText, Image as ImageIcon, Plus, Square, X } from "lucide-react";
-import { readImage } from "@tauri-apps/plugin-clipboard-manager";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -22,9 +21,7 @@ import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import { MentionableInput, type MentionableInputRef } from "@/components/chat/MentionableInput";
 import { OpenCodeSlashCommandMenu } from "@/components/opencode/OpenCodeSlashCommandMenu";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { writeContainerFile, writeLocalFile } from "@/lib/tauri";
-import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
-import { useFileMentions, useFileSearch } from "@/hooks";
+import { useFileMentions, useFileSearch, useNativeComposeBarPaste } from "@/hooks";
 import { toast } from "sonner";
 import type { OpenCodeSlashCommand } from "@/lib/opencode-client";
 import type {
@@ -39,8 +36,6 @@ import type { FileCandidate, FileMention } from "@/types";
 
 const MIN_HEIGHT_PX = 28;
 const MAX_HEIGHT_PX = 160;
-const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
-const MAX_RGBA_SIZE = 32 * 1024 * 1024;
 const EMPTY_ATTACHMENTS: CodexAttachment[] = [];
 const EMPTY_MENTIONS: FileMention[] = [];
 const EMPTY_QUEUE: CodexQueuedMessage[] = [];
@@ -59,15 +54,6 @@ const REASONING_DESCRIPTIONS: Record<CodexReasoningEffort, string> = {
   high: "Greater reasoning depth for complex problems",
   xhigh: "Extra high reasoning depth for complex problems",
 };
-
-function generateImageFilename(): string {
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[:.]/g, "-")
-    .slice(0, 19);
-  const random = Math.random().toString(36).substring(2, 8);
-  return `clipboard-${timestamp}-${random}.png`;
-}
 
 interface CodexComposeBarProps {
   environmentId: string;
@@ -329,93 +315,16 @@ export function CodexComposeBar({
     }
   }, [showAttachmentMenu]);
 
-  const handlePaste = useCallback(
-    async (event: ClipboardEvent) => {
-      // Check if focus is within THIS compose bar's input area (not any other instance)
-      const activeEl = document.activeElement;
-      if (!activeEl || !inputContainerRef.current?.contains(activeEl)) return;
-
-      try {
-        const image = await readImage();
-        const rgba = await image.rgba();
-        const { width, height } = await image.size();
-
-        let canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-
-        const imageDataObj = new ImageData(new Uint8ClampedArray(rgba), width, height);
-        ctx.putImageData(imageDataObj, 0, 0);
-
-        canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
-
-        const dataUrl = canvas.toDataURL("image/png");
-        const base64Data = dataUrl.split(",")[1] || "";
-        const estimatedSize = (base64Data.length * 3) / 4;
-        if (estimatedSize > MAX_IMAGE_SIZE) {
-          toast.error("Image too large", {
-            description: `Image is ${(estimatedSize / 1024 / 1024).toFixed(1)}MB. Maximum is 8MB.`,
-          });
-          return;
-        }
-
-        canvas.width = 0;
-        canvas.height = 0;
-
-        event.preventDefault();
-        event.stopPropagation();
-
-        const filename = generateImageFilename();
-        const filePath = `.orkestrator/clipboard/${filename}`;
-
-        let savedPath: string | null = null;
-        if (containerId) {
-          await writeContainerFile(containerId, filePath, base64Data);
-          savedPath = `/workspace/${filePath}`;
-        } else if (worktreePath) {
-          savedPath = await writeLocalFile(worktreePath, filePath, base64Data);
-        }
-
-        if (!savedPath) {
-          toast.error("Cannot save image", {
-            description: "Environment not properly configured for attachments",
-          });
-          return;
-        }
-
-        addAttachment(sessionKey, {
-          id: Math.random().toString(36).substring(2, 9),
-          type: "image",
-          path: savedPath,
-          previewUrl: dataUrl,
-          name: filename,
-        });
-      } catch (error) {
-        if (!(error instanceof Error)) return;
-        const msg = error.message.toLowerCase();
-        if (
-          msg.includes("clipboard")
-          || msg.includes("no image")
-          || msg.includes("not found")
-          || msg.includes("empty")
-          || msg.includes("unavailable")
-        ) {
-          return;
-        }
-        console.error("[CodexComposeBar] Unexpected paste error:", error);
-      }
-    },
-    [addAttachment, containerId, sessionKey, worktreePath],
-  );
-
-  useEffect(() => {
-    document.addEventListener("paste", handlePaste, { capture: true });
-    return () => {
-      document.removeEventListener("paste", handlePaste, { capture: true });
-    };
-  }, [handlePaste]);
+  useNativeComposeBarPaste({
+    inputContainerRef,
+    containerId: containerId ?? null,
+    worktreePath,
+    onAttach: useCallback(
+      (attachment) => addAttachment(sessionKey, attachment),
+      [addAttachment, sessionKey],
+    ),
+    logLabel: "CodexComposeBar",
+  });
 
   const handleQueuedMessageClick = useCallback(
     (message: CodexQueuedMessage) => {

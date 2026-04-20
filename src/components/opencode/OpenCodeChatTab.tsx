@@ -245,14 +245,23 @@ export function OpenCodeChatTab({
   );
 
   // Auto-scroll when footer content changes while user is at bottom.
-  // Virtuoso's followOutput only fires on data item changes, but the footer
-  // (thinking indicator, question/permission cards) can grow without data changes.
+  // Virtuoso's followOutput only fires on data item changes and scrolls to the
+  // last data item — it can fall short of footer content (thinking indicator,
+  // question/permission cards). Also re-fire on message count so that after a
+  // tool-call message arrives mid-loading we scroll past the last message
+  // into the thinking footer.
   useEffect(() => {
     if (isAtBottomRef.current) {
       const rafId = requestAnimationFrame(() => scrollToBottom());
       return () => cancelAnimationFrame(rafId);
     }
-  }, [session?.isLoading, pendingQuestions.length, pendingPermissions.length, scrollToBottom]);
+  }, [
+    session?.isLoading,
+    sessionMessages.length,
+    pendingQuestions.length,
+    pendingPermissions.length,
+    scrollToBottom,
+  ]);
 
   const worktreePath = useEnvironmentStore(
     useCallback(

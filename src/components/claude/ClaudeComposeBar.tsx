@@ -15,9 +15,6 @@ import {
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import { readImage } from "@tauri-apps/plugin-clipboard-manager";
-import { writeContainerFile, writeLocalFile } from "@/lib/tauri";
-import { resizeCanvasIfNeeded, resizeCanvasToMaxDimension, MAX_IMAGE_DIMENSION } from "@/lib/canvas-utils";
 import { toast } from "sonner";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useClaudeStore, createClaudeSessionKey, type ClaudeAttachment, type QueuedMessage, type ClaudeEffortLevel } from "@/stores/claudeStore";
@@ -28,6 +25,7 @@ import { FileMentionMenu } from "./FileMentionMenu";
 import { MentionableInput, type MentionableInputRef } from "./MentionableInput";
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useFileMentions } from "@/hooks/useFileMentions";
+import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
 import type { FileMention, FileCandidate } from "@/types";
 
 const EFFORT_LABELS: Record<ClaudeEffortLevel, string> = {
@@ -66,17 +64,6 @@ interface ClaudeComposeBarProps {
 
 const MAX_LINES = 12;
 const LINE_HEIGHT = 20;
-const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
-const MAX_RGBA_SIZE = 32 * 1024 * 1024;
-
-function generateImageFilename(): string {
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[:.]/g, "-")
-    .slice(0, 19);
-  const random = Math.random().toString(36).substring(2, 8);
-  return `clipboard-${timestamp}-${random}.png`;
-}
 
 export function ClaudeComposeBar({
   environmentId,
@@ -305,119 +292,16 @@ export function ClaudeComposeBar({
     }
   }, [showAttachmentMenu]);
 
-  // Handle paste for clipboard images
-  // Note: For MentionableInput (contenteditable), the activeElement is the div inside the component
-  const handlePaste = useCallback(
-    async (event: ClipboardEvent) => {
-      // Check if focus is within THIS compose bar's input area (not any other instance)
-      const activeEl = document.activeElement;
-      if (!activeEl || !inputContainerRef.current?.contains(activeEl)) return;
-
-      try {
-        const image = await readImage();
-        const rgba = await image.rgba();
-        const { width, height } = await image.size();
-
-        // Create canvas with original image data
-        let canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-
-        const imageDataObj = new ImageData(new Uint8ClampedArray(rgba), width, height);
-        ctx.putImageData(imageDataObj, 0, 0);
-
-        // Resize to fit within SDK pixel dimension limit, then RGBA size limit
-        canvas = resizeCanvasToMaxDimension(canvas, MAX_IMAGE_DIMENSION);
-        canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
-
-        const dataUrl = canvas.toDataURL("image/png");
-        const base64Data = dataUrl.split(",")[1] || "";
-
-        const estimatedSize = (base64Data.length * 3) / 4;
-        if (estimatedSize > MAX_IMAGE_SIZE) {
-          console.error("[ClaudeComposeBar] Image too large after encoding");
-          toast.error("Image too large", {
-            description: `Image is ${(estimatedSize / 1024 / 1024).toFixed(1)}MB. Maximum is 8MB.`,
-          });
-          return;
-        }
-
-        canvas.width = 0;
-        canvas.height = 0;
-
-        event.preventDefault();
-        event.stopPropagation();
-
-        // Save to container and add as attachment (only for containerized environments)
-        const filename = generateImageFilename();
-        const filePath = `.orkestrator/clipboard/${filename}`;
-
-        if (containerId) {
-          // Containerized environment - write to container
-          await writeContainerFile(containerId, filePath, base64Data);
-
-          const attachment: ClaudeAttachment = {
-            id: Math.random().toString(36).substring(2, 9),
-            type: "image",
-            path: `/workspace/${filePath}`,
-            previewUrl: dataUrl,
-            name: filename,
-          };
-          addAttachment(sessionKey, attachment);
-        } else if (worktreePath) {
-          // Local environment - write to worktree path
-          const fullPath = await writeLocalFile(worktreePath, filePath, base64Data);
-
-          const attachment: ClaudeAttachment = {
-            id: Math.random().toString(36).substring(2, 9),
-            type: "image",
-            path: fullPath,
-            previewUrl: dataUrl,
-            name: filename,
-          };
-          addAttachment(sessionKey, attachment);
-        } else {
-          toast.error("Cannot save image", {
-            description: "Environment not properly configured for attachments",
-          });
-        }
-      } catch (e) {
-        // Clipboard read errors are expected when no image is present - ignore silently
-        // Check for known clipboard-related error patterns across platforms
-        const isExpectedClipboardError = (error: unknown): boolean => {
-          if (!(error instanceof Error)) return false;
-          const msg = error.message.toLowerCase();
-          const name = error.name?.toLowerCase() ?? "";
-          // Common clipboard error patterns across platforms/browsers
-          return (
-            msg.includes("clipboard") ||
-            msg.includes("no image") ||
-            msg.includes("not found") ||
-            msg.includes("empty") ||
-            msg.includes("unavailable") ||
-            name.includes("clipboard") ||
-            name.includes("notfounderror")
-          );
-        };
-
-        // Log unexpected errors for debugging
-        if (!isExpectedClipboardError(e)) {
-          console.error("[ClaudeComposeBar] Unexpected paste error:", e);
-        }
-        // Let text paste through by not preventing default
-      }
-    },
-    [containerId, sessionKey, worktreePath, addAttachment]
-  );
-
-  useEffect(() => {
-    document.addEventListener("paste", handlePaste, { capture: true });
-    return () => {
-      document.removeEventListener("paste", handlePaste, { capture: true });
-    };
-  }, [handlePaste]);
+  useNativeComposeBarPaste({
+    inputContainerRef,
+    containerId: containerId ?? null,
+    worktreePath,
+    onAttach: useCallback(
+      (attachment) => addAttachment(sessionKey, attachment),
+      [addAttachment, sessionKey],
+    ),
+    logLabel: "ClaudeComposeBar",
+  });
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // Handle file mention menu navigation first (it takes priority over slash commands)

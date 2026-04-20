@@ -166,14 +166,23 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
   );
 
   // Auto-scroll when footer content changes while user is at bottom.
-  // Virtuoso's followOutput only fires on data item changes, but the footer
-  // (thinking indicator, question/approval cards) can grow without data changes.
+  // Virtuoso's followOutput only fires on data item changes and scrolls to the
+  // last data item — it can fall short of footer content (thinking indicator,
+  // question/approval cards). Also re-fire on message count so that after a
+  // tool-call message arrives mid-loading we scroll past the last message
+  // into the "Claude is thinking" footer.
   useEffect(() => {
     if (isAtBottomRef.current) {
       const rafId = requestAnimationFrame(() => scrollToBottom());
       return () => cancelAnimationFrame(rafId);
     }
-  }, [session?.isLoading, pendingQuestions.length, pendingPlanApprovals.length, scrollToBottom]);
+  }, [
+    session?.isLoading,
+    sessionMessages.length,
+    pendingQuestions.length,
+    pendingPlanApprovals.length,
+    scrollToBottom,
+  ]);
 
   // Setup completion awareness - block initialization until setup scripts finish
   const setupScriptsRunning = useEnvironmentStore(

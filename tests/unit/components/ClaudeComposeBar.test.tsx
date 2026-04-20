@@ -1,13 +1,18 @@
 import { describe, expect, mock, test, beforeEach, afterEach } from "bun:test";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { mockReadImage } from "../../mocks/clipboard";
+
+const mockWriteContainerFile = mock(async () => {});
+const mockWriteLocalFile = mock(async () => "/tmp/file.png");
+const mockSerializeForLLM = mock((text: string, _mentions?: unknown[]) => text);
 
 // --- Module mocks (must be before component import) ---
 
 mock.module("@/lib/tauri", () => ({
   openInBrowser: async () => {},
   readFileBase64: async () => "",
-  writeContainerFile: async () => {},
-  writeLocalFile: async () => "/tmp/file.png",
+  writeContainerFile: mockWriteContainerFile,
+  writeLocalFile: mockWriteLocalFile,
   getFileTree: async () => [],
   getLocalFileTree: async () => [],
 }));
@@ -62,7 +67,7 @@ mock.module("@/hooks/useFileMentions", () => ({
     handleCursorChange: () => {},
     handleKeyDown: () => false,
     closeMenu: () => {},
-    serializeForLLM: (text: string) => text,
+    serializeForLLM: mockSerializeForLLM,
     createMention: () => ({}),
   }),
 }));
@@ -81,8 +86,25 @@ import { ClaudeComposeBar } from "../../../src/components/claude/ClaudeComposeBa
 import { useClaudeStore } from "../../../src/stores/claudeStore";
 import { useEnvironmentStore } from "../../../src/stores/environmentStore";
 
+if (typeof globalThis.ImageData === "undefined") {
+  (globalThis as Record<string, unknown>).ImageData = class ImageData {
+    data: Uint8ClampedArray;
+    width: number;
+    height: number;
+
+    constructor(data: Uint8ClampedArray, width: number, height: number) {
+      this.data = data;
+      this.width = width;
+      this.height = height;
+    }
+  };
+}
+
 const ENV_ID = "env-compose-test";
 const TAB_ID = "default";
+const SESSION_KEY = `env-${ENV_ID}:${TAB_ID}`;
+const originalGetContext = HTMLCanvasElement.prototype.getContext;
+const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
 
 const defaultModels = [
   { id: "opus", name: "Opus", supportsFastMode: false, supportsEffort: true, supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] as const },
@@ -111,6 +133,21 @@ function renderComposeBar(overrides: Partial<Parameters<typeof ClaudeComposeBar>
 
 describe("ClaudeComposeBar", () => {
   beforeEach(() => {
+    mockReadImage.mockReset();
+    mockWriteContainerFile.mockReset();
+    mockWriteLocalFile.mockReset();
+    mockSerializeForLLM.mockReset();
+    mockSerializeForLLM.mockImplementation((text: string) => text);
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    HTMLCanvasElement.prototype.getContext = (() => ({
+      putImageData: () => {},
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.toDataURL = (() =>
+      "data:image/png;base64,QUJD") as typeof HTMLCanvasElement.prototype.toDataURL;
+
     // Reset store state
     useClaudeStore.setState({
       attachments: new Map(),
@@ -127,6 +164,8 @@ describe("ClaudeComposeBar", () => {
 
   afterEach(() => {
     cleanup();
+    HTMLCanvasElement.prototype.getContext = originalGetContext;
+    HTMLCanvasElement.prototype.toDataURL = originalToDataURL;
   });
 
   test("renders input placeholder", () => {
@@ -180,22 +219,145 @@ describe("ClaudeComposeBar", () => {
 
   test("EFFORT_LABELS has entry for xhigh", () => {
     // Verify the new xhigh effort level renders without error
-    const sessionKey = `env-${ENV_ID}:${TAB_ID}`;
-    useClaudeStore.getState().setEffort(sessionKey, "xhigh");
+    useClaudeStore.getState().setEffort(SESSION_KEY, "xhigh");
     renderComposeBar();
     expect(screen.getByText("Extra High")).toBeTruthy();
   });
 
   test("all effort levels render correctly", () => {
-    const sessionKey = `env-${ENV_ID}:${TAB_ID}`;
     const levels = ["low", "medium", "high", "xhigh", "max"] as const;
     const labels = ["Low", "Medium", "High", "Extra High", "Max"];
 
     for (let i = 0; i < levels.length; i++) {
-      useClaudeStore.getState().setEffort(sessionKey, levels[i]);
+      useClaudeStore.getState().setEffort(SESSION_KEY, levels[i]);
       const { unmount } = renderComposeBar();
       expect(screen.getByText(labels[i])).toBeTruthy();
       unmount();
     }
+  });
+
+  test("sends the current prompt and clears the draft state", async () => {
+    const { onSend } = renderComposeBar();
+    const input = screen.getByTestId("mentionable-input");
+
+    fireEvent.change(input, { target: { value: "Ship the release" } });
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("Ship the release", [], "high", false);
+    });
+    expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe("");
+  });
+
+  test("queues the prompt while Claude is loading", async () => {
+    const { onQueue } = renderComposeBar({ isLoading: true });
+    const input = screen.getByTestId("mentionable-input");
+
+    fireEvent.change(input, { target: { value: "Queue this next" } });
+    fireEvent.click(screen.getByTitle("Add to queue"));
+
+    await waitFor(() => {
+      expect(onQueue).toHaveBeenCalledWith("Queue this next", [], "high", false);
+    });
+  });
+
+  test("clicking a queued prompt restores its text, settings, and attachments for editing", async () => {
+    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-1",
+      text: "Queued follow-up",
+      attachments: [
+        {
+          id: "att-1",
+          type: "image",
+          path: "/workspace/screenshot.png",
+          previewUrl: "data:image/png;base64,abc",
+          name: "screenshot.png",
+        },
+      ],
+      effort: "max",
+      planModeEnabled: true,
+    });
+
+    renderComposeBar({ queueLength: 1 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+    fireEvent.click(screen.getByText("Queued follow-up"));
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe(
+        "Queued follow-up",
+      );
+    });
+    expect(useClaudeStore.getState().getAttachments(SESSION_KEY)).toHaveLength(1);
+    expect(useClaudeStore.getState().getEffort(SESSION_KEY)).toBe("max");
+    expect(useClaudeStore.getState().isPlanMode(SESSION_KEY)).toBe(true);
+    expect(useClaudeStore.getState().getQueueLength(SESSION_KEY)).toBe(0);
+  });
+
+  test("serializes file mentions before sending", async () => {
+    mockSerializeForLLM.mockImplementation((text, mentions) => {
+      const mention = (mentions as Array<{ relativePath: string }>)[0];
+      return `${text} -> ${mention?.relativePath}`;
+    });
+    useClaudeStore.getState().setDraftText(SESSION_KEY, "@app");
+    useClaudeStore.getState().setDraftMentions(SESSION_KEY, [
+      { id: "mention-1", filename: "app.ts", relativePath: "src/app.ts" },
+    ]);
+
+    const { onSend } = renderComposeBar();
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("@app -> src/app.ts", [], "high", false);
+    });
+  });
+
+  test("selects a slash command instead of sending when Enter is pressed on slash input", async () => {
+    const { onSend } = renderComposeBar();
+    const input = screen.getByTestId("mentionable-input") as HTMLTextAreaElement;
+
+    fireEvent.change(input, { target: { value: "/rev" } });
+    await waitFor(() => {
+      expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe("/rev");
+    });
+
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe("/review ");
+    });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  test("adds a pasted image attachment through the shared paste hook", async () => {
+    const { getByTestId } = renderComposeBar({ containerId: "container-1" });
+    const input = getByTestId("mentionable-input") as HTMLTextAreaElement;
+    input.focus();
+
+    document.dispatchEvent(
+      new Event("paste", { bubbles: true, cancelable: true }),
+    );
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().getAttachments(SESSION_KEY)).toHaveLength(1);
+    });
+    expect(mockWriteContainerFile).toHaveBeenCalledTimes(1);
+  });
+
+  test("removes queued prompts from the dialog", async () => {
+    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-1",
+      text: "Queued follow-up",
+      attachments: [],
+      effort: "high",
+      planModeEnabled: false,
+    });
+
+    renderComposeBar({ queueLength: 1 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+    fireEvent.click(screen.getByTitle("Remove queued prompt"));
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().getQueueLength(SESSION_KEY)).toBe(0);
+    });
   });
 });

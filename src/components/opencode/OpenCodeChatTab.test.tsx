@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createOpenCodeSessionKey, useOpenCodeStore } from "@/stores/openCodeStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import * as realHooks from "@/hooks";
 
 // Snapshot the real sibling modules before we install stubs so we can restore
 // them when this file finishes. Without this, Bun's global mock.module cache
@@ -20,6 +21,8 @@ const realOpenCodeQuestionCardSnapshot = { ...realOpenCodeQuestionCard };
 const realOpenCodeResumeSessionDialogSnapshot = { ...realOpenCodeResumeSessionDialog };
 const realSlashCommandDirectorySnapshot = { ...realSlashCommandDirectory };
 const realSlashCommandRegistrySnapshot = { ...realSlashCommandRegistry };
+const realHooksSnapshot = { ...realHooks };
+const mockScrollToBottom = mock(() => {});
 
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
 const mockSendPrompt = mock(async () => ({ success: true }));
@@ -99,6 +102,17 @@ mock.module("./slash-command-directory", () => ({
 
 mock.module("./slash-command-registry", () => ({
   getNativeSlashCommands: mock(() => []),
+}));
+
+mock.module("@/hooks", () => ({
+  ...realHooksSnapshot,
+  useVirtuosoScrollState: mock(() => ({
+    isAtBottom: true,
+    isAtBottomRef: { current: true },
+    scrollToBottom: mockScrollToBottom,
+    virtuosoRef: { current: null },
+    scrollProps: {},
+  })),
 }));
 
 import { OpenCodeChatTab } from "./OpenCodeChatTab";
@@ -192,6 +206,7 @@ afterAll(() => {
   mock.module("./OpenCodeResumeSessionDialog", () => realOpenCodeResumeSessionDialogSnapshot);
   mock.module("./slash-command-directory", () => realSlashCommandDirectorySnapshot);
   mock.module("./slash-command-registry", () => realSlashCommandRegistrySnapshot);
+  mock.module("@/hooks", () => realHooksSnapshot);
 });
 
 describe("OpenCodeChatTab", () => {
@@ -203,6 +218,7 @@ describe("OpenCodeChatTab", () => {
     mockRenameEnvironmentFromPrompt.mockImplementation(async () => {});
     mockSendPrompt.mockClear();
     mockSendPrompt.mockImplementation(async () => ({ success: true }));
+    mockScrollToBottom.mockClear();
     resetStores();
   });
 
@@ -372,6 +388,69 @@ describe("OpenCodeChatTab", () => {
     });
 
     expect(clearIntervalCalls).toBeGreaterThan(0);
+  });
+
+  test("drains queued prompts when the session is idle", async () => {
+    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-1",
+      text: "Handle the queued prompt",
+      attachments: [],
+      model: "openai/gpt-5",
+      mode: "build",
+    });
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        "session-1",
+        "Handle the queued prompt",
+        expect.objectContaining({
+          model: "openai/gpt-5",
+          mode: "build",
+          attachments: undefined,
+        }),
+      );
+    });
+  });
+
+  test("scrolls to the footer again when a new message arrives while at the bottom", async () => {
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    mockScrollToBottom.mockClear();
+
+    act(() => {
+      useOpenCodeStore.getState().setSession(SESSION_KEY, {
+        sessionId: "session-1",
+        messages: [
+          {
+            id: "assistant-1",
+            role: "assistant",
+            content: "Done",
+            parts: [{ type: "text", content: "Done" }],
+            createdAt: "2026-04-15T10:00:00.000Z",
+          } as any,
+        ],
+        isLoading: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(mockScrollToBottom).toHaveBeenCalled();
+    });
   });
 });
 

@@ -1,18 +1,36 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { createClaudeSessionKey, useClaudeStore } from "@/stores/claudeStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 
+import * as realHooks from "@/hooks";
+const realHooksSnapshot = { ...realHooks };
+const mockScrollToBottom = mock(() => {});
+const mockCreateSession = mock(async () => ({ sessionId: "session-1" }));
+const mockCheckHealth = mock(async () => true);
+const mockSendPrompt = mock(async () => {});
+
+mock.module("@/hooks", () => ({
+  ...realHooksSnapshot,
+  useVirtuosoScrollState: mock(() => ({
+    isAtBottom: true,
+    isAtBottomRef: { current: true },
+    scrollToBottom: mockScrollToBottom,
+    virtuosoRef: { current: null },
+    scrollProps: {},
+  })),
+}));
+
 mock.module("@/lib/claude-client", () => ({
   createClient: mock(() => ({ baseUrl: "http://127.0.0.1:9999" })),
   getModels: mock(async () => []),
-  createSession: mock(async () => ({ sessionId: "session-1" })),
+  createSession: mockCreateSession,
   getSession: mock(async () => null),
   getSessionMessages: mock(async () => []),
-  sendPrompt: mock(async () => {}),
+  sendPrompt: mockSendPrompt,
   abortSession: mock(async () => {}),
   subscribeToEvents: mock(() => (async function* () {})()),
-  checkHealth: mock(async () => true),
+  checkHealth: mockCheckHealth,
   getSlashCommands: mock(async () => []),
   ERROR_MESSAGE_PREFIX: "error-",
   SYSTEM_MESSAGE_PREFIX: "system-",
@@ -121,9 +139,17 @@ function resetStores() {
 }
 
 describe("ClaudeChatTab", () => {
+  afterAll(() => {
+    mock.module("@/hooks", () => realHooksSnapshot);
+  });
+
   beforeEach(() => {
     cleanup();
     resetStores();
+    mockScrollToBottom.mockClear();
+    mockCreateSession.mockClear();
+    mockCheckHealth.mockClear();
+    mockSendPrompt.mockClear();
   });
 
   afterEach(() => {
@@ -170,6 +196,83 @@ describe("ClaudeChatTab", () => {
     });
 
     expect(clearIntervalCalls).toBeGreaterThan(0);
+  });
+
+  test("fast reconnect reuses the existing session instead of creating a new one", async () => {
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockCheckHealth).toHaveBeenCalledWith(MOCK_CLIENT);
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("drains queued prompts when the session is idle", async () => {
+    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-1",
+      text: "Run the queued review",
+      attachments: [],
+      effort: "high",
+      planModeEnabled: false,
+    });
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        "session-1",
+        "Run the queued review",
+        expect.objectContaining({
+          attachments: undefined,
+          effort: "high",
+          permissionMode: "bypassPermissions",
+        }),
+      );
+    });
+  });
+
+  test("scrolls to the footer again when a new message arrives while at the bottom", async () => {
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    mockScrollToBottom.mockClear();
+
+    act(() => {
+      useClaudeStore.getState().setSession(SESSION_KEY, {
+        sessionId: "session-1",
+        messages: [
+          {
+            id: "assistant-1",
+            type: "assistant",
+            message: { content: [{ type: "text", text: "Done" }] },
+            timestamp: "2026-04-15T10:00:00.000Z",
+          } as any,
+        ],
+        isLoading: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(mockScrollToBottom).toHaveBeenCalled();
+    });
   });
 });
 

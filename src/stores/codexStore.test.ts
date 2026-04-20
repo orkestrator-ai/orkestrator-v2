@@ -169,3 +169,102 @@ describe("codexStore message helpers", () => {
     }
   });
 });
+
+describe("codexStore cleanup and queue helpers", () => {
+  beforeEach(() => {
+    resetCodexStore();
+  });
+
+  test("clearEnvironment removes only the targeted environment's tab-scoped state", () => {
+    const sessionKeyA = createCodexSessionKey("env-1", "tab-1");
+    const sessionKeyB = createCodexSessionKey("env-2", "tab-1");
+    const store = useCodexStore.getState();
+
+    store.setSession(sessionKeyA, {
+      sessionId: "session-a",
+      messages: [],
+      isLoading: false,
+    });
+    store.setSession(sessionKeyB, {
+      sessionId: "session-b",
+      messages: [],
+      isLoading: false,
+    });
+    store.setSelectedModel(sessionKeyA, "gpt-5");
+    store.setSelectedModel(sessionKeyB, "gpt-4");
+    store.setSelectedMode(sessionKeyA, "plan");
+    store.setSelectedReasoningEffort(sessionKeyA, "high");
+    store.setDraftText(sessionKeyA, "draft");
+    store.addAttachment(sessionKeyA, {
+      id: "att-a",
+      type: "image",
+      path: "/workspace/a.png",
+      name: "a.png",
+    });
+    store.addToQueue(sessionKeyA, {
+      id: "queue-a",
+      text: "queued",
+      attachments: [],
+      model: "gpt-5",
+      mode: "build",
+      reasoningEffort: "medium",
+    });
+    store.setSlashCommands("env-1", [{ name: "/fix", source: "prompt" }]);
+    store.setSlashCommands("env-2", [{ name: "/keep", source: "builtin" }]);
+
+    store.clearEnvironment("env-1");
+
+    expect(store.getSession(sessionKeyA)).toBeUndefined();
+    expect(store.getSession(sessionKeyB)?.sessionId).toBe("session-b");
+    expect(store.getDraftText(sessionKeyA)).toBe("");
+    expect(store.getAttachments(sessionKeyA)).toEqual([]);
+    expect(store.getQueueLength(sessionKeyA)).toBe(0);
+    expect(useCodexStore.getState().selectedModel.get(sessionKeyA)).toBeUndefined();
+    expect(useCodexStore.getState().selectedModel.get(sessionKeyB)).toBe("gpt-4");
+    expect(useCodexStore.getState().slashCommands.get("env-1")).toBeUndefined();
+    expect(useCodexStore.getState().slashCommands.get("env-2")).toEqual([
+      { name: "/keep", source: "builtin" },
+    ]);
+  });
+
+  test("queue helpers remove items in FIFO order and preserve unrelated queues", () => {
+    const queueA = createCodexSessionKey("env-1", "tab-1");
+    const queueB = createCodexSessionKey("env-1", "tab-2");
+    const store = useCodexStore.getState();
+
+    store.addToQueue(queueA, {
+      id: "q-1",
+      text: "first",
+      attachments: [],
+      model: "gpt-5",
+      mode: "build",
+      reasoningEffort: "medium",
+    });
+    store.addToQueue(queueA, {
+      id: "q-2",
+      text: "second",
+      attachments: [],
+      model: "gpt-5",
+      mode: "plan",
+      reasoningEffort: "high",
+    });
+    store.addToQueue(queueB, {
+      id: "q-3",
+      text: "other-tab",
+      attachments: [],
+      model: "gpt-4",
+      mode: "build",
+      reasoningEffort: "low",
+    });
+
+    expect(store.removeFromQueue(queueA)?.id).toBe("q-1");
+    expect(store.getQueuedMessages(queueA).map((item) => item.id)).toEqual([
+      "q-2",
+    ]);
+
+    store.clearQueue(queueA);
+
+    expect(store.getQueueLength(queueA)).toBe(0);
+    expect(store.getQueueLength(queueB)).toBe(1);
+  });
+});

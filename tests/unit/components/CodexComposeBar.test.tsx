@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { mockReadImage } from "../../mocks/clipboard";
+
+const mockWriteContainerFile = mock(async () => {});
+const mockWriteLocalFile = mock(async () => "/tmp/file.png");
+const mockSerializeForLLM = mock((text: string, _mentions?: unknown[]) => text);
 
 // --- Module mocks (must be before component import) ---
 
 mock.module("@/lib/tauri", () => ({
-  writeContainerFile: async () => {},
-  writeLocalFile: async () => "/tmp/file.png",
+  writeContainerFile: mockWriteContainerFile,
+  writeLocalFile: mockWriteLocalFile,
   getFileTree: async () => [],
   getLocalFileTree: async () => [],
 }));
@@ -58,7 +63,7 @@ mock.module("@/hooks/useFileMentions", () => ({
     handleCursorChange: () => {},
     handleKeyDown: () => false,
     closeMenu: () => {},
-    serializeForLLM: (text: string) => text,
+    serializeForLLM: mockSerializeForLLM,
     createMention: () => ({}),
   }),
 }));
@@ -73,8 +78,24 @@ import { CodexComposeBar } from "../../../src/components/codex/CodexComposeBar";
 import { useCodexStore } from "../../../src/stores/codexStore";
 import type { CodexModel } from "../../../src/lib/codex-client";
 
+if (typeof globalThis.ImageData === "undefined") {
+  (globalThis as Record<string, unknown>).ImageData = class ImageData {
+    data: Uint8ClampedArray;
+    width: number;
+    height: number;
+
+    constructor(data: Uint8ClampedArray, width: number, height: number) {
+      this.data = data;
+      this.width = width;
+      this.height = height;
+    }
+  };
+}
+
 const ENV_ID = "env-codex-compose";
 const SESSION_KEY = `env-${ENV_ID}:default`;
+const originalGetContext = HTMLCanvasElement.prototype.getContext;
+const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
 
 const defaultModels: CodexModel[] = [
   {
@@ -132,6 +153,21 @@ function renderComposeBar(
 
 describe("CodexComposeBar", () => {
   beforeEach(() => {
+    mockReadImage.mockReset();
+    mockWriteContainerFile.mockReset();
+    mockWriteLocalFile.mockReset();
+    mockSerializeForLLM.mockReset();
+    mockSerializeForLLM.mockImplementation((text: string) => text);
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    HTMLCanvasElement.prototype.getContext = (() => ({
+      putImageData: () => {},
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.toDataURL = (() =>
+      "data:image/png;base64,QUJD") as typeof HTMLCanvasElement.prototype.toDataURL;
+
     useCodexStore.setState({
       attachments: new Map(),
       draftText: new Map(),
@@ -142,6 +178,8 @@ describe("CodexComposeBar", () => {
 
   afterEach(() => {
     cleanup();
+    HTMLCanvasElement.prototype.getContext = originalGetContext;
+    HTMLCanvasElement.prototype.toDataURL = originalToDataURL;
   });
 
   test("renders input placeholder", () => {
@@ -234,5 +272,152 @@ describe("CodexComposeBar", () => {
     const { container } = renderComposeBar();
     const wrapper = container.firstChild as HTMLElement;
     expect(wrapper.className).toContain("shrink-0");
+  });
+
+  test("sends the current prompt and clears the draft state", async () => {
+    const { onSend } = renderComposeBar();
+    const input = screen.getByTestId("mentionable-input");
+
+    fireEvent.change(input, { target: { value: "Review the flaky test" } });
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("Review the flaky test", []);
+    });
+    expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe("");
+  });
+
+  test("queues the prompt while Codex is loading", async () => {
+    const { onQueue } = renderComposeBar({ isLoading: true });
+    const input = screen.getByTestId("mentionable-input");
+
+    fireEvent.change(input, { target: { value: "Queue this for later" } });
+    fireEvent.click(screen.getByTitle("Add to queue"));
+
+    await waitFor(() => {
+      expect(onQueue).toHaveBeenCalledWith("Queue this for later", []);
+    });
+  });
+
+  test("clicking a queued prompt restores it into the draft and removes it from the queue", async () => {
+    useCodexStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-1",
+      text: "Queued codex task",
+      attachments: [
+        {
+          id: "att-1",
+          type: "image",
+          path: "/workspace/screenshot.png",
+          previewUrl: "data:image/png;base64,abc",
+          name: "screenshot.png",
+        },
+      ],
+      model: "gpt-5.3-codex",
+      mode: "plan",
+      reasoningEffort: "xhigh",
+    });
+
+    renderComposeBar({ queueLength: 1 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+    fireEvent.click(screen.getByText("Queued codex task"));
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe(
+        "Queued codex task",
+      );
+    });
+    expect(useCodexStore.getState().getAttachments(SESSION_KEY)).toHaveLength(1);
+    expect(useCodexStore.getState().getQueueLength(SESSION_KEY)).toBe(0);
+  });
+
+  test("serializes file mentions before sending", async () => {
+    mockSerializeForLLM.mockImplementation((text, mentions) => {
+      const mention = (mentions as Array<{ relativePath: string }>)[0];
+      return `${text} -> ${mention?.relativePath}`;
+    });
+    useCodexStore.getState().setDraftText(SESSION_KEY, "@app");
+    useCodexStore.getState().setDraftMentions(SESSION_KEY, [
+      { id: "mention-1", filename: "app.ts", relativePath: "src/app.ts" },
+    ]);
+
+    const { onSend } = renderComposeBar();
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("@app -> src/app.ts", []);
+    });
+  });
+
+  test("selects a slash command instead of sending when Enter is pressed on slash input", async () => {
+    const { onSend } = renderComposeBar({
+      slashCommands: [{ name: "/fix", source: "prompt" }],
+    });
+    const input = screen.getByTestId("mentionable-input") as HTMLTextAreaElement;
+
+    fireEvent.change(input, { target: { value: "/fi" } });
+    await waitFor(() => {
+      expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe("/fi");
+    });
+
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe("/fix ");
+    });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  test("adds a pasted image attachment through the shared paste hook", async () => {
+    const { getByTestId } = renderComposeBar({ containerId: "container-1" });
+    const input = getByTestId("mentionable-input") as HTMLTextAreaElement;
+    input.focus();
+
+    document.dispatchEvent(
+      new Event("paste", { bubbles: true, cancelable: true }),
+    );
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().getAttachments(SESSION_KEY)).toHaveLength(1);
+    });
+    expect(mockWriteContainerFile).toHaveBeenCalledTimes(1);
+  });
+
+  test("reorders and removes queued prompts from the dialog", async () => {
+    useCodexStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-1",
+      text: "First queued task",
+      attachments: [],
+      model: "gpt-5.3-codex",
+      mode: "build",
+      reasoningEffort: "high",
+    });
+    useCodexStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-2",
+      text: "Second queued task",
+      attachments: [],
+      model: "gpt-5.3-codex",
+      mode: "build",
+      reasoningEffort: "high",
+    });
+
+    renderComposeBar({ queueLength: 2 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+    fireEvent.click(
+      screen
+        .getAllByTitle("Move down")
+        .find((button) => !button.hasAttribute("disabled"))!,
+    );
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().getQueuedMessages(SESSION_KEY)[0]?.id).toBe(
+        "queue-2",
+      );
+    });
+
+    fireEvent.click(screen.getAllByTitle("Remove queued prompt")[0]!);
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().getQueueLength(SESSION_KEY)).toBe(1);
+    });
   });
 });

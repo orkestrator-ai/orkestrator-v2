@@ -21,6 +21,7 @@ import {
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
+import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import {
   createClient,
   getModelsWithDefaults,
@@ -1372,11 +1373,10 @@ export function OpenCodeChatTab({
   // Render loading state
   if (isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady })) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
-        <Loader2 className="w-8 h-8 animate-spin text-yellow-400" />
-        <p className="text-sm">Waiting for setup scripts to complete...</p>
-        <p className="text-xs">OpenCode will connect automatically once setup finishes</p>
-      </div>
+      <SetupPendingOverlay
+        environmentId={environmentId}
+        subtext="OpenCode will connect automatically once setup finishes"
+      />
     );
   }
 

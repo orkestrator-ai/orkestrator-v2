@@ -58,6 +58,30 @@ export function markSetupScriptsComplete(environmentId: string): void {
     });
 }
 
+/**
+ * Force the runtime setup-pending gates open for an environment without
+ * persisting completion. Intended for the user-facing "skip waiting" override
+ * when detection fails to fire. Does NOT drop pending setup commands so a
+ * retry path is preserved if setup was merely slow.
+ */
+export function forceResolveSetupRuntime(environmentId: string): void {
+  const store = useEnvironmentStore.getState();
+  const env = store.getEnvironmentById(environmentId);
+  if (!env) {
+    console.warn(
+      "[setup-commands] forceResolveSetupRuntime: unknown environment",
+      { environmentId }
+    );
+    return;
+  }
+  if (env.environmentType === "local") {
+    store.setSetupScriptsRunning(environmentId, false);
+    store.setSetupCommandsResolved(environmentId, true);
+  } else {
+    store.setWorkspaceReady(environmentId, true);
+  }
+}
+
 export function isSetupPending(params: {
   isLocal: boolean;
   setupCommandsResolved: boolean;

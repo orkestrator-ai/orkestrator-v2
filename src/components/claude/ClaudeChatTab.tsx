@@ -44,6 +44,7 @@ import { ResumeSessionDialog } from "./ResumeSessionDialog";
 import type { ClaudeNativeData } from "@/types/paneLayout";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
+import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import type { ClaudeAttachment } from "@/stores/claudeStore";
 
 interface ClaudeChatTabProps {
@@ -1232,11 +1233,10 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
 
   if (isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady })) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
-        <Loader2 className="w-8 h-8 animate-spin text-yellow-400" />
-        <p className="text-sm">Waiting for setup scripts to complete...</p>
-        <p className="text-xs">Claude will connect automatically once setup finishes</p>
-      </div>
+      <SetupPendingOverlay
+        environmentId={environmentId}
+        subtext="Claude will connect automatically once setup finishes"
+      />
     );
   }
 

@@ -52,6 +52,7 @@ import {
 } from "./codex-preferences";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
+import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import type { CodexNativeData } from "@/types/paneLayout";
 import type { CodexAttachment } from "@/stores/codexStore";
 
@@ -1114,11 +1115,10 @@ export function CodexChatTab({
 
   if (isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady })) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
-        <Loader2 className="w-8 h-8 animate-spin text-yellow-400" />
-        <p className="text-sm">Waiting for setup scripts to complete...</p>
-        <p className="text-xs">Codex will connect automatically once setup finishes</p>
-      </div>
+      <SetupPendingOverlay
+        environmentId={environmentId}
+        subtext="Codex will connect automatically once setup finishes"
+      />
     );
   }
 

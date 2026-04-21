@@ -4,6 +4,7 @@ import { waitFor } from "@testing-library/react";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";
 import {
+  forceResolveSetupRuntime,
   isSetupPending,
   markSetupScriptsComplete,
   shouldAutoResolveSetupCommands,
@@ -163,6 +164,60 @@ describe("setup-commands", () => {
     await Promise.resolve();
 
     expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupScriptsComplete).toBeUndefined();
+  });
+
+  test("forceResolveSetupRuntime flips local gates without draining pending commands", () => {
+    useEnvironmentStore.setState({
+      environments: [createEnvironment({ id: "env-1", environmentType: "local" })],
+      setupScriptsRunning: new Set<string>(["env-1"]),
+      setupCommandsResolved: new Set<string>(),
+      pendingSetupCommands: new Map([["env-1", ["echo hi"]]]),
+      workspaceReadyEnvironments: new Set<string>(),
+    });
+
+    forceResolveSetupRuntime("env-1");
+
+    const state = useEnvironmentStore.getState();
+    expect(state.setupScriptsRunning.has("env-1")).toBe(false);
+    expect(state.setupCommandsResolved.has("env-1")).toBe(true);
+    // Pending commands are preserved so a retry path exists when setup was
+    // merely slow rather than genuinely stuck.
+    expect(state.pendingSetupCommands.get("env-1")).toEqual(["echo hi"]);
+    // Local override does not touch workspace-ready (that's the container gate).
+    expect(state.workspaceReadyEnvironments.has("env-1")).toBe(false);
+  });
+
+  test("forceResolveSetupRuntime flips workspaceReady for containerized envs", () => {
+    useEnvironmentStore.setState({
+      environments: [createEnvironment({ id: "env-1", environmentType: "containerized" })],
+      setupScriptsRunning: new Set<string>(),
+      setupCommandsResolved: new Set<string>(),
+      pendingSetupCommands: new Map(),
+      workspaceReadyEnvironments: new Set<string>(),
+    });
+
+    forceResolveSetupRuntime("env-1");
+
+    const state = useEnvironmentStore.getState();
+    expect(state.workspaceReadyEnvironments.has("env-1")).toBe(true);
+    // Container override does NOT touch the local gates.
+    expect(state.setupCommandsResolved.has("env-1")).toBe(false);
+  });
+
+  test("forceResolveSetupRuntime no-ops for unknown environment", () => {
+    useEnvironmentStore.setState({
+      environments: [],
+      setupScriptsRunning: new Set<string>(),
+      setupCommandsResolved: new Set<string>(),
+      pendingSetupCommands: new Map(),
+      workspaceReadyEnvironments: new Set<string>(),
+    });
+
+    forceResolveSetupRuntime("missing-env");
+
+    const state = useEnvironmentStore.getState();
+    expect(state.workspaceReadyEnvironments.has("missing-env")).toBe(false);
+    expect(state.setupCommandsResolved.has("missing-env")).toBe(false);
   });
 
   test("deduplicates concurrent completion writes", async () => {

@@ -93,7 +93,6 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
   // Always set the state to true - this ensures the state is updated even if it was
   // reset to false by TerminalContainer for a new container startup
   const handleWorkspaceReady = useCallback((payload: { persistSetupComplete: boolean }) => {
-    console.log("[TerminalPortalHost] handleWorkspaceReady called - setting workspace ready for environment:", environmentId);
     setWorkspaceReady(environmentId, true);
     if (!isLocalEnvironment && payload.persistSetupComplete) {
       markSetupScriptsComplete(environmentId);
@@ -102,7 +101,6 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
 
   // Handle setup scripts completion - fires when setup tab's marker is detected
   const handleSetupComplete = useCallback((payload: { persistSetupComplete: boolean }) => {
-    console.log("[TerminalPortalHost] handleSetupComplete called - clearing setupScriptsRunning for environment:", environmentId);
     setSetupScriptsRunning(environmentId, false);
     if (payload.persistSetupComplete) {
       markSetupScriptsComplete(environmentId);

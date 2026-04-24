@@ -106,6 +106,22 @@ async fn fetch_setup_commands(worktree_path: &str, environment_id: &str) -> Opti
     }
 }
 
+async fn fetch_setup_commands_for_start(
+    worktree_path: &str,
+    environment_id: &str,
+    setup_scripts_complete: bool,
+) -> Option<Vec<String>> {
+    if setup_scripts_complete {
+        debug!(
+            environment_id = %environment_id,
+            "Skipping setupLocal commands for completed local environment"
+        );
+        None
+    } else {
+        fetch_setup_commands(worktree_path, environment_id).await
+    }
+}
+
 /// Resolve and persist entry port mapping for a container environment.
 ///
 /// When `entry_port` is `Some`, queries Docker for the host port mapped to the
@@ -1539,8 +1555,12 @@ async fn start_local_environment(
                 warn!(error = %e, "Failed to configure local git artifacts (non-fatal)");
             }
 
-            // Get setupLocal commands from orkestrator-ai.json
-            let setup_commands = fetch_setup_commands(worktree_path, environment_id).await;
+            let setup_commands = fetch_setup_commands_for_start(
+                worktree_path,
+                environment_id,
+                environment.setup_scripts_complete,
+            )
+            .await;
 
             // Update status to running
             storage
@@ -2313,6 +2333,24 @@ mod tests {
     fn test_resolve_container_github_token_prefers_configured_token() {
         let token = resolve_container_github_token(Some("  ghp-configured  "), "env-123");
         assert_eq!(token, Some("ghp-configured".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_setup_commands_for_start_skips_completed_environment() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            temp_dir.path().join("orkestrator-ai.json"),
+            r#"{"setupLocal":["bun install"]}"#,
+        )
+        .unwrap();
+        let worktree_path = temp_dir.path().to_str().unwrap();
+
+        let completed = fetch_setup_commands_for_start(worktree_path, "env-complete", true).await;
+        assert_eq!(completed, None);
+
+        let incomplete =
+            fetch_setup_commands_for_start(worktree_path, "env-incomplete", false).await;
+        assert_eq!(incomplete, Some(vec!["bun install".to_string()]));
     }
 
     fn env_with_branch(name: &str, branch: &str) -> Environment {

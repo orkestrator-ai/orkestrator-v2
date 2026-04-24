@@ -807,6 +807,11 @@ impl Storage {
             if let Some(codex_mode) = updates.get("codexMode") {
                 environment.codex_mode = serde_json::from_value(codex_mode.clone()).ok().flatten();
             }
+            if let Some(setup_scripts_complete) = updates.get("setupScriptsComplete") {
+                if let Some(value) = setup_scripts_complete.as_bool() {
+                    environment.setup_scripts_complete = value;
+                }
+            }
 
             let updated = environment.clone();
             self.save_environments_unlocked(&environments)?;
@@ -2112,6 +2117,80 @@ mod tests {
 
         let loaded = storage.get_environment(&env.id).unwrap().unwrap();
         assert_eq!(loaded.codex_mode, None);
+    }
+
+    #[test]
+    fn test_update_environment_setup_scripts_complete() {
+        let storage = create_test_storage();
+
+        let env = Environment::new_local("project-123".to_string(), "test-env".to_string());
+        storage.add_environment(env.clone()).unwrap();
+
+        let updated = storage
+            .update_environment(
+                &env.id,
+                serde_json::json!({
+                    "setupScriptsComplete": true
+                }),
+            )
+            .unwrap();
+        assert!(updated.setup_scripts_complete);
+
+        let loaded = storage.get_environment(&env.id).unwrap().unwrap();
+        assert!(loaded.setup_scripts_complete);
+
+        let updated = storage
+            .update_environment(
+                &env.id,
+                serde_json::json!({
+                    "setupScriptsComplete": false
+                }),
+            )
+            .unwrap();
+        assert!(!updated.setup_scripts_complete);
+
+        let loaded = storage.get_environment(&env.id).unwrap().unwrap();
+        assert!(!loaded.setup_scripts_complete);
+    }
+
+    #[test]
+    fn test_update_environment_ignores_invalid_setup_scripts_complete() {
+        let storage = create_test_storage();
+
+        let env = Environment::new_local("project-123".to_string(), "test-env".to_string());
+        storage.add_environment(env.clone()).unwrap();
+
+        storage
+            .update_environment(
+                &env.id,
+                serde_json::json!({
+                    "setupScriptsComplete": true
+                }),
+            )
+            .unwrap();
+
+        let updated = storage
+            .update_environment(
+                &env.id,
+                serde_json::json!({
+                    "setupScriptsComplete": "yes"
+                }),
+            )
+            .unwrap();
+        assert!(updated.setup_scripts_complete);
+
+        let updated = storage
+            .update_environment(
+                &env.id,
+                serde_json::json!({
+                    "setupScriptsComplete": null
+                }),
+            )
+            .unwrap();
+        assert!(updated.setup_scripts_complete);
+
+        let loaded = storage.get_environment(&env.id).unwrap().unwrap();
+        assert!(loaded.setup_scripts_complete);
     }
 
     #[test]

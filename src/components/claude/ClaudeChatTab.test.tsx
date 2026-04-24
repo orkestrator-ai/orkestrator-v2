@@ -220,6 +220,7 @@ describe("ClaudeChatTab", () => {
       attachments: [],
       effort: "high",
       planModeEnabled: false,
+      fastModeEnabled: false,
     });
 
     render(

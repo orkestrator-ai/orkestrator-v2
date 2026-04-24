@@ -216,6 +216,8 @@ export interface PromptOptions {
   model?: string;
   effort?: EffortLevel;
   permissionMode?: PermissionMode;
+  /** When true, enables Claude Code fast mode (Opus 4.6 priority service tier). */
+  fastMode?: boolean;
   attachments?: Array<{
     type: "file" | "image";
     path: string;

@@ -670,6 +670,7 @@ fn build_local_codex_bridge_env_vars(
     worktree_path: &str,
     port: u16,
     bundled_bun_path: Option<&str>,
+    bundled_codex_path: Option<&str>,
     raw_log_dir: Option<&str>,
 ) -> HashMap<String, String> {
     let mut env_vars = HashMap::new();
@@ -681,6 +682,14 @@ fn build_local_codex_bridge_env_vars(
         build_comprehensive_path(bundled_bun_path),
     );
     env_vars.insert("CWD".to_string(), worktree_path.to_string());
+
+    // Prefer the bundled codex binary; fall back to whatever's on PATH otherwise.
+    // The bridge reads `CODEX_PATH` when instantiating `new Codex({...})`.
+    if let Some(codex_path) = bundled_codex_path {
+        env_vars.insert("CODEX_PATH".to_string(), codex_path.to_string());
+    } else if let Some(codex_path) = find_codex_binary() {
+        env_vars.insert("CODEX_PATH".to_string(), codex_path);
+    }
 
     if let Some(raw_log_dir) = raw_log_dir {
         env_vars.insert(
@@ -704,6 +713,7 @@ pub async fn start_local_codex_bridge(
     port: u16,
     bridge_path: &str,
     bundled_bun_path: Option<&str>,
+    bundled_codex_path: Option<&str>,
     raw_log_dir: Option<&str>,
 ) -> Result<LocalServerStartResult, String> {
     wait_for_startup_cleanup().await;
@@ -736,8 +746,13 @@ pub async fn start_local_codex_bridge(
         }
     }
 
-    let env_vars =
-        build_local_codex_bridge_env_vars(worktree_path, port, bundled_bun_path, raw_log_dir);
+    let env_vars = build_local_codex_bridge_env_vars(
+        worktree_path,
+        port,
+        bundled_bun_path,
+        bundled_codex_path,
+        raw_log_dir,
+    );
 
     let entry_point = format!("{}/dist/index.js", bridge_path);
     ensure_bridge_ready("codex-bridge", bridge_path, &entry_point).await?;
@@ -1716,6 +1731,7 @@ mod tests {
             "/tmp/worktree",
             4321,
             Some("/tmp/bun"),
+            None,
             Some("/tmp/logs/codex-raw"),
         );
 
@@ -1732,9 +1748,30 @@ mod tests {
 
     #[test]
     fn test_build_local_codex_bridge_env_vars_omits_raw_log_dir_when_disabled() {
-        let env_vars =
-            build_local_codex_bridge_env_vars("/tmp/worktree", 4321, Some("/tmp/bun"), None);
+        let env_vars = build_local_codex_bridge_env_vars(
+            "/tmp/worktree",
+            4321,
+            Some("/tmp/bun"),
+            None,
+            None,
+        );
 
         assert!(!env_vars.contains_key("ORKESTRATOR_CODEX_RAW_LOG_DIR"));
+    }
+
+    #[test]
+    fn test_build_local_codex_bridge_env_vars_sets_codex_path_when_bundled() {
+        let env_vars = build_local_codex_bridge_env_vars(
+            "/tmp/worktree",
+            4321,
+            Some("/tmp/bun"),
+            Some("/app/bin/codex"),
+            None,
+        );
+
+        assert_eq!(
+            env_vars.get("CODEX_PATH").map(String::as_str),
+            Some("/app/bin/codex")
+        );
     }
 }

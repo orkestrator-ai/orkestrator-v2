@@ -126,6 +126,7 @@ session.post("/:id/prompt", async (c) => {
           filename?: string;
         }>
       | undefined;
+    const fastMode = typeof body.fastMode === "boolean" ? body.fastMode : undefined;
 
     if (!prompt) {
       return c.json({ error: "Prompt is required" }, 400);
@@ -137,11 +138,12 @@ session.post("/:id/prompt", async (c) => {
       model,
       effort,
       permissionMode,
+      fastMode,
       attachmentsCount: attachments?.length ?? 0,
     });
 
     // Start processing in background (don't await)
-    sendPrompt(id, prompt, { model, attachments, effort, permissionMode }).catch((error) => {
+    sendPrompt(id, prompt, { model, attachments, effort, permissionMode, fastMode }).catch((error) => {
       console.error("[session] Error processing prompt:", error);
     });
 

@@ -156,6 +156,7 @@ describe("ClaudeComposeBar", () => {
       selectedModel: new Map(),
       effort: new Map(),
       planMode: new Map(),
+      fastMode: new Map(),
       queuedMessages: new Map(),
       sessionInitData: new Map(),
       contextUsage: new Map(),
@@ -244,7 +245,7 @@ describe("ClaudeComposeBar", () => {
     fireEvent.click(screen.getByTitle("Send message"));
 
     await waitFor(() => {
-      expect(onSend).toHaveBeenCalledWith("Ship the release", [], "high", false);
+      expect(onSend).toHaveBeenCalledWith("Ship the release", [], "high", false, false);
     });
     expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe("");
   });
@@ -257,7 +258,7 @@ describe("ClaudeComposeBar", () => {
     fireEvent.click(screen.getByTitle("Add to queue"));
 
     await waitFor(() => {
-      expect(onQueue).toHaveBeenCalledWith("Queue this next", [], "high", false);
+      expect(onQueue).toHaveBeenCalledWith("Queue this next", [], "high", false, false);
     });
   });
 
@@ -307,7 +308,7 @@ describe("ClaudeComposeBar", () => {
     fireEvent.click(screen.getByTitle("Send message"));
 
     await waitFor(() => {
-      expect(onSend).toHaveBeenCalledWith("@app -> src/app.ts", [], "high", false);
+      expect(onSend).toHaveBeenCalledWith("@app -> src/app.ts", [], "high", false, false);
     });
   });
 
@@ -358,6 +359,87 @@ describe("ClaudeComposeBar", () => {
 
     await waitFor(() => {
       expect(useClaudeStore.getState().getQueueLength(SESSION_KEY)).toBe(0);
+    });
+  });
+
+  describe("fast mode toggle", () => {
+    test("hides the Fast button when the selected model does not support fast mode", () => {
+      // Opus is the default (first) model and has supportsFastMode: false.
+      renderComposeBar();
+      expect(screen.queryByText("Fast")).toBeNull();
+    });
+
+    test("renders the Fast button when the selected model supports fast mode", () => {
+      useClaudeStore.getState().setSelectedModel(SESSION_KEY, "sonnet");
+      renderComposeBar();
+      expect(screen.getByText("Fast")).toBeTruthy();
+    });
+
+    test("toggles fast mode in the store when the button is clicked", async () => {
+      useClaudeStore.getState().setSelectedModel(SESSION_KEY, "sonnet");
+      renderComposeBar();
+
+      const fastButton = screen.getByText("Fast").closest("button");
+      expect(fastButton).toBeTruthy();
+
+      fireEvent.click(fastButton!);
+      await waitFor(() => {
+        expect(useClaudeStore.getState().isFastMode(SESSION_KEY)).toBe(true);
+      });
+      expect(fastButton!.getAttribute("aria-pressed")).toBe("true");
+
+      fireEvent.click(fastButton!);
+      await waitFor(() => {
+        expect(useClaudeStore.getState().isFastMode(SESSION_KEY)).toBe(false);
+      });
+    });
+
+    test("resets fast mode when the selected model switches to one that doesn't support it", async () => {
+      // Start on a supporting model with fast mode on.
+      useClaudeStore.getState().setSelectedModel(SESSION_KEY, "sonnet");
+      useClaudeStore.getState().setFastMode(SESSION_KEY, true);
+      renderComposeBar();
+
+      await waitFor(() => {
+        expect(screen.getByText("Fast")).toBeTruthy();
+      });
+
+      // Switch to the non-supporting model; the component's normalization
+      // effect must clear stored fast mode to keep UI and state in sync.
+      useClaudeStore.getState().setSelectedModel(SESSION_KEY, "opus");
+
+      await waitFor(() => {
+        expect(useClaudeStore.getState().isFastMode(SESSION_KEY)).toBe(false);
+      });
+      expect(screen.queryByText("Fast")).toBeNull();
+    });
+
+    test("defensively resets fast mode on mount when the selected model doesn't support it", async () => {
+      // Simulate a stale preference: fast mode was set before a model list arrived
+      // that excludes fast-mode support for the current selection.
+      useClaudeStore.getState().setSelectedModel(SESSION_KEY, "opus");
+      useClaudeStore.getState().setFastMode(SESSION_KEY, true);
+
+      renderComposeBar();
+
+      await waitFor(() => {
+        expect(useClaudeStore.getState().isFastMode(SESSION_KEY)).toBe(false);
+      });
+    });
+
+    test("sends fast mode flag through when enabled on a supporting model", async () => {
+      useClaudeStore.getState().setSelectedModel(SESSION_KEY, "sonnet");
+      useClaudeStore.getState().setFastMode(SESSION_KEY, true);
+      const { onSend } = renderComposeBar();
+
+      fireEvent.change(screen.getByTestId("mentionable-input"), {
+        target: { value: "Go fast" },
+      });
+      fireEvent.click(screen.getByTitle("Send message"));
+
+      await waitFor(() => {
+        expect(onSend).toHaveBeenCalledWith("Go fast", [], "high", false, true);
+      });
     });
   });
 });

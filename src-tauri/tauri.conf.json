@@ -47,7 +47,8 @@
       "../bridges/codex-bridge/package.json": "codex-bridge/package.json",
       "../bridges/codex-bridge/node_modules": "codex-bridge/node_modules",
       "../binaries/bun": "bin/bun",
-      "../binaries/opencode": "bin/opencode"
+      "../binaries/opencode": "bin/opencode",
+      "../binaries/codex": "bin/codex"
     }
   }
 }

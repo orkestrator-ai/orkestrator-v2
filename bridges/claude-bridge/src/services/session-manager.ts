@@ -949,6 +949,8 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
     const requestedPlanMode = options?.permissionMode === "plan";
     const permissionMode = requestedPlanMode ? "bypassPermissions" : (options?.permissionMode ?? "bypassPermissions");
 
+    const fastMode = options?.fastMode === true;
+
     console.log("[session-manager] Starting query", {
       sessionId,
       cwd,
@@ -956,6 +958,7 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
       resume: session.sdkSessionId ?? null,
       effortLevel,
       permissionMode,
+      fastMode,
       mcpServerCount,
       mcpServerNames: Array.from(mcpServerNames),
       pluginCount,
@@ -1005,6 +1008,9 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
         // Load user settings (from ~/.claude.json including MCP servers) and project settings (CLAUDE.md files)
         // Using "user" lets the SDK handle MCP server loading natively, which supports all transport types
         settingSources: ["user", "project"],
+        // Fast mode is a Claude Code setting (Opus 4.6 priority service tier).
+        // Pass it through the flag-layer settings so the user can opt in per prompt.
+        ...(fastMode && { settings: { fastMode: true } }),
         // Also pass MCP servers explicitly for any project-local .mcp.json overrides
         mcpServers: mcpServerCount > 0 ? mcpServers : undefined,
         // Load plugins from user config
@@ -1505,6 +1511,7 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
       const repromptOptions: PromptOptions = {
         model: options?.model,
         effort: options?.effort,
+        fastMode: options?.fastMode,
         permissionMode: "plan",
         _isReprompt: true,
       };

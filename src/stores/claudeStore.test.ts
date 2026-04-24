@@ -143,6 +143,7 @@ describe("claudeStore cleanup and queue helpers", () => {
       attachments: [],
       effort: "high",
       planModeEnabled: false,
+      fastModeEnabled: false,
     });
     store.addPendingQuestion({ id: "question-a", sessionId: "session-a" } as any);
     store.addPendingQuestion({ id: "question-b", sessionId: "session-b" } as any);
@@ -182,6 +183,7 @@ describe("claudeStore cleanup and queue helpers", () => {
       attachments: [],
       effort: "high",
       planModeEnabled: false,
+      fastModeEnabled: false,
     });
     store.addToQueue(queueA, {
       id: "q-2",
@@ -189,6 +191,7 @@ describe("claudeStore cleanup and queue helpers", () => {
       attachments: [],
       effort: "medium",
       planModeEnabled: true,
+      fastModeEnabled: false,
     });
     store.addToQueue(queueB, {
       id: "q-3",
@@ -196,6 +199,7 @@ describe("claudeStore cleanup and queue helpers", () => {
       attachments: [],
       effort: "low",
       planModeEnabled: false,
+      fastModeEnabled: false,
     });
 
     expect(store.getQueuedMessages(queueA).map((item) => item.id)).toEqual([

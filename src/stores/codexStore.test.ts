@@ -208,6 +208,7 @@ describe("codexStore cleanup and queue helpers", () => {
       model: "gpt-5",
       mode: "build",
       reasoningEffort: "medium",
+      fastMode: false,
     });
     store.setSlashCommands("env-1", [{ name: "/fix", source: "prompt" }]);
     store.setSlashCommands("env-2", [{ name: "/keep", source: "builtin" }]);
@@ -239,6 +240,7 @@ describe("codexStore cleanup and queue helpers", () => {
       model: "gpt-5",
       mode: "build",
       reasoningEffort: "medium",
+      fastMode: false,
     });
     store.addToQueue(queueA, {
       id: "q-2",
@@ -247,6 +249,7 @@ describe("codexStore cleanup and queue helpers", () => {
       model: "gpt-5",
       mode: "plan",
       reasoningEffort: "high",
+      fastMode: false,
     });
     store.addToQueue(queueB, {
       id: "q-3",
@@ -255,6 +258,7 @@ describe("codexStore cleanup and queue helpers", () => {
       model: "gpt-4",
       mode: "build",
       reasoningEffort: "low",
+      fastMode: false,
     });
 
     expect(store.removeFromQueue(queueA)?.id).toBe("q-1");

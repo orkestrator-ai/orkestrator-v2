@@ -55,6 +55,7 @@ export interface QueuedMessage {
   attachments: ClaudeAttachment[];
   effort: ClaudeEffortLevel;
   planModeEnabled: boolean;
+  fastModeEnabled: boolean;
 }
 
 /**
@@ -109,6 +110,7 @@ interface ClaudeState extends ClaudeChatSlice {
   isComposing: Map<ClaudeSessionKey, boolean>;
   effort: Map<ClaudeSessionKey, ClaudeEffortLevel>;
   planMode: Map<ClaudeSessionKey, boolean>;
+  fastMode: Map<ClaudeSessionKey, boolean>;
   selectedModel: Map<ClaudeSessionKey, string>;
   sessionInitData: Map<string, SessionInitData>;
   contextUsage: Map<ClaudeSessionKey, ContextUsageSnapshot>;
@@ -121,6 +123,7 @@ interface ClaudeState extends ClaudeChatSlice {
   setComposing: (sessionKey: ClaudeSessionKey, isComposing: boolean) => void;
   setEffort: (sessionKey: ClaudeSessionKey, effort: ClaudeEffortLevel) => void;
   setPlanMode: (sessionKey: ClaudeSessionKey, enabled: boolean) => void;
+  setFastMode: (sessionKey: ClaudeSessionKey, enabled: boolean) => void;
   setSessionInitData: (
     environmentId: string,
     initData: SessionInitData | null,
@@ -151,6 +154,7 @@ interface ClaudeState extends ClaudeChatSlice {
   isComposingFor: (sessionKey: ClaudeSessionKey) => boolean;
   getEffort: (sessionKey: ClaudeSessionKey) => ClaudeEffortLevel;
   isPlanMode: (sessionKey: ClaudeSessionKey) => boolean;
+  isFastMode: (sessionKey: ClaudeSessionKey) => boolean;
   getSessionInitData: (environmentId: string) => SessionInitData | undefined;
   getContextUsage: (
     sessionKey: ClaudeSessionKey,
@@ -190,6 +194,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   isComposing: new Map(),
   effort: new Map(),
   planMode: new Map(),
+  fastMode: new Map(),
   selectedModel: new Map(),
   sessionInitData: new Map(),
   contextUsage: new Map(),
@@ -225,6 +230,13 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       const next = new Map(state.planMode);
       next.set(sessionKey, enabled);
       return { planMode: next };
+    }),
+
+  setFastMode: (sessionKey, enabled) =>
+    set((state) => {
+      const next = new Map(state.fastMode);
+      next.set(sessionKey, enabled);
+      return { fastMode: next };
     }),
 
   setSessionInitData: (environmentId, initData) =>
@@ -314,6 +326,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
         isComposing: pruneSessionKeyedMap(state.isComposing, prefix),
         effort: pruneSessionKeyedMap(state.effort, prefix),
         planMode: pruneSessionKeyedMap(state.planMode, prefix),
+        fastMode: pruneSessionKeyedMap(state.fastMode, prefix),
         messageQueue: pruneSessionKeyedMap(state.messageQueue, prefix),
         contextUsage: pruneSessionKeyedMap(state.contextUsage, prefix),
         pendingQuestions: nextPendingQuestions,
@@ -427,6 +440,8 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   getEffort: (sessionKey) => get().effort.get(sessionKey) ?? "high",
   // Default to false (plan mode disabled) - uses bypassPermissions by default
   isPlanMode: (sessionKey) => get().planMode.get(sessionKey) ?? false,
+  // Default to false (fast mode disabled)
+  isFastMode: (sessionKey) => get().fastMode.get(sessionKey) ?? false,
   getSessionInitData: (environmentId) =>
     get().sessionInitData.get(environmentId),
   getContextUsage: (sessionKey) => get().contextUsage.get(sessionKey),

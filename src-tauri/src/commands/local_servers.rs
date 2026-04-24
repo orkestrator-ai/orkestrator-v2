@@ -674,6 +674,42 @@ fn resolve_bundled_opencode_path(#[allow(unused)] app_handle: &tauri::AppHandle)
     }
 }
 
+/// Resolve the bundled codex binary path for packaged apps
+fn resolve_bundled_codex_path(#[allow(unused)] app_handle: &tauri::AppHandle) -> Option<String> {
+    // In debug mode, skip bundled codex - it may have code signing issues on macOS
+    #[cfg(debug_assertions)]
+    {
+        debug!("Debug mode: skipping bundled codex, will use system binary");
+        return None;
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        if let Ok(bundled) = app_handle
+            .path()
+            .resolve("bin/codex", tauri::path::BaseDirectory::Resource)
+        {
+            debug!(path = %bundled.display(), "Checking bundled codex path");
+            if bundled.exists() {
+                debug!(path = %bundled.display(), "Found bundled codex");
+                return Some(bundled.to_string_lossy().to_string());
+            }
+        }
+
+        if let Ok(res_dir) = app_handle.path().resource_dir() {
+            let bundled = res_dir.join("bin").join("codex");
+            debug!(resource_dir = %res_dir.display(), path = %bundled.display(), "Checking resource_dir codex path");
+            if bundled.exists() {
+                debug!(path = %bundled.display(), "Found codex via resource_dir");
+                return Some(bundled.to_string_lossy().to_string());
+            }
+        }
+
+        debug!("No bundled codex found, will use system binary");
+        None
+    }
+}
+
 /// Resolve the bundled bun binary path for packaged apps
 fn resolve_bundled_bun_path(#[allow(unused)] app_handle: &tauri::AppHandle) -> Option<String> {
     // In debug mode, skip bundled bun - it may have code signing issues on macOS
@@ -908,12 +944,18 @@ pub async fn start_local_codex_server_cmd(
         debug!(environment_id = %environment_id, bun_path = %bun_path, "Resolved bundled bun path");
     }
 
+    let bundled_codex_path = resolve_bundled_codex_path(&app_handle);
+    if let Some(ref codex_path) = bundled_codex_path {
+        debug!(environment_id = %environment_id, codex_path = %codex_path, "Resolved bundled codex path");
+    }
+
     let result = start_local_codex_bridge(
         &environment_id,
         worktree_path,
         port,
         &bridge_path,
         bundled_bun_path.as_deref(),
+        bundled_codex_path.as_deref(),
         raw_log_dir.as_deref(),
     )
     .await?;

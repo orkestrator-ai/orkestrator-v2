@@ -201,6 +201,7 @@ export async function createSession(
     model?: string;
     modelReasoningEffort?: CodexReasoningEffort;
     mode?: CodexConversationMode;
+    fastMode?: boolean;
   },
 ): Promise<CodexSession> {
   const response = await fetchWithTimeout(`${client.baseUrl}/session/create`, {
@@ -211,6 +212,7 @@ export async function createSession(
       model: options?.model,
       modelReasoningEffort: options?.modelReasoningEffort,
       mode: options?.mode,
+      fastMode: options?.fastMode,
     }),
   });
   if (!response.ok) {
@@ -243,6 +245,7 @@ export async function resumeSession(
     model?: string;
     modelReasoningEffort?: CodexReasoningEffort;
     mode?: CodexConversationMode;
+    fastMode?: boolean;
   },
 ): Promise<{ session: CodexSession; messages: CodexMessage[] } | null> {
   try {
@@ -273,6 +276,7 @@ export async function updateSessionConfig(
     model?: string;
     modelReasoningEffort?: CodexReasoningEffort;
     mode?: CodexConversationMode;
+    fastMode?: boolean;
   },
 ): Promise<boolean> {
   try {

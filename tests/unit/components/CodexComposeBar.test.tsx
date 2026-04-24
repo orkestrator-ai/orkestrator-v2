@@ -121,6 +121,7 @@ function renderComposeBar(
   const onModeChange = mock(() => {});
   const onModelChange = mock(() => {});
   const onReasoningEffortChange = mock(() => {});
+  const onFastModeChange = mock(() => {});
 
   const result = render(
     <CodexComposeBar
@@ -130,12 +131,14 @@ function renderComposeBar(
       selectedMode="build"
       selectedModel="gpt-5.3-codex"
       selectedReasoningEffort="high"
+      fastModeEnabled={false}
       onSend={onSend}
       onStop={onStop}
       onQueue={onQueue}
       onModeChange={onModeChange}
       onModelChange={onModelChange}
       onReasoningEffortChange={onReasoningEffortChange}
+      onFastModeChange={onFastModeChange}
       {...overrides}
     />,
   );
@@ -148,6 +151,7 @@ function renderComposeBar(
     onModeChange,
     onModelChange,
     onReasoningEffortChange,
+    onFastModeChange,
   };
 }
 

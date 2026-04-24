@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, ChevronDown, ChevronUp, FileText, Image as ImageIcon, Plus, Square, X } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, ChevronUp, FileText, Image as ImageIcon, Plus, Square, X, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -64,6 +64,7 @@ interface CodexComposeBarProps {
   selectedMode: CodexConversationMode;
   selectedModel: string;
   selectedReasoningEffort: CodexReasoningEffort;
+  fastModeEnabled: boolean;
   settingsLocked?: boolean;
   disabled?: boolean;
   isLoading?: boolean;
@@ -74,6 +75,7 @@ interface CodexComposeBarProps {
   onModeChange: (mode: CodexConversationMode) => Promise<void> | void;
   onModelChange: (modelId: string) => Promise<void> | void;
   onReasoningEffortChange: (effort: CodexReasoningEffort) => Promise<void> | void;
+  onFastModeChange: (enabled: boolean) => void;
 }
 
 export function CodexComposeBar({
@@ -85,6 +87,7 @@ export function CodexComposeBar({
   selectedMode,
   selectedModel,
   selectedReasoningEffort,
+  fastModeEnabled,
   settingsLocked = false,
   disabled = false,
   isLoading = false,
@@ -95,6 +98,7 @@ export function CodexComposeBar({
   onModeChange,
   onModelChange,
   onReasoningEffortChange,
+  onFastModeChange,
 }: CodexComposeBarProps) {
   const [isSending, setIsSending] = useState(false);
   const inputRef = useRef<MentionableInputRef>(null);
@@ -334,11 +338,23 @@ export function CodexComposeBar({
       for (const attachment of message.attachments) {
         addAttachment(sessionKey, attachment);
       }
+      if (message.fastMode !== fastModeEnabled) {
+        onFastModeChange(message.fastMode);
+      }
       removeQueueItem(sessionKey, message.id);
       setQueueDialogOpen(false);
       inputRef.current?.focus();
     },
-    [addAttachment, clearAttachments, removeQueueItem, sessionKey, setDraftMentions, setDraftText],
+    [
+      addAttachment,
+      clearAttachments,
+      fastModeEnabled,
+      onFastModeChange,
+      removeQueueItem,
+      sessionKey,
+      setDraftMentions,
+      setDraftText,
+    ],
   );
 
   const handleMoveQueuedMessage = useCallback(
@@ -617,6 +633,28 @@ export function CodexComposeBar({
           </DropdownMenuContent>
         </DropdownMenu>
 
+        {/* Fast mode toggle — maps to Codex's `service_tier = fast` config. */}
+        <button
+          type="button"
+          disabled={disabled || settingsLocked}
+          onClick={() => onFastModeChange(!fastModeEnabled)}
+          className={cn(
+            "flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+            fastModeEnabled
+              ? "bg-amber-500/10 text-amber-500 hover:bg-amber-500/15 hover:text-amber-400"
+              : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+          )}
+          title={
+            fastModeEnabled
+              ? "Fast mode on — ~1.5x faster, higher credit rate"
+              : "Enable fast mode (~1.5x faster, higher credit rate)"
+          }
+          aria-pressed={fastModeEnabled}
+        >
+          <Zap className={cn("h-3 w-3", fastModeEnabled && "fill-current")} />
+          <span>Fast</span>
+        </button>
+
         <div className="flex-1" />
 
         {queueLength > 0 && (
@@ -704,6 +742,7 @@ export function CodexComposeBar({
                           <span>{message.mode === "plan" ? "Plan" : "Build"}</span>
                           <span>{message.model}</span>
                           <span>{REASONING_LABELS[message.reasoningEffort]}</span>
+                          {message.fastMode && <span>Fast mode</span>}
                           {message.attachments.length > 0 && (
                             <span>
                               {message.attachments.length} attachment

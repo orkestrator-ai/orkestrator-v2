@@ -8,7 +8,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BINARIES_DIR="$PROJECT_ROOT/binaries"
 
 # OpenCode version to download — should match @opencode-ai/sdk version in package.json
-OPENCODE_VERSION="1.3.2"
+OPENCODE_VERSION="1.14.22"
 
 # Detect architecture
 ARCH=$(uname -m)

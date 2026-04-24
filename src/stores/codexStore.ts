@@ -40,6 +40,7 @@ export interface CodexQueuedMessage {
   model: string;
   mode: CodexConversationMode;
   reasoningEffort: CodexReasoningEffort;
+  fastMode: boolean;
 }
 
 type CodexChatSlice = NativeChatStoreSlice<
@@ -56,6 +57,7 @@ interface CodexState extends CodexChatSlice {
   selectedModel: Map<string, string>;
   selectedMode: Map<string, CodexConversationMode>;
   selectedReasoningEffort: Map<string, CodexReasoningEffort>;
+  fastMode: Map<string, boolean>;
 
   // Agent-specific actions
   setModels: (models: CodexModel[]) => void;
@@ -66,6 +68,8 @@ interface CodexState extends CodexChatSlice {
     sessionKey: string,
     effort: CodexReasoningEffort,
   ) => void;
+  setFastMode: (sessionKey: string, enabled: boolean) => void;
+  isFastMode: (sessionKey: string) => boolean;
   clearEnvironment: (environmentId: string) => void;
 }
 
@@ -83,6 +87,7 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
   selectedModel: new Map(),
   selectedMode: new Map(),
   selectedReasoningEffort: new Map(),
+  fastMode: new Map(),
 
   // Agent-specific actions
   setModels: (models) => set({ models: models.length > 0 ? models : CODEX_MODELS }),
@@ -119,6 +124,15 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
       return { selectedReasoningEffort: next };
     }),
 
+  setFastMode: (sessionKey, enabled) =>
+    set((state) => {
+      const next = new Map(state.fastMode);
+      next.set(sessionKey, enabled);
+      return { fastMode: next };
+    }),
+
+  isFastMode: (sessionKey) => get().fastMode.get(sessionKey) ?? false,
+
   clearEnvironment: (environmentId) =>
     set((state) => {
       const nextServerStatus = new Map(state.serverStatus);
@@ -148,6 +162,7 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
           state.selectedReasoningEffort,
           prefix,
         ),
+        fastMode: pruneSessionKeyedMap(state.fastMode, prefix),
       };
     }),
 }));

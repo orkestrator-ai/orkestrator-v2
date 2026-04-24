@@ -378,6 +378,7 @@ export async function sendPrompt(
     attachments?: ClaudeAttachment[];
     effort?: ClaudeEffortLevel;
     permissionMode?: PermissionMode;
+    fastMode?: boolean;
   }
 ): Promise<boolean> {
   try {
@@ -388,6 +389,7 @@ export async function sendPrompt(
       attachmentsCount: options?.attachments?.length ?? 0,
       effort: options?.effort,
       permissionMode: options?.permissionMode,
+      fastMode: options?.fastMode,
     });
     const response = await fetch(`${client.baseUrl}/session/${sessionId}/prompt`, {
       method: "POST",
@@ -398,6 +400,7 @@ export async function sendPrompt(
         attachments: options?.attachments,
         effort: options?.effort,
         permissionMode: options?.permissionMode,
+        fastMode: options?.fastMode,
       }),
     });
     console.debug("[claude-client] Prompt response", {

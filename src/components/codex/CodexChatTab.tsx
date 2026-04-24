@@ -122,6 +122,7 @@ export function CodexChatTab({
     setSelectedModel,
     setSelectedMode,
     setSelectedReasoningEffort,
+    setFastMode,
     addToQueue,
     removeFromQueue,
     clients: clientsMap,
@@ -167,6 +168,9 @@ export function CodexChatTab({
   const selectedReasoningEffort = useMemo(
     () => selectedReasoningEffortMap.get(sessionKey) ?? DEFAULT_REASONING_EFFORT,
     [selectedReasoningEffortMap, sessionKey],
+  );
+  const fastModeEnabled = useCodexStore(
+    useCallback((state) => state.fastMode.get(sessionKey) ?? false, [sessionKey]),
   );
   const persistCodexPreferences = useCallback(
     async (model: string, effort: CodexReasoningEffort) => {
@@ -323,9 +327,10 @@ export function CodexChatTab({
         model: selectedModel,
         mode: selectedMode,
         reasoningEffort: selectedReasoningEffort,
+        fastMode: fastModeEnabled,
       });
     },
-    [addToQueue, selectedMode, selectedModel, selectedReasoningEffort, sessionKey],
+    [addToQueue, fastModeEnabled, selectedMode, selectedModel, selectedReasoningEffort, sessionKey],
   );
 
   const processQueue = useCallback(() => {
@@ -414,6 +419,7 @@ export function CodexChatTab({
         model: selectedModel,
         modelReasoningEffort: selectedReasoningEffort,
         mode: selectedMode,
+        fastMode: fastModeEnabled,
       });
 
       if (!resumed) {
@@ -431,6 +437,7 @@ export function CodexChatTab({
     },
     [
       client,
+      fastModeEnabled,
       selectedModel,
       selectedMode,
       selectedReasoningEffort,
@@ -514,10 +521,12 @@ export function CodexChatTab({
             persistedReasoningEffort: persistedPreferencesRef.current.reasoningEffort,
           });
 
+          const warmFastMode = codexState.fastMode.get(sessionKey) ?? false;
           const created = await createSession(cachedClient, {
             model: resolvedSelection.model,
             modelReasoningEffort: resolvedSelection.reasoningEffort,
             mode: resolvedMode,
+            fastMode: warmFastMode,
           });
           if (!mounted) return;
 
@@ -604,10 +613,12 @@ export function CodexChatTab({
           if (!mounted) return;
           setMessages(sessionKey, messages);
         } else {
+          const coldFastMode = codexState.fastMode.get(sessionKey) ?? false;
           const created = await createSession(nextClient, {
             model: resolvedModel,
             modelReasoningEffort: resolvedReasoningEffort,
             mode: resolvedMode,
+            fastMode: coldFastMode,
           });
           setSession(sessionKey, {
             sessionId: created.sessionId,
@@ -685,6 +696,7 @@ export function CodexChatTab({
       model: string,
       nextReasoningEffort: CodexReasoningEffort,
       mode: CodexConversationMode,
+      fastMode: boolean,
     ): Promise<boolean> => {
       if (!client || !session?.sessionId) {
         return true;
@@ -698,6 +710,7 @@ export function CodexChatTab({
         model,
         modelReasoningEffort: nextReasoningEffort,
         mode,
+        fastMode,
       });
 
       if (!updated) {
@@ -717,6 +730,7 @@ export function CodexChatTab({
         selectedModel,
         selectedReasoningEffort,
         mode,
+        fastModeEnabled,
       );
       if (!updated && !session?.isLoading) {
         setSelectedMode(sessionKey, previousMode);
@@ -725,6 +739,7 @@ export function CodexChatTab({
       return true;
     },
     [
+      fastModeEnabled,
       selectedMode,
       selectedModel,
       selectedReasoningEffort,
@@ -747,7 +762,7 @@ export function CodexChatTab({
       if (nextReasoningEffort !== selectedReasoningEffort) {
         setSelectedReasoningEffort(sessionKey, nextReasoningEffort);
       }
-      const updated = await syncSessionConfig(model, nextReasoningEffort, selectedMode);
+      const updated = await syncSessionConfig(model, nextReasoningEffort, selectedMode, fastModeEnabled);
       if (!updated && !session?.isLoading) {
         setSelectedModel(sessionKey, previousModel);
         if (nextReasoningEffort !== selectedReasoningEffort) {
@@ -760,6 +775,7 @@ export function CodexChatTab({
       void persistCodexPreferences(model, nextReasoningEffort);
     },
     [
+      fastModeEnabled,
       models,
       persistCodexPreferences,
       selectedModel,
@@ -784,7 +800,7 @@ export function CodexChatTab({
     async (effort: CodexReasoningEffort) => {
       const previousReasoningEffort = selectedReasoningEffort;
       setSelectedReasoningEffort(sessionKey, effort);
-      const updated = await syncSessionConfig(selectedModel, effort, selectedMode);
+      const updated = await syncSessionConfig(selectedModel, effort, selectedMode, fastModeEnabled);
       if (!updated && !session?.isLoading) {
         setSelectedReasoningEffort(sessionKey, previousReasoningEffort);
         void persistCodexPreferences(selectedModel, previousReasoningEffort);
@@ -794,6 +810,7 @@ export function CodexChatTab({
       void persistCodexPreferences(selectedModel, effort);
     },
     [
+      fastModeEnabled,
       persistCodexPreferences,
       selectedModel,
       selectedMode,
@@ -801,6 +818,31 @@ export function CodexChatTab({
       session?.isLoading,
       sessionKey,
       setSelectedReasoningEffort,
+      syncSessionConfig,
+    ],
+  );
+
+  const handleFastModeChange = useCallback(
+    (enabled: boolean) => {
+      const previous = fastModeEnabled;
+      setFastMode(sessionKey, enabled);
+      // Push the change to the bridge so the current thread uses the new service tier.
+      void syncSessionConfig(selectedModel, selectedReasoningEffort, selectedMode, enabled).then(
+        (updated) => {
+          if (!updated && !session?.isLoading) {
+            setFastMode(sessionKey, previous);
+          }
+        },
+      );
+    },
+    [
+      fastModeEnabled,
+      selectedMode,
+      selectedModel,
+      selectedReasoningEffort,
+      session?.isLoading,
+      sessionKey,
+      setFastMode,
       syncSessionConfig,
     ],
   );
@@ -1250,6 +1292,8 @@ export function CodexChatTab({
         onModeChange={handleModeChange}
         onModelChange={handleModelChange}
         onReasoningEffortChange={handleReasoningEffortChange}
+        fastModeEnabled={fastModeEnabled}
+        onFastModeChange={handleFastModeChange}
       />
 
       {client ? (

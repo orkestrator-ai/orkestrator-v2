@@ -40,6 +40,7 @@ const mockRenameEnvironmentFromPrompt = mock(async () => {});
 const mockSendPrompt = mock(async () => true);
 const mockGetSessionMessages = mock(async (): Promise<TestCodexMessage[]> => []);
 const mockSubscribeToEvents = mock(() => (async function* () {})());
+const mockUpdateSessionConfig = mock(async () => true);
 
 // NOTE: Do NOT mock @/hooks/useScrollLock here — it pollutes the global
 // module cache and breaks useScrollLock.test.ts. The real hook returns
@@ -69,7 +70,7 @@ mock.module("@/lib/codex-client", () => ({
   resumeSession: mock(async () => null),
   sendPrompt: mockSendPrompt,
   subscribeToEvents: mockSubscribeToEvents,
-  updateSessionConfig: mock(async () => true),
+  updateSessionConfig: mockUpdateSessionConfig,
 }));
 
 let composeText = "Rename the environment";
@@ -84,21 +85,39 @@ let composeAttachments: Array<{
 mock.module("./CodexComposeBar", () => ({
   CodexComposeBar: ({
     onSend,
+    onFastModeChange,
     disabled,
   }: {
     onSend: (text: string, attachments: typeof composeAttachments) => Promise<void>;
+    onFastModeChange?: (enabled: boolean) => void;
     disabled?: boolean;
   }) => (
-    <button
-      type="button"
-      data-testid="codex-send"
-      disabled={disabled}
-      onClick={() => {
-        void onSend(composeText, composeAttachments);
-      }}
-    >
-      Send
-    </button>
+    <>
+      <button
+        type="button"
+        data-testid="codex-send"
+        disabled={disabled}
+        onClick={() => {
+          void onSend(composeText, composeAttachments);
+        }}
+      >
+        Send
+      </button>
+      <button
+        type="button"
+        data-testid="codex-fast-mode-on"
+        onClick={() => onFastModeChange?.(true)}
+      >
+        Fast on
+      </button>
+      <button
+        type="button"
+        data-testid="codex-fast-mode-off"
+        onClick={() => onFastModeChange?.(false)}
+      >
+        Fast off
+      </button>
+    </>
   ),
 }));
 
@@ -266,6 +285,7 @@ function seedCodexStore(messages: ReturnType<typeof createMessage>[] = []) {
     selectedModel: new Map([[SESSION_KEY, MOCK_MODELS[0]!.id]]),
     selectedMode: new Map([[SESSION_KEY, "build"]]),
     selectedReasoningEffort: new Map([[SESSION_KEY, "medium"]]),
+    fastMode: new Map(),
   });
 }
 
@@ -299,6 +319,8 @@ describe("CodexChatTab", () => {
     mockGetSessionMessages.mockImplementation(async () => []);
     mockSubscribeToEvents.mockClear();
     mockScrollToBottom.mockClear();
+    mockUpdateSessionConfig.mockClear();
+    mockUpdateSessionConfig.mockImplementation(async () => true);
     restoreTimerHarness();
 
     resetStores();
@@ -674,6 +696,7 @@ describe("CodexChatTab", () => {
       model: MOCK_MODELS[0]!.id,
       mode: "build",
       reasoningEffort: "medium",
+      fastMode: false,
     });
 
     render(
@@ -691,6 +714,53 @@ describe("CodexChatTab", () => {
         "Handle the queued codex prompt",
         { attachments: undefined },
       );
+    });
+  });
+
+  describe("fast mode toggle", () => {
+    test("persists fast mode in the store when the bridge accepts the config change", async () => {
+      render(
+        <CodexChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive={false}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("codex-fast-mode-on"));
+
+      await waitFor(() => {
+        expect(mockUpdateSessionConfig).toHaveBeenCalled();
+      });
+      const lastCall = mockUpdateSessionConfig.mock.calls.at(-1) as unknown as unknown[] | undefined;
+      expect(lastCall?.[2]).toMatchObject({ fastMode: true });
+
+      await waitFor(() => {
+        expect(useCodexStore.getState().isFastMode(SESSION_KEY)).toBe(true);
+      });
+    });
+
+    test("rolls back fast mode when the bridge rejects the config change", async () => {
+      mockUpdateSessionConfig.mockImplementation(async () => false);
+
+      render(
+        <CodexChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive={false}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("codex-fast-mode-on"));
+
+      await waitFor(() => {
+        expect(mockUpdateSessionConfig).toHaveBeenCalled();
+      });
+
+      // The optimistic update should be reverted to the previous value (false).
+      await waitFor(() => {
+        expect(useCodexStore.getState().isFastMode(SESSION_KEY)).toBe(false);
+      });
     });
   });
 

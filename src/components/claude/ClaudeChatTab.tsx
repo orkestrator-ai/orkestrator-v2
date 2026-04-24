@@ -122,7 +122,7 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
   const session = useMemo(() => sessionsMap.get(sessionKey), [sessionsMap, sessionKey]);
 
   // Virtuoso scroll state - auto-follow when user is at bottom, persist across tab switches
-  const { isAtBottom, isAtBottomRef, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
+  const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive,
     persistKey: sessionKey,
   });
@@ -165,25 +165,6 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
     session?.loadingStartedAt,
     session?.lastCompletedElapsedSeconds,
   );
-
-  // Auto-scroll when footer content changes while user is at bottom.
-  // Virtuoso's followOutput only fires on data item changes and scrolls to the
-  // last data item — it can fall short of footer content (thinking indicator,
-  // question/approval cards). Also re-fire on message count so that after a
-  // tool-call message arrives mid-loading we scroll past the last message
-  // into the "Claude is thinking" footer.
-  useEffect(() => {
-    if (isAtBottomRef.current) {
-      const rafId = requestAnimationFrame(() => scrollToBottom());
-      return () => cancelAnimationFrame(rafId);
-    }
-  }, [
-    session?.isLoading,
-    sessionMessages.length,
-    pendingQuestions.length,
-    pendingPlanApprovals.length,
-    scrollToBottom,
-  ]);
 
   // Setup completion awareness - block initialization until setup scripts finish
   const setupScriptsRunning = useEnvironmentStore(

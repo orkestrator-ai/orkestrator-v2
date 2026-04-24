@@ -19,11 +19,23 @@ const SCROLL_TO_BOTTOM_MAX_ATTEMPTS = 10;
 /** Delay between retry attempts; ~one frame, gives Virtuoso time to fire atBottomStateChange */
 const SCROLL_TO_BOTTOM_RETRY_INTERVAL_MS = 16;
 
-const persistedStates = new Map<string, StateSnapshot>();
+/**
+ * After landing at the bottom we keep watching scrollHeight for a short window
+ * to catch late-rendering footer content (async-measured cards, images) and
+ * re-issue the smooth scroll so it stays in view.
+ */
+const POST_SCROLL_WATCH_MS = 400;
 
-function setPersistedState(key: string, state: StateSnapshot) {
+interface PersistedEntry {
+  snapshot: StateSnapshot;
+  wantsStick: boolean;
+}
+
+const persistedStates = new Map<string, PersistedEntry>();
+
+function setPersistedState(key: string, entry: PersistedEntry) {
   persistedStates.delete(key);
-  persistedStates.set(key, state);
+  persistedStates.set(key, entry);
 
   if (persistedStates.size > MAX_PERSISTED_STATES) {
     const oldestKey = persistedStates.keys().next().value;
@@ -49,7 +61,7 @@ interface UseVirtuosoScrollStateReturn {
   isAtBottom: boolean;
   /** Ref that tracks at-bottom state without triggering re-renders (for use in effects) */
   isAtBottomRef: React.RefObject<boolean>;
-  /** Scroll to bottom and re-enable follow mode */
+  /** Scroll to bottom and re-enable stick mode */
   scrollToBottom: () => void;
   /** Ref to attach to the Virtuoso component */
   virtuosoRef: React.RefObject<VirtuosoHandle | null>;
@@ -59,17 +71,24 @@ interface UseVirtuosoScrollStateReturn {
     atBottomStateChange: (atBottom: boolean) => void;
     atBottomThreshold: number;
     restoreStateFrom: StateSnapshot | undefined;
+    scrollerRef: (el: HTMLElement | Window | null) => void;
   };
 }
 
 /**
  * Hook to manage scroll state for a react-virtuoso Virtuoso component.
  *
- * Replaces useScrollLock for virtualized chat lists. Provides:
- * - Auto-follow when user is at bottom (via followOutput)
- * - "At bottom" state tracking (via atBottomStateChange)
- * - Scroll position persistence across tab switches
- * - Smooth scroll-to-bottom action
+ * Provides:
+ * - Auto-follow when user is sticky to bottom (via followOutput + ResizeObserver)
+ * - Intent-based "stick" that survives transient content growth (new footer
+ *   content pushing the viewport off-bottom doesn't disengage stick — only
+ *   a user-initiated scroll up does)
+ * - "At bottom" state tracking for UI affordances (via atBottomStateChange)
+ * - Scroll position persistence across tab switches; if the user was sticky
+ *   when leaving, returning snaps them to the new bottom instead of the old
+ *   scroll position
+ * - Smooth animated scroll-to-bottom that keeps pace with late-rendering
+ *   footer content (thinking indicator, question/approval cards)
  */
 export function useVirtuosoScrollState(
   options: UseVirtuosoScrollStateOptions = {}
@@ -77,73 +96,131 @@ export function useVirtuosoScrollState(
   const { isActive = true, persistKey } = options;
 
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
+  const [scrollerEl, setScrollerEl] = useState<HTMLElement | null>(null);
+  const scrollerElRef = useRef<HTMLElement | null>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const isAtBottomRef = useRef(true);
-  const mountedRef = useRef(true);
-  const scrollInFlightRef = useRef(false);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
-
-  // Resolve initial restore state once on mount
-  const [restoreState] = useState<StateSnapshot | undefined>(() =>
+  // Resolve persisted state once on mount.
+  const [persisted] = useState<PersistedEntry | undefined>(() =>
     persistKey ? persistedStates.get(persistKey) : undefined
   );
 
-  // Persist state when tab becomes inactive
+  /**
+   * Intent: the user wants new content to auto-scroll into view. Only
+   * flipped false by a user-initiated scroll up (wheel/touch/keyboard);
+   * content growth that pushes the viewport off-bottom leaves it true.
+   *
+   * Lazy-init from persisted state so we seed exactly once. A render-time
+   * conditional write would re-clear the ref on every rerender after the
+   * user reaches bottom (atBottomStateChange sets true → rerender → render
+   * sees persisted.wantsStick=false → clears again).
+   */
+  const wantsStickRef = useRef<boolean>(persisted?.wantsStick ?? true);
+  const lastScrollTopRef = useRef(0);
+  const mountedRef = useRef(true);
+  const scrollInFlightRef = useRef(false);
+
+  // If the user was sticky, skip snapshot restore — the activation effect
+  // below will scroll them to the new bottom instead of the old position.
+  const restoreStateFrom =
+    persisted && !persisted.wantsStick ? persisted.snapshot : undefined;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Persist state when tab becomes inactive.
   useEffect(() => {
     if (isActive || !persistKey) return;
 
     virtuosoRef.current?.getState((snapshot) => {
-      setPersistedState(persistKey, snapshot);
+      setPersistedState(persistKey, {
+        snapshot,
+        wantsStick: wantsStickRef.current,
+      });
     });
   }, [isActive, persistKey]);
 
-  const atBottomStateChange = useCallback(
-    (atBottom: boolean) => {
-      setIsAtBottom(atBottom);
-      isAtBottomRef.current = atBottom;
+  const atBottomStateChange = useCallback((atBottom: boolean) => {
+    setIsAtBottom(atBottom);
+    isAtBottomRef.current = atBottom;
+    // Reaching bottom re-engages stick intent. We intentionally do NOT flip
+    // intent false when atBottom becomes false — that transition is usually
+    // caused by content growing below the viewport, not by user action.
+    if (atBottom) {
+      wantsStickRef.current = true;
+    }
+  }, []);
+
+  const followOutput = useCallback(
+    (atBottom: boolean): "smooth" | false => {
+      return atBottom || wantsStickRef.current ? "smooth" : false;
     },
     []
   );
 
-  const followOutput = useCallback(
-    (isAtBottom: boolean): "smooth" | false => {
-      return isAtBottom ? "smooth" : false;
-    },
-    []
-  );
+  const scrollerRef = useCallback((el: HTMLElement | Window | null) => {
+    const next = el instanceof HTMLElement ? el : null;
+    scrollerElRef.current = next;
+    setScrollerEl(next);
+  }, []);
 
   const scrollToBottom = useCallback(() => {
     const handle = virtuosoRef.current;
     if (!handle) return;
+    // Clicking the scroll-down button (or any programmatic call) is an
+    // explicit stick signal.
+    wantsStickRef.current = true;
     // Guard against overlapping invocations — a second call while the
     // retry loop is still mid-flight would fire a duplicate footer scroll.
     if (scrollInFlightRef.current) return;
     scrollInFlightRef.current = true;
 
-    // Virtuoso's virtual scrollHeight is based on *estimated* heights for
-    // items that haven't been rendered yet. On long conversations those
-    // estimates are often significantly wrong, so a single scrollToIndex(LAST)
-    // can land short of the true bottom (the user's reported "scroll down
-    // only goes to the bottom of the loaded window"). Each retry forces
-    // Virtuoso to render and measure the tail items, correcting the virtual
-    // height, until we actually reach the bottom.
     let attempts = 0;
 
+    const watchScrollHeight = () => {
+      const el = scrollerElRef.current;
+      if (!el || !mountedRef.current) {
+        scrollInFlightRef.current = false;
+        return;
+      }
+      const start = performance.now();
+      let lastScrollHeight = el.scrollHeight;
+      const tick = () => {
+        if (!mountedRef.current) {
+          scrollInFlightRef.current = false;
+          return;
+        }
+        const currentHeight = el.scrollHeight;
+        if (currentHeight !== lastScrollHeight) {
+          lastScrollHeight = currentHeight;
+          // Footer grew after we landed — re-issue smooth scroll so the
+          // new content (thinking indicator, cards) stays in view.
+          handle.scrollTo({
+            top: SCROLL_TO_ABSOLUTE_BOTTOM,
+            behavior: "smooth",
+          });
+        }
+        if (performance.now() - start < POST_SCROLL_WATCH_MS) {
+          requestAnimationFrame(tick);
+        } else {
+          scrollInFlightRef.current = false;
+        }
+      };
+      requestAnimationFrame(tick);
+    };
+
     const finish = () => {
-      scrollInFlightRef.current = false;
-      // Once stable at the last data item, smooth-scroll past it to reveal
-      // footer content (thinking indicator, question/approval cards,
-      // elapsed time). The browser clamps to the real scrollHeight, so
-      // this lands correctly even if retries exhausted without isAtBottom
-      // flipping true.
+      // Smooth-scroll past the last data item to reveal footer content.
+      // The browser clamps to scrollHeight - clientHeight.
       handle.scrollTo({
         top: SCROLL_TO_ABSOLUTE_BOTTOM,
         behavior: "smooth",
       });
+      watchScrollHeight();
     };
 
     const attempt = () => {
@@ -153,6 +230,9 @@ export function useVirtuosoScrollState(
       }
       attempts += 1;
 
+      // Instant (not smooth) on retries — we're correcting virtual-height
+      // estimates; smoothing each retry would look jittery. The final
+      // scrollTo in finish() animates into the footer.
       handle.scrollToIndex({
         index: "LAST",
         align: "end",
@@ -177,7 +257,122 @@ export function useVirtuosoScrollState(
     };
 
     attempt();
+    // Deps intentionally empty: reads only refs (virtuosoRef, scrollerElRef,
+    // mountedRef, scrollInFlightRef, isAtBottomRef, wantsStickRef). Adding
+    // scrollerEl here would recreate the callback whenever the scroller
+    // mounts, which in turn would retrigger the ResizeObserver effect and
+    // reobserve from scratch on each mount.
   }, []);
+
+  // User-scroll-up detection: only a user action can release stick intent.
+  // Virtuoso's own programmatic scrolls (followOutput, scrollToIndex) do not
+  // fire wheel/touch/keydown events, so this cleanly separates the two.
+  useEffect(() => {
+    if (!scrollerEl) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) wantsStickRef.current = false;
+    };
+    const handleTouchStart = () => {
+      lastScrollTopRef.current = scrollerEl.scrollTop;
+    };
+    const handleTouchMove = () => {
+      const st = scrollerEl.scrollTop;
+      if (st < lastScrollTopRef.current - 2) {
+        wantsStickRef.current = false;
+      }
+      lastScrollTopRef.current = st;
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "ArrowUp" || e.key === "PageUp" || e.key === "Home") {
+        wantsStickRef.current = false;
+      }
+    };
+
+    scrollerEl.addEventListener("wheel", handleWheel, { passive: true });
+    scrollerEl.addEventListener("touchstart", handleTouchStart, {
+      passive: true,
+    });
+    scrollerEl.addEventListener("touchmove", handleTouchMove, {
+      passive: true,
+    });
+    scrollerEl.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      scrollerEl.removeEventListener("wheel", handleWheel);
+      scrollerEl.removeEventListener("touchstart", handleTouchStart);
+      scrollerEl.removeEventListener("touchmove", handleTouchMove);
+      scrollerEl.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [scrollerEl]);
+
+  // ResizeObserver: when content grows (e.g. footer gains a thinking
+  // indicator or question card) and the user still wants stick, scroll to
+  // the new bottom. This is the primary mechanism that keeps late-rendering
+  // footer content in view — followOutput only fires on data-item changes.
+  useEffect(() => {
+    if (!scrollerEl || typeof ResizeObserver === "undefined") return;
+
+    let rafId: number | null = null;
+    const schedule = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        // Skip when Virtuoso already has us at bottom — followOutput handles
+        // that case, so issuing our own scroll would churn while streaming.
+        if (isAtBottomRef.current) return;
+        if (wantsStickRef.current && !scrollInFlightRef.current) {
+          scrollToBottom();
+        }
+      });
+    };
+
+    const resizeObserver = new ResizeObserver(schedule);
+    const observed = new WeakSet<Element>();
+    const observeChildren = () => {
+      for (const child of Array.from(scrollerEl.children)) {
+        if (!observed.has(child)) {
+          resizeObserver.observe(child);
+          observed.add(child);
+        }
+      }
+    };
+    observeChildren();
+
+    // Watches for added/removed direct children so the ResizeObserver can
+    // start observing them. Deeper-subtree size changes are already caught
+    // by the RO via the children we observe (their scrollHeight reflects
+    // descendant layout), so subtree: true would just duplicate callbacks.
+    const mutationObserver =
+      typeof MutationObserver !== "undefined"
+        ? new MutationObserver(() => {
+            observeChildren();
+            schedule();
+          })
+        : null;
+    mutationObserver?.observe(scrollerEl, {
+      childList: true,
+      subtree: false,
+    });
+
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      resizeObserver.disconnect();
+      mutationObserver?.disconnect();
+    };
+  }, [scrollerEl, scrollToBottom]);
+
+  // Tab activation: if the user was sticky when they left, snap to the new
+  // bottom on return. We already skipped restoreStateFrom in that case, so
+  // Virtuoso mounts at the top; the rAF defer lets it measure first.
+  useEffect(() => {
+    if (!isActive) return;
+    if (!wantsStickRef.current) return;
+    const id = requestAnimationFrame(() => {
+      if (mountedRef.current) scrollToBottom();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [isActive, scrollToBottom]);
 
   return {
     isAtBottom,
@@ -188,7 +383,8 @@ export function useVirtuosoScrollState(
       followOutput,
       atBottomStateChange,
       atBottomThreshold: AT_BOTTOM_THRESHOLD,
-      restoreStateFrom: restoreState,
+      restoreStateFrom,
+      scrollerRef,
     },
   };
 }

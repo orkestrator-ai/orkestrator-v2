@@ -694,30 +694,6 @@ describe("CodexChatTab", () => {
     });
   });
 
-  test("scrolls to the footer again when a new message arrives while at the bottom", async () => {
-    render(
-      <CodexChatTab
-        tabId={TAB_ID}
-        data={createData()}
-        isActive={false}
-      />,
-    );
-
-    mockScrollToBottom.mockClear();
-
-    act(() => {
-      useCodexStore.getState().setSession(SESSION_KEY, {
-        sessionId: SESSION_ID,
-        messages: [createMessage("assistant-1", "Done") as any],
-        isLoading: true,
-        title: "Test session",
-      });
-    });
-
-    await waitFor(() => {
-      expect(mockScrollToBottom).toHaveBeenCalled();
-    });
-  });
 });
 
 function installTimerHarness(startTime: number) {

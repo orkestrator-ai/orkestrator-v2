@@ -213,26 +213,10 @@ export function CodexChatTab({
     session?.lastCompletedElapsedSeconds,
   );
 
-  const { isAtBottom, isAtBottomRef, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
+  const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive,
     persistKey: sessionKey,
   });
-
-  // Auto-scroll when footer content changes while user is at bottom.
-  // Virtuoso's followOutput only fires on data item changes and scrolls to the
-  // last data item — it can fall short of footer content (thinking indicator).
-  // Also re-fire on message count so that after a tool-call message arrives
-  // mid-loading we scroll past the last message into the thinking footer.
-  useEffect(() => {
-    if (isAtBottomRef.current) {
-      const rafId = requestAnimationFrame(() => scrollToBottom());
-      return () => cancelAnimationFrame(rafId);
-    }
-  }, [
-    session?.isLoading,
-    sessionMessages.length,
-    scrollToBottom,
-  ]);
 
   // Activity state tracking is handled globally by useGlobalActivityMonitor
   // (in App.tsx), which derives state from this store's session data.

@@ -17,6 +17,7 @@ interface VirtualizedMessageListProps<TMessage> {
     atBottomStateChange: (atBottom: boolean) => void;
     atBottomThreshold: number;
     restoreStateFrom: StateSnapshot | undefined;
+    scrollerRef?: (el: HTMLElement | Window | null) => void;
   };
   virtuosoRef: RefObject<VirtuosoHandle | null>;
 }
@@ -85,6 +86,7 @@ export function VirtualizedMessageList<TMessage>({
         atBottomStateChange={scrollProps.atBottomStateChange}
         atBottomThreshold={scrollProps.atBottomThreshold}
         restoreStateFrom={scrollProps.restoreStateFrom}
+        scrollerRef={scrollProps.scrollerRef}
         increaseViewportBy={{ top: 400, bottom: 200 }}
         style={{ height: "100%" }}
         className="py-4"

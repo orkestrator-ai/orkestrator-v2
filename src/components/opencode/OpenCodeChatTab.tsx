@@ -194,7 +194,7 @@ export function OpenCodeChatTab({
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
 
   // Virtuoso scroll state - auto-follow when user is at bottom, persist across tab switches
-  const { isAtBottom, isAtBottomRef, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
+  const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive,
     persistKey: sessionKey,
   });
@@ -244,25 +244,6 @@ export function OpenCodeChatTab({
     session?.loadingStartedAt,
     session?.lastCompletedElapsedSeconds,
   );
-
-  // Auto-scroll when footer content changes while user is at bottom.
-  // Virtuoso's followOutput only fires on data item changes and scrolls to the
-  // last data item — it can fall short of footer content (thinking indicator,
-  // question/permission cards). Also re-fire on message count so that after a
-  // tool-call message arrives mid-loading we scroll past the last message
-  // into the thinking footer.
-  useEffect(() => {
-    if (isAtBottomRef.current) {
-      const rafId = requestAnimationFrame(() => scrollToBottom());
-      return () => cancelAnimationFrame(rafId);
-    }
-  }, [
-    session?.isLoading,
-    sessionMessages.length,
-    pendingQuestions.length,
-    pendingPermissions.length,
-    scrollToBottom,
-  ]);
 
   const worktreePath = useEnvironmentStore(
     useCallback(

@@ -421,37 +421,6 @@ describe("OpenCodeChatTab", () => {
     });
   });
 
-  test("scrolls to the footer again when a new message arrives while at the bottom", async () => {
-    render(
-      <OpenCodeChatTab
-        tabId={TAB_ID}
-        data={createData()}
-        isActive={false}
-      />,
-    );
-
-    mockScrollToBottom.mockClear();
-
-    act(() => {
-      useOpenCodeStore.getState().setSession(SESSION_KEY, {
-        sessionId: "session-1",
-        messages: [
-          {
-            id: "assistant-1",
-            role: "assistant",
-            content: "Done",
-            parts: [{ type: "text", content: "Done" }],
-            createdAt: "2026-04-15T10:00:00.000Z",
-          } as any,
-        ],
-        isLoading: true,
-      });
-    });
-
-    await waitFor(() => {
-      expect(mockScrollToBottom).toHaveBeenCalled();
-    });
-  });
 });
 
 function installTimerHarness(startTime: number) {

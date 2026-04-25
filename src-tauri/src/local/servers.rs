@@ -1736,7 +1736,10 @@ mod tests {
         );
 
         assert_eq!(env_vars.get("PORT").map(String::as_str), Some("4321"));
-        assert_eq!(env_vars.get("CWD").map(String::as_str), Some("/tmp/worktree"));
+        assert_eq!(
+            env_vars.get("CWD").map(String::as_str),
+            Some("/tmp/worktree")
+        );
         assert_eq!(
             env_vars
                 .get("ORKESTRATOR_CODEX_RAW_LOG_DIR")
@@ -1748,13 +1751,8 @@ mod tests {
 
     #[test]
     fn test_build_local_codex_bridge_env_vars_omits_raw_log_dir_when_disabled() {
-        let env_vars = build_local_codex_bridge_env_vars(
-            "/tmp/worktree",
-            4321,
-            Some("/tmp/bun"),
-            None,
-            None,
-        );
+        let env_vars =
+            build_local_codex_bridge_env_vars("/tmp/worktree", 4321, Some("/tmp/bun"), None, None);
 
         assert!(!env_vars.contains_key("ORKESTRATOR_CODEX_RAW_LOG_DIR"));
     }

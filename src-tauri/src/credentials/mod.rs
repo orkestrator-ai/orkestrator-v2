@@ -531,12 +531,14 @@ attributes:
                 "content-type",
                 "application/json",
             ))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "access_token": "new-access",
-                "refresh_token": "new-refresh",
-                "expires_in": 3600,
-                "scope": "user:profile user:inference"
-            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "access_token": "new-access",
+                    "refresh_token": "new-refresh",
+                    "expires_in": 3600,
+                    "scope": "user:profile user:inference"
+                })),
+            )
             .mount(&server)
             .await;
 
@@ -567,10 +569,12 @@ attributes:
     async fn test_refresh_credentials_preserves_refresh_token_when_server_omits() {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "access_token": "new-access",
-                "expires_in": 60
-            })))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "access_token": "new-access",
+                    "expires_in": 60
+                })),
+            )
             .mount(&server)
             .await;
 
@@ -599,12 +603,17 @@ attributes:
             .await;
 
         let client = reqwest::Client::new();
-        let err = refresh_credentials_with(&client, &format!("{}/token", server.uri()), &sample_creds())
-            .await
-            .expect_err("400 should produce RefreshFailed");
+        let err =
+            refresh_credentials_with(&client, &format!("{}/token", server.uri()), &sample_creds())
+                .await
+                .expect_err("400 should produce RefreshFailed");
         match err {
             CredentialsError::RefreshFailed(msg) => {
-                assert!(msg.contains("400"), "message should mention status: {}", msg);
+                assert!(
+                    msg.contains("400"),
+                    "message should mention status: {}",
+                    msg
+                );
                 assert!(
                     msg.contains("invalid_grant"),
                     "message should include server body: {}",
@@ -624,9 +633,10 @@ attributes:
             .await;
 
         let client = reqwest::Client::new();
-        let err = refresh_credentials_with(&client, &format!("{}/token", server.uri()), &sample_creds())
-            .await
-            .expect_err("malformed body should produce RefreshFailed");
+        let err =
+            refresh_credentials_with(&client, &format!("{}/token", server.uri()), &sample_creds())
+                .await
+                .expect_err("malformed body should produce RefreshFailed");
         assert!(matches!(err, CredentialsError::RefreshFailed(_)));
     }
 }

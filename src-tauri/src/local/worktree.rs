@@ -1225,8 +1225,7 @@ mod tests {
             .output()
             .await
             .unwrap();
-        let default_branch =
-            String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let default_branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
         (remote_dir, local_dir, default_branch)
     }
@@ -1313,14 +1312,9 @@ mod tests {
         // Create a worktree requesting branch "my-feature" — should get a
         // different name because my-feature exists on remote.
         // Args: (source_repo_path, branch_name, project_name, base_branch_override)
-        let result = create_worktree(
-            local_path,
-            "my-feature",
-            "test-project",
-            None,
-        )
-        .await
-        .unwrap();
+        let result = create_worktree(local_path, "my-feature", "test-project", None)
+            .await
+            .unwrap();
 
         assert_ne!(
             result.branch, "my-feature",

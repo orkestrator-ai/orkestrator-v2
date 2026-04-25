@@ -286,11 +286,7 @@ fn make_unique_name(base_name: &str, existing_environments: &[Environment]) -> S
 /// When the branch has changed compared to `old_branch`, the PR metadata
 /// (prUrl, prState, hasMergeConflicts) is cleared so stale data from the
 /// old branch does not persist.
-fn build_rename_update(
-    new_name: &str,
-    new_branch: &str,
-    old_branch: &str,
-) -> serde_json::Value {
+fn build_rename_update(new_name: &str, new_branch: &str, old_branch: &str) -> serde_json::Value {
     if new_branch != old_branch {
         json!({
             "name": new_name,
@@ -497,13 +493,7 @@ async fn list_git_branches_at_path(repo_path: &str, fetch_first: bool) -> Vec<St
     }
 
     match tokio::process::Command::new("git")
-        .args([
-            "-C",
-            repo_path,
-            "branch",
-            "-a",
-            "--format=%(refname:short)",
-        ])
+        .args(["-C", repo_path, "branch", "-a", "--format=%(refname:short)"])
         .output()
         .await
     {
@@ -1128,10 +1118,7 @@ pub async fn set_environment_setup_complete(
 ) -> Result<Environment, String> {
     let storage = get_storage().map_err(storage_error_to_string)?;
     storage
-        .update_environment(
-            &environment_id,
-            json!({ "setupScriptsComplete": complete }),
-        )
+        .update_environment(&environment_id, json!({ "setupScriptsComplete": complete }))
         .map_err(storage_error_to_string)
 }
 

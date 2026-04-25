@@ -202,8 +202,7 @@ pub async fn run_sync_loop(app: AppHandle) {
     loop {
         interval.tick().await;
 
-        let outcome =
-            sync_once_with(Some(&app), &mut last_synced_token, list, refresh, push).await;
+        let outcome = sync_once_with(Some(&app), &mut last_synced_token, list, refresh, push).await;
 
         match outcome {
             SyncOutcome::RefreshFailed(e) => {

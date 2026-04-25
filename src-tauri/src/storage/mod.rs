@@ -1698,7 +1698,10 @@ mod tests {
         let dynamic = image::DynamicImage::ImageRgba8(image);
         let mut bytes = Vec::new();
         dynamic
-            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
             .unwrap();
         base64::engine::general_purpose::STANDARD.encode(bytes)
     }
@@ -1845,7 +1848,10 @@ mod tests {
         let reordered = storage
             .reorder_projects(&[project_c.id.clone(), project_a.id.clone()])
             .unwrap();
-        let reordered_ids: Vec<&str> = reordered.iter().map(|project| project.id.as_str()).collect();
+        let reordered_ids: Vec<&str> = reordered
+            .iter()
+            .map(|project| project.id.as_str())
+            .collect();
         assert_eq!(
             reordered_ids,
             vec![
@@ -2623,8 +2629,14 @@ mod tests {
         let reordered = storage
             .reorder_sessions("env-1", &[session_a.id.clone()])
             .unwrap();
-        let reordered_ids: Vec<&str> = reordered.iter().map(|session| session.id.as_str()).collect();
-        assert_eq!(reordered_ids, vec![session_a.id.as_str(), session_b.id.as_str()]);
+        let reordered_ids: Vec<&str> = reordered
+            .iter()
+            .map(|session| session.id.as_str())
+            .collect();
+        assert_eq!(
+            reordered_ids,
+            vec![session_a.id.as_str(), session_b.id.as_str()]
+        );
     }
 
     #[test]
@@ -2648,7 +2660,10 @@ mod tests {
         let deleted = storage.cleanup_orphaned_buffers().unwrap();
         assert_eq!(deleted, vec!["orphan-session".to_string()]);
         assert!(storage.load_session_buffer(&session.id).unwrap().is_some());
-        assert!(storage.load_session_buffer("orphan-session").unwrap().is_none());
+        assert!(storage
+            .load_session_buffer("orphan-session")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -2694,10 +2709,8 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&backup_path).unwrap()).unwrap();
         assert_eq!(throttled_backup.len(), 1);
 
-        let old_mtime = FileTime::from_unix_time(
-            (Utc::now() - chrono::TimeDelta::seconds(61)).timestamp(),
-            0,
-        );
+        let old_mtime =
+            FileTime::from_unix_time((Utc::now() - chrono::TimeDelta::seconds(61)).timestamp(), 0);
         set_file_mtime(&backup_path, old_mtime).unwrap();
 
         storage
@@ -3069,10 +3082,8 @@ mod tests {
         std::fs::write(&backup, "[]").unwrap();
 
         // Set backup mtime to 61 seconds ago
-        let old_mtime = FileTime::from_unix_time(
-            (Utc::now() - chrono::TimeDelta::seconds(61)).timestamp(),
-            0,
-        );
+        let old_mtime =
+            FileTime::from_unix_time((Utc::now() - chrono::TimeDelta::seconds(61)).timestamp(), 0);
         set_file_mtime(&backup, old_mtime).unwrap();
 
         assert!(Storage::should_rotate_json_backups(

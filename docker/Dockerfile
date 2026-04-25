@@ -104,14 +104,19 @@ WORKDIR /opt/claude-bridge
 # Delete musl variants so the SDK picks the glibc binary matching our Debian base.
 # The SDK prefers musl first on Linux, but node:20 is glibc — without this, spawns fail
 # with "Claude Code native binary not found". If switching to an Alpine/musl base, invert.
+# The rm MUST come after `npm prune --production`: prune reconciles against the lockfile
+# and re-installs deleted optional deps, undoing an earlier rm.
 RUN npm install \
- && rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl \
- && npm run build && npm prune --production
+ && npm run build \
+ && npm prune --production \
+ && rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl
 
 # Copy and build Codex Bridge Server
 COPY --chown=node:node bridges/codex-bridge /opt/codex-bridge
 WORKDIR /opt/codex-bridge
-RUN npm install && npm run build && npm prune --production
+RUN npm install \
+ && npm run build \
+ && npm prune --production
 WORKDIR /workspace
 
 # Copy and set up firewall scripts

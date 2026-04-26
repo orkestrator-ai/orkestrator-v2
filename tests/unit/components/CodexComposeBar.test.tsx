@@ -233,6 +233,16 @@ describe("CodexComposeBar", () => {
     expect(screen.getByTitle("Stop current query")).toBeTruthy();
   });
 
+  test("keeps stop button available while loading with drafted text", () => {
+    renderComposeBar({ isLoading: true });
+    fireEvent.change(screen.getByTestId("mentionable-input"), {
+      target: { value: "please continue" },
+    });
+
+    expect(screen.getByTitle("Stop current query")).toBeTruthy();
+    expect(screen.getByTitle("Add to queue")).toBeTruthy();
+  });
+
   test("shows queue indicator when queueLength > 0", () => {
     renderComposeBar({ queueLength: 2 });
     expect(screen.getByText("+2 queued")).toBeTruthy();

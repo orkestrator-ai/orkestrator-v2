@@ -1286,13 +1286,11 @@ export function OpenCodeChatTab({
   const handleStop = useCallback(async () => {
     if (!client || !session) return;
 
-    // Cancel queued prompts when stopping current execution
     clearQueue(sessionKey);
+    setSessionLoading(sessionKey, false);
 
     const success = await abortSession(client, session.sessionId);
-    if (success) {
-      setSessionLoading(sessionKey, false);
-    } else {
+    if (!success) {
       console.error("[OpenCodeChatTab] Failed to abort session");
     }
   }, [client, session, sessionKey, clearQueue, setSessionLoading]);

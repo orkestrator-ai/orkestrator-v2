@@ -124,6 +124,7 @@ export function CodexChatTab({
     setSelectedReasoningEffort,
     setFastMode,
     addToQueue,
+    clearQueue,
     removeFromQueue,
     clients: clientsMap,
     sessions: sessionsMap,
@@ -379,8 +380,23 @@ export function CodexChatTab({
 
   const handleStop = useCallback(async () => {
     if (!client || !session?.sessionId) return;
-    await abortSession(client, session.sessionId);
-  }, [client, session?.sessionId]);
+
+    clearQueue(sessionKey);
+    setSessionLoading(sessionKey, false);
+    setSessionError(sessionKey, undefined);
+
+    const success = await abortSession(client, session.sessionId);
+    if (!success) {
+      console.error("[CodexChatTab] Failed to abort session");
+    }
+  }, [
+    client,
+    clearQueue,
+    session?.sessionId,
+    sessionKey,
+    setSessionError,
+    setSessionLoading,
+  ]);
 
   useEffect(() => {
     if (!isActive || !session?.isLoading) {

@@ -668,7 +668,7 @@ export function CodexComposeBar({
           </button>
         )}
 
-        {isLoading && !text.trim() && attachments.length === 0 ? (
+        {isLoading ? (
           <button
             type="button"
             onClick={() => {
@@ -683,25 +683,25 @@ export function CodexComposeBar({
           >
             <Square className="h-4 w-4 fill-current" />
           </button>
-        ) : (
-          <Button
-            type="button"
-            size="icon"
-            className={cn(
-              "h-8 w-8 rounded-full text-foreground transition-colors",
-              isLoading
-                ? "bg-primary/20 text-primary hover:bg-primary/30"
-                : "bg-muted hover:bg-muted/80",
-            )}
-            disabled={disabled || isSending || (text.trim().length === 0 && attachments.length === 0)}
-            onClick={() => {
-              void handleSubmit();
-            }}
-            title={isLoading ? "Add to queue" : "Send message"}
-          >
-            <ArrowUp className="h-4 w-4" />
-          </Button>
-        )}
+        ) : null}
+
+        <Button
+          type="button"
+          size="icon"
+          className={cn(
+            "h-8 w-8 rounded-full text-foreground transition-colors",
+            isLoading
+              ? "bg-primary/20 text-primary hover:bg-primary/30"
+              : "bg-muted hover:bg-muted/80",
+          )}
+          disabled={disabled || isSending || (text.trim().length === 0 && attachments.length === 0)}
+          onClick={() => {
+            void handleSubmit();
+          }}
+          title={isLoading ? "Add to queue" : "Send message"}
+        >
+          <ArrowUp className="h-4 w-4" />
+        </Button>
       </div>
 
       <Dialog open={queueDialogOpen} onOpenChange={setQueueDialogOpen}>

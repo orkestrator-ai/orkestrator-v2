@@ -1,6 +1,8 @@
 // Test setup file for Bun
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 
+process.env.CODEX_BRIDGE_NO_SERVER ??= "1";
+
 // Register happy-dom globals for React testing
 GlobalRegistrator.register();
 

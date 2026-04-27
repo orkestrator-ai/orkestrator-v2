@@ -114,8 +114,16 @@ export function TerminalContainer({
   const [dragOverPaneId, setDragOverPaneId] = useState<string | null>(null);
 
   // Get Claude options for this environment
-  const { getOptions, clearOptions } = useClaudeOptionsStore();
+  const {
+    getOptions,
+    clearOptions,
+    setPendingNativeLaunch,
+    clearPendingNativeLaunch,
+  } = useClaudeOptionsStore();
   const claudeOptions = getOptions(environmentId);
+  const pendingNativeLaunch = useClaudeOptionsStore(
+    (state) => state.pendingNativeLaunches[environmentId]
+  );
   const hasAppliedClaudeOptionsRef = useRef(false);
 
   // Get config for agent modes - per-environment overrides take precedence over global
@@ -200,15 +208,6 @@ export function TerminalContainer({
   const initialPromptRef = useRef<string | undefined>(undefined);
   const previousContainerIdRef = useRef<string | null>(null);
   const rerunSetupFetchFailedRef = useRef(false);
-
-  // Track pending native agent launch (after workspace setup completes)
-  const pendingNativeAgentRef = useRef<{
-    containerId: string | null;
-    environmentId: string;
-    initialPrompt?: string;
-    targetPaneId: string;
-    agentType?: "opencode" | "claude" | "codex";
-  } | null>(null);
 
   // Set active environment when this container becomes active
   useEffect(() => {
@@ -466,13 +465,14 @@ export function TerminalContainer({
       } else if (useNativeOpenCode || useNativeClaude || useNativeCodex) {
         // Container + native mode: start with plain terminal for setup scripts
         setWorkspaceReady(environmentId, false);
-        pendingNativeAgentRef.current = {
+        setSetupScriptsRunning(environmentId, true);
+        setPendingNativeLaunch(environmentId, {
           containerId,
           environmentId,
           initialPrompt: pendingInitialPrompt,
           targetPaneId: "default",
           agentType: useNativeClaude ? "claude" : useNativeCodex ? "codex" : "opencode",
-        };
+        });
         console.log(
           "[TerminalContainer] Pending native",
           useNativeClaude ? "Claude" : useNativeCodex ? "Codex" : "OpenCode",
@@ -491,7 +491,7 @@ export function TerminalContainer({
         addTab("default", initialTab, environmentId);
       }
     }
-  }, [isEnvironmentRunning, containerId, isLocalEnvironmentReady, isLocalEnvironment, setupCommandsResolved, claudeOptions, initialize, addTab, environmentId, currentEnvState, opencodeMode, claudeMode, codexMode, setWorkspaceReady, consumePendingSetupCommands, setSetupScriptsRunning]);
+  }, [isEnvironmentRunning, containerId, isLocalEnvironmentReady, isLocalEnvironment, setupCommandsResolved, claudeOptions, initialize, addTab, environmentId, currentEnvState, opencodeMode, claudeMode, codexMode, setWorkspaceReady, consumePendingSetupCommands, setSetupScriptsRunning, setPendingNativeLaunch]);
 
   // Reset pane layout when container changes within the same environment
   // (e.g., container was stopped and restarted with a new ID)
@@ -500,9 +500,10 @@ export function TerminalContainer({
       console.debug("[TerminalContainer] Container changed for environment:", environmentId, "resetting panes");
       reset(environmentId);
       hasAppliedClaudeOptionsRef.current = false;
+      clearPendingNativeLaunch(environmentId);
     }
     previousContainerIdRef.current = containerId;
-  }, [containerId, environmentId, reset]);
+  }, [containerId, environmentId, reset, clearPendingNativeLaunch]);
 
   // Reset pane layout and workspace ready state when container stops
   // This clears all terminals and tabs since their backend sessions are destroyed
@@ -512,18 +513,18 @@ export function TerminalContainer({
       setWorkspaceReady(environmentId, false);
       reset(environmentId);
       // Clear pending native OpenCode launch on container stop
-      pendingNativeAgentRef.current = null;
+      clearPendingNativeLaunch(environmentId);
     }
-  }, [isContainerRunning, environmentId, containerId, setWorkspaceReady, reset]);
+  }, [isContainerRunning, environmentId, containerId, setWorkspaceReady, reset, clearPendingNativeLaunch]);
 
   // Launch native tab after workspace setup completes
   useEffect(() => {
-    console.log("[TerminalContainer] Native tab effect check - workspaceReady:", workspaceReady, "hasPending:", !!pendingNativeAgentRef.current, "containerId:", !!containerId, "isLocalEnvironmentReady:", isLocalEnvironmentReady);
+    console.log("[TerminalContainer] Native tab effect check - workspaceReady:", workspaceReady, "hasPending:", !!pendingNativeLaunch, "containerId:", !!containerId, "isLocalEnvironmentReady:", isLocalEnvironmentReady);
 
     // Simple logic: when workspace is ready and we have a pending launch, create the tab
     // For local environments, containerId is null so we check isLocalEnvironmentReady (worktreePath exists)
-    if (workspaceReady && pendingNativeAgentRef.current && (containerId || isLocalEnvironmentReady)) {
-      const pending = pendingNativeAgentRef.current;
+    if (workspaceReady && pendingNativeLaunch && (containerId || isLocalEnvironmentReady)) {
+      const pending = pendingNativeLaunch;
 
       // Only launch if this is for the current container/environment
       // For local envs, both containerId values are null, so we also check environmentId
@@ -534,6 +535,7 @@ export function TerminalContainer({
       if (containerMatch) {
         const isClaudeNative = pending.agentType === "claude";
         const isCodexNative = pending.agentType === "codex";
+        setSetupScriptsRunning(environmentId, false);
         console.log(
           "[TerminalContainer] Workspace ready, launching native",
           isClaudeNative ? "Claude" : isCodexNative ? "Codex" : "OpenCode",
@@ -585,10 +587,22 @@ export function TerminalContainer({
         }
 
         // Clear the pending launch
-        pendingNativeAgentRef.current = null;
+        clearPendingNativeLaunch(environmentId);
+        clearOptions(environmentId);
       }
     }
-  }, [workspaceReady, containerId, environmentId, isLocalEnvironmentReady, addTab]);
+  }, [
+    workspaceReady,
+    pendingNativeLaunch,
+    containerId,
+    environmentId,
+    isLocalEnvironment,
+    isLocalEnvironmentReady,
+    addTab,
+    clearPendingNativeLaunch,
+    clearOptions,
+    setSetupScriptsRunning,
+  ]);
 
   // Register terminal write function with context
   useEffect(() => {
@@ -768,7 +782,12 @@ export function TerminalContainer({
     if (hasAppliedClaudeOptionsRef.current && claudeOptions?.initialPrompt) {
       // Give time for the container to start and the command to be sent
       const timer = setTimeout(() => {
-        clearOptions(environmentId);
+        const pending = useClaudeOptionsStore
+          .getState()
+          .getPendingNativeLaunch(environmentId);
+        if (!pending) {
+          clearOptions(environmentId);
+        }
       }, 3000);
       return () => clearTimeout(timer);
     }

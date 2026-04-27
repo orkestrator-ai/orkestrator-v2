@@ -888,9 +888,15 @@ pub struct GlobalConfig {
     /// Claude mode - terminal CLI or native chat interface
     #[serde(default)]
     pub claude_mode: ClaudeMode,
+    /// Enable fast mode by default for new Claude Native tabs
+    #[serde(default)]
+    pub claude_native_fast_mode_default: bool,
     /// Codex mode - terminal CLI or native chat interface
     #[serde(default)]
     pub codex_mode: CodexMode,
+    /// Enable fast mode by default for new Codex Native tabs
+    #[serde(default)]
+    pub codex_native_fast_mode_default: bool,
     /// Terminal appearance settings (font, size, colors)
     #[serde(default)]
     pub terminal_appearance: TerminalAppearance,
@@ -920,7 +926,9 @@ impl Default for GlobalConfig {
             codex_reasoning_effort: default_codex_reasoning_effort(),
             opencode_mode: OpenCodeMode::default(),
             claude_mode: ClaudeMode::default(),
+            claude_native_fast_mode_default: false,
             codex_mode: CodexMode::default(),
+            codex_native_fast_mode_default: false,
             terminal_appearance: TerminalAppearance::default(),
             terminal_scrollback: default_terminal_scrollback(),
             experimental_codex_raw_event_logging: default_experimental_codex_raw_event_logging(),
@@ -1103,7 +1111,38 @@ mod tests {
         assert!(config.anthropic_api_key.is_none());
         assert!(config.github_token.is_none());
         assert_eq!(config.codex_mode, CodexMode::Native);
+        assert!(!config.claude_native_fast_mode_default);
+        assert!(!config.codex_native_fast_mode_default);
         assert!(config.experimental_codex_raw_event_logging);
+    }
+
+    #[test]
+    fn test_global_config_deserializes_missing_native_fast_mode_defaults() {
+        let json = r#"{
+            "containerResources": { "cpuCores": 2, "memoryGb": 4 },
+            "envFilePatterns": [".env"]
+        }"#;
+
+        let config: GlobalConfig = serde_json::from_str(json).unwrap();
+
+        assert!(!config.claude_native_fast_mode_default);
+        assert!(!config.codex_native_fast_mode_default);
+    }
+
+    #[test]
+    fn test_global_config_serializes_native_fast_mode_defaults() {
+        let mut config = GlobalConfig::default();
+        config.claude_native_fast_mode_default = true;
+        config.codex_native_fast_mode_default = true;
+
+        let json = serde_json::to_string(&config).unwrap();
+
+        assert!(json.contains("\"claudeNativeFastModeDefault\":true"));
+        assert!(json.contains("\"codexNativeFastModeDefault\":true"));
+
+        let deserialized: GlobalConfig = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.claude_native_fast_mode_default);
+        assert!(deserialized.codex_native_fast_mode_default);
     }
 
     #[test]

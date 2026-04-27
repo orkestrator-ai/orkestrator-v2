@@ -53,7 +53,9 @@ describe("GlobalSettings", () => {
           codexReasoningEffort: "medium",
           opencodeMode: "terminal",
           claudeMode: "terminal",
+          claudeNativeFastModeDefault: false,
           codexMode: "native",
+          codexNativeFastModeDefault: false,
           terminalAppearance: {
             fontFamily: "Fira Code",
             fontSize: 14,
@@ -91,6 +93,118 @@ describe("GlobalSettings", () => {
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({
           codexMode: "terminal",
+        })
+      );
+    });
+  });
+
+  test("saves Claude native fast mode default changes", async () => {
+    const { container } = render(<GlobalSettings activeSection="claude" />);
+
+    fireEvent.click(screen.getByRole("switch", { name: "Claude fast mode for new native tabs" }));
+    fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          claudeNativeFastModeDefault: true,
+        })
+      );
+    });
+  });
+
+  test("renders saved native fast mode defaults as enabled", () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          claudeNativeFastModeDefault: true,
+          codexNativeFastModeDefault: true,
+        },
+      },
+    }));
+
+    const { rerender } = render(<GlobalSettings activeSection="claude" />);
+
+    expect(
+      screen
+        .getByRole("switch", { name: "Claude fast mode for new native tabs" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
+
+    rerender(<GlobalSettings activeSection="codex" />);
+
+    expect(
+      screen
+        .getByRole("switch", { name: "Codex fast mode for new native tabs" })
+        .getAttribute("aria-checked")
+    ).toBe("true");
+  });
+
+  test("reset restores unsaved native fast mode default changes", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          claudeNativeFastModeDefault: true,
+        },
+      },
+    }));
+    const { container } = render(<GlobalSettings activeSection="claude" />);
+    const fastModeSwitch = screen.getByRole("switch", {
+      name: "Claude fast mode for new native tabs",
+    });
+
+    fireEvent.click(fastModeSwitch);
+
+    await waitFor(() => {
+      expect(fastModeSwitch.getAttribute("aria-checked")).toBe("false");
+    });
+
+    fireEvent.click(within(container).getByRole("button", { name: "Reset" }));
+
+    await waitFor(() => {
+      expect(fastModeSwitch.getAttribute("aria-checked")).toBe("true");
+    });
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+  });
+
+  test("native fast mode switches participate in save change detection", async () => {
+    const { container } = render(<GlobalSettings activeSection="claude" />);
+    const saveButton = within(container).getByRole("button", { name: "Save Changes" });
+    const fastModeSwitch = screen.getByRole("switch", {
+      name: "Claude fast mode for new native tabs",
+    });
+
+    expect((saveButton as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(fastModeSwitch);
+
+    await waitFor(() => {
+      expect((saveButton as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    fireEvent.click(fastModeSwitch);
+
+    await waitFor(() => {
+      expect((saveButton as HTMLButtonElement).disabled).toBe(true);
+    });
+  });
+
+  test("saves Codex native fast mode default changes", async () => {
+    const { container } = render(<GlobalSettings activeSection="codex" />);
+
+    fireEvent.click(screen.getByRole("switch", { name: "Codex fast mode for new native tabs" }));
+    fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          codexNativeFastModeDefault: true,
         })
       );
     });

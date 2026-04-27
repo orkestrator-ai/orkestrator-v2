@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createClaudeSessionKey, useClaudeStore } from "@/stores/claudeStore";
+import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 
 import * as realHooks from "@/hooks";
@@ -82,6 +83,17 @@ function createData(overrides: Partial<ClaudeNativeData> = {}): ClaudeNativeData
 }
 
 function resetStores() {
+  useConfigStore.setState((state) => ({
+    ...state,
+    config: {
+      ...state.config,
+      global: {
+        ...state.config.global,
+        claudeNativeFastModeDefault: false,
+      },
+    },
+  }));
+
   useClaudeStore.setState({
     serverStatus: new Map(),
     clients: new Map([[ENVIRONMENT_ID, MOCK_CLIENT as any]]),
@@ -109,6 +121,7 @@ function resetStores() {
     pendingQuestions: new Map(),
     pendingPlanApprovals: new Map(),
     models: [],
+    fastMode: new Map(),
   });
 
   useEnvironmentStore.setState({
@@ -214,6 +227,37 @@ describe("ClaudeChatTab", () => {
       expect(mockCheckHealth).toHaveBeenCalledWith(MOCK_CLIENT);
     });
     expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("seeds configured fast mode default when warm path creates a new session", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          claudeNativeFastModeDefault: true,
+        },
+      },
+    }));
+    useClaudeStore.setState((state) => ({
+      ...state,
+      sessions: new Map(),
+      fastMode: new Map(),
+    }));
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockCreateSession).toHaveBeenCalledWith(MOCK_CLIENT);
+      expect(useClaudeStore.getState().isFastMode(SESSION_KEY)).toBe(true);
+    });
   });
 
   test("drains queued prompts when the session is idle", async () => {

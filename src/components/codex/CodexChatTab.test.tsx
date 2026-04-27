@@ -42,6 +42,7 @@ const mockGetSessionMessages = mock(async (): Promise<TestCodexMessage[]> => [])
 const mockSubscribeToEvents = mock(() => (async function* () {})());
 const mockUpdateSessionConfig = mock(async () => true);
 const mockAbortSession = mock(async () => true);
+const mockCreateSession = mock(async () => ({ sessionId: "session-1", title: "Test session" }));
 
 // NOTE: Do NOT mock @/hooks/useScrollLock here — it pollutes the global
 // module cache and breaks useScrollLock.test.ts. The real hook returns
@@ -63,7 +64,7 @@ mock.module("@/lib/codex-client", () => ({
   abortSession: mockAbortSession,
   checkHealth: mock(async () => true),
   createClient: mock(() => ({ baseUrl: "http://127.0.0.1:9999" })),
-  createSession: mock(async () => ({ sessionId: "session-1", title: "Test session" })),
+  createSession: mockCreateSession,
   getModels: mock(async () => ({ models: MOCK_MODELS, source: "fallback" })),
   getSlashCommands: mock(async () => []),
   getSessionMessages: mockGetSessionMessages,
@@ -207,6 +208,9 @@ function seedConfigStore() {
         codexReasoningEffort: "medium",
         opencodeMode: "terminal",
         claudeMode: "terminal",
+        claudeNativeFastModeDefault: false,
+        codexMode: "native",
+        codexNativeFastModeDefault: false,
         terminalAppearance: {
           fontFamily: "Fira Code",
           fontSize: 14,
@@ -340,6 +344,8 @@ describe("CodexChatTab", () => {
     mockUpdateSessionConfig.mockImplementation(async () => true);
     mockAbortSession.mockClear();
     mockAbortSession.mockImplementation(async () => true);
+    mockCreateSession.mockClear();
+    mockCreateSession.mockImplementation(async () => ({ sessionId: "session-1", title: "Test session" }));
     restoreTimerHarness();
 
     resetStores();
@@ -807,6 +813,106 @@ describe("CodexChatTab", () => {
   });
 
   describe("fast mode toggle", () => {
+    test("uses configured fast mode default when warm path creates a new session", async () => {
+      useConfigStore.setState((state) => ({
+        ...state,
+        config: {
+          ...state.config,
+          global: {
+            ...state.config.global,
+            codexNativeFastModeDefault: true,
+          },
+        },
+      }));
+      useCodexStore.setState((state) => ({
+        ...state,
+        sessions: new Map(),
+        fastMode: new Map(),
+      }));
+
+      render(
+        <CodexChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive={true}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(mockCreateSession).toHaveBeenCalled();
+      });
+      const lastCall = mockCreateSession.mock.calls.at(-1) as unknown as unknown[] | undefined;
+      expect(lastCall?.[1]).toMatchObject({ fastMode: true });
+      expect(useCodexStore.getState().isFastMode(SESSION_KEY)).toBe(true);
+    });
+
+    test("uses configured fast mode default when cold path creates a new session", async () => {
+      useConfigStore.setState((state) => ({
+        ...state,
+        config: {
+          ...state.config,
+          global: {
+            ...state.config.global,
+            codexNativeFastModeDefault: true,
+          },
+        },
+      }));
+      useCodexStore.setState((state) => ({
+        ...state,
+        clients: new Map(),
+        sessions: new Map(),
+        fastMode: new Map(),
+      }));
+
+      render(
+        <CodexChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive={true}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(mockCreateSession).toHaveBeenCalled();
+      });
+      const lastCall = mockCreateSession.mock.calls.at(-1) as unknown as unknown[] | undefined;
+      expect(lastCall?.[1]).toMatchObject({ fastMode: true });
+      expect(useCodexStore.getState().isFastMode(SESSION_KEY)).toBe(true);
+    });
+
+    test("preserves an existing per-session fast mode value over the global default", async () => {
+      useConfigStore.setState((state) => ({
+        ...state,
+        config: {
+          ...state.config,
+          global: {
+            ...state.config.global,
+            codexNativeFastModeDefault: true,
+          },
+        },
+      }));
+      useCodexStore.setState((state) => ({
+        ...state,
+        sessions: new Map(),
+        fastMode: new Map([[SESSION_KEY, false]]),
+      }));
+
+      render(
+        <CodexChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive={true}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(mockCreateSession).toHaveBeenCalled();
+      });
+      const lastCall = mockCreateSession.mock.calls.at(-1) as unknown as unknown[] | undefined;
+      expect(lastCall?.[1]).toMatchObject({ fastMode: false });
+      expect(useCodexStore.getState().isFastMode(SESSION_KEY)).toBe(false);
+    });
+
     test("persists fast mode in the store when the bridge accepts the config change", async () => {
       render(
         <CodexChatTab

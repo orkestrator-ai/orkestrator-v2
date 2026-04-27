@@ -66,7 +66,9 @@ const DEFAULT_CONFIG: AppConfig = {
     codexReasoningEffort: "medium",
     opencodeMode: "terminal",
     claudeMode: "terminal",
+    claudeNativeFastModeDefault: false,
     codexMode: "native",
+    codexNativeFastModeDefault: false,
     terminalAppearance: {
       fontFamily: "FiraCode Nerd Font",
       fontSize: 14,

@@ -173,6 +173,16 @@ export function CodexChatTab({
   const fastModeEnabled = useCodexStore(
     useCallback((state) => state.fastMode.get(sessionKey) ?? false, [sessionKey]),
   );
+  const seedInitialFastMode = useCallback((codexState = useCodexStore.getState()) => {
+    const existing = codexState.fastMode.get(sessionKey);
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const enabled = useConfigStore.getState().config.global.codexNativeFastModeDefault ?? false;
+    codexState.setFastMode(sessionKey, enabled);
+    return enabled;
+  }, [sessionKey]);
   const persistCodexPreferences = useCallback(
     async (model: string, effort: CodexReasoningEffort) => {
       try {
@@ -537,7 +547,7 @@ export function CodexChatTab({
             persistedReasoningEffort: persistedPreferencesRef.current.reasoningEffort,
           });
 
-          const warmFastMode = codexState.fastMode.get(sessionKey) ?? false;
+          const warmFastMode = seedInitialFastMode(codexState);
           const created = await createSession(cachedClient, {
             model: resolvedSelection.model,
             modelReasoningEffort: resolvedSelection.reasoningEffort,
@@ -629,7 +639,7 @@ export function CodexChatTab({
           if (!mounted) return;
           setMessages(sessionKey, messages);
         } else {
-          const coldFastMode = codexState.fastMode.get(sessionKey) ?? false;
+          const coldFastMode = seedInitialFastMode(codexState);
           const created = await createSession(nextClient, {
             model: resolvedModel,
             modelReasoningEffort: resolvedReasoningEffort,
@@ -701,6 +711,7 @@ export function CodexChatTab({
     setSelectedModel,
     setServerStatus,
     setSession,
+    seedInitialFastMode,
     setupScriptsRunning,
     setupCommandsResolved,
     hasPendingSetupCommands,

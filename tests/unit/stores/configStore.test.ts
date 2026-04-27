@@ -15,6 +15,8 @@ describe("configStore", () => {
           },
           envFilePatterns: [".env.local", ".env"],
           experimentalCodexRawEventLogging: true,
+          claudeNativeFastModeDefault: false,
+          codexNativeFastModeDefault: false,
         },
         repositories: {},
       },
@@ -30,6 +32,8 @@ describe("configStore", () => {
     expect(state.config.global.containerResources.memoryGb).toBe(4);
     expect(state.config.global.envFilePatterns).toEqual([".env.local", ".env"]);
     expect(state.config.global.experimentalCodexRawEventLogging).toBe(true);
+    expect(state.config.global.claudeNativeFastModeDefault).toBe(false);
+    expect(state.config.global.codexNativeFastModeDefault).toBe(false);
     expect(state.config.repositories).toEqual({});
     expect(state.isLoading).toBe(false);
     expect(state.error).toBeNull();
@@ -123,6 +127,16 @@ describe("configStore", () => {
     });
 
     expect(useConfigStore.getState().config.global.experimentalCodexRawEventLogging).toBe(false);
+  });
+
+  test("updateGlobalConfig updates native fast mode defaults", () => {
+    useConfigStore.getState().updateGlobalConfig({
+      claudeNativeFastModeDefault: true,
+      codexNativeFastModeDefault: true,
+    });
+
+    expect(useConfigStore.getState().config.global.claudeNativeFastModeDefault).toBe(true);
+    expect(useConfigStore.getState().config.global.codexNativeFastModeDefault).toBe(true);
   });
 
   test("setRepositoryConfig adds a new repository config", () => {

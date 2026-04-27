@@ -208,8 +208,12 @@ export interface GlobalConfig {
   opencodeMode: OpenCodeMode;
   /** Claude mode - terminal CLI or native chat interface */
   claudeMode: ClaudeMode;
+  /** Enable fast mode by default for new Claude Native tabs */
+  claudeNativeFastModeDefault?: boolean;
   /** Codex mode - terminal CLI or native chat interface */
   codexMode: CodexMode;
+  /** Enable fast mode by default for new Codex Native tabs */
+  codexNativeFastModeDefault?: boolean;
   /** Terminal appearance settings (font, size, colors) */
   terminalAppearance: TerminalAppearance;
   /** Terminal scrollback buffer size (lines) */

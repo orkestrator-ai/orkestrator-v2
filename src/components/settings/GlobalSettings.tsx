@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -69,8 +70,14 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [claudeMode, setClaudeMode] = useState<ClaudeMode>(
     global.claudeMode || "terminal"
   );
+  const [claudeNativeFastModeDefault, setClaudeNativeFastModeDefault] = useState(
+    global.claudeNativeFastModeDefault ?? false
+  );
   const [codexMode, setCodexMode] = useState<CodexMode>(
     global.codexMode || "native"
+  );
+  const [codexNativeFastModeDefault, setCodexNativeFastModeDefault] = useState(
+    global.codexNativeFastModeDefault ?? false
   );
   const [terminalFontFamily, setTerminalFontFamily] = useState(
     global.terminalAppearance?.fontFamily || DEFAULT_TERMINAL_APPEARANCE.fontFamily
@@ -114,7 +121,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setOpencodeModel(global.opencodeModel || "opencode/grok-code");
     setOpencodeMode(global.opencodeMode || "terminal");
     setClaudeMode(global.claudeMode || "terminal");
+    setClaudeNativeFastModeDefault(global.claudeNativeFastModeDefault ?? false);
     setCodexMode(global.codexMode || "native");
+    setCodexNativeFastModeDefault(global.codexNativeFastModeDefault ?? false);
     setTerminalFontFamily(global.terminalAppearance?.fontFamily || DEFAULT_TERMINAL_APPEARANCE.fontFamily);
     setTerminalFontSize(global.terminalAppearance?.fontSize || DEFAULT_TERMINAL_APPEARANCE.fontSize);
     setTerminalBackgroundColor(global.terminalAppearance?.backgroundColor || DEFAULT_TERMINAL_APPEARANCE.backgroundColor);
@@ -147,7 +156,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       opencodeModel !== (global.opencodeModel || "opencode/grok-code") ||
       opencodeMode !== (global.opencodeMode || "terminal") ||
       claudeMode !== (global.claudeMode || "terminal") ||
+      claudeNativeFastModeDefault !== (global.claudeNativeFastModeDefault ?? false) ||
       codexMode !== (global.codexMode || "native") ||
+      codexNativeFastModeDefault !== (global.codexNativeFastModeDefault ?? false) ||
       terminalFontFamily !== terminalAppearance.fontFamily ||
       terminalFontSize !== terminalAppearance.fontSize ||
       terminalBackgroundColor !== terminalAppearance.backgroundColor ||
@@ -158,7 +169,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, codexMode, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -239,7 +250,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         codexReasoningEffort: "minimal" | "low" | "medium" | "high" | "xhigh";
         opencodeMode: OpenCodeMode;
         claudeMode: ClaudeMode;
+        claudeNativeFastModeDefault: boolean;
         codexMode: CodexMode;
+        codexNativeFastModeDefault: boolean;
         terminalAppearance: TerminalAppearance;
         terminalScrollback: number;
         experimentalCodexRawEventLogging: boolean;
@@ -255,7 +268,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         codexReasoningEffort: global.codexReasoningEffort || "medium",
         opencodeMode,
         claudeMode,
+        claudeNativeFastModeDefault,
         codexMode,
+        codexNativeFastModeDefault,
         terminalAppearance: {
           fontFamily: terminalFontFamily,
           fontSize: terminalFontSize,
@@ -313,7 +328,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setOpencodeModel(global.opencodeModel || "opencode/grok-code");
     setOpencodeMode(global.opencodeMode || "terminal");
     setClaudeMode(global.claudeMode || "terminal");
+    setClaudeNativeFastModeDefault(global.claudeNativeFastModeDefault ?? false);
     setCodexMode(global.codexMode || "native");
+    setCodexNativeFastModeDefault(global.codexNativeFastModeDefault ?? false);
     setTerminalFontFamily(global.terminalAppearance?.fontFamily || DEFAULT_TERMINAL_APPEARANCE.fontFamily);
     setTerminalFontSize(global.terminalAppearance?.fontSize || DEFAULT_TERMINAL_APPEARANCE.fontSize);
     setTerminalBackgroundColor(global.terminalAppearance?.backgroundColor || DEFAULT_TERMINAL_APPEARANCE.backgroundColor);
@@ -531,9 +548,42 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     </div>
   );
 
+  const renderFastModeDefault = (
+    enabled: boolean,
+    setEnabled: (enabled: boolean) => void,
+    agentName: string,
+  ) => (
+    <div className="max-w-2xl space-y-3">
+      <div>
+        <h3 className="text-sm font-medium text-foreground">New Native Tabs</h3>
+        <p className="text-xs text-muted-foreground mt-1">
+          Start new {agentName} Native tabs in default mode or fast mode.
+        </p>
+      </div>
+      <div className="flex items-center justify-between max-w-xs rounded-lg border border-zinc-800 bg-zinc-900 p-3">
+        <div className="space-y-0.5">
+          <Label className="text-sm">{enabled ? "Fast mode" : "Default mode"}</Label>
+          <p className="text-xs text-muted-foreground">
+            {enabled ? "Fast mode starts on for new native tabs" : "Fast mode stays off for new native tabs"}
+          </p>
+        </div>
+        <Switch
+          aria-label={`${agentName} fast mode for new native tabs`}
+          checked={enabled}
+          onCheckedChange={setEnabled}
+        />
+      </div>
+    </div>
+  );
+
   const renderClaude = () => (
     <div className="max-w-2xl space-y-8">
       {renderModeToggle(claudeMode, setClaudeMode, "Choose how Claude runs in environments")}
+      {renderFastModeDefault(
+        claudeNativeFastModeDefault,
+        setClaudeNativeFastModeDefault,
+        "Claude",
+      )}
 
       {/* Anthropic API Key */}
       <div className="space-y-3">
@@ -578,10 +628,19 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     "Choose how OpenCode runs in environments",
   );
 
-  const renderCodex = () => renderModeToggle(
-    codexMode,
-    setCodexMode,
-    "Choose how Codex runs in environments",
+  const renderCodex = () => (
+    <div className="max-w-2xl space-y-8">
+      {renderModeToggle(
+        codexMode,
+        setCodexMode,
+        "Choose how Codex runs in environments",
+      )}
+      {renderFastModeDefault(
+        codexNativeFastModeDefault,
+        setCodexNativeFastModeDefault,
+        "Codex",
+      )}
+    </div>
   );
 
   const renderTerminal = () => {

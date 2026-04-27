@@ -5,6 +5,7 @@ import { formatElapsed } from "@/lib/format-elapsed";
 import { Button } from "@/components/ui/button";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
+import { useConfigStore } from "@/stores/configStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import {
   createClient,
@@ -118,6 +119,18 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
   // Create a unique session key that combines environmentId and tabId
   // This prevents session collisions when multiple environments use the same tab IDs (e.g., "default")
   const sessionKey = useMemo(() => createClaudeSessionKey(environmentId, tabId), [environmentId, tabId]);
+
+  const seedInitialFastMode = useCallback(() => {
+    const claudeState = useClaudeStore.getState();
+    const existing = claudeState.fastMode.get(sessionKey);
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const enabled = useConfigStore.getState().config.global.claudeNativeFastModeDefault ?? false;
+    claudeState.setFastMode(sessionKey, enabled);
+    return enabled;
+  }, [sessionKey]);
 
   const client = useMemo(() => clientsMap.get(environmentId), [clientsMap, environmentId]);
   const session = useMemo(() => sessionsMap.get(sessionKey), [sessionsMap, sessionKey]);
@@ -312,6 +325,7 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
 
           tabSessionIdRef.current = newSession.sessionId;
           isInitializedRef.current = true;
+          seedInitialFastMode();
 
           setSession(sessionKey, {
             sessionId: newSession.sessionId,
@@ -491,6 +505,7 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
                 const newSession = await createSession(bridgeClient);
                 if (!mounted) return;
                 if (newSession) {
+                  seedInitialFastMode();
                   tabSessionIdRef.current = newSession.sessionId;
                   setSession(sessionKey, {
                     sessionId: newSession.sessionId,
@@ -514,6 +529,7 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
 
           tabSessionIdRef.current = newSession.sessionId;
           isInitializedRef.current = true;
+          seedInitialFastMode();
 
           console.debug("[ClaudeChatTab] Created new session", {
             tabId,
@@ -561,7 +577,7 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
             const selectedModel = getSelectedModel(sessionKey);
             const effortLevel = getEffort(sessionKey);
             const planModeEnabled = isPlanMode(sessionKey);
-            const fastModeEnabled = isFastMode(sessionKey);
+            const fastModeEnabled = seedInitialFastMode();
             const permissionMode = planModeEnabled ? "plan" : "bypassPermissions";
             const modelSupportsFastMode = useClaudeStore
               .getState()

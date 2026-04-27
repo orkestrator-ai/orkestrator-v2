@@ -95,6 +95,8 @@ export interface Environment {
    * and so incomplete setup can be re-run on the next app session.
    */
   setupScriptsComplete?: boolean;
+  /** Initial prompt used when this environment was created. */
+  initialPrompt?: string;
 }
 
 /** Result of testing a domain for DNS resolution */

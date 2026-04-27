@@ -1,6 +1,10 @@
 import { describe, test, expect, mock, beforeEach } from "bun:test";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, waitFor } from "@testing-library/react";
 import type { Environment } from "../../../src/types";
+
+const toastSuccessMock = mock(() => {});
+const toastErrorMock = mock(() => {});
+const settingsDialogPropsMock = mock(() => {});
 
 // Mock UI components that require providers.
 // NOTE: @/components/ui/tooltip is already mocked by StatusIndicator.test.tsx
@@ -20,15 +24,37 @@ mock.module("@/components/ui/context-menu", () => ({
   ContextMenuContent: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="context-menu-content">{children}</div>
   ),
-  ContextMenuItem: ({ children, onClick }: { children: React.ReactNode; onClick?: () => void }) => (
-    <div role="menuitem" onClick={onClick}>{children}</div>
+  ContextMenuItem: ({
+    children,
+    disabled,
+    onClick,
+  }: {
+    children: React.ReactNode;
+    disabled?: boolean;
+    onClick?: () => void;
+  }) => (
+    <div
+      role="menuitem"
+      aria-disabled={disabled ? "true" : undefined}
+      onClick={disabled ? undefined : onClick}
+    >
+      {children}
+    </div>
   ),
   ContextMenuSeparator: () => <hr />,
 }));
 
 mock.module("@/components/ui/alert-dialog", () => ({
-  AlertDialog: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  AlertDialogAction: ({ children }: { children: React.ReactNode }) => <button>{children}</button>,
+  AlertDialog: ({ children, open }: { children: React.ReactNode; open?: boolean }) => (
+    open ? <>{children}</> : null
+  ),
+  AlertDialogAction: ({
+    children,
+    onClick,
+  }: {
+    children: React.ReactNode;
+    onClick?: () => void;
+  }) => <button onClick={onClick}>{children}</button>,
   AlertDialogCancel: ({ children }: { children: React.ReactNode }) => <button>{children}</button>,
   AlertDialogContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   AlertDialogDescription: ({ children }: { children: React.ReactNode }) => <p>{children}</p>,
@@ -43,13 +69,16 @@ mock.module("@/components/ui/checkbox", () => ({
 
 mock.module("sonner", () => ({
   toast: {
-    success: mock(() => {}),
-    error: mock(() => {}),
+    success: toastSuccessMock,
+    error: toastErrorMock,
   },
 }));
 
 mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
-  EnvironmentSettingsDialog: () => null,
+  EnvironmentSettingsDialog: (props: { open: boolean }) => {
+    settingsDialogPropsMock(props);
+    return props.open ? <div data-testid="settings-dialog" /> : null;
+  },
 }));
 
 mock.module("@/lib/tauri", () => ({
@@ -88,21 +117,48 @@ function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
   };
 }
 
-const noopHandler = () => {};
+const noopSelect = () => {};
+const noopEnvironmentHandler = () => {};
 
-function renderItem(env: Environment) {
+type RenderOptions = {
+  isSelected?: boolean;
+  isMultiSelectMode?: boolean;
+  isChecked?: boolean;
+  onSelect?: (environmentId: string, modifiers?: { shiftKey?: boolean; metaKey?: boolean }) => void;
+  onDelete?: (environmentId: string) => void;
+  onStart?: (environmentId: string) => void;
+  onStop?: (environmentId: string) => void;
+  onRestart?: (environmentId: string) => void;
+  onUpdate?: (environment: Environment) => void;
+};
+
+function renderItem(env: Environment, options: RenderOptions = {}) {
   return render(
     <EnvironmentItem
       environment={env}
-      isSelected={false}
-      onSelect={noopHandler}
-      onDelete={noopHandler}
-      onStart={noopHandler}
-      onStop={noopHandler}
-      onRestart={noopHandler}
+      isSelected={options.isSelected ?? false}
+      onSelect={options.onSelect ?? noopSelect}
+      onDelete={options.onDelete ?? noopEnvironmentHandler}
+      onStart={options.onStart ?? noopEnvironmentHandler}
+      onStop={options.onStop ?? noopEnvironmentHandler}
+      onRestart={options.onRestart ?? noopEnvironmentHandler}
+      onUpdate={options.onUpdate}
+      isMultiSelectMode={options.isMultiSelectMode}
+      isChecked={options.isChecked}
     />,
   );
 }
+
+function findMenuItem(container: HTMLElement, label: string) {
+  const menuItems = container.querySelectorAll('[role="menuitem"]');
+  return Array.from(menuItems).find((item) => item.textContent?.includes(label));
+}
+
+beforeEach(() => {
+  toastSuccessMock.mockClear();
+  toastErrorMock.mockClear();
+  settingsDialogPropsMock.mockClear();
+});
 
 describe("EnvironmentItem tooltip port display", () => {
   test("shows full port mapping when both entryPort and hostEntryPort are set", () => {
@@ -183,10 +239,7 @@ describe("EnvironmentItem copy address", () => {
     const env = makeEnvironment({ entryPort: 3000, hostEntryPort: 49152 });
     const { container } = renderItem(env);
 
-    const menuItems = container.querySelectorAll('[role="menuitem"]');
-    const copyItem = Array.from(menuItems).find(
-      (item) => item.textContent?.includes("Copy Address"),
-    );
+    const copyItem = findMenuItem(container, "Copy Address");
     expect(copyItem).not.toBeUndefined();
 
     fireEvent.click(copyItem!);
@@ -207,5 +260,183 @@ describe("EnvironmentItem copy address", () => {
 
     const clickableSpan = container.querySelector('span[role="button"]');
     expect(clickableSpan).toBeNull();
+  });
+});
+
+describe("EnvironmentItem copy initial prompt", () => {
+  let writeTextMock: ReturnType<typeof mock>;
+
+  beforeEach(() => {
+    writeTextMock = mock(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: writeTextMock },
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  test("context menu shows Copy Initial Prompt when an initial prompt is stored", () => {
+    const env = makeEnvironment({ initialPrompt: "Review the migration plan" });
+    const { container } = renderItem(env);
+
+    const contextMenu = container.querySelector('[data-testid="context-menu-content"]');
+    expect(contextMenu).not.toBeNull();
+    expect(contextMenu!.textContent).toContain("Copy Initial Prompt");
+  });
+
+  test("context menu Copy Initial Prompt copies the prompt to clipboard", () => {
+    const env = makeEnvironment({ initialPrompt: "Review the migration plan" });
+    const { container } = renderItem(env);
+
+    const copyItem = findMenuItem(container, "Copy Initial Prompt");
+    expect(copyItem).not.toBeUndefined();
+
+    fireEvent.click(copyItem!);
+    expect(writeTextMock).toHaveBeenCalledWith("Review the migration plan");
+  });
+
+  test("context menu Copy Initial Prompt trims stored prompt text before copying", () => {
+    const env = makeEnvironment({ initialPrompt: "  Review the migration plan\n" });
+    const { container } = renderItem(env);
+
+    const copyItem = findMenuItem(container, "Copy Initial Prompt");
+    expect(copyItem).not.toBeUndefined();
+
+    fireEvent.click(copyItem!);
+    expect(writeTextMock).toHaveBeenCalledWith("Review the migration plan");
+  });
+
+  test("context menu Copy Initial Prompt shows an error toast when clipboard write fails", async () => {
+    writeTextMock = mock(() => Promise.reject(new Error("clipboard unavailable")));
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: writeTextMock },
+      writable: true,
+      configurable: true,
+    });
+    const env = makeEnvironment({ initialPrompt: "Review the migration plan" });
+    const { container } = renderItem(env);
+
+    const copyItem = findMenuItem(container, "Copy Initial Prompt");
+    expect(copyItem).not.toBeUndefined();
+
+    fireEvent.click(copyItem!);
+    expect(writeTextMock).toHaveBeenCalledWith("Review the migration plan");
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith("Failed to copy initial prompt");
+    });
+  });
+
+  test("context menu does not show Copy Initial Prompt without stored prompt text", () => {
+    const env = makeEnvironment({ initialPrompt: "   " });
+    const { container } = renderItem(env);
+
+    const contextMenu = container.querySelector('[data-testid="context-menu-content"]');
+    expect(contextMenu!.textContent).not.toContain("Copy Initial Prompt");
+  });
+});
+
+describe("EnvironmentItem menu actions and selection", () => {
+  test("context menu Settings opens the settings dialog", () => {
+    const env = makeEnvironment();
+    const { container } = renderItem(env);
+
+    const settingsItem = findMenuItem(container, "Settings");
+    expect(settingsItem).not.toBeUndefined();
+
+    fireEvent.click(settingsItem!);
+    expect(container.querySelector('[data-testid="settings-dialog"]')).not.toBeNull();
+    expect(settingsDialogPropsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ open: true }),
+    );
+  });
+
+  test("context menu Stop calls onStop for a running container environment", () => {
+    const onStop = mock(() => {});
+    const env = makeEnvironment({ status: "running" });
+    const { container } = renderItem(env, { onStop });
+
+    const stopItem = findMenuItem(container, "Stop");
+    expect(stopItem).not.toBeUndefined();
+
+    fireEvent.click(stopItem!);
+    expect(onStop).toHaveBeenCalledWith("env-1");
+  });
+
+  test("context menu Start calls onStart for a stopped container environment", () => {
+    const onStart = mock(() => {});
+    const env = makeEnvironment({ status: "stopped" });
+    const { container } = renderItem(env, { onStart });
+
+    const startItem = findMenuItem(container, "Start");
+    expect(startItem).not.toBeUndefined();
+
+    fireEvent.click(startItem!);
+    expect(onStart).toHaveBeenCalledWith("env-1");
+  });
+
+  test("context menu Restart is disabled when the container environment is stopped", () => {
+    const onRestart = mock(() => {});
+    const env = makeEnvironment({ status: "stopped" });
+    const { container } = renderItem(env, { onRestart });
+
+    const restartItem = findMenuItem(container, "Restart");
+    expect(restartItem).not.toBeUndefined();
+    expect(restartItem!.getAttribute("aria-disabled")).toBe("true");
+
+    fireEvent.click(restartItem!);
+    expect(onRestart).not.toHaveBeenCalled();
+  });
+
+  test("context menu Delete confirms before calling onDelete", () => {
+    const onDelete = mock(() => {});
+    const env = makeEnvironment({ name: "delete-me" });
+    const { container } = renderItem(env, { onDelete });
+
+    const deleteItem = findMenuItem(container, "Delete");
+    expect(deleteItem).not.toBeUndefined();
+    expect(container.textContent).not.toContain("Delete Environment");
+
+    fireEvent.click(deleteItem!);
+    expect(container.textContent).toContain("Delete Environment");
+    expect(container.textContent).toContain("delete-me");
+    expect(onDelete).not.toHaveBeenCalled();
+
+    const confirmButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Delete",
+    );
+    expect(confirmButton).not.toBeUndefined();
+
+    fireEvent.click(confirmButton!);
+    expect(onDelete).toHaveBeenCalledWith("env-1");
+  });
+
+  test("click selection forwards ctrl or meta selection intent", () => {
+    const onSelect = mock(() => {});
+    const env = makeEnvironment();
+    const { container } = renderItem(env, { onSelect });
+
+    const trigger = container.querySelector('div[role="button"]');
+    expect(trigger).not.toBeNull();
+
+    fireEvent.click(trigger!, { ctrlKey: true });
+    expect(onSelect).toHaveBeenCalledWith("env-1", {
+      shiftKey: false,
+      metaKey: true,
+    });
+  });
+
+  test("keyboard selection forwards shift selection intent", () => {
+    const onSelect = mock(() => {});
+    const env = makeEnvironment();
+    const { container } = renderItem(env, { onSelect });
+
+    const trigger = container.querySelector('div[role="button"]');
+    expect(trigger).not.toBeNull();
+
+    fireEvent.keyDown(trigger!, { key: "Enter", shiftKey: true });
+    expect(onSelect).toHaveBeenCalledWith("env-1", {
+      shiftKey: true,
+      metaKey: false,
+    });
   });
 });

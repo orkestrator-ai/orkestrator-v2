@@ -243,6 +243,9 @@ pub struct Environment {
     /// and so incomplete setup can be re-run on the next app session.
     #[serde(default)]
     pub setup_scripts_complete: bool,
+    /// Initial prompt used when the environment was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_prompt: Option<String>,
 }
 
 /// Default branch for backward compatibility with existing environments
@@ -350,6 +353,7 @@ impl Environment {
             opencode_mode: None,
             codex_mode: None,
             setup_scripts_complete: false,
+            initial_prompt: None,
         }
     }
 
@@ -390,6 +394,7 @@ impl Environment {
             opencode_mode: None,
             codex_mode: None,
             setup_scripts_complete: false,
+            initial_prompt: None,
         }
     }
 
@@ -430,6 +435,7 @@ impl Environment {
             opencode_mode: None,
             codex_mode: None,
             setup_scripts_complete: false,
+            initial_prompt: None,
         }
     }
 
@@ -1137,10 +1143,27 @@ mod tests {
         assert!(json.contains("\"projectId\":"));
         assert!(json.contains("\"containerId\":"));
         assert!(json.contains("\"status\":\"stopped\""));
+        assert!(!json.contains("initialPrompt"));
 
         let deserialized: Environment = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.id, env.id);
         assert_eq!(deserialized.status, EnvironmentStatus::Stopped);
+        assert_eq!(deserialized.initial_prompt, None);
+    }
+
+    #[test]
+    fn test_environment_initial_prompt_serialization() {
+        let mut env = Environment::new("project-123".to_string());
+        env.initial_prompt = Some("Review the migration plan".to_string());
+
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(json.contains("\"initialPrompt\":\"Review the migration plan\""));
+
+        let deserialized: Environment = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            deserialized.initial_prompt,
+            Some("Review the migration plan".to_string())
+        );
     }
 
     #[test]

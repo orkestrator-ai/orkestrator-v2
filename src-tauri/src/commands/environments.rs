@@ -314,6 +314,13 @@ fn make_unique_branch(
     })
 }
 
+fn normalize_initial_prompt(initial_prompt: Option<&str>) -> Option<String> {
+    initial_prompt
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+        .map(str::to_string)
+}
+
 /// Create a new environment for a project
 #[tauri::command]
 pub async fn create_environment(
@@ -357,11 +364,10 @@ pub async fn create_environment(
         }
     };
 
+    let trimmed_initial_prompt = normalize_initial_prompt(initial_prompt.as_deref());
+
     // Determine if we should use background naming
-    let should_background_name = name.is_none()
-        && initial_prompt
-            .as_ref()
-            .map_or(false, |p| !p.trim().is_empty());
+    let should_background_name = name.is_none() && trimmed_initial_prompt.is_some();
 
     // Determine the base name for the environment
     let base_name = match &name {
@@ -425,6 +431,7 @@ pub async fn create_environment(
 
     // Set the network access mode
     environment.network_access_mode = network_mode;
+    environment.initial_prompt = trimmed_initial_prompt.clone();
 
     // For local environments, allocate ports now
     if env_type == EnvironmentType::Local {
@@ -459,10 +466,10 @@ pub async fn create_environment(
     // If we have a prompt but no explicit name, spawn background task to generate name
     // This applies to both containerized and local environments
     if should_background_name {
-        // SAFETY: unwrap is safe here because should_background_name is only true when
-        // initial_prompt.is_some() && !initial_prompt.as_ref().unwrap().trim().is_empty()
-        // (see the should_background_name assignment above)
-        let prompt = initial_prompt.unwrap();
+        // SAFETY: unwrap is safe here because should_background_name is only true
+        // when initial_prompt contains non-empty text, which is mirrored by
+        // trimmed_initial_prompt above.
+        let prompt = trimmed_initial_prompt.unwrap();
         let env_id = created_environment.id.clone();
         let old_branch = created_environment.branch.clone();
 
@@ -2394,6 +2401,16 @@ mod tests {
         let envs = vec![env_with_branch("A", "other-branch")];
         let result = make_unique_branch("my-branch", &envs, &[]);
         assert_eq!(result, "my-branch");
+    }
+
+    #[test]
+    fn test_normalize_initial_prompt_trims_and_filters_blank_text() {
+        assert_eq!(
+            normalize_initial_prompt(Some("  Review the migration plan\n")),
+            Some("Review the migration plan".to_string())
+        );
+        assert_eq!(normalize_initial_prompt(Some("   \n\t")), None);
+        assert_eq!(normalize_initial_prompt(None), None);
     }
 
     #[test]

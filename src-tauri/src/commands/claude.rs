@@ -14,6 +14,25 @@ const SERVER_STARTUP_MAX_ATTEMPTS: u32 = 75;
 /// Delay between health check attempts in milliseconds
 const SERVER_STARTUP_POLL_INTERVAL_MS: u64 = 200;
 
+fn build_claude_bridge_start_command() -> &'static str {
+    r#"
+        cd /workspace
+        rm -f /tmp/claude-bridge.log
+        source /etc/profile 2>/dev/null || true
+        source ~/.profile 2>/dev/null || true
+        source ~/.bashrc 2>/dev/null || true
+        source ~/.zshrc 2>/dev/null || true
+        source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
+        orkestrator_source_runtime_env 2>/dev/null || true
+        export PORT=4097
+        export HOSTNAME=0.0.0.0
+        setsid node /opt/claude-bridge/dist/index.js > /tmp/claude-bridge.log 2>&1 &
+        disown
+        sleep 0.5
+        echo "Started Claude bridge server"
+    "#
+}
+
 /// Result of starting the Claude bridge server
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,24 +96,9 @@ pub async fn start_claude_server(container_id: String) -> Result<ClaudeServerSta
     // Use setsid to create a new session so the process survives exec termination
     // --port 4097: listen on the mapped container port
     // PORT and HOSTNAME are set as environment variables
-    // Source shell profiles to inherit PATH modifications from setup scripts (e.g., Bun installation)
-    let command = r#"
-        cd /workspace
-        rm -f /tmp/claude-bridge.log
-        # Source shell profiles to get PATH modifications from setup scripts
-        source /etc/profile 2>/dev/null || true
-        source ~/.profile 2>/dev/null || true
-        source ~/.bashrc 2>/dev/null || true
-        source ~/.zshrc 2>/dev/null || true
-        # Add Bun's bin directory to PATH if it exists
-        [ -d ~/.bun/bin ] && export PATH="$HOME/.bun/bin:$PATH"
-        export PORT=4097
-        export HOSTNAME=0.0.0.0
-        setsid node /opt/claude-bridge/dist/index.js > /tmp/claude-bridge.log 2>&1 &
-        disown
-        sleep 0.5
-        echo "Started Claude bridge server"
-    "#;
+    // Source the captured runtime environment so agent subprocesses inherit
+    // PATH modifications from setup scripts.
+    let command = build_claude_bridge_start_command();
 
     // Execute the command in the container
     let exec_result = client
@@ -266,4 +270,19 @@ pub async fn get_claude_server_status(container_id: String) -> Result<ClaudeServ
         running,
         host_port: if running { Some(host_port) } else { None },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_claude_bridge_start_command_sources_runtime_environment() {
+        let command = build_claude_bridge_start_command();
+
+        assert!(command.contains("source /usr/local/bin/orkestrator-runtime-env.sh"));
+        assert!(command.contains("orkestrator_source_runtime_env"));
+        assert!(command.contains("setsid node /opt/claude-bridge/dist/index.js"));
+        assert!(command.contains("export PORT=4097"));
+    }
 }

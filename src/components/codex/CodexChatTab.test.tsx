@@ -41,6 +41,7 @@ const mockSendPrompt = mock(async () => true);
 const mockGetSessionMessages = mock(async (): Promise<TestCodexMessage[]> => []);
 const mockSubscribeToEvents = mock(() => (async function* () {})());
 const mockUpdateSessionConfig = mock(async () => true);
+const mockAbortSession = mock(async () => true);
 
 // NOTE: Do NOT mock @/hooks/useScrollLock here — it pollutes the global
 // module cache and breaks useScrollLock.test.ts. The real hook returns
@@ -59,7 +60,7 @@ mock.module("@/lib/tauri", () => ({
 mock.module("@/lib/codex-client", () => ({
   CODEX_MODELS: MOCK_MODELS,
   DEFAULT_CODEX_MODEL: MOCK_MODELS[0]!.id,
-  abortSession: mock(async () => {}),
+  abortSession: mockAbortSession,
   checkHealth: mock(async () => true),
   createClient: mock(() => ({ baseUrl: "http://127.0.0.1:9999" })),
   createSession: mock(async () => ({ sessionId: "session-1", title: "Test session" })),
@@ -85,12 +86,16 @@ let composeAttachments: Array<{
 mock.module("./CodexComposeBar", () => ({
   CodexComposeBar: ({
     onSend,
+    onStop,
     onFastModeChange,
     disabled,
+    isLoading,
   }: {
     onSend: (text: string, attachments: typeof composeAttachments) => Promise<void>;
+    onStop?: () => Promise<void>;
     onFastModeChange?: (enabled: boolean) => void;
     disabled?: boolean;
+    isLoading?: boolean;
   }) => (
     <>
       <button
@@ -103,6 +108,18 @@ mock.module("./CodexComposeBar", () => ({
       >
         Send
       </button>
+      {isLoading ? (
+        <button
+          type="button"
+          data-testid="codex-stop"
+          disabled={disabled}
+          onClick={() => {
+            void onStop?.();
+          }}
+        >
+          Stop
+        </button>
+      ) : null}
       <button
         type="button"
         data-testid="codex-fast-mode-on"
@@ -321,6 +338,8 @@ describe("CodexChatTab", () => {
     mockScrollToBottom.mockClear();
     mockUpdateSessionConfig.mockClear();
     mockUpdateSessionConfig.mockImplementation(async () => true);
+    mockAbortSession.mockClear();
+    mockAbortSession.mockImplementation(async () => true);
     restoreTimerHarness();
 
     resetStores();
@@ -715,6 +734,76 @@ describe("CodexChatTab", () => {
         { attachments: undefined },
       );
     });
+  });
+
+  test("stop immediately clears loading and queued prompts while abort is in flight", async () => {
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+    useCodexStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-1",
+      text: "Queued prompt",
+      attachments: [],
+      model: MOCK_MODELS[0]!.id,
+      mode: "build",
+      reasoningEffort: "medium",
+      fastMode: false,
+    });
+
+    let resolveAbort: ((value: boolean) => void) | undefined;
+    mockAbortSession.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveAbort = resolve;
+        }),
+    );
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("codex-stop"));
+
+    await waitFor(() => {
+      const state = useCodexStore.getState();
+      expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+      expect(state.messageQueue.get(SESSION_KEY)).toEqual([]);
+    });
+    expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID);
+
+    resolveAbort?.(true);
+  });
+
+  test("stop logs a failed abort after clearing local loading state", async () => {
+    const originalError = console.error;
+    const consoleError = mock(() => {});
+    console.error = consoleError as unknown as typeof console.error;
+    mockAbortSession.mockImplementation(async () => false);
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+    useCodexStore.getState().setSessionError(SESSION_KEY, "Previous error");
+
+    try {
+      render(
+        <CodexChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive={false}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("codex-stop"));
+
+      await waitFor(() => {
+        const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+        expect(session?.isLoading).toBe(false);
+        expect(session?.error).toBeUndefined();
+        expect(consoleError).toHaveBeenCalledWith("[CodexChatTab] Failed to abort session");
+      });
+    } finally {
+      console.error = originalError;
+    }
   });
 
   describe("fast mode toggle", () => {

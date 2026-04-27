@@ -1041,13 +1041,11 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
   const handleStop = useCallback(async () => {
     if (!client || !session) return;
 
-    // Clear the queue first
     clearQueue(sessionKey);
+    setSessionLoading(sessionKey, false);
 
-    // Abort the current session processing
     const success = await abortSession(client, session.sessionId);
     if (success) {
-      setSessionLoading(sessionKey, false);
       // Add a system message to indicate the query was stopped
       const systemMessage: ClaudeMessageType = {
         id: `${SYSTEM_MESSAGE_PREFIX}${crypto.randomUUID()}`,

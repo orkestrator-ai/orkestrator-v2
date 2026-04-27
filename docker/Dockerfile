@@ -144,7 +144,8 @@ RUN mkdir -p /home/node/.ssh && \
 COPY docker/entrypoint.sh /usr/local/bin/
 COPY docker/workspace-setup.sh /usr/local/bin/
 COPY docker/git-branch-helpers.sh /usr/local/bin/
-RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/workspace-setup.sh /usr/local/bin/git-branch-helpers.sh
+COPY docker/runtime-env.sh /usr/local/bin/orkestrator-runtime-env.sh
+RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/workspace-setup.sh /usr/local/bin/git-branch-helpers.sh /usr/local/bin/orkestrator-runtime-env.sh
 
 USER node
 

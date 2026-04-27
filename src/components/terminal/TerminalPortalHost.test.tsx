@@ -2,29 +2,33 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect } from "react";
 import { render, waitFor } from "@testing-library/react";
 import * as realPersistentTerminal from "./PersistentTerminal";
+import * as realTerminalPortalStore from "@/stores/terminalPortalStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
 const persistentTerminalSnapshot = { ...realPersistentTerminal };
+const terminalPortalStoreSnapshot = { ...realTerminalPortalStore };
 const markSetupScriptsCompleteMock = mock(() => {});
 const createTerminalMock = mock(() => {});
 const disposeTerminalMock = mock(() => {});
+const clearTerminalsForEnvironmentMock = mock(() => {});
 
 let terminalBehavior:
   | ((props: {
-      onReady?: (payload: { persistSetupComplete: boolean }) => void;
+      onReady?: (payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => void;
       onSetupComplete?: (payload: { persistSetupComplete: boolean }) => void;
     }) => void)
   | undefined;
 
 mock.module("@/lib/setup-commands", () => ({
+  shouldAutoResolveSetupCommands: () => false,
   markSetupScriptsComplete: markSetupScriptsCompleteMock,
 }));
 
 mock.module("./PersistentTerminal", () => ({
   PersistentTerminal: (props: {
-    onReady?: (payload: { persistSetupComplete: boolean }) => void;
+    onReady?: (payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => void;
     onSetupComplete?: (payload: { persistSetupComplete: boolean }) => void;
   }) => {
     useEffect(() => {
@@ -34,8 +38,26 @@ mock.module("./PersistentTerminal", () => ({
   },
 }));
 
-mock.module("@/stores/terminalPortalStore", () => ({
-  useTerminalPortalStore: <T,>(selector?: (state: {
+const terminalPortalStoreState = () => ({
+  terminals: new Map([
+    [
+      "env-1::default",
+      {
+        environmentId: "env-1",
+        tabId: "default",
+        portalElement: document.createElement("div"),
+        containerElement: document.createElement("div"),
+        isOpened: true,
+      },
+    ],
+  ]),
+  createTerminal: createTerminalMock,
+  disposeTerminal: disposeTerminalMock,
+  clearTerminalsForEnvironment: clearTerminalsForEnvironmentMock,
+  hasTerminal: () => true,
+});
+
+const useTerminalPortalStoreMock = (<T,>(selector?: (state: {
     terminals: Map<string, {
       environmentId: string;
       tabId: string;
@@ -45,34 +67,25 @@ mock.module("@/stores/terminalPortalStore", () => ({
     }>;
     createTerminal: typeof createTerminalMock;
     disposeTerminal: typeof disposeTerminalMock;
+    clearTerminalsForEnvironment: typeof clearTerminalsForEnvironmentMock;
     hasTerminal: (environmentId: string, tabId: string) => boolean;
   }) => T) => {
-    const state = {
-      terminals: new Map([
-        [
-          "env-1::default",
-          {
-            environmentId: "env-1",
-            tabId: "default",
-            portalElement: document.createElement("div"),
-            containerElement: document.createElement("div"),
-            isOpened: true,
-          },
-        ],
-      ]),
-      createTerminal: createTerminalMock,
-      disposeTerminal: disposeTerminalMock,
-      hasTerminal: () => true,
-    };
+    const state = terminalPortalStoreState();
 
     return selector ? selector(state) : state;
-  },
+  }) as any;
+
+useTerminalPortalStoreMock.getState = terminalPortalStoreState;
+
+mock.module("@/stores/terminalPortalStore", () => ({
+  useTerminalPortalStore: useTerminalPortalStoreMock,
 }));
 
 const { TerminalPortalHost } = await import("./TerminalPortalHost");
 
 afterAll(() => {
   mock.module("./PersistentTerminal", () => persistentTerminalSnapshot);
+  mock.module("@/stores/terminalPortalStore", () => terminalPortalStoreSnapshot);
 });
 
 describe("TerminalPortalHost", () => {
@@ -81,6 +94,7 @@ describe("TerminalPortalHost", () => {
     markSetupScriptsCompleteMock.mockClear();
     createTerminalMock.mockClear();
     disposeTerminalMock.mockClear();
+    clearTerminalsForEnvironmentMock.mockClear();
 
     useConfigStore.setState({
       config: {
@@ -166,6 +180,7 @@ describe("TerminalPortalHost", () => {
       expect(useEnvironmentStore.getState().isWorkspaceReady("env-1")).toBe(true);
     });
 
+    expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-1")).toBe(false);
     expect(markSetupScriptsCompleteMock).toHaveBeenCalledWith("env-1");
   });
 
@@ -189,6 +204,24 @@ describe("TerminalPortalHost", () => {
       expect(useEnvironmentStore.getState().isWorkspaceReady("env-1")).toBe(true);
     });
 
+    expect(markSetupScriptsCompleteMock).not.toHaveBeenCalled();
+  });
+
+  test("does not mark a container workspace ready from a terminal reconnection", async () => {
+    let reconnected = false;
+    terminalBehavior = ({ onReady }) => {
+      reconnected = true;
+      onReady?.({ persistSetupComplete: false, workspaceReady: false });
+    };
+
+    render(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
+
+    await waitFor(() => {
+      expect(reconnected).toBe(true);
+    });
+
+    expect(useEnvironmentStore.getState().isWorkspaceReady("env-1")).toBe(false);
+    expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-1")).toBe(true);
     expect(markSetupScriptsCompleteMock).not.toHaveBeenCalled();
   });
 

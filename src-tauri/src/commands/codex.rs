@@ -148,9 +148,8 @@ fn build_codex_bridge_start_command(raw_event_logging: bool) -> String {
         source ~/.profile 2>/dev/null || true
         source ~/.bashrc 2>/dev/null || true
         source ~/.zshrc 2>/dev/null || true
-        [ -d /usr/local/share/npm-global/bin ] && export PATH="/usr/local/share/npm-global/bin:$PATH"
-        [ -d ~/.bun/bin ] && export PATH="$HOME/.bun/bin:$PATH"
-        [ -d ~/.local/bin ] && export PATH="$HOME/.local/bin:$PATH"
+        source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
+        orkestrator_source_runtime_env 2>/dev/null || true
         export PORT=4098
         export HOSTNAME=0.0.0.0
         export CWD=/workspace
@@ -588,6 +587,8 @@ mod tests {
             "export ORKESTRATOR_CODEX_RAW_LOG_DIR=\"{}\"",
             CONTAINER_CODEX_RAW_LOG_DIR
         )));
+        assert!(command.contains("source /usr/local/bin/orkestrator-runtime-env.sh"));
+        assert!(command.contains("orkestrator_source_runtime_env"));
         assert!(command.contains("setsid node /opt/codex-bridge/dist/index.js"));
         assert!(!command.contains("%CODEX_RAW_LOG_DIR%"));
     }

@@ -123,6 +123,7 @@ describe("TerminalContainer", () => {
 
     useClaudeOptionsStore.setState({
       options: {},
+      pendingNativeLaunches: {},
     });
   });
 
@@ -260,6 +261,178 @@ describe("TerminalContainer", () => {
     });
 
     expect(markSetupScriptsCompleteMock).toHaveBeenCalledWith("env-hidden");
+  });
+
+  test("resumes a pending container native launch after the environment remounts", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          codexMode: "native",
+        },
+        repositories: {},
+      },
+    }));
+
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "codex",
+          initialPrompt: "Continue after setup",
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    const firstRender = render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(envHidden?.root.kind).toBe("leaf");
+      if (!envHidden || envHidden.root.kind !== "leaf") {
+        throw new Error("env-hidden root should be a leaf");
+      }
+
+      expect(envHidden.root.tabs).toHaveLength(1);
+      expect(envHidden.root.tabs[0]?.type).toBe("plain");
+      expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-hidden")).toBe(true);
+      expect(
+        useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
+      ).toBeDefined();
+    });
+
+    firstRender.unmount();
+
+    // Simulate the old timer clearing transient options while the durable
+    // launch intent survives the component unmount.
+    useClaudeOptionsStore.getState().clearOptions("env-hidden");
+    useEnvironmentStore.getState().setWorkspaceReady("env-hidden", true);
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(envHidden?.root.kind).toBe("leaf");
+      if (!envHidden || envHidden.root.kind !== "leaf") {
+        throw new Error("env-hidden root should be a leaf");
+      }
+
+      const nativeTab = envHidden.root.tabs.find((tab) => tab.type === "codex-native");
+      expect(nativeTab?.initialPrompt).toBe("Continue after setup");
+      expect(
+        useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
+      ).toBeUndefined();
+      expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-hidden")).toBe(false);
+    });
+  });
+
+  test("clears a pending native launch when the container stops", async () => {
+    useClaudeOptionsStore.getState().setPendingNativeLaunch("env-hidden", {
+      containerId: "container-hidden",
+      environmentId: "env-hidden",
+      initialPrompt: "Do not launch after stop",
+      targetPaneId: "default",
+      agentType: "codex",
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning={false}
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      expect(
+        useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
+      ).toBeUndefined();
+    });
+  });
+
+  test("clears a pending native launch when the container id changes", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          codexMode: "native",
+        },
+        repositories: {},
+      },
+    }));
+
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "codex",
+          initialPrompt: "Old container prompt",
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    const { rerender } = render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      expect(
+        useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
+      ).toBeDefined();
+    });
+
+    useClaudeOptionsStore.getState().clearOptions("env-hidden");
+
+    rerender(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-restarted"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      expect(
+        useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
+      ).toBeUndefined();
+    });
   });
 
   test("re-runs setup commands for previously incomplete local environments", async () => {

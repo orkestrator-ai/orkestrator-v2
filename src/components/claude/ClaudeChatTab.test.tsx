@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createClaudeSessionKey, useClaudeStore } from "@/stores/claudeStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 
@@ -9,6 +9,7 @@ const mockScrollToBottom = mock(() => {});
 const mockCreateSession = mock(async () => ({ sessionId: "session-1" }));
 const mockCheckHealth = mock(async () => true);
 const mockSendPrompt = mock(async () => {});
+const mockAbortSession = mock(async () => true);
 
 mock.module("@/hooks", () => ({
   ...realHooksSnapshot,
@@ -28,7 +29,7 @@ mock.module("@/lib/claude-client", () => ({
   getSession: mock(async () => null),
   getSessionMessages: mock(async () => []),
   sendPrompt: mockSendPrompt,
-  abortSession: mock(async () => {}),
+  abortSession: mockAbortSession,
   subscribeToEvents: mock(() => (async function* () {})()),
   checkHealth: mockCheckHealth,
   getSlashCommands: mock(async () => []),
@@ -150,6 +151,8 @@ describe("ClaudeChatTab", () => {
     mockCreateSession.mockClear();
     mockCheckHealth.mockClear();
     mockSendPrompt.mockClear();
+    mockAbortSession.mockClear();
+    mockAbortSession.mockImplementation(async () => true);
   });
 
   afterEach(() => {
@@ -243,6 +246,80 @@ describe("ClaudeChatTab", () => {
         }),
       );
     });
+  });
+
+  test("stop immediately clears loading and queued prompts while abort is in flight", async () => {
+    useClaudeStore.getState().setSessionLoading(SESSION_KEY, true);
+    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-1",
+      text: "Queued Claude prompt",
+      attachments: [],
+      effort: "high",
+      planModeEnabled: false,
+      fastModeEnabled: false,
+    });
+
+    let resolveAbort: ((value: boolean) => void) | undefined;
+    mockAbortSession.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveAbort = resolve;
+        }),
+    );
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle("Stop current query"));
+
+    await waitFor(() => {
+      const state = useClaudeStore.getState();
+      expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+      expect(state.messageQueue.get(SESSION_KEY)).toEqual([]);
+    });
+    expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+
+    resolveAbort?.(true);
+
+    await waitFor(() => {
+      const messages = useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages ?? [];
+      expect(messages.some((message) => message.content === "Query stopped by user.")).toBe(true);
+    });
+  });
+
+  test("stop logs a failed abort without adding a stopped system message", async () => {
+    const originalError = console.error;
+    const consoleError = mock(() => {});
+    console.error = consoleError as unknown as typeof console.error;
+    mockAbortSession.mockImplementation(async () => false);
+    useClaudeStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    try {
+      render(
+        <ClaudeChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive={false}
+        />,
+      );
+
+      fireEvent.click(screen.getByTitle("Stop current query"));
+
+      await waitFor(() => {
+        expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+        expect(consoleError).toHaveBeenCalledWith("[ClaudeChatTab] Failed to abort session");
+      });
+
+      const messages = useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages ?? [];
+      expect(messages.some((message) => message.content === "Query stopped by user.")).toBe(false);
+    } finally {
+      console.error = originalError;
+    }
   });
 
 });

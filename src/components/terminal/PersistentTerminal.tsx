@@ -68,7 +68,7 @@ interface PersistentTerminalProps {
   initialCommands?: string[];
   paneId: string;
   isSetupTab?: boolean;
-  onReady?: (payload: { persistSetupComplete: boolean }) => void;
+  onReady?: (payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => void;
   onSetupComplete?: (payload: { persistSetupComplete: boolean }) => void;
   onWrite?: (write: (data: string) => Promise<void>) => void;
 }
@@ -324,7 +324,7 @@ export function PersistentTerminal({
             console.log("[PersistentTerminal] Local environment ready detected for first tab:", tabId);
             setIsEnvironmentReady(true);
             dataBufferRef.current = "";
-            onReady?.({ persistSetupComplete: false });
+            onReady?.({ persistSetupComplete: false, workspaceReady: true });
           } else if (dataBufferRef.current.length > 1024) {
             dataBufferRef.current = dataBufferRef.current.slice(-512);
           }
@@ -355,7 +355,7 @@ export function PersistentTerminal({
             console.log("[PersistentTerminal] Environment ready detected for tab:", tabId, "isFirstTab:", isFirstTab);
             setIsEnvironmentReady(true);
             dataBufferRef.current = "";
-            onReady?.({ persistSetupComplete: !setupFailed });
+            onReady?.({ persistSetupComplete: !setupFailed, workspaceReady: true });
           }
 
           // Keep buffer from growing indefinitely, but use a larger window to catch markers
@@ -628,7 +628,7 @@ export function PersistentTerminal({
       if (!isFirstTab || hadExistingSessionAtMountRef.current) {
         setIsEnvironmentReady(true);
         console.log("[PersistentTerminal] Reconnection complete, calling onReady for tab:", tabId);
-        onReady?.({ persistSetupComplete: false });
+        onReady?.({ persistSetupComplete: false, workspaceReady: false });
       } else {
         // Leave isEnvironmentReady as false so handleData can detect setup completion
         console.log("[PersistentTerminal] First tab on new environment, waiting for setup detection before calling onReady, tab:", tabId);

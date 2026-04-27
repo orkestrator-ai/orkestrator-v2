@@ -138,6 +138,7 @@ export function EnvironmentItem({
   };
 
   const localAddress = environment.hostEntryPort ? `localhost:${environment.hostEntryPort}` : null;
+  const initialPrompt = environment.initialPrompt?.trim();
 
   const copyAddress = () => {
     if (!localAddress) return;
@@ -145,6 +146,15 @@ export function EnvironmentItem({
       toast.success("Copied address", { description: localAddress });
     }).catch(() => {
       toast.error("Failed to copy address");
+    });
+  };
+
+  const copyInitialPrompt = () => {
+    if (!initialPrompt) return;
+    navigator.clipboard.writeText(initialPrompt).then(() => {
+      toast.success("Initial prompt copied to clipboard");
+    }).catch(() => {
+      toast.error("Failed to copy initial prompt");
     });
   };
 
@@ -289,6 +299,12 @@ export function EnvironmentItem({
             <ContextMenuItem onClick={copyAddress}>
               <Copy className="h-4 w-4 mr-2" />
               Copy Address
+            </ContextMenuItem>
+          )}
+          {initialPrompt && (
+            <ContextMenuItem onClick={copyInitialPrompt}>
+              <Copy className="h-4 w-4 mr-2" />
+              Copy Initial Prompt
             </ContextMenuItem>
           )}
           {/* Start/Stop/Restart only applicable for containerized environments */}

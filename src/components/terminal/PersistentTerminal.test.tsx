@@ -82,11 +82,11 @@ const portalStoreActions = {
   setTerminalContainer: mock(() => {}),
   setTerminalPane: mock(() => {}),
   recreateTerminal: mock(() => null),
+  clearTerminalsForEnvironment: mock(() => {}),
+  disposeTerminal: mock(() => {}),
 };
 
-mock.module("@/stores/terminalPortalStore", () => ({
-  createTerminalKey: (environmentId: string, tabId: string) => `${environmentId}::${tabId}`,
-  useTerminalPortalStore: <T,>(selector?: (state: {
+const useTerminalPortalStoreMock = (<T,>(selector?: (state: {
     terminals: Map<string, { containerElement: HTMLDivElement | null; isOpened: boolean }>;
   }) => T) => {
     if (!selector) {
@@ -98,7 +98,16 @@ mock.module("@/stores/terminalPortalStore", () => ({
         ["env-1::tab-1", { containerElement: storedContainerElement, isOpened: true }],
       ]),
     });
-  },
+  }) as any;
+
+useTerminalPortalStoreMock.getState = () => ({
+  ...portalStoreActions,
+  terminals: new Map(),
+});
+
+mock.module("@/stores/terminalPortalStore", () => ({
+  createTerminalKey: (environmentId: string, tabId: string) => `${environmentId}::${tabId}`,
+  useTerminalPortalStore: useTerminalPortalStoreMock,
 }));
 
 mock.module("@/components/ui/context-menu", () => ({
@@ -484,7 +493,9 @@ describe("PersistentTerminal", () => {
   });
 
   it("marks a reused container as ready when setup reports it is already set up", async () => {
-    const onReady = mock((_payload: { persistSetupComplete: boolean }) => {});
+    const onReady = mock(
+      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {}
+    );
 
     render(
       <PersistentTerminal
@@ -510,11 +521,16 @@ describe("PersistentTerminal", () => {
       expect(onReady).toHaveBeenCalled();
     });
 
-    expect(onReady).toHaveBeenCalledWith({ persistSetupComplete: true });
+    expect(onReady).toHaveBeenCalledWith({
+      persistSetupComplete: true,
+      workspaceReady: true,
+    });
   });
 
   it("does not persist completion when container setup fails", async () => {
-    const onReady = mock((_payload: { persistSetupComplete: boolean }) => {});
+    const onReady = mock(
+      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {}
+    );
 
     render(
       <PersistentTerminal
@@ -537,7 +553,50 @@ describe("PersistentTerminal", () => {
     });
 
     await waitFor(() => {
-      expect(onReady).toHaveBeenCalledWith({ persistSetupComplete: false });
+      expect(onReady).toHaveBeenCalledWith({
+        persistSetupComplete: false,
+        workspaceReady: true,
+      });
+    });
+  });
+
+  it("does not mark workspace ready when reconnecting an existing first tab", async () => {
+    const onReady = mock(
+      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {}
+    );
+    useTerminalSessionStore.setState({
+      sessions: new Map([
+        [
+          "container-1:tab-1",
+          {
+            sessionId: "existing-session-1",
+            hasLaunchedCommand: false,
+          },
+        ],
+      ]),
+    });
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={true}
+        paneId="pane-1"
+        onReady={onReady}
+      />
+    );
+
+    await waitFor(() => {
+      expect(onReady).toHaveBeenCalledWith({
+        persistSetupComplete: false,
+        workspaceReady: false,
+      });
     });
   });
 

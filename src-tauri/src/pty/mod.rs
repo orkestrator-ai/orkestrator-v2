@@ -51,6 +51,10 @@ impl TerminalSession {
     }
 }
 
+fn build_container_terminal_start_command() -> &'static str {
+    "/bin/bash /usr/local/bin/workspace-setup.sh; source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true; orkestrator_source_runtime_env 2>/dev/null || true; exec /bin/zsh"
+}
+
 /// Manager for terminal sessions
 pub struct TerminalManager {
     sessions: Arc<Mutex<HashMap<String, TerminalSession>>>,
@@ -112,7 +116,7 @@ impl TerminalManager {
             cmd: Some(vec![
                 "/bin/zsh",
                 "-c",
-                "/bin/bash /usr/local/bin/workspace-setup.sh; exec /bin/zsh",
+                build_container_terminal_start_command(),
             ]),
             working_dir: Some("/workspace"),
             env: Some(env_refs),
@@ -361,4 +365,19 @@ pub fn init_terminal_manager() {
 /// Get the global terminal manager
 pub fn get_terminal_manager() -> Option<&'static TerminalManager> {
     TERMINAL_MANAGER.get()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_start_command_sources_runtime_environment_after_setup() {
+        let command = build_container_terminal_start_command();
+
+        assert!(command.starts_with("/bin/bash /usr/local/bin/workspace-setup.sh"));
+        assert!(command.contains("source /usr/local/bin/orkestrator-runtime-env.sh"));
+        assert!(command.contains("orkestrator_source_runtime_env"));
+        assert!(command.ends_with("exec /bin/zsh"));
+    }
 }

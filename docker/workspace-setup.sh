@@ -50,6 +50,34 @@ if ! declare -F create_branch_from_preferred_bases >/dev/null; then
     }
 fi
 
+# Load runtime PATH helpers. These source a post-setup PATH snapshot when one
+# exists and add common per-user tool install directories as a fallback.
+if [ -f "/usr/local/bin/orkestrator-runtime-env.sh" ]; then
+    # shellcheck source=/dev/null
+    . "/usr/local/bin/orkestrator-runtime-env.sh"
+    orkestrator_source_runtime_env 2>/dev/null || true
+fi
+
+capture_runtime_env_snapshot() {
+    if [ ! -f "/usr/local/bin/orkestrator-runtime-env.sh" ]; then
+        return 0
+    fi
+
+    # Native agent servers run as the node user. Root terminals should not
+    # overwrite the node user's captured setup environment.
+    if [ "$(whoami)" != "node" ]; then
+        return 0
+    fi
+
+    mkdir -p /tmp/orkestrator-ai
+    if /bin/zsh -lic 'source /usr/local/bin/orkestrator-runtime-env.sh; orkestrator_source_runtime_env 2>/dev/null || true; orkestrator_capture_runtime_env' > /tmp/orkestrator-ai/runtime-env-capture.log 2>&1; then
+        echo -e "${GREEN}Runtime environment captured for agent sessions.${NC}"
+    else
+        echo -e "${YELLOW}Warning: Failed to capture runtime environment for agent sessions${NC}"
+        cat /tmp/orkestrator-ai/runtime-env-capture.log 2>/dev/null || true
+    fi
+}
+
 # Wait for entrypoint to complete (config files to be set up)
 # This prevents race conditions where Claude is launched before config is ready
 WAIT_COUNT=0
@@ -496,8 +524,9 @@ if [ -f /workspace/orkestrator-ai.json ]; then
         run_setup_step() {
             local step="$1"
             echo -e "Command: ${GREEN}$step${NC}"
-            # Run in login shell, explicitly sourcing .zshrc to pick up PATH changes from previous steps
-            /bin/zsh -lc "source ~/.zshrc 2>/dev/null || true; $step"
+            # Run in login shell, explicitly sourcing .zshrc and the Orkestrator
+            # runtime helper to pick up PATH changes from previous steps.
+            /bin/zsh -lc "source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true; orkestrator_source_runtime_env 2>/dev/null || true; source ~/.zshrc 2>/dev/null || true; orkestrator_add_common_runtime_paths 2>/dev/null || true; $step"
             return $?
         }
 
@@ -538,6 +567,8 @@ else
     echo "  No orkestrator-ai.json found"
     touch /tmp/.workspace-setup-complete
 fi
+
+capture_runtime_env_snapshot
 
 echo ""
 echo -e "${GREEN}=== Workspace Ready ===${NC}"

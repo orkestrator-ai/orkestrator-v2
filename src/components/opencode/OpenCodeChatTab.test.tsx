@@ -26,6 +26,7 @@ const mockScrollToBottom = mock(() => {});
 
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
 const mockSendPrompt = mock(async () => ({ success: true }));
+const mockAbortSession = mock(async () => true);
 
 mock.module("@/lib/opencode-client", () => ({
   createClient: mock(() => ({ baseUrl: "http://127.0.0.1:9999" })),
@@ -37,7 +38,7 @@ mock.module("@/lib/opencode-client", () => ({
   getAvailableSlashCommands: mock(async () => []),
   sendPrompt: mockSendPrompt,
   formatOpenCodeError: mock((error) => String(error)),
-  abortSession: mock(async () => true),
+  abortSession: mockAbortSession,
   subscribeToEvents: mock(() => (async function* () {})()),
   ERROR_MESSAGE_PREFIX: "error-",
   SYSTEM_MESSAGE_PREFIX: "system-",
@@ -65,21 +66,39 @@ let composeAttachments: Array<{
 mock.module("./OpenCodeComposeBar", () => ({
   OpenCodeComposeBar: ({
     onSend,
+    onStop,
     disabled,
+    isLoading,
   }: {
     onSend: (text: string, attachments: typeof composeAttachments) => Promise<void>;
+    onStop?: () => Promise<void>;
     disabled?: boolean;
+    isLoading?: boolean;
   }) => (
-    <button
-      type="button"
-      data-testid="opencode-send"
-      disabled={disabled}
-      onClick={() => {
-        void onSend(composeText, composeAttachments);
-      }}
-    >
-      Send
-    </button>
+    <>
+      <button
+        type="button"
+        data-testid="opencode-send"
+        disabled={disabled}
+        onClick={() => {
+          void onSend(composeText, composeAttachments);
+        }}
+      >
+        Send
+      </button>
+      {isLoading ? (
+        <button
+          type="button"
+          data-testid="opencode-stop"
+          disabled={disabled}
+          onClick={() => {
+            void onStop?.();
+          }}
+        >
+          Stop
+        </button>
+      ) : null}
+    </>
   ),
 }));
 
@@ -218,6 +237,8 @@ describe("OpenCodeChatTab", () => {
     mockRenameEnvironmentFromPrompt.mockImplementation(async () => {});
     mockSendPrompt.mockClear();
     mockSendPrompt.mockImplementation(async () => ({ success: true }));
+    mockAbortSession.mockClear();
+    mockAbortSession.mockImplementation(async () => true);
     mockScrollToBottom.mockClear();
     resetStores();
   });
@@ -419,6 +440,71 @@ describe("OpenCodeChatTab", () => {
         }),
       );
     });
+  });
+
+  test("stop immediately clears loading and queued prompts while abort is in flight", async () => {
+    useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true);
+    useOpenCodeStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-1",
+      text: "Queued OpenCode prompt",
+      attachments: [],
+      model: "openai/gpt-5",
+      mode: "build",
+    });
+
+    let resolveAbort: ((value: boolean) => void) | undefined;
+    mockAbortSession.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveAbort = resolve;
+        }),
+    );
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("opencode-stop"));
+
+    await waitFor(() => {
+      const state = useOpenCodeStore.getState();
+      expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+      expect(state.messageQueue.get(SESSION_KEY)).toEqual([]);
+    });
+    expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+
+    resolveAbort?.(true);
+  });
+
+  test("stop logs a failed abort after clearing local loading state", async () => {
+    const originalError = console.error;
+    const consoleError = mock(() => {});
+    console.error = consoleError as unknown as typeof console.error;
+    mockAbortSession.mockImplementation(async () => false);
+    useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    try {
+      render(
+        <OpenCodeChatTab
+          tabId={TAB_ID}
+          data={createData()}
+          isActive={false}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("opencode-stop"));
+
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+        expect(consoleError).toHaveBeenCalledWith("[OpenCodeChatTab] Failed to abort session");
+      });
+    } finally {
+      console.error = originalError;
+    }
   });
 
 });

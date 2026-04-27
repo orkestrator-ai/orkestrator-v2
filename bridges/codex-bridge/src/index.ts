@@ -87,6 +87,18 @@ interface SessionState {
   lastAccessed: number;
 }
 
+interface ExpiredSessionState {
+  id: string;
+  title?: string;
+  conversationMode: ConversationMode;
+  fastMode: boolean;
+  threadOptions: ThreadOptions;
+  threadId?: string | null;
+  messages: NormalizedMessage[];
+  lastAccessed: number;
+  compactedAt: number;
+}
+
 interface SseEvent {
   type:
     | "session.updated"
@@ -178,8 +190,10 @@ function resolveFastMode(body: Record<string, unknown>): boolean {
 }
 const execFile = promisify(execFileCallback);
 const sessions = new Map<string, SessionState>();
+const expiredSessions = new Map<string, ExpiredSessionState>();
 const subscribers = new Set<(event: SseEvent) => void>();
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
+const EXPIRED_SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const codexRawLogDir = normalizeOptionalEnvPath("ORKESTRATOR_CODEX_RAW_LOG_DIR");
 const RUNTIME_ENV_SCRIPT_ENV = "ORKESTRATOR_RUNTIME_ENV_SCRIPT";
@@ -306,6 +320,56 @@ function updateSessionAccess(sessionId: string): void {
   }
 }
 
+function compactSession(session: SessionState, compactedAt: number): ExpiredSessionState {
+  return {
+    id: session.id,
+    title: session.title,
+    conversationMode: session.conversationMode,
+    fastMode: session.fastMode,
+    threadOptions: session.threadOptions,
+    threadId: session.threadId,
+    messages: session.messages,
+    lastAccessed: session.lastAccessed,
+    compactedAt,
+  };
+}
+
+function restoreExpiredSession(sessionId: string): SessionState | undefined {
+  const expired = expiredSessions.get(sessionId);
+  if (!expired) {
+    return undefined;
+  }
+
+  const sessionCodex = getCodex(expired.fastMode);
+  const thread = expired.threadId
+    ? sessionCodex.resumeThread(expired.threadId, expired.threadOptions)
+    : sessionCodex.startThread(expired.threadOptions);
+  const session: SessionState = {
+    id: expired.id,
+    title: expired.title,
+    conversationMode: expired.conversationMode,
+    fastMode: expired.fastMode,
+    thread,
+    threadOptions: expired.threadOptions,
+    threadId: expired.threadId,
+    messages: expired.messages,
+    status: "idle",
+    currentItems: new Map(),
+    currentItemOrder: [],
+    currentTurnStartedAt: undefined,
+    pendingAttachments: [],
+    lastAccessed: Date.now(),
+  };
+
+  expiredSessions.delete(sessionId);
+  sessions.set(sessionId, session);
+  return session;
+}
+
+function getSession(sessionId: string): SessionState | undefined {
+  return sessions.get(sessionId) ?? restoreExpiredSession(sessionId);
+}
+
 function cleanupIdleSessions(): void {
   const now = Date.now();
   for (const [sessionId, session] of sessions) {
@@ -313,7 +377,14 @@ function cleanupIdleSessions(): void {
       session.status === "idle"
       && now - session.lastAccessed > SESSION_TIMEOUT_MS
     ) {
+      expiredSessions.set(sessionId, compactSession(session, now));
       sessions.delete(sessionId);
+    }
+  }
+
+  for (const [sessionId, session] of expiredSessions) {
+    if (now - session.compactedAt > EXPIRED_SESSION_RETENTION_MS) {
+      expiredSessions.delete(sessionId);
     }
   }
 }
@@ -1752,6 +1823,9 @@ async function runPrompt(session: SessionState, prompt: string): Promise<void> {
 
 export const __testing = {
   applyRuntimeEnvironmentOutput,
+  cleanupIdleSessions,
+  EXPIRED_SESSION_RETENTION_MS,
+  expiredSessions: expiredSessions as Map<string, any>,
   refreshRuntimeEnvironment,
   runInlinePromptCommand,
   runPrompt: runPrompt as (session: any, prompt: string) => Promise<void>,
@@ -1881,7 +1955,7 @@ app.post("/session/resume", async (c) => {
 
 app.post("/session/:id/config", async (c) => {
   const sessionId = c.req.param("id");
-  const session = sessions.get(sessionId);
+  const session = getSession(sessionId);
   if (!session) {
     return c.json({ error: "Session not found" }, 404);
   }
@@ -1908,7 +1982,7 @@ app.post("/session/:id/config", async (c) => {
 
 app.get("/session/:id/messages", async (c) => {
   const sessionId = c.req.param("id");
-  const session = sessions.get(sessionId);
+  const session = getSession(sessionId);
   if (!session) {
     return c.json({ error: "Session not found" }, 404);
   }
@@ -1923,7 +1997,7 @@ app.get("/session/:id/messages", async (c) => {
 
 app.get("/session/:id/status", (c) => {
   const sessionId = c.req.param("id");
-  const session = sessions.get(sessionId);
+  const session = getSession(sessionId);
   if (!session) {
     return c.json({ error: "Session not found" }, 404);
   }
@@ -1938,7 +2012,7 @@ app.get("/session/:id/status", (c) => {
 
 app.post("/session/:id/prompt", async (c) => {
   const sessionId = c.req.param("id");
-  const session = sessions.get(sessionId);
+  const session = getSession(sessionId);
   if (!session) {
     return c.json({ error: "Session not found" }, 404);
   }
@@ -1989,7 +2063,7 @@ app.post("/session/:id/prompt", async (c) => {
 
 app.post("/session/:id/abort", (c) => {
   const sessionId = c.req.param("id");
-  const session = sessions.get(sessionId);
+  const session = getSession(sessionId);
   if (!session) {
     return c.json({ error: "Session not found" }, 404);
   }
@@ -2007,13 +2081,18 @@ app.post("/session/:id/abort", (c) => {
 });
 
 app.delete("/session/:id", (c) => {
-  const session = sessions.get(c.req.param("id"));
+  const sessionId = c.req.param("id");
+  const session = sessions.get(sessionId);
   if (!session) {
+    if (expiredSessions.delete(sessionId)) {
+      return c.json({ status: "deleted" });
+    }
     return c.json({ error: "Session not found" }, 404);
   }
 
   session.abortController?.abort();
   sessions.delete(session.id);
+  expiredSessions.delete(session.id);
   return c.json({ status: "deleted" });
 });
 

@@ -182,10 +182,84 @@ const subscribers = new Set<(event: SseEvent) => void>();
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const codexRawLogDir = normalizeOptionalEnvPath("ORKESTRATOR_CODEX_RAW_LOG_DIR");
+const RUNTIME_ENV_SCRIPT_ENV = "ORKESTRATOR_RUNTIME_ENV_SCRIPT";
+const DEFAULT_RUNTIME_ENV_SCRIPT = "/usr/local/bin/orkestrator-runtime-env.sh";
+const RUNTIME_ENV_VARIABLES = new Set([
+  "PATH",
+  "BUN_INSTALL",
+  "CARGO_HOME",
+  "GOPATH",
+  "PNPM_HOME",
+  "DENO_INSTALL",
+  "PYENV_ROOT",
+  "RYE_HOME",
+  "UV_TOOL_BIN_DIR",
+  "VOLTA_HOME",
+  "NVM_DIR",
+  "FNM_DIR",
+  "BASH_ENV",
+]);
 
 function normalizeOptionalEnvPath(name: string): string | null {
   const value = process.env[name]?.trim();
   return value ? value : null;
+}
+
+function getRuntimeEnvironmentScriptPath(): string {
+  return process.env[RUNTIME_ENV_SCRIPT_ENV]?.trim() || DEFAULT_RUNTIME_ENV_SCRIPT;
+}
+
+function applyRuntimeEnvironmentOutput(output: string): string[] {
+  const updated: string[] = [];
+
+  for (const line of output.split("\n")) {
+    const separatorIndex = line.indexOf("=");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    const name = line.slice(0, separatorIndex);
+    if (!RUNTIME_ENV_VARIABLES.has(name)) {
+      continue;
+    }
+
+    const value = line.slice(separatorIndex + 1);
+    if (value.length === 0 || process.env[name] === value) {
+      continue;
+    }
+
+    process.env[name] = value;
+    updated.push(name);
+  }
+
+  return updated;
+}
+
+async function refreshRuntimeEnvironment(): Promise<void> {
+  try {
+    const runtimeEnvScript = getRuntimeEnvironmentScriptPath();
+    const { stdout } = await execFile(
+      "/bin/sh",
+      [
+        "-c",
+        `if [ -f "$${RUNTIME_ENV_SCRIPT_ENV}" ]; then . "$${RUNTIME_ENV_SCRIPT_ENV}" 2>/dev/null || true; orkestrator_source_runtime_env 2>/dev/null || true; fi; env`,
+      ],
+      {
+        env: {
+          ...process.env,
+          [RUNTIME_ENV_SCRIPT_ENV]: runtimeEnvScript,
+        },
+        maxBuffer: 256 * 1024,
+      },
+    );
+
+    const updated = applyRuntimeEnvironmentOutput(stdout);
+    if (updated.length > 0) {
+      console.error("[codex-bridge] Refreshed runtime environment:", updated.join(", "));
+    }
+  } catch (error) {
+    console.error("[codex-bridge] Failed to refresh runtime environment:", error);
+  }
 }
 
 function sanitizeLogFileComponent(value: string): string {
@@ -1006,6 +1080,7 @@ async function runInlinePromptCommand(command: string, cwd: string): Promise<str
   const shell = process.env.SHELL || "/bin/zsh";
 
   try {
+    await refreshRuntimeEnvironment();
     const { stdout, stderr } = await execFile(shell, ["-lc", command], {
       cwd,
       env: process.env,
@@ -1517,6 +1592,8 @@ async function resolvePromptExecution(
 }
 
 async function runPrompt(session: SessionState, prompt: string): Promise<void> {
+  await refreshRuntimeEnvironment();
+
   const cwd = getWorkingDirectory(session.threadOptions.workingDirectory);
   const resolvedSlashCommand = await resolvePromptExecution(session, prompt, cwd);
   if (resolvedSlashCommand?.kind === "builtin") {
@@ -1674,6 +1751,9 @@ async function runPrompt(session: SessionState, prompt: string): Promise<void> {
 }
 
 export const __testing = {
+  applyRuntimeEnvironmentOutput,
+  refreshRuntimeEnvironment,
+  runInlinePromptCommand,
   runPrompt: runPrompt as (session: any, prompt: string) => Promise<void>,
   sessions: sessions as Map<string, any>,
 };

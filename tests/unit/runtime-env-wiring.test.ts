@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -107,6 +108,7 @@ describe("container runtime environment wiring", () => {
           HOME: home,
           PATH: "/usr/bin:/bin",
           ORKESTRATOR_RUNTIME_ENV_FILE: join(dir, "runtime-env.sh"),
+          ORKESTRATOR_BASH_ENV_FILE: join(dir, "bash-env.sh"),
         },
       );
 
@@ -147,6 +149,7 @@ describe("container runtime environment wiring", () => {
           HOME: home,
           PATH: "/usr/bin:/bin",
           ORKESTRATOR_RUNTIME_ENV_FILE: snapshot,
+          ORKESTRATOR_BASH_ENV_FILE: join(dir, "bash-env.sh"),
         },
       );
 
@@ -162,8 +165,81 @@ describe("container runtime environment wiring", () => {
       expect(captured).toContain("export PATH=");
       expect(captured).toContain("export CARGO_HOME=");
       expect(captured).toContain("export BUN_INSTALL=");
+      expect(captured).toContain("export BASH_ENV=");
       expect(captured).not.toContain("SECRET_TOKEN");
       expect(captured).not.toContain("do-not-capture");
+    });
+  });
+
+  test("runtime helper creates a bash env file with expected contents and permissions", () => {
+    withTempDir((dir) => {
+      const helper = join(repoRoot, "docker/runtime-env.sh");
+      const bashEnv = join(dir, "bash-env.sh");
+
+      const result = runShell(
+        `
+          . ${shellQuote(helper)}
+          orkestrator_source_runtime_env
+          first="$BASH_ENV"
+          orkestrator_source_runtime_env
+          printf "%s\\n%s" "$first" "$BASH_ENV"
+        `,
+        {
+          HOME: join(dir, "home"),
+          PATH: "/usr/bin:/bin",
+          ORKESTRATOR_RUNTIME_ENV_FILE: join(dir, "runtime-env.sh"),
+          ORKESTRATOR_BASH_ENV_FILE: bashEnv,
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toBe(`${bashEnv}\n${bashEnv}`);
+
+      const contents = readFileSync(bashEnv, "utf8");
+      expect(contents).toContain(". /usr/local/bin/orkestrator-runtime-env.sh");
+      expect(contents).toContain("orkestrator_source_runtime_env");
+      expect(statSync(bashEnv).mode & 0o777).toBe(0o644);
+    });
+  });
+
+  test("runtime helper makes bash login commands restore captured PATH", () => {
+    withTempDir((dir) => {
+      const bashCheck = Bun.spawnSync({
+        cmd: ["sh", "-c", "command -v bash"],
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (bashCheck.exitCode !== 0) {
+        return;
+      }
+
+      const helper = join(repoRoot, "docker/runtime-env.sh");
+      const home = join(dir, "home");
+      const bunBin = join(home, ".bun", "bin");
+      const bunPath = join(bunBin, "bun");
+      mkdirSync(bunBin, { recursive: true });
+      writeFileSync(bunPath, "#!/bin/sh\nprintf bun\n");
+      chmodSync(bunPath, 0o755);
+
+      const result = runShell(
+        `
+          . ${shellQuote(helper)}
+          export PATH="/usr/bin:/bin"
+          orkestrator_source_runtime_env
+          bash -lc 'command -v bun'
+        `,
+        {
+          HOME: home,
+          PATH: "/usr/bin:/bin",
+          ORKESTRATOR_RUNTIME_ENV_FILE: join(dir, "runtime-env.sh"),
+          ORKESTRATOR_BASH_ENV_FILE: join(dir, "bash-env.sh"),
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout.trim()).toBe(bunPath);
     });
   });
 
@@ -205,6 +281,7 @@ describe("container runtime environment wiring", () => {
           HOME: home,
           PATH: "/usr/bin:/bin",
           ORKESTRATOR_RUNTIME_ENV_FILE: join(dir, "runtime-env.sh"),
+          ORKESTRATOR_BASH_ENV_FILE: join(dir, "bash-env.sh"),
         },
         stdout: "pipe",
         stderr: "pipe",

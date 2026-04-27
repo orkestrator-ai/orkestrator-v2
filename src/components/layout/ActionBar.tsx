@@ -1123,7 +1123,7 @@ export function ActionBar() {
           if (!open) setCleanupError(null); // Clear error when closing
         }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent className="max-h-[calc(100vh-2rem)] overflow-hidden">
           <AlertDialogHeader>
             <AlertDialogTitle>Clean Up Environment</AlertDialogTitle>
             <AlertDialogDescription>
@@ -1133,7 +1133,7 @@ export function ActionBar() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           {cleanupError && (
-            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+            <div className="min-w-0 max-h-[min(16rem,40vh)] overflow-y-auto overflow-x-hidden rounded-md bg-destructive/10 p-3 text-sm text-destructive whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
               Failed to delete environment: {cleanupError}
             </div>
           )}
@@ -1165,7 +1165,7 @@ export function ActionBar() {
           if (!open) setMergeError(null); // Clear error when closing
         }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent className="max-h-[calc(100vh-2rem)] overflow-hidden">
           <AlertDialogHeader>
             <AlertDialogTitle>Merge Pull Request</AlertDialogTitle>
             <AlertDialogDescription>
@@ -1174,7 +1174,7 @@ export function ActionBar() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           {mergeError && (
-            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+            <div className="min-w-0 max-h-[min(16rem,40vh)] overflow-y-auto overflow-x-hidden rounded-md bg-destructive/10 p-3 text-sm text-destructive whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
               Failed to merge PR: {mergeError}
             </div>
           )}

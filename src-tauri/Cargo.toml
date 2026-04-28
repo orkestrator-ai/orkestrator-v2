@@ -1,7 +1,7 @@
 [package]
 name = "orkestrator-ai"
-version = "0.4.27"
-description = "Claude Code Environment Orchestrator - Manage isolated Docker-based dev environments"
+version = "0.4.28"
+description = "Agentic orchestration platform"
 authors = ["Arkaydeus"]
 edition = "2021"
 

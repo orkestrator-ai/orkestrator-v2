@@ -28,6 +28,36 @@ describe("claudeOptionsStore", () => {
     expect(useClaudeOptionsStore.getState().getOptions("env-1")).toBeUndefined();
   });
 
+  test("stores initial prompt attachments with launch options", () => {
+    useClaudeOptionsStore.getState().setOptions("env-1", {
+      launchAgent: true,
+      agentType: "claude",
+      initialPrompt: "Use this image",
+      initialPromptAttachments: [
+        {
+          id: "img-1",
+          name: "screenshot.png",
+          previewUrl: "data:image/png;base64,QUJD",
+          base64Data: "QUJD",
+        },
+      ],
+    });
+
+    expect(useClaudeOptionsStore.getState().getOptions("env-1")).toEqual({
+      launchAgent: true,
+      agentType: "claude",
+      initialPrompt: "Use this image",
+      initialPromptAttachments: [
+        {
+          id: "img-1",
+          name: "screenshot.png",
+          previewUrl: "data:image/png;base64,QUJD",
+          base64Data: "QUJD",
+        },
+      ],
+    });
+  });
+
   test("stores and clears pending native launches per environment", () => {
     useClaudeOptionsStore.getState().setPendingNativeLaunch("env-1", {
       containerId: "container-1",

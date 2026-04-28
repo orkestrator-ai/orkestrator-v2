@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
 
 export type AgentType = "claude" | "opencode" | "codex";
 
@@ -6,6 +7,7 @@ export interface ClaudeOptions {
   launchAgent: boolean;
   agentType: AgentType;
   initialPrompt: string;
+  initialPromptAttachments?: InitialPromptImageAttachment[];
 }
 
 export interface PendingNativeAgentLaunch {

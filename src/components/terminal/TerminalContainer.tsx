@@ -29,6 +29,10 @@ import { FilePlus2, Play, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { markSetupScriptsComplete, shouldAutoResolveSetupCommands } from "@/lib/setup-commands";
 import * as tauri from "@/lib/tauri";
+import {
+  buildInitialPromptWithAttachmentReferences,
+  saveInitialPromptAttachments,
+} from "@/lib/initial-prompt-attachments";
 import { createOrkestratorScriptPrompt } from "@/prompts";
 import { PaneTree } from "@/components/pane-layout";
 import { TerminalPortalHost } from "./TerminalPortalHost";
@@ -117,6 +121,7 @@ export function TerminalContainer({
   const {
     getOptions,
     clearOptions,
+    setOptions,
     setPendingNativeLaunch,
     clearPendingNativeLaunch,
   } = useClaudeOptionsStore();
@@ -208,6 +213,7 @@ export function TerminalContainer({
   const initialPromptRef = useRef<string | undefined>(undefined);
   const previousContainerIdRef = useRef<string | null>(null);
   const rerunSetupFetchFailedRef = useRef(false);
+  const isSavingInitialPromptAttachmentsRef = useRef(false);
 
   // Set active environment when this container becomes active
   useEffect(() => {
@@ -313,6 +319,45 @@ export function TerminalContainer({
       : [];
 
     if (currentTabs.length === 0) {
+      const pendingAttachments = claudeOptions?.initialPromptAttachments ?? [];
+      if (claudeOptions?.launchAgent && pendingAttachments.length > 0) {
+        if (!isSavingInitialPromptAttachmentsRef.current) {
+          isSavingInitialPromptAttachmentsRef.current = true;
+          void (async () => {
+            try {
+              const savedAttachments = await saveInitialPromptAttachments({
+                attachments: pendingAttachments,
+                containerId: isLocalEnvironment ? null : containerId,
+                worktreePath,
+              });
+              const currentOptions = useClaudeOptionsStore.getState().getOptions(environmentId);
+              if (!currentOptions) return;
+
+              setOptions(environmentId, {
+                ...currentOptions,
+                initialPrompt: buildInitialPromptWithAttachmentReferences(
+                  currentOptions.initialPrompt,
+                  savedAttachments,
+                ),
+                initialPromptAttachments: [],
+              });
+            } catch (error) {
+              console.error("[TerminalContainer] Failed to save initial prompt attachments:", error);
+              const currentOptions = useClaudeOptionsStore.getState().getOptions(environmentId);
+              if (currentOptions) {
+                setOptions(environmentId, {
+                  ...currentOptions,
+                  initialPromptAttachments: [],
+                });
+              }
+            } finally {
+              isSavingInitialPromptAttachmentsRef.current = false;
+            }
+          })();
+        }
+        return;
+      }
+
       initialize(containerId, environmentId);
 
       // Determine initial tab type based on agent options
@@ -491,7 +536,7 @@ export function TerminalContainer({
         addTab("default", initialTab, environmentId);
       }
     }
-  }, [isEnvironmentRunning, containerId, isLocalEnvironmentReady, isLocalEnvironment, setupCommandsResolved, claudeOptions, initialize, addTab, environmentId, currentEnvState, opencodeMode, claudeMode, codexMode, setWorkspaceReady, consumePendingSetupCommands, setSetupScriptsRunning, setPendingNativeLaunch]);
+  }, [isEnvironmentRunning, containerId, isLocalEnvironmentReady, isLocalEnvironment, setupCommandsResolved, claudeOptions, initialize, addTab, environmentId, currentEnvState, opencodeMode, claudeMode, codexMode, setWorkspaceReady, consumePendingSetupCommands, setSetupScriptsRunning, setPendingNativeLaunch, setOptions, worktreePath]);
 
   // Reset pane layout when container changes within the same environment
   // (e.g., container was stopped and restarted with a new ID)

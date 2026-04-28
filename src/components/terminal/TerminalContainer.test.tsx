@@ -1,13 +1,18 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { TerminalProvider } from "@/contexts";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import * as realTauri from "@/lib/tauri";
+
+const realTauriSnapshot = { ...realTauri };
 
 const markSetupScriptsCompleteMock = mock(() => {});
 const getSetupCommandsMock = mock(async (): Promise<string[] | null> => null);
+const writeContainerFileMock = mock(async (_containerId: string, filePath: string) => `/workspace/${filePath}`);
+const writeLocalFileMock = mock(async (worktreePath: string, filePath: string) => `${worktreePath}/${filePath}`);
 
 mock.module("@/lib/setup-commands", () => ({
   shouldAutoResolveSetupCommands: ({
@@ -29,7 +34,10 @@ mock.module("@/lib/setup-commands", () => ({
 }));
 
 mock.module("@/lib/tauri", () => ({
+  ...realTauriSnapshot,
   getSetupCommands: getSetupCommandsMock,
+  writeContainerFile: writeContainerFileMock,
+  writeLocalFile: writeLocalFileMock,
 }));
 
 mock.module("@/components/pane-layout", () => ({
@@ -47,6 +55,10 @@ mock.module("./InitializationLogs", () => ({
 const { TerminalContainer } = await import("./TerminalContainer");
 
 describe("TerminalContainer", () => {
+  afterAll(() => {
+    mock.module("@/lib/tauri", () => realTauriSnapshot);
+  });
+
   beforeEach(() => {
     cleanup();
 
@@ -112,6 +124,10 @@ describe("TerminalContainer", () => {
     markSetupScriptsCompleteMock.mockClear();
     getSetupCommandsMock.mockReset();
     getSetupCommandsMock.mockResolvedValue(null);
+    writeContainerFileMock.mockReset();
+    writeLocalFileMock.mockReset();
+    writeContainerFileMock.mockImplementation(async (_containerId: string, filePath: string) => `/workspace/${filePath}`);
+    writeLocalFileMock.mockImplementation(async (worktreePath: string, filePath: string) => `${worktreePath}/${filePath}`);
 
     useConfigStore.setState((state) => ({
       ...state,
@@ -197,6 +213,217 @@ describe("TerminalContainer", () => {
       expect(envHidden.root.tabs).toHaveLength(1);
       expect(envHidden.root.tabs[0]?.type).toBe("codex");
       expect(envHidden.root.tabs[0]?.initialPrompt).toBe("Review this diff");
+    });
+  });
+
+  test("saves container initial prompt attachments before creating the agent tab", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          codexMode: "terminal",
+        },
+        repositories: {},
+      },
+    }));
+
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "codex",
+          initialPrompt: "Use this screenshot",
+          initialPromptAttachments: [
+            {
+              id: "img-1",
+              name: "screen shot.png",
+              previewUrl: "data:image/png;base64,QUJD",
+              base64Data: "QUJD",
+            },
+          ],
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      expect(writeContainerFileMock).toHaveBeenCalledWith(
+        "container-hidden",
+        ".orkestrator/initial-prompt/screen-shot.png",
+        "QUJD",
+      );
+    });
+
+    await waitFor(() => {
+      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(envHidden?.root.kind).toBe("leaf");
+      if (!envHidden || envHidden.root.kind !== "leaf") {
+        throw new Error("env-hidden root should be a leaf");
+      }
+
+      expect(envHidden.root.tabs[0]?.type).toBe("codex");
+      expect(envHidden.root.tabs[0]?.initialPrompt).toContain("Use this screenshot");
+      expect(envHidden.root.tabs[0]?.initialPrompt).toContain(
+        "/workspace/.orkestrator/initial-prompt/screen-shot.png",
+      );
+      expect(
+        useClaudeOptionsStore.getState().getOptions("env-hidden")?.initialPromptAttachments,
+      ).toEqual([]);
+    });
+  });
+
+  test("saves local initial prompt attachments before creating the agent tab", async () => {
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((env) =>
+        env.id === "env-hidden"
+          ? {
+              ...env,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: "/tmp/env-hidden-worktree",
+            }
+          : env
+      ),
+      setupCommandsResolved: new Set(["env-hidden"]),
+    }));
+
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          codexMode: "terminal",
+        },
+        repositories: {},
+      },
+    }));
+
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "codex",
+          initialPrompt: "Use local image",
+          initialPromptAttachments: [
+            {
+              id: "img-1",
+              name: "local.png",
+              previewUrl: "data:image/png;base64,REVG",
+              base64Data: "REVG",
+            },
+          ],
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      expect(writeLocalFileMock).toHaveBeenCalledWith(
+        "/tmp/env-hidden-worktree",
+        ".orkestrator/initial-prompt/local.png",
+        "REVG",
+      );
+    });
+
+    await waitFor(() => {
+      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(envHidden?.root.kind).toBe("leaf");
+      if (!envHidden || envHidden.root.kind !== "leaf") {
+        throw new Error("env-hidden root should be a leaf");
+      }
+
+      expect(envHidden.root.tabs[0]?.type).toBe("codex");
+      expect(envHidden.root.tabs[0]?.initialPrompt).toContain(
+        "/tmp/env-hidden-worktree/.orkestrator/initial-prompt/local.png",
+      );
+      expect(writeContainerFileMock).not.toHaveBeenCalled();
+    });
+  });
+
+  test("clears failed initial prompt attachments and still creates the tab", async () => {
+    writeContainerFileMock.mockImplementation(async () => {
+      throw new Error("disk full");
+    });
+
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          codexMode: "terminal",
+        },
+        repositories: {},
+      },
+    }));
+
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "codex",
+          initialPrompt: "Continue without image",
+          initialPromptAttachments: [
+            {
+              id: "img-1",
+              name: "failed.png",
+              previewUrl: "data:image/png;base64,QUJD",
+              base64Data: "QUJD",
+            },
+          ],
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(envHidden?.root.kind).toBe("leaf");
+      if (!envHidden || envHidden.root.kind !== "leaf") {
+        throw new Error("env-hidden root should be a leaf");
+      }
+
+      expect(envHidden.root.tabs[0]?.type).toBe("codex");
+      expect(envHidden.root.tabs[0]?.initialPrompt).toBe("Continue without image");
+      expect(
+        useClaudeOptionsStore.getState().getOptions("env-hidden")?.initialPromptAttachments,
+      ).toEqual([]);
     });
   });
 

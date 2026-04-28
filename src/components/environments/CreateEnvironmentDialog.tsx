@@ -24,9 +24,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, Shield, Globe, Network, Plus, Trash2, ChevronDown, Container, Laptop, Terminal, Bot } from "lucide-react";
+import { Loader2, Shield, Globe, Network, Plus, Trash2, ChevronDown, Container, Laptop, Terminal, Bot, X } from "lucide-react";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { cn } from "@/lib/utils";
+import { readImage } from "@tauri-apps/plugin-clipboard-manager";
+import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
+import { toast } from "sonner";
 import type {
   ClaudeMode,
   CodexMode,
@@ -38,6 +41,7 @@ import type {
 } from "@/types";
 import type { AgentType } from "@/stores";
 import { useConfigStore } from "@/stores";
+import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
 
 // Stable empty array reference to prevent infinite re-renders when no default port mappings are provided
 const EMPTY_PORT_MAPPINGS: PortMapping[] = [];
@@ -58,6 +62,17 @@ export function resolveAgentDefaults(
 }
 
 const UNSELECTED_CARD_CLASSES = "border-transparent bg-zinc-900 hover:border-zinc-600";
+const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
+const MAX_RGBA_SIZE = 32 * 1024 * 1024;
+
+function generateImageFilename(): string {
+  const timestamp = new Date()
+    .toISOString()
+    .replace(/[:.]/g, "-")
+    .slice(0, 19);
+  const random = Math.random().toString(36).substring(2, 8);
+  return `initial-prompt-${timestamp}-${random}.png`;
+}
 
 export interface ClaudeOptions {
   environmentType: EnvironmentType;
@@ -68,6 +83,7 @@ export interface ClaudeOptions {
   opencodeMode: OpenCodeMode;
   codexMode: CodexMode;
   initialPrompt: string;
+  initialPromptAttachments: InitialPromptImageAttachment[];
   networkAccessMode: NetworkAccessMode;
   portMappings: PortMapping[];
 }
@@ -112,6 +128,7 @@ export function CreateEnvironmentDialog({
   const [opencodeMode, setOpencodeMode] = useState<OpenCodeMode>(configOpencodeMode);
   const [codexMode, setCodexMode] = useState<CodexMode>(configCodexMode);
   const [initialPrompt, setInitialPrompt] = useState("");
+  const [initialPromptAttachments, setInitialPromptAttachments] = useState<InitialPromptImageAttachment[]>([]);
   const [networkAccessMode, setNetworkAccessMode] = useState<NetworkAccessMode>("full");
   const [portMappings, setPortMappings] = useState<PortMapping[]>(defaultPortMappings);
   const [showPortConfig, setShowPortConfig] = useState(defaultPortMappings.length > 0);
@@ -146,10 +163,75 @@ export function CreateEnvironmentDialog({
     setOpencodeMode(configOpencodeMode);
     setCodexMode(configCodexMode);
     setInitialPrompt("");
+    setInitialPromptAttachments([]);
     setNetworkAccessMode("full");
     setPortMappings(defaultPortMappings);
     setShowPortConfig(defaultPortMappings.length > 0);
   }, [defaultPortMappings, configDefaultAgent, configClaudeMode, configOpencodeMode, configCodexMode]);
+
+  const handlePromptPaste = useCallback(async (event: ClipboardEvent) => {
+    if (!open || !launchAgent || document.activeElement !== promptRef.current) return;
+
+    try {
+      const image = await readImage();
+      const rgba = await image.rgba();
+      const { width, height } = await image.size();
+
+      let canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      const imageData = new ImageData(new Uint8ClampedArray(rgba), width, height);
+      ctx.putImageData(imageData, 0, 0);
+      canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
+
+      const previewUrl = canvas.toDataURL("image/png");
+      const base64Data = previewUrl.split(",")[1] || "";
+      const estimatedSize = (base64Data.length * 3) / 4;
+      if (estimatedSize > MAX_IMAGE_SIZE) {
+        toast.error("Image too large", {
+          description: `Image is ${(estimatedSize / 1024 / 1024).toFixed(1)}MB. Maximum is 8MB.`,
+        });
+        return;
+      }
+
+      canvas.width = 0;
+      canvas.height = 0;
+      if (!base64Data) return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+
+      setInitialPromptAttachments((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          name: generateImageFilename(),
+          previewUrl,
+          base64Data,
+        },
+      ]);
+      toast.success("Image attached");
+    } catch {
+      // No image in the clipboard; let normal text paste continue.
+    }
+  }, [launchAgent, open]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const listener = (event: Event) => {
+      void handlePromptPaste(event as ClipboardEvent);
+    };
+    document.addEventListener("paste", listener, { capture: true });
+    return () => document.removeEventListener("paste", listener, { capture: true });
+  }, [open, handlePromptPaste]);
+
+  const removeInitialPromptAttachment = useCallback((id: string) => {
+    setInitialPromptAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
+  }, []);
 
   // Sync defaults when dialog opens
   // This ensures the dialog always starts with the latest defaults, since the component
@@ -239,6 +321,7 @@ export function CreateEnvironmentDialog({
           opencodeMode,
           codexMode,
           initialPrompt: initialPrompt.trim(),
+          initialPromptAttachments,
           networkAccessMode,
           portMappings,
         });
@@ -253,7 +336,7 @@ export function CreateEnvironmentDialog({
         console.error("Failed to create environment:", err);
       }
     },
-    [environmentType, environmentName, launchAgent, agentType, claudeMode, opencodeMode, codexMode, initialPrompt, networkAccessMode, portMappings, onCreate, resetForm, onOpenChange, projectId, validatePortMappings]
+    [environmentType, environmentName, launchAgent, agentType, claudeMode, opencodeMode, codexMode, initialPrompt, initialPromptAttachments, networkAccessMode, portMappings, onCreate, resetForm, onOpenChange, projectId, validatePortMappings]
   );
 
   const handlePromptKeyDown = useCallback(
@@ -713,6 +796,31 @@ export function CreateEnvironmentDialog({
                 rows={3}
                 className="resize-y max-h-[calc(15*theme(lineHeight.normal)*1em)] overflow-y-auto"
               />
+              {initialPromptAttachments.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {initialPromptAttachments.map((attachment) => (
+                    <div
+                      key={attachment.id}
+                      className="group relative h-16 w-16 overflow-hidden rounded-md border border-border bg-muted"
+                    >
+                      <img
+                        src={attachment.previewUrl}
+                        alt={attachment.name}
+                        className="h-full w-full object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeInitialPromptAttachment(attachment.id)}
+                        disabled={isLoading}
+                        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-background/90 opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
+                        aria-label={`Remove ${attachment.name}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

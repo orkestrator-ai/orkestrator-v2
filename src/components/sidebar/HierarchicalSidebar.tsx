@@ -292,6 +292,7 @@ export function HierarchicalSidebar() {
         launchAgent: options.launchAgent,
         agentType: options.agentType,
         initialPrompt: options.initialPrompt,
+        initialPromptAttachments: options.initialPromptAttachments,
       });
 
       // Expand the project if collapsed so the new environment is visible

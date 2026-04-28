@@ -25,6 +25,7 @@ import { useAgentActivityStore, useEnvironmentStore, useEnvironmentDiffStore, us
 import { EnvironmentSettingsDialog } from "./EnvironmentSettingsDialog";
 import { cn } from "@/lib/utils";
 import * as tauri from "@/lib/tauri";
+import { getEnvironmentPortAddress } from "@/lib/environment-address";
 
 interface EnvironmentItemProps {
   environment: Environment;
@@ -137,7 +138,7 @@ export function EnvironmentItem({
     }
   };
 
-  const localAddress = environment.hostEntryPort ? `localhost:${environment.hostEntryPort}` : null;
+  const localAddress = getEnvironmentPortAddress(environment);
   const initialPrompt = environment.initialPrompt?.trim();
 
   const copyAddress = () => {

@@ -21,7 +21,8 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { GitPullRequest, GitMerge, GitPullRequestClosed, ExternalLink, Loader2, SlidersHorizontal, Plus, Shield, Code2, FolderTree, Container, Eye, Upload, Play, Trash2, AlertTriangle, FolderGit2, FilePlus2 } from "lucide-react";
+import { GitPullRequest, GitMerge, GitPullRequestClosed, ExternalLink, Loader2, SlidersHorizontal, Plus, Shield, Code2, FolderTree, Container, Eye, Upload, Play, Trash2, AlertTriangle, FolderGit2, FilePlus2, Copy } from "lucide-react";
+import { toast } from "sonner";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon, DockerIcon } from "@/components/icons/AgentIcons";
 import { useUIStore, useEnvironmentStore, useProjectStore, useConfigStore, useFilesPanelStore } from "@/stores";
 import { useShallow } from "zustand/react/shallow";
@@ -39,6 +40,19 @@ import { EnvironmentSettingsDialog } from "@/components/environments/Environment
 import { DockerStatsDialog } from "@/components/docker";
 import * as tauri from "@/lib/tauri";
 import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
+import { getEnvironmentPortAddress } from "@/lib/environment-address";
+
+function isEditableShortcutTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  if (target.isContentEditable) {
+    return true;
+  }
+
+  return !!target.closest("input, textarea, select, [contenteditable='true'], .xterm");
+}
 
 export function ActionBar() {
   const { selectedEnvironmentId, selectedProjectId } = useUIStore();
@@ -110,6 +124,8 @@ export function ActionBar() {
     (isLocalEnvironment && !!selectedEnvironment?.worktreePath) ||
     (!isLocalEnvironment && !!selectedEnvironment?.containerId)
   );
+  const environmentPortAddress = getEnvironmentPortAddress(selectedEnvironment);
+  const canCopyEnvironmentUrl = !!environmentPortAddress;
 
   // Handler for opening in editor
   const handleOpenInEditor = useCallback(async () => {
@@ -138,6 +154,16 @@ export function ActionBar() {
       setIsOpeningEditor(false);
     }
   }, [selectedEnvironment?.containerId, selectedEnvironment?.worktreePath, isLocalEnvironment, config.global.preferredEditor]);
+
+  const handleCopyEnvironmentUrl = useCallback(() => {
+    if (!environmentPortAddress) return;
+
+    navigator.clipboard.writeText(environmentPortAddress).then(() => {
+      toast.success("Copied URL", { description: environmentPortAddress });
+    }).catch(() => {
+      toast.error("Failed to copy URL");
+    });
+  }, [environmentPortAddress]);
 
   // Get the default agent - per-environment override takes precedence over global config
   const defaultAgent = selectedEnvironment?.defaultAgent || config.global.defaultAgent || "claude";
@@ -318,6 +344,23 @@ export function ActionBar() {
         }
       }
 
+      if (
+        e.ctrlKey &&
+        e.shiftKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === "c"
+      ) {
+        if (canCopyEnvironmentUrl) {
+          if (isEditableShortcutTarget(e.target)) {
+            return;
+          }
+          e.preventDefault();
+          handleCopyEnvironmentUrl();
+        }
+        return;
+      }
+
       // ⌘ shortcuts on Mac only to avoid conflicts
       // (Ctrl+T/N/O are commonly used by browsers and other apps on Windows/Linux)
       if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
@@ -386,6 +429,8 @@ export function ActionBar() {
     canCreateTab,
     canOpenEditor,
     handleOpenInEditor,
+    canCopyEnvironmentUrl,
+    handleCopyEnvironmentUrl,
     selectedEnvironment,
     selectedProjectId,
     handleReview,
@@ -810,6 +855,28 @@ export function ActionBar() {
                 <TooltipContent>
                   <p>Open in {config.global.preferredEditor === "cursor" ? "Cursor" : "VS Code"}</p>
                   <p className="text-xs text-muted-foreground">⌘O</p>
+                </TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={handleCopyEnvironmentUrl}
+                    disabled={!canCopyEnvironmentUrl}
+                    aria-label={environmentPortAddress ? "Copy URL" : "No mapped URL"}
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>{environmentPortAddress ? "Copy URL" : "No mapped URL"}</p>
+                  {environmentPortAddress && (
+                    <p className="text-xs text-muted-foreground">{environmentPortAddress}</p>
+                  )}
+                  {environmentPortAddress && <p className="text-xs text-muted-foreground">Ctrl⇧C</p>}
                 </TooltipContent>
               </Tooltip>
 

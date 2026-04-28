@@ -185,6 +185,15 @@ const codexFast = new Codex({
 function getCodex(fastMode: boolean): Codex {
   return fastMode ? codexFast : codex;
 }
+let freshThreadFactoryForTesting: ((session: SessionState) => Thread) | null = null;
+let beforePromptExecutionForTesting: (() => Promise<void> | void) | null = null;
+function createFreshThreadForSession(session: SessionState): Thread {
+  if (freshThreadFactoryForTesting) {
+    return freshThreadFactoryForTesting(session);
+  }
+
+  return getCodex(session.fastMode).startThread(session.threadOptions);
+}
 function resolveFastMode(body: Record<string, unknown>): boolean {
   return body.fastMode === true;
 }
@@ -198,6 +207,7 @@ const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const codexRawLogDir = normalizeOptionalEnvPath("ORKESTRATOR_CODEX_RAW_LOG_DIR");
 const RUNTIME_ENV_SCRIPT_ENV = "ORKESTRATOR_RUNTIME_ENV_SCRIPT";
 const DEFAULT_RUNTIME_ENV_SCRIPT = "/usr/local/bin/orkestrator-runtime-env.sh";
+const RECOVERY_TRANSCRIPT_CHAR_LIMIT = 40_000;
 const RUNTIME_ENV_VARIABLES = new Set([
   "PATH",
   "BUN_INSTALL",
@@ -1662,8 +1672,168 @@ async function resolvePromptExecution(
   };
 }
 
-async function runPrompt(session: SessionState, prompt: string): Promise<void> {
+function isMissingRolloutError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes("thread/resume")
+    && normalized.includes("no rollout found for thread id");
+}
+
+function messageTextForRecovery(message: NormalizedMessage): string {
+  if (message.content.trim()) {
+    return message.content.trim();
+  }
+
+  return message.parts
+    .map((part) => part.content?.trim())
+    .filter((part): part is string => Boolean(part))
+    .join("\n")
+    .trim();
+}
+
+function trimRecoveryTranscript(transcript: string): string {
+  if (transcript.length <= RECOVERY_TRANSCRIPT_CHAR_LIMIT) {
+    return transcript;
+  }
+
+  return transcript.slice(transcript.length - RECOVERY_TRANSCRIPT_CHAR_LIMIT);
+}
+
+function buildResumeRecoveryPrompt(
+  messages: NormalizedMessage[],
+  currentPrompt: string,
+): string {
+  const transcript = messages
+    .filter((message) => message.role === "user" || message.role === "assistant")
+    .map((message) => {
+      const text = messageTextForRecovery(message);
+      if (!text) return null;
+      const role = message.role === "assistant" ? "Codex" : "User";
+      return `${role}:\n${text}`;
+    })
+    .filter((entry): entry is string => entry !== null)
+    .join("\n\n");
+
+  const boundedTranscript = trimRecoveryTranscript(transcript);
+
+  return [
+    "The previous Codex thread could not be resumed by the local CLI.",
+    "Continue the work using the transcript below as context. Preserve completed repository changes and do not redo work unless needed.",
+    "",
+    "<conversation-transcript>",
+    boundedTranscript || "(no prior transcript was available)",
+    "</conversation-transcript>",
+    "",
+    "Current user request:",
+    currentPrompt,
+  ].join("\n");
+}
+
+async function processCodexStream(
+  session: SessionState,
+  executionInput: Input,
+  abortController: AbortController,
+  isCurrentTurn: () => boolean,
+): Promise<void> {
+  const streamed = await session.thread.runStreamed(executionInput, {
+    signal: abortController.signal,
+  });
+  await writeCodexRawLog(session.id, {
+    kind: "stream.start",
+    threadId: session.threadId ?? null,
+  });
+
+  for await (const event of streamed.events) {
+    if (!isCurrentTurn()) {
+      return;
+    }
+
+    await writeCodexRawLog(session.id, {
+      kind: "stream.event",
+      threadId: session.threadId ?? null,
+      eventType: event.type,
+      event: normalizeLogPayload(event),
+    });
+
+    if (event.type === "thread.started") {
+      if (!isCurrentTurn()) {
+        return;
+      }
+      session.threadId = event.thread_id;
+      await writeCodexRawLog(session.id, {
+        kind: "thread.started",
+        threadId: session.threadId,
+      });
+      continue;
+    }
+
+    if (event.type === "item.started" || event.type === "item.updated" || event.type === "item.completed") {
+      if (!isCurrentTurn()) {
+        return;
+      }
+      if (!session.currentItems.has(event.item.id)) {
+        session.currentItemOrder.push(event.item.id);
+      }
+      session.currentItems.set(event.item.id, event.item);
+      await rebuildAssistantMessage(session);
+      emit({ type: "message.updated", sessionId: session.id });
+      continue;
+    }
+
+    if (event.type === "turn.failed" || event.type === "error") {
+      if (!isCurrentTurn()) {
+        return;
+      }
+      const error =
+        event.type === "turn.failed" ? event.error.message : event.message;
+      if (isMissingRolloutError(error)) {
+        throw new Error(error);
+      }
+      session.status = "error";
+      session.error = error;
+      await rebuildAssistantMessage(session);
+      emit({
+        type: "session.error",
+        sessionId: session.id,
+        data: { error },
+      });
+      await writeCodexRawLog(session.id, {
+        kind: "stream.error",
+        threadId: session.threadId ?? null,
+        error,
+      });
+      return;
+    }
+  }
+
+  if (!isCurrentTurn()) {
+    return;
+  }
+
+  await rebuildAssistantMessage(session);
+  session.status = "idle";
+  emit({ type: "message.updated", sessionId: session.id });
+  emit({
+    type: "session.idle",
+    sessionId: session.id,
+    data: { title: session.title },
+  });
+}
+
+async function runPrompt(
+  session: SessionState,
+  prompt: string,
+  acceptedTurnId?: string,
+): Promise<void> {
   await refreshRuntimeEnvironment();
+  if (acceptedTurnId && session.currentTurnId !== acceptedTurnId) {
+    return;
+  }
+  if (beforePromptExecutionForTesting) {
+    await beforePromptExecutionForTesting();
+  }
+  if (acceptedTurnId && session.currentTurnId !== acceptedTurnId) {
+    return;
+  }
 
   const cwd = getWorkingDirectory(session.threadOptions.workingDirectory);
   const resolvedSlashCommand = await resolvePromptExecution(session, prompt, cwd);
@@ -1682,7 +1852,7 @@ async function runPrompt(session: SessionState, prompt: string): Promise<void> {
     wrapPromptForConversationMode(executionPrompt, session.conversationMode),
     attachments,
   );
-  const turnId = crypto.randomUUID();
+  const turnId = acceptedTurnId ?? crypto.randomUUID();
   const abortController = new AbortController();
   const isCurrentTurn = () => session.currentTurnId === turnId;
 
@@ -1694,7 +1864,8 @@ async function runPrompt(session: SessionState, prompt: string): Promise<void> {
   session.currentTurnStartedAt = new Date().toISOString();
   session.abortController = abortController;
 
-  session.messages.push(createUserMessage(prompt, attachments));
+  const userMessage = createUserMessage(prompt, attachments);
+  session.messages.push(userMessage);
   session.pendingAttachments = [];
   const assistantMessage = createAssistantMessage();
   session.currentAssistantMessageId = assistantMessage.id;
@@ -1713,92 +1884,67 @@ async function runPrompt(session: SessionState, prompt: string): Promise<void> {
   emit({ type: "session.updated", sessionId: session.id });
 
   try {
-    const streamed = await session.thread.runStreamed(executionInput, {
-      signal: abortController.signal,
-    });
-    await writeCodexRawLog(session.id, {
-      kind: "stream.start",
-      threadId: session.threadId ?? null,
-    });
-
-    for await (const event of streamed.events) {
-      if (!isCurrentTurn()) {
-        return;
-      }
-
-      await writeCodexRawLog(session.id, {
-        kind: "stream.event",
-        threadId: session.threadId ?? null,
-        eventType: event.type,
-        event: normalizeLogPayload(event),
-      });
-
-      if (event.type === "thread.started") {
-        if (!isCurrentTurn()) {
-          return;
-        }
-        session.threadId = event.thread_id;
-        await writeCodexRawLog(session.id, {
-          kind: "thread.started",
-          threadId: session.threadId,
-        });
-        continue;
-      }
-
-      if (event.type === "item.started" || event.type === "item.updated" || event.type === "item.completed") {
-        if (!isCurrentTurn()) {
-          return;
-        }
-        if (!session.currentItems.has(event.item.id)) {
-          session.currentItemOrder.push(event.item.id);
-        }
-        session.currentItems.set(event.item.id, event.item);
-        await rebuildAssistantMessage(session);
-        emit({ type: "message.updated", sessionId: session.id });
-        continue;
-      }
-
-      if (event.type === "turn.failed" || event.type === "error") {
-        if (!isCurrentTurn()) {
-          return;
-        }
-        const error =
-          event.type === "turn.failed" ? event.error.message : event.message;
-        session.status = "error";
-        session.error = error;
-        await rebuildAssistantMessage(session);
-        emit({
-          type: "session.error",
-          sessionId: session.id,
-          data: { error },
-        });
-        await writeCodexRawLog(session.id, {
-          kind: "stream.error",
-          threadId: session.threadId ?? null,
-          error,
-        });
-        return;
-      }
-    }
-
-    if (!isCurrentTurn()) {
-      return;
-    }
-
-    await rebuildAssistantMessage(session);
-    session.status = "idle";
-    emit({ type: "message.updated", sessionId: session.id });
-    emit({
-      type: "session.idle",
-      sessionId: session.id,
-      data: { title: session.title },
-    });
+    await processCodexStream(session, executionInput, abortController, isCurrentTurn);
   } catch (error) {
     if (abortController.signal.aborted || !isCurrentTurn()) {
       return;
     }
 
     const message = error instanceof Error ? error.message : "Codex execution failed";
+    if (isMissingRolloutError(message)) {
+      const failedThreadId = session.threadId;
+      await writeCodexRawLog(session.id, {
+        kind: "stream.resume-recovery",
+        threadId: failedThreadId ?? null,
+        error: message,
+      });
+
+      session.thread = createFreshThreadForSession(session);
+      session.threadId = null;
+      session.error = undefined;
+      session.currentItems.clear();
+      session.currentItemOrder = [];
+
+      const recoveryInput = buildPromptInput(
+        wrapPromptForConversationMode(
+          buildResumeRecoveryPrompt(
+            session.messages.filter((messageEntry) =>
+              messageEntry.id !== assistantMessage.id && messageEntry.id !== userMessage.id
+            ),
+            executionPrompt,
+          ),
+          session.conversationMode,
+        ),
+        attachments,
+      );
+
+      try {
+        await processCodexStream(session, recoveryInput, abortController, isCurrentTurn);
+        return;
+      } catch (recoveryError) {
+        if (abortController.signal.aborted || !isCurrentTurn()) {
+          return;
+        }
+        const recoveryMessage = recoveryError instanceof Error
+          ? recoveryError.message
+          : "Codex execution failed";
+        session.status = "error";
+        session.error = recoveryMessage;
+        await writeCodexRawLog(session.id, {
+          kind: "stream.recovery-exception",
+          originalThreadId: failedThreadId ?? null,
+          threadId: session.threadId ?? null,
+          error: recoveryMessage,
+        });
+        emit({
+          type: "session.error",
+          sessionId: session.id,
+          data: { error: recoveryMessage },
+        });
+        return;
+      }
+    }
+
     session.status = "error";
     session.error = message;
     await writeCodexRawLog(session.id, {
@@ -1829,6 +1975,13 @@ export const __testing = {
   refreshRuntimeEnvironment,
   runInlinePromptCommand,
   runPrompt: runPrompt as (session: any, prompt: string) => Promise<void>,
+  buildResumeRecoveryPromptForTesting: buildResumeRecoveryPrompt,
+  setBeforePromptExecutionForTesting: (callback: (() => Promise<void> | void) | null) => {
+    beforePromptExecutionForTesting = callback;
+  },
+  setFreshThreadFactoryForTesting: (factory: ((session: SessionState) => Thread) | null) => {
+    freshThreadFactoryForTesting = factory;
+  },
   sessions: sessions as Map<string, any>,
 };
 
@@ -2054,8 +2207,28 @@ app.post("/session/:id/prompt", async (c) => {
   }
 
   session.pendingAttachments = attachments;
-  runPrompt(session, prompt).catch((error) => {
+  const acceptedTurnId = crypto.randomUUID();
+  session.currentTurnId = acceptedTurnId;
+  session.status = "running";
+  session.error = undefined;
+  emit({ type: "session.updated", sessionId: session.id });
+  runPrompt(session, prompt, acceptedTurnId).catch((error) => {
+    if (session.currentTurnId !== acceptedTurnId) {
+      return;
+    }
     console.error("[codex-bridge] Prompt failed:", error);
+    const message = error instanceof Error ? error.message : "Codex execution failed";
+    session.status = "error";
+    session.error = message;
+    session.currentTurnId = undefined;
+    session.currentTurnStartedAt = undefined;
+    session.abortController = undefined;
+    session.pendingAttachments = [];
+    emit({
+      type: "session.error",
+      sessionId: session.id,
+      data: { error: message },
+    });
   });
 
   return c.json({ status: "processing" }, 202);

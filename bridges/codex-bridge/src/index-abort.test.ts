@@ -209,6 +209,8 @@ describe("codex bridge abort handling", () => {
   beforeEach(() => {
     __testing.sessions.clear();
     __testing.expiredSessions.clear();
+    __testing.setBeforePromptExecutionForTesting(null);
+    __testing.setFreshThreadFactoryForTesting(null);
   });
 
   test("abort route aborts the controller and clears active turn state", async () => {
@@ -290,6 +292,236 @@ describe("codex bridge abort handling", () => {
     expect(assistantContent).toContain("NEW RESPONSE");
     expect(assistantContent).not.toContain("OLD RESPONSE");
     expect(session.status).toBe("idle");
+  });
+
+  test("missing rollout resume errors recover on a fresh thread with transcript context", async () => {
+    let recoveryInput = "";
+    const session = createSession({
+      threadId: "old-thread",
+      thread: {
+        runStreamed: async () => {
+          throw new Error(
+            "Codex Exec exited with code 1: Reading prompt from stdin...\nError: thread/resume: thread/resume failed: no rollout found for thread id old-thread",
+          );
+        },
+      },
+      messages: [
+        {
+          id: "review-user",
+          role: "user",
+          content: "Review the implementation.",
+          parts: [{ type: "text", content: "Review the implementation." }],
+          createdAt: "2026-04-15T10:00:00.000Z",
+        },
+        {
+          id: "review-assistant",
+          role: "assistant",
+          content: "Issue: add test coverage for the retry path.",
+          parts: [{ type: "text", content: "Issue: add test coverage for the retry path." }],
+          createdAt: "2026-04-15T10:01:00.000Z",
+        },
+      ],
+    });
+
+    __testing.setFreshThreadFactoryForTesting(() => ({
+      runStreamed: async (input: string) => {
+        recoveryInput = input;
+        return {
+          events: (async function* () {
+            yield { type: "thread.started", thread_id: "new-thread" };
+            yield {
+              type: "item.completed",
+              item: { id: "recovered-item", type: "agent_message", text: "Recovered response" },
+            };
+            yield {
+              type: "turn.completed",
+              usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+            };
+          })(),
+        };
+      },
+    } as any));
+
+    await __testing.runPrompt(session, "Please address all the above issues.");
+
+    expect(session.threadId).toBe("new-thread");
+    expect(session.status).toBe("idle");
+    expect(recoveryInput).toContain("previous Codex thread could not be resumed");
+    expect(recoveryInput).toContain("Issue: add test coverage for the retry path.");
+    expect(recoveryInput).toContain("Please address all the above issues.");
+    expect(
+      session.messages.filter(
+        (message: { role: string; content: string }) =>
+          message.role === "user" && message.content === "Please address all the above issues.",
+      ),
+    ).toHaveLength(1);
+    expect(
+      session.messages.some(
+        (message: { role: string; content: string }) =>
+          message.role === "assistant" && message.content === "Recovered response",
+      ),
+    ).toBe(true);
+  });
+
+  test("missing rollout stream failure events recover on a fresh thread", async () => {
+    let recoveryInput = "";
+    const session = createSession({
+      threadId: "old-thread",
+      thread: {
+        runStreamed: async () => ({
+          events: (async function* () {
+            yield {
+              type: "turn.failed",
+              error: {
+                message: "thread/resume failed: no rollout found for thread id old-thread",
+              },
+            };
+          })(),
+        }),
+      },
+      messages: [
+        {
+          id: "previous-user",
+          role: "user",
+          content: "Original request",
+          parts: [{ type: "text", content: "Original request" }],
+          createdAt: "2026-04-15T10:00:00.000Z",
+        },
+      ],
+    });
+
+    __testing.setFreshThreadFactoryForTesting(() => ({
+      runStreamed: async (input: string) => {
+        recoveryInput = input;
+        return {
+          events: (async function* () {
+            yield { type: "thread.started", thread_id: "new-thread" };
+            yield {
+              type: "item.completed",
+              item: { id: "recovered-item", type: "agent_message", text: "Recovered from event" },
+            };
+          })(),
+        };
+      },
+    } as any));
+
+    await __testing.runPrompt(session, "Continue after stream failure.");
+
+    expect(session.threadId).toBe("new-thread");
+    expect(session.status).toBe("idle");
+    expect(recoveryInput).toContain("Original request");
+    expect(
+      session.messages.some(
+        (message: { role: string; content: string }) =>
+          message.role === "assistant" && message.content === "Recovered from event",
+      ),
+    ).toBe(true);
+  });
+
+  test("fresh thread recovery failures leave the session errored and clean up turn state", async () => {
+    const session = createSession({
+      threadId: "old-thread",
+      thread: {
+        runStreamed: async () => {
+          throw new Error("thread/resume failed: no rollout found for thread id old-thread");
+        },
+      },
+    });
+
+    __testing.setFreshThreadFactoryForTesting(() => ({
+      runStreamed: async () => {
+        throw new Error("fresh thread failed");
+      },
+    } as any));
+
+    await __testing.runPrompt(session, "Recover this prompt.");
+
+    expect(session.threadId).toBeNull();
+    expect(session.status).toBe("error");
+    expect(session.error).toBe("fresh thread failed");
+    expect(session.currentTurnId).toBeUndefined();
+    expect(session.currentTurnStartedAt).toBeUndefined();
+    expect(session.abortController).toBeUndefined();
+  });
+
+  test("resume recovery prompt trims long transcripts from the front", () => {
+    const prompt = __testing.buildResumeRecoveryPromptForTesting(
+      [
+        {
+          id: "long-message",
+          role: "assistant",
+          content: `START_MARKER${"x".repeat(41_000)}END_MARKER`,
+          parts: [],
+          createdAt: "2026-04-15T10:00:00.000Z",
+        },
+      ],
+      "Current work",
+    );
+
+    expect(prompt).not.toContain("START_MARKER");
+    expect(prompt).toContain("END_MARKER");
+    expect(prompt).toContain("Current work");
+  });
+
+  test("prompt route marks a session running before async execution starts", async () => {
+    const session = createSession({
+      id: "route-session",
+      thread: {
+        runStreamed: async () => ({
+          events: (async function* () {
+            await new Promise(() => {});
+          })(),
+        }),
+      },
+    });
+    __testing.sessions.set(session.id, session);
+
+    const firstResponse = await app.request("/session/route-session/prompt", {
+      method: "POST",
+      body: JSON.stringify({ prompt: "first prompt" }),
+      headers: { "Content-Type": "application/json" },
+    });
+    const secondResponse = await app.request("/session/route-session/prompt", {
+      method: "POST",
+      body: JSON.stringify({ prompt: "second prompt" }),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    expect(firstResponse.status).toBe(202);
+    expect(secondResponse.status).toBe(409);
+    expect(session.status).toBe("running");
+    session.abortController?.abort();
+  });
+
+  test("prompt route ignores stale async setup failures after a newer turn starts", async () => {
+    let rejectPromptSetup: ((error: Error) => void) | undefined;
+    __testing.setBeforePromptExecutionForTesting(
+      () => new Promise<void>((_resolve, reject) => {
+        rejectPromptSetup = reject;
+      }),
+    );
+
+    const session = createSession({ id: "stale-route-session" });
+    __testing.sessions.set(session.id, session);
+
+    const response = await app.request("/session/stale-route-session/prompt", {
+      method: "POST",
+      body: JSON.stringify({ prompt: "first prompt" }),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    expect(response.status).toBe(202);
+    session.currentTurnId = "newer-turn";
+    session.status = "running";
+    session.error = undefined;
+
+    rejectPromptSetup?.(new Error("setup failed after stale turn"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(session.status).toBe("running");
+    expect(session.error).toBeUndefined();
+    expect(session.currentTurnId).toBe("newer-turn");
   });
 
   test("idle cleanup compacts sessions that can be restored by the same session id", async () => {

@@ -741,7 +741,11 @@ describe("useVirtuosoScrollState", () => {
       }
     });
 
-    test("skips snapshot restore when user was sticky (snaps to new bottom instead)", () => {
+    test("restores snapshot even when user was sticky (avoids mount-from-top flash)", () => {
+      // Locks in the contract that the persisted snapshot is always restored
+      // when one exists. For sticky users, this lands them at the previous
+      // bottom (no flash from the top of the list); the activation effect on
+      // a subsequent re-activation handles jumping to any newer bottom.
       const mockSnapshot = { ranges: [], scrollTop: 500 } as any;
       const { result, rerender } = renderHook(
         ({ isActive }) =>
@@ -760,7 +764,7 @@ describe("useVirtuosoScrollState", () => {
       const { result: result2 } = renderHook(() =>
         useVirtuosoScrollState({ persistKey: "sticky-key" })
       );
-      expect(result2.current.scrollProps.restoreStateFrom).toBeUndefined();
+      expect(result2.current.scrollProps.restoreStateFrom).toEqual(mockSnapshot);
       clearPersistedVirtuosoState("sticky-key");
     });
 
@@ -783,6 +787,227 @@ describe("useVirtuosoScrollState", () => {
         useVirtuosoScrollState({ persistKey: "no-state-here" })
       );
       expect(result2.current.scrollProps.restoreStateFrom).toBeUndefined();
+    });
+
+    test("jumps to bottom instantly on re-activation when sticky", async () => {
+      const scrollToIndexCalls: any[] = [];
+      const scrollToCalls: any[] = [];
+      const { result, rerender } = renderHook(
+        ({ isActive }) =>
+          useVirtuosoScrollState({ isActive, persistKey: "reactivate-key" }),
+        { initialProps: { isActive: true } }
+      );
+
+      result.current.virtuosoRef.current = {
+        scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
+        scrollTo: (opts: any) => scrollToCalls.push(opts),
+        getState: (cb: (state: any) => void) =>
+          cb({ ranges: [], scrollTop: 100 } as any),
+      } as any;
+
+      // Deactivate (persists wantsStick=true) then re-activate.
+      rerender({ isActive: false });
+      const before = scrollToIndexCalls.length;
+      rerender({ isActive: true });
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+
+      // Re-activation issues an instant scrollToIndex + scrollTo (auto, not
+      // smooth). The smooth retry loop is intentionally NOT used here.
+      expect(scrollToIndexCalls.length - before).toBe(1);
+      expect(scrollToCalls).toEqual([
+        { top: 10_000_000, behavior: "auto" },
+      ]);
+
+      clearPersistedVirtuosoState("reactivate-key");
+    });
+
+    test("clears stale scrollInFlightRef on re-activation (deadlock recovery)", async () => {
+      // Regression: if a smooth scrollToBottom was in flight when the user
+      // switched tabs, scrollInFlightRef could remain true on return,
+      // causing the scroll-down button click and totalListHeightChanged to
+      // silently no-op. Re-activation must reset that flag.
+      const { result, rerender } = renderHook(
+        ({ isActive }) => useVirtuosoScrollState({ isActive }),
+        { initialProps: { isActive: true } }
+      );
+
+      const scrollToIndexCalls: any[] = [];
+      result.current.virtuosoRef.current = {
+        scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
+        scrollTo: () => {},
+        getState: () => {},
+      } as any;
+
+      const el = document.createElement("div");
+      document.body.appendChild(el);
+      try {
+        act(() => result.current.scrollProps.scrollerRef(el));
+
+        // Start a scroll. This sets both wantsStickRef=true AND
+        // scrollInFlightRef=true and fires one scrollToIndex.
+        act(() => {
+          result.current.scrollToBottom();
+        });
+
+        // Now flip wantsStick back to false via a wheel-up. This isolates
+        // the flag-reset behavior: with wantsStick=false at re-activation,
+        // the activation effect must NOT itself fire a scroll, so any new
+        // scrollToIndex calls after re-activation come solely from our own
+        // scrollToBottom() — which proves scrollInFlightRef was cleared.
+        act(() => {
+          el.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+        });
+
+        // Deactivate before the in-flight retry loop resolves — leaves
+        // scrollInFlightRef stuck true.
+        rerender({ isActive: false });
+
+        const callsBeforeReactivation = scrollToIndexCalls.length;
+
+        // Re-activate, then flush any pending rAF/timers. Because
+        // wantsStick=false the activation effect's rAF body is a no-op
+        // beyond the flag reset, so the call count must not change.
+        rerender({ isActive: true });
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        });
+        expect(scrollToIndexCalls.length).toBe(callsBeforeReactivation);
+
+        // Subsequent scrollToBottom must succeed (one new scrollToIndex)
+        // because the in-flight flag was cleared on re-activation.
+        act(() => {
+          result.current.scrollToBottom();
+        });
+        expect(scrollToIndexCalls.length).toBe(callsBeforeReactivation + 1);
+      } finally {
+        document.body.removeChild(el);
+      }
+    });
+
+    test("does not scroll on first activation when sticky (Virtuoso handles initial position)", async () => {
+      // The activation effect must skip the very first time isActive becomes
+      // true: Virtuoso handles initial position via restoreStateFrom, and
+      // firing an extra scrollToIndex on top of that would either fight the
+      // restore or scroll past intended initial position.
+      const mockSnapshot = { ranges: [], scrollTop: 500 } as any;
+
+      // Seed persisted sticky state so a fresh mount sees wantsStick=true.
+      const { result: seedResult, rerender: seedRerender } = renderHook(
+        ({ isActive }) =>
+          useVirtuosoScrollState({ isActive, persistKey: "first-mount-key" }),
+        { initialProps: { isActive: true } }
+      );
+      seedResult.current.virtuosoRef.current = {
+        scrollToIndex: () => {},
+        scrollTo: () => {},
+        getState: (cb: (state: any) => void) => cb(mockSnapshot),
+      } as any;
+      seedRerender({ isActive: false });
+
+      // Fresh mount with isActive=true. wantsStick=true is restored from
+      // the persisted entry, but this is the *first* activation.
+      const scrollToIndexCalls: any[] = [];
+      const scrollToCalls: any[] = [];
+      const { result } = renderHook(() =>
+        useVirtuosoScrollState({ isActive: true, persistKey: "first-mount-key" })
+      );
+      result.current.virtuosoRef.current = {
+        scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
+        scrollTo: (opts: any) => scrollToCalls.push(opts),
+        getState: () => {},
+      } as any;
+
+      // restoreStateFrom must be present (sticky restore).
+      expect(result.current.scrollProps.restoreStateFrom).toEqual(mockSnapshot);
+
+      // Flush any rAF the activation effect might schedule. It must not
+      // fire a scroll on first activation.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+      expect(scrollToIndexCalls.length).toBe(0);
+      expect(scrollToCalls.length).toBe(0);
+
+      clearPersistedVirtuosoState("first-mount-key");
+    });
+
+    test("does not scroll on re-activation when wantsStick is false", async () => {
+      // Symmetric to the sticky-jump test: when the user had scrolled up
+      // before leaving, the activation effect must NOT fire a scroll on
+      // return — it should only reset scrollInFlightRef and exit.
+      const { result, rerender } = renderHook(
+        ({ isActive }) => useVirtuosoScrollState({ isActive }),
+        { initialProps: { isActive: true } }
+      );
+
+      const scrollToIndexCalls: any[] = [];
+      const scrollToCalls: any[] = [];
+      result.current.virtuosoRef.current = {
+        scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
+        scrollTo: (opts: any) => scrollToCalls.push(opts),
+        getState: () => {},
+      } as any;
+
+      const el = document.createElement("div");
+      document.body.appendChild(el);
+      try {
+        // Release stick intent via a wheel-up.
+        act(() => result.current.scrollProps.scrollerRef(el));
+        act(() => {
+          el.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+        });
+
+        rerender({ isActive: false });
+        rerender({ isActive: true });
+
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        });
+
+        expect(scrollToIndexCalls.length).toBe(0);
+        expect(scrollToCalls.length).toBe(0);
+      } finally {
+        document.body.removeChild(el);
+      }
+    });
+
+    test("cancels pending activation scroll if isActive flips false before rAF fires", async () => {
+      // The activation effect schedules its instant jump via rAF and
+      // returns a cleanup that cancels it. If the user toggles tabs again
+      // before the rAF body runs, the scroll must not fire.
+      const { result, rerender } = renderHook(
+        ({ isActive }) =>
+          useVirtuosoScrollState({ isActive, persistKey: "cancel-raf-key" }),
+        { initialProps: { isActive: true } }
+      );
+
+      const scrollToIndexCalls: any[] = [];
+      const scrollToCalls: any[] = [];
+      result.current.virtuosoRef.current = {
+        scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
+        scrollTo: (opts: any) => scrollToCalls.push(opts),
+        getState: (cb: (state: any) => void) =>
+          cb({ ranges: [], scrollTop: 100 } as any),
+      } as any;
+
+      // Deactivate (persists wantsStick=true), re-activate, then immediately
+      // deactivate again — all synchronously, before the activation rAF
+      // can fire. The cleanup must cancel the scheduled scroll.
+      rerender({ isActive: false });
+      rerender({ isActive: true });
+      rerender({ isActive: false });
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+
+      expect(scrollToIndexCalls.length).toBe(0);
+      expect(scrollToCalls.length).toBe(0);
+
+      clearPersistedVirtuosoState("cancel-raf-key");
     });
 
     test("does not persist when isActive stays true", () => {

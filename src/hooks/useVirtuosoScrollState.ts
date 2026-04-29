@@ -120,11 +120,12 @@ export function useVirtuosoScrollState(
   const lastScrollTopRef = useRef(0);
   const mountedRef = useRef(true);
   const scrollInFlightRef = useRef(false);
+  const hasBeenActiveRef = useRef(false);
 
-  // If the user was sticky, skip snapshot restore — the activation effect
-  // below will scroll them to the new bottom instead of the old position.
-  const restoreStateFrom =
-    persisted && !persisted.wantsStick ? persisted.snapshot : undefined;
+  // Always restore the snapshot when one exists. For sticky users this lands
+  // them at their previous bottom (avoiding a flash from the top), then the
+  // activation effect nudges to the *new* bottom if content grew while away.
+  const restoreStateFrom = persisted?.snapshot;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -390,17 +391,35 @@ export function useVirtuosoScrollState(
     };
   }, [scrollerEl, scrollToBottom]);
 
-  // Tab activation: if the user was sticky when they left, snap to the new
-  // bottom on return. We already skipped restoreStateFrom in that case, so
-  // Virtuoso mounts at the top; the rAF defer lets it measure first.
+  // Tab re-activation: if the user was sticky when they left, jump to the
+  // new bottom on return. We use an instant jump rather than the smooth
+  // retry loop in scrollToBottom — animating on every env switch reads as
+  // jank. Reset scrollInFlightRef first so a stale flag from a prior
+  // activation cycle (e.g. a smooth scroll interrupted by switching away)
+  // can't deadlock subsequent scroll attempts.
+  //
+  // Skip on the very first activation: Virtuoso handles initial position
+  // via restoreStateFrom. If the persisted snapshot is stale (content grew
+  // while the tab was inactive), the user lands at the *old* bottom on
+  // mount; totalListHeightChanged and the ResizeObserver fallback then
+  // catch up to the new bottom as items measure. (followOutput alone is
+  // not enough — it only fires on data-item appends *after* mount.)
   useEffect(() => {
     if (!isActive) return;
+    const isFirstActivation = !hasBeenActiveRef.current;
+    hasBeenActiveRef.current = true;
+    if (isFirstActivation) return;
+    scrollInFlightRef.current = false;
     if (!wantsStickRef.current) return;
     const id = requestAnimationFrame(() => {
-      if (mountedRef.current) scrollToBottom();
+      if (!mountedRef.current) return;
+      const handle = virtuosoRef.current;
+      if (!handle) return;
+      handle.scrollToIndex({ index: "LAST", align: "end" });
+      handle.scrollTo({ top: SCROLL_TO_ABSOLUTE_BOTTOM, behavior: "auto" });
     });
     return () => cancelAnimationFrame(id);
-  }, [isActive, scrollToBottom]);
+  }, [isActive]);
 
   return {
     isAtBottom,

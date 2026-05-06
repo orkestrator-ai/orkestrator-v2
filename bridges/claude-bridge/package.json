@@ -5,9 +5,9 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "build": "bunx tsc",
+    "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "bunx tsx watch src/index.ts"
+    "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.119",

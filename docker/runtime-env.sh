@@ -19,53 +19,74 @@ orkestrator_prepend_path() {
     esac
 }
 
-orkestrator_add_common_runtime_paths() {
-    orkestrator_prepend_path "/usr/local/share/npm-global/bin"
+orkestrator_append_path() {
+    if [ -z "${1:-}" ] || [ ! -d "$1" ]; then
+        return 0
+    fi
+
+    case ":${PATH:-}:" in
+        *":$1:"*) ;;
+        *) PATH="${PATH:+$PATH:}$1" ;;
+    esac
+}
+
+orkestrator_add_common_runtime_paths_with() {
+    path_writer="$1"
+
+    "$path_writer" "/usr/local/share/npm-global/bin"
 
     if [ -n "${BUN_INSTALL:-}" ]; then
-        orkestrator_prepend_path "$BUN_INSTALL/bin"
+        "$path_writer" "$BUN_INSTALL/bin"
     fi
     if [ -n "${CARGO_HOME:-}" ]; then
-        orkestrator_prepend_path "$CARGO_HOME/bin"
+        "$path_writer" "$CARGO_HOME/bin"
     fi
     if [ -n "${GOPATH:-}" ]; then
-        orkestrator_prepend_path "$GOPATH/bin"
+        "$path_writer" "$GOPATH/bin"
     fi
     if [ -n "${PNPM_HOME:-}" ]; then
-        orkestrator_prepend_path "$PNPM_HOME"
+        "$path_writer" "$PNPM_HOME"
     fi
     if [ -n "${DENO_INSTALL:-}" ]; then
-        orkestrator_prepend_path "$DENO_INSTALL/bin"
+        "$path_writer" "$DENO_INSTALL/bin"
     fi
     if [ -n "${PYENV_ROOT:-}" ]; then
-        orkestrator_prepend_path "$PYENV_ROOT/shims"
-        orkestrator_prepend_path "$PYENV_ROOT/bin"
+        "$path_writer" "$PYENV_ROOT/shims"
+        "$path_writer" "$PYENV_ROOT/bin"
     fi
     if [ -n "${RYE_HOME:-}" ]; then
-        orkestrator_prepend_path "$RYE_HOME/shims"
+        "$path_writer" "$RYE_HOME/shims"
     fi
     if [ -n "${UV_TOOL_BIN_DIR:-}" ]; then
-        orkestrator_prepend_path "$UV_TOOL_BIN_DIR"
+        "$path_writer" "$UV_TOOL_BIN_DIR"
     fi
     if [ -n "${VOLTA_HOME:-}" ]; then
-        orkestrator_prepend_path "$VOLTA_HOME/bin"
+        "$path_writer" "$VOLTA_HOME/bin"
     fi
 
     if [ -n "${HOME:-}" ]; then
-        orkestrator_prepend_path "$HOME/.local/bin"
-        orkestrator_prepend_path "$HOME/bin"
-        orkestrator_prepend_path "$HOME/.bun/bin"
-        orkestrator_prepend_path "$HOME/.cargo/bin"
-        orkestrator_prepend_path "$HOME/go/bin"
-        orkestrator_prepend_path "$HOME/.deno/bin"
-        orkestrator_prepend_path "$HOME/.npm-global/bin"
-        orkestrator_prepend_path "$HOME/.yarn/bin"
-        orkestrator_prepend_path "$HOME/.config/yarn/global/node_modules/.bin"
-        orkestrator_prepend_path "$HOME/.opencode/bin"
-        orkestrator_prepend_path "$HOME/.claude/local"
+        "$path_writer" "$HOME/.local/bin"
+        "$path_writer" "$HOME/bin"
+        "$path_writer" "$HOME/.bun/bin"
+        "$path_writer" "$HOME/.cargo/bin"
+        "$path_writer" "$HOME/go/bin"
+        "$path_writer" "$HOME/.deno/bin"
+        "$path_writer" "$HOME/.npm-global/bin"
+        "$path_writer" "$HOME/.yarn/bin"
+        "$path_writer" "$HOME/.config/yarn/global/node_modules/.bin"
+        "$path_writer" "$HOME/.opencode/bin"
+        "$path_writer" "$HOME/.claude/local"
     fi
 
     export PATH
+}
+
+orkestrator_add_common_runtime_paths() {
+    orkestrator_add_common_runtime_paths_with orkestrator_prepend_path
+}
+
+orkestrator_add_common_runtime_paths_floor() {
+    orkestrator_add_common_runtime_paths_with orkestrator_append_path
 }
 
 orkestrator_ensure_bash_env() {
@@ -94,14 +115,55 @@ orkestrator_shell_quote() {
     printf "%s" "$1" | sed "s/'/'\\\\''/g; 1s/^/'/; \$s/\$/'/"
 }
 
-orkestrator_write_export() {
+orkestrator_write_soft_export() {
     name="$1"
     value="$2"
     file="$3"
 
-    printf "export %s=" "$name" >> "$file"
+    printf "if [ -z \"\${%s:-}\" ]; then\n" "$name" >> "$file"
+    printf "    %s=" "$name" >> "$file"
     orkestrator_shell_quote "$value" >> "$file"
     printf "\n" >> "$file"
+    printf "    export %s\n" "$name" >> "$file"
+    printf "fi\n" >> "$file"
+}
+
+orkestrator_write_path_merge_helpers() {
+    file="$1"
+
+    {
+        printf "if ! command -v orkestrator_append_path >/dev/null 2>&1; then\n"
+        printf "    orkestrator_append_path() {\n"
+        printf "        if [ -z \"\${1:-}\" ] || [ ! -d \"\$1\" ]; then\n"
+        printf "            return 0\n"
+        printf "        fi\n"
+        printf "        case \":\${PATH:-}:\" in\n"
+        printf "            *\":\$1:\"*) ;;\n"
+        printf "            *) PATH=\"\${PATH:+\$PATH:}\$1\" ;;\n"
+        printf "        esac\n"
+        printf "    }\n"
+        printf "fi\n"
+    } >> "$file"
+}
+
+orkestrator_write_path_merge() {
+    file="$1"
+    snapshot="${PATH:-}"
+
+    if [ -z "$snapshot" ]; then
+        return 0
+    fi
+
+    old_ifs="$IFS"
+    IFS=":"
+    for entry in $snapshot; do
+        [ -z "$entry" ] && continue
+        printf "orkestrator_append_path " >> "$file"
+        orkestrator_shell_quote "$entry" >> "$file"
+        printf "\n" >> "$file"
+    done
+    IFS="$old_ifs"
+    printf "export PATH\n" >> "$file"
 }
 
 orkestrator_get_runtime_var() {
@@ -131,13 +193,20 @@ orkestrator_capture_runtime_env() {
     tmp_file="${ORKESTRATOR_RUNTIME_ENV_FILE}.$$"
     {
         printf "# Generated by Orkestrator. Do not edit.\n"
+        printf "# orkestrator-runtime-env: v2\n"
         printf "# Contains only whitelisted runtime path variables.\n"
     } > "$tmp_file"
+    orkestrator_write_path_merge_helpers "$tmp_file"
 
     for name in PATH BUN_INSTALL CARGO_HOME GOPATH PNPM_HOME DENO_INSTALL PYENV_ROOT RYE_HOME UV_TOOL_BIN_DIR VOLTA_HOME NVM_DIR FNM_DIR BASH_ENV; do
+        if [ "$name" = "PATH" ]; then
+            orkestrator_write_path_merge "$tmp_file"
+            continue
+        fi
+
         value="$(orkestrator_get_runtime_var "$name")"
         if [ -n "$value" ]; then
-            orkestrator_write_export "$name" "$value" "$tmp_file"
+            orkestrator_write_soft_export "$name" "$value" "$tmp_file"
         fi
     done
 
@@ -145,12 +214,36 @@ orkestrator_capture_runtime_env() {
     mv "$tmp_file" "$ORKESTRATOR_RUNTIME_ENV_FILE"
 }
 
-orkestrator_source_runtime_env() {
-    if [ -f "$ORKESTRATOR_RUNTIME_ENV_FILE" ]; then
+orkestrator_runtime_env_is_current() {
+    [ -f "$ORKESTRATOR_RUNTIME_ENV_FILE" ] &&
+        grep -q "^# orkestrator-runtime-env: v2$" "$ORKESTRATOR_RUNTIME_ENV_FILE"
+}
+
+orkestrator_migrate_runtime_env() {
+    old_runtime_env_file="$ORKESTRATOR_RUNTIME_ENV_FILE"
+
+    (
         # shellcheck source=/dev/null
-        . "$ORKESTRATOR_RUNTIME_ENV_FILE"
+        . "$old_runtime_env_file" || exit 1
+        ORKESTRATOR_RUNTIME_ENV_FILE="$old_runtime_env_file"
+        orkestrator_capture_runtime_env
+    )
+}
+
+orkestrator_source_runtime_env() {
+    orkestrator_add_common_runtime_paths_floor
+
+    if [ -f "$ORKESTRATOR_RUNTIME_ENV_FILE" ]; then
+        if ! orkestrator_runtime_env_is_current; then
+            orkestrator_migrate_runtime_env 2>/dev/null || true
+        fi
+
+        if orkestrator_runtime_env_is_current; then
+            # shellcheck source=/dev/null
+            . "$ORKESTRATOR_RUNTIME_ENV_FILE"
+        fi
     fi
 
-    orkestrator_add_common_runtime_paths
+    orkestrator_add_common_runtime_paths_floor
     orkestrator_ensure_bash_env
 }

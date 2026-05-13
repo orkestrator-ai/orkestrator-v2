@@ -876,19 +876,19 @@ export async function sendPrompt(
   // If plan mode is enabled, instruct Claude to use the EnterPlanMode tool
   // This uses Claude's native planning mode which allows read-only exploration
   if (options?.permissionMode === "plan") {
+    // The SDK injects its own read-only enforcement preamble + ExitPlanMode protocol
+    // when permissionMode === "plan". We append guidance on *how* to plan well.
     const planModeInstruction = `<system-reminder>
-IMPORTANT: The user has enabled PLANNING MODE via the UI. You are now in planning mode.
+The user has enabled PLANNING MODE via the UI. You are in plan mode.
 
-Your FIRST action MUST be to call the EnterPlanMode tool to formally enter planning mode. Do this immediately before any other action.
-
-In planning mode:
+Use this phase to:
 1. Thoroughly explore the codebase to understand existing patterns
 2. Identify similar features and architectural approaches
 3. Consider multiple approaches and their trade-offs
 4. Design a concrete implementation strategy
-5. When ready, use ExitPlanMode to present your plan for approval
+5. When ready, call ExitPlanMode with your plan to present it for approval
 
-Remember: In planning mode, you can READ files but should NOT write or edit any files yet. This is a read-only exploration and planning phase.
+Plan mode is read-only: do not write or edit files until the user approves your plan via ExitPlanMode.
 </system-reminder>
 
 `;
@@ -942,12 +942,12 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
 
     const mcpServerCount = Object.keys(mcpServers).length;
     const pluginCount = plugins.length;
-    // Determine permission mode: use provided option or default to "bypassPermissions"
-    // Note: When user requests "plan" mode, we use "bypassPermissions" for the SDK
-    // because Claude's native EnterPlanMode tool handles the planning workflow
-    // (the "plan" mode in SDK blocks ALL tools which prevents EnterPlanMode from working)
-    const requestedPlanMode = options?.permissionMode === "plan";
-    const permissionMode = requestedPlanMode ? "bypassPermissions" : (options?.permissionMode ?? "bypassPermissions");
+    // Determine permission mode: use provided option or default to "bypassPermissions".
+    // Why: when the user requests "plan" mode we forward it as the SDK's actual
+    // `"plan"` permissionMode. The SDK enforces read-only and runs its built-in
+    // ExitPlanMode tool natively — without this, ExitPlanMode fails because the
+    // CLI has no plan-mode state to exit.
+    const permissionMode = options?.permissionMode ?? "bypassPermissions";
 
     const fastMode = options?.fastMode === true;
 
@@ -1096,20 +1096,19 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
               toolUseId: approvalId,
             };
 
-            // Store the approval request
+            // Store the approval request and set up the resolver BEFORE emitting,
+            // so an instant response from the UI can never find a missing resolver.
             pendingPlanApprovals.set(approvalId, approvalRequest);
+
+            const approvalPromise = new Promise<PlanApprovalResponse>((resolve, reject) => {
+              planApprovalResolvers.set(approvalId, { resolve, reject });
+            });
 
             // Emit event so frontend knows to show the approval UI
             eventEmitter.emit({
               type: "plan.approval-requested",
               sessionId,
               data: approvalRequest,
-            });
-
-            // Wait for user decision with a Promise that can be resolved externally
-            // Include timeout to prevent hanging indefinitely if user disconnects
-            const approvalPromise = new Promise<PlanApprovalResponse>((resolve, reject) => {
-              planApprovalResolvers.set(approvalId, { resolve, reject });
             });
 
             let approvalTimeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -1124,7 +1123,11 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
               console.log("[session-manager] Plan approval result:", approvalId, response);
 
               if (response.approved) {
-                // User approved - emit exit event and allow the tool
+                // User approved - emit exit event and allow the tool.
+                // Mark `planApprovedThisTurn` so the fallback below can detect
+                // the case where the SDK still fails the ExitPlanMode tool
+                // (override the failure + re-prompt Claude to continue).
+                planApprovedThisTurn = true;
                 eventEmitter.emit({
                   type: "plan.exit-requested",
                   sessionId,
@@ -1223,6 +1226,36 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
     // When ExitPlanMode is denied, the SDK may end the turn without Claude seeing
     // the feedback. We capture it here and re-send as a follow-up prompt.
     let pendingPlanRejectionFeedback: string | null = null;
+
+    // ---------------------------------------------------------------------
+    // Defensive fallback for the ExitPlanMode "approved but failed" case.
+    //
+    // Primary fix lives at the permissionMode site above: we now forward
+    // `permissionMode: "plan"` to the SDK, so the SDK is genuinely in plan
+    // mode and its native ExitPlanMode tool runs to success.
+    //
+    // The fallback below covers the case where the SDK's plan-mode handling
+    // misbehaves (older SDK builds, future regressions, or unforeseen edge
+    // cases): if the user explicitly approved the plan but the SDK still
+    // marked the ExitPlanMode tool as `is_error`, we don't want to surface a
+    // red "failure" to the user, and we don't want Claude to abandon the
+    // turn. So we:
+    //   1) Remember that the user approved this turn (`planApprovedThisTurn`).
+    //   2) After every tool_result is parsed, scan the tool tracker for any
+    //      ExitPlanMode tool that landed in "failure" state and rewrite it
+    //      to "success" with an explanatory output. The UI then renders the
+    //      tool the way the user expects.
+    //   3) Set `pendingPlanApprovalContinuation` so that when the SDK ends
+    //      the turn (which it usually does after a failed ExitPlanMode), we
+    //      re-prompt Claude with a non-plan-mode follow-up telling them to
+    //      continue with implementation.
+    //
+    // If the SDK behaves correctly (the expected case post-fix), the
+    // ExitPlanMode tool is already in "success" state and none of the
+    // override / re-prompt logic fires. The fallback is silent and free.
+    // ---------------------------------------------------------------------
+    let planApprovedThisTurn = false;
+    let pendingPlanApprovalContinuation: string | null = null;
 
     // Process the async generator
     for await (const message of queryIterator) {
@@ -1443,6 +1476,37 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
           activeTaskIds.delete(taskId);
         }
 
+        // Defensive fallback: if the user approved the plan this turn but the
+        // SDK still reported the ExitPlanMode tool as a failure, rewrite the
+        // tracked tool to "success" so the UI doesn't show a red failure for
+        // something the user explicitly approved. Capture a continuation
+        // re-prompt so Claude doesn't just abandon the turn. See the comment
+        // block where `planApprovedThisTurn` is declared for full context.
+        if (planApprovedThisTurn) {
+          for (const tool of toolTracker.getTools()) {
+            if (
+              tool.toolName === "ExitPlanMode" &&
+              tool.toolState === "failure" &&
+              tool.toolUseId
+            ) {
+              console.warn(
+                "[session-manager] ExitPlanMode reported failure despite user approval — overriding to success and scheduling continuation re-prompt",
+                { sessionId, toolUseId: tool.toolUseId, sdkError: tool.toolError }
+              );
+              toolTracker.updateToolResult(tool.toolUseId, {
+                state: "success",
+                output:
+                  "Plan approved by the user. Proceeding with implementation.",
+                error: undefined,
+              });
+              if (!pendingPlanApprovalContinuation) {
+                pendingPlanApprovalContinuation =
+                  "The user has approved your plan. Please proceed with implementing it now. You are no longer in plan mode and may write, edit, and run commands as needed.";
+              }
+            }
+          }
+        }
+
         // Rebuild message parts with updated tool results
         if (currentAssistantMessage) {
           const finalParts = buildMessageParts(accumulatedOrderedParts, toolTracker);
@@ -1522,6 +1586,52 @@ Remember: In planning mode, you can READ files but should NOT write or edit any 
         return;
       } catch (repromptError) {
         console.error("[session-manager] Failed to re-prompt with plan feedback:", repromptError);
+        // Fall through to normal idle handling
+      }
+    }
+
+    // Defensive fallback continuation: see the comment block on
+    // `planApprovedThisTurn` above. If the SDK failed the ExitPlanMode tool
+    // despite an approval (we already overrode the tool state to success in
+    // the message loop), re-prompt Claude WITHOUT plan mode so it actually
+    // implements the approved plan instead of ending the turn.
+    // Guard: skip if this call is itself a re-prompt to avoid recursion.
+    if (
+      pendingPlanApprovalContinuation &&
+      !abortController.signal.aborted &&
+      !options?._isReprompt
+    ) {
+      const continuationPrompt = pendingPlanApprovalContinuation;
+      pendingPlanApprovalContinuation = null;
+
+      console.log("[session-manager] Re-prompting after approved-plan ExitPlanMode failure", {
+        sessionId,
+      });
+
+      session.status = "idle";
+      session.abortController = undefined;
+
+      // Drop plan mode for the continuation re-prompt — the user has approved,
+      // so Claude needs the full toolset (Write/Edit/Bash) to implement.
+      // Attachments are intentionally not forwarded: the SDK has already seen
+      // them in the conversation history, and re-sending them on a synthetic
+      // system-role continuation could double-count their content. Matches
+      // the pendingPlanRejectionFeedback re-prompt path above.
+      const repromptOptions: PromptOptions = {
+        model: options?.model,
+        effort: options?.effort,
+        fastMode: options?.fastMode,
+        _isReprompt: true,
+      };
+
+      try {
+        await sendPrompt(sessionId, continuationPrompt, repromptOptions);
+        return;
+      } catch (repromptError) {
+        console.error(
+          "[session-manager] Failed to re-prompt after plan approval:",
+          repromptError
+        );
         // Fall through to normal idle handling
       }
     }

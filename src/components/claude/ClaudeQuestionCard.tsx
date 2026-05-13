@@ -1,9 +1,9 @@
-import { useState, useCallback, useMemo } from "react";
-import { HelpCircle, Check, Circle } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
+import { Check, Circle, HelpCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import type { ClaudeQuestionRequest, QuestionInfo, ClaudeClient } from "@/lib/claude-client";
+import type { ClaudeClient, ClaudeQuestionRequest, QuestionInfo } from "@/lib/claude-client";
 import { answerQuestion } from "@/lib/claude-client";
 import { useClaudeStore } from "@/stores/claudeStore";
 
@@ -17,17 +17,28 @@ interface ClaudeQuestionCardProps {
 function QuestionItem({
   info,
   answer,
+  customText,
   onAnswerChange,
+  onCustomTextChange,
 }: {
   info: QuestionInfo;
   answer: string[];
+  customText: string;
   onAnswerChange: (newAnswer: string[]) => void;
+  onCustomTextChange: (newText: string) => void;
 }) {
-  const [customText, setCustomText] = useState("");
-
   // Determine if this question allows custom input
   const hasOptions = info.options && info.options.length > 0;
   const isMultiple = info.multiSelect ?? false;
+  const optionLabels = useMemo(
+    () => new Set((info.options ?? []).map((o) => o.label)),
+    [info.options]
+  );
+  // Custom answers that have been committed (via Enter) and are not in the option list
+  const committedCustomAnswers = useMemo(
+    () => answer.filter((a) => !optionLabels.has(a)),
+    [answer, optionLabels]
+  );
 
   // Handle option selection
   const handleOptionClick = useCallback(
@@ -44,28 +55,42 @@ function QuestionItem({
         if (answer.includes(label)) {
           onAnswerChange([]);
         } else {
-          onAnswerChange([label]);
+          // Preserve any committed custom answers when switching option in single-select
+          onAnswerChange([...committedCustomAnswers, label]);
         }
       }
     },
-    [answer, isMultiple, onAnswerChange]
+    [answer, isMultiple, onAnswerChange, committedCustomAnswers]
   );
 
-  // Handle custom text submission
+  // Commit current draft customText into the answer array (so it shows as a chip).
+  // Returning the resulting answer makes Enter behavior easy to reason about.
   const handleCustomSubmit = useCallback(() => {
-    if (customText.trim()) {
-      if (isMultiple) {
-        // Add to existing answers
-        if (!answer.includes(customText.trim())) {
-          onAnswerChange([...answer, customText.trim()]);
-        }
-      } else {
-        // Replace existing answer
-        onAnswerChange([customText.trim()]);
-      }
-      setCustomText("");
+    const trimmed = customText.trim();
+    if (!trimmed) return;
+    if (answer.includes(trimmed)) {
+      onCustomTextChange("");
+      return;
     }
-  }, [customText, answer, isMultiple, onAnswerChange]);
+    if (isMultiple) {
+      onAnswerChange([...answer, trimmed]);
+    } else {
+      // Single-select: only one custom chip allowed at a time. Drop any prior
+      // chips and keep the currently-selected option (if any) alongside the
+      // new chip, mirroring how handleOptionClick keeps chips alongside
+      // the option.
+      const selectedOption = answer.filter((a) => optionLabels.has(a));
+      onAnswerChange([...selectedOption, trimmed]);
+    }
+    onCustomTextChange("");
+  }, [customText, answer, isMultiple, onAnswerChange, onCustomTextChange, optionLabels]);
+
+  const handleRemoveCustomAnswer = useCallback(
+    (label: string) => {
+      onAnswerChange(answer.filter((a) => a !== label));
+    },
+    [answer, onAnswerChange]
+  );
 
   // Handle custom text input key press
   const handleKeyDown = useCallback(
@@ -136,20 +161,47 @@ function QuestionItem({
         </div>
       )}
 
+      {/* Committed custom answers - shown so the user can see what will be submitted */}
+      {committedCustomAnswers.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 pt-1">
+          {committedCustomAnswers.map((label) => (
+            <span
+              key={label}
+              className="inline-flex items-center gap-1 rounded-full bg-primary/10 text-primary text-xs px-2.5 py-1 border border-primary/20"
+            >
+              <Check className="w-3 h-3" />
+              <span className="max-w-[28ch] truncate">{label}</span>
+              <button
+                type="button"
+                onClick={() => handleRemoveCustomAnswer(label)}
+                className="ml-0.5 -mr-0.5 rounded-full hover:bg-primary/20 p-0.5"
+                aria-label={`Remove ${label}`}
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* Custom text input - always show for Claude questions */}
       <div className="pt-2">
         <Input
-          placeholder="Type your own answer"
+          placeholder={
+            hasOptions
+              ? "Type your own answer (press Enter to add)"
+              : "Type your answer"
+          }
           value={customText}
-          onChange={(e) => setCustomText(e.target.value)}
+          onChange={(e) => onCustomTextChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          onBlur={() => {
-            if (customText.trim()) {
-              handleCustomSubmit();
-            }
-          }}
           className="h-9 text-sm bg-transparent border-muted-foreground/20 focus:border-primary"
         />
+        {customText.trim().length > 0 && (
+          <p className="text-[11px] text-muted-foreground mt-1">
+            Your typed answer will be included when you submit.
+          </p>
+        )}
       </div>
     </div>
   );
@@ -162,9 +214,15 @@ export function ClaudeQuestionCard({
 }: ClaudeQuestionCardProps) {
   const { removePendingQuestion } = useClaudeStore();
 
-  // Track answers for each question
+  // Track answers for each question (committed option selections + Enter-committed custom answers)
   const [answers, setAnswers] = useState<string[][]>(
     () => question.questions.map(() => [])
+  );
+  // Track in-progress (uncommitted) custom text per question. Lifted to parent so it
+  // survives navigation between questions (the QuestionItem remounts on index change),
+  // and so it can be included at submit even if the user never pressed Enter.
+  const [customTexts, setCustomTexts] = useState<string[]>(
+    () => question.questions.map(() => "")
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
   // Track which question we're currently viewing (for multi-question support)
@@ -173,26 +231,41 @@ export function ClaudeQuestionCard({
   const questionCount = question.questions.length;
   const currentQuestion = question.questions[currentQuestionIndex];
   const currentAnswer = answers[currentQuestionIndex] || [];
+  const currentCustomText = customTexts[currentQuestionIndex] ?? "";
 
-  // Safety check - should never happen but TypeScript wants it
-  if (!currentQuestion) {
-    return null;
-  }
+  // Merge committed answers with any uncommitted custom text for the given index
+  const mergeAnswerForIndex = useCallback(
+    (i: number): string[] => {
+      const committed = answers[i] ?? [];
+      const draft = (customTexts[i] ?? "").trim();
+      if (!draft || committed.includes(draft)) return committed;
+      return [...committed, draft];
+    },
+    [answers, customTexts]
+  );
 
-  // Check if current question has an answer
-  const hasCurrentAnswer = currentAnswer.length > 0;
+  const questionHasAnswer = useCallback(
+    (i: number): boolean => {
+      return (answers[i]?.length ?? 0) > 0 || (customTexts[i] ?? "").trim().length > 0;
+    },
+    [answers, customTexts]
+  );
+
+  // Check if current question has an answer (committed OR typed-but-not-committed)
+  const hasCurrentAnswer = questionHasAnswer(currentQuestionIndex);
 
   // Check if all questions have answers
   const canSubmit = useMemo(() => {
-    return question.questions.every((_, i) => {
-      return answers[i] && answers[i].length > 0;
-    });
-  }, [question.questions, answers]);
+    return question.questions.every((_, i) => questionHasAnswer(i));
+  }, [question.questions, questionHasAnswer]);
 
   // Count answered questions for progress display
   const answeredCount = useMemo(() => {
-    return answers.filter((a) => a && a.length > 0).length;
-  }, [answers]);
+    return question.questions.reduce(
+      (acc, _, i) => acc + (questionHasAnswer(i) ? 1 : 0),
+      0
+    );
+  }, [question.questions, questionHasAnswer]);
 
   // Handle answer change for current question
   const handleAnswerChange = useCallback((newAnswer: string[]) => {
@@ -203,28 +276,49 @@ export function ClaudeQuestionCard({
     });
   }, [currentQuestionIndex]);
 
+  // Handle custom text change for current question
+  const handleCustomTextChange = useCallback((newText: string) => {
+    setCustomTexts((prev) => {
+      const updated = [...prev];
+      updated[currentQuestionIndex] = newText;
+      return updated;
+    });
+  }, [currentQuestionIndex]);
+
   // Handle next question or submit
   const handleNext = useCallback(async () => {
     if (currentQuestionIndex < questionCount - 1) {
       // Go to next question
       setCurrentQuestionIndex((prev) => prev + 1);
-    } else {
-      // Submit all answers
-      if (!canSubmit) return;
-
-      setIsSubmitting(true);
-      try {
-        const success = await answerQuestion(client, sessionId, question.id, answers);
-        if (success) {
-          removePendingQuestion(question.id);
-        }
-      } catch (error) {
-        console.error("[ClaudeQuestionCard] Failed to submit answer:", error);
-      } finally {
-        setIsSubmitting(false);
-      }
+      return;
     }
-  }, [currentQuestionIndex, questionCount, canSubmit, client, sessionId, question.id, answers, removePendingQuestion]);
+    // Submit all answers — include any uncommitted custom text so nothing is lost
+    if (!canSubmit) return;
+
+    const effectiveAnswers = question.questions.map((_, i) => mergeAnswerForIndex(i));
+
+    setIsSubmitting(true);
+    try {
+      const success = await answerQuestion(client, sessionId, question.id, effectiveAnswers);
+      if (success) {
+        removePendingQuestion(question.id);
+      }
+    } catch (error) {
+      console.error("[ClaudeQuestionCard] Failed to submit answer:", error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [
+    currentQuestionIndex,
+    questionCount,
+    canSubmit,
+    client,
+    sessionId,
+    question.id,
+    question.questions,
+    mergeAnswerForIndex,
+    removePendingQuestion,
+  ]);
 
   // Handle dismiss - just remove the question locally (server will handle timeout)
   const handleDismiss = useCallback(() => {
@@ -238,6 +332,12 @@ export function ClaudeQuestionCard({
     : isLastQuestion
       ? "Submit"
       : "Next";
+
+  // Safety check - should never happen but TypeScript wants it. Placed after
+  // all hooks to satisfy the rules-of-hooks.
+  if (!currentQuestion) {
+    return null;
+  }
 
   return (
     <div className="mx-4 my-3 rounded-lg border border-border bg-card shadow-sm overflow-hidden">
@@ -261,7 +361,7 @@ export function ClaudeQuestionCard({
       {questionCount > 1 && (
         <div className="flex items-center gap-1 px-4 py-2 border-b border-border bg-muted/20">
           {question.questions.map((q, index) => {
-            const isAnswered = answers[index] && answers[index].length > 0;
+            const isAnswered = questionHasAnswer(index);
             const isActive = index === currentQuestionIndex;
             return (
               <button
@@ -305,7 +405,9 @@ export function ClaudeQuestionCard({
           key={currentQuestionIndex}
           info={currentQuestion}
           answer={currentAnswer}
+          customText={currentCustomText}
           onAnswerChange={handleAnswerChange}
+          onCustomTextChange={handleCustomTextChange}
         />
       </div>
 

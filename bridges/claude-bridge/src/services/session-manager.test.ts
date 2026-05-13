@@ -531,6 +531,136 @@ describe("plan approval flow", () => {
   test("respondToPlanApproval returns false for unknown ids", () => {
     expect(respondToPlanApproval("missing", true)).toBe(false);
   });
+
+  test("forwards permissionMode: 'plan' to the SDK so ExitPlanMode runs in real plan mode", async () => {
+    const session = createSession("plan-mode-forwarded");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "make a plan", { permissionMode: "plan" });
+    const call = await nextQueryCall();
+
+    expect(call.options.permissionMode).toBe("plan");
+    // Real plan mode does not need allowDangerouslySkipPermissions
+    expect(call.options.allowDangerouslySkipPermissions).toBeFalsy();
+
+    call.finish();
+    await promptPromise;
+  });
+
+  test("approval is resolvable even if the UI responds before the SDK awaits the promise", async () => {
+    const session = createSession("plan-fast-approve");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "make a plan", { permissionMode: "plan" });
+    const call = await nextQueryCall();
+
+    // Kick off canUseTool but respond before awaiting it — this exercises the
+    // race where the UI's approve fires synchronously after the request event.
+    const canUseToolPromise = call.options.canUseTool!("ExitPlanMode", { plan: "ok" });
+
+    await waitFor(() => getPendingPlanApprovals(session.id).length === 1);
+    const [approval] = getPendingPlanApprovals(session.id);
+    expect(respondToPlanApproval(approval!.id, true)).toBe(true);
+
+    const result = (await canUseToolPromise) as { behavior: string };
+    expect(result.behavior).toBe("allow");
+
+    call.finish();
+    await promptPromise;
+  });
+
+  // -------------------------------------------------------------------------
+  // Defensive fallback: if the SDK fails ExitPlanMode despite an approval
+  // (e.g. SDK plan-mode regression), the bridge should rewrite the tool
+  // result to success and re-prompt Claude to continue.
+  // -------------------------------------------------------------------------
+  test("approved ExitPlanMode failure is overridden to success and triggers continuation re-prompt", async () => {
+    const session = createSession("plan-approve-but-fail");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "make a plan", { permissionMode: "plan" });
+    const call = await nextQueryCall();
+
+    call.push({
+      type: "system",
+      subtype: "init",
+      session_id: "sdk-approved-fail",
+      mcp_servers: [],
+    });
+
+    // User approves the plan via canUseTool
+    const canUseToolPromise = call.options.canUseTool!("ExitPlanMode", { plan: "ship it" });
+    await waitFor(() => getPendingPlanApprovals(session.id).length === 1);
+    const [approval] = getPendingPlanApprovals(session.id);
+    expect(respondToPlanApproval(approval!.id, true)).toBe(true);
+    const canUseToolResult = (await canUseToolPromise) as { behavior: string };
+    expect(canUseToolResult.behavior).toBe("allow");
+
+    // Simulate the SDK emitting an assistant message containing the
+    // ExitPlanMode tool_use, then a user message with a FAILED tool_result.
+    call.push({
+      type: "assistant",
+      uuid: "asst-1",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "tool-exit-1",
+            name: "ExitPlanMode",
+            input: { plan: "ship it" },
+          },
+        ],
+      },
+    });
+    call.push({
+      type: "user",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "tool-exit-1",
+            content: "Error: not in plan mode",
+            is_error: true,
+          },
+        ],
+      },
+    });
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+
+    // Bridge should have queued a continuation re-prompt — serve it.
+    const repromptCall = await nextQueryCall();
+    // The re-prompt should NOT be in plan mode (user has approved; Claude needs full tools)
+    expect(repromptCall.options.permissionMode).not.toBe("plan");
+    repromptCall.push({
+      type: "system",
+      subtype: "init",
+      session_id: "sdk-approved-fail",
+      mcp_servers: [],
+    });
+    repromptCall.push({ type: "result", subtype: "success" });
+    repromptCall.finish();
+
+    await promptPromise;
+
+    // Recursion guard: after the original sendPrompt resolves, there should be
+    // no further queued query calls. The `_isReprompt` flag on the recursive
+    // sendPrompt prevents the fallback from re-triggering on the re-prompt
+    // itself.
+    expect(pendingCalls.length).toBe(0);
+
+    // The original assistant message's ExitPlanMode tool should now show success,
+    // not the SDK's reported failure.
+    const messages = getSession(session.id)?.messages ?? [];
+    const assistantWithTool = messages.find((m) =>
+      m.role === "assistant" &&
+      m.parts.some((p) => p.toolName === "ExitPlanMode")
+    );
+    expect(assistantWithTool).toBeDefined();
+    const exitPart = assistantWithTool?.parts.find((p) => p.toolName === "ExitPlanMode");
+    expect(exitPart?.toolState).toBe("success");
+    expect(exitPart?.toolError).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

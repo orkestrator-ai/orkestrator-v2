@@ -5,12 +5,14 @@ import { ERROR_MESSAGE_PREFIX, type ClaudeMessage as ClaudeMessageType } from ".
 import { TerminalProvider, useTerminalContext } from "../../../src/contexts/TerminalContext";
 import { CLAUDE_AUTH_LOGIN_COMMAND } from "../../../src/lib/claude-auth";
 import { mockWriteText } from "../../mocks/clipboard";
+import { useFilesPanelStore } from "../../../src/stores";
 
+const mockOpenInBrowser = mock(async () => {});
 const mockReadFileBase64 = mock(async () => "local-base64");
 const mockReadContainerFileBase64 = mock(async () => "container-base64");
 
 mock.module("@/lib/tauri", () => ({
-  openInBrowser: async () => {},
+  openInBrowser: mockOpenInBrowser,
   readFileBase64: mockReadFileBase64,
   readContainerFileBase64: mockReadContainerFileBase64,
 }));
@@ -27,13 +29,15 @@ import { ClaudeMessage } from "../../../src/components/claude/ClaudeMessage";
 function TerminalContextHarness({
   children,
   createTab,
+  createFileTab,
 }: {
   children: React.ReactNode;
   createTab?: (type: "plain" | "claude" | "opencode" | "codex" | "root", options?: { initialPrompt?: string; initialCommands?: string[] }) => void;
+  createFileTab?: (filePath: string, options?: { isDiff?: boolean; gitStatus?: string }) => void;
 }) {
   return (
     <TerminalProvider>
-      <ConfigureTerminalContext createTab={createTab} />
+      <ConfigureTerminalContext createTab={createTab} createFileTab={createFileTab} />
       {children}
     </TerminalProvider>
   );
@@ -41,15 +45,22 @@ function TerminalContextHarness({
 
 function ConfigureTerminalContext({
   createTab,
+  createFileTab,
 }: {
   createTab?: (type: "plain" | "claude" | "opencode" | "codex" | "root", options?: { initialPrompt?: string; initialCommands?: string[] }) => void;
+  createFileTab?: (filePath: string, options?: { isDiff?: boolean; gitStatus?: string }) => void;
 }) {
-  const { setCreateTab } = useTerminalContext();
+  const { setCreateFileTab, setCreateTab } = useTerminalContext();
 
   useEffect(() => {
     setCreateTab(createTab ?? null);
     return () => setCreateTab(null);
   }, [createTab, setCreateTab]);
+
+  useEffect(() => {
+    setCreateFileTab(createFileTab ?? null);
+    return () => setCreateFileTab(null);
+  }, [createFileTab, setCreateFileTab]);
 
   return null;
 }
@@ -61,8 +72,11 @@ describe("ClaudeMessage", () => {
     mockReadContainerFileBase64.mockImplementation(async () => "container-base64");
     mockReadFileBase64.mockReset();
     mockReadFileBase64.mockImplementation(async () => "local-base64");
+    mockOpenInBrowser.mockReset();
+    mockOpenInBrowser.mockImplementation(async () => {});
     mockWriteText.mockReset();
     mockWriteText.mockImplementation(async () => {});
+    useFilesPanelStore.setState({ changes: [] });
   });
 
   test("renders single newlines as visible line breaks in user text", () => {
@@ -111,6 +125,271 @@ describe("ClaudeMessage", () => {
       expect(mockWriteText).toHaveBeenCalledWith("Copy this Claude response");
     });
     expect(screen.getByRole("button", { name: "Copied text" })).toBeTruthy();
+  });
+
+  test("renders thinking blocks collapsed by default while streaming", () => {
+    const message: ClaudeMessageType = {
+      id: "msg-thinking-streaming",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "thinking",
+          content: "I am mapping out the implementation details.",
+        },
+      ],
+    };
+
+    render(<ClaudeMessage message={message} isStreaming />);
+
+    const trigger = screen.getByRole("button", { name: /Thinking/i });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(trigger);
+
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  test("renders thinking blocks collapsed by default after completion", () => {
+    const message: ClaudeMessageType = {
+      id: "msg-thinking-complete",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "thinking",
+          content: "I am checking the final behavior.",
+        },
+        {
+          type: "text",
+          content: "Done.",
+        },
+      ],
+    };
+
+    render(<ClaudeMessage message={message} />);
+
+    expect(screen.getByRole("button", { name: /Thinking/i }).getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("renders system messages without the regular message header", () => {
+    const message: ClaudeMessageType = {
+      id: "msg-system",
+      role: "system",
+      content: "Session resumed from transcript.",
+      timestamp: "2026-03-07T12:00:00.000Z",
+      parts: [],
+    };
+
+    const { container } = render(<ClaudeMessage message={message} />);
+
+    expect(container.textContent).toContain("Session resumed from transcript.");
+    expect(container.textContent).not.toContain("Claude");
+    expect(container.textContent).not.toContain("You");
+  });
+
+  test("hides assistant headers for same-minute continuation messages", () => {
+    const firstMessage: ClaudeMessageType = {
+      id: "msg-assistant-first",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "text", content: "First assistant chunk." }],
+    };
+    const continuationMessage: ClaudeMessageType = {
+      id: "msg-assistant-continuation",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-03-07T12:00:30.000Z",
+      parts: [{ type: "text", content: "Continuation chunk." }],
+    };
+
+    render(
+      <>
+        <ClaudeMessage message={firstMessage} />
+        <ClaudeMessage message={continuationMessage} previousMessage={firstMessage} />
+      </>,
+    );
+
+    expect(screen.getAllByText("Claude")).toHaveLength(1);
+    expect(screen.getByText("First assistant chunk.")).toBeTruthy();
+    expect(screen.getByText("Continuation chunk.")).toBeTruthy();
+  });
+
+  test("renders standalone file parts", () => {
+    const message: ClaudeMessageType = {
+      id: "msg-file-part",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "/workspace/src/app.tsx" }],
+    };
+
+    render(<ClaudeMessage message={message} />);
+
+    expect(screen.getByText("/workspace/src/app.tsx")).toBeTruthy();
+  });
+
+  test("renders generic tool rows and expands output", () => {
+    const message: ClaudeMessageType = {
+      id: "msg-tool",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          toolName: "Read",
+          toolState: "success",
+          toolArgs: { file_path: "/workspace/src/main.ts" },
+          toolOutput: "export function main() {}",
+        },
+      ],
+    };
+
+    const { container } = render(<ClaudeMessage message={message} />);
+
+    expect(container.textContent).toContain("Read");
+    expect(container.textContent).toContain("main.ts");
+    expect(container.textContent).toContain("success");
+    expect(container.textContent).not.toContain("export function main");
+
+    fireEvent.click(screen.getByRole("button", { name: /Read/i }));
+
+    expect(container.textContent).toContain("export function main() {}");
+  });
+
+  test("renders edit tool diffs and opens them in a file tab", () => {
+    const createFileTab = mock(() => {});
+    const message: ClaudeMessageType = {
+      id: "msg-edit-tool",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          toolName: "Edit",
+          toolState: "success",
+          toolOutput: "@@ -1 +1 @@\n-old value\n+new value",
+          toolDiff: {
+            filePath: "/workspace/src/config.ts",
+            additions: 1,
+            deletions: 1,
+          },
+        },
+      ],
+    };
+
+    const { container } = render(
+      <TerminalContextHarness createFileTab={createFileTab}>
+        <ClaudeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+
+    expect(container.textContent).toContain("Edit");
+    expect(container.textContent).toContain("config.ts");
+    expect(container.textContent).toContain("+1");
+    expect(container.textContent).toContain("-1");
+
+    fireEvent.click(screen.getByRole("button", { name: /Edit/i }));
+
+    expect(container.textContent).toContain("-old value");
+    expect(container.textContent).toContain("+new value");
+
+    fireEvent.click(screen.getByTitle("Open diff in new tab"));
+
+    expect(createFileTab).toHaveBeenCalledWith("/workspace/src/config.ts", {
+      isDiff: true,
+      gitStatus: "M",
+    });
+  });
+
+  test("renders task groups with child tools", () => {
+    const message: ClaudeMessageType = {
+      id: "msg-task-tool",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          toolName: "Task",
+          toolState: "success",
+          toolUseId: "task-1",
+          toolArgs: { description: "Inspect implementation" },
+        },
+        {
+          type: "tool-invocation",
+          toolName: "Bash",
+          toolState: "success",
+          toolUseId: "tool-1",
+          parentTaskUseId: "task-1",
+          toolArgs: { command: "bun test tests/unit/components/ClaudeMessage.test.tsx" },
+          toolOutput: "1 pass",
+        },
+      ],
+    };
+
+    const { container } = render(<ClaudeMessage message={message} />);
+
+    expect(container.textContent).toContain("Task");
+    expect(container.textContent).toContain("Inspect implementation");
+    expect(container.textContent).toContain("1 tool");
+    expect(container.textContent).not.toContain("Bash");
+
+    fireEvent.click(screen.getByRole("button", { name: /Task/i }));
+
+    expect(container.textContent).toContain("Bash");
+    expect(container.textContent).toContain("bun test tests/unit/components/ClaudeMessage.test.tsx");
+    expect(container.textContent).not.toContain("1 pass");
+
+    fireEvent.click(screen.getByRole("button", { name: /Bash/i }));
+
+    expect(container.textContent).toContain("1 pass");
+  });
+
+  test("opens markdown file mentions and external links through the right handlers", () => {
+    const createFileTab = mock(() => {});
+    useFilesPanelStore.setState({
+      changes: [
+        {
+          path: "src/changed.ts",
+          status: "M",
+          additions: 2,
+          deletions: 1,
+        },
+      ],
+    });
+    const message: ClaudeMessageType = {
+      id: "msg-links",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "text",
+          content: "Open [@src/changed.ts](src/changed.ts) and [docs](https://example.com/docs).",
+        },
+      ],
+    };
+
+    render(
+      <TerminalContextHarness createFileTab={createFileTab}>
+        <ClaudeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+
+    fireEvent.click(screen.getByText("src/changed.ts"));
+    expect(createFileTab).toHaveBeenCalledWith("src/changed.ts", {
+      isDiff: true,
+      gitStatus: "M",
+    });
+
+    fireEvent.click(screen.getByRole("link", { name: "docs" }));
+    expect(mockOpenInBrowser).toHaveBeenCalledWith("https://example.com/docs");
   });
 
   test("shows a Claude auth login action for authentication failures", () => {

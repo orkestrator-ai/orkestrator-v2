@@ -1,4 +1,4 @@
-import { memo, useCallback, useState, useMemo, useRef, useEffect, type AnchorHTMLAttributes } from "react";
+import { memo, useCallback, useState, useMemo, useEffect, type AnchorHTMLAttributes } from "react";
 import { createPortal } from "react-dom";
 import { Brain, FileText, ChevronRight, Wrench, AlertCircle, Pencil, ExternalLink as ExternalLinkIcon, Layers, Image as ImageIcon, X, Plug, FileCode } from "lucide-react";
 import { type Components } from "react-markdown";
@@ -192,23 +192,14 @@ interface ClaudeMessageProps {
   containerId?: string;
 }
 
-/** Render a thinking/reasoning part - collapsible after response completes */
-function ThinkingPart({ content, isComplete }: { content: string; isComplete: boolean }) {
-  // Start expanded while thinking, collapse when complete
-  const [isOpen, setIsOpen] = useState(!isComplete);
+const TOOL_ROW_CLASS =
+  "flex h-9 w-full items-center gap-2 rounded-md px-3 text-xs leading-none text-muted-foreground transition-colors";
+const TOOL_ROW_ICON_CLASS = "h-3.5 w-3.5 shrink-0";
+const TOOL_ROW_CHEVRON_CLASS = "h-3 w-3 shrink-0 transition-transform";
 
-  // Track previous isComplete value to detect changes
-  const prevIsCompleteRef = useRef(isComplete);
-
-  // Auto-collapse when response completes (isComplete changes from false to true)
-  // But don't auto-expand if user manually collapsed
-  useEffect(() => {
-    // Only collapse when transitioning from incomplete to complete
-    if (isComplete && !prevIsCompleteRef.current) {
-      setIsOpen(false);
-    }
-    prevIsCompleteRef.current = isComplete;
-  }, [isComplete]);
+/** Render a thinking/reasoning part */
+function ThinkingPart({ content }: { content: string }) {
+  const [isOpen, setIsOpen] = useState(false);
 
   // Get truncated preview of thinking content for collapsed state
   const thinkingPreview = useMemo(() => {
@@ -223,17 +214,22 @@ function ThinkingPart({ content, isComplete }: { content: string; isComplete: bo
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="mb-3">
-      <CollapsibleTrigger className="flex items-center gap-1.5 text-xs text-muted-foreground w-full py-2 px-3 bg-muted/30 rounded-md hover:bg-muted/50 transition-colors cursor-pointer">
+      <CollapsibleTrigger
+        className={cn(
+          TOOL_ROW_CLASS,
+          "bg-muted/30 hover:bg-muted/50 cursor-pointer",
+        )}
+      >
         <ChevronRight
           className={cn(
-            "w-3 h-3 transition-transform shrink-0",
+            TOOL_ROW_CHEVRON_CLASS,
             isOpen && "rotate-90"
           )}
         />
-        <Brain className="w-3 h-3 shrink-0" />
-        <span className="font-medium shrink-0">Thinking</span>
+        <Brain className={TOOL_ROW_ICON_CLASS} />
+        <span className="font-medium shrink-0 leading-none">Thinking</span>
         {!isOpen && thinkingPreview && (
-          <span className="text-muted-foreground/60 truncate flex-1 text-left">
+          <span className="text-muted-foreground/60 truncate flex-1 text-left leading-none">
             {thinkingPreview}
           </span>
         )}
@@ -359,7 +355,7 @@ function ToolPart({
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
       <CollapsibleTrigger
         className={cn(
-          "flex items-center gap-2 w-full text-xs text-muted-foreground py-2 px-3 rounded-md transition-colors",
+          TOOL_ROW_CLASS,
           isMcpTool ? "bg-violet-500/10 hover:bg-violet-500/20" : "bg-muted/50 hover:bg-muted/70",
           hasExpandableContent && "cursor-pointer",
           !hasExpandableContent && "cursor-default"
@@ -368,34 +364,34 @@ function ToolPart({
       >
         <ChevronRight
           className={cn(
-            "w-3 h-3 transition-transform shrink-0",
+            TOOL_ROW_CHEVRON_CLASS,
             isOpen && "rotate-90",
             !hasExpandableContent && "opacity-0"
           )}
         />
         {isMcpTool ? (
-          <Plug className="w-3.5 h-3.5 shrink-0 text-violet-500" />
+          <Plug className={cn(TOOL_ROW_ICON_CLASS, "text-violet-500")} />
         ) : (
-          <Wrench className="w-3.5 h-3.5 shrink-0" />
+          <Wrench className={TOOL_ROW_ICON_CLASS} />
         )}
-        <span className={cn("font-medium", isMcpTool && "text-violet-400")}>{toolName || "Unknown tool"}</span>
+        <span className={cn("font-medium leading-none", isMcpTool && "text-violet-400")}>{toolName || "Unknown tool"}</span>
         {isMcpTool && mcpServerName && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-400 shrink-0" title={`MCP server: ${mcpServerName}`}>
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-400 shrink-0 leading-none" title={`MCP server: ${mcpServerName}`}>
             MCP
           </span>
         )}
         {displayInfo && (
-          <span className="font-mono text-muted-foreground/80 truncate flex-1 text-left">
+          <span className="font-mono text-muted-foreground/80 truncate flex-1 text-left leading-none">
             {displayInfo}
           </span>
         )}
         {toolTitle && !displayInfo && (
-          <span className="text-muted-foreground/70 truncate flex-1 text-left">
+          <span className="text-muted-foreground/70 truncate flex-1 text-left leading-none">
             {toolTitle}
           </span>
         )}
         {toolState && (
-          <span className={cn("ml-auto shrink-0", TOOL_STATE_COLORS[toolState] || "")}>
+          <span className={cn("ml-auto shrink-0 leading-none", TOOL_STATE_COLORS[toolState] || "")}>
             {toolState === "pending" ? "running..." : toolState}
           </span>
         )}
@@ -618,7 +614,8 @@ function EditToolPart({
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
       <CollapsibleTrigger
         className={cn(
-          "flex items-center gap-2 w-full text-xs text-muted-foreground py-2 px-3 bg-muted/50 rounded-md hover:bg-muted/70 transition-colors",
+          TOOL_ROW_CLASS,
+          "bg-muted/50 hover:bg-muted/70",
           hasExpandableContent && "cursor-pointer",
           !hasExpandableContent && "cursor-default"
         )}
@@ -626,26 +623,26 @@ function EditToolPart({
       >
         <ChevronRight
           className={cn(
-            "w-3 h-3 transition-transform shrink-0",
+            TOOL_ROW_CHEVRON_CLASS,
             isOpen && "rotate-90",
             !hasExpandableContent && "opacity-0"
           )}
         />
-        <Pencil className="w-3.5 h-3.5 shrink-0" />
-        <span className="font-medium">{toolName || "edit"}</span>
+        <Pencil className={TOOL_ROW_ICON_CLASS} />
+        <span className="font-medium leading-none">{toolName || "edit"}</span>
         {fileName && (
-          <span className="font-mono text-muted-foreground/80 truncate flex-1 text-left">
+          <span className="font-mono text-muted-foreground/80 truncate flex-1 text-left leading-none">
             {fileName}
           </span>
         )}
         {toolTitle && !fileName && (
-          <span className="text-muted-foreground/70 truncate flex-1 text-left">
+          <span className="text-muted-foreground/70 truncate flex-1 text-left leading-none">
             {toolTitle}
           </span>
         )}
         {/* Line count stats - shown after filename */}
         {(additions > 0 || deletions > 0) && (
-          <span className="flex items-center gap-1 shrink-0">
+          <span className="flex items-center gap-1 shrink-0 leading-none">
             {additions > 0 && (
               <span className="text-green-500 font-mono">+{additions}</span>
             )}
@@ -655,7 +652,7 @@ function EditToolPart({
           </span>
         )}
         {toolState && (
-          <span className={cn("ml-auto shrink-0", TOOL_STATE_COLORS[toolState] || "")}>
+          <span className={cn("ml-auto shrink-0 leading-none", TOOL_STATE_COLORS[toolState] || "")}>
             {toolState === "pending" ? "running..." : toolState}
           </span>
         )}
@@ -762,7 +759,8 @@ function TaskToolPart({
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
       <CollapsibleTrigger
         className={cn(
-          "flex items-center gap-2 w-full text-xs text-muted-foreground py-2 px-3 bg-muted/50 rounded-md hover:bg-muted/70 transition-colors",
+          TOOL_ROW_CLASS,
+          "bg-muted/50 hover:bg-muted/70",
           hasExpandableContent && "cursor-pointer",
           !hasExpandableContent && "cursor-default"
         )}
@@ -770,26 +768,26 @@ function TaskToolPart({
       >
         <ChevronRight
           className={cn(
-            "w-3 h-3 transition-transform shrink-0",
+            TOOL_ROW_CHEVRON_CLASS,
             isOpen && "rotate-90",
             !hasExpandableContent && "opacity-0"
           )}
         />
-        <Layers className="w-3.5 h-3.5 shrink-0" />
-        <span className="font-medium shrink-0">{toolName || "Task"}</span>
+        <Layers className={TOOL_ROW_ICON_CLASS} />
+        <span className="font-medium shrink-0 leading-none">{toolName || "Task"}</span>
         {description && (
-          <span className="text-muted-foreground/80 truncate flex-1 text-left">
+          <span className="text-muted-foreground/80 truncate flex-1 text-left leading-none">
             {description}
           </span>
         )}
         {/* Tool count badge */}
         {toolCount > 0 && (
-          <span className="ml-auto shrink-0 px-1.5 py-0.5 rounded bg-muted text-muted-foreground/70 font-mono text-[10px]">
+          <span className="ml-auto shrink-0 px-1.5 py-0.5 rounded bg-muted text-muted-foreground/70 font-mono text-[10px] leading-none">
             {toolCount} tool{toolCount !== 1 ? "s" : ""}
           </span>
         )}
         {toolState && (
-          <span className={cn("shrink-0", TOOL_STATE_COLORS[toolState] || "")}>
+          <span className={cn("shrink-0 leading-none", TOOL_STATE_COLORS[toolState] || "")}>
             {toolState === "pending" ? "running..." : toolState}
           </span>
         )}
@@ -895,7 +893,7 @@ function ChildToolPart({ part }: { part: ClaudeMessagePart }) {
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0.5">
       <CollapsibleTrigger
         className={cn(
-          "flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded transition-colors",
+          "flex h-8 w-full items-center gap-2 rounded px-2 text-xs leading-none text-muted-foreground transition-colors",
           isMcpTool ? "bg-violet-500/10 hover:bg-violet-500/20" : "bg-muted/30 hover:bg-muted/50",
           hasExpandableContent && "cursor-pointer",
           !hasExpandableContent && "cursor-default"
@@ -904,25 +902,25 @@ function ChildToolPart({ part }: { part: ClaudeMessagePart }) {
       >
         <ChevronRight
           className={cn(
-            "w-2.5 h-2.5 transition-transform shrink-0",
+            "h-2.5 w-2.5 shrink-0 transition-transform",
             isOpen && "rotate-90",
             !hasExpandableContent && "opacity-0"
           )}
         />
-        <ToolIcon className={cn("w-3 h-3 shrink-0", isMcpTool && "text-violet-500")} />
-        <span className={cn("font-medium shrink-0", isMcpTool && "text-violet-400")}>{toolName || "Unknown"}</span>
+        <ToolIcon className={cn("h-3 w-3 shrink-0", isMcpTool && "text-violet-500")} />
+        <span className={cn("font-medium shrink-0 leading-none", isMcpTool && "text-violet-400")}>{toolName || "Unknown"}</span>
         {isMcpTool && (
-          <span className="text-[9px] px-1 py-0.5 rounded bg-violet-500/20 text-violet-400 shrink-0" title={mcpServerName ? `MCP server: ${mcpServerName}` : "MCP tool"}>
+          <span className="text-[9px] px-1 py-0.5 rounded bg-violet-500/20 text-violet-400 shrink-0 leading-none" title={mcpServerName ? `MCP server: ${mcpServerName}` : "MCP tool"}>
             MCP
           </span>
         )}
         {displayInfo && (
-          <span className="font-mono text-muted-foreground/70 truncate flex-1 text-left text-[11px]">
+          <span className="font-mono text-muted-foreground/70 truncate flex-1 text-left text-[11px] leading-none">
             {displayInfo}
           </span>
         )}
         {toolState && (
-          <span className={cn("ml-auto shrink-0", TOOL_STATE_COLORS[toolState] || "")}>
+          <span className={cn("ml-auto shrink-0 leading-none", TOOL_STATE_COLORS[toolState] || "")}>
             {toolState === "pending" ? "..." : toolState}
           </span>
         )}
@@ -1167,7 +1165,6 @@ function TextPart({ content }: { content: string }) {
 export const ClaudeMessage = memo(function ClaudeMessage({
   message,
   previousMessage = null,
-  isStreaming = false,
   containerId,
 }: ClaudeMessageProps) {
   const terminalContext = useOptionalTerminalContext();
@@ -1196,11 +1193,6 @@ export const ClaudeMessage = memo(function ClaudeMessage({
     () => processPartsInOrder(message.parts),
     [message.parts]
   );
-
-  // Thinking is "complete" only when the turn has finished streaming AND text has appeared.
-  // During active streaming, keep thinking blocks expanded so they don't flash/disappear.
-  const hasTextParts = message.parts.some((p) => p.type === "text");
-  const thinkingComplete = hasTextParts && !isStreaming;
 
   // Render error messages with special styling
   if (isError) {
@@ -1261,7 +1253,6 @@ export const ClaudeMessage = memo(function ClaudeMessage({
                   <ThinkingPart
                     key={`thinking-${i}`}
                     content={processed.part?.content || ""}
-                    isComplete={thinkingComplete}
                   />
                 );
               case "text":

@@ -42,7 +42,7 @@ export function TodoToolPart({
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
       <CollapsibleTrigger
         className={cn(
-          "flex w-full items-center gap-2 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-muted/70",
+          "flex h-9 w-full items-center gap-2 rounded-md bg-muted/50 px-3 text-xs leading-none text-muted-foreground transition-colors hover:bg-muted/70",
           hasExpandableContent ? "cursor-pointer" : "cursor-default",
         )}
         disabled={!hasExpandableContent}
@@ -55,17 +55,17 @@ export function TodoToolPart({
           )}
         />
         <ListTodo className="h-3.5 w-3.5 shrink-0" />
-        <span className="shrink-0 font-medium">
+        <span className="shrink-0 font-medium leading-none">
           {toolName === "todo_list" ? "Todo List" : toolName || "TodoWrite"}
         </span>
         {totalCount > 0 && (
-          <span className="flex-1 text-left text-muted-foreground/80">
+          <span className="flex-1 text-left text-muted-foreground/80 leading-none">
             {completedCount}/{totalCount} complete
             {cancelledCount > 0 ? ` (${cancelledCount} cancelled)` : ""}
           </span>
         )}
         {toolState && (
-          <span className={cn("ml-auto shrink-0", TOOL_STATE_COLORS[toolState] || "")}>
+          <span className={cn("ml-auto shrink-0 leading-none", TOOL_STATE_COLORS[toolState] || "")}>
             {toolState === "pending" ? "running..." : toolState}
           </span>
         )}

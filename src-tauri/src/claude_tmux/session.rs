@@ -128,11 +128,7 @@ impl TmuxSession {
         let is_resume = resume_session_id.is_some();
         let session_id = resume_session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
 
-        let tmux_session = format!(
-            "orkestrator-{}-{}",
-            short_id(&environment_id),
-            short_id(&tab_id),
-        );
+        let tmux_session = tmux_session_name(&environment_id, &tab_id);
 
         // Workspace runtime dir is per-env; multiple tabs share it. The
         // hook script (one per workspace) routes events into the right
@@ -629,8 +625,19 @@ impl TmuxSession {
     }
 }
 
-fn short_id(id: &str) -> String {
+pub fn short_id(id: &str) -> String {
     id.chars().take(12).collect::<String>().replace('-', "")
+}
+
+/// Compute the deterministic tmux session name for a given (env, tab) pair.
+/// Exposed so callers that need to act on the session (e.g. force-kill on
+/// "Start fresh") can do so without first instantiating a `TmuxSession`.
+pub fn tmux_session_name(environment_id: &str, tab_id: &str) -> String {
+    format!(
+        "orkestrator-{}-{}",
+        short_id(environment_id),
+        short_id(tab_id),
+    )
 }
 
 fn shell_arg(s: &str) -> String {
@@ -676,6 +683,22 @@ mod tests {
         assert_eq!(id.len(), 11);
         assert!(!id.contains('-'));
         assert!("a33f9026-8cfe".starts_with(&id[..4]));
+    }
+
+    #[test]
+    fn tmux_session_name_matches_build_output() {
+        let tmp = TempDir::new().unwrap();
+        let s = build(&tmp, "env-xyz", "tab-abc", None);
+        assert_eq!(s.tmux_session, tmux_session_name("env-xyz", "tab-abc"));
+        // Distinct (env, tab) pairs yield distinct names.
+        assert_ne!(
+            tmux_session_name("env-xyz", "tab-abc"),
+            tmux_session_name("env-xyz", "tab-other"),
+        );
+        assert_ne!(
+            tmux_session_name("env-xyz", "tab-abc"),
+            tmux_session_name("env-other", "tab-abc"),
+        );
     }
 
     #[test]

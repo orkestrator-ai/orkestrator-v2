@@ -35,6 +35,7 @@ pub enum HookEventKind {
     PostToolUse,
     UserPromptSubmit,
     Stop,
+    SubagentStop,
     Notification,
     SessionStart,
 }
@@ -46,6 +47,7 @@ impl HookEventKind {
             "PostToolUse" => HookEventKind::PostToolUse,
             "UserPromptSubmit" => HookEventKind::UserPromptSubmit,
             "Stop" => HookEventKind::Stop,
+            "SubagentStop" => HookEventKind::SubagentStop,
             "Notification" => HookEventKind::Notification,
             "SessionStart" => HookEventKind::SessionStart,
             _ => return None,
@@ -245,6 +247,7 @@ pub fn hooks_block(hook_script_path: &str) -> Value {
         "PostToolUse":      [mk("PostToolUse")],
         "UserPromptSubmit": [mk_no_matcher("UserPromptSubmit")],
         "Stop":             [mk_no_matcher("Stop")],
+        "SubagentStop":     [mk_no_matcher("SubagentStop")],
         "Notification":     [mk_no_matcher("Notification")],
         "SessionStart":     [mk_no_matcher("SessionStart")]
     })
@@ -540,6 +543,7 @@ mod tests {
             "PostToolUse",
             "UserPromptSubmit",
             "Stop",
+            "SubagentStop",
             "Notification",
             "SessionStart",
         ] {
@@ -594,6 +598,7 @@ mod tests {
             HookEventKind::PostToolUse,
             HookEventKind::UserPromptSubmit,
             HookEventKind::Stop,
+            HookEventKind::SubagentStop,
             HookEventKind::Notification,
             HookEventKind::SessionStart,
         ] {

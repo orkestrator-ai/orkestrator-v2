@@ -50,6 +50,15 @@ interface TmuxTabState {
   infoEvents: TmuxInfoEvent[];
   /** True if this tab is replaying a previously-recorded session. */
   resumed: boolean;
+  /**
+   * True while we believe Claude is mid-turn (between a `UserPromptSubmit`
+   * hook — or an optimistic flip on local submit — and the next `Stop` or
+   * `SubagentStop` hook). Drives the "Claude is thinking…" indicator,
+   * mirroring native mode's `session.isLoading`.
+   */
+  busy: boolean;
+  /** Wall-clock when busy flipped to true, for the elapsed counter. */
+  busyStartedAt: number | null;
 }
 
 const emptyTabState = (): TmuxTabState => ({
@@ -60,6 +69,8 @@ const emptyTabState = (): TmuxTabState => ({
   pendingApprovals: [],
   infoEvents: [],
   resumed: false,
+  busy: false,
+  busyStartedAt: null,
 });
 
 interface ClaudeTmuxState {
@@ -80,6 +91,7 @@ interface ClaudeTmuxState {
   removePendingApproval: (tabId: string, eventId: string) => void;
   pushInfoEvent: (tabId: string, event: TmuxInfoEvent) => void;
   dismissInfoEvent: (tabId: string, id: string) => void;
+  setBusy: (tabId: string, busy: boolean) => void;
 
   getTab: (tabId: string) => TmuxTabState;
 }
@@ -152,6 +164,18 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
         ...s,
         infoEvents: s.infoEvents.filter((e) => e.id !== id),
       })),
+    ),
+
+  setBusy: (tabId, busy) =>
+    set((state) =>
+      patchTab(state, tabId, (s) => {
+        if (s.busy === busy) return s;
+        return {
+          ...s,
+          busy,
+          busyStartedAt: busy ? Date.now() : null,
+        };
+      }),
     ),
 
   getTab: (tabId) => get().tabs.get(tabId) ?? emptyTabState(),

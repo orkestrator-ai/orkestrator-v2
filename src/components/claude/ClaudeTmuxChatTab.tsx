@@ -14,6 +14,7 @@ import {
   Check,
   ChevronDown,
   History,
+  Loader2,
   Plus,
   Sparkles,
   Square,
@@ -29,6 +30,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ClaudeMessage } from "@/components/claude/ClaudeMessage";
 import { ResumeTmuxSessionDialog } from "@/components/claude/ResumeTmuxSessionDialog";
+import { formatElapsed } from "@/lib/format-elapsed";
 import {
   parseSlashCommands,
   SlashCommandMenu,
@@ -122,10 +124,11 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
   const removePendingApproval = useClaudeTmuxStore((s) => s.removePendingApproval);
   const pushInfoEvent = useClaudeTmuxStore((s) => s.pushInfoEvent);
   const dismissInfoEvent = useClaudeTmuxStore((s) => s.dismissInfoEvent);
+  const setTabBusy = useClaudeTmuxStore((s) => s.setBusy);
   const clearTabInitialPrompt = usePaneLayoutStore((s) => s.clearTabInitialPrompt);
 
   const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showTui, setShowTui] = useState(false);
   const [tuiSnapshot, setTuiSnapshot] = useState<string>("");
@@ -159,17 +162,40 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
           return;
         case "stopped":
           setRunning(tabId, false, { sessionId: null });
+          // No claude process means no in-flight turn.
+          setTabBusy(tabId, false);
           return;
         case "transcript-line":
           applyTranscriptLine(tabId, ev.line);
           break;
         case "hook":
+          // Drive the "Claude is thinking…" indicator from the same hook
+          // events Claude Code emits for the agent lifecycle. We rely on
+          // UserPromptSubmit/Stop here rather than transcript content so
+          // tool-call turns (no final text) still clear the spinner.
+          // SubagentStop fires when a Task-tool subagent finishes; we treat
+          // it as the same end-of-turn signal so subagent-only turns still
+          // clear the spinner.
+          if (ev.event_kind === "UserPromptSubmit") {
+            setTabBusy(tabId, true);
+          } else if (
+            ev.event_kind === "Stop" ||
+            ev.event_kind === "SubagentStop"
+          ) {
+            setTabBusy(tabId, false);
+          }
           if (ev.event_kind === "PreToolUse") {
             addPendingApproval(
               tabId,
               payloadToApproval(ev.event_id, ev.payload),
             );
-          } else {
+          } else if (
+            // Lifecycle hooks are consumed for busy-state only; surfacing
+            // them as visible "info" rows is noise.
+            ev.event_kind !== "UserPromptSubmit" &&
+            ev.event_kind !== "Stop" &&
+            ev.event_kind !== "SubagentStop"
+          ) {
             pushInfoEvent(
               tabId,
               payloadToInfoEvent(ev.event_id, ev.event_kind, ev.payload),
@@ -205,6 +231,7 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
     addPendingApproval,
     removePendingApproval,
     pushInfoEvent,
+    setTabBusy,
   ]);
 
   // Common "start the tmux session" path used by both auto-start (initial
@@ -282,16 +309,26 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
 
   const handleSubmit = async () => {
     const text = draft.trim();
-    if (!text || busy) return;
-    setBusy(true);
+    // `isThinking` covers the post-HTTP window where Claude is still
+    // processing but `sending` has already reset; without it a user could
+    // submit a second message before the first turn finishes.
+    if (!text || sending || isThinking) return;
+    setSending(true);
     setError(null);
+    // Optimistically flip the "Claude is thinking…" indicator on submit so
+    // the user gets instant feedback; the UserPromptSubmit hook will confirm
+    // it shortly after, and the Stop hook (handled in the subscription
+    // above) clears it when the turn ends.
+    setTabBusy(tabId, true);
     try {
       await submitToTmux(tabId, text);
       setDraft("");
     } catch (e) {
       setError(String(e));
+      // The submit failed before claude saw it — there's no Stop coming.
+      setTabBusy(tabId, false);
     } finally {
-      setBusy(false);
+      setSending(false);
     }
   };
 
@@ -318,8 +355,25 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
   const infoEvents = tabState?.infoEvents ?? [];
   const running = tabState?.running ?? false;
   const resumedSession = tabState?.resumed ?? false;
+  const isThinking = tabState?.busy ?? false;
+  const busyStartedAt = tabState?.busyStartedAt ?? null;
   const hasStarted = startedRef.current || running;
   const showStartScreen = !hasStarted && !hasInitialPrompt;
+
+  // Tick once a second while the spinner is visible so the elapsed counter
+  // updates. Mirrors the native tab's behavior.
+  const [elapsedSeconds, setElapsedSeconds] = useState<number | null>(null);
+  useEffect(() => {
+    if (!isThinking || busyStartedAt === null) {
+      setElapsedSeconds(null);
+      return;
+    }
+    const update = () =>
+      setElapsedSeconds(Math.floor((Date.now() - busyStartedAt) / 1000));
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [isThinking, busyStartedAt]);
 
   return (
     <div className="@container flex flex-col h-full bg-background overflow-hidden">
@@ -454,12 +508,33 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
         </div>
       </div>
 
-      {/* Compose bar */}
+      {/* "Claude is thinking…" indicator — matches the native tab so the UI
+          looks the same between modes. Shown only while running so a freshly
+          mounted tab without a session doesn't flash a misleading spinner. */}
+      {isThinking && running && (
+        <div className="shrink-0 px-2 @sm:px-4 py-2 border-t border-border/40">
+          <div className="max-w-3xl mx-auto min-w-0">
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span className="text-xs">Claude is thinking...</span>
+              {elapsedSeconds !== null && elapsedSeconds > 0 && (
+                <span className="text-xs text-muted-foreground/50">
+                  {formatElapsed(elapsedSeconds)}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Compose bar — stays "busy" for the full turn (HTTP submit + Claude
+          processing) so a user can't queue a second message before the
+          previous one finishes. Mirrors the spinner condition above. */}
       <TmuxComposeBar
         value={draft}
         setValue={setDraft}
         disabled={!running}
-        busy={busy}
+        busy={sending || isThinking}
         autoFocus={isActive}
         onSubmit={handleSubmit}
         selectedModel={selectedModel}
@@ -717,12 +792,13 @@ function TmuxComposeBar({
           <Plus className="w-4 h-4" />
         </button>
 
-        {/* Model picker */}
+        {/* Model picker — selectable before launch even while compose is
+            disabled, so users can pre-pick from the start screen. */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
-              disabled={disabled || settingsLocked}
-              className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+              disabled={settingsLocked}
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-60"
               title={
                 settingsLocked
                   ? "Model is fixed for this tmux session"
@@ -765,8 +841,8 @@ function TmuxComposeBar({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
-              disabled={disabled || settingsLocked}
-              className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+              disabled={settingsLocked}
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-60"
               title={
                 settingsLocked
                   ? "Plan mode is fixed for this tmux session"

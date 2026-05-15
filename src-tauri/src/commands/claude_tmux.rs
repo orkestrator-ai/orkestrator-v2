@@ -6,7 +6,7 @@ use crate::claude_tmux::{
     backend::Backend,
     get_manager,
     hooks,
-    session::{TmuxSession, TmuxSessionStatus},
+    session::{tmux_session_name, TmuxSession, TmuxSessionStatus},
     transcript::{self, PreviousSessionInfo},
 };
 use crate::models::EnvironmentType;
@@ -95,6 +95,37 @@ pub async fn claude_tmux_start(
         resume = ?resume_session_id,
         "claude_tmux_start"
     );
+
+    // "Start fresh" semantics: when no resume id was supplied, the caller is
+    // asking for a brand-new conversation. Drop any in-memory session for
+    // this tab and force-kill the per-tab tmux session before launching, so
+    // a stale tmux server (e.g. from a prior app run) can't leave claude
+    // running with the previous model/plan flags. The tmux name is derived
+    // strictly from (env_id, tab_id) — never matches another tab or project.
+    if resume_session_id.is_none() {
+        let mgr = get_manager();
+        if let Some(existing) = mgr.remove(&tab_id).await {
+            if let Err(e) = existing.stop().await {
+                tracing::warn!(tab = %tab_id, error = %e, "stop of prior tmux session failed");
+            }
+        } else {
+            match resolve_backend(&environment_id) {
+                Ok(backend) => {
+                    let name = tmux_session_name(&environment_id, &tab_id);
+                    let _ = backend.exec(&["tmux", "kill-session", "-t", &name]).await;
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        environment_id = %environment_id,
+                        tab = %tab_id,
+                        error = %e,
+                        "skipping orphan tmux kill: backend unresolved"
+                    );
+                }
+            }
+        }
+    }
+
     let session = get_or_create(&environment_id, &tab_id, resume_session_id).await?;
     session
         .clone()

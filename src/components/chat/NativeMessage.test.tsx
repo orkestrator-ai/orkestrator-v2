@@ -118,6 +118,7 @@ describe("NativeMessage task list rendering", () => {
 
     const copyButton = screen.getByRole("button", { name: "Copy text" });
     expect(copyButton.textContent).toBe("");
+    expect(copyButton.parentElement?.className).toContain("pr-3");
 
     fireEvent.click(copyButton);
 
@@ -125,6 +126,31 @@ describe("NativeMessage task list rendering", () => {
       expect(mockWriteText).toHaveBeenCalledWith("Copy this answer");
     });
     expect(screen.getByRole("button", { name: "Copied text" })).toBeTruthy();
+  });
+
+  test("adds lead-in spacing to text after visible tool activity", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName: "Bash",
+        toolState: "success",
+      },
+      {
+        type: "tool-result",
+        content: "",
+      },
+      {
+        type: "text",
+        content: "Text after tool",
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    const text = screen.getByText("Text after tool");
+    const markdownWrapper = text.closest(".prose");
+    expect(markdownWrapper?.parentElement?.className).toContain("pt-2");
   });
 
   test("shows an error toast when copying text fails", async () => {

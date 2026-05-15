@@ -128,6 +128,227 @@ describe("NativeMessage", () => {
     expect(secondTextIndex).toBeGreaterThan(fileIndex);
   });
 
+  test("adds lead-in spacing after subagents and for fallback text after tools", () => {
+    const subagentMessage: NativeMessageType = {
+      id: "msg-subagent-lead-in",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "subagent",
+          content: "Lovelace",
+          subagentId: "agent-1",
+          subagentName: "Lovelace",
+          subagentRole: "explorer",
+          subagentActionCount: 1,
+          toolState: "success",
+          subagentActions: [
+            {
+              type: "tool-invocation",
+              content: "exec_command",
+              toolName: "exec_command",
+              toolState: "success",
+            },
+            {
+              type: "tool-result",
+              content: "done",
+            },
+            {
+              type: "text",
+              content: "Child text after tool",
+            },
+          ],
+        },
+        { type: "text", content: "Top-level text after subagent" },
+      ],
+    };
+
+    const { unmount } = render(<NativeMessage message={subagentMessage} />);
+
+    const topLevelText = screen.getByText("Top-level text after subagent");
+    expect(topLevelText.closest(".prose")?.parentElement?.className).toContain(
+      "pt-2",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /lovelace/i }));
+    const childText = screen
+      .getAllByText("Child text after tool")
+      .find((element) => element.closest(".prose"));
+    expect(childText).toBeTruthy();
+    expect(childText!.closest(".prose")?.parentElement?.className).toContain(
+      "pt-2",
+    );
+
+    unmount();
+
+    const fallbackMessage: NativeMessageType = {
+      id: "msg-fallback-lead-in",
+      role: "assistant",
+      content: "Fallback text after tool",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Read",
+          toolState: "success",
+        },
+        {
+          type: "tool-result",
+          content: "done",
+        },
+      ],
+    };
+
+    render(<NativeMessage message={fallbackMessage} />);
+
+    const fallbackText = screen.getByText("Fallback text after tool");
+    expect(fallbackText.closest(".prose")?.parentElement?.className).toContain(
+      "pt-2",
+    );
+  });
+
+  test("renders system and error messages distinctly and compacts continuations", () => {
+    const systemMessage: NativeMessageType = {
+      id: "system-naming-1",
+      role: "assistant",
+      content: "Generated environment name",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [],
+    };
+
+    const { container, rerender } = render(
+      <NativeMessage message={systemMessage} />,
+    );
+
+    expect(screen.getByText("Generated environment name")).toBeTruthy();
+    expect(container.querySelector(".italic")).toBeTruthy();
+    expect(screen.queryByText("Assistant")).toBeNull();
+
+    const errorMessage: NativeMessageType = {
+      id: "error-session-1",
+      role: "assistant",
+      content: "Bridge unavailable",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [],
+    };
+
+    rerender(<NativeMessage message={errorMessage} />);
+
+    expect(screen.getByText("Bridge unavailable")).toBeTruthy();
+    expect(container.querySelector(".text-destructive")).toBeTruthy();
+    expect(screen.queryByText("Assistant")).toBeNull();
+
+    const previousMessage: NativeMessageType = {
+      id: "assistant-previous",
+      role: "assistant",
+      content: "Previous response",
+      createdAt: "2026-03-07T12:00:15.000Z",
+      parts: [{ type: "text", content: "Previous response" }],
+    };
+    const continuationMessage: NativeMessageType = {
+      id: "assistant-continuation",
+      role: "assistant",
+      content: "Continuation response",
+      createdAt: "2026-03-07T12:00:45.000Z",
+      parts: [{ type: "text", content: "Continuation response" }],
+    };
+
+    rerender(
+      <NativeMessage
+        message={continuationMessage}
+        previousMessage={previousMessage}
+        assistantLabel="Worker"
+      />,
+    );
+
+    expect(screen.getByText("Continuation response")).toBeTruthy();
+    expect(screen.queryByText("Worker")).toBeNull();
+  });
+
+  test("opens local image previews and closes the overlay with Escape", async () => {
+    const message: NativeMessageType = {
+      id: "msg-local-file-preview",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "file",
+          content: "/tmp/screenshot.png",
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /screenshot\.png/i }));
+
+    const image = await screen.findByAltText("screenshot.png");
+    expect(mockReadFileBase64).toHaveBeenCalledWith("/tmp/screenshot.png");
+    expect(image.getAttribute("src")).toBe("data:image/png;base64,image-base64");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(screen.queryByAltText("screenshot.png")).toBeNull();
+    });
+  });
+
+  test("opens data URL and remote image previews without local file reads", async () => {
+    const dataUrl = "data:image/png;base64,inline-image";
+    const dataUrlMessage: NativeMessageType = {
+      id: "msg-data-url-preview",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "file",
+          content: "inline.png",
+          fileUrl: dataUrl,
+        },
+      ],
+    };
+
+    const { rerender } = render(<NativeMessage message={dataUrlMessage} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /inline\.png/i }));
+
+    const inlineImage = await screen.findByAltText("inline.png");
+    expect(inlineImage.getAttribute("src")).toBe(dataUrl);
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByAltText("inline.png")).toBeNull();
+    });
+
+    const remoteUrl = "https://example.com/remote.webp";
+    const remoteMessage: NativeMessageType = {
+      id: "msg-remote-preview",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "file",
+          content: "remote.webp",
+          fileUrl: remoteUrl,
+        },
+      ],
+    };
+
+    rerender(<NativeMessage message={remoteMessage} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /remote\.webp/i }));
+
+    const remoteImage = await screen.findByAltText("remote.webp");
+    expect(remoteImage.getAttribute("src")).toBe(remoteUrl);
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+  });
+
   test("shows an error state when local image preview loading fails", async () => {
     const consoleError = console.error;
     console.error = mock(() => {}) as typeof console.error;

@@ -29,7 +29,7 @@ export function MessageCopyButton({ content }: MessageCopyButtonProps) {
   }, [content]);
 
   return (
-    <div className="mt-1 flex justify-end">
+    <div className="mt-1 flex justify-end pr-3">
       <Button
         type="button"
         variant="ghost"

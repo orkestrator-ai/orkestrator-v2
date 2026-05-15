@@ -819,10 +819,36 @@ function FilePart({ path, fileUrl }: { path: string; fileUrl?: string }) {
   );
 }
 
-/** Render a text content part with markdown support */
-function TextPart({ content }: { content: string }) {
+function shouldAddTextLeadIn(previousPart?: NativeMessagePart | null): boolean {
   return (
-    <div>
+    previousPart?.type === "tool-invocation" ||
+    previousPart?.type === "subagent"
+  );
+}
+
+function getPreviousRenderedPart(
+  parts: NativeMessagePart[],
+  index: number,
+): NativeMessagePart | null {
+  for (let i = index - 1; i >= 0; i--) {
+    const part = parts[i];
+    if (part && part.type !== "tool-result") {
+      return part;
+    }
+  }
+  return null;
+}
+
+/** Render a text content part with markdown support */
+function TextPart({
+  content,
+  followsToolActivity = false,
+}: {
+  content: string;
+  followsToolActivity?: boolean;
+}) {
+  return (
+    <div className={cn(followsToolActivity && "pt-2")}>
       <MessageMarkdown content={content} components={markdownComponents} />
       <MessageCopyButton content={content} />
     </div>
@@ -876,6 +902,7 @@ function getSubagentPreview(part: NativeMessagePart): string {
 
 function SubagentPart({ part }: { part: NativeMessagePart }) {
   const [isOpen, setIsOpen] = useState(false);
+  const subagentActions = part.subagentActions ?? [];
   const toolCount = part.subagentActionCount ?? 0;
   const displayName = part.subagentName || part.subagentRole || part.content || "subagent";
   const displayLabel = part.subagentRole
@@ -920,7 +947,7 @@ function SubagentPart({ part }: { part: NativeMessagePart }) {
           </div>
           <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">
             <div>{toolCount} {toolCount === 1 ? "tool" : "tools"}</div>
-            <div>{(part.subagentActions ?? []).length} {(part.subagentActions ?? []).length === 1 ? "update" : "updates"}</div>
+            <div>{subagentActions.length} {subagentActions.length === 1 ? "update" : "updates"}</div>
           </div>
         </div>
       </CollapsibleTrigger>
@@ -942,13 +969,14 @@ function SubagentPart({ part }: { part: NativeMessagePart }) {
           ) : null}
 
           <div className="space-y-1">
-            {(part.subagentActions ?? []).map((childPart, index) => (
+            {subagentActions.map((childPart, index) => (
               <MessagePart
                 key={`${part.subagentId || part.content}-subagent-part-${index}-${childPart.type}`}
                 part={childPart}
+                previousPart={getPreviousRenderedPart(subagentActions, index)}
               />
             ))}
-            {(part.subagentActions ?? []).length === 0 ? (
+            {subagentActions.length === 0 ? (
               <div className="rounded-md border border-dashed border-border/40 px-3 py-2 text-xs text-muted-foreground/70">
                 No child actions yet.
               </div>
@@ -961,14 +989,25 @@ function SubagentPart({ part }: { part: NativeMessagePart }) {
 }
 
 /** Render a single message part based on its type */
-function MessagePart({ part }: { part: NativeMessagePart }) {
+function MessagePart({
+  part,
+  previousPart,
+}: {
+  part: NativeMessagePart;
+  previousPart?: NativeMessagePart | null;
+}) {
   switch (part.type) {
     case "thinking":
       // Thinking parts are typically rendered directly in NativeMessage with isComplete
       // If rendered through MessagePart, assume complete (collapsed by default)
       return <ThinkingPart content={part.content} />;
     case "text":
-      return <TextPart content={part.content} />;
+      return (
+        <TextPart
+          content={part.content}
+          followsToolActivity={shouldAddTextLeadIn(previousPart)}
+        />
+      );
     case "tool-invocation":
       // Use specialized EditToolPart for edit/write tools
       if (isEditTool(part.toolName)) {
@@ -1070,10 +1109,18 @@ export const NativeMessage = memo(function NativeMessage({
         <MessagePart
           key={`${message.id}-part-${index}-${part.type}`}
           part={part}
+          previousPart={getPreviousRenderedPart(message.parts, index)}
         />
       ))}
 
-      {!hasTextParts && message.content && <TextPart content={message.content} />}
+      {!hasTextParts && message.content && (
+        <TextPart
+          content={message.content}
+          followsToolActivity={shouldAddTextLeadIn(
+            getPreviousRenderedPart(message.parts, message.parts.length),
+          )}
+        />
+      )}
     </MessageShell>
   );
 });

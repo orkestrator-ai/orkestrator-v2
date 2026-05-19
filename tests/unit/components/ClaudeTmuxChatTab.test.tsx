@@ -683,6 +683,79 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel
     });
   });
 
+  test("answers confirmation prompts by sending the selected number", async () => {
+    capturePaneMock.mockImplementation(async () => `
+WARNING: Claude Code running in Bypass Permissions mode
+
+https://code.claude.com/docs/en/security
+
+› 1. No, exit
+  2. Yes, I accept
+
+Enter to confirm · Esc to cancel
+`);
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Yes, I accept/ }));
+
+    await waitFor(() => {
+      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["2", "Enter"]);
+    });
+  });
+
+  test("moves confirmation prompt selection in the overlay before confirming", async () => {
+    capturePaneMock.mockImplementation(async () => `
+WARNING: Claude Code running in Bypass Permissions mode
+
+https://code.claude.com/docs/en/security
+
+› 1. No, exit
+  2. Yes, I accept
+
+Enter to confirm · Esc to cancel
+`);
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle("Move selection down"));
+    expect(sendKeysMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTitle("Select highlighted option"));
+
+    await waitFor(() => {
+      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["2", "Enter"]);
+    });
+  });
+
   test("renders the active TUI question without stale numbered transcript lines", async () => {
     capturePaneMock.mockImplementation(async () => `
 1. Run \`git diff origin/main...HEAD\` to see all changes that will be in the PR
@@ -724,6 +797,217 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         name: /Unstage & add to \.gitignore \(Recommended\)/,
       }),
     ).toBeTruthy();
+  });
+
+  test("parses confirmation prompts with the full context instead of only the URL", () => {
+    const prompt = parseTmuxSelectionPrompt(`
+------------------------------------------------------------
+WARNING: Claude Code running in Bypass Permissions mode
+
+In Bypass Permissions mode, Claude Code will not ask for your approval before running potentially dangerous commands.
+This mode should only be used in a sandboxed container/VM that has restricted internet access and can easily be restored if damaged.
+
+By proceeding, you accept all responsibility for actions taken while running in Bypass Permissions mode.
+
+https://code.claude.com/docs/en/security
+
+› 1. No, exit
+  2. Yes, I accept
+
+Enter to confirm · Esc to cancel
+`);
+
+    expect(prompt?.question).toBe(
+      [
+        "WARNING: Claude Code running in Bypass Permissions mode",
+        "",
+        "In Bypass Permissions mode, Claude Code will not ask for your approval before running potentially dangerous commands.",
+        "This mode should only be used in a sandboxed container/VM that has restricted internet access and can easily be restored if damaged.",
+        "",
+        "By proceeding, you accept all responsibility for actions taken while running in Bypass Permissions mode.",
+        "",
+        "https://code.claude.com/docs/en/security",
+      ].join("\n"),
+    );
+    expect(prompt?.selectedOptionIndex).toBe(0);
+    expect(prompt?.options.map((o) => o.label)).toEqual([
+      "No, exit",
+      "Yes, I accept",
+    ]);
+  });
+
+  test("clamps the number-mode local highlight at the option list bounds", async () => {
+    capturePaneMock.mockImplementation(async () => `
+WARNING: Claude Code running in Bypass Permissions mode
+
+https://code.claude.com/docs/en/security
+
+› 1. No, exit
+  2. Yes, I accept
+
+Enter to confirm · Esc to cancel
+`);
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
+
+    // Up at index 0 is a no-op.
+    fireEvent.click(screen.getByTitle("Move selection up"));
+    fireEvent.click(screen.getByTitle("Select highlighted option"));
+    await waitFor(() => {
+      expect(sendKeysMock).toHaveBeenLastCalledWith("tab-1", ["1", "Enter"]);
+    });
+
+    sendKeysMock.mockClear();
+
+    // Down twice should stop at the last option (index 1).
+    fireEvent.click(screen.getByTitle("Move selection down"));
+    fireEvent.click(screen.getByTitle("Move selection down"));
+    fireEvent.click(screen.getByTitle("Select highlighted option"));
+    await waitFor(() => {
+      expect(sendKeysMock).toHaveBeenLastCalledWith("tab-1", ["2", "Enter"]);
+    });
+  });
+
+  test("splits multi-digit option numbers into individual digit keys", async () => {
+    let pane = "";
+    for (let i = 1; i <= 10; i++) {
+      pane += `${i === 1 ? "› " : "  "}${i}. Option ${i}\n`;
+    }
+    pane += "\nEnter to confirm · Esc to cancel\n";
+    capturePaneMock.mockImplementation(async () => pane);
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Option 10/ }));
+
+    await waitFor(() => {
+      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["1", "0", "Enter"]);
+    });
+  });
+
+  test("defaults to navigate mode when no input-mode hint is present", async () => {
+    capturePaneMock.mockImplementation(async () => `
+  1. Kill stale tmux before launch (Recommended)
+› 2. Always kill before launch
+
+Enter to select · Esc to cancel
+`);
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
+
+    // Clicking the already-selected option should send only Enter (delta = 0).
+    fireEvent.click(
+      screen.getByRole("button", { name: /Always kill before launch/ }),
+    );
+
+    await waitFor(() => {
+      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["Enter"]);
+    });
+  });
+
+  test("does not absorb a prior numbered option list into a URL-only question", () => {
+    const prompt = parseTmuxSelectionPrompt(`
+1. Some earlier listed step
+2. Another earlier step
+3. A third earlier step
+
+https://code.claude.com/docs/en/security
+
+› 1. No, exit
+  2. Yes, I accept
+
+Enter to confirm · Esc to cancel
+`);
+
+    expect(prompt?.question).toBe("https://code.claude.com/docs/en/security");
+  });
+
+  test("does not absorb a bracketed log prefix paragraph into a URL-only question", () => {
+    const prompt = parseTmuxSelectionPrompt(`
+[INFO] background task complete
+
+https://code.claude.com/docs/en/security
+
+› 1. No, exit
+  2. Yes, I accept
+
+Enter to confirm · Esc to cancel
+`);
+
+    expect(prompt?.question).toBe("https://code.claude.com/docs/en/security");
+  });
+
+  test("does not absorb a bare shell prompt paragraph into a URL-only question", () => {
+    const prompt = parseTmuxSelectionPrompt(`
+node@host$
+
+https://code.claude.com/docs/en/security
+
+› 1. No, exit
+  2. Yes, I accept
+
+Enter to confirm · Esc to cancel
+`);
+
+    expect(prompt?.question).toBe("https://code.claude.com/docs/en/security");
+  });
+
+  test("stops question expansion at a ------ boundary line", () => {
+    const prompt = parseTmuxSelectionPrompt(`
+This earlier paragraph is before the boundary and should not appear.
+
+------------------------------------------------------------
+
+https://code.claude.com/docs/en/security
+
+› 1. No, exit
+  2. Yes, I accept
+
+Enter to confirm · Esc to cancel
+`);
+
+    expect(prompt?.question).toBe("https://code.claude.com/docs/en/security");
   });
 
   test("answers AskUserQuestion hooks with PreToolUse updatedInput", async () => {

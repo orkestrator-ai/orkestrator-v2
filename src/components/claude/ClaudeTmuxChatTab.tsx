@@ -107,6 +107,7 @@ interface TmuxSelectionPrompt {
   question: string | null;
   options: TmuxSelectionOption[];
   selectedOptionIndex: number;
+  inputMode: "navigate" | "number";
 }
 
 interface TmuxSelectionOption {
@@ -604,6 +605,15 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
     prompt: TmuxSelectionPrompt,
     optionIndex: number,
   ) => {
+    const option = prompt.options[optionIndex];
+    if (!option) return;
+
+    if (prompt.inputMode === "number") {
+      const digits = String(option.number).split("");
+      await handlePromptKeys([...digits, "Enter"]);
+      return;
+    }
+
     const delta = optionIndex - prompt.selectedOptionIndex;
     const navKey = delta > 0 ? "Down" : "Up";
     const keys: string[] = Array.from({ length: Math.abs(delta) }, () => navKey);
@@ -1184,7 +1194,7 @@ function TmuxElicitationCard({
 // ─── In-TUI selection prompt controls ───────────────────────────────────────
 
 const SELECTION_PROMPT_HINT =
-  /Enter\s+to\s+select|Tab\/Arrow\s+keys\s+to\s+navigate|Esc\s+to\s+cancel/i;
+  /Enter\s+to\s+(?:select|confirm)|Tab\/Arrow\s+keys\s+to\s+navigate|Esc\s+to\s+cancel/i;
 
 export function parseTmuxSelectionPrompt(
   snapshot: string,
@@ -1241,10 +1251,12 @@ export function parseTmuxSelectionPrompt(
   }
 
   if (options.length === 0) return null;
+  const hintLine = lines[hintIndex] ?? "";
   return {
     question: parseTmuxSelectionQuestion(lines, blockStart),
     options,
     selectedOptionIndex: selectedOptionIndex >= 0 ? selectedOptionIndex : 0,
+    inputMode: /Enter\s+to\s+confirm/i.test(hintLine) ? "number" : "navigate",
   };
 }
 
@@ -1283,14 +1295,83 @@ function parseTmuxSelectionQuestion(
     questionStart -= 1;
   }
 
+  if (isBareContextPointer(lines.slice(questionStart, questionEnd))) {
+    questionStart = expandTmuxSelectionQuestionStart(lines, questionStart);
+  }
+  while (
+    questionStart < questionEnd &&
+    isTmuxSelectionPromptBoundaryLine(lines[questionStart]?.trim() ?? "")
+  ) {
+    questionStart += 1;
+  }
+
   const question = lines
     .slice(questionStart, questionEnd)
     .map((line) => line.trim())
-    .filter(Boolean)
     .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 
   return question.length > 0 ? question : null;
+}
+
+function isBareContextPointer(lines: string[]): boolean {
+  const text = lines.map((line) => line.trim()).filter(Boolean).join(" ");
+  return /^https?:\/\/\S+$/i.test(text);
+}
+
+function expandTmuxSelectionQuestionStart(
+  lines: string[],
+  questionStart: number,
+): number {
+  let expandedStart = questionStart;
+  let cursor = questionStart;
+
+  while (cursor > 0) {
+    let previousEnd = cursor;
+    while (previousEnd > 0 && lines[previousEnd - 1]?.trim() === "") {
+      previousEnd -= 1;
+    }
+    if (previousEnd <= 0) break;
+
+    let previousStart = previousEnd;
+    while (previousStart > 0 && lines[previousStart - 1]?.trim() !== "") {
+      previousStart -= 1;
+    }
+
+    const rawParagraph = lines
+      .slice(previousStart, previousEnd)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const boundaryIndex = findLastIndex(
+      rawParagraph,
+      isTmuxSelectionPromptBoundaryLine,
+    );
+    const paragraph =
+      boundaryIndex >= 0 ? rawParagraph.slice(boundaryIndex + 1) : rawParagraph;
+    if (!isTmuxSelectionPromptContextParagraph(paragraph)) break;
+
+    expandedStart =
+      boundaryIndex >= 0 ? previousStart + boundaryIndex + 1 : previousStart;
+    cursor = expandedStart;
+    if (boundaryIndex >= 0) break;
+  }
+
+  return expandedStart;
+}
+
+function isTmuxSelectionPromptContextParagraph(lines: string[]): boolean {
+  if (lines.length === 0) return false;
+  const text = lines.join(" ");
+  if (lines.every(isTmuxSelectionPromptBoundaryLine)) return false;
+  if (/^\[[^\]]+\]/.test(text)) return false;
+  if (/^[^@\s]+@[^$#]+[$#]\s*$/.test(text)) return false;
+  if (lines.every((line) => /^\d+\.\s+/.test(line))) return false;
+  return true;
+}
+
+function isTmuxSelectionPromptBoundaryLine(line: string): boolean {
+  return /^-{6,}$/.test(line);
 }
 
 function stripAnsi(text: string): string {
@@ -1336,6 +1417,29 @@ function TmuxSelectionPromptCard({
   onSelectOption: (optionIndex: number) => void;
   onSendKeys: (keys: string[]) => void;
 }) {
+  const [localSelectedOptionIndex, setLocalSelectedOptionIndex] = useState(
+    prompt.selectedOptionIndex,
+  );
+
+  useEffect(() => {
+    setLocalSelectedOptionIndex(prompt.selectedOptionIndex);
+  }, [prompt.inputMode, prompt.options.length]);
+
+  const selectedOptionIndex =
+    prompt.inputMode === "number"
+      ? localSelectedOptionIndex
+      : prompt.selectedOptionIndex;
+
+  const moveSelection = (delta: -1 | 1) => {
+    if (prompt.inputMode === "number") {
+      setLocalSelectedOptionIndex((current) =>
+        Math.min(Math.max(current + delta, 0), prompt.options.length - 1),
+      );
+      return;
+    }
+    onSendKeys([delta < 0 ? "Up" : "Down"]);
+  };
+
   return (
     <div className="rounded-lg border border-blue-700/60 bg-blue-950/20 px-3 py-3 mb-3">
       <div className="flex items-center justify-between gap-2 mb-2">
@@ -1350,7 +1454,7 @@ function TmuxSelectionPromptCard({
             disabled={busy}
             className="h-7 w-7 p-0"
             title="Move selection up"
-            onClick={() => onSendKeys(["Up"])}
+            onClick={() => moveSelection(-1)}
           >
             <ChevronUp className="h-3.5 w-3.5" />
           </Button>
@@ -1361,7 +1465,7 @@ function TmuxSelectionPromptCard({
             disabled={busy}
             className="h-7 w-7 p-0"
             title="Move selection down"
-            onClick={() => onSendKeys(["Down"])}
+            onClick={() => moveSelection(1)}
           >
             <ChevronDown className="h-3.5 w-3.5" />
           </Button>
@@ -1372,7 +1476,7 @@ function TmuxSelectionPromptCard({
             disabled={busy}
             className="h-7 w-7 p-0"
             title="Select highlighted option"
-            onClick={() => onSendKeys(["Enter"])}
+            onClick={() => onSelectOption(selectedOptionIndex)}
           >
             <CornerDownLeft className="h-3.5 w-3.5" />
           </Button>
@@ -1398,7 +1502,8 @@ function TmuxSelectionPromptCard({
       <div className="space-y-1">
         {prompt.options.map((option) => {
           const selected =
-            option.optionIndex === prompt.selectedOptionIndex || option.selected;
+            option.optionIndex === selectedOptionIndex ||
+            (prompt.inputMode === "navigate" && option.selected);
           return (
             <button
               type="button"

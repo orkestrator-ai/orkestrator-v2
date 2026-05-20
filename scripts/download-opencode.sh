@@ -7,8 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BINARIES_DIR="$PROJECT_ROOT/binaries"
 
-# OpenCode version to download — should match @opencode-ai/sdk version in package.json
-OPENCODE_VERSION="1.14.22"
+# OpenCode version to download. Keep in sync with @opencode-ai/sdk and docker/Dockerfile.
+OPENCODE_VERSION="1.15.4"
 
 # Detect architecture
 ARCH=$(uname -m)
@@ -40,9 +40,14 @@ case "$OS" in
         ;;
 esac
 
-# Download URL
+# Download URL. macOS assets are zip files; Linux assets are tarballs.
 OPENCODE_FILENAME="opencode-${PLATFORM}-${OPENCODE_ARCH}"
-OPENCODE_URL="https://github.com/sst/opencode/releases/download/v${OPENCODE_VERSION}/${OPENCODE_FILENAME}.zip"
+if [[ "$PLATFORM" == "linux" ]]; then
+    OPENCODE_ARCHIVE="$OPENCODE_FILENAME.tar.gz"
+else
+    OPENCODE_ARCHIVE="$OPENCODE_FILENAME.zip"
+fi
+OPENCODE_URL="https://github.com/sst/opencode/releases/download/v${OPENCODE_VERSION}/${OPENCODE_ARCHIVE}"
 
 echo "Downloading OpenCode v${OPENCODE_VERSION} for ${PLATFORM}-${OPENCODE_ARCH}..."
 
@@ -52,8 +57,12 @@ mkdir -p "$BINARIES_DIR"
 # Download and extract
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
-curl -fsSL "$OPENCODE_URL" -o "$TEMP_DIR/opencode.zip"
-unzip -q "$TEMP_DIR/opencode.zip" -d "$TEMP_DIR"
+curl -fsSL "$OPENCODE_URL" -o "$TEMP_DIR/$OPENCODE_ARCHIVE"
+if [[ "$OPENCODE_ARCHIVE" == *.tar.gz ]]; then
+    tar -xzf "$TEMP_DIR/$OPENCODE_ARCHIVE" -C "$TEMP_DIR"
+else
+    unzip -q "$TEMP_DIR/$OPENCODE_ARCHIVE" -d "$TEMP_DIR"
+fi
 
 # Copy only the binary (skip .map files)
 cp "$TEMP_DIR/opencode" "$BINARIES_DIR/opencode"

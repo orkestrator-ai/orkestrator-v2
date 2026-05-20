@@ -99,6 +99,7 @@ pub struct TmuxSession {
     pub backend: Backend,
     pub session_id: String,
     pub tmux_session: String,
+    pub claude_command: String,
     pub workspace_hook_paths: WorkspaceHookPaths,
     pub session_hook_paths: SessionHookPaths,
     pub claude_home: String,
@@ -129,6 +130,7 @@ impl TmuxSession {
         tab_id: String,
         backend: Backend,
         resume_session_id: Option<String>,
+        claude_command: Option<String>,
     ) -> Self {
         let is_resume = resume_session_id.is_some();
         let session_id = resume_session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -169,6 +171,7 @@ impl TmuxSession {
             backend,
             session_id,
             tmux_session,
+            claude_command: claude_command.unwrap_or_else(|| "claude".to_string()),
             workspace_hook_paths,
             session_hook_paths,
             claude_home,
@@ -283,11 +286,12 @@ impl TmuxSession {
         // 2b. Ensure claude CLI is available *and* supports --session-id —
         // we rely on that flag to discover the transcript filename and to
         // resume previous sessions deterministically.
-        let claude_probe = self.backend.exec(&["which", "claude"]).await?;
-        if !claude_probe.success() || claude_probe.stdout.trim().is_empty() {
+        let claude_command = self.resolve_claude_command().await?;
+        let claude_probe = self.backend.exec(&[&claude_command, "--version"]).await?;
+        if !claude_probe.success() {
             return Err("claude CLI not found in this environment.".to_string());
         }
-        let help = self.backend.exec(&["claude", "--help"]).await?;
+        let help = self.backend.exec(&[&claude_command, "--help"]).await?;
         let help_text = format!("{}\n{}", help.stdout, help.stderr);
         if !help_text.contains("--session-id") {
             return Err(
@@ -307,7 +311,7 @@ impl TmuxSession {
         let alive = self.tmux_alive().await?;
         let launched_new = !alive;
         if launched_new {
-            let mut claude_cmd = String::from("claude");
+            let mut claude_cmd = shell_arg(&claude_command);
             if let Some(m) = model {
                 if !m.is_empty() {
                     claude_cmd.push_str(&format!(" --model {}", shell_arg(&m)));
@@ -400,6 +404,28 @@ impl TmuxSession {
         );
 
         Ok(())
+    }
+
+    async fn resolve_claude_command(&self) -> Result<String, String> {
+        if self.claude_command.contains('/') {
+            let probe = self
+                .backend
+                .exec(&["test", "-x", &self.claude_command])
+                .await?;
+            if probe.success() {
+                return Ok(self.claude_command.clone());
+            }
+        }
+
+        let claude_probe = self.backend.exec(&["which", "claude"]).await?;
+        if claude_probe.success() {
+            let resolved = claude_probe.stdout.trim();
+            if !resolved.is_empty() {
+                return Ok(resolved.to_string());
+            }
+        }
+
+        Ok(self.claude_command.clone())
     }
 
     fn spawn_poll_loop(self: Arc<Self>, app: AppHandle) {
@@ -726,6 +752,7 @@ mod tests {
                 cwd: tmp.path().to_string_lossy().into_owned(),
             },
             resume.map(str::to_string),
+            None,
         ))
     }
 
@@ -835,6 +862,7 @@ mod tests {
             "tab-p".to_string(),
             backend.clone(),
             None,
+            None,
         );
         hooks::ensure_session_dirs(&backend, &s.session_hook_paths)
             .await
@@ -903,6 +931,55 @@ mod tests {
         assert!(HOOK_TIMEOUT_SECS <= 3600);
     }
 
+    #[test]
+    fn build_defaults_claude_command_to_bare_name() {
+        let tmp = TempDir::new().unwrap();
+        let s = build(&tmp, "env-d", "tab-d", None);
+        assert_eq!(s.claude_command, "claude");
+    }
+
+    #[test]
+    fn build_uses_explicit_claude_command_when_provided() {
+        let tmp = TempDir::new().unwrap();
+        let s = Arc::new(TmuxSession::build(
+            "env-x".to_string(),
+            "tab-x".to_string(),
+            Backend::Local {
+                cwd: tmp.path().to_string_lossy().into_owned(),
+            },
+            None,
+            Some("/opt/bin/claude".to_string()),
+        ));
+        assert_eq!(s.claude_command, "/opt/bin/claude");
+    }
+
+    #[tokio::test]
+    async fn resolve_claude_command_returns_absolute_path_when_executable() {
+        let tmp = TempDir::new().unwrap();
+        let bin = tmp.path().join("fake-claude");
+        std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&bin).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&bin, perms).unwrap();
+        }
+
+        let s = Arc::new(TmuxSession::build(
+            "env-r".to_string(),
+            "tab-r".to_string(),
+            Backend::Local {
+                cwd: tmp.path().to_string_lossy().into_owned(),
+            },
+            None,
+            Some(bin.to_string_lossy().into_owned()),
+        ));
+
+        let resolved = s.resolve_claude_command().await.unwrap();
+        assert_eq!(resolved, bin.to_string_lossy());
+    }
+
     #[tokio::test]
     async fn install_then_uninstall_restores_original_settings() {
         let tmp = TempDir::new().unwrap();
@@ -913,6 +990,7 @@ mod tests {
             "env-restore".to_string(),
             "tab-r".to_string(),
             backend.clone(),
+            None,
             None,
         );
 
@@ -949,6 +1027,7 @@ mod tests {
             "tab-f".to_string(),
             backend.clone(),
             None,
+            None,
         );
 
         hooks::install_workspace_hooks(&backend, &s.workspace_hook_paths)
@@ -973,11 +1052,13 @@ mod tests {
             "tab-1".to_string(),
             backend.clone(),
             None,
+            None,
         );
         let b = TmuxSession::build(
             "env-x".to_string(),
             "tab-2".to_string(),
             backend.clone(),
+            None,
             None,
         );
 
@@ -1021,11 +1102,13 @@ mod tests {
             "tab-1".to_string(),
             backend.clone(),
             None,
+            None,
         );
         let b = TmuxSession::build(
             "env-conc".to_string(),
             "tab-2".to_string(),
             backend.clone(),
+            None,
             None,
         );
 
@@ -1081,6 +1164,7 @@ mod tests {
             "tab-d".to_string(),
             backend.clone(),
             None,
+            None,
         );
         hooks::install_workspace_hooks(&backend, &s.workspace_hook_paths)
             .await
@@ -1130,6 +1214,7 @@ mod tests {
             "tab-i".to_string(),
             backend.clone(),
             None,
+            None,
         );
         hooks::install_workspace_hooks(&backend, &s.workspace_hook_paths)
             .await
@@ -1162,6 +1247,7 @@ mod tests {
             "env-timeout".to_string(),
             "tab-t".to_string(),
             backend.clone(),
+            None,
             None,
         );
         hooks::install_workspace_hooks(&backend, &s.workspace_hook_paths)

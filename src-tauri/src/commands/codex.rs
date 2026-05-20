@@ -153,7 +153,13 @@ fn build_codex_bridge_start_command(raw_event_logging: bool) -> String {
         export PORT=4098
         export HOSTNAME=0.0.0.0
         export CWD=/workspace
-        export CODEX_PATH="$(command -v codex 2>/dev/null || echo codex)"
+        if [ -n "${CODEX_CLI_PATH:-}" ] && [ -x "$CODEX_CLI_PATH" ]; then
+            export CODEX_PATH="$CODEX_CLI_PATH"
+        elif [ -x /usr/local/share/npm-global/bin/codex ]; then
+            export CODEX_PATH="/usr/local/share/npm-global/bin/codex"
+        else
+            export CODEX_PATH="$(command -v codex 2>/dev/null || echo codex)"
+        fi
         export ORKESTRATOR_CODEX_RAW_LOG_DIR="%CODEX_RAW_LOG_DIR%"
         setsid node /opt/codex-bridge/dist/index.js > /tmp/codex-bridge.log 2>&1 &
         disown
@@ -600,5 +606,15 @@ mod tests {
         assert!(command.contains("export ORKESTRATOR_CODEX_RAW_LOG_DIR=\"\""));
         assert!(!command.contains(CONTAINER_CODEX_RAW_LOG_DIR));
         assert!(!command.contains("%CODEX_RAW_LOG_DIR%"));
+    }
+
+    #[test]
+    fn build_codex_bridge_start_command_prefers_pinned_codex_cli_path() {
+        let command = build_codex_bridge_start_command(false);
+
+        assert!(command.contains("if [ -n \"${CODEX_CLI_PATH:-}\" ] && [ -x \"$CODEX_CLI_PATH\" ]"));
+        assert!(command.contains("export CODEX_PATH=\"$CODEX_CLI_PATH\""));
+        assert!(command.contains("/usr/local/share/npm-global/bin/codex"));
+        assert!(command.contains("command -v codex"));
     }
 }

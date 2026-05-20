@@ -93,6 +93,7 @@ mod tests {
                 cwd: tmp.path().to_string_lossy().into_owned(),
             },
             None,
+            None,
         ))
     }
 

@@ -6,6 +6,7 @@
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtyPair, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -38,11 +39,18 @@ pub struct LocalTerminalSession {
     pub cols: u16,
     pub rows: u16,
     pub is_active: bool,
+    pub bundled_bin_dir: Option<String>,
     pty_handle: Option<PtyHandle>,
 }
 
 impl LocalTerminalSession {
-    pub fn new(environment_id: &str, worktree_path: &str, cols: u16, rows: u16) -> Self {
+    pub fn new(
+        environment_id: &str,
+        worktree_path: &str,
+        cols: u16,
+        rows: u16,
+        bundled_bin_dir: Option<String>,
+    ) -> Self {
         Self {
             session_id: uuid::Uuid::new_v4().to_string(),
             environment_id: environment_id.to_string(),
@@ -50,6 +58,7 @@ impl LocalTerminalSession {
             cols,
             rows,
             is_active: false,
+            bundled_bin_dir,
             pty_handle: None,
         }
     }
@@ -76,6 +85,7 @@ impl LocalTerminalManager {
         worktree_path: &str,
         cols: u16,
         rows: u16,
+        bundled_bin_dir: Option<String>,
     ) -> Result<String, LocalPtyError> {
         debug!(
             environment_id = %environment_id,
@@ -99,7 +109,8 @@ impl LocalTerminalManager {
             .map_err(|e| LocalPtyError::Pty(e.to_string()))?;
 
         // Create and store session
-        let mut session = LocalTerminalSession::new(environment_id, worktree_path, cols, rows);
+        let mut session =
+            LocalTerminalSession::new(environment_id, worktree_path, cols, rows, bundled_bin_dir);
         session.pty_handle = Some(PtyHandle::Pair(pair));
         session.is_active = true;
 
@@ -121,7 +132,7 @@ impl LocalTerminalManager {
     ) -> Result<mpsc::Receiver<Vec<u8>>, LocalPtyError> {
         debug!(session_id = %session_id, "Starting local terminal session");
 
-        let (worktree_path, pair) = {
+        let (worktree_path, bundled_bin_dir, pair) = {
             let mut sessions = self.sessions.lock().unwrap();
             let session = sessions
                 .get_mut(session_id)
@@ -139,7 +150,11 @@ impl LocalTerminalManager {
                 }
             };
 
-            (session.worktree_path.clone(), pair)
+            (
+                session.worktree_path.clone(),
+                session.bundled_bin_dir.clone(),
+                pair,
+            )
         };
 
         // Get the user's default shell
@@ -152,6 +167,10 @@ impl LocalTerminalManager {
         // Set up environment variables
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        for (key, value) in build_bundled_bin_env(bundled_bin_dir.as_deref(), &current_path) {
+            cmd.env(key, value);
+        }
 
         // Spawn the shell in the PTY
         let mut child = pair
@@ -363,6 +382,33 @@ impl Default for LocalTerminalManager {
     }
 }
 
+/// Build the bundled-binary env vars to layer on top of the inherited
+/// environment. Returns an empty list if no bundled bin dir was provided.
+///
+/// `PATH` is always prepended when `bin_dir` is set. Per-CLI env vars
+/// (`CLAUDE_CLI_PATH`, `OPENCODE_CLI_PATH`, `CODEX_CLI_PATH`) are only emitted
+/// when the corresponding binary actually exists at `<bin_dir>/<name>`, so a
+/// partial bundle never points consumers at a non-existent file.
+fn build_bundled_bin_env(bin_dir: Option<&str>, current_path: &str) -> Vec<(String, String)> {
+    let Some(bin_dir) = bin_dir else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(4);
+    out.push(("PATH".to_string(), format!("{bin_dir}:{current_path}")));
+    let dir = Path::new(bin_dir);
+    for (env_var, binary) in [
+        ("CLAUDE_CLI_PATH", "claude"),
+        ("OPENCODE_CLI_PATH", "opencode"),
+        ("CODEX_CLI_PATH", "codex"),
+    ] {
+        let path = dir.join(binary);
+        if path.exists() {
+            out.push((env_var.to_string(), path.to_string_lossy().into_owned()));
+        }
+    }
+    out
+}
+
 // Global local terminal manager instance
 static LOCAL_TERMINAL_MANAGER: std::sync::OnceLock<LocalTerminalManager> =
     std::sync::OnceLock::new();
@@ -375,4 +421,99 @@ pub fn init_local_terminal_manager() {
 /// Get the global local terminal manager
 pub fn get_local_terminal_manager() -> Option<&'static LocalTerminalManager> {
     LOCAL_TERMINAL_MANAGER.get()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn new_session_plumbs_bundled_bin_dir() {
+        let s = LocalTerminalSession::new(
+            "env-1",
+            "/tmp/work",
+            80,
+            24,
+            Some("/opt/bin".to_string()),
+        );
+        assert_eq!(s.environment_id, "env-1");
+        assert_eq!(s.worktree_path, "/tmp/work");
+        assert_eq!(s.cols, 80);
+        assert_eq!(s.rows, 24);
+        assert_eq!(s.bundled_bin_dir.as_deref(), Some("/opt/bin"));
+        assert!(!s.is_active);
+        assert!(!s.session_id.is_empty());
+    }
+
+    #[test]
+    fn new_session_accepts_no_bundled_bin_dir() {
+        let s = LocalTerminalSession::new("env-1", "/tmp/work", 80, 24, None);
+        assert!(s.bundled_bin_dir.is_none());
+    }
+
+    #[test]
+    fn build_bundled_bin_env_returns_empty_when_dir_missing() {
+        let env = build_bundled_bin_env(None, "/usr/bin:/bin");
+        assert!(env.is_empty());
+    }
+
+    #[test]
+    fn build_bundled_bin_env_prepends_path() {
+        let tmp = TempDir::new().unwrap();
+        let bin_dir = tmp.path().to_string_lossy().into_owned();
+        let env = build_bundled_bin_env(Some(&bin_dir), "/usr/bin:/bin");
+        let path = env
+            .iter()
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| v.as_str())
+            .expect("PATH should be set");
+        assert_eq!(path, &format!("{bin_dir}:/usr/bin:/bin"));
+    }
+
+    #[test]
+    fn build_bundled_bin_env_only_emits_existing_binaries() {
+        let tmp = TempDir::new().unwrap();
+        let bin_dir = tmp.path();
+        // Only Claude exists in this fake bundle.
+        fs::write(bin_dir.join("claude"), "#!/bin/sh\n").unwrap();
+
+        let env = build_bundled_bin_env(Some(&bin_dir.to_string_lossy()), "");
+        let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"PATH"));
+        assert!(keys.contains(&"CLAUDE_CLI_PATH"));
+        assert!(
+            !keys.contains(&"OPENCODE_CLI_PATH"),
+            "OPENCODE_CLI_PATH should not be set when opencode is missing"
+        );
+        assert!(
+            !keys.contains(&"CODEX_CLI_PATH"),
+            "CODEX_CLI_PATH should not be set when codex is missing"
+        );
+    }
+
+    #[test]
+    fn build_bundled_bin_env_emits_all_when_all_exist() {
+        let tmp = TempDir::new().unwrap();
+        let bin_dir = tmp.path();
+        for name in ["claude", "opencode", "codex"] {
+            fs::write(bin_dir.join(name), "#!/bin/sh\n").unwrap();
+        }
+
+        let env = build_bundled_bin_env(Some(&bin_dir.to_string_lossy()), "");
+        let map: std::collections::HashMap<_, _> = env.into_iter().collect();
+        assert_eq!(
+            map.get("CLAUDE_CLI_PATH").map(String::as_str),
+            Some(bin_dir.join("claude").to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            map.get("OPENCODE_CLI_PATH").map(String::as_str),
+            Some(bin_dir.join("opencode").to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            map.get("CODEX_CLI_PATH").map(String::as_str),
+            Some(bin_dir.join("codex").to_string_lossy().as_ref())
+        );
+    }
 }

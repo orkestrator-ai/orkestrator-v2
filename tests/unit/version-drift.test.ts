@@ -8,11 +8,7 @@ function read(rel: string): string {
   return readFileSync(join(repoRoot, rel), "utf8");
 }
 
-function stripRange(version: string): string {
-  return version.replace(/^[\^~]/, "");
-}
-
-function getPkgDep(pkgJsonRel: string, depName: string): string {
+function expectExactVersion(pkgJsonRel: string, depName: string): string {
   const pkg = JSON.parse(read(pkgJsonRel)) as {
     dependencies?: Record<string, string>;
   };
@@ -20,7 +16,8 @@ function getPkgDep(pkgJsonRel: string, depName: string): string {
   if (!raw) {
     throw new Error(`Expected ${pkgJsonRel} to declare ${depName}`);
   }
-  return stripRange(raw);
+  expect(raw).not.toMatch(/^[\^~]/);
+  return raw;
 }
 
 function getDockerfileArg(argName: string): string {
@@ -42,8 +39,25 @@ function getShellVar(scriptRel: string, varName: string): string {
 }
 
 describe("version drift between SDK pins and bundled/container CLIs", () => {
+  test("Claude: bundled binary and Docker CLI match", () => {
+    const downloadScriptPin = getShellVar(
+      "scripts/download-claude.sh",
+      "CLAUDE_VERSION",
+    );
+    const dockerfilePin = getDockerfileArg("CLAUDE_CLI_VERSION");
+
+    expect(dockerfilePin).toBe(downloadScriptPin);
+  });
+
+  test("Claude: agent SDK dependency is exact-pinned", () => {
+    expectExactVersion(
+      "bridges/claude-bridge/package.json",
+      "@anthropic-ai/claude-agent-sdk",
+    );
+  });
+
   test("Codex: SDK pin, bundled binary, and Docker CLI all match", () => {
-    const sdkPin = getPkgDep(
+    const sdkPin = expectExactVersion(
       "bridges/codex-bridge/package.json",
       "@openai/codex-sdk",
     );
@@ -67,7 +81,7 @@ describe("version drift between SDK pins and bundled/container CLIs", () => {
   });
 
   test("OpenCode: SDK pin, bundled binary, and Docker CLI all match", () => {
-    const sdkPin = getPkgDep("package.json", "@opencode-ai/sdk");
+    const sdkPin = expectExactVersion("package.json", "@opencode-ai/sdk");
     const downloadScriptPin = getShellVar(
       "scripts/download-opencode.sh",
       "OPENCODE_VERSION",

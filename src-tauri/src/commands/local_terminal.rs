@@ -3,6 +3,7 @@
 //! These commands handle terminal sessions for local (worktree-based) environments,
 //! spawning native shell processes instead of Docker exec.
 
+use crate::commands::claude_tmux::{bundled_resource_dir_candidates, find_bundled_dir_containing};
 use crate::local::get_local_terminal_manager;
 use crate::storage::get_storage;
 use tauri::{AppHandle, Emitter, Runtime};
@@ -31,8 +32,9 @@ fn spawn_local_output_forwarder<R: Runtime>(
 
 /// Create a local terminal session for a local environment
 #[tauri::command]
-#[instrument(fields(environment_id = %environment_id, cols, rows))]
+#[instrument(skip(app), fields(environment_id = %environment_id, cols, rows))]
 pub async fn create_local_terminal_session(
+    app: AppHandle,
     environment_id: String,
     cols: u16,
     rows: u16,
@@ -54,12 +56,23 @@ pub async fn create_local_terminal_session(
         .ok_or_else(|| "Environment has no worktree path".to_string())?;
 
     let session_id = manager
-        .create_session(&environment_id, &worktree_path, cols, rows)
+        .create_session(
+            &environment_id,
+            &worktree_path,
+            cols,
+            rows,
+            resolve_bundled_bin_dir(&app),
+        )
         .await
         .map_err(|e| e.to_string())?;
 
     info!(session_id = %session_id, environment_id = %environment_id, "Local terminal session created");
     Ok(session_id)
+}
+
+fn resolve_bundled_bin_dir(app_handle: &tauri::AppHandle) -> Option<String> {
+    let candidates = bundled_resource_dir_candidates(app_handle);
+    find_bundled_dir_containing(&candidates, "claude").map(|p| p.to_string_lossy().into_owned())
 }
 
 /// Start a local terminal session and begin forwarding output

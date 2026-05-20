@@ -25,9 +25,15 @@ fn build_opencode_server_start_command() -> &'static str {
         source ~/.zshrc 2>/dev/null || true
         source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
         orkestrator_source_runtime_env 2>/dev/null || true
-        OPENCODE_BIN="$(command -v opencode 2>/dev/null || true)"
+        OPENCODE_BIN="${OPENCODE_CLI_PATH:-}"
+        if [ -n "$OPENCODE_BIN" ] && [ ! -x "$OPENCODE_BIN" ]; then
+            OPENCODE_BIN=""
+        fi
         if [ -z "$OPENCODE_BIN" ] && [ -x /home/node/.opencode/bin/opencode ]; then
             OPENCODE_BIN="/home/node/.opencode/bin/opencode"
+        fi
+        if [ -z "$OPENCODE_BIN" ]; then
+            OPENCODE_BIN="$(command -v opencode 2>/dev/null || true)"
         fi
         if [ -z "$OPENCODE_BIN" ]; then
             echo "OpenCode binary not found. PATH=$PATH" > /tmp/opencode-serve.log
@@ -455,6 +461,8 @@ mod tests {
 
         assert!(command.contains("source /usr/local/bin/orkestrator-runtime-env.sh"));
         assert!(command.contains("orkestrator_source_runtime_env"));
+        assert!(command.contains("OPENCODE_BIN=\"${OPENCODE_CLI_PATH:-}\""));
+        assert!(command.contains("/home/node/.opencode/bin/opencode"));
         assert!(command.contains("OPENCODE_BIN=\"$(command -v opencode"));
         assert!(command.contains("serve --port 4096 --hostname 0.0.0.0"));
     }

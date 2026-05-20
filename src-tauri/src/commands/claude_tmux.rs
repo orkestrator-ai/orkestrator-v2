@@ -12,8 +12,9 @@ use crate::models::EnvironmentType;
 use crate::storage::get_storage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tracing::info;
 
 fn resolve_backend(environment_id: &str) -> Result<Backend, String> {
@@ -59,6 +60,7 @@ fn workspace_and_claude_home(backend: &Backend) -> (String, String) {
 }
 
 async fn get_or_create(
+    app: &AppHandle,
     environment_id: &str,
     tab_id: &str,
     resume_session_id: Option<String>,
@@ -68,14 +70,82 @@ async fn get_or_create(
         return Ok(s);
     }
     let backend = resolve_backend(environment_id)?;
+    let claude_command = resolve_pinned_claude_command(app, &backend);
     let session = Arc::new(TmuxSession::build(
         environment_id.to_string(),
         tab_id.to_string(),
         backend,
         resume_session_id,
+        claude_command,
     ));
     mgr.insert(tab_id.to_string(), session.clone()).await;
     Ok(session)
+}
+
+/// Pick a pinned `claude` binary for the session.
+///
+/// - **Container**: returns `None` and lets the session probe via `which claude`
+///   inside the container, which resolves to the npm-global install path that
+///   the Dockerfile puts on `$PATH`. This keeps the path as a single source of
+///   truth (the Dockerfile).
+/// - **Local**: returns the bundled binary path if the app resource directory
+///   contains `bin/claude`; otherwise `None` (falls back to host `claude`).
+fn resolve_pinned_claude_command(app: &AppHandle, backend: &Backend) -> Option<String> {
+    match backend {
+        Backend::Container { .. } => None,
+        Backend::Local { .. } => resolve_bundled_claude_path(app),
+    }
+}
+
+fn resolve_bundled_claude_path(app: &AppHandle) -> Option<String> {
+    let candidates = bundled_resource_dir_candidates(app);
+    find_bundled_binary(&candidates, "claude").map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Build the list of "bin/" directories to search for a bundled CLI, in order
+/// of preference. Includes the dev fallback (`<repo>/binaries/`) only in debug
+/// builds. Exposed at module scope so a sibling can build the same list.
+pub(crate) fn bundled_resource_dir_candidates(app: &AppHandle) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(bundled) = app
+        .path()
+        .resolve("bin", tauri::path::BaseDirectory::Resource)
+    {
+        out.push(bundled);
+    }
+    if let Ok(res_dir) = app.path().resource_dir() {
+        out.push(res_dir.join("bin"));
+    }
+    #[cfg(debug_assertions)]
+    {
+        let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        if let Some(workspace_root) = manifest_path.parent() {
+            out.push(workspace_root.join("binaries"));
+        }
+    }
+    out
+}
+
+/// Pure helper: given a list of candidate directories, return the full path
+/// to `<dir>/<binary_name>` for the first dir where that file exists.
+pub(crate) fn find_bundled_binary(candidates: &[PathBuf], binary_name: &str) -> Option<PathBuf> {
+    for dir in candidates {
+        let full = dir.join(binary_name);
+        if full.exists() {
+            return Some(full);
+        }
+    }
+    None
+}
+
+/// Pure helper: pick the first directory in `candidates` that contains `marker`,
+/// returning that directory (not the marker file). Used by callers that need
+/// to set `PATH=<dir>:...` rather than a specific binary path.
+pub(crate) fn find_bundled_dir_containing(
+    candidates: &[PathBuf],
+    marker: &str,
+) -> Option<PathBuf> {
+    find_bundled_binary(candidates, marker).and_then(|p| p.parent().map(Path::to_path_buf))
 }
 
 #[tauri::command]
@@ -125,7 +195,7 @@ pub async fn claude_tmux_start(
         }
     }
 
-    let session = get_or_create(&environment_id, &tab_id, resume_session_id).await?;
+    let session = get_or_create(&app, &environment_id, &tab_id, resume_session_id).await?;
     session
         .clone()
         .start(app, initial_prompt, model, plan_mode.unwrap_or(false))
@@ -309,9 +379,65 @@ pub async fn claude_tmux_list_previous_sessions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs as std_fs;
     use tempfile::TempDir;
     use tokio::fs;
     use uuid::Uuid;
+
+    #[test]
+    fn find_bundled_binary_returns_first_existing_path() {
+        let tmp = TempDir::new().unwrap();
+        let dir_a = tmp.path().join("a");
+        let dir_b = tmp.path().join("b");
+        std_fs::create_dir_all(&dir_a).unwrap();
+        std_fs::create_dir_all(&dir_b).unwrap();
+        // Only the second candidate contains the binary.
+        std_fs::write(dir_b.join("claude"), b"#!/bin/sh\n").unwrap();
+
+        let candidates = vec![dir_a.clone(), dir_b.clone()];
+        let found = find_bundled_binary(&candidates, "claude").expect("should find binary");
+        assert_eq!(found, dir_b.join("claude"));
+    }
+
+    #[test]
+    fn find_bundled_binary_prefers_earlier_candidates() {
+        let tmp = TempDir::new().unwrap();
+        let dir_a = tmp.path().join("a");
+        let dir_b = tmp.path().join("b");
+        std_fs::create_dir_all(&dir_a).unwrap();
+        std_fs::create_dir_all(&dir_b).unwrap();
+        std_fs::write(dir_a.join("claude"), b"#!/bin/sh\n").unwrap();
+        std_fs::write(dir_b.join("claude"), b"#!/bin/sh\n").unwrap();
+
+        let candidates = vec![dir_a.clone(), dir_b.clone()];
+        let found = find_bundled_binary(&candidates, "claude").unwrap();
+        assert_eq!(found, dir_a.join("claude"));
+    }
+
+    #[test]
+    fn find_bundled_binary_returns_none_when_missing() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_path_buf();
+        assert!(find_bundled_binary(&[dir], "claude").is_none());
+    }
+
+    #[test]
+    fn find_bundled_dir_containing_returns_parent_dir() {
+        let tmp = TempDir::new().unwrap();
+        let bin_dir = tmp.path().join("bin");
+        std_fs::create_dir_all(&bin_dir).unwrap();
+        std_fs::write(bin_dir.join("claude"), b"#!/bin/sh\n").unwrap();
+
+        let parent = find_bundled_dir_containing(&[bin_dir.clone()], "claude").unwrap();
+        assert_eq!(parent, bin_dir);
+    }
+
+    #[test]
+    fn find_bundled_dir_containing_returns_none_when_missing() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_path_buf();
+        assert!(find_bundled_dir_containing(&[dir], "claude").is_none());
+    }
 
     #[tokio::test]
     async fn pending_hooks_command_returns_missing_session_error() {
@@ -331,6 +457,7 @@ mod tests {
             "env-command-test".to_string(),
             tab_id.clone(),
             backend.clone(),
+            None,
             None,
         ));
         hooks::ensure_session_dirs(&backend, &session.session_hook_paths)

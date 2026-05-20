@@ -184,6 +184,7 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
   const [showTui, setShowTui] = useState(false);
   const [tuiSnapshot, setTuiSnapshot] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
+  const [modelSwitching, setModelSwitching] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
   const [promptControlBusy, setPromptControlBusy] = useState(false);
@@ -471,7 +472,7 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
     // `isThinking` covers the post-HTTP window where Claude is still
     // processing but `sending` has already reset; without it a user could
     // submit a second message before the first turn finishes.
-    if (!text || sending || isThinking) return;
+    if (!text || sending || isThinking || modelSwitching) return;
     setSending(true);
     setError(null);
     // Optimistically flip the "Claude is thinking…" indicator on submit so
@@ -635,6 +636,28 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
   const handleResume = (sessionId: string) => {
     setResumeDialogOpen(false);
     launchSession(sessionId);
+  };
+
+  const handleSelectModel = async (modelId: string) => {
+    if (modelId === selectedModel || modelSwitching) return;
+
+    if (!hasStarted || !running) {
+      setSelectedModel(modelId);
+      return;
+    }
+
+    if (sending || isThinking) return;
+
+    setModelSwitching(true);
+    setError(null);
+    try {
+      await submitToTmux(tabId, `/model ${modelCommandArg(modelId)}`);
+      setSelectedModel(modelId);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setModelSwitching(false);
+    }
   };
 
   // Tick once a second while the spinner is visible so the elapsed counter
@@ -867,14 +890,18 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
         containerId={containerId}
         worktreePath={worktreePath}
         disabled={!running}
-        busy={sending || isThinking}
+        busy={sending || isThinking || modelSwitching}
         autoFocus={isActive}
         onSubmit={handleSubmit}
         selectedModel={selectedModel}
-        onSelectModel={setSelectedModel}
+        onSelectModel={(modelId) => {
+          void handleSelectModel(modelId);
+        }}
         planMode={planMode}
         onTogglePlanMode={setPlanMode}
-        settingsLocked={hasStarted}
+        modelDisabled={(hasStarted && !running) || sending || isThinking || modelSwitching}
+        modelSwitching={modelSwitching}
+        planLocked={hasStarted}
       />
 
       <ResumeTmuxSessionDialog
@@ -1539,6 +1566,10 @@ function modelObj(id: string) {
   return TMUX_MODELS.find((m) => m.id === id) ?? TMUX_MODELS[1]!;
 }
 
+function modelCommandArg(id: string) {
+  return modelObj(id).id;
+}
+
 // ─── Compose bar ─────────────────────────────────────────────────────────────
 
 interface TmuxComposeBarProps {
@@ -1554,7 +1585,9 @@ interface TmuxComposeBarProps {
   onSelectModel: (id: string) => void;
   planMode: boolean;
   onTogglePlanMode: (v: boolean) => void;
-  settingsLocked: boolean;
+  modelDisabled: boolean;
+  modelSwitching: boolean;
+  planLocked: boolean;
 }
 
 function TmuxComposeBar({
@@ -1570,7 +1603,9 @@ function TmuxComposeBar({
   onSelectModel,
   planMode,
   onTogglePlanMode,
-  settingsLocked,
+  modelDisabled,
+  modelSwitching,
+  planLocked,
 }: TmuxComposeBarProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const prevFileMentionMenuOpen = useRef(false);
@@ -1815,16 +1850,21 @@ function TmuxComposeBar({
         </button>
 
         {/* Model picker — selectable before launch even while compose is
-            disabled, so users can pre-pick from the start screen. */}
+            disabled, and after launch it sends Claude Code's /model command
+            into the running tmux pane. */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
-              disabled={settingsLocked}
+              disabled={modelDisabled}
               className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-60"
               title={
-                settingsLocked
-                  ? "Model is fixed for this tmux session"
-                  : "Select the model for the next tmux launch"
+                modelSwitching
+                  ? "Switching Claude model"
+                  : modelDisabled
+                    ? "Wait for Claude to finish before changing the model"
+                    : disabled
+                      ? "Select the model for the next tmux launch"
+                      : "Switch the model for this tmux session"
               }
             >
               <ChevronDown className="w-3 h-3" />
@@ -1863,10 +1903,10 @@ function TmuxComposeBar({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
-              disabled={settingsLocked}
+              disabled={planLocked}
               className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-60"
               title={
-                settingsLocked
+                planLocked
                   ? "Plan mode is fixed for this tmux session"
                   : "Select the launch mode for the next tmux session"
               }

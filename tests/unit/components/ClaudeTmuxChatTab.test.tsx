@@ -626,7 +626,7 @@ describe("ClaudeTmuxChatTab", () => {
     expect(textarea.value).toBe("@missing");
   });
 
-  test("locks launch-only model and plan controls once the session is running", async () => {
+  test("switches the running tmux model through Claude's slash command", async () => {
     useClaudeTmuxStore
       .getState()
       .setRunning("tab-1", true, {
@@ -645,11 +645,183 @@ describe("ClaudeTmuxChatTab", () => {
     const modelButton = screen.getByRole("button", {
       name: /Sonnet 4\.6/,
     }) as HTMLButtonElement;
+    expect(modelButton.disabled).toBe(false);
+
+    fireEvent.pointerDown(modelButton);
+    const opusOption = await screen.findByText("Opus 4.7");
+    await act(async () => {
+      fireEvent.click(opusOption);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(submitMock).toHaveBeenCalledWith(
+        "tab-1",
+        "/model claude-opus-4-7",
+      );
+    });
+    expect(screen.getByRole("button", { name: /Opus 4\.7/ })).toBeTruthy();
+  });
+
+  test("uses the pre-launch model selection when starting fresh", async () => {
+    seedPane();
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
+
+    const modelButton = screen.getByRole("button", {
+      name: /Sonnet 4\.6/,
+    }) as HTMLButtonElement;
+    expect(modelButton.disabled).toBe(false);
+
+    fireEvent.pointerDown(modelButton);
+    const haikuOption = await screen.findByText("Haiku 4.5");
+    await act(async () => {
+      fireEvent.click(haikuOption);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
+
+    await waitFor(() => {
+      expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
+        initialPrompt: undefined,
+        model: "claude-haiku-4-5",
+        planMode: false,
+        resumeSessionId: undefined,
+      });
+    });
+  });
+
+  test("locks compose and model controls while a model switch is in flight", async () => {
+    let resolveSubmit!: () => void;
+    submitMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSubmit = resolve;
+        }),
+    );
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    const textarea = screen.getByPlaceholderText(
+      /Ask Claude anything/,
+    ) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "hello after switch" } });
+
+    const modelButton = screen.getByRole("button", {
+      name: /Sonnet 4\.6/,
+    }) as HTMLButtonElement;
+    fireEvent.pointerDown(modelButton);
+    const opusOption = await screen.findByText("Opus 4.7");
+    await act(async () => {
+      fireEvent.click(opusOption);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(submitMock).toHaveBeenCalledWith(
+        "tab-1",
+        "/model claude-opus-4-7",
+      );
+      expect(textarea.disabled).toBe(true);
+      expect(
+        screen.getByRole("button", { name: /Sonnet 4\.6/ }),
+      ).toHaveProperty("disabled", true);
+    });
+
+    fireEvent.click(screen.getByTitle("Send (↵)"));
+    expect(submitMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveSubmit();
+    });
+
+    await waitFor(() => {
+      expect(textarea.disabled).toBe(false);
+      expect(screen.getByRole("button", { name: /Opus 4\.7/ })).toHaveProperty(
+        "disabled",
+        false,
+      );
+    });
+  });
+
+  test("shows an error and keeps the previous model when model switching fails", async () => {
+    submitMock.mockImplementationOnce(async () => {
+      throw new Error("tmux unavailable");
+    });
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    const modelButton = screen.getByRole("button", {
+      name: /Sonnet 4\.6/,
+    }) as HTMLButtonElement;
+    fireEvent.pointerDown(modelButton);
+    const opusOption = await screen.findByText("Opus 4.7");
+    await act(async () => {
+      fireEvent.click(opusOption);
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText("Error: tmux unavailable")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Sonnet 4\.6/ })).toHaveProperty(
+        "disabled",
+        false,
+      );
+    });
+    expect(screen.queryByRole("button", { name: /Opus 4\.7/ })).toBeNull();
+  });
+
+  test("keeps plan mode launch-only once the session is running", async () => {
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
     const planButton = screen.getByRole("button", {
       name: /Build/,
     }) as HTMLButtonElement;
 
-    expect(modelButton.disabled).toBe(true);
     expect(planButton.disabled).toBe(true);
   });
 

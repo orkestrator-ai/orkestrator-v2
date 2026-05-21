@@ -72,6 +72,7 @@ describe("claudeOptionsStore", () => {
       environmentId: "env-2",
       targetPaneId: "default",
       agentType: "claude",
+      claudeNativeBackend: "tmux",
     });
 
     expect(
@@ -96,6 +97,7 @@ describe("claudeOptionsStore", () => {
       environmentId: "env-2",
       targetPaneId: "default",
       agentType: "claude",
+      claudeNativeBackend: "tmux",
     });
   });
 

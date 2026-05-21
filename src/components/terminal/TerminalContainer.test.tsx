@@ -1,11 +1,12 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { useEffect } from "react";
-import { cleanup, render, waitFor } from "@testing-library/react";
-import { TerminalProvider, useTerminalContext, type TerminalTabType, type CreateTabOptions } from "@/contexts";
+import { useEffect, useRef, type ReactNode } from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { TerminalProvider, useTerminalContext, type TerminalTabType, type CreateTabOptions, type CreateFileTabOptions } from "@/contexts";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import type { PaneLeaf } from "@/types/paneLayout";
 import * as realTauri from "@/lib/tauri";
 
 const realTauriSnapshot = { ...realTauri };
@@ -45,6 +46,25 @@ mock.module("@/components/pane-layout", () => ({
   PaneTree: () => null,
 }));
 
+mock.module("@/components/ui/context-menu", () => ({
+  ContextMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
+  ContextMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  ContextMenuContent: ({ children }: { children: ReactNode }) => <>{children}</>,
+  ContextMenuItem: ({
+    children,
+    disabled,
+    onClick,
+  }: {
+    children: ReactNode;
+    disabled?: boolean;
+    onClick?: () => void;
+  }) => (
+    <button type="button" disabled={disabled} onClick={onClick}>
+      {children}
+    </button>
+  ),
+}));
+
 mock.module("./TerminalPortalHost", () => ({
   TerminalPortalHost: () => null,
 }));
@@ -53,7 +73,7 @@ mock.module("./InitializationLogs", () => ({
   InitializationLogs: () => null,
 }));
 
-const { TerminalContainer } = await import("./TerminalContainer");
+const { TerminalContainer, getTerminalTabDragEndAction } = await import("./TerminalContainer");
 
 describe("TerminalContainer", () => {
   afterAll(() => {
@@ -134,6 +154,13 @@ describe("TerminalContainer", () => {
       ...state,
       config: {
         ...state.config,
+        global: {
+          ...state.config.global,
+          opencodeMode: "terminal",
+          claudeMode: "terminal",
+          claudeNativeBackend: "sdk",
+          codexMode: "native",
+        },
         repositories: {},
       },
     }));
@@ -491,6 +518,146 @@ describe("TerminalContainer", () => {
     expect(markSetupScriptsCompleteMock).toHaveBeenCalledWith("env-hidden");
   });
 
+  test("creates a Claude tmux tab for ready local environments when Claude native backend is tmux", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          claudeMode: "native",
+          claudeNativeBackend: "tmux",
+        },
+        repositories: {},
+      },
+    }));
+
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((env) =>
+        env.id === "env-hidden"
+          ? {
+              ...env,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: "/tmp/env-hidden-worktree",
+            }
+          : env
+      ),
+      setupCommandsResolved: new Set(["env-hidden"]),
+    }));
+
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "claude",
+          initialPrompt: "Use tmux",
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(envHidden?.root.kind).toBe("leaf");
+      if (!envHidden || envHidden.root.kind !== "leaf") {
+        throw new Error("env-hidden root should be a leaf");
+      }
+
+      expect(envHidden.root.tabs).toHaveLength(1);
+      expect(envHidden.root.tabs[0]?.type).toBe("claude-tmux");
+      expect(envHidden.root.tabs[0]?.initialPrompt).toBe("Use tmux");
+      expect(envHidden.root.tabs[0]?.claudeTmuxData).toEqual({
+        containerId: undefined,
+        environmentId: "env-hidden",
+        isLocal: true,
+      });
+    });
+  });
+
+  test("creates setup and Claude tmux tabs for local environments with setup commands", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          claudeMode: "native",
+          claudeNativeBackend: "tmux",
+        },
+        repositories: {},
+      },
+    }));
+
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((env) =>
+        env.id === "env-hidden"
+          ? {
+              ...env,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: "/tmp/env-hidden-worktree",
+            }
+          : env
+      ),
+      pendingSetupCommands: new Map([["env-hidden", ["bun install"]]]),
+      setupCommandsResolved: new Set(["env-hidden"]),
+    }));
+
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "claude",
+          initialPrompt: "After setup",
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(envHidden?.root.kind).toBe("leaf");
+      if (!envHidden || envHidden.root.kind !== "leaf") {
+        throw new Error("env-hidden root should be a leaf");
+      }
+
+      expect(envHidden.root.tabs).toHaveLength(2);
+      expect(envHidden.root.tabs[0]?.type).toBe("plain");
+      expect(envHidden.root.tabs[0]?.initialCommands).toEqual(["bun install"]);
+      expect(envHidden.root.tabs[0]?.isSetupTab).toBe(true);
+      expect(envHidden.root.tabs[1]?.type).toBe("claude-tmux");
+      expect(envHidden.root.tabs[1]?.initialPrompt).toBe("After setup");
+      expect(envHidden.root.activeTabId).toBe("default");
+    });
+
+    expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-hidden")).toBe(
+      true
+    );
+  });
+
   test("resumes a pending container native launch after the environment remounts", async () => {
     useConfigStore.setState((state) => ({
       ...state,
@@ -546,7 +713,9 @@ describe("TerminalContainer", () => {
     // Simulate the old timer clearing transient options while the durable
     // launch intent survives the component unmount.
     useClaudeOptionsStore.getState().clearOptions("env-hidden");
-    useEnvironmentStore.getState().setWorkspaceReady("env-hidden", true);
+    await act(async () => {
+      useEnvironmentStore.getState().setWorkspaceReady("env-hidden", true);
+    });
 
     render(
       <TerminalProvider>
@@ -568,6 +737,86 @@ describe("TerminalContainer", () => {
 
       const nativeTab = envHidden.root.tabs.find((tab) => tab.type === "codex-native");
       expect(nativeTab?.initialPrompt).toBe("Continue after setup");
+      expect(
+        useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
+      ).toBeUndefined();
+      expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-hidden")).toBe(false);
+    });
+  });
+
+  test("launches Claude tmux after container setup when Claude native backend is tmux", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          claudeMode: "native",
+          claudeNativeBackend: "tmux",
+        },
+        repositories: {},
+      },
+    }));
+
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "claude",
+          initialPrompt: "Continue in tmux",
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(envHidden?.root.kind).toBe("leaf");
+      if (!envHidden || envHidden.root.kind !== "leaf") {
+        throw new Error("env-hidden root should be a leaf");
+      }
+
+      expect(envHidden.root.tabs).toHaveLength(1);
+      expect(envHidden.root.tabs[0]?.type).toBe("plain");
+      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toEqual({
+        containerId: "container-hidden",
+        environmentId: "env-hidden",
+        initialPrompt: "Continue in tmux",
+        targetPaneId: "default",
+        agentType: "claude",
+        claudeNativeBackend: "tmux",
+      });
+    });
+
+    await act(async () => {
+      useEnvironmentStore.getState().setWorkspaceReady("env-hidden", true);
+    });
+
+    await waitFor(() => {
+      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(envHidden?.root.kind).toBe("leaf");
+      if (!envHidden || envHidden.root.kind !== "leaf") {
+        throw new Error("env-hidden root should be a leaf");
+      }
+
+      const tmuxTab = envHidden.root.tabs.find((tab) => tab.type === "claude-tmux");
+      expect(tmuxTab?.initialPrompt).toBe("Continue in tmux");
+      expect(tmuxTab?.claudeTmuxData).toEqual({
+        containerId: "container-hidden",
+        environmentId: "env-hidden",
+        isLocal: false,
+      });
       expect(
         useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
       ).toBeUndefined();
@@ -750,6 +999,266 @@ describe("TerminalContainer", () => {
     });
 
     expect(markSetupScriptsCompleteMock).not.toHaveBeenCalled();
+  });
+
+  test("start overlay ignores modifier clicks, starts normally, and creates scripts from the context menu", async () => {
+    const onStartContainer = mock(() => {});
+    const onCreateScript = mock((_prompt: string) => {});
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning={false}
+          isActive
+          onStartContainer={onStartContainer}
+          onCreateScript={onCreateScript}
+        />
+      </TerminalProvider>
+    );
+
+    const startButton = screen.getByRole("button", { name: /start container/i });
+    fireEvent.click(startButton, { ctrlKey: true });
+    expect(onStartContainer).not.toHaveBeenCalled();
+
+    fireEvent.click(startButton);
+    expect(onStartContainer).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /create script/i }));
+    expect(onCreateScript).toHaveBeenCalledTimes(1);
+    expect(onCreateScript.mock.calls[0]?.[0]).toContain("setup");
+  });
+
+  describe("createFileTab", () => {
+    function CreateFileTabHarness({
+      calls,
+    }: {
+      calls: Array<{ filePath: string; options?: CreateFileTabOptions }>;
+    }) {
+      const { createFileTab } = useTerminalContext();
+      const didRunRef = useRef(false);
+      useEffect(() => {
+        if (!createFileTab || didRunRef.current) return;
+        didRunRef.current = true;
+        for (const call of calls) {
+          createFileTab(call.filePath, call.options);
+        }
+      }, [createFileTab, calls]);
+      return null;
+    }
+
+    test("creates container file tabs with diff metadata and validated git status", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateFileTabHarness
+            calls={[
+              { filePath: "src/App.tsx", options: { isDiff: true, gitStatus: "M" } },
+              { filePath: "src/App.tsx", options: { isDiff: false, gitStatus: "invalid" } },
+            ]}
+          />
+        </TerminalProvider>
+      );
+
+      await waitFor(() => {
+        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
+        const fileTabs = env.root.tabs.filter((tab) => tab.type === "file");
+        expect(fileTabs).toHaveLength(2);
+        expect(fileTabs[0]?.fileData).toEqual({
+          filePath: "src/App.tsx",
+          containerId: "container-visible",
+          worktreePath: undefined,
+          isLocalEnvironment: false,
+          isDiff: true,
+          gitStatus: "M",
+          baseBranch: undefined,
+        });
+        expect(fileTabs[1]?.fileData?.isDiff).toBe(false);
+        expect(fileTabs[1]?.fileData?.gitStatus).toBeUndefined();
+      });
+    });
+
+    test("activates an existing matching file tab instead of duplicating it", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateFileTabHarness
+            calls={[
+              { filePath: "src/main.tsx", options: { isDiff: true, gitStatus: "A" } },
+              { filePath: "src/main.tsx", options: { isDiff: true, gitStatus: "A" } },
+            ]}
+          />
+        </TerminalProvider>
+      );
+
+      await waitFor(() => {
+        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
+        const fileTabs = env.root.tabs.filter((tab) => tab.type === "file");
+        expect(fileTabs).toHaveLength(1);
+        expect(env.root.activeTabId).toBe(fileTabs[0]?.id ?? null);
+      });
+    });
+
+    test("creates local file tabs with worktree metadata and no container id", async () => {
+      usePaneLayoutStore.setState({
+        environments: new Map([
+          ["env-visible", {
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [{ id: "visible-tab", type: "plain" }],
+              activeTabId: "visible-tab",
+            },
+            activePaneId: "default",
+            containerId: null,
+          }],
+        ]),
+        activeEnvironmentId: "env-visible",
+      });
+      useEnvironmentStore.setState((state) => ({
+        ...state,
+        environments: state.environments.map((env) =>
+          env.id === "env-visible"
+            ? {
+                ...env,
+                containerId: null,
+                environmentType: "local",
+                worktreePath: "/tmp/env-visible-worktree",
+              }
+            : env
+        ),
+      }));
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId={null}
+            isActive
+          />
+          <CreateFileTabHarness
+            calls={[{ filePath: "README.md", options: { gitStatus: "?" } }]}
+          />
+        </TerminalProvider>
+      );
+
+      await waitFor(() => {
+        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
+        const fileTab = env.root.tabs.find((tab) => tab.type === "file");
+        expect(fileTab?.fileData).toMatchObject({
+          filePath: "README.md",
+          containerId: undefined,
+          worktreePath: "/tmp/env-visible-worktree",
+          isLocalEnvironment: true,
+          gitStatus: "?",
+        });
+      });
+    });
+  });
+
+  describe("tab drag-end decisions", () => {
+    const pane = (id: string, tabIds: string[]): PaneLeaf => ({
+      kind: "leaf",
+      id,
+      tabs: tabIds.map((tabId) => ({ id: tabId, type: "plain" })),
+      activeTabId: tabIds[0] ?? null,
+    });
+
+    test("returns split, same-pane reorder, cross-pane move, and self-collision move actions", () => {
+      const panes = new Map([
+        ["left", pane("left", ["a", "b", "c"])],
+        ["right", pane("right", ["x", "y"])],
+      ]);
+      const getPane = (paneId: string) => panes.get(paneId) ?? null;
+
+      expect(
+        getTerminalTabDragEndAction({
+          activeId: "tab:a:pane:left",
+          overId: "edge:right:bottom",
+          lastDragOverPaneId: null,
+          getPane,
+        })
+      ).toEqual({
+        type: "split",
+        targetPaneId: "right",
+        edge: "bottom",
+        tabId: "a",
+        fromPaneId: "left",
+      });
+
+      expect(
+        getTerminalTabDragEndAction({
+          activeId: "tab:a:pane:left",
+          overId: "tab:c:pane:left",
+          lastDragOverPaneId: null,
+          getPane,
+        })
+      ).toEqual({ type: "reorder", paneId: "left", fromIndex: 0, toIndex: 2 });
+
+      expect(
+        getTerminalTabDragEndAction({
+          activeId: "tab:b:pane:left",
+          overId: "tab:y:pane:right",
+          lastDragOverPaneId: null,
+          getPane,
+        })
+      ).toEqual({
+        type: "move",
+        fromPaneId: "left",
+        toPaneId: "right",
+        tabId: "b",
+        toIndex: 1,
+      });
+
+      expect(
+        getTerminalTabDragEndAction({
+          activeId: "tab:b:pane:left",
+          overId: "tab:b:pane:left",
+          lastDragOverPaneId: "right",
+          getPane,
+        })
+      ).toEqual({
+        type: "move",
+        fromPaneId: "left",
+        toPaneId: "right",
+        tabId: "b",
+      });
+    });
+
+    test("returns none for invalid drops and no-op same-pane tabbar drops", () => {
+      const getPane = (paneId: string) => paneId === "left" ? pane("left", ["a"]) : null;
+
+      expect(
+        getTerminalTabDragEndAction({
+          activeId: "not-a-tab",
+          overId: "tab:a:pane:left",
+          lastDragOverPaneId: null,
+          getPane,
+        })
+      ).toEqual({ type: "none" });
+      expect(
+        getTerminalTabDragEndAction({
+          activeId: "tab:a:pane:left",
+          overId: "tabbar:left",
+          lastDragOverPaneId: null,
+          getPane,
+        })
+      ).toEqual({ type: "none" });
+    });
   });
 
   describe("createTab forwards displayTitle", () => {

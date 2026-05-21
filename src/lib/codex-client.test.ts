@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, mock } from "bun:test";
-import { createSession, getSessionMessages, resumeSession, type CodexClient } from "./codex-client";
+import { createSession, deleteSession, getSessionMessages, resumeSession, type CodexClient } from "./codex-client";
 
 const originalFetch = globalThis.fetch;
 
@@ -133,5 +133,43 @@ describe("codex-client getSessionMessages", () => {
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.id).toBe("msg-1");
+  });
+});
+
+describe("codex-client deleteSession", () => {
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    mock.restore();
+  });
+
+  test("returns true on success", async () => {
+    globalThis.fetch = mock(async () => new Response(null, { status: 200 })) as unknown as typeof fetch;
+
+    const client: CodexClient = { baseUrl: "http://127.0.0.1:4000" };
+    const deleted = await deleteSession(client, "session-1");
+
+    expect(deleted).toBe(true);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://127.0.0.1:4000/session/session-1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  test("returns false on non-ok response", async () => {
+    globalThis.fetch = mock(async () => new Response(null, { status: 404 })) as unknown as typeof fetch;
+
+    const client: CodexClient = { baseUrl: "http://127.0.0.1:4000" };
+
+    expect(await deleteSession(client, "missing-session")).toBe(false);
+  });
+
+  test("returns false on network error", async () => {
+    globalThis.fetch = mock(async () => {
+      throw new Error("network unavailable");
+    }) as unknown as typeof fetch;
+
+    const client: CodexClient = { baseUrl: "http://127.0.0.1:4000" };
+
+    expect(await deleteSession(client, "session-1")).toBe(false);
   });
 });

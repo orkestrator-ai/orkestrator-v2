@@ -5,13 +5,14 @@
 use crate::claude_tmux::{
     backend::Backend,
     get_manager, hooks,
-    session::{tmux_session_name, TmuxSession, TmuxSessionStatus},
+    session::{short_id, tmux_session_name, TmuxSession, TmuxSessionStatus},
     transcript::{self, PreviousSessionInfo},
 };
 use crate::models::EnvironmentType;
 use crate::storage::get_storage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
@@ -162,6 +163,10 @@ pub async fn claude_tmux_start(
         "claude_tmux_start"
     );
 
+    let mgr = get_manager();
+    let install_lock = mgr.install_lock(&environment_id).await;
+    let _guard = install_lock.lock().await;
+
     // "Start fresh" semantics: when no resume id was supplied, the caller is
     // asking for a brand-new conversation. Drop any in-memory session for
     // this tab and force-kill the per-tab tmux session before launching, so
@@ -169,7 +174,6 @@ pub async fn claude_tmux_start(
     // running with the previous model/plan flags. The tmux name is derived
     // strictly from (env_id, tab_id) — never matches another tab or project.
     if resume_session_id.is_none() {
-        let mgr = get_manager();
         if let Some(existing) = mgr.remove(&tab_id).await {
             if let Err(e) = existing.stop().await {
                 tracing::warn!(tab = %tab_id, error = %e, "stop of prior tmux session failed");
@@ -193,9 +197,10 @@ pub async fn claude_tmux_start(
     }
 
     let session = get_or_create(&app, &environment_id, &tab_id, resume_session_id).await?;
+    hooks::install_workspace_hooks(&session.backend, &session.workspace_hook_paths).await?;
     session
         .clone()
-        .start(app, initial_prompt, model, plan_mode.unwrap_or(false))
+        .start_after_hooks_installed(app, initial_prompt, model, plan_mode.unwrap_or(false))
         .await?;
     let alive = session.tmux_alive().await.unwrap_or(false);
     Ok(session.status(alive))
@@ -229,6 +234,120 @@ pub async fn claude_tmux_stop(tab_id: String) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn workspace_hook_paths_for_backend(
+    environment_id: &str,
+    backend: &Backend,
+) -> hooks::WorkspaceHookPaths {
+    let (workspace, _) = workspace_and_claude_home(backend);
+    hooks::WorkspaceHookPaths::new(
+        &format!("/tmp/orkestrator-claude-tmux/{}", environment_id),
+        &workspace,
+    )
+}
+
+async fn kill_tmux_sessions_for_env(backend: &Backend, environment_id: &str) {
+    let prefix = format!("orkestrator-{}-", short_id(environment_id));
+    let out = match backend
+        .exec(&["tmux", "list-sessions", "-F", "#{session_name}"])
+        .await
+    {
+        Ok(out) => out,
+        Err(e) => {
+            tracing::debug!(
+                env = %environment_id,
+                error = %e,
+                "tmux list-sessions failed; nothing to clean"
+            );
+            return;
+        }
+    };
+
+    for name in out.stdout.lines().map(str::trim).filter(|name| {
+        !name.is_empty() && name.starts_with(&prefix)
+    }) {
+        if let Err(e) = backend.exec(&["tmux", "kill-session", "-t", name]).await {
+            tracing::warn!(
+                env = %environment_id,
+                tmux_session = %name,
+                error = %e,
+                "failed to kill orphan Claude tmux session"
+            );
+        }
+    }
+}
+
+pub async fn stop_tmux_sessions_for_environment(environment_id: &str) {
+    let mgr = get_manager();
+    let install_lock = mgr.install_lock(environment_id).await;
+    let _guard = install_lock.lock().await;
+
+    let sessions = mgr.remove_by_env(environment_id).await;
+    let mut backend_and_hooks: Option<(Backend, hooks::WorkspaceHookPaths)> = None;
+
+    for session in sessions {
+        if backend_and_hooks.is_none() {
+            backend_and_hooks = Some((
+                session.backend.clone(),
+                session.workspace_hook_paths.clone(),
+            ));
+        }
+        if let Err(e) = session.stop().await {
+            tracing::warn!(
+                env = %environment_id,
+                tab = %session.tab_id,
+                error = %e,
+                "failed to stop tracked Claude tmux session"
+            );
+        }
+    }
+
+    if backend_and_hooks.is_none() {
+        if let Ok(backend) = resolve_backend(environment_id) {
+            let paths = workspace_hook_paths_for_backend(environment_id, &backend);
+            backend_and_hooks = Some((backend, paths));
+        }
+    }
+
+    if let Some((backend, workspace_hook_paths)) = backend_and_hooks {
+        kill_tmux_sessions_for_env(&backend, environment_id).await;
+        if mgr.sessions_in_env(environment_id).await == 0 {
+            if let Err(e) = hooks::uninstall_workspace_hooks(&backend, &workspace_hook_paths).await {
+                tracing::warn!(env = %environment_id, error = %e, "uninstall_workspace_hooks failed");
+            }
+        }
+    }
+}
+
+pub async fn shutdown_all_tmux_sessions() {
+    let mgr = get_manager();
+    let sessions = mgr.drain().await;
+    let mut envs: HashMap<String, (Backend, hooks::WorkspaceHookPaths)> = HashMap::new();
+
+    for session in sessions {
+        envs.entry(session.environment_id.clone()).or_insert_with(|| {
+            (
+                session.backend.clone(),
+                session.workspace_hook_paths.clone(),
+            )
+        });
+        if let Err(e) = session.stop().await {
+            tracing::warn!(
+                env = %session.environment_id,
+                tab = %session.tab_id,
+                error = %e,
+                "failed to stop Claude tmux session during shutdown"
+            );
+        }
+    }
+
+    for (environment_id, (backend, workspace_hook_paths)) in envs {
+        kill_tmux_sessions_for_env(&backend, &environment_id).await;
+        if let Err(e) = hooks::uninstall_workspace_hooks(&backend, &workspace_hook_paths).await {
+            tracing::warn!(env = %environment_id, error = %e, "uninstall_workspace_hooks failed during shutdown");
+        }
+    }
 }
 
 #[tauri::command]
@@ -569,5 +688,109 @@ mod tests {
         assert_eq!(hooks.len(), 1);
         assert_eq!(hooks[0].id, "id-1");
         assert_eq!(hooks[0].kind, "PreToolUse");
+    }
+
+    // NOTE: `shutdown_all_tmux_sessions` is exercised by the components it
+    // composes — `TmuxSessionManager::drain` (covered in
+    // `claude_tmux::manager::tests`), `kill_tmux_sessions_for_env` (test
+    // below), and `hooks::uninstall_workspace_hooks` (covered in
+    // `claude_tmux::hooks::tests`). A direct test would call `drain` on the
+    // shared global manager and race with other tmux tests inserting into
+    // it, so we avoid it here.
+
+    #[tokio::test]
+    async fn kill_tmux_sessions_for_env_targets_only_matching_prefix() {
+        let tmp = TempDir::new().unwrap();
+        let backend = Backend::Local {
+            cwd: tmp.path().to_string_lossy().into_owned(),
+        };
+
+        let env_a = format!("env-prefix-a-{}", Uuid::new_v4());
+        let env_b = format!("env-prefix-b-{}", Uuid::new_v4());
+        let session_a = tmux_session_name(&env_a, "tab-a");
+        let session_b = tmux_session_name(&env_b, "tab-b");
+
+        // Install a fake tmux that returns both session names from list-sessions
+        // and logs subsequent calls.
+        let _guard = crate::claude_tmux::TEST_PATH_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let bin_dir = tmp.path().join("bin");
+        std_fs::create_dir_all(&bin_dir).unwrap();
+        let log_path = tmp.path().join("tmux.log");
+        let script = bin_dir.join("tmux");
+        std_fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\nif [ \"$1\" = \"list-sessions\" ]; then\n  printf '%s\\n' '{a}' '{b}'\nfi\nexit 0\n",
+                log = log_path.display(),
+                a = session_a,
+                b = session_b,
+            ),
+        )
+        .unwrap();
+        let mut perms = std_fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std_fs::set_permissions(&script, perms).unwrap();
+
+        let original_path = std::env::var_os("PATH");
+        let path = match original_path.as_ref() {
+            Some(existing) => {
+                let mut paths = vec![bin_dir.clone()];
+                paths.extend(std::env::split_paths(existing));
+                std::env::join_paths(paths).unwrap()
+            }
+            None => bin_dir.into_os_string(),
+        };
+        std::env::set_var("PATH", path);
+
+        kill_tmux_sessions_for_env(&backend, &env_a).await;
+
+        let log = fs::read_to_string(&log_path).await.unwrap();
+        assert!(
+            log.contains(&format!("kill-session -t {}", session_a)),
+            "expected kill of env_a session, got log:\n{}",
+            log,
+        );
+        assert!(
+            !log.contains(&format!("kill-session -t {}", session_b)),
+            "env_b session was killed by env_a cleanup, log:\n{}",
+            log,
+        );
+
+        match original_path {
+            Some(path) => std::env::set_var("PATH", path),
+            None => std::env::remove_var("PATH"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_tmux_sessions_for_environment_stops_tracked_sessions() {
+        let tmp = TempDir::new().unwrap();
+        let environment_id = format!("env-command-test-{}", Uuid::new_v4());
+        let tab_id = format!("tab-{}", Uuid::new_v4());
+        let backend = Backend::Local {
+            cwd: tmp.path().to_string_lossy().into_owned(),
+        };
+        let session = Arc::new(TmuxSession::build(
+            environment_id.clone(),
+            tab_id.clone(),
+            backend,
+            None,
+            None,
+        ));
+        let tmux_session = session.tmux_session.clone();
+        get_manager().insert(tab_id.clone(), session).await;
+
+        with_fake_tmux(&tmp, |log_path| async move {
+            stop_tmux_sessions_for_environment(&environment_id).await;
+
+            let log = fs::read_to_string(log_path).await.unwrap();
+            assert!(log.contains(&format!("kill-session -t {}", tmux_session)));
+            assert!(get_manager().get(&tab_id).await.is_none());
+            assert_eq!(get_manager().sessions_in_env(&environment_id).await, 0);
+        })
+        .await;
     }
 }

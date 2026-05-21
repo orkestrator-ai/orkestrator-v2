@@ -14,7 +14,15 @@ import { useTerminalSessionStore, createSessionKey } from "./terminalSessionStor
 import { useSessionStore } from "./sessionStore";
 import { useTerminalPortalStore } from "./terminalPortalStore";
 import { useEnvironmentStore } from "./environmentStore";
+import { useClaudeStore, createClaudeSessionKey } from "./claudeStore";
+import { useClaudeTmuxStore } from "./claudeTmuxStore";
+import { useCodexStore, createCodexSessionKey } from "./codexStore";
+import { useOpenCodeStore, createOpenCodeSessionKey } from "./openCodeStore";
 import * as tauri from "@/lib/tauri";
+import { deleteSession as deleteClaudeSession } from "@/lib/claude-client";
+import { stopSession as stopClaudeTmuxSession } from "@/lib/claude-tmux-client";
+import { deleteSession as deleteCodexSession } from "@/lib/codex-client";
+import { deleteSession as deleteOpenCodeSession } from "@/lib/opencode-client";
 
 /**
  * Per-environment state for pane layout
@@ -192,6 +200,111 @@ function getEnvironmentPaneState(
   };
 }
 
+const TERMINAL_TAB_TYPES = new Set(["plain", "claude", "opencode", "codex", "root"]);
+
+function cleanupTerminalTab(envId: string, containerId: string | null, tabId: string) {
+  const sessionStore = useTerminalSessionStore.getState();
+  const sessionKey = createSessionKey(containerId, tabId, envId);
+  const sessionData = sessionStore.sessions.get(sessionKey);
+  if (!sessionData) return;
+
+  console.debug("[PaneLayout] Cleaning up terminal session for closed tab:", sessionKey, sessionData.sessionId);
+  sessionStore.removeSession(sessionKey);
+
+  if (sessionData.sessionId) {
+    const isLocalSession = containerId === null;
+    const close = isLocalSession
+      ? tauri.closeLocalTerminalSession(sessionData.sessionId)
+      : tauri.detachTerminal(sessionData.sessionId);
+
+    close.catch((err) => {
+      console.debug("[PaneLayout] Error closing terminal session:", err);
+    });
+  }
+
+  if (sessionData.persistentSessionId) {
+    useSessionStore.getState().updateSessionStatus(sessionData.persistentSessionId, "disconnected")
+      .catch((err) => {
+        console.error("[PaneLayout] Error updating persistent session status:", err);
+      });
+  }
+}
+
+function cleanupClaudeNativeTab(envId: string, tabId: string) {
+  const store = useClaudeStore.getState();
+  const sessionKey = createClaudeSessionKey(envId, tabId);
+  const client = store.clients.get(envId);
+  const session = store.sessions.get(sessionKey);
+  store.clearQueue(sessionKey);
+  store.setSession(sessionKey, null);
+  if (client && session?.sessionId) {
+    deleteClaudeSession(client, session.sessionId).catch((err) => {
+      console.debug("[PaneLayout] Error deleting Claude native session:", err);
+    });
+  }
+}
+
+function cleanupOpenCodeNativeTab(envId: string, tabId: string) {
+  const store = useOpenCodeStore.getState();
+  const sessionKey = createOpenCodeSessionKey(envId, tabId);
+  const client = store.clients.get(envId);
+  const session = store.sessions.get(sessionKey);
+  store.clearQueue(sessionKey);
+  store.setSession(sessionKey, null);
+  if (client && session?.sessionId) {
+    deleteOpenCodeSession(client, session.sessionId).catch((err) => {
+      console.debug("[PaneLayout] Error deleting OpenCode native session:", err);
+    });
+  }
+}
+
+function cleanupCodexNativeTab(envId: string, tabId: string) {
+  const store = useCodexStore.getState();
+  const sessionKey = createCodexSessionKey(envId, tabId);
+  const client = store.clients.get(envId);
+  const session = store.sessions.get(sessionKey);
+  store.clearQueue(sessionKey);
+  store.setSession(sessionKey, null);
+  if (client && session?.sessionId) {
+    deleteCodexSession(client, session.sessionId).catch((err) => {
+      console.debug("[PaneLayout] Error deleting Codex native session:", err);
+    });
+  }
+}
+
+function cleanupClaudeTmuxTab(tabId: string) {
+  useClaudeTmuxStore.getState().resetTab(tabId);
+  stopClaudeTmuxSession(tabId).catch((err) => {
+    console.debug("[PaneLayout] Error stopping Claude tmux session:", err);
+  });
+}
+
+function cleanupTabResources(envId: string, containerId: string | null, tab: TabInfo) {
+  if (TERMINAL_TAB_TYPES.has(tab.type)) {
+    cleanupTerminalTab(envId, containerId, tab.id);
+    return;
+  }
+
+  if (tab.type === "claude-native") {
+    cleanupClaudeNativeTab(envId, tab.id);
+    return;
+  }
+
+  if (tab.type === "opencode-native") {
+    cleanupOpenCodeNativeTab(envId, tab.id);
+    return;
+  }
+
+  if (tab.type === "codex-native") {
+    cleanupCodexNativeTab(envId, tab.id);
+    return;
+  }
+
+  if (tab.type === "claude-tmux") {
+    cleanupClaudeTmuxTab(tab.id);
+  }
+}
+
 export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
   environments: new Map(),
   activeEnvironmentId: null,
@@ -248,33 +361,12 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const envState = state.environments.get(envId);
     if (!envState) return;
 
-    // Clear terminal sessions for this environment's tabs
-    // Handle both container environments (containerId set) and local environments (containerId null)
-    const sessionStore = useTerminalSessionStore.getState();
     const terminalPortalStore = useTerminalPortalStore.getState();
     const containerId = envState.containerId;
 
     const envTabs = getAllLeaves(envState.root).flatMap((leaf) => leaf.tabs);
     envTabs.forEach((tab) => {
-      const sessionKey = createSessionKey(containerId, tab.id, envId);
-      const sessionData = sessionStore.sessions.get(sessionKey);
-      if (sessionData) {
-        console.debug("[PaneLayout] Cleaning up terminal session on reset:", sessionKey, sessionData.sessionId);
-        // Only detach if we have a PTY session ID (may be undefined if restored from persistent)
-        if (sessionData.sessionId) {
-          tauri.detachTerminal(sessionData.sessionId).catch((err) => {
-            console.error("[PaneLayout] Error detaching terminal session:", err);
-          });
-        }
-        // Update persistent session status to disconnected
-        if (sessionData.persistentSessionId) {
-          useSessionStore.getState().updateSessionStatus(sessionData.persistentSessionId, "disconnected")
-            .catch((err) => {
-              console.error("[PaneLayout] Error updating persistent session status:", err);
-            });
-        }
-        sessionStore.removeSession(sessionKey);
-      }
+      cleanupTabResources(envId, containerId, tab);
     });
 
     // Clear all terminal instances from portal store for this environment
@@ -337,32 +429,16 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const leaf = findLeaf(envState.root, paneId);
     if (!leaf) return;
 
-    // Clean up terminal session for this tab (if it exists)
-    // Handle both container environments (containerId set) and local environments (containerId null)
-    const sessionStore = useTerminalSessionStore.getState();
     const terminalPortalStore = useTerminalPortalStore.getState();
-    const sessionKey = createSessionKey(envState.containerId, tabId, envId);
-    const sessionId = sessionStore.getSessionId(sessionKey);
-    if (sessionId) {
-      console.debug("[PaneLayout] Cleaning up terminal session for closed tab:", sessionKey, sessionId);
-      // Remove from session store
-      sessionStore.removeSession(sessionKey);
-      // Detach the terminal session (async, fire and forget)
-      tauri.detachTerminal(sessionId).catch((err) => {
-        console.error("[PaneLayout] Error detaching terminal session:", err);
-      });
-      // Update persistent session status to disconnected (for sidebar display)
-      useSessionStore.getState().updateSessionStatus(sessionId, "disconnected")
-        .catch((err) => {
-          console.error("[PaneLayout] Error updating persistent session status:", err);
-        });
+    const closedTab = leaf.tabs.find((t) => t.id === tabId);
+    if (closedTab) {
+      cleanupTabResources(envId, envState.containerId, closedTab);
     }
 
     // Dispose the terminal instance from portal store
     terminalPortalStore.disposeTerminal(envId, tabId);
 
     // If this was a setup tab, clear the setupScriptsRunning flag so the play button isn't stuck disabled
-    const closedTab = leaf.tabs.find((t) => t.id === tabId);
     if (closedTab?.isSetupTab) {
       useEnvironmentStore.getState().setSetupScriptsRunning(envId, false);
     }
@@ -371,7 +447,19 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
 
     // If this was the last tab, close the pane
     if (remainingTabs.length === 0) {
-      get().closePane(paneId);
+      const parentSplit = findParentSplit(envState.root, paneId);
+      if (parentSplit) {
+        get().closePane(paneId);
+      } else {
+        const newRoot = updateLeaf(envState.root, paneId, () => ({
+          ...leaf,
+          tabs: [],
+          activeTabId: null,
+        }));
+        const newEnvs = new Map(state.environments);
+        newEnvs.set(envId, { ...envState, root: newRoot });
+        set({ environments: newEnvs });
+      }
       return;
     }
 

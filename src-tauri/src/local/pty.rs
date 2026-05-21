@@ -3,7 +3,8 @@
 //! Handles terminal sessions that spawn local shell processes in worktree directories,
 //! as opposed to Docker exec sessions for containerized environments.
 
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtyPair, PtySize};
+use super::process::kill_process;
+use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtyPair, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -41,6 +42,8 @@ pub struct LocalTerminalSession {
     pub is_active: bool,
     pub bundled_bin_dir: Option<String>,
     pty_handle: Option<PtyHandle>,
+    child_pid: Option<u32>,
+    child_killer: Option<Box<dyn ChildKiller + Send + Sync>>,
 }
 
 impl LocalTerminalSession {
@@ -60,6 +63,8 @@ impl LocalTerminalSession {
             is_active: false,
             bundled_bin_dir,
             pty_handle: None,
+            child_pid: None,
+            child_killer: None,
         }
     }
 }
@@ -177,6 +182,8 @@ impl LocalTerminalManager {
             .slave
             .spawn_command(cmd)
             .map_err(|e| LocalPtyError::Pty(e.to_string()))?;
+        let child_pid = child.process_id();
+        let child_killer = child.clone_killer();
 
         // Drop the slave - we don't need it after spawning
         drop(pair.slave);
@@ -206,6 +213,8 @@ impl LocalTerminalManager {
             let mut sessions = self.sessions.lock().unwrap();
             if let Some(session) = sessions.get_mut(session_id) {
                 session.pty_handle = Some(PtyHandle::Master(pair.master));
+                session.child_pid = child_pid;
+                session.child_killer = Some(child_killer);
             }
         }
 
@@ -345,13 +354,57 @@ impl LocalTerminalManager {
         }
 
         // Remove session
-        let mut sessions = self.sessions.lock().unwrap();
-        if sessions.remove(session_id).is_none() {
-            return Err(LocalPtyError::SessionNotFound(session_id.to_string()));
+        let mut session = {
+            let mut sessions = self.sessions.lock().unwrap();
+            sessions
+                .remove(session_id)
+                .ok_or_else(|| LocalPtyError::SessionNotFound(session_id.to_string()))?
+        };
+
+        if let Some(mut killer) = session.child_killer.take() {
+            if let Err(e) = killer.kill() {
+                warn!(session_id = %session_id, error = %e, "Failed to kill local terminal child via PTY killer");
+            }
+        } else if let Some(pid) = session.child_pid {
+            if let Err(e) = kill_process(pid) {
+                warn!(session_id = %session_id, pid = pid, error = %e, "Failed to kill local terminal child process");
+            }
         }
 
         info!(session_id = %session_id, "Local terminal session closed");
         Ok(())
+    }
+
+    /// Close every local terminal session for an environment.
+    pub fn close_sessions_for_environment(&self, environment_id: &str) {
+        let session_ids: Vec<String> = {
+            let sessions = self.sessions.lock().unwrap();
+            sessions
+                .values()
+                .filter(|session| session.environment_id == environment_id)
+                .map(|session| session.session_id.clone())
+                .collect()
+        };
+
+        for session_id in session_ids {
+            if let Err(e) = self.close_session(&session_id) {
+                warn!(session_id = %session_id, error = %e, "Failed to close local terminal session for environment");
+            }
+        }
+    }
+
+    /// Close every tracked local terminal session.
+    pub fn shutdown_all(&self) {
+        let session_ids: Vec<String> = {
+            let sessions = self.sessions.lock().unwrap();
+            sessions.keys().cloned().collect()
+        };
+
+        for session_id in session_ids {
+            if let Err(e) = self.close_session(&session_id) {
+                warn!(session_id = %session_id, error = %e, "Failed to close local terminal session during shutdown");
+            }
+        }
     }
 
     /// Get session info
@@ -423,6 +476,18 @@ pub fn get_local_terminal_manager() -> Option<&'static LocalTerminalManager> {
     LOCAL_TERMINAL_MANAGER.get()
 }
 
+pub fn close_local_terminal_sessions_for_environment(environment_id: &str) {
+    if let Some(manager) = get_local_terminal_manager() {
+        manager.close_sessions_for_environment(environment_id);
+    }
+}
+
+pub fn shutdown_all_local_terminal_sessions() {
+    if let Some(manager) = get_local_terminal_manager() {
+        manager.shutdown_all();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,6 +516,52 @@ mod tests {
     fn new_session_accepts_no_bundled_bin_dir() {
         let s = LocalTerminalSession::new("env-1", "/tmp/work", 80, 24, None);
         assert!(s.bundled_bin_dir.is_none());
+    }
+
+    #[tokio::test]
+    async fn close_sessions_for_environment_removes_only_matching_sessions() {
+        let tmp = TempDir::new().unwrap();
+        let manager = LocalTerminalManager::new();
+        let worktree = tmp.path().to_string_lossy();
+        let env1_a = manager
+            .create_session("env-1", &worktree, 80, 24, None)
+            .await
+            .unwrap();
+        let env1_b = manager
+            .create_session("env-1", &worktree, 80, 24, None)
+            .await
+            .unwrap();
+        let env2 = manager
+            .create_session("env-2", &worktree, 80, 24, None)
+            .await
+            .unwrap();
+
+        manager.close_sessions_for_environment("env-1");
+
+        assert!(manager.get_session(&env1_a).is_none());
+        assert!(manager.get_session(&env1_b).is_none());
+        assert!(manager.get_session(&env2).is_some());
+    }
+
+    #[tokio::test]
+    async fn shutdown_all_removes_all_sessions() {
+        let tmp = TempDir::new().unwrap();
+        let manager = LocalTerminalManager::new();
+        let worktree = tmp.path().to_string_lossy();
+        let first = manager
+            .create_session("env-1", &worktree, 80, 24, None)
+            .await
+            .unwrap();
+        let second = manager
+            .create_session("env-2", &worktree, 80, 24, None)
+            .await
+            .unwrap();
+
+        manager.shutdown_all();
+
+        assert!(manager.get_session(&first).is_none());
+        assert!(manager.get_session(&second).is_none());
+        assert!(manager.list_sessions().is_empty());
     }
 
     #[test]

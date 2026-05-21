@@ -1,16 +1,306 @@
-import { beforeEach, describe, expect, test } from "bun:test";
-import { usePaneLayoutStore } from "./paneLayoutStore";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
-function resetPaneLayoutStore() {
+const closeLocalTerminalSession = mock(async (_sessionId: string) => {});
+const detachTerminal = mock(async (_sessionId: string) => {});
+const updateSessionStatus = mock(async (_sessionId: string, _status: string) => ({}));
+const stopTmuxSession = mock(async (_tabId: string) => {});
+const deleteClaudeSession = mock(async (_client: unknown, _sessionId: string) => true);
+const deleteCodexSession = mock(async (_client: unknown, _sessionId: string) => true);
+const deleteOpenCodeSession = mock(async (_client: unknown, _sessionId: string) => true);
+
+const realTauri = await import("@/lib/tauri");
+const realTauriSnapshot = { ...realTauri };
+const realClaudeTmuxClient = await import("@/lib/claude-tmux-client");
+const realClaudeTmuxClientSnapshot = { ...realClaudeTmuxClient };
+const realClaudeClient = await import("@/lib/claude-client");
+const realClaudeClientSnapshot = { ...realClaudeClient };
+const realCodexClient = await import("@/lib/codex-client");
+const realCodexClientSnapshot = { ...realCodexClient };
+const realOpenCodeClient = await import("@/lib/opencode-client");
+const realOpenCodeClientSnapshot = { ...realOpenCodeClient };
+
+mock.module("@/lib/tauri", () => ({
+  ...realTauriSnapshot,
+  closeLocalTerminalSession,
+  detachTerminal,
+  createSession: mock(async () => ({})),
+  updateSessionStatus,
+  updateSessionActivity: mock(async () => ({})),
+  deleteSession: mock(async () => {}),
+  deleteSessionsByEnvironment: mock(async () => []),
+  disconnectEnvironmentSessions: mock(async () => {}),
+  getSessionsByEnvironment: mock(async () => []),
+  saveSessionBuffer: mock(async () => {}),
+  loadSessionBuffer: mock(async () => null),
+  syncSessionsWithContainer: mock(async () => []),
+  renameSession: mock(async () => ({})),
+  reorderSessions: mock(async () => []),
+  openInBrowser: mock(async () => {}),
+}));
+
+mock.module("@/lib/claude-tmux-client", () => ({
+  ...realClaudeTmuxClientSnapshot,
+  stopSession: stopTmuxSession,
+}));
+
+mock.module("@/lib/claude-client", () => ({
+  ...realClaudeClientSnapshot,
+  deleteSession: deleteClaudeSession,
+}));
+
+mock.module("@/lib/codex-client", () => ({
+  ...realCodexClientSnapshot,
+  deleteSession: deleteCodexSession,
+}));
+
+mock.module("@/lib/opencode-client", () => ({
+  ...realOpenCodeClientSnapshot,
+  deleteSession: deleteOpenCodeSession,
+}));
+
+afterAll(() => {
+  mock.module("@/lib/tauri", () => realTauriSnapshot);
+  mock.module("@/lib/claude-tmux-client", () => realClaudeTmuxClientSnapshot);
+  mock.module("@/lib/claude-client", () => realClaudeClientSnapshot);
+  mock.module("@/lib/codex-client", () => realCodexClientSnapshot);
+  mock.module("@/lib/opencode-client", () => realOpenCodeClientSnapshot);
+});
+
+const { usePaneLayoutStore } = await import("./paneLayoutStore");
+const { useTerminalSessionStore, createSessionKey } = await import("./terminalSessionStore");
+const { useClaudeStore, createClaudeSessionKey } = await import("./claudeStore");
+const { useCodexStore, createCodexSessionKey } = await import("./codexStore");
+const { useOpenCodeStore, createOpenCodeSessionKey } = await import("./openCodeStore");
+
+function resetStores() {
   usePaneLayoutStore.setState({
     environments: new Map(),
     activeEnvironmentId: null,
   });
+  useTerminalSessionStore.setState({
+    sessions: new Map(),
+    composeDraftText: new Map(),
+    composeDraftImages: new Map(),
+  });
+  useClaudeStore.setState({
+    clients: new Map(),
+    sessions: new Map(),
+    messageQueue: new Map(),
+  });
+  useCodexStore.setState({
+    clients: new Map(),
+    sessions: new Map(),
+    messageQueue: new Map(),
+  });
+  useOpenCodeStore.setState({
+    clients: new Map(),
+    sessions: new Map(),
+    messageQueue: new Map(),
+  });
+
+  closeLocalTerminalSession.mockClear();
+  detachTerminal.mockClear();
+  updateSessionStatus.mockClear();
+  stopTmuxSession.mockClear();
+  deleteClaudeSession.mockClear();
+  deleteCodexSession.mockClear();
+  deleteOpenCodeSession.mockClear();
 }
+
+function seedSingleTabEnvironment(
+  environmentId: string,
+  containerId: string | null,
+  tab: { id: string; type: string },
+) {
+  usePaneLayoutStore.setState({
+    activeEnvironmentId: environmentId,
+    environments: new Map([
+      [
+        environmentId,
+        {
+          containerId,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [tab as any],
+            activeTabId: tab.id,
+          },
+        },
+      ],
+    ]),
+  });
+}
+
+describe("paneLayoutStore tab cleanup", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+
+  test("closing a local terminal tab calls the local PTY close command", () => {
+    seedSingleTabEnvironment("env-local", null, { id: "tab-terminal", type: "plain" });
+    const sessionKey = createSessionKey(null, "tab-terminal", "env-local");
+    useTerminalSessionStore.getState().setSession(sessionKey, { sessionId: "pty-local" });
+
+    usePaneLayoutStore.getState().removeTab("default", "tab-terminal");
+
+    expect(closeLocalTerminalSession).toHaveBeenCalledWith("pty-local");
+    expect(detachTerminal).not.toHaveBeenCalled();
+    expect(useTerminalSessionStore.getState().sessions.has(sessionKey)).toBe(false);
+  });
+
+  test("closing a terminal tab marks its persistent session disconnected", () => {
+    seedSingleTabEnvironment("env-local", null, { id: "tab-terminal", type: "plain" });
+    const sessionKey = createSessionKey(null, "tab-terminal", "env-local");
+    useTerminalSessionStore.getState().setSession(sessionKey, {
+      sessionId: "pty-local",
+      persistentSessionId: "persistent-1",
+    });
+
+    usePaneLayoutStore.getState().removeTab("default", "tab-terminal");
+
+    expect(updateSessionStatus).toHaveBeenCalledWith("persistent-1", "disconnected");
+  });
+
+  test("closing a container terminal tab calls the Docker detach command", () => {
+    seedSingleTabEnvironment("env-container", "container-1", { id: "tab-terminal", type: "plain" });
+    const sessionKey = createSessionKey("container-1", "tab-terminal", "env-container");
+    useTerminalSessionStore.getState().setSession(sessionKey, { sessionId: "pty-container" });
+
+    usePaneLayoutStore.getState().removeTab("default", "tab-terminal");
+
+    expect(detachTerminal).toHaveBeenCalledWith("pty-container");
+    expect(closeLocalTerminalSession).not.toHaveBeenCalled();
+  });
+
+  test("closing a Claude tmux tab stops its tmux session", () => {
+    seedSingleTabEnvironment("env-local", null, { id: "tab-tmux", type: "claude-tmux" });
+
+    usePaneLayoutStore.getState().removeTab("default", "tab-tmux");
+
+    expect(stopTmuxSession).toHaveBeenCalledWith("tab-tmux");
+  });
+
+  test("closing native agent tabs deletes their backend sessions", () => {
+    const tabs = [
+      { id: "claude-tab", type: "claude-native" },
+      { id: "codex-tab", type: "codex-native" },
+      { id: "opencode-tab", type: "opencode-native" },
+    ];
+    usePaneLayoutStore.setState({
+      activeEnvironmentId: "env-native",
+      environments: new Map([
+        [
+          "env-native",
+          {
+            containerId: null,
+            activePaneId: "default",
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: tabs as any,
+              activeTabId: "claude-tab",
+            },
+          },
+        ],
+      ]),
+    });
+
+    const claudeKey = createClaudeSessionKey("env-native", "claude-tab");
+    useClaudeStore.getState().setClient("env-native", {} as any);
+    useClaudeStore.getState().setSession(claudeKey, {
+      sessionId: "claude-session",
+      messages: [],
+      isLoading: true,
+    });
+
+    const codexKey = createCodexSessionKey("env-native", "codex-tab");
+    useCodexStore.getState().setClient("env-native", {} as any);
+    useCodexStore.getState().setSession(codexKey, {
+      sessionId: "codex-session",
+      messages: [],
+      isLoading: true,
+    });
+
+    const openCodeKey = createOpenCodeSessionKey("env-native", "opencode-tab");
+    useOpenCodeStore.getState().setClient("env-native", {} as any);
+    useOpenCodeStore.getState().setSession(openCodeKey, {
+      sessionId: "opencode-session",
+      messages: [],
+      isLoading: true,
+    });
+
+    usePaneLayoutStore.getState().removeTab("default", "claude-tab");
+    usePaneLayoutStore.getState().removeTab("default", "codex-tab");
+    usePaneLayoutStore.getState().removeTab("default", "opencode-tab");
+
+    expect(deleteClaudeSession).toHaveBeenCalledWith(expect.anything(), "claude-session");
+    expect(deleteCodexSession).toHaveBeenCalledWith(expect.anything(), "codex-session");
+    expect(deleteOpenCodeSession).toHaveBeenCalledWith(expect.anything(), "opencode-session");
+    expect(useClaudeStore.getState().sessions.has(claudeKey)).toBe(false);
+    expect(useCodexStore.getState().sessions.has(codexKey)).toBe(false);
+    expect(useOpenCodeStore.getState().sessions.has(openCodeKey)).toBe(false);
+  });
+
+  test("reset cleans up all tab resources for the environment", () => {
+    usePaneLayoutStore.setState({
+      activeEnvironmentId: "env-reset",
+      environments: new Map([
+        [
+          "env-reset",
+          {
+            containerId: null,
+            activePaneId: "default",
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [
+                { id: "terminal-tab", type: "plain" },
+                { id: "tmux-tab", type: "claude-tmux" },
+                { id: "codex-tab", type: "codex-native" },
+              ] as any,
+              activeTabId: "terminal-tab",
+            },
+          },
+        ],
+      ]),
+    });
+    const terminalKey = createSessionKey(null, "terminal-tab", "env-reset");
+    useTerminalSessionStore.getState().setSession(terminalKey, { sessionId: "pty-reset" });
+    const codexKey = createCodexSessionKey("env-reset", "codex-tab");
+    useCodexStore.getState().setClient("env-reset", {} as any);
+    useCodexStore.getState().setSession(codexKey, {
+      sessionId: "codex-session",
+      messages: [],
+      isLoading: false,
+    });
+
+    usePaneLayoutStore.getState().reset("env-reset");
+
+    expect(closeLocalTerminalSession).toHaveBeenCalledWith("pty-reset");
+    expect(stopTmuxSession).toHaveBeenCalledWith("tmux-tab");
+    expect(deleteCodexSession).toHaveBeenCalledWith(expect.anything(), "codex-session");
+    expect(usePaneLayoutStore.getState().getAllTabs("env-reset")).toEqual([]);
+  });
+
+  test("removing the last tab in the root pane keeps an empty leaf", () => {
+    seedSingleTabEnvironment("env-root", null, { id: "tab-only", type: "plain" });
+
+    usePaneLayoutStore.getState().removeTab("default", "tab-only");
+
+    const envState = usePaneLayoutStore.getState().environments.get("env-root");
+    expect(envState).toBeDefined();
+    const root = envState!.root as { kind: "leaf"; id: string; tabs: unknown[]; activeTabId: string | null };
+    expect(root.kind).toBe("leaf");
+    expect(root.id).toBe("default");
+    expect(root.tabs).toEqual([]);
+    expect(root.activeTabId).toBeNull();
+  });
+});
 
 describe("paneLayoutStore environment scoping", () => {
   beforeEach(() => {
-    resetPaneLayoutStore();
+    resetStores();
   });
 
   test("initializes a hidden environment without changing the active environment", () => {

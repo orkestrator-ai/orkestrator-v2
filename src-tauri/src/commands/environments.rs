@@ -12,7 +12,7 @@ use crate::docker::{
 use crate::local::{
     allocate_ports, configure_local_git_artifacts, copy_env_files, copy_project_files,
     create_worktree, delete_worktree, get_setup_local_commands, isolated_opencode_data_home,
-    stop_all_local_servers,
+    close_local_terminal_sessions_for_environment, stop_all_local_servers,
 };
 use crate::models::{
     sanitize_branch_name, sanitize_environment_name, ClaudeMode, ClaudeNativeBackend, CodexMode,
@@ -23,6 +23,8 @@ use crate::storage::{get_config, get_storage, Storage, StorageError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::Emitter;
+
+use super::claude_tmux::stop_tmux_sessions_for_environment;
 
 /// Event payload emitted when an environment is renamed in the background
 #[derive(Clone, Serialize, Deserialize)]
@@ -861,6 +863,12 @@ pub async fn delete_environment(environment_id: String) -> Result<(), String> {
     };
 
     if let Some(env) = environment {
+        // Close terminal/tmux sessions for either backend. Local terminal
+        // cleanup is a no-op for container envs, and tmux cleanup uses the
+        // backend stored on each tracked session.
+        close_local_terminal_sessions_for_environment(&environment_id);
+        stop_tmux_sessions_for_environment(&environment_id).await;
+
         // Handle based on environment type
         if env.is_local() {
             // Local environment: stop servers and delete worktree
@@ -1756,6 +1764,12 @@ pub async fn stop_environment(environment_id: String) -> Result<(), String> {
         environment_type = ?environment.environment_type,
         "Found environment"
     );
+
+    // Close terminal/tmux sessions before either-backend container stop.
+    // Local terminal cleanup is a no-op for container envs; tmux cleanup
+    // uses the backend stored on each tracked session.
+    close_local_terminal_sessions_for_environment(&environment_id);
+    stop_tmux_sessions_for_environment(&environment_id).await;
 
     // Handle local environments differently
     if environment.is_local() {

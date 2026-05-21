@@ -12,7 +12,6 @@
 //! payload Claude Code provides. See [`crate::claude_tmux::hooks`].
 
 use super::backend::Backend;
-use super::get_manager;
 use super::hooks::{self, PendingHookEvent, SessionHookPaths, WorkspaceHookPaths};
 use super::transcript::{self, TranscriptTail, POLL_INTERVAL_MS};
 use serde::{Deserialize, Serialize};
@@ -253,23 +252,17 @@ impl TmuxSession {
         hooks::list_pending_blocking(&self.backend, &self.session_hook_paths).await
     }
 
-    /// Start tmux + claude and spawn the poll loop. Idempotent if tmux
-    /// already has a session by this name.
-    pub async fn start(
+    /// Start tmux + claude after the caller has already installed workspace
+    /// hooks while holding the per-environment install lock. Keeping the lock
+    /// at the command level serializes the whole create/insert/start sequence
+    /// against environment stop/delete cleanup.
+    pub(crate) async fn start_after_hooks_installed(
         self: Arc<Self>,
         app: AppHandle,
         initial_prompt: Option<String>,
         model: Option<String>,
         plan_mode: bool,
     ) -> Result<(), String> {
-        // 1. Install workspace-level hook artifacts (idempotent across tabs).
-        //    Serialized per-env so two concurrent starts in the same
-        //    workspace can't race on the settings backup.
-        {
-            let install_lock = get_manager().install_lock(&self.environment_id).await;
-            let _guard = install_lock.lock().await;
-            hooks::install_workspace_hooks(&self.backend, &self.workspace_hook_paths).await?;
-        }
         // Ensure this session's pending/response/timeout subdirs exist BEFORE
         // claude launches and starts firing hooks.
         hooks::ensure_session_dirs(&self.backend, &self.session_hook_paths).await?;

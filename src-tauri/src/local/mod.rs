@@ -11,7 +11,10 @@ pub mod worktree;
 
 // Re-export commonly used items
 pub use ports::allocate_ports;
-pub use pty::{get_local_terminal_manager, init_local_terminal_manager};
+pub use pty::{
+    close_local_terminal_sessions_for_environment, get_local_terminal_manager,
+    init_local_terminal_manager, shutdown_all_local_terminal_sessions,
+};
 pub use servers::{
     cleanup_stale_local_servers, get_local_claude_status, get_local_codex_status,
     get_local_opencode_status, isolated_opencode_data_home, shutdown_all_local_servers,

@@ -383,6 +383,22 @@ export async function abortSession(
   }
 }
 
+export async function deleteSession(
+  client: CodexClient,
+  sessionId: string,
+): Promise<boolean> {
+  try {
+    const response = await fetchWithTimeout(
+      `${client.baseUrl}/session/${sessionId}`,
+      { method: "DELETE" },
+    );
+    return response.ok;
+  } catch (error) {
+    console.error("[codex-client] Failed to delete session:", error);
+    return false;
+  }
+}
+
 export function subscribeToEvents(
   client: CodexClient,
   signal?: AbortSignal,

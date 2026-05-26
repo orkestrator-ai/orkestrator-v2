@@ -291,6 +291,57 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     expect(container.textContent).toContain("1/2 complete");
   });
 
+  test("routes TaskUpdate tool-invocation to TodoToolPart instead of raw JSON", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName: "TaskUpdate",
+        toolState: "success",
+        toolArgs: {
+          taskId: "2",
+          status: "completed",
+        },
+        toolOutput: "Updated task #2 status",
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(container.textContent).toContain("Task Update");
+    expect(container.textContent).toContain("1/1 complete");
+    expect(container.textContent).not.toContain('"taskId"');
+    expect(container.textContent).not.toContain('"completed"');
+  });
+
+  test("routes TaskCreate tool-invocation to TodoToolPart with task rows", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "",
+        toolName: "TaskCreate",
+        toolState: "success",
+        toolArgs: {
+          tasks: [
+            { id: "1", title: "Inspect renderer", status: "completed" },
+            { id: "2", title: "Add tests", status: "pending" },
+          ],
+        },
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(container.textContent).toContain("Task Create");
+    expect(container.textContent).toContain("1/2 complete");
+
+    const trigger = screen.getByRole("button", { name: /Task Create/i });
+    fireEvent.click(trigger);
+
+    expect(container.textContent).toContain("#1 Inspect renderer");
+    expect(container.textContent).toContain("#2 Add tests");
+  });
+
   test("does not route non-todo tools to TodoToolPart", () => {
     const message = makeMessage([
       {

@@ -46,6 +46,50 @@ describe("TodoToolPart", () => {
     expect(container.textContent).toContain("1/2 complete");
   });
 
+  test("renders TaskCreate tasks with friendly label", () => {
+    const { container } = render(
+      <TodoToolPart
+        toolName="TaskCreate"
+        toolState="success"
+        toolArgs={{
+          tasks: [
+            { id: "1", title: "Inspect renderer", status: "completed" },
+            { id: "2", title: "Add direct coverage", status: "pending" },
+          ],
+        }}
+      />,
+    );
+
+    expect(container.textContent).toContain("Task Create");
+    expect(container.textContent).toContain("1/2 complete");
+
+    fireEvent.click(container.querySelector("button")!);
+
+    expect(container.textContent).toContain("#1 Inspect renderer");
+    expect(container.textContent).toContain("#2 Add direct coverage");
+  });
+
+  test("renders TaskUpdate from JSON output when args are missing", () => {
+    const { container } = render(
+      <TodoToolPart
+        toolName="TaskUpdate"
+        toolState="success"
+        toolOutput={JSON.stringify({
+          taskId: "7",
+          content: "Verify output fallback",
+          status: "done",
+        })}
+      />,
+    );
+
+    expect(container.textContent).toContain("Task Update");
+    expect(container.textContent).toContain("1/1 complete");
+
+    fireEvent.click(container.querySelector("button")!);
+
+    expect(container.textContent).toContain("#7 Verify output fallback");
+  });
+
   test("falls back to 'TodoWrite' when toolName is undefined", () => {
     const { container } = render(
       <TodoToolPart toolState="success" toolOutput='[{"content":"a","status":"pending"}]' />,

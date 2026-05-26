@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { AlertCircle, CheckSquare, ChevronRight, ListTodo, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getTodoItems } from "@/lib/todo-tool";
+import { getTodoItems, getTodoToolLabel } from "@/lib/todo-tool";
 import {
   Collapsible,
   CollapsibleContent,
@@ -30,7 +30,8 @@ export function TodoToolPart({
   toolError,
 }: TodoToolPartProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const todos = getTodoItems(toolArgs, toolOutput);
+  const todos = getTodoItems(toolArgs, toolOutput, toolName);
+  const toolLabel = getTodoToolLabel(toolName);
   const completedCount = todos.filter((todo) => todo.status === "completed").length;
   const cancelledCount = todos.filter((todo) => todo.status === "cancelled").length;
   const totalCount = todos.length;
@@ -56,7 +57,7 @@ export function TodoToolPart({
         />
         <ListTodo className="h-3.5 w-3.5 shrink-0" />
         <span className="shrink-0 font-medium leading-none">
-          {toolName === "todo_list" ? "Todo List" : toolName || "TodoWrite"}
+          {toolLabel}
         </span>
         {totalCount > 0 && (
           <span className="flex-1 text-left text-muted-foreground/80 leading-none">

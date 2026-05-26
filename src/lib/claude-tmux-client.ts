@@ -18,6 +18,12 @@ export type TmuxEvent =
       resumed: boolean;
     }
   | {
+      kind: "initial-prompt-sent";
+      tab_id: string;
+      environment_id: string;
+      session_id: string;
+    }
+  | {
       kind: "transcript-line";
       tab_id: string;
       environment_id: string;

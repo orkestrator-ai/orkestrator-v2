@@ -22,6 +22,7 @@ interface ClaudeQuestionCardBaseProps {
   allowOptionDeselect?: boolean;
   submitOnOptionSelect?: boolean;
   onDismiss?: () => Promise<void> | void;
+  hideDismiss?: boolean;
 }
 
 type ClaudeQuestionCardProps =
@@ -263,6 +264,7 @@ export function ClaudeQuestionCard({
   sessionId,
   onSubmitAnswers,
   onDismiss,
+  hideDismiss = false,
 }: ClaudeQuestionCardProps) {
   const { removePendingQuestion } = useClaudeStore();
 
@@ -490,15 +492,17 @@ export function ClaudeQuestionCard({
 
       {/* Actions */}
       <div className="flex items-center justify-between px-4 py-3 bg-muted/30 border-t border-border">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleDismiss}
-          disabled={isSubmitting}
-          className="text-muted-foreground hover:text-foreground"
-        >
-          Dismiss
-        </Button>
+        {!hideDismiss && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleDismiss}
+            disabled={isSubmitting}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            Dismiss
+          </Button>
+        )}
         <div className="flex items-center gap-2">
           {questionCount > 1 && currentQuestionIndex > 0 && (
             <Button

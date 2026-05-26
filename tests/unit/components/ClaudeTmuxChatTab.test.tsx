@@ -223,7 +223,7 @@ describe("ClaudeTmuxChatTab", () => {
     seedPane("Run the audit");
   });
 
-  test("starts once with tabId+envId and clears the tab initialPrompt after launch succeeds", async () => {
+  test("starts once with tabId+envId and clears the tab initialPrompt after the backend sends it", async () => {
     render(
       <ClaudeTmuxChatTab
         tabId="tab-1"
@@ -244,6 +244,19 @@ describe("ClaudeTmuxChatTab", () => {
         resumeSessionId: undefined,
       },
     ]);
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]?.initialPrompt).toBe(
+      "Run the audit",
+    );
+
+    act(() => {
+      subscribedHandler?.({
+        kind: "initial-prompt-sent",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+      });
+    });
 
     await waitFor(() => {
       const tab = usePaneLayoutStore.getState().getAllTabs("env-1")[0];
@@ -1147,7 +1160,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     ]);
   });
 
-  test("shows controls for Claude Code selection prompts and answers through tmux keys", async () => {
+  test("shows controls for Claude Code selection prompts and answers through tmux keys on submit", async () => {
     capturePaneMock.mockImplementation(async () => `
   1. Kill stale tmux before launch (Recommended)
 › 2. Always kill before launch
@@ -1175,13 +1188,16 @@ Enter to select · Tab/Arrow keys to navigate · Esc to cancel
     fireEvent.click(
       screen.getByRole("button", { name: /Randomize tmux session name/ }),
     );
+    expect(sendKeysMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
       expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["Down", "Enter"]);
     });
   });
 
-  test("answers confirmation prompts by sending the selected number", async () => {
+  test("answers confirmation prompts by sending the selected number on submit", async () => {
     capturePaneMock.mockImplementation(async () => `
 WARNING: Claude Code running in Bypass Permissions mode
 
@@ -1210,6 +1226,9 @@ Enter to confirm · Esc to cancel
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /Yes, I accept/ }));
+    expect(sendKeysMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
       expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["2", "Enter"]);
@@ -1331,7 +1350,7 @@ Enter to confirm · Esc to cancel
     ]);
   });
 
-  test("clicking a different number-mode answer submits that number", async () => {
+  test("submitting a different number-mode answer sends that number", async () => {
     capturePaneMock.mockImplementation(async () => `
 WARNING: Claude Code running in Bypass Permissions mode
 
@@ -1360,6 +1379,9 @@ Enter to confirm · Esc to cancel
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /Yes, I accept/ }));
+    expect(sendKeysMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() => {
       expect(sendKeysMock).toHaveBeenLastCalledWith("tab-1", ["2", "Enter"]);
     });
@@ -1393,13 +1415,16 @@ Enter to confirm · Esc to cancel
 
     const retryButtons = screen.getAllByRole("button", { name: "Retry" });
     fireEvent.click(retryButtons[1]!);
+    expect(sendKeysMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
       expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["2", "Enter"]);
     });
   });
 
-  test("dismisses selection prompts by sending Escape", async () => {
+  test("selection prompts do not show a Dismiss button", async () => {
     capturePaneMock.mockImplementation(async () => `
 › 1. No, exit
   2. Yes, I accept
@@ -1422,12 +1447,7 @@ Enter to confirm · Esc to cancel
     );
 
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-
-    await waitFor(() => {
-      expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["Escape"]);
-    });
+    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
   });
 
   test("keeps selection prompt controls disabled while tmux keys are pending", async () => {
@@ -1464,6 +1484,9 @@ Enter to confirm · Esc to cancel
     const noButton = screen.getByRole("button", { name: /No, exit/ }) as HTMLButtonElement;
     const yesButton = screen.getByRole("button", { name: /Yes, I accept/ }) as HTMLButtonElement;
     fireEvent.click(yesButton);
+    expect(sendKeysMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
       expect(sendKeysMock).toHaveBeenCalledTimes(1);
@@ -1502,6 +1525,9 @@ Enter to confirm · Esc to cancel
 
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Option 10/ }));
+    expect(sendKeysMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
       expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["1", "0", "Enter"]);
@@ -1532,10 +1558,13 @@ Enter to select · Esc to cancel
 
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
 
-    // Clicking the already-selected option should send only Enter (delta = 0).
+    // Submitting the already-selected option should send only Enter (delta = 0).
     fireEvent.click(
       screen.getByRole("button", { name: /Always kill before launch/ }),
     );
+    expect(sendKeysMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
       expect(sendKeysMock).toHaveBeenCalledWith("tab-1", ["Enter"]);

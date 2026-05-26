@@ -295,6 +295,11 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
             resumed: ev.resumed,
           });
           return;
+        case "initial-prompt-sent":
+          if (ev.environment_id === environmentId) {
+            clearTabInitialPrompt(tabId, environmentId);
+          }
+          return;
         case "stopped":
           setRunning(tabId, false, { sessionId: null });
           // No claude process means no in-flight turn.
@@ -385,6 +390,8 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
     removePendingElicitation,
     pushInfoEvent,
     setTabBusy,
+    clearTabInitialPrompt,
+    environmentId,
   ]);
 
   // Common "start the tmux session" path used by both auto-start (initial
@@ -399,11 +406,6 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
         planMode,
         resumeSessionId,
       })
-        .then(() => {
-          if (initialPrompt?.trim()) {
-            clearTabInitialPrompt(tabId, environmentId);
-          }
-        })
         .catch((e) => {
           // Re-arm so the user can retry from the start screen.
           startedRef.current = false;
@@ -416,7 +418,6 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
       initialPrompt,
       selectedModel,
       planMode,
-      clearTabInitialPrompt,
     ],
   );
 
@@ -911,11 +912,10 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
                   initialAnswers={[selectionPromptInitialAnswer(selectionPrompt)]}
                   allowCustomAnswer={false}
                   allowOptionDeselect={false}
-                  submitOnOptionSelect
+                  hideDismiss
                   onSubmitAnswers={(answers) =>
                     handleSelectionPromptAnswers(selectionPrompt, answers)
                   }
-                  onDismiss={() => handlePromptKeys(["Escape"])}
                 />
               )}
             </div>

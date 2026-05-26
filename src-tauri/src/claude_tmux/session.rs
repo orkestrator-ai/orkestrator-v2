@@ -40,6 +40,12 @@ pub enum TmuxEvent {
         /// transcript content will replay through TranscriptLine events).
         resumed: bool,
     },
+    /// The backend-delayed initial prompt was safely delivered to Claude.
+    InitialPromptSent {
+        tab_id: String,
+        environment_id: String,
+        session_id: String,
+    },
     /// A new JSONL line was appended to the transcript.
     TranscriptLine {
         tab_id: String,
@@ -360,32 +366,12 @@ impl TmuxSession {
             );
         }
 
-        // 4. Send the initial prompt (if any). When we just launched tmux we
-        //    wait briefly so claude's TUI is ready to receive keystrokes; for
-        //    a reused (warm) session the TUI is already up and we send
-        //    immediately.
-        //
-        //    Edge case worth being aware of: "warm tmux" here only means
-        //    `tmux has-session -t <name>` succeeded. If a prior `start` died
-        //    after tmux launched but before claude's TUI finished booting,
-        //    the prompt could land in a half-up shell. We accept that risk
-        //    for the common case (rapid re-mount of the same tab) because
-        //    the alternative (capture-and-probe) doubles startup latency
-        //    for every well-behaved start. Don't optimize this without a
-        //    confirmed reproducer.
-        if should_send_initial_prompt(initial_prompt.as_deref()) {
-            let prompt = initial_prompt.unwrap_or_default();
-            if launched_new {
-                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-            }
-            self.send_text(&prompt).await?;
-            self.send_enter().await?;
-        }
-
-        // 5. Kick off the poll loop.
+        // 4. Kick off the poll loop.
         self.clone().spawn_poll_loop(app.clone());
 
-        // 6. Emit started event.
+        // 5. Emit started event before any delayed prompt work. The frontend
+        // needs `running=true` so it can surface Claude Code's own first-run
+        // confirmation prompts, including the bypass-permissions warning.
         let _ = app.emit(
             TAURI_EVENT,
             TmuxEvent::Started {
@@ -396,7 +382,96 @@ impl TmuxSession {
             },
         );
 
+        // 6. Send the initial prompt (if any) in the background, after the
+        // TUI is past any selection/confirmation prompt. Claude Code now asks
+        // for explicit bypass-permissions confirmation on fresh installs; the
+        // old fixed-delay send could press Enter while "No, exit" was selected.
+        if should_send_initial_prompt(initial_prompt.as_deref()) {
+            self.clone().spawn_initial_prompt_sender(
+                app.clone(),
+                initial_prompt.unwrap_or_default(),
+                launched_new,
+            );
+        }
+
         Ok(())
+    }
+
+    fn spawn_initial_prompt_sender(
+        self: Arc<Self>,
+        app: AppHandle,
+        prompt: String,
+        launched_new: bool,
+    ) {
+        tokio::spawn(async move {
+            if let Err(e) = self
+                .send_initial_prompt_when_ready(&prompt, launched_new)
+                .await
+            {
+                warn!(
+                    tab = %self.tab_id,
+                    error = %e,
+                    "failed to send delayed tmux initial prompt"
+                );
+                let _ = app.emit(
+                    TAURI_EVENT,
+                    TmuxEvent::Warning {
+                        tab_id: self.tab_id.clone(),
+                        environment_id: self.environment_id.clone(),
+                        message: format!("Failed to send initial prompt: {e}"),
+                    },
+                );
+                return;
+            }
+
+            let _ = app.emit(
+                TAURI_EVENT,
+                TmuxEvent::InitialPromptSent {
+                    tab_id: self.tab_id.clone(),
+                    environment_id: self.environment_id.clone(),
+                    session_id: self.session_id.clone(),
+                },
+            );
+        });
+    }
+
+    async fn send_initial_prompt_when_ready(
+        &self,
+        prompt: &str,
+        launched_new: bool,
+    ) -> Result<(), String> {
+        if launched_new {
+            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        }
+
+        self.wait_for_tui_input_ready().await?;
+        self.send_text(prompt).await?;
+        self.send_enter().await
+    }
+
+    async fn wait_for_tui_input_ready(&self) -> Result<(), String> {
+        const INITIAL_PROMPT_READY_TIMEOUT_SECS: u64 = 10 * 60;
+        let deadline = tokio::time::Instant::now()
+            + std::time::Duration::from_secs(INITIAL_PROMPT_READY_TIMEOUT_SECS);
+
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                return Err("timed out waiting for Claude to leave its startup prompt".to_string());
+            }
+            if !self.tmux_alive().await.unwrap_or(false) {
+                return Err("tmux session stopped before Claude was ready".to_string());
+            }
+
+            let snapshot = self.capture_pane().await.unwrap_or_default();
+            if pane_has_claude_exited(&snapshot) {
+                return Err("Claude exited before the initial prompt was sent".to_string());
+            }
+            if !pane_has_selection_prompt(&snapshot) {
+                return Ok(());
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
     }
 
     async fn resolve_claude_command(&self) -> Result<String, String> {
@@ -747,6 +822,81 @@ fn should_send_initial_prompt(prompt: Option<&str>) -> bool {
     prompt.is_some_and(|p| !p.trim().is_empty())
 }
 
+fn pane_has_selection_prompt(snapshot: &str) -> bool {
+    let plain = strip_ansi(snapshot);
+    let lower = plain.to_ascii_lowercase();
+    if !lower.contains("esc to cancel") || !lower.contains("enter to") {
+        return false;
+    }
+
+    plain.lines().any(is_selection_option_line)
+}
+
+fn is_selection_option_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let without_selector = trimmed
+        .strip_prefix('>')
+        .or_else(|| trimmed.strip_prefix('›'))
+        .or_else(|| trimmed.strip_prefix('❯'))
+        .or_else(|| trimmed.strip_prefix('▸'))
+        .or_else(|| trimmed.strip_prefix('➜'))
+        .or_else(|| trimmed.strip_prefix('→'))
+        .unwrap_or(trimmed)
+        .trim_start();
+
+    let digit_count = without_selector
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .count();
+    digit_count > 0 && without_selector[digit_count..].starts_with(". ")
+}
+
+fn pane_has_claude_exited(snapshot: &str) -> bool {
+    strip_ansi(snapshot).contains("[claude exited]")
+}
+
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\x1b' {
+            out.push(ch);
+            continue;
+        }
+        match chars.peek() {
+            Some(&'[') => {
+                // CSI: ESC [ <params> <letter>
+                chars.next();
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            Some(&']') => {
+                // OSC: ESC ] ... BEL or ESC \ (ST)
+                chars.next();
+                loop {
+                    match chars.next() {
+                        Some('\x07') | None => break,
+                        Some('\x1b') => {
+                            chars.next(); // consume the \ of ST
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Some(_) => {
+                // Two-char sequences: ESC M (reverse index), ESC O (SS3), etc.
+                chars.next();
+            }
+            None => {}
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1038,6 +1188,65 @@ mod tests {
         assert!(!should_send_initial_prompt(Some("   ")));
         assert!(!should_send_initial_prompt(Some("")));
         assert!(!should_send_initial_prompt(None));
+    }
+
+    #[test]
+    fn detects_claude_tui_selection_prompts() {
+        let pane = r#"
+WARNING: Claude Code running in Bypass Permissions mode
+
+› 1. No, exit
+  2. Yes, I accept
+
+Enter to confirm · Esc to cancel
+"#;
+
+        assert!(pane_has_selection_prompt(pane));
+    }
+
+    #[test]
+    fn does_not_treat_plain_output_as_selection_prompt() {
+        let pane = r#"
+1. Inspect the failing test
+2. Patch the race
+
+node@host:/workspace$
+"#;
+
+        assert!(!pane_has_selection_prompt(pane));
+    }
+
+    #[test]
+    fn detects_claude_exited_sentinel() {
+        assert!(pane_has_claude_exited(
+            "\u{1b}[31m[claude exited]\u{1b}[0m\nnode@host:/workspace$"
+        ));
+    }
+
+    #[test]
+    fn strip_ansi_handles_osc_sequences() {
+        // OSC terminated by BEL
+        assert_eq!(strip_ansi("\x1b]0;window title\x07hello"), "hello");
+        // OSC terminated by ST (ESC \)
+        assert_eq!(strip_ansi("\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\"), "link");
+    }
+
+    #[test]
+    fn strip_ansi_handles_two_char_escape_sequences() {
+        // ESC M (reverse index) — only two chars consumed
+        assert_eq!(strip_ansi("\x1bMtext"), "text");
+    }
+
+    #[test]
+    fn pane_has_selection_prompt_survives_osc_wrapped_text() {
+        let pane = "\x1b]0;claude\x07\
+WARNING: Claude Code running in Bypass Permissions mode\n\
+\n\
+› 1. No, exit\n\
+  2. Yes, I accept\n\
+\n\
+Enter to confirm · Esc to cancel\n";
+        assert!(pane_has_selection_prompt(pane));
     }
 
     #[test]

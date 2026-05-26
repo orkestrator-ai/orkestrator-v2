@@ -561,7 +561,7 @@ describe("PersistentTerminal", () => {
     });
   });
 
-  it("does not mark workspace ready when reconnecting an existing first tab", async () => {
+  it("marks workspace ready when a reconnected first tab buffer contains setup completion", async () => {
     const onReady = mock(
       (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {}
     );
@@ -572,6 +572,7 @@ describe("PersistentTerminal", () => {
           {
             sessionId: "existing-session-1",
             hasLaunchedCommand: false,
+            serializedBuffer: "Container setup completed successfully!\n=== Workspace Ready ===\n",
           },
         ],
       ]),
@@ -595,8 +596,59 @@ describe("PersistentTerminal", () => {
 
     await waitFor(() => {
       expect(onReady).toHaveBeenCalledWith({
-        persistSetupComplete: false,
-        workspaceReady: false,
+        persistSetupComplete: true,
+        workspaceReady: true,
+      });
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(onReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps setup detection active when reconnecting an unfinished first tab", async () => {
+    const onReady = mock(
+      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {}
+    );
+    useTerminalSessionStore.setState({
+      sessions: new Map([
+        [
+          "container-1:tab-1",
+          {
+            sessionId: "existing-session-1",
+            hasLaunchedCommand: false,
+            serializedBuffer: "Installing dependencies...\n",
+          },
+        ],
+      ]),
+    });
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={true}
+        paneId="pane-1"
+        onReady={onReady}
+      />
+    );
+
+    await act(async () => {
+      terminalOnData?.(new TextEncoder().encode("=== Workspace Ready ===\n"));
+    });
+
+    await waitFor(() => {
+      expect(onReady).toHaveBeenCalledWith({
+        persistSetupComplete: true,
+        workspaceReady: true,
       });
     });
   });
@@ -788,6 +840,98 @@ describe("PersistentTerminal", () => {
       const sessions = useTerminalSessionStore.getState().sessions;
       const session = sessions.get("container-1:tab-1");
       expect(session?.serializedBuffer).toBe("restored-buffer");
+    });
+  });
+
+  it("marks workspace ready when an asynchronously restored first-tab buffer contains setup completion", async () => {
+    const onReady = mock(
+      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {}
+    );
+    persistentSessionStore.loadSessionBuffer.mockImplementation(async () =>
+      "Container setup completed successfully!\n=== Workspace Ready ===\n"
+    );
+    persistentSessionStore.getSessionsByEnvironment = () => [
+      {
+        id: "existing-setup-session-1",
+        environmentId: "env-1",
+        containerId: "container-1",
+        tabId: "tab-1",
+        sessionType: "plain",
+        status: "disconnected",
+        hasLaunchedCommand: false,
+        lastActivityAt: "2024-01-01T00:00:00.000Z",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        order: 0,
+      },
+    ];
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={true}
+        paneId="pane-1"
+        onReady={onReady}
+      />
+    );
+
+    await waitFor(() => {
+      expect(onReady).toHaveBeenCalledWith({
+        persistSetupComplete: true,
+        workspaceReady: true,
+      });
+    });
+  });
+
+  it("does not persist completion when an asynchronously restored first-tab buffer contains setup failure", async () => {
+    const onReady = mock(
+      (_payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => {}
+    );
+    persistentSessionStore.loadSessionBuffer.mockImplementation(async () =>
+      "=== Workspace Setup Failed ===\n=== Workspace Ready ===\n"
+    );
+    persistentSessionStore.getSessionsByEnvironment = () => [
+      {
+        id: "existing-failed-setup-session-1",
+        environmentId: "env-1",
+        containerId: "container-1",
+        tabId: "tab-1",
+        sessionType: "plain",
+        status: "disconnected",
+        hasLaunchedCommand: false,
+        lastActivityAt: "2024-01-01T00:00:00.000Z",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        order: 0,
+      },
+    ];
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={true}
+        paneId="pane-1"
+        onReady={onReady}
+      />
+    );
+
+    await waitFor(() => {
+      expect(onReady).toHaveBeenCalledWith({
+        persistSetupComplete: false,
+        workspaceReady: true,
+      });
     });
   });
 

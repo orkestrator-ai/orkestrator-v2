@@ -40,6 +40,33 @@ export const SETUP_COMPLETE_MARKER = "Container setup completed successfully!";
 
 export const ENVIRONMENT_SETUP_FAILED_MARKER = "=== Workspace Setup Failed ===";
 
+export interface ContainerSetupReadiness {
+  ready: boolean;
+  failed: boolean;
+}
+
+/**
+ * Detect container workspace setup completion markers in terminal output.
+ * Used for both live PTY output and restored terminal buffers, because setup
+ * can finish while the React tree that normally receives live data is inactive.
+ */
+export function detectContainerSetupReadiness(text: string): ContainerSetupReadiness {
+  const strippedText = stripAnsi(text);
+  const failed =
+    strippedText.includes(ENVIRONMENT_SETUP_FAILED_MARKER) ||
+    text.includes(ENVIRONMENT_SETUP_FAILED_MARKER);
+  const ready =
+    failed ||
+    strippedText.includes(ENVIRONMENT_READY_MARKER) ||
+    text.includes(ENVIRONMENT_READY_MARKER) ||
+    strippedText.includes(ENVIRONMENT_READY_MARKER_ALT_TILDE) ||
+    strippedText.includes(ENVIRONMENT_READY_MARKER_ALT_DASH) ||
+    strippedText.includes(ENVIRONMENT_ALREADY_READY_MARKER) ||
+    strippedText.includes(SETUP_COMPLETE_MARKER);
+
+  return { ready, failed };
+}
+
 /** OSC identifier used for invisible setup-complete signalling via xterm.js */
 export const SETUP_DONE_OSC_ID = 9999;
 

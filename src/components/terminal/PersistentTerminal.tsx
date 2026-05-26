@@ -20,12 +20,7 @@ import {
 import {
   stripAnsi,
   tabTypeToSessionType,
-  ENVIRONMENT_READY_MARKER,
-  ENVIRONMENT_READY_MARKER_ALT_TILDE,
-  ENVIRONMENT_READY_MARKER_ALT_DASH,
-  ENVIRONMENT_ALREADY_READY_MARKER,
-  ENVIRONMENT_SETUP_FAILED_MARKER,
-  SETUP_COMPLETE_MARKER,
+  detectContainerSetupReadiness,
   SETUP_DONE_OSC_ID,
   SETUP_DONE_OSC_DATA,
   SETUP_FAILED_OSC_DATA,
@@ -107,6 +102,7 @@ export function PersistentTerminal({
   const composeBarOpenRef = useRef(false); // Ref for synchronous access in key handler
   const dataBufferRef = useRef<string>("");
   const setupCompleteRef = useRef(false);
+  const workspaceReadySignaledRef = useRef(false);
   const hasLaunchedCommandRef = useRef(false);
   const hasInitiatedConnectionRef = useRef(false);
   const previousContainerIdRef = useRef<string>(containerId);
@@ -288,6 +284,7 @@ export function PersistentTerminal({
     if (previousContainerIdRef.current !== containerId) {
       setIsEnvironmentReady(false);
       dataBufferRef.current = "";
+      workspaceReadySignaledRef.current = false;
       hasLaunchedCommandRef.current = false;
       hasInitiatedConnectionRef.current = false;
       initialRestorationCompleteRef.current = false;
@@ -335,27 +332,17 @@ export function PersistentTerminal({
           // 2. Git clone output contains "workspace", "main", etc.
           // 3. We need to wait for ALL setup scripts in orkestrator-ai.json to complete
           // 4. Reused containers short-circuit setup and emit "Workspace already set up."
-          const readyDetected =
-            strippedBuffer.includes(ENVIRONMENT_SETUP_FAILED_MARKER) ||
-            dataBufferRef.current.includes(ENVIRONMENT_SETUP_FAILED_MARKER) ||
-            strippedBuffer.includes(ENVIRONMENT_READY_MARKER) ||
-            dataBufferRef.current.includes(ENVIRONMENT_READY_MARKER) ||
-            // Also check for alternate marker formats (with different delimiters)
-            strippedBuffer.includes(ENVIRONMENT_READY_MARKER_ALT_TILDE) ||
-            strippedBuffer.includes(ENVIRONMENT_READY_MARKER_ALT_DASH) ||
-            // Reused containers exit early without printing "Workspace Ready"
-            strippedBuffer.includes(ENVIRONMENT_ALREADY_READY_MARKER) ||
-            // Setup complete marker appears right before "Workspace Ready"
-            strippedBuffer.includes(SETUP_COMPLETE_MARKER);
+          const { ready: readyDetected, failed: setupFailed } =
+            detectContainerSetupReadiness(dataBufferRef.current);
 
           if (readyDetected) {
-            const setupFailed =
-              strippedBuffer.includes(ENVIRONMENT_SETUP_FAILED_MARKER) ||
-              dataBufferRef.current.includes(ENVIRONMENT_SETUP_FAILED_MARKER);
             console.log("[PersistentTerminal] Environment ready detected for tab:", tabId, "isFirstTab:", isFirstTab);
             setIsEnvironmentReady(true);
             dataBufferRef.current = "";
-            onReady?.({ persistSetupComplete: !setupFailed, workspaceReady: true });
+            if (!workspaceReadySignaledRef.current) {
+              workspaceReadySignaledRef.current = true;
+              onReady?.({ persistSetupComplete: !setupFailed, workspaceReady: true });
+            }
           }
 
           // Keep buffer from growing indefinitely, but use a larger window to catch markers
@@ -626,15 +613,50 @@ export function PersistentTerminal({
       // IMPORTANT: Don't set isEnvironmentReady to true in that case either, so handleData can
       // continue to monitor for setup completion.
       if (!isFirstTab || hadExistingSessionAtMountRef.current) {
-        setIsEnvironmentReady(true);
-        console.log("[PersistentTerminal] Reconnection complete, calling onReady for tab:", tabId);
-        onReady?.({ persistSetupComplete: false, workspaceReady: false });
+        if (isFirstTab && !isLocalEnvironment) {
+          const { ready, failed } = detectContainerSetupReadiness(serializedBuffer ?? "");
+          if (ready) {
+            setIsEnvironmentReady(true);
+            console.log("[PersistentTerminal] Reconnection buffer contains setup readiness marker for tab:", tabId);
+            if (!workspaceReadySignaledRef.current) {
+              workspaceReadySignaledRef.current = true;
+              onReady?.({ persistSetupComplete: !failed, workspaceReady: true });
+            }
+          } else {
+            console.log("[PersistentTerminal] Reconnected first container tab without setup marker, keeping readiness detection active for tab:", tabId);
+          }
+        } else {
+          setIsEnvironmentReady(true);
+          console.log("[PersistentTerminal] Reconnection complete, calling onReady for tab:", tabId);
+          onReady?.({ persistSetupComplete: false, workspaceReady: false });
+        }
       } else {
         // Leave isEnvironmentReady as false so handleData can detect setup completion
         console.log("[PersistentTerminal] First tab on new environment, waiting for setup detection before calling onReady, tab:", tabId);
       }
     }
-  }, [isReconnecting, isConnected, hasReconnected, tabId, environmentId, onReady, serializedBuffer, existingHasLaunchedCommand, terminal, fitAddon, isFirstTab]);
+  }, [isReconnecting, isConnected, hasReconnected, tabId, environmentId, onReady, serializedBuffer, existingHasLaunchedCommand, terminal, fitAddon, isFirstTab, isLocalEnvironment]);
+
+  // Persistent session buffers can arrive after the PTY reconnection effect has
+  // already run. If that restored buffer contains setup completion, rehydrate
+  // the workspace-ready gate from it so inactive setup completion is not lost.
+  useEffect(() => {
+    if (!isFirstTab || isLocalEnvironment || isEnvironmentReady || !serializedBuffer) {
+      return;
+    }
+
+    const { ready, failed } = detectContainerSetupReadiness(serializedBuffer);
+    if (!ready) {
+      return;
+    }
+
+    setIsEnvironmentReady(true);
+    if (!workspaceReadySignaledRef.current) {
+      workspaceReadySignaledRef.current = true;
+      console.log("[PersistentTerminal] Restored buffer contains setup readiness marker for tab:", tabId);
+      onReady?.({ persistSetupComplete: !failed, workspaceReady: true });
+    }
+  }, [isFirstTab, isLocalEnvironment, isEnvironmentReady, serializedBuffer, tabId, onReady]);
 
   // Monitor Claude activity state
   useAgentState(containerId, tabId);

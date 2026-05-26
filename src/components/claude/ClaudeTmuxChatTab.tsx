@@ -683,15 +683,7 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
     const option = prompt.options[optionIndex];
     if (!option) return;
 
-    // Claude Code renders numeric prefixes in some confirmation prompts, but
-    // current TUI builds do not treat those numbers as selection shortcuts.
-    // Drive the real highlighted selection instead; otherwise `2` + Enter can
-    // confirm the default "No, exit" option on the bypass-permissions prompt.
-    const delta = optionIndex - prompt.selectedOptionIndex;
-    const navKey = delta > 0 ? "Down" : "Up";
-    const keys: string[] = Array.from({ length: Math.abs(delta) }, () => navKey);
-    keys.push("Enter");
-    await handlePromptKeys(keys);
+    await handlePromptKeys(selectionPromptSubmitKeys(prompt, optionIndex));
   };
 
   const handleSelectionPromptAnswers = async (
@@ -1316,12 +1308,41 @@ export function parseTmuxSelectionPrompt(
 
   if (options.length === 0) return null;
   const hintLine = lines[hintIndex] ?? "";
+  const hasNavigationHint =
+    /(?:Tab\/Arrow|Arrow\s+keys?|[↑↓].*navigate|navigate)/i.test(hintLine);
   return {
     question: parseTmuxSelectionQuestion(lines, blockStart),
     options,
     selectedOptionIndex: selectedOptionIndex >= 0 ? selectedOptionIndex : 0,
-    inputMode: /Enter\s+to\s+confirm/i.test(hintLine) ? "number" : "navigate",
+    inputMode:
+      /Enter\s+to\s+confirm/i.test(hintLine) && !hasNavigationHint
+        ? "number"
+        : "navigate",
   };
+}
+
+function selectionPromptNavigationKeys(
+  prompt: TmuxSelectionPrompt,
+  optionIndex: number,
+): string[] {
+  const delta = optionIndex - prompt.selectedOptionIndex;
+  const navKey = delta > 0 ? "Down" : "Up";
+  return [...Array.from({ length: Math.abs(delta) }, () => navKey), "Enter"];
+}
+
+function selectionPromptSubmitKeys(
+  prompt: TmuxSelectionPrompt,
+  optionIndex: number,
+): string[] {
+  const option = prompt.options[optionIndex];
+  if (!option) return [];
+  if (prompt.inputMode === "number") {
+    return option.number.toString().split("");
+  }
+  if (optionIndex === prompt.selectedOptionIndex) {
+    return ["Enter"];
+  }
+  return selectionPromptNavigationKeys(prompt, optionIndex);
 }
 
 function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {

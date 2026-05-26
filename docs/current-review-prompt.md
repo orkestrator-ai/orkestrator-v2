@@ -164,9 +164,10 @@ If a command was not run, say why — do not pretend it ran.
 
 ## Issues
 
-For each issue use this exact numbered heading and body format. Number issues sequentially starting at 1:
+For each issue use this exact numbered heading and body format. Number issues sequentially starting at 1. Put the title on its own line immediately under the numbered severity/confidence/category heading:
 
-### 1. [P0|P1|P2][conf:NN][category] Short title
+### 1. [P0|P1|P2][conf:NN][category]
+Short title
 - File: path/to/file.ts:LINE
 - Symbol: ClassName.methodName (or function name; "" if module-level)
 - Description: 1-3 sentences explaining what is wrong and why it matters.

@@ -21,7 +21,7 @@ describe("createBuildReviewPrompt", () => {
     expect(result).toContain("## Review Scope");
     expect(result).toContain("## Risk Profile");
     expect(result).toContain("## Issues");
-    expect(result).toContain("### 1. [P0|P1|P2][conf:NN][category] Short title");
+    expect(result).toContain("### 1. [P0|P1|P2][conf:NN][category]\nShort title");
     expect(result).not.toContain("## Findings");
     expect(result).toContain("## Verdict");
   });

@@ -38,7 +38,7 @@ describe("buildReviewBody", () => {
       expect(body).toContain("Security and instruction hierarchy");
       expect(body).toContain("git diff origin/develop...HEAD");
       expect(body).toContain("## Issues");
-      expect(body).toContain("### 1. [P0|P1|P2][conf:NN][category] Short title");
+      expect(body).toContain("### 1. [P0|P1|P2][conf:NN][category]\nShort title");
       expect(body).not.toContain("## Findings");
     }
 

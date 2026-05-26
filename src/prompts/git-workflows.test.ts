@@ -85,7 +85,7 @@ describe("createReviewPrompt", () => {
     expect(result).toContain("## Test Results");
     expect(result).toContain("## Issues");
     expect(result).toContain("Number issues sequentially starting at 1");
-    expect(result).toContain("### 1. [P0|P1|P2][conf:NN][category] Short title");
+    expect(result).toContain("### 1. [P0|P1|P2][conf:NN][category]\nShort title");
     expect(result).not.toContain("## Findings");
     expect(result).toContain("Symbol:");
     expect(result).toContain("## Test Coverage Gaps");

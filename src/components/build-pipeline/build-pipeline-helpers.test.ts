@@ -203,7 +203,7 @@ describe("createBuildReviewPrompt", () => {
     const result = createBuildReviewPrompt(baseTask, "");
     expect(result).toContain("## Output Format");
     expect(result).toContain("## Issues");
-    expect(result).toContain("### 1. [P0|P1|P2][conf:NN][category] Short title");
+    expect(result).toContain("### 1. [P0|P1|P2][conf:NN][category]\nShort title");
     expect(result).toContain("File: path/to/file.ts:LINE");
     expect(result).toContain("Evidence:");
     expect(result).toContain("Suggestion:");

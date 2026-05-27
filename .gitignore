@@ -71,3 +71,8 @@ temp/
 
 # Context directory (workspace-specific)
 .context/
+
+# Agent configuration directories (workspace-specific, not shared)
+.claude/
+.codex/
+.orkestrator/

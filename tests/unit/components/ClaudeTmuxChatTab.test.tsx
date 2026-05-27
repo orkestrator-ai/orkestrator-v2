@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useConfigStore } from "@/stores/configStore";
 import { clearPersistedScrollState } from "@/hooks/useScrollLock";
 import * as realTmuxClient from "@/lib/claude-tmux-client";
 import * as realTauri from "@/lib/tauri";
@@ -19,6 +20,11 @@ const realInteractiveTerminalSnapshot = { ...realInteractiveTerminal };
 const realFileMentionMenuSnapshot = { ...realFileMentionMenu };
 const getFileTreeMock = mock(async () => []);
 const getLocalFileTreeMock = mock(async () => []);
+const updateGlobalConfigMock = mock(async (global: any) => ({
+  version: "1.0",
+  global,
+  repositories: {},
+}));
 
 const startSessionMock = mock(async () => ({
   tab_id: "tab-1",
@@ -137,6 +143,7 @@ mock.module("@/components/claude/ClaudeTmuxInteractiveTerminal", () => ({
 mock.module("@/lib/tauri", () => ({
   getFileTree: getFileTreeMock,
   getLocalFileTree: getLocalFileTreeMock,
+  updateGlobalConfig: updateGlobalConfigMock,
 }));
 
 mock.module("@/components/chat/FileMentionMenu", () => ({
@@ -196,6 +203,12 @@ describe("ClaudeTmuxChatTab", () => {
     getFileTreeMock.mockResolvedValue([]);
     getLocalFileTreeMock.mockReset();
     getLocalFileTreeMock.mockResolvedValue([]);
+    updateGlobalConfigMock.mockReset();
+    updateGlobalConfigMock.mockImplementation(async (global: any) => ({
+      version: "1.0",
+      global,
+      repositories: {},
+    }));
     startSessionMock.mockClear();
     getStatusMock.mockClear();
     getStatusMock.mockImplementation(async () => null);
@@ -226,6 +239,17 @@ describe("ClaudeTmuxChatTab", () => {
       },
     ]);
     useClaudeTmuxStore.setState({ tabs: new Map() });
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          claudeModel: "claude-sonnet-4-6",
+        },
+        repositories: {},
+      },
+    }));
     clearPersistedScrollState("claude-tmux-tab-1");
     clearPersistedScrollState("claude-tmux-env:env-1:tab:tab-1");
     useEnvironmentStore.setState({
@@ -1272,6 +1296,38 @@ describe("ClaudeTmuxChatTab", () => {
     expect(screen.getByRole("button", { name: /Opus 4\.7/ })).toBeTruthy();
   });
 
+  test("does not send the launch-only Default model sentinel to a running tmux session", async () => {
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Sonnet 4\.6/ }));
+    const defaultOption = (await screen.findByText("Default")).closest(
+      "[role='menuitem']",
+    );
+
+    expect(defaultOption).toBeTruthy();
+    expect(
+      defaultOption?.getAttribute("aria-disabled") === "true" ||
+        defaultOption?.hasAttribute("data-disabled"),
+    ).toBe(true);
+
+    fireEvent.click(defaultOption!);
+    expect(submitMock).not.toHaveBeenCalledWith("tab-1", "/model default");
+    expect(updateGlobalConfigMock).not.toHaveBeenCalled();
+  });
+
   test("uses the pre-launch model selection when starting fresh", async () => {
     seedPane();
 
@@ -1305,6 +1361,152 @@ describe("ClaudeTmuxChatTab", () => {
         resumeSessionId: undefined,
       });
     });
+  });
+
+  test("seeds fresh tmux sessions from the persisted Claude model default", async () => {
+    seedPane();
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          claudeModel: "claude-opus-4-7",
+        },
+      },
+    }));
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Opus 4\.7/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
+
+    await waitFor(() => {
+      expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
+        initialPrompt: undefined,
+        model: "claude-opus-4-7",
+        planMode: false,
+        resumeSessionId: undefined,
+      });
+    });
+  });
+
+  test("uses Claude Code's own model default when persisted tmux model is Default", async () => {
+    seedPane();
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          claudeModel: "default",
+        },
+      },
+    }));
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Default/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
+
+    await waitFor(() => {
+      expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
+        initialPrompt: undefined,
+        model: undefined,
+        planMode: false,
+        resumeSessionId: undefined,
+      });
+    });
+  });
+
+  test("persists selected tmux model as the default for later sessions", async () => {
+    seedPane();
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Sonnet 4\.6/ }));
+    const haikuOption = await screen.findByText("Haiku 4.5");
+    await act(async () => {
+      fireEvent.click(haikuOption);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(updateGlobalConfigMock).toHaveBeenCalledWith(
+        expect.objectContaining({ claudeModel: "claude-haiku-4-5" }),
+      );
+      expect(useConfigStore.getState().config.global.claudeModel).toBe(
+        "claude-haiku-4-5",
+      );
+    });
+
+    cleanup();
+    seedPane();
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-2"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: /Haiku 4\.5/ })).toBeTruthy();
+  });
+
+  test("rolls back the persisted tmux model preference when saving fails", async () => {
+    seedPane();
+    updateGlobalConfigMock.mockImplementationOnce(async () => {
+      throw new Error("disk full");
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Sonnet 4\.6/ }));
+    const haikuOption = await screen.findByText("Haiku 4.5");
+    await act(async () => {
+      fireEvent.click(haikuOption);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(useConfigStore.getState().config.global.claudeModel).toBe(
+        "claude-sonnet-4-6",
+      );
+    });
+    expect(await screen.findByText("Failed to save Claude model default")).toBeTruthy();
   });
 
   test("locks compose and model controls while a model switch is in flight", async () => {

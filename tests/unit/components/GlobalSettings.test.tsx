@@ -49,6 +49,7 @@ describe("GlobalSettings", () => {
           allowedDomains: [],
           defaultAgent: "claude",
           opencodeModel: "opencode/grok-code",
+          claudeModel: "claude-sonnet-4-6",
           codexModel: "gpt-5.3-codex",
           codexReasoningEffort: "medium",
           opencodeMode: "terminal",
@@ -108,6 +109,40 @@ describe("GlobalSettings", () => {
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({
           claudeNativeFastModeDefault: true,
+        })
+      );
+    });
+  });
+
+  test("preserves the tmux Claude model preference when saving unrelated settings", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          claudeModel: "default",
+        },
+      },
+    }));
+
+    const { container } = render(<GlobalSettings activeSection="codex" />);
+
+    const codexSection = screen
+      .getByText("Choose how Codex runs in environments")
+      .parentElement;
+    if (!codexSection) {
+      throw new Error("Expected Codex settings section");
+    }
+
+    fireEvent.click(within(codexSection).getByRole("button", { name: "Terminal" }));
+    fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          claudeModel: "default",
+          codexMode: "terminal",
         })
       );
     });

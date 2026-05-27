@@ -62,6 +62,7 @@ const DEFAULT_CONFIG: AppConfig = {
     ],
     defaultAgent: "claude",
     opencodeModel: "opencode/grok-code",
+    claudeModel: "claude-sonnet-4-6",
     codexModel: "gpt-5.3-codex",
     codexReasoningEffort: "medium",
     opencodeMode: "terminal",

@@ -214,6 +214,8 @@ export interface GlobalConfig {
   defaultAgent: DefaultAgent;
   /** Default model for OpenCode */
   opencodeModel: string;
+  /** Default model for Claude Native/tmux tabs */
+  claudeModel?: string;
   /** Default model for Codex Native tabs */
   codexModel: string;
   /** Default reasoning effort for Codex Native tabs */

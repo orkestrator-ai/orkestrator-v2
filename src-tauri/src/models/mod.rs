@@ -858,6 +858,10 @@ fn default_codex_model() -> String {
     "gpt-5.3-codex".to_string()
 }
 
+fn default_claude_model() -> String {
+    "claude-sonnet-4-6".to_string()
+}
+
 fn default_codex_reasoning_effort() -> String {
     "medium".to_string()
 }
@@ -896,6 +900,9 @@ pub struct GlobalConfig {
     /// Default model for OpenCode (e.g., "opencode/grok-code")
     #[serde(default = "default_opencode_model")]
     pub opencode_model: String,
+    /// Default model for Claude Native/tmux tabs
+    #[serde(default = "default_claude_model")]
+    pub claude_model: String,
     /// Default model for Codex Native tabs
     #[serde(default = "default_codex_model")]
     pub codex_model: String,
@@ -946,6 +953,7 @@ impl Default for GlobalConfig {
             preferred_editor: None,
             default_agent: DefaultAgent::default(),
             opencode_model: default_opencode_model(),
+            claude_model: default_claude_model(),
             codex_model: default_codex_model(),
             codex_reasoning_effort: default_codex_reasoning_effort(),
             opencode_mode: OpenCodeMode::default(),
@@ -1141,6 +1149,7 @@ mod tests {
         assert!(config.anthropic_api_key.is_none());
         assert!(config.github_token.is_none());
         assert_eq!(config.codex_mode, CodexMode::Native);
+        assert_eq!(config.claude_model, "claude-sonnet-4-6");
         assert!(!config.claude_native_fast_mode_default);
         assert!(!config.codex_native_fast_mode_default);
         assert!(config.experimental_codex_raw_event_logging);
@@ -1155,6 +1164,7 @@ mod tests {
 
         let config: GlobalConfig = serde_json::from_str(json).unwrap();
 
+        assert_eq!(config.claude_model, "claude-sonnet-4-6");
         assert!(!config.claude_native_fast_mode_default);
         assert!(!config.codex_native_fast_mode_default);
     }
@@ -1162,15 +1172,18 @@ mod tests {
     #[test]
     fn test_global_config_serializes_native_fast_mode_defaults() {
         let mut config = GlobalConfig::default();
+        config.claude_model = "default".to_string();
         config.claude_native_fast_mode_default = true;
         config.codex_native_fast_mode_default = true;
 
         let json = serde_json::to_string(&config).unwrap();
 
+        assert!(json.contains("\"claudeModel\":\"default\""));
         assert!(json.contains("\"claudeNativeFastModeDefault\":true"));
         assert!(json.contains("\"codexNativeFastModeDefault\":true"));
 
         let deserialized: GlobalConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.claude_model, "default");
         assert!(deserialized.claude_native_fast_mode_default);
         assert!(deserialized.codex_native_fast_mode_default);
     }

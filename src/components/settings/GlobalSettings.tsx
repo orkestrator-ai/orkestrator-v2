@@ -252,6 +252,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         preferredEditor?: PreferredEditor;
         defaultAgent: DefaultAgent;
         opencodeModel: string;
+        claudeModel: string;
         codexModel: string;
         codexReasoningEffort: "minimal" | "low" | "medium" | "high" | "xhigh";
         opencodeMode: OpenCodeMode;
@@ -271,6 +272,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         preferredEditor,
         defaultAgent,
         opencodeModel,
+        claudeModel: global.claudeModel || "claude-sonnet-4-6",
         codexModel: global.codexModel || "gpt-5.3-codex",
         codexReasoningEffort: global.codexReasoningEffort || "medium",
         opencodeMode,

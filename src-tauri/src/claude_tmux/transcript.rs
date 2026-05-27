@@ -446,6 +446,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn find_transcript_path_does_not_fallback_without_mtime_gate() {
+        let dir = TempDir::new().unwrap();
+        let backend = local_backend(&dir);
+        let cwd = "/Users/me/proj";
+        let proj_dir = path_in(&dir, &format!(".claude/projects/{}", encode_cwd(cwd)));
+        fs::create_dir_all(&proj_dir).await.unwrap();
+        fs::write(proj_dir.join("other-session.jsonl"), b"{\"type\":\"system\"}\n")
+            .await
+            .unwrap();
+
+        let claude_home = dir.path().join(".claude");
+        let out = find_transcript_path(
+            &backend,
+            claude_home.to_str().unwrap(),
+            cwd,
+            "session-xyz",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(out, None);
+    }
+
+    #[tokio::test]
     async fn find_transcript_path_ignores_concurrent_sessions_in_other_projects() {
         // Regression: when another Claude session is actively writing under a
         // *different* project dir, our cwd-scoped search must NOT pick it up.

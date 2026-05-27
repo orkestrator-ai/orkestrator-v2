@@ -107,6 +107,7 @@ const { ClaudeTmuxInteractiveTerminal } = await import(
 describe("ClaudeTmuxInteractiveTerminal", () => {
   const originalResizeObserver = globalThis.ResizeObserver;
   const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+  const environmentId = "env-1";
 
   afterAll(() => {
     mock.module("@xterm/xterm", () => realXtermSnapshot);
@@ -153,12 +154,16 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
 
   test("attaches, forwards terminal output and input, resizes, and detaches on unmount", async () => {
     const { unmount } = render(
-      <ClaudeTmuxInteractiveTerminal tabId="tab-1" isActive />,
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        isActive
+      />,
     );
 
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
 
-    expect(createInteractiveTerminalMock).toHaveBeenCalledWith("tab-1", 120, 30, undefined);
+    expect(createInteractiveTerminalMock).toHaveBeenCalledWith("tab-1", 120, 30, environmentId);
     expect(listenMock.mock.calls[0]?.[0]).toBe("terminal-output-pty-1");
     expect(resizeInteractiveTerminalMock).toHaveBeenCalledWith("pty-1", 120, 30);
 
@@ -185,7 +190,13 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   test("cleans up the created session and listener when start fails", async () => {
     startInteractiveTerminalMock.mockRejectedValueOnce(new Error("spawn failed"));
 
-    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" isActive />);
+    render(
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        isActive
+      />,
+    );
 
     await screen.findByText("Error: spawn failed");
 
@@ -203,7 +214,11 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     });
 
     const { unmount } = render(
-      <ClaudeTmuxInteractiveTerminal tabId="tab-1" isActive />,
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        isActive
+      />,
     );
 
     await waitFor(() => expect(listenMock).toHaveBeenCalledTimes(1));

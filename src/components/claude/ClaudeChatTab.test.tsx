@@ -12,6 +12,7 @@ const realHooksSnapshot = { ...realHooks };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 const mockScrollToBottom = mock(() => {});
 const mockCreateSession = mock(async () => ({ sessionId: "session-1" }));
+const mockGetModels = mock(async () => []);
 const mockGetSessionMessages = mock(async (): Promise<ClaudeMessageType[]> => []);
 const mockCheckHealth = mock(async () => true);
 const mockSendPrompt = mock(async () => {});
@@ -47,7 +48,7 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
 
 mock.module("@/lib/claude-client", () => ({
   createClient: mock(() => ({ baseUrl: "http://127.0.0.1:9999" })),
-  getModels: mock(async () => []),
+  getModels: mockGetModels,
   createSession: mockCreateSession,
   getSession: mock(async () => null),
   getSessionMessages: mockGetSessionMessages,
@@ -113,6 +114,7 @@ function resetStores() {
       ...state.config,
       global: {
         ...state.config.global,
+        claudeModel: "claude-sonnet-4-6",
         claudeNativeFastModeDefault: false,
       },
     },
@@ -187,6 +189,8 @@ describe("ClaudeChatTab", () => {
     resetStores();
     mockScrollToBottom.mockClear();
     mockCreateSession.mockClear();
+    mockGetModels.mockReset();
+    mockGetModels.mockImplementation(async () => []);
     mockGetSessionMessages.mockReset();
     mockGetSessionMessages.mockImplementation(async () => []);
     mockCheckHealth.mockClear();
@@ -330,6 +334,79 @@ describe("ClaudeChatTab", () => {
     await waitFor(() => {
       expect(mockCreateSession).toHaveBeenCalledWith(MOCK_CLIENT);
       expect(useClaudeStore.getState().isFastMode(SESSION_KEY)).toBe(true);
+    });
+  });
+
+  test("prefers the persisted Claude model when warm path creates a new session", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          claudeModel: "sonnet",
+        },
+      },
+    }));
+    useClaudeStore.setState((state) => ({
+      ...state,
+      sessions: new Map(),
+      selectedModel: new Map(),
+      models: [
+        { id: "opus", name: "Opus" },
+        { id: "sonnet", name: "Sonnet" },
+      ] as any,
+    }));
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockCreateSession).toHaveBeenCalledWith(MOCK_CLIENT);
+      expect(useClaudeStore.getState().getSelectedModel(SESSION_KEY)).toBe("sonnet");
+    });
+  });
+
+  test("falls back to the first available model when persisted Claude model is unavailable", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          claudeModel: "missing-model",
+        },
+      },
+    }));
+    useClaudeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+      selectedModel: new Map(),
+      models: [],
+    }));
+    mockGetModels.mockImplementation(async () => [
+      { id: "opus", name: "Opus" },
+      { id: "sonnet", name: "Sonnet" },
+    ] as any);
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetModels).toHaveBeenCalled();
+      expect(mockCreateSession).toHaveBeenCalled();
+      expect(useClaudeStore.getState().getSelectedModel(SESSION_KEY)).toBe("opus");
     });
   });
 

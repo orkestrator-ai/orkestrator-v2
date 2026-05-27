@@ -57,6 +57,13 @@ interface ClaudeChatTabProps {
 
 type ConnectionState = "connecting" | "connected" | "error";
 
+function resolvePreferredClaudeModel(models: Array<{ id: string }>): string | undefined {
+  const preferred = useConfigStore.getState().config.global.claudeModel;
+  return models.some((model) => model.id === preferred)
+    ? preferred
+    : models[0]?.id;
+}
+
 export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
   // Initialize as "connected" if we already have a client and session from a previous init.
@@ -311,9 +318,9 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
           }
 
           const currentSelectedModel = getSelectedModel(sessionKey);
-          const firstModel = resolvedModels[0];
-          if (!currentSelectedModel && firstModel) {
-            setSelectedModel(sessionKey, firstModel.id);
+          const preferredModel = resolvePreferredClaudeModel(resolvedModels);
+          if (!currentSelectedModel && preferredModel) {
+            setSelectedModel(sessionKey, preferredModel);
           }
 
           const newSession = await createSession(bridgeClient);
@@ -422,9 +429,9 @@ export function ClaudeChatTab({ tabId, data, isActive, initialPrompt }: ClaudeCh
 
         // Set default model if not already selected
         const currentSelectedModel = getSelectedModel(sessionKey);
-        const firstModel = availableModels[0];
-        if (!currentSelectedModel && firstModel) {
-          setSelectedModel(sessionKey, firstModel.id);
+        const preferredModel = resolvePreferredClaudeModel(availableModels);
+        if (!currentSelectedModel && preferredModel) {
+          setSelectedModel(sessionKey, preferredModel);
         }
 
         // Eagerly load slash commands from plugins (before first query)

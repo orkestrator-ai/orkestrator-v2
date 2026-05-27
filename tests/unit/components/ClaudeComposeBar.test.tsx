@@ -4,10 +4,16 @@ import { mockReadImage } from "../../mocks/clipboard";
 
 const mockWriteContainerFile = mock(async () => {});
 const mockWriteLocalFile = mock(async () => "/tmp/file.png");
+const mockUpdateGlobalConfig = mock(async (global: any) => ({
+  version: "1.0",
+  global,
+  repositories: {},
+}));
 const mockSerializeForLLM = mock((text: string, _mentions?: unknown[]) => text);
 const mockHandleFileMentionCursorChange = mock(() => {});
 const mockHandleFileMentionKeyDown = mock(() => false);
 const mockCloseFileMentionMenu = mock(() => {});
+const mockToastError = mock((_message: string) => {});
 const mockCreateMention = mock(() => ({
   id: "mention-created",
   filename: "app.ts",
@@ -42,12 +48,13 @@ mock.module("@/lib/tauri", () => ({
   readFileBase64: async () => "",
   writeContainerFile: mockWriteContainerFile,
   writeLocalFile: mockWriteLocalFile,
+  updateGlobalConfig: mockUpdateGlobalConfig,
   getFileTree: async () => [],
   getLocalFileTree: async () => [],
 }));
 
 mock.module("sonner", () => ({
-  toast: { success: () => {}, error: () => {} },
+  toast: { success: () => {}, error: mockToastError },
 }));
 
 // @tauri-apps/plugin-clipboard-manager is centrally mocked in tests/setup.ts.
@@ -123,6 +130,7 @@ mock.module("@/lib/canvas-utils", () => ({
 
 import { ClaudeComposeBar } from "../../../src/components/claude/ClaudeComposeBar";
 import { useClaudeStore } from "../../../src/stores/claudeStore";
+import { useConfigStore } from "../../../src/stores/configStore";
 import { useEnvironmentStore } from "../../../src/stores/environmentStore";
 
 if (typeof globalThis.ImageData === "undefined") {
@@ -175,12 +183,19 @@ describe("ClaudeComposeBar", () => {
     mockReadImage.mockReset();
     mockWriteContainerFile.mockReset();
     mockWriteLocalFile.mockReset();
+    mockUpdateGlobalConfig.mockReset();
+    mockUpdateGlobalConfig.mockImplementation(async (global: any) => ({
+      version: "1.0",
+      global,
+      repositories: {},
+    }));
     mockSerializeForLLM.mockReset();
     mockSerializeForLLM.mockImplementation((text: string) => text);
     mockHandleFileMentionCursorChange.mockReset();
     mockHandleFileMentionKeyDown.mockReset();
     mockHandleFileMentionKeyDown.mockImplementation(() => false);
     mockCloseFileMentionMenu.mockReset();
+    mockToastError.mockReset();
     mockCreateMention.mockReset();
     mockCreateMention.mockImplementation(() => ({
       id: "mention-created",
@@ -211,6 +226,7 @@ describe("ClaudeComposeBar", () => {
       sessionInitData: new Map(),
       contextUsage: new Map(),
     });
+    useConfigStore.getState().updateGlobalConfig({ claudeModel: "opus" });
   });
 
   afterEach(() => {
@@ -228,6 +244,101 @@ describe("ClaudeComposeBar", () => {
     renderComposeBar();
     // First model should be shown as default
     expect(screen.getByText("Opus")).toBeTruthy();
+  });
+
+  test("persists selected model as the Claude global default", async () => {
+    renderComposeBar();
+
+    const modelTrigger = screen.getByText("Opus").closest("button");
+    expect(modelTrigger).toBeTruthy();
+    fireEvent.pointerDown(modelTrigger!);
+    fireEvent.click(await screen.findByText("Sonnet"));
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ claudeModel: "sonnet" }),
+      );
+    });
+    expect(useConfigStore.getState().config.global.claudeModel).toBe("sonnet");
+  });
+
+  test("rolls back the persisted Claude model default when saving fails", async () => {
+    mockUpdateGlobalConfig.mockImplementationOnce(async () => {
+      throw new Error("disk full");
+    });
+
+    renderComposeBar();
+
+    const modelTrigger = screen.getByText("Opus").closest("button");
+    expect(modelTrigger).toBeTruthy();
+    fireEvent.pointerDown(modelTrigger!);
+    fireEvent.click(await screen.findByText("Sonnet"));
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ claudeModel: "sonnet" }),
+      );
+      expect(useConfigStore.getState().config.global.claudeModel).toBe("opus");
+    });
+    expect(useClaudeStore.getState().getSelectedModel(SESSION_KEY)).toBe("sonnet");
+    expect(mockToastError).toHaveBeenCalledWith("Failed to save Claude model default");
+  });
+
+  test("keeps the newest selected model when an older persistence request resolves later", async () => {
+    let resolveFirstSave: (() => void) | undefined;
+    mockUpdateGlobalConfig.mockImplementationOnce(
+      (global: any) =>
+        new Promise((resolve) => {
+          resolveFirstSave = () => resolve({
+            version: "1.0",
+            global,
+            repositories: {},
+          });
+        }),
+    );
+    mockUpdateGlobalConfig.mockImplementationOnce(async (global: any) => ({
+      version: "1.0",
+      global,
+      repositories: {},
+    }));
+
+    renderComposeBar({
+      models: [
+        ...defaultModels,
+        {
+          id: "haiku",
+          name: "Haiku",
+          supportsFastMode: true,
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high"],
+        },
+      ] as any,
+    });
+
+    const opusTrigger = screen.getByText("Opus").closest("button");
+    expect(opusTrigger).toBeTruthy();
+    fireEvent.pointerDown(opusTrigger!);
+    fireEvent.click(await screen.findByText("Sonnet"));
+
+    await waitFor(() => {
+      expect(useConfigStore.getState().config.global.claudeModel).toBe("sonnet");
+    });
+
+    const sonnetTrigger = screen.getByText("Sonnet").closest("button");
+    expect(sonnetTrigger).toBeTruthy();
+    fireEvent.pointerDown(sonnetTrigger!);
+    fireEvent.click(await screen.findByText("Haiku"));
+
+    await waitFor(() => {
+      expect(useConfigStore.getState().config.global.claudeModel).toBe("haiku");
+    });
+
+    resolveFirstSave?.();
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(2);
+      expect(useConfigStore.getState().config.global.claudeModel).toBe("haiku");
+    });
   });
 
   test("renders effort label (defaults to 'High')", () => {

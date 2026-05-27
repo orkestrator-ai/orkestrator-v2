@@ -18,7 +18,9 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useClaudeStore, createClaudeSessionKey, type ClaudeAttachment, type QueuedMessage, type ClaudeEffortLevel } from "@/stores/claudeStore";
+import { useConfigStore } from "@/stores/configStore";
 import { ContextUsageWheel } from "@/components/chat/ContextUsageWheel";
+import { updateGlobalConfig as persistGlobalConfig } from "@/lib/tauri";
 import type { ClaudeModel } from "@/lib/claude-client";
 import { SlashCommandMenu, parseSlashCommands } from "./SlashCommandMenu";
 import { FileMentionMenu } from "./FileMentionMenu";
@@ -431,8 +433,33 @@ export function ClaudeComposeBar({
   const selectedModelName = selectedModelObj?.name ?? (models.length > 0 ? models[0]?.name : "No models");
   const selectedModelSupportsFastMode = selectedModelObj?.supportsFastMode !== false;
 
+  const persistClaudeModelDefault = useCallback(async (modelId: string) => {
+    const currentConfig = useConfigStore.getState().config;
+    if (currentConfig.global.claudeModel === modelId) return;
+
+    const nextGlobal = { ...currentConfig.global, claudeModel: modelId };
+    useConfigStore.getState().setConfig({
+      ...currentConfig,
+      global: nextGlobal,
+    });
+
+    try {
+      const updatedConfig = await persistGlobalConfig(nextGlobal);
+      if (useConfigStore.getState().config.global.claudeModel === modelId) {
+        useConfigStore.getState().setConfig(updatedConfig);
+      }
+    } catch (error) {
+      if (useConfigStore.getState().config.global.claudeModel === modelId) {
+        useConfigStore.getState().setConfig(currentConfig);
+      }
+      console.error("[ClaudeComposeBar] Failed to persist Claude model default:", error);
+      toast.error("Failed to save Claude model default");
+    }
+  }, []);
+
   const handleModelChange = (modelId: string) => {
     setSelectedModel(sessionKey, modelId);
+    void persistClaudeModelDefault(modelId);
     const nextModel = models.find((m) => m.id === modelId);
     if (nextModel?.supportsFastMode === false && isFastMode(sessionKey)) {
       setFastMode(sessionKey, false);

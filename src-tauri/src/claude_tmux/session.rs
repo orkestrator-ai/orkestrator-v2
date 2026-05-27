@@ -115,12 +115,11 @@ pub struct TmuxSession {
     /// poll loop. Frontend listeners can be absent while an environment is
     /// hidden, so status must carry the latest lifecycle state.
     busy: AtomicBool,
-    /// Unix-seconds when this `TmuxSession` was built. Used as a lower bound
-    /// when discovering the transcript JSONL by mtime fallback.
+    /// Unix-seconds when this `TmuxSession` was built. Kept for diagnostics
+    /// around fresh session startup.
     pub started_at_unix: u64,
     /// True if `session_id` was supplied by the caller to resume an existing
-    /// Claude Code session. When true we skip the started_at_unix mtime
-    /// gate so the prior transcript is picked up.
+    /// Claude Code session.
     pub is_resume: bool,
 }
 
@@ -211,17 +210,16 @@ impl TmuxSession {
             Backend::Local { cwd } => cwd.clone(),
             Backend::Container { .. } => "/workspace".to_string(),
         };
-        let min_mtime = if self.is_resume {
-            None
-        } else {
-            Some(self.started_at_unix)
-        };
+        // Fresh tmux tabs are launched with a stable `--session-id`, so the
+        // transcript must match that exact id. Falling back to the newest JSONL
+        // in the project can attach the native transcript view to a different
+        // still-running tab before this tab's own transcript has been written.
         let found = transcript::find_transcript_path(
             &self.backend,
             &self.claude_home,
             &cwd,
             &self.session_id,
-            min_mtime,
+            None,
         )
         .await?;
         if let Some(path) = found.as_ref() {
@@ -553,10 +551,9 @@ impl TmuxSession {
                     }
                 }
 
-                // b) discover transcript file if we don't know it yet.
-                //    For a resumed session, the file already exists and was
-                //    last written long ago, so we drop the started_at_unix
-                //    mtime gate to find it.
+                // b) discover the exact transcript file if we don't know it yet.
+                //    We do not fall back to the newest project JSONL here:
+                //    concurrent tmux tabs can be writing nearby transcripts.
                 if tail.is_none() {
                     match session.discover_transcript_path().await {
                         Ok(Some(p)) => {
@@ -1161,6 +1158,35 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0]["type"], "user");
         assert_eq!(lines[1]["type"], "assistant");
+    }
+
+    #[tokio::test]
+    async fn transcript_lines_does_not_read_newest_unrelated_project_jsonl() {
+        let tmp = TempDir::new().unwrap();
+        let cwd = tmp.path().to_string_lossy().into_owned();
+        let mut s = TmuxSession::build(
+            "env-1".to_string(),
+            "tab-1".to_string(),
+            Backend::Local { cwd: cwd.clone() },
+            None,
+            None,
+        );
+        s.claude_home = tmp.path().join(".claude").to_string_lossy().into_owned();
+        let project_dir = tmp
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join(transcript::encode_cwd(&cwd));
+        fs::create_dir_all(&project_dir).await.unwrap();
+        fs::write(
+            project_dir.join("previous-review-session.jsonl"),
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"review text\"}}\n",
+        )
+        .await
+        .unwrap();
+
+        let lines = s.transcript_lines().await.unwrap();
+        assert!(lines.is_empty());
     }
 
     #[tokio::test]

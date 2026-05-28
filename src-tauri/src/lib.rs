@@ -433,6 +433,7 @@ pub fn run() {
             claude_tmux_send_text,
             claude_tmux_send_keys,
             claude_tmux_submit,
+            claude_tmux_switch_model,
             claude_tmux_capture_pane,
             claude_tmux_resize,
             claude_tmux_answer_pre_tool_use,

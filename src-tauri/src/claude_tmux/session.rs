@@ -27,6 +27,18 @@ use uuid::Uuid;
 /// All Tauri events emitted on behalf of a tmux session go through this
 /// single channel name. The payload's `kind` field disambiguates.
 pub const TAURI_EVENT: &str = "claude-tmux:event";
+#[cfg(not(test))]
+const COMMAND_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+#[cfg(test)]
+const COMMAND_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+#[cfg(not(test))]
+const COMMAND_NO_HOOK_SETTLE: std::time::Duration = std::time::Duration::from_millis(2_000);
+#[cfg(test)]
+const COMMAND_NO_HOOK_SETTLE: std::time::Duration = std::time::Duration::from_millis(50);
+#[cfg(not(test))]
+const COMMAND_AFTER_IDLE_SETTLE: std::time::Duration = std::time::Duration::from_millis(400);
+#[cfg(test)]
+const COMMAND_AFTER_IDLE_SETTLE: std::time::Duration = std::time::Duration::from_millis(20);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -104,6 +116,7 @@ pub struct TmuxSession {
     pub backend: Backend,
     pub session_id: String,
     pub tmux_session: String,
+    pub(crate) tmux_command: String,
     pub claude_command: String,
     pub workspace_hook_paths: WorkspaceHookPaths,
     pub session_hook_paths: SessionHookPaths,
@@ -175,6 +188,7 @@ impl TmuxSession {
             backend,
             session_id,
             tmux_session,
+            tmux_command: "tmux".to_string(),
             claude_command: claude_command.unwrap_or_else(|| "claude".to_string()),
             workspace_hook_paths,
             session_hook_paths,
@@ -272,7 +286,8 @@ impl TmuxSession {
         hooks::ensure_session_dirs(&self.backend, &self.session_hook_paths).await?;
 
         // 2. Ensure tmux is available.
-        let probe = self.backend.exec(&["which", "tmux"]).await?;
+        let tmux = self.tmux_command.as_str();
+        let probe = self.backend.exec(&["which", tmux]).await?;
         if !probe.success() || probe.stdout.trim().is_empty() {
             return Err(
                 "tmux is not installed in this environment. For containers, rebuild the base image; for local, install tmux on the host."
@@ -338,7 +353,7 @@ impl TmuxSession {
             let out = self
                 .backend
                 .exec(&[
-                    "tmux",
+                    tmux,
                     "new-session",
                     "-d",
                     "-s",
@@ -639,9 +654,10 @@ impl TmuxSession {
     }
 
     pub async fn tmux_alive(&self) -> Result<bool, String> {
+        let tmux = self.tmux_command.as_str();
         let out = self
             .backend
-            .exec(&["tmux", "has-session", "-t", &self.tmux_session])
+            .exec(&[tmux, "has-session", "-t", &self.tmux_session])
             .await?;
         Ok(out.success())
     }
@@ -655,11 +671,12 @@ impl TmuxSession {
         if text.is_empty() {
             return Ok(());
         }
+        let tmux = self.tmux_command.as_str();
         let buffer_name = format!("claude-tmux-input-{}", self.tmux_session);
         let load = self
             .backend
             .exec_with_stdin(
-                &["tmux", "load-buffer", "-b", &buffer_name, "-"],
+                &[tmux, "load-buffer", "-b", &buffer_name, "-"],
                 Some(text),
             )
             .await?;
@@ -669,7 +686,7 @@ impl TmuxSession {
         let paste = self
             .backend
             .exec(&[
-                "tmux",
+                tmux,
                 "paste-buffer",
                 "-p",
                 "-d",
@@ -701,8 +718,60 @@ impl TmuxSession {
         self.send_enter().await
     }
 
+    /// Send Claude Code's `/model` slash command and keep the caller blocked
+    /// until the command has settled. A plain `submit("/model ...")` returns
+    /// immediately after pressing Enter, but Claude Code may still be applying
+    /// the model change; sending the next user prompt during that window can
+    /// interrupt the internal command turn instead of submitting the prompt.
+    pub async fn switch_model(&self, model_arg: &str) -> Result<(), String> {
+        let trimmed = model_arg.trim();
+        if trimmed.is_empty() {
+            return Err("model id cannot be empty".to_string());
+        }
+
+        self.submit(&format!("/model {trimmed}")).await?;
+        self.wait_for_command_idle().await;
+        Ok(())
+    }
+
+    async fn wait_for_command_idle(&self) {
+        let started = tokio::time::Instant::now();
+        let deadline = started + COMMAND_IDLE_TIMEOUT;
+        let no_hook_deadline = started + COMMAND_NO_HOOK_SETTLE;
+        let mut saw_busy = self.busy.load(Ordering::SeqCst);
+
+        loop {
+            let now = tokio::time::Instant::now();
+            let busy = self.busy.load(Ordering::SeqCst);
+            if busy {
+                saw_busy = true;
+            } else if saw_busy {
+                tokio::time::sleep(COMMAND_AFTER_IDLE_SETTLE).await;
+                return;
+            } else if now >= no_hook_deadline {
+                return;
+            }
+
+            if now >= deadline {
+                warn!(
+                    tab = %self.tab_id,
+                    session = %self.tmux_session,
+                    "timed out waiting for Claude slash command to settle"
+                );
+                return;
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
     pub async fn send_keys(&self, keys: &[&str]) -> Result<(), String> {
-        let mut args: Vec<&str> = vec!["tmux", "send-keys", "-t", &self.tmux_session];
+        let mut args: Vec<&str> = vec![
+            self.tmux_command.as_str(),
+            "send-keys",
+            "-t",
+            &self.tmux_session,
+        ];
         args.push("--");
         args.extend_from_slice(keys);
         let out = self.backend.exec(&args).await?;
@@ -727,9 +796,10 @@ impl TmuxSession {
     /// garbage. `-J` joins lines wrapped by tmux so long output reads
     /// naturally.
     pub async fn capture_pane(&self) -> Result<String, String> {
+        let tmux = self.tmux_command.as_str();
         let out = self
             .backend
-            .exec(&["tmux", "capture-pane", "-t", &self.tmux_session, "-p", "-J"])
+            .exec(&[tmux, "capture-pane", "-t", &self.tmux_session, "-p", "-J"])
             .await?;
         if !out.success() {
             return Err(out.stderr);
@@ -738,10 +808,11 @@ impl TmuxSession {
     }
 
     pub async fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
+        let tmux = self.tmux_command.as_str();
         let out = self
             .backend
             .exec(&[
-                "tmux",
+                tmux,
                 "resize-window",
                 "-t",
                 &self.tmux_session,
@@ -792,7 +863,12 @@ impl TmuxSession {
 
         let _ = self
             .backend
-            .exec(&["tmux", "kill-session", "-t", &self.tmux_session])
+            .exec(&[
+                self.tmux_command.as_str(),
+                "kill-session",
+                "-t",
+                &self.tmux_session,
+            ])
             .await;
 
         if let Err(e) = hooks::remove_session_dirs(&self.backend, &self.session_hook_paths).await {
@@ -922,15 +998,43 @@ mod tests {
     use tokio::fs;
 
     fn build(tmp: &TempDir, env: &str, tab: &str, resume: Option<&str>) -> Arc<TmuxSession> {
-        Arc::new(TmuxSession::build(
+        build_with_tmux(tmp, env, tab, resume, None)
+    }
+
+    fn build_with_tmux(
+        tmp: &TempDir,
+        env: &str,
+        tab: &str,
+        resume: Option<&str>,
+        tmux_command: Option<String>,
+    ) -> Arc<TmuxSession> {
+        build_with_tmux_cwd(
+            tmp.path().to_string_lossy().into_owned(),
+            env,
+            tab,
+            resume,
+            tmux_command,
+        )
+    }
+
+    fn build_with_tmux_cwd(
+        cwd: String,
+        env: &str,
+        tab: &str,
+        resume: Option<&str>,
+        tmux_command: Option<String>,
+    ) -> Arc<TmuxSession> {
+        let mut session = TmuxSession::build(
             env.to_string(),
             tab.to_string(),
-            Backend::Local {
-                cwd: tmp.path().to_string_lossy().into_owned(),
-            },
+            Backend::Local { cwd },
             resume.map(str::to_string),
             None,
-        ))
+        );
+        if let Some(tmux_command) = tmux_command {
+            session.tmux_command = tmux_command;
+        }
+        Arc::new(session)
     }
 
     fn install_fake_tmux(dir: &std::path::Path, log_path: &std::path::Path, status: i32) {
@@ -938,7 +1042,10 @@ mod tests {
         std_fs::write(
             &script,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nif [ {} -ne 0 ]; then echo 'tmux failed' >&2; fi\nexit {}\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nif [ \"$1\" = \"load-buffer\" ]; then printf 'stdin:' >> '{}'; cat >> '{}'; printf '\\n' >> '{}'; fi\nif [ {} -ne 0 ]; then echo 'tmux failed' >&2; fi\nexit {}\n",
+                log_path.display(),
+                log_path.display(),
+                log_path.display(),
                 log_path.display(),
                 status,
                 status,
@@ -952,35 +1059,16 @@ mod tests {
 
     async fn with_fake_tmux<F, Fut>(tmp: &TempDir, status: i32, f: F)
     where
-        F: FnOnce(std::path::PathBuf) -> Fut,
+        F: FnOnce(std::path::PathBuf, String) -> Fut,
         Fut: std::future::Future<Output = ()>,
     {
-        let _guard = crate::claude_tmux::TEST_PATH_LOCK
-            .get_or_init(|| tokio::sync::Mutex::new(()))
-            .lock()
-            .await;
         let bin_dir = tmp.path().join("bin");
         std_fs::create_dir_all(&bin_dir).unwrap();
         let log_path = tmp.path().join("tmux.log");
         install_fake_tmux(&bin_dir, &log_path, status);
+        let tmux_path = bin_dir.join("tmux").to_string_lossy().into_owned();
 
-        let original_path = std::env::var_os("PATH");
-        let path = match original_path.as_ref() {
-            Some(existing) => {
-                let mut paths = vec![bin_dir.clone()];
-                paths.extend(std::env::split_paths(existing));
-                std::env::join_paths(paths).unwrap()
-            }
-            None => bin_dir.into_os_string(),
-        };
-        std::env::set_var("PATH", path);
-
-        f(log_path).await;
-
-        match original_path {
-            Some(path) => std::env::set_var("PATH", path),
-            None => std::env::remove_var("PATH"),
-        }
+        f(log_path, tmux_path).await;
     }
 
     #[test]
@@ -1061,10 +1149,12 @@ mod tests {
     #[tokio::test]
     async fn interrupt_sends_escape_and_clears_busy_on_success() {
         let tmp = TempDir::new().unwrap();
-        let s = build(&tmp, "env-1", "tab-1", None);
-        s.update_busy_from_hook_kind("UserPromptSubmit");
+        let cwd = tmp.path().to_string_lossy().into_owned();
 
-        with_fake_tmux(&tmp, 0, |log_path| async move {
+        with_fake_tmux(&tmp, 0, |log_path, tmux_path| async move {
+            let s = build_with_tmux_cwd(cwd, "env-1", "tab-1", None, Some(tmux_path));
+            s.update_busy_from_hook_kind("UserPromptSubmit");
+
             s.interrupt().await.unwrap();
 
             assert!(!s.status(true).busy);
@@ -1077,9 +1167,11 @@ mod tests {
     #[tokio::test]
     async fn send_text_uses_bracketed_paste_buffer() {
         let tmp = TempDir::new().unwrap();
-        let s = build(&tmp, "env-1", "tab-1", None);
+        let cwd = tmp.path().to_string_lossy().into_owned();
 
-        with_fake_tmux(&tmp, 0, |log_path| async move {
+        with_fake_tmux(&tmp, 0, |log_path, tmux_path| async move {
+            let s = build_with_tmux_cwd(cwd, "env-1", "tab-1", None, Some(tmux_path));
+
             s.send_text("- review this\nnext line").await.unwrap();
 
             let log = fs::read_to_string(log_path).await.unwrap();
@@ -1098,9 +1190,11 @@ mod tests {
     #[tokio::test]
     async fn submit_pastes_text_then_presses_enter() {
         let tmp = TempDir::new().unwrap();
-        let s = build(&tmp, "env-1", "tab-1", None);
+        let cwd = tmp.path().to_string_lossy().into_owned();
 
-        with_fake_tmux(&tmp, 0, |log_path| async move {
+        with_fake_tmux(&tmp, 0, |log_path, tmux_path| async move {
+            let s = build_with_tmux_cwd(cwd, "env-1", "tab-1", None, Some(tmux_path));
+
             s.submit("hello").await.unwrap();
 
             let log = fs::read_to_string(log_path).await.unwrap();
@@ -1124,12 +1218,65 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn interrupt_preserves_busy_when_tmux_send_fails() {
+    async fn switch_model_rejects_empty_model_id() {
         let tmp = TempDir::new().unwrap();
         let s = build(&tmp, "env-1", "tab-1", None);
-        s.update_busy_from_hook_kind("UserPromptSubmit");
 
-        with_fake_tmux(&tmp, 1, |log_path| async move {
+        let err = s.switch_model("   ").await.unwrap_err();
+
+        assert_eq!(err, "model id cannot be empty");
+    }
+
+    #[tokio::test]
+    async fn switch_model_submits_model_command_and_settles_without_hooks() {
+        let tmp = TempDir::new().unwrap();
+        let cwd = tmp.path().to_string_lossy().into_owned();
+
+        with_fake_tmux(&tmp, 0, |log_path, tmux_path| async move {
+            let s = build_with_tmux_cwd(cwd, "env-1", "tab-1", None, Some(tmux_path));
+
+            s.switch_model("  claude-opus-4-7  ").await.unwrap();
+
+            let log = fs::read_to_string(log_path).await.unwrap();
+            assert!(log.contains("stdin:/model claude-opus-4-7"));
+            assert!(log.contains(&format!("send-keys -t {} -- Enter", s.tmux_session)));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn switch_model_waits_for_busy_to_clear_before_returning() {
+        let tmp = TempDir::new().unwrap();
+        let cwd = tmp.path().to_string_lossy().into_owned();
+
+        with_fake_tmux(&tmp, 0, |log_path, tmux_path| async move {
+            let s = build_with_tmux_cwd(cwd, "env-1", "tab-1", None, Some(tmux_path));
+            s.update_busy_from_hook_kind("UserPromptSubmit");
+            let s_for_task = Arc::clone(&s);
+            let task = tokio::spawn(async move {
+                s_for_task.switch_model("claude-haiku-4-5").await.unwrap();
+            });
+
+            tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+            s.update_busy_from_hook_kind("Stop");
+
+            task.await.unwrap();
+            let log = fs::read_to_string(log_path).await.unwrap();
+            assert!(log.contains("stdin:/model claude-haiku-4-5"));
+            assert!(!s.status(true).busy);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn interrupt_preserves_busy_when_tmux_send_fails() {
+        let tmp = TempDir::new().unwrap();
+        let cwd = tmp.path().to_string_lossy().into_owned();
+
+        with_fake_tmux(&tmp, 1, |log_path, tmux_path| async move {
+            let s = build_with_tmux_cwd(cwd, "env-1", "tab-1", None, Some(tmux_path));
+            s.update_busy_from_hook_kind("UserPromptSubmit");
+
             let err = s.interrupt().await.unwrap_err();
 
             assert!(err.contains("tmux failed"));

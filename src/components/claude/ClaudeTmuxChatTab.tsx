@@ -55,6 +55,7 @@ import {
   sendKeys,
   startSession,
   submit as submitToTmux,
+  switchModel,
   subscribe,
   type TmuxPendingHook,
   type TmuxEvent,
@@ -778,7 +779,7 @@ export function ClaudeTmuxChatTab({ tabId, data, isActive, initialPrompt }: Prop
     setModelSwitching(true);
     setError(null);
     try {
-      await submitToTmux(tabId, `/model ${modelCommandArg(modelId)}`, environmentId);
+      await switchModel(tabId, modelCommandArg(modelId), environmentId);
       setSelectedModel(modelId);
       void persistSelectedModel(modelId);
     } catch (e) {

@@ -52,6 +52,7 @@ const capturePaneMock = mock(async () => "");
 const sendKeysMock = mock(async () => {});
 const replyHookMock = mock(async () => {});
 const submitMock = mock(async () => {});
+const switchModelMock = mock(async () => {});
 const answerPreToolUseMock = mock(async () => {});
 const listPreviousSessionsMock = mock(async () => [
   {
@@ -112,6 +113,8 @@ mock.module("@/lib/claude-tmux-client", () => ({
     capturePaneMock(tabId, environmentId),
   sendKeys: (tabId: string, keys: string[], environmentId?: string) =>
     sendKeysMock(tabId, keys, environmentId),
+  switchModel: (tabId: string, model: string, environmentId?: string) =>
+    switchModelMock(tabId, model, environmentId),
   replyHook: (
     tabId: string,
     eventKind: realTmuxClient.HookEventKind,
@@ -224,12 +227,14 @@ describe("ClaudeTmuxChatTab", () => {
     sendKeysMock.mockClear();
     replyHookMock.mockClear();
     submitMock.mockClear();
+    switchModelMock.mockClear();
     answerPreToolUseMock.mockClear();
     listPreviousSessionsMock.mockClear();
     claudeMessageRenderMock.mockClear();
     interactiveTerminalRenderMock.mockClear();
     capturePaneMock.mockImplementation(async () => "");
     submitMock.mockImplementation(async () => {});
+    switchModelMock.mockImplementation(async () => {});
     listPreviousSessionsMock.mockImplementation(async () => [
       {
         session_id: "resume-1",
@@ -1287,9 +1292,9 @@ describe("ClaudeTmuxChatTab", () => {
     });
 
     await waitFor(() => {
-      expect(submitMock).toHaveBeenCalledWith(
+      expect(switchModelMock).toHaveBeenCalledWith(
         "tab-1",
-        "/model claude-opus-4-7",
+        "claude-opus-4-7",
         "env-1",
       );
     });
@@ -1324,7 +1329,7 @@ describe("ClaudeTmuxChatTab", () => {
     ).toBe(true);
 
     fireEvent.click(defaultOption!);
-    expect(submitMock).not.toHaveBeenCalledWith("tab-1", "/model default");
+    expect(switchModelMock).not.toHaveBeenCalledWith("tab-1", "default");
     expect(updateGlobalConfigMock).not.toHaveBeenCalled();
   });
 
@@ -1511,7 +1516,7 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("locks compose and model controls while a model switch is in flight", async () => {
     let resolveSubmit!: () => void;
-    submitMock.mockImplementationOnce(
+    switchModelMock.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
           resolveSubmit = resolve;
@@ -1548,9 +1553,9 @@ describe("ClaudeTmuxChatTab", () => {
     });
 
     await waitFor(() => {
-      expect(submitMock).toHaveBeenCalledWith(
+      expect(switchModelMock).toHaveBeenCalledWith(
         "tab-1",
-        "/model claude-opus-4-7",
+        "claude-opus-4-7",
         "env-1",
       );
       expect(textarea.disabled).toBe(true);
@@ -1560,7 +1565,8 @@ describe("ClaudeTmuxChatTab", () => {
     });
 
     fireEvent.click(screen.getByTitle("Send (↵)"));
-    expect(submitMock).toHaveBeenCalledTimes(1);
+    expect(switchModelMock).toHaveBeenCalledTimes(1);
+    expect(submitMock).not.toHaveBeenCalled();
 
     await act(async () => {
       resolveSubmit();
@@ -1576,7 +1582,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("shows an error and keeps the previous model when model switching fails", async () => {
-    submitMock.mockImplementationOnce(async () => {
+    switchModelMock.mockImplementationOnce(async () => {
       throw new Error("tmux unavailable");
     });
     useClaudeTmuxStore

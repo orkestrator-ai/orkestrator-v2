@@ -631,6 +631,19 @@ pub async fn claude_tmux_submit(
 }
 
 #[tauri::command]
+pub async fn claude_tmux_switch_model(
+    tab_id: String,
+    model: String,
+    environment_id: String,
+) -> Result<(), String> {
+    let session = get_manager()
+        .get_for_env(&environment_id, &tab_id)
+        .await
+        .ok_or_else(|| "tmux session not running".to_string())?;
+    session.switch_model(&model).await
+}
+
+#[tauri::command]
 pub async fn claude_tmux_capture_pane(
     tab_id: String,
     environment_id: String,
@@ -740,7 +753,10 @@ mod tests {
         std_fs::write(
             &script,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexit 0\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nif [ \"$1\" = \"load-buffer\" ]; then printf 'stdin:' >> '{}'; cat >> '{}'; printf '\\n' >> '{}'; fi\nexit 0\n",
+                log_path.display(),
+                log_path.display(),
+                log_path.display(),
                 log_path.display(),
             ),
         )
@@ -866,6 +882,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn switch_model_command_returns_missing_session_error() {
+        let tab_id = format!("missing-{}", Uuid::new_v4());
+        let err = claude_tmux_switch_model(
+            tab_id,
+            "claude-opus-4-7".to_string(),
+            "env-missing".to_string(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, "tmux session not running");
+    }
+
+    #[tokio::test]
     async fn interactive_terminal_commands_handle_missing_sessions() {
         crate::local::init_local_terminal_manager();
         crate::pty::init_terminal_manager();
@@ -921,6 +950,45 @@ mod tests {
                 .unwrap();
             let log = fs::read_to_string(log_path).await.unwrap();
             assert!(log.contains(&format!("send-keys -t {} -- Escape", tmux_session)));
+        })
+        .await;
+
+        get_manager()
+            .remove_for_env("env-command-test", &tab_id)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn switch_model_command_dispatches_to_existing_session() {
+        let tmp = TempDir::new().unwrap();
+        let tab_id = format!("tab-{}", Uuid::new_v4());
+        let backend = Backend::Local {
+            cwd: tmp.path().to_string_lossy().into_owned(),
+        };
+        let session = Arc::new(TmuxSession::build(
+            "env-command-test".to_string(),
+            tab_id.clone(),
+            backend,
+            None,
+            None,
+        ));
+        let tmux_session = session.tmux_session.clone();
+        get_manager()
+            .insert("env-command-test", tab_id.clone(), session)
+            .await;
+        let command_tab_id = tab_id.clone();
+
+        with_fake_tmux(&tmp, |log_path| async move {
+            claude_tmux_switch_model(
+                command_tab_id,
+                "claude-opus-4-7".to_string(),
+                "env-command-test".to_string(),
+            )
+            .await
+            .unwrap();
+            let log = fs::read_to_string(log_path).await.unwrap();
+            assert!(log.contains("stdin:/model claude-opus-4-7"));
+            assert!(log.contains(&format!("send-keys -t {} -- Enter", tmux_session)));
         })
         .await;
 

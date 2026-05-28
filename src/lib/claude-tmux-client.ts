@@ -179,6 +179,14 @@ export async function submit(tabId: string, text: string, environmentId: string)
   await invoke("claude_tmux_submit", { tabId, environmentId, text });
 }
 
+export async function switchModel(
+  tabId: string,
+  model: string,
+  environmentId: string,
+): Promise<void> {
+  await invoke("claude_tmux_switch_model", { tabId, environmentId, model });
+}
+
 export async function sendText(tabId: string, text: string, environmentId: string): Promise<void> {
   await invoke("claude_tmux_send_text", { tabId, environmentId, text });
 }

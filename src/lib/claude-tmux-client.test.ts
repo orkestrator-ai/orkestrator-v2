@@ -54,6 +54,7 @@ import {
   startSession,
   stopSession,
   submit,
+  switchModel,
   writeInteractiveTerminal,
 } from "./claude-tmux-client";
 
@@ -135,6 +136,16 @@ describe("claude-tmux-client invoke wrappers", () => {
     await submit("tab-1", "go", "env-1");
     expect(calls[0]!.cmd).toBe("claude_tmux_submit");
     expect(calls[0]!.args).toEqual({ tabId: "tab-1", environmentId: "env-1", text: "go" });
+  });
+
+  test("switchModel forwards the model and environmentId", async () => {
+    await switchModel("tab-1", "claude-opus-4-7", "env-1");
+    expect(calls[0]!.cmd).toBe("claude_tmux_switch_model");
+    expect(calls[0]!.args).toEqual({
+      tabId: "tab-1",
+      environmentId: "env-1",
+      model: "claude-opus-4-7",
+    });
   });
 
   test("sendText forwards text and environmentId without auto-Enter", async () => {

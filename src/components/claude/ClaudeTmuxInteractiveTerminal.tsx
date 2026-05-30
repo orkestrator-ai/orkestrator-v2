@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
 import {
   createInteractiveTerminal,
   detachInteractiveTerminal,
@@ -10,6 +11,7 @@ import {
   startInteractiveTerminal,
   writeInteractiveTerminal,
 } from "@/lib/claude-tmux-client";
+import { escapePathForTerminalInput, handleTerminalPaste } from "@/lib/terminal-paste";
 import { cn } from "@/lib/utils";
 import { useConfigStore } from "@/stores";
 import {
@@ -21,6 +23,8 @@ import {
 interface ClaudeTmuxInteractiveTerminalProps {
   tabId: string;
   environmentId?: string;
+  containerId?: string | null;
+  worktreePath?: string | null;
   isActive: boolean;
   className?: string;
 }
@@ -28,6 +32,8 @@ interface ClaudeTmuxInteractiveTerminalProps {
 export function ClaudeTmuxInteractiveTerminal({
   tabId,
   environmentId,
+  containerId,
+  worktreePath,
   isActive,
   className,
 }: ClaudeTmuxInteractiveTerminalProps) {
@@ -48,6 +54,56 @@ export function ClaudeTmuxInteractiveTerminal({
   const terminalBackgroundColor = resolveTerminalBackgroundColor(
     terminalAppearance.backgroundColor,
   );
+
+  const writeToTerminal = useCallback(async (data: string) => {
+    const sessionId = sessionIdRef.current;
+    if (!sessionId) return;
+    await writeInteractiveTerminal(sessionId, data);
+  }, []);
+
+  const focusTerminal = useCallback(() => {
+    terminalRef.current?.focus();
+  }, []);
+
+  const handlePaste = useCallback(async () => {
+    await handleTerminalPaste({
+      containerId,
+      worktreePath,
+      writeToTerminal,
+      focusTerminal,
+      componentName: "ClaudeTmuxInteractiveTerminal",
+    });
+  }, [containerId, worktreePath, writeToTerminal, focusTerminal]);
+
+  // Keep the latest paste handler in a ref so the terminal/tmux session
+  // lifecycle does not depend on the handler's identity. Without this, a
+  // change to containerId/worktreePath would tear down and recreate the
+  // session just to refresh the key-handler closure.
+  const handlePasteRef = useRef(handlePaste);
+  useEffect(() => {
+    handlePasteRef.current = handlePaste;
+  }, [handlePaste]);
+
+  const handleImageSaved = useCallback(
+    async (filePath: string) => {
+      const terminalPath = containerId ? filePath : escapePathForTerminalInput(filePath);
+      await writeToTerminal(terminalPath + " ");
+      focusTerminal();
+    },
+    [containerId, writeToTerminal, focusTerminal],
+  );
+
+  const handleImageError = useCallback((errorMessage: string) => {
+    console.error("[ClaudeTmuxInteractiveTerminal] Clipboard image error:", errorMessage);
+  }, []);
+
+  useClipboardImagePaste({
+    containerId: containerId ?? null,
+    worktreePath,
+    isActive,
+    onImageSaved: handleImageSaved,
+    onError: handleImageError,
+  });
 
   useEffect(() => {
     const host = terminalHostRef.current;
@@ -112,6 +168,20 @@ export function ClaudeTmuxInteractiveTerminal({
       const sessionId = sessionIdRef.current;
       if (!sessionId) return;
       void writeInteractiveTerminal(sessionId, data);
+    });
+
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown") return true;
+
+      const key = event.key.toLowerCase();
+      const isPasteShortcut = (event.metaKey || event.ctrlKey) && key === "v";
+      if (isPasteShortcut && !event.altKey) {
+        event.preventDefault();
+        void handlePasteRef.current();
+        return false;
+      }
+
+      return true;
     });
 
     const resizeObserver = new ResizeObserver(() => fit());

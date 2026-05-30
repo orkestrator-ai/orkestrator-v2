@@ -89,15 +89,21 @@ const interactiveTerminalRenderMock = mock(
     tabId,
     isActive,
     className,
+    containerId,
+    worktreePath,
   }: {
     tabId: string;
     isActive: boolean;
     className?: string;
+    containerId?: string | null;
+    worktreePath?: string | null;
   }) => (
     <div
       data-testid="tmux-interactive-terminal"
       data-tab-id={tabId}
       data-active={String(isActive)}
+      data-container-id={containerId ?? ""}
+      data-worktree-path={worktreePath ?? ""}
       className={className}
     />
   ),
@@ -373,6 +379,9 @@ describe("ClaudeTmuxChatTab", () => {
     const terminal = screen.getByTestId("tmux-interactive-terminal");
     expect(terminal.getAttribute("data-tab-id")).toBe("tab-1");
     expect(terminal.getAttribute("data-active")).toBe("true");
+    // Container/worktree props must be forwarded so clipboard paste targets
+    // the right environment.
+    expect(terminal.getAttribute("data-container-id")).toBe("container-1");
     // Pinned: useScrollLock's isActive/mountTrigger flip on the interactive
     // toggle causes one extra render on top of the initial mount.
     expect(interactiveTerminalRenderMock).toHaveBeenCalledTimes(2);
@@ -381,6 +390,59 @@ describe("ClaudeTmuxChatTab", () => {
 
     expect(screen.queryByTestId("tmux-interactive-terminal")).toBeNull();
     expect(screen.getByRole("button", { name: /terminal/i })).toBeTruthy();
+  });
+
+  test("forwards the worktree path to the interactive terminal for local environments", async () => {
+    getStatusMock.mockImplementation(async () => ({
+      tab_id: "tab-1",
+      environment_id: "env-1",
+      session_id: "session-existing",
+      tmux_session: "orkestrator-env1-tab1",
+      running: true,
+      transcript_path: "/tmp/session-existing.jsonl",
+      resumed: false,
+      busy: false,
+    }));
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Local env",
+          branch: "main",
+          containerId: null,
+          status: "running",
+          prUrl: null,
+          prState: null,
+          hasMergeConflicts: null,
+          createdAt: new Date().toISOString(),
+          networkAccessMode: "restricted",
+          order: 0,
+          environmentType: "local",
+          worktreePath: "/tmp/local-repo",
+        },
+      ],
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", isLocal: true }}
+        isActive
+      />,
+    );
+
+    const terminalButton = await waitFor(() => {
+      const button = screen.getByRole("button", { name: /terminal/i });
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+      return button;
+    });
+
+    fireEvent.click(terminalButton);
+
+    const terminal = screen.getByTestId("tmux-interactive-terminal");
+    expect(terminal.getAttribute("data-worktree-path")).toBe("/tmp/local-repo");
+    expect(terminal.getAttribute("data-container-id")).toBe("");
   });
 
   test("shows a scroll down button after the user scrolls up in native tmux transcript mode", async () => {

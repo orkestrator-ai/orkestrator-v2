@@ -4,13 +4,24 @@ import * as realXterm from "@xterm/xterm";
 import * as realFitAddon from "@xterm/addon-fit";
 import * as realTauriEvent from "@tauri-apps/api/event";
 import * as realTmuxClient from "@/lib/claude-tmux-client";
+import * as realTerminalPaste from "@/lib/terminal-paste";
+import * as realClipboardImagePaste from "@/hooks/useClipboardImagePaste";
 
 const realXtermSnapshot = { ...realXterm };
 const realFitAddonSnapshot = { ...realFitAddon };
 const realTauriEventSnapshot = { ...realTauriEvent };
 const realTmuxClientSnapshot = { ...realTmuxClient };
+const realTerminalPasteSnapshot = { ...realTerminalPaste };
+const realClipboardImagePasteSnapshot = { ...realClipboardImagePaste };
 
 type OutputHandler = (event: { payload: number[] }) => void;
+type KeyHandler = (event: KeyboardEvent) => boolean;
+type ImagePasteOptions = {
+  onImageSaved?: (filePath: string) => void | Promise<void>;
+  onError?: (message: string) => void | Promise<void>;
+};
+
+let capturedImagePasteOptions: ImagePasteOptions | null = null;
 
 const terminalInstances: MockTerminal[] = [];
 const fitInstances: MockFitAddon[] = [];
@@ -24,6 +35,7 @@ class MockTerminal {
   focused = false;
   disposed = false;
   dataHandlers: Array<(data: string) => void> = [];
+  keyHandler: KeyHandler | null = null;
 
   constructor() {
     terminalInstances.push(this);
@@ -42,8 +54,16 @@ class MockTerminal {
     };
   }
 
+  attachCustomKeyEventHandler(handler: KeyHandler) {
+    this.keyHandler = handler;
+  }
+
   emitData(data: string) {
     this.dataHandlers.forEach((handler) => handler(data));
+  }
+
+  emitKey(event: Partial<KeyboardEvent>) {
+    return this.keyHandler?.(event as KeyboardEvent);
   }
 
   write(data: Uint8Array) {
@@ -77,6 +97,7 @@ const startInteractiveTerminalMock = mock(async () => {});
 const writeInteractiveTerminalMock = mock(async () => {});
 const resizeInteractiveTerminalMock = mock(async () => {});
 const detachInteractiveTerminalMock = mock(async () => {});
+const handleTerminalPasteMock = mock(async () => {});
 
 mock.module("@xterm/xterm", () => ({
   Terminal: MockTerminal,
@@ -100,6 +121,21 @@ mock.module("@/lib/claude-tmux-client", () => ({
   detachInteractiveTerminal: detachInteractiveTerminalMock,
 }));
 
+mock.module("@/lib/terminal-paste", () => ({
+  ...realTerminalPasteSnapshot,
+  handleTerminalPaste: handleTerminalPasteMock,
+}));
+
+// Capture the options the component passes to the clipboard image-paste hook
+// (DOM/right-click path) so we can drive its onImageSaved/onError callbacks
+// directly. The hook itself is covered by useClipboardImagePaste.test.ts.
+mock.module("@/hooks/useClipboardImagePaste", () => ({
+  ...realClipboardImagePasteSnapshot,
+  useClipboardImagePaste: (options: ImagePasteOptions) => {
+    capturedImagePasteOptions = options;
+  },
+}));
+
 const { ClaudeTmuxInteractiveTerminal } = await import(
   "@/components/claude/ClaudeTmuxInteractiveTerminal"
 );
@@ -114,6 +150,8 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     mock.module("@xterm/addon-fit", () => realFitAddonSnapshot);
     mock.module("@tauri-apps/api/event", () => realTauriEventSnapshot);
     mock.module("@/lib/claude-tmux-client", () => realTmuxClientSnapshot);
+    mock.module("@/lib/terminal-paste", () => realTerminalPasteSnapshot);
+    mock.module("@/hooks/useClipboardImagePaste", () => realClipboardImagePasteSnapshot);
     globalThis.ResizeObserver = originalResizeObserver;
     globalThis.requestAnimationFrame = originalRequestAnimationFrame;
   });
@@ -133,6 +171,9 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     writeInteractiveTerminalMock.mockClear();
     resizeInteractiveTerminalMock.mockClear();
     detachInteractiveTerminalMock.mockClear();
+    handleTerminalPasteMock.mockClear();
+    handleTerminalPasteMock.mockResolvedValue(undefined);
+    capturedImagePasteOptions = null;
 
     globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => {
       callback(0);
@@ -185,6 +226,185 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     expect(unlistenMock).toHaveBeenCalledTimes(1);
     expect(detachInteractiveTerminalMock).toHaveBeenCalledWith("pty-1");
     expect(terminalInstances[0]!.disposed).toBe(true);
+  });
+
+  test("handles keyboard paste through the shared terminal paste helper", async () => {
+    handleTerminalPasteMock.mockImplementationOnce(async (options) => {
+      await options.writeToTerminal("/workspace/.orkestrator/clipboard/image.png ");
+      options.focusTerminal();
+    });
+    const preventDefault = mock(() => {});
+
+    render(
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        containerId="container-1"
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+
+    const handled = terminalInstances[0]!.emitKey({
+      type: "keydown",
+      key: "v",
+      metaKey: true,
+      ctrlKey: false,
+      altKey: false,
+      preventDefault,
+    });
+
+    expect(handled).toBe(false);
+    expect(preventDefault).toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(handleTerminalPasteMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          containerId: "container-1",
+          componentName: "ClaudeTmuxInteractiveTerminal",
+        }),
+      );
+      expect(writeInteractiveTerminalMock).toHaveBeenCalledWith(
+        "pty-1",
+        "/workspace/.orkestrator/clipboard/image.png ",
+      );
+    });
+    expect(terminalInstances[0]!.focused).toBe(true);
+  });
+
+  test("does not recreate the tmux session when paste-related props change", async () => {
+    const { rerender } = render(
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        worktreePath={undefined}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+    expect(createInteractiveTerminalMock).toHaveBeenCalledTimes(1);
+
+    // A change to worktreePath (e.g. environment store loads after mount) used to
+    // change the paste handler's identity and tear down the whole terminal.
+    rerender(
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        worktreePath="/tmp/worktrees/env"
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(capturedImagePasteOptions).not.toBeNull());
+
+    // Session must NOT have been recreated/detached.
+    expect(createInteractiveTerminalMock).toHaveBeenCalledTimes(1);
+    expect(detachInteractiveTerminalMock).not.toHaveBeenCalled();
+    expect(terminalInstances).toHaveLength(1);
+    expect(terminalInstances[0]!.disposed).toBe(false);
+
+    // The key handler must still route the paste using the UPDATED props.
+    terminalInstances[0]!.emitKey({
+      type: "keydown",
+      key: "v",
+      metaKey: true,
+      ctrlKey: false,
+      altKey: false,
+      preventDefault: mock(() => {}),
+    });
+
+    await waitFor(() =>
+      expect(handleTerminalPasteMock).toHaveBeenCalledWith(
+        expect.objectContaining({ worktreePath: "/tmp/worktrees/env" }),
+      ),
+    );
+  });
+
+  test("escapes saved image paths for local environments but not containers", async () => {
+    // Local environment (no containerId): path must be shell-escaped.
+    render(
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        worktreePath="/tmp/worktrees/env"
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+    expect(capturedImagePasteOptions?.onImageSaved).toBeDefined();
+
+    await act(async () => {
+      await capturedImagePasteOptions!.onImageSaved!(
+        "/tmp/my project/.orkestrator/clipboard/image.png",
+      );
+    });
+
+    expect(writeInteractiveTerminalMock).toHaveBeenCalledWith(
+      "pty-1",
+      "/tmp/my\\ project/.orkestrator/clipboard/image.png ",
+    );
+    expect(terminalInstances[0]!.focused).toBe(true);
+
+    writeInteractiveTerminalMock.mockClear();
+    cleanup();
+    terminalInstances.length = 0;
+    capturedImagePasteOptions = null;
+
+    // Container environment: path is written verbatim (no escaping).
+    render(
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-2"
+        environmentId={environmentId}
+        containerId="container-1"
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(capturedImagePasteOptions?.onImageSaved).toBeDefined());
+
+    await act(async () => {
+      await capturedImagePasteOptions!.onImageSaved!(
+        "/workspace/.orkestrator/clipboard/image.png",
+      );
+    });
+
+    expect(writeInteractiveTerminalMock).toHaveBeenCalledWith(
+      "pty-1",
+      "/workspace/.orkestrator/clipboard/image.png ",
+    );
+  });
+
+  test("logs clipboard image errors without throwing", async () => {
+    const consoleError = mock(() => {});
+    const originalConsoleError = console.error;
+    console.error = consoleError as unknown as typeof console.error;
+
+    try {
+      render(
+        <ClaudeTmuxInteractiveTerminal
+          tabId="tab-1"
+          environmentId={environmentId}
+          containerId="container-1"
+          isActive
+        />,
+      );
+
+      await waitFor(() => expect(capturedImagePasteOptions?.onError).toBeDefined());
+
+      await act(async () => {
+        await capturedImagePasteOptions!.onError!("Image too large (9.0MB). Maximum size is 8MB.");
+      });
+
+      expect(consoleError).toHaveBeenCalledWith(
+        "[ClaudeTmuxInteractiveTerminal] Clipboard image error:",
+        "Image too large (9.0MB). Maximum size is 8MB.",
+      );
+    } finally {
+      console.error = originalConsoleError;
+    }
   });
 
   test("cleans up the created session and listener when start fails", async () => {

@@ -923,6 +923,8 @@ export function ClaudeTmuxChatTab({
         <ClaudeTmuxInteractiveTerminal
           tabId={tabId}
           environmentId={environmentId}
+          containerId={containerId}
+          worktreePath={worktreePath}
           isActive={isActive}
           className="flex-1"
         />

@@ -110,6 +110,58 @@ describe("useFileMentions", () => {
     expect(result.current.selectedIndex).toBe(0);
   });
 
+  test("selects with Space and resets menu state", () => {
+    const onSelect = mock(() => {});
+    const { result } = renderHook(() =>
+      useFileMentions({
+        searchFiles: () => files,
+      }),
+    );
+
+    act(() => {
+      result.current.handleCursorChange(1, "@");
+      result.current.setSelectedIndex(1);
+    });
+
+    const spaceEvent = keyEvent(" ");
+    act(() => {
+      expect(result.current.handleKeyDown(spaceEvent, onSelect)).toBe(true);
+    });
+
+    expect(spaceEvent.preventDefault).toHaveBeenCalled();
+    expect(spaceEvent.stopPropagation).toHaveBeenCalled();
+    expect(onSelect).toHaveBeenCalledWith(files[1]);
+    expect(result.current.isMenuOpen).toBe(false);
+    expect(result.current.searchQuery).toBe("");
+    expect(result.current.selectedIndex).toBe(0);
+  });
+
+  test("selects with legacy Spacebar and resets menu state", () => {
+    const onSelect = mock(() => {});
+    const { result } = renderHook(() =>
+      useFileMentions({
+        searchFiles: () => files,
+      }),
+    );
+
+    act(() => {
+      result.current.handleCursorChange(1, "@");
+      result.current.setSelectedIndex(2);
+    });
+
+    const spacebarEvent = keyEvent("Spacebar");
+    act(() => {
+      expect(result.current.handleKeyDown(spacebarEvent, onSelect)).toBe(true);
+    });
+
+    expect(spacebarEvent.preventDefault).toHaveBeenCalled();
+    expect(spacebarEvent.stopPropagation).toHaveBeenCalled();
+    expect(onSelect).toHaveBeenCalledWith(files[2]);
+    expect(result.current.isMenuOpen).toBe(false);
+    expect(result.current.searchQuery).toBe("");
+    expect(result.current.selectedIndex).toBe(0);
+  });
+
   test("closes and resets selection with Escape", () => {
     const { result } = renderHook(() =>
       useFileMentions({
@@ -160,6 +212,32 @@ describe("useFileMentions", () => {
       result.current.handleKeyDown(keyEvent("Escape"), onSelect);
     });
     expect(result.current.isMenuOpen).toBe(false);
+  });
+
+  test("lets Space continue text input when the menu has no suggestions", () => {
+    const onSelect = mock(() => {});
+    const { result } = renderHook(() =>
+      useFileMentions({
+        searchFiles: () => [],
+      }),
+    );
+
+    act(() => {
+      result.current.handleCursorChange(8, "@missing");
+      result.current.setSelectedIndex(2);
+    });
+
+    const spaceEvent = keyEvent(" ");
+    act(() => {
+      expect(result.current.handleKeyDown(spaceEvent, onSelect)).toBe(false);
+    });
+
+    expect(spaceEvent.preventDefault).not.toHaveBeenCalled();
+    expect(spaceEvent.stopPropagation).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(result.current.isMenuOpen).toBe(false);
+    expect(result.current.searchQuery).toBe("");
+    expect(result.current.selectedIndex).toBe(0);
   });
 
   test("does not handle keys when the menu is closed", () => {

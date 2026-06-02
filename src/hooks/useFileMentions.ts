@@ -138,6 +138,21 @@ export function useFileMentions({
           }
           break;
 
+        case " ":
+        case "Spacebar":
+          if (filteredFiles.length === 0) {
+            closeMenu();
+            return false;
+          }
+          handleMenuKey(event);
+          if (filteredFiles[safeSelectedIndex]) {
+            const selectedFile = filteredFiles[safeSelectedIndex];
+            closeMenu();
+            onSelect(selectedFile);
+            return true;
+          }
+          break;
+
         case "Escape":
           handleMenuKey(event);
           closeMenu();

@@ -120,7 +120,6 @@ export function ClaudeChatTab({
     getSessionKeyBySdkSessionId,
     addToQueue,
     removeFromQueue,
-    clearQueue,
     clients: clientsMap,
     sessions: sessionsMap,
     pendingQuestions: pendingQuestionsMap,
@@ -191,6 +190,14 @@ export function ClaudeChatTab({
   const queueLength = useClaudeStore(
     useCallback((state) => state.messageQueue.get(sessionKey)?.length ?? 0, [sessionKey])
   );
+  const isQueueBlockedByDraft = useClaudeStore(
+    useCallback(
+      (state) =>
+        (state.draftText.get(sessionKey)?.trim().length ?? 0) > 0 ||
+        (state.attachments.get(sessionKey)?.length ?? 0) > 0,
+      [sessionKey],
+    ),
+  );
 
   // Elapsed timer: counts up while agent is working
   const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
@@ -213,6 +220,13 @@ export function ClaudeChatTab({
   const workspaceReady = useEnvironmentStore(
     (state) => state.workspaceReadyEnvironments.has(environmentId)
   );
+  const setupPending = isSetupPending({
+    isLocal: !!isLocal,
+    setupCommandsResolved,
+    hasPendingSetupCommands,
+    setupScriptsRunning,
+    workspaceReady,
+  });
 
   const lastInitTimeRef = useRef<number>(0);
   const INIT_DEBOUNCE_MS = 1000;
@@ -227,7 +241,7 @@ export function ClaudeChatTab({
 
   useEffect(() => {
     // Block initialization until setup scripts finish (local environments with orkestrator-ai.json)
-    if (isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady })) {
+    if (setupPending) {
       return;
     }
 
@@ -678,7 +692,7 @@ export function ClaudeChatTab({
       slashCmdCleanupRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [containerId, environmentId, tabId, isLocal, setupScriptsRunning, setupCommandsResolved, hasPendingSetupCommands, workspaceReady]);
+  }, [containerId, environmentId, tabId, isLocal, setupPending]);
 
   const startSharedEventSubscription = useCallback(
     async (bridgeClient: ReturnType<typeof createClient>) => {
@@ -1073,11 +1087,32 @@ export function ClaudeChatTab({
     [sessionKey, addToQueue]
   );
 
+  const promoteNextQueuedPromptToDraft = useCallback(() => {
+    const store = useClaudeStore.getState();
+    const hasCurrentDraft =
+      store.getDraftText(sessionKey).trim().length > 0 ||
+      store.getAttachments(sessionKey).length > 0;
+    if (hasCurrentDraft) return;
+
+    const nextMessage = store.removeFromQueue(sessionKey);
+    if (!nextMessage) return;
+
+    store.setDraftText(sessionKey, nextMessage.text);
+    store.setDraftMentions(sessionKey, []);
+    store.clearAttachments(sessionKey);
+    for (const attachment of nextMessage.attachments) {
+      store.addAttachment(sessionKey, attachment);
+    }
+    store.setEffort(sessionKey, nextMessage.effort);
+    store.setPlanMode(sessionKey, nextMessage.planModeEnabled);
+    store.setFastMode(sessionKey, nextMessage.fastModeEnabled);
+  }, [sessionKey]);
+
   // Handle stopping the current query
   const handleStop = useCallback(async () => {
     if (!client || !session) return;
 
-    clearQueue(sessionKey);
+    promoteNextQueuedPromptToDraft();
     setSessionLoading(sessionKey, false);
 
     const success = await abortSession(client, session.sessionId);
@@ -1094,7 +1129,7 @@ export function ClaudeChatTab({
     } else {
       console.error("[ClaudeChatTab] Failed to abort session");
     }
-  }, [client, session, sessionKey, clearQueue, setSessionLoading, addMessage]);
+  }, [client, session, sessionKey, promoteNextQueuedPromptToDraft, setSessionLoading, addMessage]);
 
   useEffect(() => {
     if (!isActive || !session?.isLoading) {
@@ -1142,6 +1177,7 @@ export function ClaudeChatTab({
       client &&
       session &&
       initialPrompt &&
+      !setupPending &&
       !initialPromptSentRef.current &&
       !sessionHasMessages
     ) {
@@ -1151,7 +1187,7 @@ export function ClaudeChatTab({
       console.debug("[ClaudeChatTab] Sending initial prompt on reconnection for tab:", tabId);
       handleSendRef.current?.(initialPrompt, [], effortValue, planModeEnabledValue, fastModeEnabledValue);
     }
-  }, [connectionState, client, session, initialPrompt, tabId, effortValue, planModeEnabledValue, fastModeEnabledValue, clearTabInitialPrompt, environmentId]);
+  }, [connectionState, client, session, initialPrompt, setupPending, tabId, effortValue, planModeEnabledValue, fastModeEnabledValue, clearTabInitialPrompt, environmentId]);
 
   // Process queued messages when session becomes idle
   useEffect(() => {
@@ -1166,6 +1202,8 @@ export function ClaudeChatTab({
       session &&
       !session.isLoading &&
       queueLength > 0 &&
+      !isQueueBlockedByDraft &&
+      !setupPending &&
       !isProcessingQueueRef.current
     ) {
       const nextMessage = removeFromQueue(sessionKey);
@@ -1209,7 +1247,7 @@ export function ClaudeChatTab({
         }
       }
     }
-  }, [connectionState, client, session, session?.isLoading, queueLength, sessionKey, removeFromQueue, addMessage, setSessionLoading]);
+  }, [connectionState, client, session, session?.isLoading, queueLength, isQueueBlockedByDraft, setupPending, sessionKey, removeFromQueue, addMessage, setSessionLoading]);
 
   const handleRetry = useCallback(() => {
     setConnectionState("connecting");
@@ -1261,7 +1299,7 @@ export function ClaudeChatTab({
     [client, sessionKey, setSession]
   );
 
-  if (isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady })) {
+  if (setupPending) {
     return (
       <SetupPendingOverlay
         environmentId={environmentId}

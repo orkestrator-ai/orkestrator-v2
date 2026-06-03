@@ -742,13 +742,42 @@ pub async fn claude_tmux_list_previous_sessions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use std::fs as std_fs;
     use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
     use tempfile::TempDir;
     use tokio::fs;
     use uuid::Uuid;
 
-    fn install_fake_tmux(dir: &std::path::Path, log_path: &std::path::Path) {
+    struct PathGuard {
+        original_path: Option<OsString>,
+    }
+
+    impl Drop for PathGuard {
+        fn drop(&mut self) {
+            match self.original_path.take() {
+                Some(path) => std::env::set_var("PATH", path),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+    }
+
+    fn prepend_to_path(dir: &Path) -> PathGuard {
+        let original_path = std::env::var_os("PATH");
+        let path = match original_path.as_ref() {
+            Some(existing) => {
+                let mut paths = vec![dir.to_path_buf()];
+                paths.extend(std::env::split_paths(existing));
+                std::env::join_paths(paths).unwrap()
+            }
+            None => dir.as_os_str().to_os_string(),
+        };
+        std::env::set_var("PATH", path);
+        PathGuard { original_path }
+    }
+
+    fn install_fake_tmux(dir: &Path, log_path: &Path) -> PathBuf {
         let script = dir.join("tmux");
         std_fs::write(
             &script,
@@ -764,11 +793,12 @@ mod tests {
         let mut perms = std_fs::metadata(&script).unwrap().permissions();
         perms.set_mode(0o755);
         std_fs::set_permissions(&script, perms).unwrap();
+        script
     }
 
     async fn with_fake_tmux<F, Fut>(tmp: &TempDir, f: F)
     where
-        F: FnOnce(std::path::PathBuf) -> Fut,
+        F: FnOnce(PathBuf, String) -> Fut,
         Fut: std::future::Future<Output = ()>,
     {
         let _guard = crate::claude_tmux::TEST_PATH_LOCK
@@ -778,25 +808,10 @@ mod tests {
         let bin_dir = tmp.path().join("bin");
         std_fs::create_dir_all(&bin_dir).unwrap();
         let log_path = tmp.path().join("tmux.log");
-        install_fake_tmux(&bin_dir, &log_path);
+        let tmux_path = install_fake_tmux(&bin_dir, &log_path);
 
-        let original_path = std::env::var_os("PATH");
-        let path = match original_path.as_ref() {
-            Some(existing) => {
-                let mut paths = vec![bin_dir.clone()];
-                paths.extend(std::env::split_paths(existing));
-                std::env::join_paths(paths).unwrap()
-            }
-            None => bin_dir.into_os_string(),
-        };
-        std::env::set_var("PATH", path);
-
-        f(log_path).await;
-
-        match original_path {
-            Some(path) => std::env::set_var("PATH", path),
-            None => std::env::remove_var("PATH"),
-        }
+        let _path_guard = prepend_to_path(&bin_dir);
+        f(log_path, tmux_path.to_string_lossy().into_owned()).await;
     }
 
     #[test]
@@ -928,73 +943,73 @@ mod tests {
     async fn interrupt_command_sends_escape_to_existing_session() {
         let tmp = TempDir::new().unwrap();
         let tab_id = format!("tab-{}", Uuid::new_v4());
-        let backend = Backend::Local {
-            cwd: tmp.path().to_string_lossy().into_owned(),
-        };
-        let session = Arc::new(TmuxSession::build(
-            "env-command-test".to_string(),
-            tab_id.clone(),
-            backend,
-            None,
-            None,
-        ));
-        let tmux_session = session.tmux_session.clone();
-        get_manager()
-            .insert("env-command-test", tab_id.clone(), session)
-            .await;
+        let environment_id = format!("env-command-test-{}", Uuid::new_v4());
+        let cwd = tmp.path().to_string_lossy().into_owned();
         let command_tab_id = tab_id.clone();
 
-        with_fake_tmux(&tmp, |log_path| async move {
-            claude_tmux_interrupt(command_tab_id, "env-command-test".to_string())
+        with_fake_tmux(&tmp, |log_path, tmux_path| async move {
+            let mut session = TmuxSession::build(
+                environment_id.clone(),
+                tab_id.clone(),
+                Backend::Local { cwd },
+                None,
+                None,
+            );
+            session.tmux_command = tmux_path;
+            let session = Arc::new(session);
+            let tmux_session = session.tmux_session.clone();
+            get_manager()
+                .insert(&environment_id, tab_id.clone(), session)
+                .await;
+
+            claude_tmux_interrupt(command_tab_id, environment_id.clone())
                 .await
                 .unwrap();
             let log = fs::read_to_string(log_path).await.unwrap();
             assert!(log.contains(&format!("send-keys -t {} -- Escape", tmux_session)));
+
+            get_manager().remove_for_env(&environment_id, &tab_id).await;
         })
         .await;
-
-        get_manager()
-            .remove_for_env("env-command-test", &tab_id)
-            .await;
     }
 
     #[tokio::test]
     async fn switch_model_command_dispatches_to_existing_session() {
         let tmp = TempDir::new().unwrap();
         let tab_id = format!("tab-{}", Uuid::new_v4());
-        let backend = Backend::Local {
-            cwd: tmp.path().to_string_lossy().into_owned(),
-        };
-        let session = Arc::new(TmuxSession::build(
-            "env-command-test".to_string(),
-            tab_id.clone(),
-            backend,
-            None,
-            None,
-        ));
-        let tmux_session = session.tmux_session.clone();
-        get_manager()
-            .insert("env-command-test", tab_id.clone(), session)
-            .await;
+        let environment_id = format!("env-command-test-{}", Uuid::new_v4());
+        let cwd = tmp.path().to_string_lossy().into_owned();
         let command_tab_id = tab_id.clone();
 
-        with_fake_tmux(&tmp, |log_path| async move {
+        with_fake_tmux(&tmp, |log_path, tmux_path| async move {
+            let mut session = TmuxSession::build(
+                environment_id.clone(),
+                tab_id.clone(),
+                Backend::Local { cwd },
+                None,
+                None,
+            );
+            session.tmux_command = tmux_path;
+            let session = Arc::new(session);
+            let tmux_session = session.tmux_session.clone();
+            get_manager()
+                .insert(&environment_id, tab_id.clone(), session)
+                .await;
+
             claude_tmux_switch_model(
                 command_tab_id,
                 "claude-opus-4-7".to_string(),
-                "env-command-test".to_string(),
+                environment_id.clone(),
             )
             .await
             .unwrap();
             let log = fs::read_to_string(log_path).await.unwrap();
             assert!(log.contains("stdin:/model claude-opus-4-7"));
             assert!(log.contains(&format!("send-keys -t {} -- Enter", tmux_session)));
+
+            get_manager().remove_for_env(&environment_id, &tab_id).await;
         })
         .await;
-
-        get_manager()
-            .remove_for_env("env-command-test", &tab_id)
-            .await;
     }
 
     #[tokio::test]
@@ -1004,8 +1019,9 @@ mod tests {
         let backend = Backend::Local {
             cwd: tmp.path().to_string_lossy().into_owned(),
         };
+        let environment_id = format!("env-command-test-{}", Uuid::new_v4());
         let session = Arc::new(TmuxSession::build(
-            "env-command-test".to_string(),
+            environment_id.clone(),
             tab_id.clone(),
             backend.clone(),
             None,
@@ -1023,14 +1039,12 @@ mod tests {
             .unwrap();
 
         get_manager()
-            .insert("env-command-test", tab_id.clone(), session)
+            .insert(&environment_id, tab_id.clone(), session)
             .await;
-        let hooks = claude_tmux_pending_hooks(tab_id.clone(), "env-command-test".to_string())
+        let hooks = claude_tmux_pending_hooks(tab_id.clone(), environment_id.clone())
             .await
             .unwrap();
-        get_manager()
-            .remove_for_env("env-command-test", &tab_id)
-            .await;
+        get_manager().remove_for_env(&environment_id, &tab_id).await;
 
         assert_eq!(hooks.len(), 1);
         assert_eq!(hooks[0].id, "id-1");
@@ -1081,16 +1095,7 @@ mod tests {
         perms.set_mode(0o755);
         std_fs::set_permissions(&script, perms).unwrap();
 
-        let original_path = std::env::var_os("PATH");
-        let path = match original_path.as_ref() {
-            Some(existing) => {
-                let mut paths = vec![bin_dir.clone()];
-                paths.extend(std::env::split_paths(existing));
-                std::env::join_paths(paths).unwrap()
-            }
-            None => bin_dir.into_os_string(),
-        };
-        std::env::set_var("PATH", path);
+        let _path_guard = prepend_to_path(&bin_dir);
 
         kill_tmux_sessions_for_env(&backend, &env_a).await;
 
@@ -1105,11 +1110,6 @@ mod tests {
             "env_b session was killed by env_a cleanup, log:\n{}",
             log,
         );
-
-        match original_path {
-            Some(path) => std::env::set_var("PATH", path),
-            None => std::env::remove_var("PATH"),
-        }
     }
 
     #[tokio::test]
@@ -1117,22 +1117,23 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let environment_id = format!("env-command-test-{}", Uuid::new_v4());
         let tab_id = format!("tab-{}", Uuid::new_v4());
-        let backend = Backend::Local {
-            cwd: tmp.path().to_string_lossy().into_owned(),
-        };
-        let session = Arc::new(TmuxSession::build(
-            environment_id.clone(),
-            tab_id.clone(),
-            backend,
-            None,
-            None,
-        ));
-        let tmux_session = session.tmux_session.clone();
-        get_manager()
-            .insert(&environment_id, tab_id.clone(), session)
-            .await;
+        let cwd = tmp.path().to_string_lossy().into_owned();
 
-        with_fake_tmux(&tmp, |log_path| async move {
+        with_fake_tmux(&tmp, |log_path, tmux_path| async move {
+            let mut session = TmuxSession::build(
+                environment_id.clone(),
+                tab_id.clone(),
+                Backend::Local { cwd },
+                None,
+                None,
+            );
+            session.tmux_command = tmux_path;
+            let session = Arc::new(session);
+            let tmux_session = session.tmux_session.clone();
+            get_manager()
+                .insert(&environment_id, tab_id.clone(), session)
+                .await;
+
             stop_tmux_sessions_for_environment(&environment_id).await;
 
             let log = fs::read_to_string(log_path).await.unwrap();

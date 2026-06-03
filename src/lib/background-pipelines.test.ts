@@ -274,6 +274,24 @@ describe("getBackgroundProcessingEnvironments", () => {
     expect(result).toEqual([env]);
   });
 
+  test("returns environments with queued native prompts even without other signals", () => {
+    const env = makeEnv("e1");
+
+    const result = getBackgroundProcessingEnvironments(
+      new Map(),
+      [env],
+      null,
+      [],
+      new Set(),
+      [],
+      [],
+      [],
+      ["e1"],
+    );
+
+    expect(result).toEqual([env]);
+  });
+
   test("excludes loading native sessions for the currently visible environment", () => {
     const env = makeEnv("e1");
 
@@ -283,6 +301,24 @@ describe("getBackgroundProcessingEnvironments", () => {
       "e1",
       [env],
       new Set(),
+      [],
+      [],
+      ["e1"],
+    );
+
+    expect(result).toEqual([]);
+  });
+
+  test("excludes queued native prompt environments already visible in the main content", () => {
+    const env = makeEnv("e1");
+
+    const result = getBackgroundProcessingEnvironments(
+      new Map(),
+      [env],
+      "e1",
+      [env],
+      new Set(),
+      [],
       [],
       [],
       ["e1"],

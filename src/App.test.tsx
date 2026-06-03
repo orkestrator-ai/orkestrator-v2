@@ -2,9 +2,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
-import { useClaudeStore } from "@/stores/claudeStore";
+import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
 import { useCodexStore, createCodexSessionKey } from "@/stores/codexStore";
-import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { useOpenCodeStore, createOpenCodeSessionKey } from "@/stores/openCodeStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -256,14 +256,17 @@ function resetStores({
 
   useClaudeStore.setState({
     sessions: new Map(),
+    messageQueue: new Map(),
   });
 
   useCodexStore.setState({
     sessions: new Map(),
+    messageQueue: new Map(),
   });
 
   useOpenCodeStore.setState({
     sessions: new Map(),
+    messageQueue: new Map(),
   });
 }
 
@@ -411,6 +414,97 @@ describe("App background processing mounts", () => {
       expect(screen.getByTestId("terminal-env-pending-prompt")).toBeTruthy();
     });
     expect(screen.getByTestId("terminal-env-pending-prompt").getAttribute("data-active")).toBe("false");
+  });
+
+  test("keeps off-screen environments with queued native prompts mounted across agents until queues drain", async () => {
+    resetStores({
+      environments: [
+        makeEnvironment("env-visible", "project-1"),
+        makeEnvironment("env-queued-claude", "project-2"),
+        makeEnvironment("env-queued-codex", "project-2"),
+        makeEnvironment("env-queued-opencode", "project-2"),
+      ],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    const claudeSessionKey = createClaudeSessionKey("env-queued-claude", "tab-1");
+    const codexSessionKey = createCodexSessionKey("env-queued-codex", "tab-1");
+    const openCodeSessionKey = createOpenCodeSessionKey("env-queued-opencode", "tab-1");
+    useClaudeStore.setState({
+      messageQueue: new Map([
+        [
+          claudeSessionKey,
+          [
+            {
+              id: "queue-claude",
+              text: "Run queued Claude work",
+              attachments: [],
+              effort: "medium",
+              planModeEnabled: false,
+              fastModeEnabled: false,
+            },
+          ],
+        ],
+      ]),
+    });
+    useCodexStore.setState({
+      messageQueue: new Map([
+        [
+          codexSessionKey,
+          [
+            {
+              id: "queue-codex",
+              text: "Run queued Codex work",
+              attachments: [],
+              model: "gpt-5",
+              mode: "build",
+              reasoningEffort: "medium",
+              fastMode: false,
+            },
+          ],
+        ],
+      ]),
+    });
+    useOpenCodeStore.setState({
+      messageQueue: new Map([
+        [
+          openCodeSessionKey,
+          [
+            {
+              id: "queue-opencode",
+              text: "Run queued OpenCode work",
+              attachments: [],
+              model: "openai/gpt-5",
+              mode: "build",
+            },
+          ],
+        ],
+      ]),
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("terminal-env-queued-claude")).toBeTruthy();
+      expect(screen.getByTestId("terminal-env-queued-codex")).toBeTruthy();
+      expect(screen.getByTestId("terminal-env-queued-opencode")).toBeTruthy();
+    });
+    expect(screen.getByTestId("terminal-env-queued-claude").getAttribute("data-active")).toBe("false");
+    expect(screen.getByTestId("terminal-env-queued-codex").getAttribute("data-active")).toBe("false");
+    expect(screen.getByTestId("terminal-env-queued-opencode").getAttribute("data-active")).toBe("false");
+
+    act(() => {
+      useClaudeStore.getState().clearQueue(claudeSessionKey);
+      useCodexStore.getState().clearQueue(codexSessionKey);
+      useOpenCodeStore.getState().clearQueue(openCodeSessionKey);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("terminal-env-queued-claude")).toBeNull();
+      expect(screen.queryByTestId("terminal-env-queued-codex")).toBeNull();
+      expect(screen.queryByTestId("terminal-env-queued-opencode")).toBeNull();
+    });
   });
 
   test("keeps off-screen environments with a loading native session mounted until idle", async () => {

@@ -69,6 +69,7 @@ import {
   sendKeys,
   startSession,
   submit as submitToTmux,
+  switchEffort,
   switchModel,
   subscribe,
   type TmuxPendingHook,
@@ -93,6 +94,8 @@ import {
   type TmuxQueuedMessage,
 } from "@/stores/claudeTmuxStore";
 import { collapseTaskToolUpdates } from "@/lib/task-tool-snapshots";
+import type { ClaudeEffortLevel, ClaudeModel } from "@/lib/claude-client";
+import { useClaudeStore } from "@/stores/claudeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -110,42 +113,130 @@ interface Props {
 }
 
 /**
- * Hardcoded model list for tmux mode. There's no SDK to enumerate available
- * models, so we ship a small, stable set. Users can also type `/model …` in
- * the Claude TUI to override at runtime.
+ * Fallback model list for tmux mode, mirroring what the Claude Agent SDK's
+ * `supportedModels()` reports for the current Claude Code release. When a
+ * Claude native (bridge) tab has fetched the live SDK model list, we prefer
+ * that — see `useClaudeStore` in the component. Users can also type
+ * `/model …` in the Claude TUI to override at runtime.
  */
-const TMUX_MODELS: Array<{ id: string; name: string; description?: string }> = [
+const TMUX_FALLBACK_MODELS: ClaudeModel[] = [
   {
     id: "default",
-    name: "Default",
-    description: "Use Claude Code's configured default model",
+    name: "Default (recommended)",
+    description: "Opus 4.8 with 1M context · Best for everyday, complex tasks",
+    supportsEffort: true,
+    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
   },
   {
-    id: "claude-opus-4-7",
-    name: "Opus 4.7",
-    description: "Most capable; slowest",
+    id: "claude-fable-5[1m]",
+    name: "Fable",
+    description:
+      "Fable 5 · Most capable for your hardest and longest-running tasks",
+    supportsEffort: true,
+    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
   },
   {
-    id: "claude-sonnet-4-6",
-    name: "Sonnet 4.6",
-    description: "Balanced speed and capability (default)",
+    id: "sonnet",
+    name: "Sonnet",
+    description: "Sonnet 4.6 · Efficient for routine tasks",
+    supportsEffort: true,
+    supportedEffortLevels: ["low", "medium", "high", "max"],
   },
   {
-    id: "claude-haiku-4-5",
-    name: "Haiku 4.5",
-    description: "Fastest; lightweight tasks",
+    id: "sonnet[1m]",
+    name: "Sonnet (1M context)",
+    description: "Sonnet 4.6 with 1M context · Draws from usage credits",
+    supportsEffort: true,
+    supportedEffortLevels: ["low", "medium", "high", "max"],
+  },
+  {
+    id: "haiku",
+    name: "Haiku",
+    description: "Haiku 4.5 · Fastest for quick answers",
   },
 ];
-const DEFAULT_MODEL = "claude-sonnet-4-6";
+const DEFAULT_MODEL = "default";
 
-function resolveTmuxModelPreference(modelId: string | undefined): string {
-  return TMUX_MODELS.some((model) => model.id === modelId)
-    ? modelId!
+/**
+ * Model ids we persisted before switching to SDK-style ids/aliases. Mapped so
+ * an old saved preference still resolves to a sensible current model.
+ */
+const LEGACY_TMUX_MODEL_ALIASES: Record<string, string> = {
+  "claude-opus-4-7": "default",
+  "claude-opus-4-6": "default",
+  "claude-sonnet-4-6": "sonnet",
+  "claude-haiku-4-5": "haiku",
+  "claude-haiku-4-5-20251001": "haiku",
+};
+
+const EFFORT_LABELS: Record<ClaudeEffortLevel, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  max: "Max",
+};
+const EFFORT_DESCRIPTIONS: Record<ClaudeEffortLevel, string> = {
+  low: "Minimal thinking, fastest responses",
+  medium: "Moderate thinking for everyday tasks",
+  high: "Deep reasoning for complex problems",
+  xhigh: "Deeper reasoning for the hardest problems",
+  max: "Maximum effort (select models only)",
+};
+const DEFAULT_EFFORT: ClaudeEffortLevel = "high";
+
+function resolveTmuxModelPreference(
+  modelId: string | undefined,
+  models: ClaudeModel[],
+): string {
+  const normalized = modelId
+    ? (LEGACY_TMUX_MODEL_ALIASES[modelId] ?? modelId)
+    : undefined;
+  return models.some((model) => model.id === normalized)
+    ? normalized!
     : DEFAULT_MODEL;
 }
 
 function selectedModelForLaunch(modelId: string): string | undefined {
   return modelId === "default" ? undefined : modelId;
+}
+
+function getTmuxModel(id: string, models: ClaudeModel[]): ClaudeModel {
+  return (
+    models.find((m) => m.id === id) ??
+    models.find((m) => m.id === DEFAULT_MODEL) ??
+    models[0] ??
+    TMUX_FALLBACK_MODELS[0]!
+  );
+}
+
+function supportedEffortLevels(model: ClaudeModel): ClaudeEffortLevel[] {
+  if (!model.supportsEffort && !model.supportedEffortLevels?.length) return [];
+  return model.supportedEffortLevels?.length
+    ? model.supportedEffortLevels
+    : (["low", "medium", "high"] as ClaudeEffortLevel[]);
+}
+
+/**
+ * The level to fall back to when the stored preference isn't supported by the
+ * selected model. Usually `DEFAULT_EFFORT`, but the SDK owns each model's
+ * level list, so don't assume "high" is always present. Callers must ensure
+ * `options` is non-empty.
+ */
+function fallbackEffort(options: ClaudeEffortLevel[]): ClaudeEffortLevel {
+  return options.includes(DEFAULT_EFFORT) ? DEFAULT_EFFORT : options[0]!;
+}
+
+/**
+ * Prefer the live model list the Claude bridge fetched from the Agent SDK
+ * (shared via the claude store) over the static fallback. The launch-only
+ * "default" sentinel is guaranteed to be present either way.
+ */
+function tmuxModelList(sdkModels: ClaudeModel[]): ClaudeModel[] {
+  if (sdkModels.length === 0) return TMUX_FALLBACK_MODELS;
+  return sdkModels.some((m) => m.id === DEFAULT_MODEL)
+    ? sdkModels
+    : [TMUX_FALLBACK_MODELS[0]!, ...sdkModels];
 }
 
 interface TmuxSelectionPrompt {
@@ -241,12 +332,16 @@ export function ClaudeTmuxChatTab({
   const [showTui, setShowTui] = useState(false);
   const [interactiveMode, setInteractiveMode] = useState(false);
   const [tuiSnapshot, setTuiSnapshot] = useState<string>("");
+  const sdkModels = useClaudeStore((s) => s.models);
+  const availableModels = useMemo(() => tmuxModelList(sdkModels), [sdkModels]);
   const [selectedModel, setSelectedModel] = useState<string>(() =>
     resolveTmuxModelPreference(
       useConfigStore.getState().config.global.claudeModel,
+      tmuxModelList(useClaudeStore.getState().models),
     ),
   );
   const [modelSwitching, setModelSwitching] = useState(false);
+  const [effortSwitching, setEffortSwitching] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
   const [promptControlBusy, setPromptControlBusy] = useState(false);
@@ -318,10 +413,34 @@ export function ClaudeTmuxChatTab({
     ),
   );
 
+  const setEffortLevel = useClaudeTmuxStore((s) => s.setEffortLevel);
+  const selectedEffort = useClaudeTmuxStore(
+    useCallback(
+      (state) => state.effortLevels.get(storeKey) ?? DEFAULT_EFFORT,
+      [storeKey],
+    ),
+  );
+  const selectedModelObj = useMemo(
+    () => getTmuxModel(selectedModel, availableModels),
+    [selectedModel, availableModels],
+  );
+  const effortOptions = useMemo(
+    () => supportedEffortLevels(selectedModelObj),
+    [selectedModelObj],
+  );
+  // Claude Code silently downgrades unsupported levels, so mirror that in the
+  // UI when e.g. an "xhigh" preference meets a model without xhigh support.
+  const effectiveEffort =
+    effortOptions.length > 0 && !effortOptions.includes(selectedEffort)
+      ? fallbackEffort(effortOptions)
+      : selectedEffort;
+
   useEffect(() => {
     if (hasStarted) return;
-    setSelectedModel(resolveTmuxModelPreference(persistedClaudeModel));
-  }, [hasStarted, persistedClaudeModel]);
+    setSelectedModel(
+      resolveTmuxModelPreference(persistedClaudeModel, availableModels),
+    );
+  }, [hasStarted, persistedClaudeModel, availableModels]);
 
   const persistSelectedModel = useCallback(
     async (modelId: string) => {
@@ -545,6 +664,7 @@ export function ClaudeTmuxChatTab({
       startSession(tabId, environmentId, {
         initialPrompt,
         model: selectedModelForLaunch(selectedModel),
+        effort: effortOptions.length > 0 ? effectiveEffort : undefined,
         planMode,
         resumeSessionId,
       })
@@ -559,6 +679,8 @@ export function ClaudeTmuxChatTab({
       environmentId,
       initialPrompt,
       selectedModel,
+      effortOptions,
+      effectiveEffort,
       planMode,
     ],
   );
@@ -607,7 +729,13 @@ export function ClaudeTmuxChatTab({
     // `isThinking` covers the post-HTTP window where Claude is still
     // processing but `sending` has already reset; without it a user could
     // submit a second message before the first turn finishes.
-    if ((!text && attachments.length === 0) || sending || isThinking || modelSwitching) {
+    if (
+      (!text && attachments.length === 0) ||
+      sending ||
+      isThinking ||
+      modelSwitching ||
+      effortSwitching
+    ) {
       return false;
     }
     setSending(true);
@@ -666,7 +794,16 @@ export function ClaudeTmuxChatTab({
 
   const processQueue = useCallback(() => {
     if (isProcessingQueueRef.current) return;
-    if (!backendHydrated || !running || sending || isThinking || modelSwitching) return;
+    if (
+      !backendHydrated ||
+      !running ||
+      sending ||
+      isThinking ||
+      modelSwitching ||
+      effortSwitching
+    ) {
+      return;
+    }
 
     const tmuxState = useClaudeTmuxStore.getState();
     if (
@@ -712,6 +849,7 @@ export function ClaudeTmuxChatTab({
     backendHydrated,
     isThinking,
     modelSwitching,
+    effortSwitching,
     removeFromQueue,
     running,
     sending,
@@ -914,8 +1052,23 @@ export function ClaudeTmuxChatTab({
     launchSession(sessionId);
   };
 
+  // Claude Code silently downgrades an unsupported effort level, so when a
+  // model change makes the stored preference invalid we snap the stored
+  // preference back to the default rather than letting UI and TUI drift.
+  const clampEffortToModel = useCallback(
+    (modelId: string) => {
+      const levels = supportedEffortLevels(getTmuxModel(modelId, availableModels));
+      const current =
+        useClaudeTmuxStore.getState().effortLevels.get(storeKey) ?? DEFAULT_EFFORT;
+      if (levels.length > 0 && !levels.includes(current)) {
+        setEffortLevel(storeKey, fallbackEffort(levels));
+      }
+    },
+    [availableModels, storeKey, setEffortLevel],
+  );
+
   const handleSelectModel = async (modelId: string) => {
-    if (modelId === selectedModel || modelSwitching) return;
+    if (modelId === selectedModel || modelSwitching || effortSwitching) return;
 
     if (modelId === "default" && hasStarted && running) {
       setError("Claude Code's default model can only be selected before launch.");
@@ -924,6 +1077,7 @@ export function ClaudeTmuxChatTab({
 
     if (!hasStarted || !running) {
       setSelectedModel(modelId);
+      clampEffortToModel(modelId);
       void persistSelectedModel(modelId);
       return;
     }
@@ -933,13 +1087,36 @@ export function ClaudeTmuxChatTab({
     setModelSwitching(true);
     setError(null);
     try {
-      await switchModel(tabId, modelCommandArg(modelId), environmentId);
+      await switchModel(tabId, modelId, environmentId);
       setSelectedModel(modelId);
+      clampEffortToModel(modelId);
       void persistSelectedModel(modelId);
     } catch (e) {
       setError(String(e));
     } finally {
       setModelSwitching(false);
+    }
+  };
+
+  const handleSelectEffort = async (effort: ClaudeEffortLevel) => {
+    if (effort === effectiveEffort || effortSwitching || modelSwitching) return;
+
+    if (!hasStarted || !running) {
+      setEffortLevel(storeKey, effort);
+      return;
+    }
+
+    if (sending || isThinking) return;
+
+    setEffortSwitching(true);
+    setError(null);
+    try {
+      await switchEffort(tabId, effort, environmentId);
+      setEffortLevel(storeKey, effort);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setEffortSwitching(false);
     }
   };
 
@@ -1080,7 +1257,12 @@ export function ClaudeTmuxChatTab({
                   <StartScreen
                     onStartFresh={() => launchSession()}
                     onPickResume={() => setResumeDialogOpen(true)}
-                    selectedModel={getTmuxModel(selectedModel).name}
+                    selectedModel={selectedModelObj.name}
+                    effortLabel={
+                      effortOptions.length > 0
+                        ? EFFORT_LABELS[effectiveEffort]
+                        : null
+                    }
                     planMode={planMode}
                   />
                 ) : (
@@ -1206,7 +1388,7 @@ export function ClaudeTmuxChatTab({
             worktreePath={worktreePath}
             disabled={!running}
             busy={isThinking}
-            submitting={sending || modelSwitching}
+            submitting={sending || modelSwitching || effortSwitching}
             autoFocus={isActive}
             onSubmit={handleSubmit}
             onQueue={handleQueue}
@@ -1214,14 +1396,27 @@ export function ClaudeTmuxChatTab({
             showAddressAll={showAddressAll}
             onAddressAll={handleAddressAll}
             onInterrupt={handleInterrupt}
+            models={availableModels}
             selectedModel={selectedModel}
             onSelectModel={(modelId) => {
               void handleSelectModel(modelId);
             }}
+            selectedEffort={effectiveEffort}
+            effortOptions={effortOptions}
+            onSelectEffort={(level) => {
+              void handleSelectEffort(level);
+            }}
             planMode={planMode}
             onTogglePlanMode={setPlanMode}
-            modelDisabled={(hasStarted && !running) || sending || isThinking || modelSwitching}
+            modelDisabled={
+              (hasStarted && !running) ||
+              sending ||
+              isThinking ||
+              modelSwitching ||
+              effortSwitching
+            }
             modelSwitching={modelSwitching}
+            effortSwitching={effortSwitching}
             planLocked={hasStarted}
             defaultModelDisabled={hasStarted && running}
           />
@@ -1244,6 +1439,7 @@ interface StartScreenProps {
   onStartFresh: () => void;
   onPickResume: () => void;
   selectedModel: string;
+  effortLabel: string | null;
   planMode: boolean;
 }
 
@@ -1256,6 +1452,7 @@ function StartScreen({
   onStartFresh,
   onPickResume,
   selectedModel,
+  effortLabel,
   planMode,
 }: StartScreenProps) {
   return (
@@ -1268,6 +1465,7 @@ function StartScreen({
         </p>
         <p className="text-[11px] text-muted-foreground/70">
           Will launch with <span className="font-mono">{selectedModel}</span>
+          {effortLabel ? ` at ${effortLabel} effort` : ""}
           {planMode ? " in plan mode" : ""}.
         </p>
       </div>
@@ -1855,18 +2053,6 @@ function elicitationSchemaFields(schema: Record<string, unknown> | null): Array<
   });
 }
 
-function getTmuxModel(id: string) {
-  return (
-    TMUX_MODELS.find((m) => m.id === id) ??
-    TMUX_MODELS.find((m) => m.id === DEFAULT_MODEL) ??
-    TMUX_MODELS[0]!
-  );
-}
-
-function modelCommandArg(id: string) {
-  return getTmuxModel(id).id;
-}
-
 function tmuxFileMentionPath(
   relativePath: string,
   containerId?: string,
@@ -1961,12 +2147,17 @@ interface TmuxComposeBarProps {
   showAddressAll?: boolean;
   onAddressAll?: () => void;
   onInterrupt: () => void;
+  models: ClaudeModel[];
   selectedModel: string;
   onSelectModel: (id: string) => void;
+  selectedEffort: ClaudeEffortLevel;
+  effortOptions: ClaudeEffortLevel[];
+  onSelectEffort: (level: ClaudeEffortLevel) => void;
   planMode: boolean;
   onTogglePlanMode: (v: boolean) => void;
   modelDisabled: boolean;
   modelSwitching: boolean;
+  effortSwitching: boolean;
   planLocked: boolean;
   defaultModelDisabled: boolean;
 }
@@ -1985,12 +2176,17 @@ function TmuxComposeBar({
   showAddressAll = false,
   onAddressAll,
   onInterrupt,
+  models,
   selectedModel,
   onSelectModel,
+  selectedEffort,
+  effortOptions,
+  onSelectEffort,
   planMode,
   onTogglePlanMode,
   modelDisabled,
   modelSwitching,
+  effortSwitching,
   planLocked,
   defaultModelDisabled,
 }: TmuxComposeBarProps) {
@@ -2026,8 +2222,8 @@ function TmuxComposeBar({
   const removeQueueItem = useClaudeTmuxStore((state) => state.removeQueueItem);
   const moveQueueItem = useClaudeTmuxStore((state) => state.moveQueueItem);
   const modelObj = useMemo(
-    () => getTmuxModel(selectedModel),
-    [selectedModel],
+    () => getTmuxModel(selectedModel, models),
+    [selectedModel, models],
   );
 
   // Slash command menu state. The list is static (claude builtins) — see
@@ -2420,8 +2616,8 @@ function TmuxComposeBar({
               <span className="max-w-[200px] truncate">{modelObj.name}</span>
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="min-w-[240px]">
-            {TMUX_MODELS.map((m) => {
+          <DropdownMenuContent align="start" className="max-h-[400px] overflow-y-auto min-w-[240px]">
+            {models.map((m) => {
               const selected = m.id === selectedModel;
               const optionDisabled = defaultModelDisabled && m.id === "default";
               return (
@@ -2483,6 +2679,56 @@ function TmuxComposeBar({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+
+        {/* Reasoning effort — pre-launch it sets the `--effort` launch flag,
+            after launch it sends Claude Code's /effort command into the
+            running tmux pane. Hidden for models without effort support. */}
+        {effortOptions.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                disabled={modelDisabled}
+                className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-60"
+                title={
+                  effortSwitching
+                    ? "Switching effort level"
+                    : modelDisabled
+                      ? "Wait for Claude to finish before changing the effort level"
+                      : disabled
+                        ? "Select the reasoning effort for the next tmux launch"
+                        : "Switch the reasoning effort for this tmux session"
+                }
+              >
+                <ChevronDown className="w-3 h-3" />
+                <span>{EFFORT_LABELS[selectedEffort]}</span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="min-w-[280px]">
+              {effortOptions.map((level) => (
+                <DropdownMenuItem
+                  key={level}
+                  onClick={() => onSelectEffort(level)}
+                  className="flex items-start gap-2 py-2"
+                >
+                  <div className="w-4 h-4 shrink-0 mt-0.5">
+                    {selectedEffort === level && (
+                      <Check className="w-4 h-4 text-primary" />
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-0.5 min-w-0">
+                    <span className="text-sm font-medium">
+                      {EFFORT_LABELS[level]}
+                      {level === DEFAULT_EFFORT ? " (default)" : ""}
+                    </span>
+                    <span className="text-xs text-muted-foreground line-clamp-2">
+                      {EFFORT_DESCRIPTIONS[level]}
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
 
         <div className="flex-1" />
 

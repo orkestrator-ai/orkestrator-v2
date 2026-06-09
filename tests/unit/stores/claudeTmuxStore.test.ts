@@ -12,6 +12,7 @@ describe("claudeTmuxStore", () => {
       draftText: new Map(),
       draftMentions: new Map(),
       messageQueue: new Map(),
+      effortLevels: new Map(),
     });
   });
 
@@ -132,6 +133,47 @@ describe("claudeTmuxStore", () => {
       const tab = useClaudeTmuxStore.getState().getTab("tab-1");
       expect(tab.busy).toBe(false);
       expect(tab.busyStartedAt).toBeNull();
+    });
+
+    test("clears per-tab drafts and queue but preserves the effort preference", () => {
+      const state = useClaudeTmuxStore.getState();
+      state.setDraftText("tab-1", "unsent");
+      state.addToQueue("tab-1", {
+        id: "q-1",
+        text: "queued",
+        attachments: [],
+      });
+      state.setEffortLevel("tab-1", "xhigh");
+
+      useClaudeTmuxStore.getState().resetTab("tab-1");
+
+      const after = useClaudeTmuxStore.getState();
+      expect(after.draftText.get("tab-1")).toBeUndefined();
+      expect(after.messageQueue.get("tab-1")).toBeUndefined();
+      // Effort is a per-tab preference (like the model default) and must
+      // survive resetTab so it seeds the next launch in that tab.
+      expect(after.effortLevels.get("tab-1")).toBe("xhigh");
+    });
+  });
+
+  describe("setEffortLevel", () => {
+    test("stores effort preferences per tab", () => {
+      useClaudeTmuxStore.getState().setEffortLevel("tab-1", "low");
+      useClaudeTmuxStore.getState().setEffortLevel("tab-2", "max");
+
+      const state = useClaudeTmuxStore.getState();
+      expect(state.effortLevels.get("tab-1")).toBe("low");
+      expect(state.effortLevels.get("tab-2")).toBe("max");
+      expect(state.effortLevels.get("tab-3")).toBeUndefined();
+    });
+
+    test("overwrites a previous preference for the same tab", () => {
+      useClaudeTmuxStore.getState().setEffortLevel("tab-1", "low");
+      useClaudeTmuxStore.getState().setEffortLevel("tab-1", "high");
+
+      expect(useClaudeTmuxStore.getState().effortLevels.get("tab-1")).toBe(
+        "high",
+      );
     });
   });
 

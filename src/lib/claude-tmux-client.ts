@@ -141,6 +141,7 @@ export async function startSession(
   options?: {
     initialPrompt?: string;
     model?: string;
+    effort?: string;
     planMode?: boolean;
     resumeSessionId?: string;
   },
@@ -150,6 +151,7 @@ export async function startSession(
     environmentId,
     initialPrompt: options?.initialPrompt,
     model: options?.model,
+    effort: options?.effort,
     planMode: options?.planMode,
     resumeSessionId: options?.resumeSessionId,
   });
@@ -185,6 +187,14 @@ export async function switchModel(
   environmentId: string,
 ): Promise<void> {
   await invoke("claude_tmux_switch_model", { tabId, environmentId, model });
+}
+
+export async function switchEffort(
+  tabId: string,
+  effort: string,
+  environmentId: string,
+): Promise<void> {
+  await invoke("claude_tmux_switch_effort", { tabId, environmentId, effort });
 }
 
 export async function sendText(tabId: string, text: string, environmentId: string): Promise<void> {

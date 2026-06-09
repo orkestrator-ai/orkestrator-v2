@@ -149,6 +149,9 @@ pub(crate) fn find_bundled_dir_containing(candidates: &[PathBuf], marker: &str) 
     find_bundled_binary(candidates, marker).and_then(|p| p.parent().map(Path::to_path_buf))
 }
 
+// Tauri commands take flat named IPC arguments, so launch options can't be
+// grouped into a struct without changing the frontend invoke payload.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn claude_tmux_start(
     app: AppHandle,
@@ -156,6 +159,7 @@ pub async fn claude_tmux_start(
     environment_id: String,
     initial_prompt: Option<String>,
     model: Option<String>,
+    effort: Option<String>,
     plan_mode: Option<bool>,
     resume_session_id: Option<String>,
 ) -> Result<TmuxSessionStatus, String> {
@@ -203,7 +207,7 @@ pub async fn claude_tmux_start(
     hooks::install_workspace_hooks(&session.backend, &session.workspace_hook_paths).await?;
     session
         .clone()
-        .start_after_hooks_installed(app, initial_prompt, model, plan_mode.unwrap_or(false))
+        .start_after_hooks_installed(app, initial_prompt, model, effort, plan_mode.unwrap_or(false))
         .await?;
     let alive = session.tmux_alive().await.unwrap_or(false);
     Ok(session.status(alive))
@@ -662,6 +666,19 @@ pub async fn claude_tmux_switch_model(
 }
 
 #[tauri::command]
+pub async fn claude_tmux_switch_effort(
+    tab_id: String,
+    effort: String,
+    environment_id: String,
+) -> Result<(), String> {
+    let session = get_manager()
+        .get_for_env(&environment_id, &tab_id)
+        .await
+        .ok_or_else(|| "tmux session not running".to_string())?;
+    session.switch_effort(&effort).await
+}
+
+#[tauri::command]
 pub async fn claude_tmux_capture_pane(
     tab_id: String,
     environment_id: String,
@@ -928,6 +945,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn switch_effort_command_returns_missing_session_error() {
+        let tab_id = format!("missing-{}", Uuid::new_v4());
+        let err = claude_tmux_switch_effort(
+            tab_id,
+            "high".to_string(),
+            "env-missing".to_string(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, "tmux session not running");
+    }
+
+    #[tokio::test]
     async fn interactive_terminal_commands_handle_missing_sessions() {
         crate::local::init_local_terminal_manager();
         crate::pty::init_terminal_manager();
@@ -1023,6 +1053,45 @@ mod tests {
             .unwrap();
             let log = fs::read_to_string(log_path).await.unwrap();
             assert!(log.contains("stdin:/model claude-opus-4-7"));
+            assert!(log.contains(&format!("send-keys -t {} -- Enter", tmux_session)));
+
+            get_manager().remove_for_env(&environment_id, &tab_id).await;
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn switch_effort_command_dispatches_to_existing_session() {
+        let tmp = TempDir::new().unwrap();
+        let tab_id = format!("tab-{}", Uuid::new_v4());
+        let environment_id = format!("env-command-test-{}", Uuid::new_v4());
+        let cwd = tmp.path().to_string_lossy().into_owned();
+        let command_tab_id = tab_id.clone();
+
+        with_fake_tmux(&tmp, |log_path, tmux_path| async move {
+            let mut session = TmuxSession::build(
+                environment_id.clone(),
+                tab_id.clone(),
+                Backend::Local { cwd },
+                None,
+                None,
+            );
+            session.tmux_command = tmux_path;
+            let session = Arc::new(session);
+            let tmux_session = session.tmux_session.clone();
+            get_manager()
+                .insert(&environment_id, tab_id.clone(), session)
+                .await;
+
+            claude_tmux_switch_effort(
+                command_tab_id,
+                "xhigh".to_string(),
+                environment_id.clone(),
+            )
+            .await
+            .unwrap();
+            let log = fs::read_to_string(log_path).await.unwrap();
+            assert!(log.contains("stdin:/effort xhigh"));
             assert!(log.contains(&format!("send-keys -t {} -- Enter", tmux_session)));
 
             get_manager().remove_for_env(&environment_id, &tab_id).await;

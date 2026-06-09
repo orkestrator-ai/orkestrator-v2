@@ -279,6 +279,7 @@ impl TmuxSession {
         app: AppHandle,
         initial_prompt: Option<String>,
         model: Option<String>,
+        effort: Option<String>,
         plan_mode: bool,
     ) -> Result<(), String> {
         // Ensure this session's pending/response/timeout subdirs exist BEFORE
@@ -323,30 +324,8 @@ impl TmuxSession {
         let alive = self.tmux_alive().await?;
         let launched_new = !alive;
         if launched_new {
-            let mut claude_cmd = shell_arg(&claude_command);
-            if let Some(m) = model {
-                if !m.is_empty() {
-                    claude_cmd.push_str(&format!(" --model {}", shell_arg(&m)));
-                }
-            }
-            if plan_mode {
-                claude_cmd.push_str(" --permission-mode plan");
-            }
-            claude_cmd.push_str(" --dangerously-skip-permissions");
-            if self.is_resume {
-                // `--resume <id>` replays the prior conversation; the
-                // transcript path is still the same `<id>.jsonl` file.
-                //
-                // If `initial_prompt` is also supplied, it gets sent below
-                // *after* claude reattaches — i.e. it is appended to the
-                // resumed conversation. This is intentional (it's how the
-                // resume-then-continue flow works in the UI), not an
-                // accident. Don't introduce a branch that drops the prompt
-                // on resume without confirming the UI flow first.
-                claude_cmd.push_str(&format!(" --resume {}", self.session_id));
-            } else {
-                claude_cmd.push_str(&format!(" --session-id {}", self.session_id));
-            }
+            let claude_cmd =
+                self.claude_launch_command(&claude_command, &help_text, model, effort, plan_mode);
 
             let wrapped = format!("{}; echo '[claude exited]'; exec bash", claude_cmd);
 
@@ -408,6 +387,61 @@ impl TmuxSession {
         }
 
         Ok(())
+    }
+
+    /// Build the claude invocation for a fresh tmux launch. Split out of
+    /// [`Self::start_after_hooks_installed`] so the flag handling (notably
+    /// the `--effort` help-text gating) is unit-testable without a Tauri
+    /// `AppHandle`.
+    fn claude_launch_command(
+        &self,
+        claude_command: &str,
+        help_text: &str,
+        model: Option<String>,
+        effort: Option<String>,
+        plan_mode: bool,
+    ) -> String {
+        let mut claude_cmd = shell_arg(claude_command);
+        if let Some(m) = model {
+            if !m.is_empty() {
+                claude_cmd.push_str(&format!(" --model {}", shell_arg(&m)));
+            }
+        }
+        if let Some(e) = effort {
+            if !e.is_empty() {
+                // Older CLIs don't know --effort; skip the flag rather than
+                // fail the launch, since effort is a tuning knob, not a
+                // prerequisite.
+                if help_text.contains("--effort") {
+                    claude_cmd.push_str(&format!(" --effort {}", shell_arg(&e)));
+                } else {
+                    warn!(
+                        tab = %self.tab_id,
+                        effort = %e,
+                        "claude CLI does not support --effort; launching without it"
+                    );
+                }
+            }
+        }
+        if plan_mode {
+            claude_cmd.push_str(" --permission-mode plan");
+        }
+        claude_cmd.push_str(" --dangerously-skip-permissions");
+        if self.is_resume {
+            // `--resume <id>` replays the prior conversation; the
+            // transcript path is still the same `<id>.jsonl` file.
+            //
+            // If `initial_prompt` is also supplied, it gets sent by
+            // `start_after_hooks_installed` *after* claude reattaches — i.e.
+            // it is appended to the resumed conversation. This is intentional
+            // (it's how the resume-then-continue flow works in the UI), not
+            // an accident. Don't introduce a branch that drops the prompt on
+            // resume without confirming the UI flow first.
+            claude_cmd.push_str(&format!(" --resume {}", self.session_id));
+        } else {
+            claude_cmd.push_str(&format!(" --session-id {}", self.session_id));
+        }
+        claude_cmd
     }
 
     fn spawn_initial_prompt_sender(
@@ -730,6 +764,19 @@ impl TmuxSession {
         }
 
         self.submit(&format!("/model {trimmed}")).await?;
+        self.wait_for_command_idle().await;
+        Ok(())
+    }
+
+    /// Send Claude Code's `/effort` slash command and block until it settles,
+    /// for the same reason as [`Self::switch_model`].
+    pub async fn switch_effort(&self, effort_arg: &str) -> Result<(), String> {
+        let trimmed = effort_arg.trim();
+        if trimmed.is_empty() {
+            return Err("effort level cannot be empty".to_string());
+        }
+
+        self.submit(&format!("/effort {trimmed}")).await?;
         self.wait_for_command_idle().await;
         Ok(())
     }
@@ -1264,6 +1311,114 @@ mod tests {
             let log = fs::read_to_string(log_path).await.unwrap();
             assert!(log.contains("stdin:/model claude-haiku-4-5"));
             assert!(!s.status(true).busy);
+        })
+        .await;
+    }
+
+    const HELP_WITH_EFFORT: &str = "--session-id\n--resume\n--effort <level>";
+    const HELP_WITHOUT_EFFORT: &str = "--session-id\n--resume";
+
+    #[test]
+    fn claude_launch_command_includes_model_effort_and_plan_flags() {
+        let tmp = TempDir::new().unwrap();
+        let s = build(&tmp, "env-1", "tab-1", None);
+
+        let cmd = s.claude_launch_command(
+            "claude",
+            HELP_WITH_EFFORT,
+            Some("sonnet".to_string()),
+            Some("xhigh".to_string()),
+            true,
+        );
+
+        assert_eq!(
+            cmd,
+            format!(
+                "'claude' --model 'sonnet' --effort 'xhigh' --permission-mode plan --dangerously-skip-permissions --session-id {}",
+                s.session_id
+            )
+        );
+    }
+
+    #[test]
+    fn claude_launch_command_skips_effort_when_cli_does_not_advertise_it() {
+        let tmp = TempDir::new().unwrap();
+        let s = build(&tmp, "env-1", "tab-1", None);
+
+        let cmd = s.claude_launch_command(
+            "claude",
+            HELP_WITHOUT_EFFORT,
+            None,
+            Some("xhigh".to_string()),
+            false,
+        );
+
+        assert!(!cmd.contains("--effort"));
+        assert_eq!(
+            cmd,
+            format!(
+                "'claude' --dangerously-skip-permissions --session-id {}",
+                s.session_id
+            )
+        );
+    }
+
+    #[test]
+    fn claude_launch_command_omits_empty_model_and_effort() {
+        let tmp = TempDir::new().unwrap();
+        let s = build(&tmp, "env-1", "tab-1", None);
+
+        let cmd = s.claude_launch_command(
+            "claude",
+            HELP_WITH_EFFORT,
+            Some(String::new()),
+            Some(String::new()),
+            false,
+        );
+
+        assert!(!cmd.contains("--model"));
+        assert!(!cmd.contains("--effort"));
+    }
+
+    #[test]
+    fn claude_launch_command_uses_resume_flag_for_resumed_sessions() {
+        let tmp = TempDir::new().unwrap();
+        let s = build(
+            &tmp,
+            "env-1",
+            "tab-1",
+            Some("00000000-0000-0000-0000-000000000000"),
+        );
+
+        let cmd = s.claude_launch_command("claude", HELP_WITH_EFFORT, None, None, false);
+
+        assert!(cmd.contains("--resume 00000000-0000-0000-0000-000000000000"));
+        assert!(!cmd.contains("--session-id"));
+    }
+
+    #[tokio::test]
+    async fn switch_effort_rejects_empty_effort_level() {
+        let tmp = TempDir::new().unwrap();
+        let s = build(&tmp, "env-1", "tab-1", None);
+
+        let err = s.switch_effort("   ").await.unwrap_err();
+
+        assert_eq!(err, "effort level cannot be empty");
+    }
+
+    #[tokio::test]
+    async fn switch_effort_submits_effort_command_and_settles_without_hooks() {
+        let tmp = TempDir::new().unwrap();
+        let cwd = tmp.path().to_string_lossy().into_owned();
+
+        with_fake_tmux(&tmp, 0, |log_path, tmux_path| async move {
+            let s = build_with_tmux_cwd(cwd, "env-1", "tab-1", None, Some(tmux_path));
+
+            s.switch_effort("  xhigh  ").await.unwrap();
+
+            let log = fs::read_to_string(log_path).await.unwrap();
+            assert!(log.contains("stdin:/effort xhigh"));
+            assert!(log.contains(&format!("send-keys -t {} -- Enter", s.tmux_session)));
         })
         .await;
     }

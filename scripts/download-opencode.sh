@@ -8,7 +8,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BINARIES_DIR="$PROJECT_ROOT/binaries"
 
 # OpenCode version to download. Keep in sync with @opencode-ai/sdk and docker/Dockerfile.
-OPENCODE_VERSION="1.15.12"
+OPENCODE_VERSION="1.16.2"
 
 # Detect architecture
 ARCH=$(uname -m)

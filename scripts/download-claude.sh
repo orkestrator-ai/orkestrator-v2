@@ -8,7 +8,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BINARIES_DIR="$PROJECT_ROOT/binaries"
 
 # Claude Code version to bundle. Keep in sync with docker/Dockerfile.
-CLAUDE_VERSION="2.1.154"
+CLAUDE_VERSION="2.1.170"
 
 ARCH=$(uname -m)
 case "$ARCH" in

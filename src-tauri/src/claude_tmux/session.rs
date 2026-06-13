@@ -130,6 +130,7 @@ pub struct TmuxSession {
     busy: AtomicBool,
     /// Unix-seconds when this `TmuxSession` was built. Kept for diagnostics
     /// around fresh session startup.
+    #[allow(dead_code)]
     pub started_at_unix: u64,
     /// True if `session_id` was supplied by the caller to resume an existing
     /// Claude Code session.

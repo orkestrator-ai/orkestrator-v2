@@ -405,6 +405,103 @@ describe("sendPrompt", () => {
     }
   });
 
+  test("streams partial thinking content and preserves block order", async () => {
+    const session = createSession("streaming-thinking");
+    track(session.id);
+
+    const { events, stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "Think then answer");
+      const call = await nextQueryCall();
+
+      // Thinking block at index 0.
+      call.push({
+        type: "stream_event",
+        uuid: "partial-think-1",
+        session_id: "sdk-session-think",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "thinking", thinking: "" },
+        },
+      });
+      call.push({
+        type: "stream_event",
+        uuid: "partial-think-1",
+        session_id: "sdk-session-think",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "thinking_delta", thinking: "Reasoning..." },
+        },
+      });
+      // Text block at index 1 - must render after the thinking block.
+      call.push({
+        type: "stream_event",
+        uuid: "partial-think-1",
+        session_id: "sdk-session-think",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 1,
+          content_block: { type: "text", text: "" },
+        },
+      });
+      call.push({
+        type: "stream_event",
+        uuid: "partial-think-1",
+        session_id: "sdk-session-think",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 1,
+          delta: { type: "text_delta", text: "Answer" },
+        },
+      });
+
+      await waitFor(() => {
+        const assistant = getSessionMessages(session.id).find((m) => m.role === "assistant");
+        return assistant?.content === "Answer";
+      });
+
+      const assistant = getSessionMessages(session.id).find((m) => m.role === "assistant");
+      expect(assistant?.parts.map((part) => part.type)).toEqual(["thinking", "text"]);
+      const thinkingPart = assistant?.parts.find((part) => part.type === "thinking");
+      expect(thinkingPart?.content).toBe("Reasoning...");
+
+      const streamedThinking = events.find((event) => {
+        const message = (event.data as { message?: { parts?: { type: string; content?: string }[] } } | undefined)?.message;
+        return (
+          event.type === "message.updated" &&
+          message?.parts?.some((part) => part.type === "thinking" && part.content === "Reasoning...")
+        );
+      });
+      expect(streamedThinking).toBeDefined();
+
+      call.push({
+        type: "assistant",
+        uuid: "partial-think-1",
+        message: {
+          content: [
+            { type: "thinking", thinking: "Reasoning..." },
+            { type: "text", text: "Answer final" },
+          ],
+        },
+      });
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+
+      await promptPromise;
+
+      const finalAssistant = getSessionMessages(session.id).find((m) => m.role === "assistant");
+      expect(finalAssistant?.content).toBe("Answer final");
+    } finally {
+      stop();
+    }
+  });
+
   test("rejects a second prompt while the session is already running", async () => {
     const session = createSession("busy");
     track(session.id);

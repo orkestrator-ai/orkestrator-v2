@@ -35,13 +35,12 @@ import {
   abortSession,
   subscribeToEvents,
   normalizeOpenCodePart,
+  buildOpenCodeMessageFromPart,
   ERROR_MESSAGE_PREFIX,
   SYSTEM_MESSAGE_PREFIX,
   type PermissionRequest,
   type QuestionRequest,
   type OpenCodeConversationMode,
-  type OpenCodeMessage,
-  type OpenCodeMessagePart,
   type OpenCodeSlashCommand,
   type OpenCodeModel,
   type OpenCodeModelDefaults,
@@ -149,58 +148,6 @@ function resolveModelSelection(input: {
 
   return { model, variant };
 }
-
-function getOpenCodePartKey(part: OpenCodeMessagePart): string | null {
-  if (part.sourcePartId) return part.sourcePartId;
-  if (part.sourceMessageId) {
-    return [
-      part.sourceMessageId,
-      part.type,
-      part.toolName,
-      part.fileUrl,
-      part.content,
-    ].filter(Boolean).join(":");
-  }
-  return null;
-}
-
-function buildOpenCodeMessageFromPart(
-  existing: OpenCodeMessage | undefined,
-  messageId: string,
-  part: OpenCodeMessagePart,
-  delta?: string,
-): OpenCodeMessage {
-  const nextParts = [...(existing?.parts ?? [])];
-  const incomingKey = getOpenCodePartKey(part);
-  const existingIndex = incomingKey
-    ? nextParts.findIndex((existingPart) => getOpenCodePartKey(existingPart) === incomingKey)
-    : -1;
-  const existingPart = existingIndex >= 0 ? nextParts[existingIndex] : undefined;
-  const nextPart =
-    part.content === "" && delta && existingPart?.type === part.type
-      ? { ...part, content: `${existingPart.content}${delta}` }
-      : part;
-
-  if (existingIndex >= 0) {
-    nextParts[existingIndex] = nextPart;
-  } else {
-    nextParts.push(nextPart);
-  }
-
-  const content = nextParts
-    .filter((candidate) => candidate.type === "text")
-    .map((candidate) => candidate.content)
-    .join("");
-
-  return {
-    id: messageId,
-    role: existing?.role ?? "assistant",
-    content,
-    parts: nextParts,
-    createdAt: existing?.createdAt ?? new Date().toISOString(),
-  };
-}
-
 
 export function OpenCodeChatTab({
   tabId,

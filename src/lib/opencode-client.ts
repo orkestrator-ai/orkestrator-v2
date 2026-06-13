@@ -632,6 +632,75 @@ export function normalizeOpenCodeMessage(rawMessage: unknown): OpenCodeMessage |
 }
 
 /**
+ * Compute a stable identity key for a message part so incremental streaming
+ * updates (`message.part.updated`) can replace the matching part in place.
+ *
+ * Prefers the SDK source part id; falls back to a composite key derived from
+ * the source message id and the part's distinguishing fields. Returns null
+ * when the part has no source identity (in which case it cannot be matched).
+ */
+export function getOpenCodePartKey(part: OpenCodeMessagePart): string | null {
+  if (part.sourcePartId) return part.sourcePartId;
+  if (part.sourceMessageId) {
+    return [
+      part.sourceMessageId,
+      part.type,
+      part.toolName,
+      part.fileUrl,
+      part.content,
+    ].filter(Boolean).join(":");
+  }
+  return null;
+}
+
+/**
+ * Build (or update) an OpenCode message from a single streamed part.
+ *
+ * If the part matches an existing part (by {@link getOpenCodePartKey}) it is
+ * replaced in place; otherwise it is appended. When the incoming part carries
+ * no content but a text `delta`, the delta is appended to the existing part's
+ * content (incremental text streaming). The aggregate `content` is recomputed
+ * from all text parts. Role/createdAt are preserved from the existing message,
+ * defaulting to an assistant message created now.
+ */
+export function buildOpenCodeMessageFromPart(
+  existing: OpenCodeMessage | undefined,
+  messageId: string,
+  part: OpenCodeMessagePart,
+  delta?: string,
+): OpenCodeMessage {
+  const nextParts = [...(existing?.parts ?? [])];
+  const incomingKey = getOpenCodePartKey(part);
+  const existingIndex = incomingKey
+    ? nextParts.findIndex((existingPart) => getOpenCodePartKey(existingPart) === incomingKey)
+    : -1;
+  const existingPart = existingIndex >= 0 ? nextParts[existingIndex] : undefined;
+  const nextPart =
+    part.content === "" && delta && existingPart?.type === part.type
+      ? { ...part, content: `${existingPart.content}${delta}` }
+      : part;
+
+  if (existingIndex >= 0) {
+    nextParts[existingIndex] = nextPart;
+  } else {
+    nextParts.push(nextPart);
+  }
+
+  const content = nextParts
+    .filter((candidate) => candidate.type === "text")
+    .map((candidate) => candidate.content)
+    .join("");
+
+  return {
+    id: messageId,
+    role: existing?.role ?? "assistant",
+    content,
+    parts: nextParts,
+    createdAt: existing?.createdAt ?? new Date().toISOString(),
+  };
+}
+
+/**
  * Create an OpenCode SDK client connected to a server
  */
 export function createClient(baseUrl: string, directory?: string): OpencodeClient {

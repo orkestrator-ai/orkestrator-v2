@@ -787,7 +787,10 @@ export function ClaudeChatTab({
               const message = (event.data as { message?: ClaudeMessageType } | undefined)?.message;
               if (message?.id && message.role === "assistant") {
                 upsertMessage(sessionTabId, message);
-              } else if (!message) {
+              } else {
+                // Non-assistant payloads (e.g. server-originated `system`
+                // re-prompts) and payload-less events fall back to an
+                // authoritative refetch so they still surface promptly.
                 fetchMessagesDebounced(eventSessionId, sessionTabId);
               }
             } else if (isFinalEvent) {

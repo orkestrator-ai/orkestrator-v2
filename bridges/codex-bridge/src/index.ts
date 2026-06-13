@@ -2088,6 +2088,7 @@ export const __testing = {
   cleanupIdleSessions,
   EXPIRED_SESSION_RETENTION_MS,
   expiredSessions: expiredSessions as Map<string, any>,
+  rebuildAssistantMessage: rebuildAssistantMessage as (session: any) => Promise<any>,
   refreshRuntimeEnvironment,
   runInlinePromptCommand,
   runPrompt: runPrompt as (session: any, prompt: string) => Promise<void>,

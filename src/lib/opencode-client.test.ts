@@ -1,13 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildOpenCodeMessageFromPart,
   formatOpenCodeError,
   getAvailableSlashCommands,
   getModelsWithDefaults,
+  getOpenCodePartKey,
   getSessionMessages,
   listSessions,
+  normalizeOpenCodeMessage,
   normalizeOpenCodePart,
   sendPrompt,
   type OpencodeClient,
+  type OpenCodeMessage,
 } from "./opencode-client";
 
 describe("opencode-client listSessions", () => {
@@ -642,6 +646,233 @@ describe("opencode-client streaming part normalization", () => {
       sourcePartId: "part-1",
       sourceMessageId: "message-1",
     });
+  });
+
+  test("normalizes reasoning parts into thinking parts", () => {
+    const part = normalizeOpenCodePart({
+      id: "part-r",
+      messageID: "message-1",
+      type: "reasoning",
+      text: "Let me think",
+    });
+
+    expect(part).toEqual({
+      type: "thinking",
+      content: "Let me think",
+      sourcePartId: "part-r",
+      sourceMessageId: "message-1",
+    });
+  });
+
+  test("drops reasoning parts with empty text", () => {
+    expect(
+      normalizeOpenCodePart({ id: "part-r", type: "reasoning", text: "" }),
+    ).toBeNull();
+  });
+
+  test("normalizes tool parts with mapped state and diff metadata", () => {
+    const part = normalizeOpenCodePart({
+      id: "part-t",
+      messageID: "message-1",
+      type: "tool",
+      tool: "edit",
+      state: {
+        status: "completed",
+        title: "Edit file.ts",
+        input: {
+          filePath: "file.ts",
+          oldString: "a",
+          newString: "a\nb",
+        },
+        output: "done",
+      },
+    });
+
+    expect(part?.type).toBe("tool-invocation");
+    expect(part?.toolName).toBe("edit");
+    expect(part?.toolState).toBe("success");
+    expect(part?.toolTitle).toBe("Edit file.ts");
+    expect(part?.toolOutput).toBe("done");
+    expect(part?.sourcePartId).toBe("part-t");
+    expect(part?.sourceMessageId).toBe("message-1");
+    expect(part?.toolDiff).toMatchObject({
+      filePath: "file.ts",
+      before: "a",
+      after: "a\nb",
+      additions: 2,
+      deletions: 1,
+    });
+  });
+
+  test("maps tool error status to failure state and stringifies error payloads", () => {
+    const part = normalizeOpenCodePart({
+      id: "part-t",
+      type: "tool",
+      tool: "bash",
+      state: {
+        status: "error",
+        error: { message: "boom" },
+      },
+    });
+
+    expect(part?.toolState).toBe("failure");
+    expect(part?.toolError).toBe(JSON.stringify({ message: "boom" }, null, 2));
+  });
+
+  test("normalizes file parts using filename then url", () => {
+    const part = normalizeOpenCodePart({
+      id: "part-f",
+      messageID: "message-1",
+      type: "file",
+      filename: "photo.png",
+      url: "file:///tmp/photo.png",
+    });
+
+    expect(part).toEqual({
+      type: "file",
+      content: "photo.png",
+      sourcePartId: "part-f",
+      sourceMessageId: "message-1",
+      fileUrl: "file:///tmp/photo.png",
+    });
+  });
+
+  test("returns null for unrecognized or non-object parts", () => {
+    expect(normalizeOpenCodePart(null)).toBeNull();
+    expect(normalizeOpenCodePart("nope")).toBeNull();
+    expect(normalizeOpenCodePart({ type: "step-start" })).toBeNull();
+  });
+});
+
+describe("opencode-client normalizeOpenCodeMessage", () => {
+  test("aggregates text content and parts from an SDK message", () => {
+    const message = normalizeOpenCodeMessage({
+      info: { id: "message-1", role: "assistant", time: { created: 1739232000000 } },
+      parts: [
+        { id: "p1", messageID: "message-1", type: "text", text: "Hello " },
+        { id: "p2", messageID: "message-1", type: "reasoning", text: "thinking" },
+        { id: "p3", messageID: "message-1", type: "text", text: "world" },
+        { id: "p4", type: "step-start" },
+      ],
+    });
+
+    expect(message).toEqual({
+      id: "message-1",
+      role: "assistant",
+      content: "Hello world",
+      parts: [
+        { type: "text", content: "Hello ", sourcePartId: "p1", sourceMessageId: "message-1" },
+        { type: "thinking", content: "thinking", sourcePartId: "p2", sourceMessageId: "message-1" },
+        { type: "text", content: "world", sourcePartId: "p3", sourceMessageId: "message-1" },
+      ],
+      createdAt: new Date(1739232000000).toISOString(),
+    });
+  });
+
+  test("returns null for non-object input", () => {
+    expect(normalizeOpenCodeMessage(null)).toBeNull();
+    expect(normalizeOpenCodeMessage(42)).toBeNull();
+  });
+});
+
+describe("opencode-client getOpenCodePartKey", () => {
+  test("prefers the source part id", () => {
+    expect(
+      getOpenCodePartKey({ type: "text", content: "x", sourcePartId: "p1", sourceMessageId: "m1" }),
+    ).toBe("p1");
+  });
+
+  test("falls back to a composite key from the source message id", () => {
+    expect(
+      getOpenCodePartKey({
+        type: "tool-invocation",
+        content: "edit",
+        toolName: "edit",
+        sourceMessageId: "m1",
+      }),
+    ).toBe("m1:tool-invocation:edit:edit");
+  });
+
+  test("returns null when the part has no source identity", () => {
+    expect(getOpenCodePartKey({ type: "text", content: "x" })).toBeNull();
+  });
+});
+
+describe("opencode-client buildOpenCodeMessageFromPart", () => {
+  test("creates a new assistant message when none exists", () => {
+    const message = buildOpenCodeMessageFromPart(undefined, "message-1", {
+      type: "text",
+      content: "Hello",
+      sourcePartId: "p1",
+      sourceMessageId: "message-1",
+    });
+
+    expect(message.id).toBe("message-1");
+    expect(message.role).toBe("assistant");
+    expect(message.content).toBe("Hello");
+    expect(message.parts).toHaveLength(1);
+  });
+
+  test("replaces an existing part matched by source identity", () => {
+    const existing: OpenCodeMessage = {
+      id: "message-1",
+      role: "assistant",
+      content: "Hello",
+      parts: [{ type: "text", content: "Hello", sourcePartId: "p1", sourceMessageId: "message-1" }],
+      createdAt: new Date(0).toISOString(),
+    };
+
+    const updated = buildOpenCodeMessageFromPart(existing, "message-1", {
+      type: "text",
+      content: "Hello world",
+      sourcePartId: "p1",
+      sourceMessageId: "message-1",
+    });
+
+    expect(updated.parts).toHaveLength(1);
+    expect(updated.content).toBe("Hello world");
+    // Preserves role/createdAt from the existing message.
+    expect(updated.createdAt).toBe(existing.createdAt);
+  });
+
+  test("appends a delta to the matched part when the incoming content is empty", () => {
+    const existing: OpenCodeMessage = {
+      id: "message-1",
+      role: "assistant",
+      content: "Hel",
+      parts: [{ type: "text", content: "Hel", sourcePartId: "p1", sourceMessageId: "message-1" }],
+      createdAt: new Date(0).toISOString(),
+    };
+
+    const updated = buildOpenCodeMessageFromPart(
+      existing,
+      "message-1",
+      { type: "text", content: "", sourcePartId: "p1", sourceMessageId: "message-1" },
+      "lo",
+    );
+
+    expect(updated.content).toBe("Hello");
+    expect(updated.parts).toHaveLength(1);
+  });
+
+  test("appends a new part when the source identity does not match", () => {
+    const existing: OpenCodeMessage = {
+      id: "message-1",
+      role: "assistant",
+      content: "Hello",
+      parts: [{ type: "text", content: "Hello", sourcePartId: "p1", sourceMessageId: "message-1" }],
+      createdAt: new Date(0).toISOString(),
+    };
+
+    const updated = buildOpenCodeMessageFromPart(existing, "message-1", {
+      type: "text",
+      content: " again",
+      sourcePartId: "p2",
+      sourceMessageId: "message-1",
+    });
+
+    expect(updated.parts).toHaveLength(2);
+    expect(updated.content).toBe("Hello again");
   });
 });
 

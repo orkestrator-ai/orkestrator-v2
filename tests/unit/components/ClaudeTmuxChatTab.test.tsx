@@ -9,6 +9,7 @@ import {
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useClaudeStore } from "@/stores/claudeStore";
+import { useUIStore } from "@/stores/uiStore";
 import { clearPersistedVirtuosoState } from "@/hooks/useVirtuosoScrollState";
 import * as realTmuxClient from "@/lib/claude-tmux-client";
 import * as realTauri from "@/lib/tauri";
@@ -474,7 +475,54 @@ describe("ClaudeTmuxChatTab", () => {
       setupScriptsRunning: new Set(),
       sessionActivated: new Set(),
     });
+    useUIStore.setState({ selectedEnvironmentId: "env-1" });
     seedPane("Run the audit");
+  });
+
+  test("jumps to the bottom when reactivated after an environment switch", async () => {
+    const { rerender } = render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    const scroller = await screen.findByTestId("virtuoso-mock");
+    act(() => {
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+    });
+
+    const callsBeforeSwitch = virtuosoScrollToIndexMock.mock.calls.length;
+    act(() => {
+      useUIStore.setState({ selectedEnvironmentId: "env-2" });
+    });
+    rerender(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive={false}
+      />,
+    );
+    act(() => {
+      useUIStore.setState({ selectedEnvironmentId: "env-1" });
+    });
+    rerender(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(virtuosoScrollToIndexMock.mock.calls.length).toBeGreaterThan(
+        callsBeforeSwitch,
+      );
+    });
+    expect(virtuosoScrollToMock.mock.calls.at(-1)).toEqual([
+      { top: 10_000_000, behavior: "auto" },
+    ]);
   });
 
   test("starts once with tabId+envId and clears the tab initialPrompt after the backend sends it", async () => {
@@ -1770,7 +1818,7 @@ describe("ClaudeTmuxChatTab", () => {
     expect(screen.getByRole("button", { name: /Fable/ })).toBeTruthy();
   });
 
-  test("does not send the launch-only Default model sentinel to a running tmux session", async () => {
+  test("persists the launch-only Default model sentinel without switching a running tmux session", async () => {
     useClaudeTmuxStore
       .getState()
       .setRunning("tab-1", true, {
@@ -1795,11 +1843,21 @@ describe("ClaudeTmuxChatTab", () => {
     expect(
       defaultOption?.getAttribute("aria-disabled") === "true" ||
         defaultOption?.hasAttribute("data-disabled"),
-    ).toBe(true);
+    ).toBe(false);
 
-    fireEvent.click(defaultOption!);
-    expect(switchModelMock).not.toHaveBeenCalledWith("tab-1", "default");
-    expect(updateGlobalConfigMock).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(defaultOption!);
+      await Promise.resolve();
+    });
+
+    expect(switchModelMock).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(updateGlobalConfigMock).toHaveBeenCalledWith(
+        expect.objectContaining({ claudeModel: "default" }),
+      );
+      expect(useConfigStore.getState().config.global.claudeModel).toBe("default");
+    });
+    expect(screen.getByRole("button", { name: /Default/ })).toBeTruthy();
   });
 
   test("uses the pre-launch model selection when starting fresh", async () => {

@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import type { VirtuosoHandle, StateSnapshot } from "react-virtuoso";
+import { useUIStore } from "@/stores/uiStore";
 
 /** Pixels from bottom to consider "at bottom" */
 const AT_BOTTOM_THRESHOLD = 50;
@@ -54,6 +55,14 @@ interface UseVirtuosoScrollStateOptions {
   isActive?: boolean;
   /** Optional persistence key for retaining scroll state across tab switches */
   persistKey?: string;
+  /**
+   * Environment this view belongs to. When provided, the hook watches the
+   * globally selected environment while the view is inactive; if it changed
+   * (i.e. the user switched environments), the next activation jumps to the
+   * absolute bottom regardless of prior scroll position. Within-environment
+   * tab switches are unaffected and keep the user's scroll position.
+   */
+  environmentId?: string;
 }
 
 interface UseVirtuosoScrollStateReturn {
@@ -88,13 +97,16 @@ interface UseVirtuosoScrollStateReturn {
  * - Scroll position persistence across tab switches; if the user was sticky
  *   when leaving, returning snaps them to the new bottom instead of the old
  *   scroll position
+ * - Environment-switch handling (when environmentId is provided): returning
+ *   to a view after the selected environment changed always jumps to the
+ *   absolute bottom, even if the user had scrolled up before leaving
  * - Smooth animated scroll-to-bottom that keeps pace with late-rendering
  *   footer content (thinking indicator, question/approval cards)
  */
 export function useVirtuosoScrollState(
   options: UseVirtuosoScrollStateOptions = {}
 ): UseVirtuosoScrollStateReturn {
-  const { isActive = true, persistKey } = options;
+  const { isActive = true, persistKey, environmentId } = options;
 
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const [scrollerEl, setScrollerEl] = useState<HTMLElement | null>(null);
@@ -121,6 +133,25 @@ export function useVirtuosoScrollState(
   const mountedRef = useRef(true);
   const scrollInFlightRef = useRef(false);
   const hasBeenActiveRef = useRef(false);
+  const envChangedWhileInactiveRef = useRef(false);
+
+  // While inactive, watch the globally selected environment. If it ever
+  // differs from this view's environment, the user switched environments —
+  // flag it so the next activation jumps to the absolute bottom. A
+  // within-environment tab switch never trips this (the selected environment
+  // stays equal to ours for the whole inactive period).
+  useEffect(() => {
+    if (isActive || !environmentId) return;
+    const check = (selectedId: string | null) => {
+      if (selectedId !== environmentId) {
+        envChangedWhileInactiveRef.current = true;
+      }
+    };
+    // The deactivation itself may have been caused by an environment switch
+    // that already happened — check the current value, then watch for more.
+    check(useUIStore.getState().selectedEnvironmentId);
+    return useUIStore.subscribe((state) => check(state.selectedEnvironmentId));
+  }, [isActive, environmentId]);
 
   // Always restore the snapshot when one exists. For sticky users this lands
   // them at their previous bottom (avoiding a flash from the top), then the
@@ -170,7 +201,11 @@ export function useVirtuosoScrollState(
     setScrollerEl(next);
   }, []);
 
-  const scrollToBottom = useCallback(() => {
+  // Core retry loop, shared by the public scrollToBottom (smooth) and the
+  // activation jump (instant — animating on every env/tab switch reads as
+  // jank). `behavior` only affects the final footer scroll; the scrollToIndex
+  // retries are always instant since they correct virtual-height estimates.
+  const performScrollToBottom = useCallback((behavior: "smooth" | "auto") => {
     const handle = virtuosoRef.current;
     if (!handle) return;
     if (
@@ -205,11 +240,11 @@ export function useVirtuosoScrollState(
         const currentHeight = el.scrollHeight;
         if (currentHeight !== lastScrollHeight) {
           lastScrollHeight = currentHeight;
-          // Footer grew after we landed — re-issue smooth scroll so the
+          // Footer grew after we landed — re-issue the scroll so the
           // new content (thinking indicator, cards) stays in view.
           handle.scrollTo({
             top: SCROLL_TO_ABSOLUTE_BOTTOM,
-            behavior: "smooth",
+            behavior,
           });
         }
         if (performance.now() - start < POST_SCROLL_WATCH_MS) {
@@ -222,11 +257,11 @@ export function useVirtuosoScrollState(
     };
 
     const finish = () => {
-      // Smooth-scroll past the last data item to reveal footer content.
+      // Scroll past the last data item to reveal footer content.
       // The browser clamps to scrollHeight - clientHeight.
       handle.scrollTo({
         top: SCROLL_TO_ABSOLUTE_BOTTOM,
-        behavior: "smooth",
+        behavior,
       });
       watchScrollHeight();
     };
@@ -240,7 +275,7 @@ export function useVirtuosoScrollState(
 
       // Instant (not smooth) on retries — we're correcting virtual-height
       // estimates; smoothing each retry would look jittery. The final
-      // scrollTo in finish() animates into the footer.
+      // scrollTo in finish() moves into the footer with `behavior`.
       handle.scrollToIndex({
         index: "LAST",
         align: "end",
@@ -271,6 +306,11 @@ export function useVirtuosoScrollState(
     // mounts, which in turn would retrigger the ResizeObserver effect and
     // reobserve from scratch on each mount.
   }, []);
+
+  const scrollToBottom = useCallback(
+    () => performScrollToBottom("smooth"),
+    [performScrollToBottom]
+  );
 
   const isActiveRef = useRef(isActive);
   useEffect(() => {
@@ -391,12 +431,15 @@ export function useVirtuosoScrollState(
     };
   }, [scrollerEl, scrollToBottom]);
 
-  // Tab re-activation: if the user was sticky when they left, jump to the
-  // new bottom on return. We use an instant jump rather than the smooth
-  // retry loop in scrollToBottom — animating on every env switch reads as
-  // jank. Reset scrollInFlightRef first so a stale flag from a prior
-  // activation cycle (e.g. a smooth scroll interrupted by switching away)
-  // can't deadlock subsequent scroll attempts.
+  // Tab re-activation: jump to the new bottom on return when either the user
+  // was sticky when they left, or the selected environment changed while the
+  // view was away (an environment switch always lands at the absolute bottom,
+  // regardless of prior scroll position). The jump uses the instant retry
+  // loop — animating on every env switch reads as jank, and a one-shot
+  // scrollToIndex can land short while Virtuoso re-measures items that were
+  // outside the rendered window. Reset scrollInFlightRef first so a stale
+  // flag from a prior activation cycle (e.g. a smooth scroll interrupted by
+  // switching away) can't deadlock subsequent scroll attempts.
   //
   // Skip on the very first activation: Virtuoso handles initial position
   // via restoreStateFrom. If the persisted snapshot is stale (content grew
@@ -408,18 +451,17 @@ export function useVirtuosoScrollState(
     if (!isActive) return;
     const isFirstActivation = !hasBeenActiveRef.current;
     hasBeenActiveRef.current = true;
+    const envChanged = envChangedWhileInactiveRef.current;
+    envChangedWhileInactiveRef.current = false;
     if (isFirstActivation) return;
     scrollInFlightRef.current = false;
-    if (!wantsStickRef.current) return;
+    if (!envChanged && !wantsStickRef.current) return;
     const id = requestAnimationFrame(() => {
       if (!mountedRef.current) return;
-      const handle = virtuosoRef.current;
-      if (!handle) return;
-      handle.scrollToIndex({ index: "LAST", align: "end" });
-      handle.scrollTo({ top: SCROLL_TO_ABSOLUTE_BOTTOM, behavior: "auto" });
+      performScrollToBottom("auto");
     });
     return () => cancelAnimationFrame(id);
-  }, [isActive]);
+  }, [isActive, performScrollToBottom]);
 
   return {
     isAtBottom,

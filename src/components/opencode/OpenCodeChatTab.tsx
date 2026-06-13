@@ -257,6 +257,7 @@ export function OpenCodeChatTab({
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive,
     persistKey: sessionKey,
+    environmentId,
   });
 
   // Get pending questions for this session - subscribe to the Map for reactivity

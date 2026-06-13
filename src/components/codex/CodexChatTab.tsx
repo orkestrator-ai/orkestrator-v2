@@ -260,6 +260,7 @@ export function CodexChatTab({
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive,
     persistKey: sessionKey,
+    environmentId,
   });
 
   // Activity state tracking is handled globally by useGlobalActivityMonitor

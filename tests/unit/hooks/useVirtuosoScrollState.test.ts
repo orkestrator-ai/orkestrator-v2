@@ -4,6 +4,7 @@ import {
   useVirtuosoScrollState,
   clearPersistedVirtuosoState,
 } from "@/hooks/useVirtuosoScrollState";
+import { useUIStore } from "@/stores/uiStore";
 
 describe("useVirtuosoScrollState", () => {
   beforeEach(() => {
@@ -1029,6 +1030,170 @@ describe("useVirtuosoScrollState", () => {
       rerender({ isActive: true });
 
       expect(getStateCalls).toHaveLength(0);
+    });
+  });
+
+  describe("environment switch handling", () => {
+    function makeHandle(
+      scrollToIndexCalls: any[],
+      scrollToCalls: any[]
+    ) {
+      return {
+        scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
+        scrollTo: (opts: any) => scrollToCalls.push(opts),
+        getState: (cb: (state: any) => void) =>
+          cb({ ranges: [], scrollTop: 100 } as any),
+      } as any;
+    }
+
+    test("jumps to bottom on re-activation after env switch even when user had scrolled up", async () => {
+      useUIStore.setState({ selectedEnvironmentId: "env-1" });
+      const { result, rerender } = renderHook(
+        ({ isActive }) =>
+          useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
+        { initialProps: { isActive: true } }
+      );
+
+      const scrollToIndexCalls: any[] = [];
+      const scrollToCalls: any[] = [];
+      result.current.virtuosoRef.current = makeHandle(
+        scrollToIndexCalls,
+        scrollToCalls
+      );
+
+      const el = document.createElement("div");
+      document.body.appendChild(el);
+      try {
+        // Release stick intent via a wheel-up: without an env switch this
+        // would suppress the re-activation jump.
+        act(() => result.current.scrollProps.scrollerRef(el));
+        act(() => {
+          el.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+        });
+
+        // Switch environments away and back while the view is inactive.
+        act(() => {
+          useUIStore.setState({ selectedEnvironmentId: "env-2" });
+        });
+        rerender({ isActive: false });
+        act(() => {
+          useUIStore.setState({ selectedEnvironmentId: "env-1" });
+        });
+        rerender({ isActive: true });
+
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        });
+
+        // The env switch forces the jump despite wantsStick=false.
+        expect(scrollToIndexCalls.length).toBeGreaterThanOrEqual(1);
+        expect(scrollToIndexCalls[0]).toEqual({ index: "LAST", align: "end" });
+        expect(scrollToCalls[scrollToCalls.length - 1]).toEqual({
+          top: 10_000_000,
+          behavior: "auto",
+        });
+        // The forced jump also re-engages stick intent.
+        expect(result.current.scrollProps.followOutput(false)).toBe("smooth");
+      } finally {
+        document.body.removeChild(el);
+        useUIStore.setState({ selectedEnvironmentId: null });
+      }
+    });
+
+    test("does not jump on within-environment tab switch when user had scrolled up", async () => {
+      useUIStore.setState({ selectedEnvironmentId: "env-1" });
+      const { result, rerender } = renderHook(
+        ({ isActive }) =>
+          useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
+        { initialProps: { isActive: true } }
+      );
+
+      const scrollToIndexCalls: any[] = [];
+      const scrollToCalls: any[] = [];
+      result.current.virtuosoRef.current = makeHandle(
+        scrollToIndexCalls,
+        scrollToCalls
+      );
+
+      const el = document.createElement("div");
+      document.body.appendChild(el);
+      try {
+        act(() => result.current.scrollProps.scrollerRef(el));
+        act(() => {
+          el.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+        });
+
+        // Deactivate/re-activate without any environment change (simulates
+        // switching to another tab in the same environment and back).
+        rerender({ isActive: false });
+        rerender({ isActive: true });
+
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        });
+
+        expect(scrollToIndexCalls.length).toBe(0);
+        expect(scrollToCalls.length).toBe(0);
+      } finally {
+        document.body.removeChild(el);
+        useUIStore.setState({ selectedEnvironmentId: null });
+      }
+    });
+
+    test("retries the activation jump until Virtuoso reports at-bottom", async () => {
+      // After an environment switch, items outside the rendered window have
+      // estimated heights, so a one-shot jump can land short. The activation
+      // jump must keep retrying scrollToIndex until isAtBottom flips.
+      useUIStore.setState({ selectedEnvironmentId: "env-1" });
+      const { result, rerender } = renderHook(
+        ({ isActive }) =>
+          useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
+        { initialProps: { isActive: true } }
+      );
+
+      const scrollToIndexCalls: any[] = [];
+      const scrollToCalls: any[] = [];
+      result.current.virtuosoRef.current = makeHandle(
+        scrollToIndexCalls,
+        scrollToCalls
+      );
+
+      try {
+        // Simulate not-at-bottom (estimated heights keep landing short).
+        act(() => {
+          result.current.scrollProps.atBottomStateChange(false);
+        });
+
+        act(() => {
+          useUIStore.setState({ selectedEnvironmentId: "env-2" });
+        });
+        rerender({ isActive: false });
+        act(() => {
+          useUIStore.setState({ selectedEnvironmentId: "env-1" });
+        });
+        rerender({ isActive: true });
+
+        // Let several retry iterations elapse (16ms apart).
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        });
+        expect(scrollToIndexCalls.length).toBeGreaterThan(1);
+
+        // Once Virtuoso reports at-bottom, the loop finishes with an instant
+        // footer scroll.
+        act(() => {
+          result.current.scrollProps.atBottomStateChange(true);
+        });
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        });
+        expect(scrollToCalls[scrollToCalls.length - 1]).toEqual({
+          top: 10_000_000,
+          behavior: "auto",
+        });
+      } finally {
+        useUIStore.setState({ selectedEnvironmentId: null });
+      }
     });
   });
 

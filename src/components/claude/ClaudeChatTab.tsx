@@ -158,6 +158,7 @@ export function ClaudeChatTab({
   const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive,
     persistKey: sessionKey,
+    environmentId,
   });
 
   const pendingQuestions = useMemo(() => {

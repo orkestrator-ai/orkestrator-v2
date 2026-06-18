@@ -560,7 +560,7 @@ async function getLocalGitStatus(worktreePath: string, targetBranch: string): Pr
   const stats = new Map<string, { additions: number; deletions: number }>();
   for (const line of numstat.stdout.split("\n").filter(Boolean)) {
     const [additions = "0", deletions = "0", ...paths] = line.split("\t");
-    const normalizedPath = paths.at(-1) ?? "";
+    const normalizedPath = parseNumstatPath(paths.join("\t"));
     stats.set(normalizedPath, {
       additions: additions === "-" ? 0 : Number.parseInt(additions, 10) || 0,
       deletions: deletions === "-" ? 0 : Number.parseInt(deletions, 10) || 0,
@@ -602,6 +602,19 @@ async function getLocalGitStatus(worktreePath: string, targetBranch: string): Pr
   }
 
   return changes;
+}
+
+function parseNumstatPath(token: string): string {
+  // Rename/copy numstat entries render the path as "prefix{old => new}suffix" or "old => new".
+  // Resolve to the new path so the stats line up with the --name-status path key.
+  const arrowIndex = token.indexOf(" => ");
+  if (arrowIndex === -1) return token;
+  const braceStart = token.indexOf("{");
+  const braceEnd = token.indexOf("}");
+  if (braceStart !== -1 && braceEnd > arrowIndex && braceStart < arrowIndex) {
+    return `${token.slice(0, braceStart)}${token.slice(arrowIndex + 4, braceEnd)}${token.slice(braceEnd + 1)}`;
+  }
+  return token.slice(arrowIndex + 4);
 }
 
 async function countLocalFileLines(rootPath: string, relativePath: string): Promise<number> {
@@ -669,6 +682,12 @@ function setGitHubTokenGitConfigCommand(token: string): string {
 function githubTokenPropagationCommand(newToken: string | undefined): string {
   const token = newToken?.trim();
   return token ? setGitHubTokenGitConfigCommand(token) : clearGitHubTokenGitConfigCommand();
+}
+
+function redactSecret(message: string, secret: string | undefined): string {
+  const trimmed = secret?.trim();
+  if (!trimmed) return message;
+  return message.split(trimmed).join("***");
 }
 
 async function createDockerContainer(environment: Environment, context: CommandContext): Promise<string> {
@@ -1015,7 +1034,8 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
         await dockerExec(env.containerId, githubTokenPropagationCommand(asOptionalString(newToken)));
         updated.push(env.id);
       } catch (error) {
-        failed.push([env.id, error instanceof Error ? error.message : String(error)]);
+        const message = error instanceof Error ? error.message : String(error);
+        failed.push([env.id, redactSecret(message, asOptionalString(newToken))]);
       }
     }
     return { updated, failed };

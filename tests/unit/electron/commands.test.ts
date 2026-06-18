@@ -448,6 +448,96 @@ exit 0
     )).rejects.toThrow("Invalid filePath");
   });
 
+  test("rejects unsafe target branch names before running git", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const commands = createCommandRegistry();
+    const context = createContext(createEnvironment()).context;
+
+    for (const branch of ["-rf", "feature..main", "feature//main", "bad name", "refs/.hidden"]) {
+      await expect(commands.get("get_local_git_status")?.(
+        { worktreePath: worktree, targetBranch: branch },
+        context,
+      )).rejects.toThrow("Invalid target branch");
+      await expect(commands.get("read_local_file_at_branch")?.(
+        { worktreePath: worktree, filePath: "tracked.txt", branch },
+        context,
+      )).rejects.toThrow("Invalid target branch");
+    }
+  });
+
+  test("counts zero added lines for empty and binary untracked files", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    await fs.writeFile(path.join(worktree, "empty.txt"), "");
+    await fs.writeFile(path.join(worktree, "binary.bin"), Buffer.from([1, 2, 0, 3, 4]));
+    const commands = createCommandRegistry();
+
+    const changes = await commands.get("get_local_git_status")?.(
+      { worktreePath: worktree, targetBranch: "main" },
+      createContext(createEnvironment()).context,
+    ) as Array<{ path: string; additions: number; deletions: number; status: string }>;
+
+    expect(changes).toContainEqual(expect.objectContaining({ path: "empty.txt", additions: 0, status: "?" }));
+    expect(changes).toContainEqual(expect.objectContaining({ path: "binary.bin", additions: 0, status: "?" }));
+  });
+
+  test("maps rename stats to the new path in local git status", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    await fs.writeFile(path.join(worktree, "original.txt"), "a\nb\nc\nd\ne\n");
+    await runGit(worktree, ["add", "original.txt"]);
+    await runGit(worktree, ["commit", "-m", "add original"]);
+    await runGit(worktree, ["push", "origin", "main"]);
+
+    await fs.rm(path.join(worktree, "original.txt"));
+    await fs.writeFile(path.join(worktree, "renamed.txt"), "a\nb\nc\nd\ne\nf\n");
+    await runGit(worktree, ["add", "-A"]);
+    await runGit(worktree, ["commit", "-m", "rename with edit"]);
+    const commands = createCommandRegistry();
+
+    const changes = await commands.get("get_local_git_status")?.(
+      { worktreePath: worktree, targetBranch: "main" },
+      createContext(createEnvironment()).context,
+    ) as Array<{ path: string; additions: number; deletions: number; status: string }>;
+
+    const renamed = changes.find((change) => change.path === "renamed.txt");
+    expect(renamed).toBeDefined();
+    expect(renamed?.status.startsWith("R")).toBe(true);
+    expect(renamed?.additions).toBe(1);
+  });
+
+  test("redacts the GitHub token from propagation failure messages", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  printf '%s\\n' "$*" >&2
+  exit 1
+fi
+exit 0
+`, async () => {
+      const result = await commands.get("propagate_github_token_to_containers")?.(
+        { newToken: "secret-token-123" },
+        context,
+      ) as { updated: string[]; failed: [string, string][] };
+
+      expect(result.updated).toEqual([]);
+      expect(result.failed).toHaveLength(1);
+      const [, message] = result.failed[0]!;
+      expect(message).not.toContain("secret-token-123");
+      expect(message).toContain("***");
+    });
+  });
+
   test("waits for a local bridge server to pass health before persisting pid and port", async () => {
     const appRoot = await createTempDir("ork-electron-app-");
     const worktreePath = await createTempDir("ork-electron-worktree-");

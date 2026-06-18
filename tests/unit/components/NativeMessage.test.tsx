@@ -163,6 +163,61 @@ describe("NativeMessage", () => {
     expect(screen.queryByRole("button", { name: "show more" })).toBeNull();
   });
 
+  test("truncates long fallback user content when no text parts are present", () => {
+    const content = Array.from(
+      { length: 13 },
+      (_, index) => `Fallback line ${index + 1}`,
+    ).join("\n");
+    const message: NativeMessageType = {
+      id: "msg-long-user-fallback-prompt",
+      role: "user",
+      content,
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    const toggle = screen.getByRole("button", { name: "show more" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      (toggle.previousElementSibling as HTMLElement).style.maxHeight,
+    ).toContain("12");
+  });
+
+  test("counts CRLF and CR line endings when truncating user prompts", () => {
+    const crlfContent = Array.from(
+      { length: 13 },
+      (_, index) => `CRLF line ${index + 1}`,
+    ).join("\r\n");
+    const crContent = Array.from(
+      { length: 13 },
+      (_, index) => `CR line ${index + 1}`,
+    ).join("\r");
+    const crlfMessage: NativeMessageType = {
+      id: "msg-crlf-user-prompt",
+      role: "user",
+      content: crlfContent,
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "text", content: crlfContent }],
+    };
+    const crMessage: NativeMessageType = {
+      id: "msg-cr-user-prompt",
+      role: "user",
+      content: crContent,
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "text", content: crContent }],
+    };
+
+    const { rerender } = render(<NativeMessage message={crlfMessage} />);
+
+    expect(screen.getByRole("button", { name: "show more" })).toBeTruthy();
+
+    rerender(<NativeMessage message={crMessage} />);
+
+    expect(screen.getByRole("button", { name: "show more" })).toBeTruthy();
+  });
+
   test("renders user copy control below the bubble with the timestamp row", async () => {
     const message: NativeMessageType = {
       id: "msg-user-copy",

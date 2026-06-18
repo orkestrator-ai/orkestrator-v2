@@ -94,6 +94,7 @@ mock.module("./CodexComposeBar", () => ({
     disabled,
     isLoading,
     showAddressAll,
+    layout,
   }: {
     onSend: (text: string, attachments: typeof composeAttachments) => Promise<void>;
     onStop?: () => Promise<void>;
@@ -102,11 +103,13 @@ mock.module("./CodexComposeBar", () => ({
     disabled?: boolean;
     isLoading?: boolean;
     showAddressAll?: boolean;
+    layout?: "bottom" | "centered";
   }) => (
     <>
       <div data-testid="codex-address-all-state">
         {showAddressAll ? "shown" : "hidden"}
       </div>
+      <div data-testid="codex-compose-layout">{layout ?? "bottom"}</div>
       <button
         type="button"
         data-testid="codex-send"
@@ -450,6 +453,25 @@ describe("CodexChatTab", () => {
         composeText,
         { attachments: undefined },
       );
+    });
+  });
+
+  test("centers the compose bar with the ready title until message history exists", async () => {
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    expect(screen.getByText("Ready to build!")).toBeTruthy();
+    expect(screen.getByTestId("codex-compose-layout").textContent).toBe("centered");
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("codex-compose-layout").textContent).toBe("bottom");
     });
   });
 

@@ -497,7 +497,7 @@ export function HierarchicalSidebar() {
   return (
     <div className="flex h-full flex-col">
       {/* Header - switches between normal and multi-select mode */}
-      <div className="flex h-12 items-center justify-between pl-3 pr-2 bg-zinc-900/80 border-b border-border">
+      <div className="flex h-12 items-center justify-between border-b border-border/80 bg-zinc-800/60 pl-3 pr-2">
         {isMultiSelectMode ? (
           <>
             <span className="text-sm font-medium text-foreground">
@@ -551,7 +551,7 @@ export function HierarchicalSidebar() {
 
       {/* Projects List */}
       <ScrollArea className="flex-1">
-        <div>
+        <div className="py-2">
           {projectsLoading && projects.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
               <FolderGit2 className="h-8 w-8 mb-2 opacity-50" />

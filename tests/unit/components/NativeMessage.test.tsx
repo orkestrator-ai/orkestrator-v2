@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import type { NativeMessage as NativeMessageType } from "../../../src/lib/chat/native-message-types";
+import { mockWriteText } from "../../mocks/clipboard";
 import {
   type CreateFileTabOptions,
   TerminalProvider,
@@ -55,6 +56,8 @@ describe("NativeMessage", () => {
     mockOpenInBrowser.mockImplementation(async () => {});
     mockReadFileBase64.mockReset();
     mockReadFileBase64.mockImplementation(async () => "image-base64");
+    mockWriteText.mockReset();
+    mockWriteText.mockImplementation(async () => {});
   });
 
   test("renders single newlines as visible line breaks in text parts", () => {
@@ -75,6 +78,33 @@ describe("NativeMessage", () => {
     expect(container.textContent).toContain("Second line");
     expect(container.textContent).toContain("Third line");
     expect(lineBreaks).toHaveLength(2);
+  });
+
+  test("renders user copy control below the bubble with the timestamp row", async () => {
+    const message: NativeMessageType = {
+      id: "msg-user-copy",
+      role: "user",
+      content: "Copy this user prompt",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        { type: "text", content: "Copy this user prompt" },
+      ],
+    };
+
+    const { container } = render(<NativeMessage message={message} />);
+    const bubble = screen.getByText("Copy this user prompt").closest(".rounded-xl") as HTMLElement;
+    expect(bubble.textContent).not.toContain("12:00");
+    expect(bubble.className).toContain("[&_.prose_p]:my-0");
+
+    const hiddenRow = container.querySelector(".group-hover\\:opacity-100") as HTMLElement;
+    expect(hiddenRow).not.toBeNull();
+    expect(hiddenRow.textContent).toContain("12:00");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
+
+    await waitFor(() => {
+      expect(mockWriteText).toHaveBeenCalledWith("Copy this user prompt");
+    });
   });
 
   test("opens markdown links through the system browser", () => {
@@ -209,7 +239,7 @@ describe("NativeMessage", () => {
     );
   });
 
-  test("renders system and error messages distinctly and compacts continuations", () => {
+  test("renders system and error messages distinctly and shows continuation metadata", () => {
     const systemMessage: NativeMessageType = {
       id: "system-naming-1",
       role: "assistant",
@@ -264,7 +294,7 @@ describe("NativeMessage", () => {
     );
 
     expect(screen.getByText("Continuation response")).toBeTruthy();
-    expect(screen.queryByText("Worker")).toBeNull();
+    expect(screen.getByText("Worker")).toBeTruthy();
   });
 
   test("opens local image previews and closes the overlay with Escape", async () => {

@@ -22,7 +22,7 @@ describe("MessageShell", () => {
     expect(container.textContent).toContain("Hello world");
   });
 
-  test("hides header when showHeader is false", () => {
+  test("keeps assistant metadata under the block when showHeader is false", () => {
     const { container } = render(
       <MessageShell
         isUser={false}
@@ -34,23 +34,52 @@ describe("MessageShell", () => {
       </MessageShell>,
     );
 
-    expect(container.textContent).not.toContain("Claude");
-    expect(container.textContent).not.toContain("12:00 PM");
+    expect(container.textContent).toContain("Claude");
+    expect(container.textContent).toContain("12:00 PM");
     expect(container.textContent).toContain("Content only");
   });
 
-  test("applies user background styling for user messages", () => {
+  test("applies right-aligned bubble styling for user messages", () => {
     const { container } = render(
       <MessageShell isUser={true} authorLabel="You" timestampLabel="1:00 PM">
         <p>User message</p>
       </MessageShell>,
     );
 
-    const outerDiv = container.firstElementChild as HTMLElement;
-    expect(outerDiv.className).toContain("bg-muted/30");
+    const rowDiv = container.querySelector(".justify-end") as HTMLElement;
+    expect(rowDiv).not.toBeNull();
+
+    const bubble = Array.from(container.querySelectorAll(".rounded-xl"))
+      .find((element) => element.textContent?.includes("User message")) as HTMLElement;
+    expect(bubble).not.toBeNull();
+    expect(bubble.className).toContain("rounded-xl");
+    expect(bubble.className).toContain("bg-zinc-800/80");
   });
 
-  test("applies transparent background for non-user messages", () => {
+  test("places user metadata and actions in a hidden row below the bubble", () => {
+    const { container } = render(
+      <MessageShell
+        isUser={true}
+        authorLabel="You"
+        timestampLabel="1:00 PM"
+        actions={<button type="button">Copy</button>}
+      >
+        <p>User message</p>
+      </MessageShell>,
+    );
+
+    const bubble = Array.from(container.querySelectorAll(".rounded-xl"))
+      .find((element) => element.textContent?.includes("User message")) as HTMLElement;
+    expect(bubble.textContent).not.toContain("1:00 PM");
+
+    const hiddenRow = container.querySelector(".group-hover\\:opacity-100") as HTMLElement;
+    expect(hiddenRow).not.toBeNull();
+    expect(hiddenRow.className).toContain("opacity-0");
+    expect(hiddenRow.textContent).toContain("1:00 PM");
+    expect(screen.getByRole("button", { name: "Copy" })).toBeTruthy();
+  });
+
+  test("applies full-width content styling for non-user messages", () => {
     const { container } = render(
       <MessageShell
         isUser={false}
@@ -61,8 +90,11 @@ describe("MessageShell", () => {
       </MessageShell>,
     );
 
-    const outerDiv = container.firstElementChild as HTMLElement;
-    expect(outerDiv.className).toContain("bg-transparent");
+    const rowDiv = container.querySelector(".justify-start") as HTMLElement;
+    expect(rowDiv).not.toBeNull();
+
+    const contentDiv = rowDiv.firstElementChild as HTMLElement;
+    expect(contentDiv.className).toContain("w-full");
   });
 
   test("applies responsive padding classes", () => {
@@ -73,8 +105,8 @@ describe("MessageShell", () => {
     );
 
     const outerDiv = container.firstElementChild as HTMLElement;
-    expect(outerDiv.className).toContain("px-2");
-    expect(outerDiv.className).toContain("@sm:px-4");
+    expect(outerDiv.className).toContain("px-3");
+    expect(outerDiv.className).toContain("@sm:px-6");
   });
 
   test("applies min-w-0 and break-words for text wrapping", () => {

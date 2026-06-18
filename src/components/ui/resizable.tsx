@@ -39,10 +39,11 @@ function ResizableHandle({
   // specificity issues with the library's inline styles
   const handleStyle: React.CSSProperties = {
     ...style,
-    // Ensure the handle has proper dimensions
+    // Keep the divider visually exact; wider transparent hit areas read as gaps
+    // against headers with a different surface color.
     ...(isVertical
-      ? { height: "4px", width: "100%" }
-      : { width: "4px", height: "100%" }),
+      ? { height: "1px", width: "100%" }
+      : { width: "1px", height: "100%" }),
   }
 
   return (
@@ -51,13 +52,15 @@ function ResizableHandle({
       style={handleStyle}
       className={cn(
         // Base styles - always applied
-        "bg-zinc-900/80 focus-visible:ring-ring relative z-30 flex items-center justify-center hover:bg-primary/20 transition-colors",
+        "focus-visible:ring-ring relative z-30 flex items-center justify-center bg-zinc-900 transition-colors after:absolute after:bg-border/80 hover:after:bg-primary/50",
         // Prevent flex from collapsing the handle
         "shrink-0",
         // Focus styles
         "focus-visible:ring-1 focus-visible:ring-offset-1 focus-visible:outline-hidden",
         // Orientation-specific cursor
-        isVertical ? "cursor-row-resize" : "cursor-col-resize",
+        isVertical
+          ? "cursor-row-resize after:h-px after:w-full"
+          : "cursor-col-resize after:h-full after:w-px",
         className
       )}
       {...props}

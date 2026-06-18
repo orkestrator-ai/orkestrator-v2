@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, ArrowDown, History, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { useElapsedTimer, useVirtuosoScrollState } from "@/hooks";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -40,6 +41,7 @@ import {
 } from "@/lib/tauri";
 import { SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import { NativeMessage } from "@/components/chat/NativeMessage";
+import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
 import { CodexComposeBar } from "./CodexComposeBar";
 import { CodexPlanModeCard } from "./CodexPlanModeCard";
 import { CodexResumeSessionDialog } from "./CodexResumeSessionDialog";
@@ -54,6 +56,7 @@ import {
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
+import { cn } from "@/lib/utils";
 import type { CodexNativeData } from "@/types/paneLayout";
 import type { CodexAttachment } from "@/stores/codexStore";
 
@@ -219,6 +222,8 @@ export function CodexChatTab({
     () => session?.messages ?? [],
     [session?.messages],
   );
+  const hasMessageHistory = sessionMessages.length > 0;
+  const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
   const latestAssistantMessage = useMemo(() => {
     for (let i = sessionMessages.length - 1; i >= 0; i--) {
       const msg = sessionMessages[i];
@@ -1288,112 +1293,126 @@ export function CodexChatTab({
   }
 
   return (
-    <div className="@container flex h-full min-h-0 flex-col bg-background overflow-hidden">
-      {/* Virtualized messages area */}
-      <VirtualizedMessageList
-        messages={sessionMessages}
-        computeItemKey={(_index, msg) => msg.id}
-        renderMessage={(_index, message, prev) => (
-          <NativeMessage
-            message={message}
-            previousMessage={prev}
-            assistantLabel="Codex"
-          />
+    <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 flex-col transition-[opacity,transform] duration-300 ease-out motion-reduce:transition-none",
+          centerCompose && "pointer-events-none scale-[0.995] opacity-0",
         )}
-        emptyState={
-          <div className="flex min-h-[200px] flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border/70 bg-muted/15 px-5 py-8 text-center text-sm text-muted-foreground">
-            <p>Codex is ready.</p>
-            {client ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setResumeDialogOpen(true)}
-              >
-                <History className="mr-2 h-4 w-4" />
-                Resume Session
-              </Button>
-            ) : null}
-          </div>
-        }
-        footer={
-          <>
-            {session?.isLoading && (
-              <div className="px-2 @sm:px-4 py-3">
-                <div className="mx-auto max-w-3xl min-w-0">
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    <span className="text-xs">Codex is thinking...</span>
-                    {elapsedSeconds !== null && elapsedSeconds > 0 && (
-                      <span className="text-xs text-muted-foreground/50">
-                        {formatElapsed(elapsedSeconds)}
-                      </span>
-                    )}
+      >
+        {/* Virtualized messages area */}
+        <VirtualizedMessageList
+          messages={sessionMessages}
+          computeItemKey={(_index, msg) => msg.id}
+          renderMessage={(_index, message, prev) => (
+            <NativeMessage
+              message={normalizeCodexNativeMessage(message)}
+              previousMessage={prev ? normalizeCodexNativeMessage(prev) : null}
+              assistantLabel="Codex"
+            />
+          )}
+          footer={
+            <>
+              {session?.isLoading && (
+                <div className="px-2 @sm:px-4 py-3">
+                  <div className="mx-auto max-w-3xl min-w-0">
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span className="text-xs">Codex is thinking...</span>
+                      {elapsedSeconds !== null && elapsedSeconds > 0 && (
+                        <span className="text-xs text-muted-foreground/50">
+                          {formatElapsed(elapsedSeconds)}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            {!session?.isLoading && finalElapsedSeconds !== null && (
-              <div className="px-2 @sm:px-4 py-1.5">
-                <div className="mx-auto max-w-3xl min-w-0">
-                  <span className="text-[10px] text-muted-foreground/40">
-                    Completed in {formatElapsed(finalElapsedSeconds)}
-                  </span>
+              {!session?.isLoading && finalElapsedSeconds !== null && (
+                <div className="px-2 @sm:px-4 py-1.5">
+                  <div className="mx-auto max-w-3xl min-w-0">
+                    <span className="text-[10px] text-muted-foreground/40">
+                      Completed in {formatElapsed(finalElapsedSeconds)}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            )}
-          </>
-        }
-        scrollProps={scrollProps}
-        virtuosoRef={virtuosoRef}
-      />
+              )}
 
-      {/* Scroll to bottom button - positioned above compose bar */}
-      {!isAtBottom && (
-        <div className="flex justify-end px-4 py-1">
-          <button
-            onClick={scrollToBottom}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 shadow-sm transition-colors"
-            aria-label="Scroll to bottom of conversation"
-          >
-            <ArrowDown className="w-3.5 h-3.5" />
-            <span>Scroll down</span>
-          </button>
-        </div>
-      )}
-
-      {showPlanModeCard ? (
-        <CodexPlanModeCard
-          isSubmitting={isPlanTransitionPending}
-          onApproveAndBuild={handleApprovePlan}
-          onSwitchToBuild={handleSwitchPlanToBuild}
-          onDismiss={() => setDismissedPlanReviewMessageId(latestAssistantMessage?.id ?? null)}
+              <div className="h-32" aria-hidden="true" />
+            </>
+          }
+          scrollProps={scrollProps}
+          virtuosoRef={virtuosoRef}
         />
-      ) : null}
 
-      <CodexComposeBar
-        environmentId={environmentId}
-        containerId={containerId}
-        sessionKey={sessionKey}
-        models={models}
-        selectedMode={selectedMode}
-        selectedModel={selectedModel}
-        selectedReasoningEffort={selectedReasoningEffort}
-        slashCommands={slashCommands}
-        settingsLocked={session?.isLoading ?? false}
-        disabled={!session?.sessionId}
-        isLoading={session?.isLoading ?? false}
-        queueLength={queueLength}
-        onSend={handleSend}
-        onQueue={handleQueue}
-        onStop={handleStop}
-        onModeChange={handleModeChange}
-        onModelChange={handleModelChange}
-        onReasoningEffortChange={handleReasoningEffortChange}
-        fastModeEnabled={fastModeEnabled}
-        onFastModeChange={handleFastModeChange}
-        showAddressAll={showAddressAll}
-      />
+        {/* Scroll to bottom button - positioned above compose bar */}
+        {!isAtBottom && (
+          <div className="flex justify-end px-4 py-1">
+            <button
+              onClick={scrollToBottom}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 shadow-sm transition-colors"
+              aria-label="Scroll to bottom of conversation"
+            >
+              <ArrowDown className="w-3.5 h-3.5" />
+              <span>Scroll down</span>
+            </button>
+          </div>
+        )}
+
+        {showPlanModeCard ? (
+          <CodexPlanModeCard
+            isSubmitting={isPlanTransitionPending}
+            onApproveAndBuild={handleApprovePlan}
+            onSwitchToBuild={handleSwitchPlanToBuild}
+            onDismiss={() => setDismissedPlanReviewMessageId(latestAssistantMessage?.id ?? null)}
+          />
+        ) : null}
+      </div>
+
+      <NativeComposeDock
+        centered={centerCompose}
+        actions={
+          client ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setResumeDialogOpen(true)}
+              className="rounded-full text-muted-foreground transition-colors hover:text-foreground"
+              aria-hidden={!centerCompose}
+              tabIndex={centerCompose ? 0 : -1}
+            >
+              <History className="mr-2 h-4 w-4" />
+              Resume Session
+            </Button>
+          ) : null
+        }
+      >
+        <CodexComposeBar
+          environmentId={environmentId}
+          containerId={containerId}
+          sessionKey={sessionKey}
+          models={models}
+          selectedMode={selectedMode}
+          selectedModel={selectedModel}
+          selectedReasoningEffort={selectedReasoningEffort}
+          slashCommands={slashCommands}
+          settingsLocked={session?.isLoading ?? false}
+          disabled={!session?.sessionId}
+          isLoading={session?.isLoading ?? false}
+          queueLength={queueLength}
+          onSend={handleSend}
+          onQueue={handleQueue}
+          onStop={handleStop}
+          onModeChange={handleModeChange}
+          onModelChange={handleModelChange}
+          onReasoningEffortChange={handleReasoningEffortChange}
+          fastModeEnabled={fastModeEnabled}
+          onFastModeChange={handleFastModeChange}
+          showAddressAll={showAddressAll}
+          layout={centerCompose ? "centered" : "bottom"}
+        />
+      </NativeComposeDock>
 
       {client ? (
         <CodexResumeSessionDialog

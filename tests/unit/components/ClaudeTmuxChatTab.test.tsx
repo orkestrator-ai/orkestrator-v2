@@ -17,7 +17,6 @@ import type {
   ClaudeMessage as ClaudeMessageType,
   ClaudeModel,
 } from "@/lib/claude-client";
-import * as realClaudeMessage from "@/components/claude/ClaudeMessage";
 import * as realInteractiveTerminal from "@/components/claude/ClaudeTmuxInteractiveTerminal";
 import * as realFileMentionMenu from "@/components/chat/FileMentionMenu";
 import * as realReactVirtuoso from "react-virtuoso";
@@ -27,7 +26,6 @@ import type { Environment, FileCandidate } from "@/types";
 
 const realTmuxClientSnapshot = { ...realTmuxClient };
 const realTauriSnapshot = { ...realTauri };
-const realClaudeMessageSnapshot = { ...realClaudeMessage };
 const realInteractiveTerminalSnapshot = { ...realInteractiveTerminal };
 const realFileMentionMenuSnapshot = { ...realFileMentionMenu };
 const realReactVirtuosoSnapshot = { ...realReactVirtuoso };
@@ -86,26 +84,6 @@ const listPreviousSessionsMock = mock(async () => [
     message_count: 7,
   },
 ]);
-const claudeMessageRenderMock = mock(
-  ({
-    message,
-    previousMessage,
-  }: {
-    message: ClaudeMessageType;
-    previousMessage?: ClaudeMessageType | null;
-  }) => (
-    <div
-      data-testid="claude-message"
-      data-message-id={message.id}
-      data-previous-id={previousMessage?.id ?? ""}
-      data-part-types={message.parts.map((part) => part.type).join(",")}
-      data-tool-names={message.parts.map((part) => part.toolName ?? "").join(",")}
-      data-tool-args={JSON.stringify(message.parts.map((part) => part.toolArgs ?? null))}
-    >
-      {message.content}
-    </div>
-  ),
-);
 const interactiveTerminalRenderMock = mock(
   ({
     tabId,
@@ -166,11 +144,6 @@ mock.module("@/lib/claude-tmux-client", () => ({
     environmentId?: string,
   ) => answerPreToolUseMock(tabId, eventId, decision, reason, environmentId),
   listPreviousSessions: listPreviousSessionsMock,
-}));
-
-mock.module("@/components/claude/ClaudeMessage", () => ({
-  ...realClaudeMessageSnapshot,
-  ClaudeMessage: claudeMessageRenderMock,
 }));
 
 mock.module("@/components/claude/ClaudeTmuxInteractiveTerminal", () => ({
@@ -345,7 +318,6 @@ describe("ClaudeTmuxChatTab", () => {
   afterAll(() => {
     mock.module("@/lib/claude-tmux-client", () => realTmuxClientSnapshot);
     mock.module("@/lib/tauri", () => realTauriSnapshot);
-    mock.module("@/components/claude/ClaudeMessage", () => realClaudeMessageSnapshot);
     mock.module("@/components/claude/ClaudeTmuxInteractiveTerminal", () => realInteractiveTerminalSnapshot);
     mock.module("@/components/chat/FileMentionMenu", () => realFileMentionMenuSnapshot);
     mock.module("react-virtuoso", () => realReactVirtuosoSnapshot);
@@ -426,7 +398,6 @@ describe("ClaudeTmuxChatTab", () => {
     switchEffortMock.mockClear();
     answerPreToolUseMock.mockClear();
     listPreviousSessionsMock.mockClear();
-    claudeMessageRenderMock.mockClear();
     interactiveTerminalRenderMock.mockClear();
     capturePaneMock.mockImplementation(async () => "");
     submitMock.mockImplementation(async () => {});
@@ -1011,7 +982,7 @@ describe("ClaudeTmuxChatTab", () => {
     await waitFor(() => {
       expect(lastVirtuosoProps?.data).toHaveLength(100);
     });
-    expect(screen.getAllByTestId("claude-message")).toHaveLength(VIRTUOSO_WINDOW_SIZE);
+    expect(screen.getAllByText(/^Message \d+$/)).toHaveLength(VIRTUOSO_WINDOW_SIZE);
     expect(screen.queryByText("Message 0")).toBeNull();
     expect(screen.getByText("Message 99")).toBeTruthy();
   });
@@ -3092,13 +3063,18 @@ describe("ClaudeTmuxChatTab", () => {
       />,
     );
 
-    const renderedMessages = screen.getAllByTestId("claude-message");
+    const renderedMessages = lastVirtuosoProps?.data ?? [];
     expect(renderedMessages).toHaveLength(2);
-    expect(renderedMessages[1]!.dataset.messageId).toBe("a1");
-    expect(renderedMessages[1]!.dataset.previousId).toBe("u1");
-    expect(renderedMessages[1]!.dataset.partTypes).toBe(
-      "tool-invocation,tool-invocation,text",
-    );
+    expect(renderedMessages[1]!.id).toBe("a1");
+    expect(renderedMessages[0]!.id).toBe("u1");
+    expect(renderedMessages[1]!.parts.map((part: ClaudeMessageType["parts"][number]) => part.type)).toEqual([
+      "tool-invocation",
+      "tool-invocation",
+      "text",
+    ]);
+    expect(screen.getAllByText("Read").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Grep").length).toBeGreaterThan(0);
+    expect(screen.getByText("done")).toBeTruthy();
   });
 
   test("renders repeated task tools as one current TaskList snapshot", async () => {
@@ -3164,10 +3140,12 @@ describe("ClaudeTmuxChatTab", () => {
       />,
     );
 
-    const renderedMessages = screen.getAllByTestId("claude-message");
+    const renderedMessages = lastVirtuosoProps?.data ?? [];
     expect(renderedMessages).toHaveLength(1);
-    expect(renderedMessages[0]!.dataset.toolNames).toBe("TaskList");
-    expect(JSON.parse(renderedMessages[0]!.dataset.toolArgs ?? "[]")).toEqual([
+    expect(renderedMessages[0]!.parts.map((part: ClaudeMessageType["parts"][number]) => part.toolName)).toEqual([
+      "TaskList",
+    ]);
+    expect(renderedMessages[0]!.parts.map((part: ClaudeMessageType["parts"][number]) => part.toolArgs)).toEqual([
       {
         todos: [
           { content: "Inspect renderer", status: "completed" },
@@ -3175,6 +3153,7 @@ describe("ClaudeTmuxChatTab", () => {
         ],
       },
     ]);
+    expect(screen.getByText("Task List")).toBeTruthy();
   });
 
   test("parses Claude Code in-TUI selection prompts from a tmux pane snapshot", () => {

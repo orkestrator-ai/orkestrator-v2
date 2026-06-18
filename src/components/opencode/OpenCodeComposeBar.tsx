@@ -77,6 +77,7 @@ interface OpenCodeComposeBarProps {
   onRefreshModels?: () => void;
   /** Show the review follow-up action for review workflow tabs. */
   showAddressAll?: boolean;
+  layout?: "bottom" | "centered";
 }
 
 const MAX_LINES = 12;
@@ -102,6 +103,7 @@ export function OpenCodeComposeBar({
   onQueue,
   onRefreshModels,
   showAddressAll = false,
+  layout = "bottom",
 }: OpenCodeComposeBarProps) {
   const [isSending, setIsSending] = useState(false);
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
@@ -485,7 +487,12 @@ export function OpenCodeComposeBar({
 
   return (
     <>
-      <div className="shrink-0 border-t border-border bg-background p-3">
+      <div
+        className={cn(
+          "mx-auto w-[min(calc(100%_-_2rem),56rem)] shrink-0 rounded-2xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20",
+          layout === "bottom" ? "mb-4 mt-2" : "my-0",
+        )}
+      >
         {/* Attachments preview */}
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">
@@ -563,9 +570,9 @@ export function OpenCodeComposeBar({
 
             {/* Attachment menu popover */}
             {showAttachmentMenu && (
-              <div className="absolute bottom-full left-0 mb-1 w-56 rounded-md border border-border bg-popover p-1 shadow-md z-50">
+              <div className="absolute bottom-full left-0 z-50 mb-1 w-56 rounded-xl border border-zinc-700/70 bg-zinc-900/95 p-1 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm">
                 <button
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+                  className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-zinc-800/70 hover:text-foreground"
                   onClick={() => {
                     setShowAttachmentMenu(false);
                   }}
@@ -574,7 +581,7 @@ export function OpenCodeComposeBar({
                   Attach file from workspace
                 </button>
                 <button
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-muted-foreground cursor-default"
+                  className="flex w-full cursor-default items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted-foreground"
                   disabled
                 >
                   <ImageIcon className="w-4 h-4" />

@@ -3,12 +3,19 @@ import { Check, Copy } from "lucide-react";
 import { writeText } from "@/lib/native/clipboard";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 interface MessageCopyButtonProps {
   content: string;
+  wrapperClassName?: string;
+  buttonClassName?: string;
 }
 
-export function MessageCopyButton({ content }: MessageCopyButtonProps) {
+export function MessageCopyButton({
+  content,
+  wrapperClassName,
+  buttonClassName,
+}: MessageCopyButtonProps) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -29,12 +36,12 @@ export function MessageCopyButton({ content }: MessageCopyButtonProps) {
   }, [content]);
 
   return (
-    <div className="mt-1 flex justify-end pr-3">
+    <div className={cn("mt-1 flex justify-end pr-3", wrapperClassName)}>
       <Button
         type="button"
         variant="ghost"
         size="icon-sm"
-        className="h-6 w-6 p-0 text-muted-foreground/70 hover:text-foreground"
+        className={cn("h-6 w-6 p-0 text-muted-foreground/70 hover:text-foreground", buttonClassName)}
         onClick={handleCopy}
         aria-label={copied ? "Copied text" : "Copy text"}
         title={copied ? "Copied" : "Copy"}

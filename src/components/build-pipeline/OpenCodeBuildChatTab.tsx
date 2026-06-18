@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { NativeMessage } from "@/components/chat/NativeMessage";
+import { normalizeOpenCodeNativeMessage } from "@/lib/chat/native-message-adapters";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useConfigStore, useEnvironmentStore } from "@/stores";
 import type { BuildPhase, PipelineSession } from "@/stores/buildPipelineStore";
@@ -1165,8 +1166,12 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
                     .map((message: OpenCodeMessage, index: number, filteredMessages: OpenCodeMessage[]) => (
                       <NativeMessage
                         key={message.id}
-                        message={message}
-                        previousMessage={index > 0 ? filteredMessages[index - 1] ?? null : null}
+                        message={normalizeOpenCodeNativeMessage(message)}
+                        previousMessage={
+                          index > 0
+                            ? normalizeOpenCodeNativeMessage(filteredMessages[index - 1]!)
+                            : null
+                        }
                         assistantLabel="OpenCode"
                       />
                     ))}

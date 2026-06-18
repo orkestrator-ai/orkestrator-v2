@@ -8,7 +8,7 @@ import type { TerminalAppearance } from "@/types";
 export const ROOT_TERMINAL_USER = "orkroot";
 
 /** Default terminal appearance values - shared across all components */
-export const TERMINAL_BACKGROUND_COLOR = "#000000";
+export const TERMINAL_BACKGROUND_COLOR = "#141414";
 
 /** Default terminal appearance values - shared across all components */
 export const DEFAULT_TERMINAL_APPEARANCE: TerminalAppearance = {

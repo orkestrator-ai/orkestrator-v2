@@ -10,7 +10,7 @@ import {
 
 export const TOOL_STATE_COLORS = {
   success: "text-green-600",
-  failure: "text-red-600",
+  failure: "text-red-400",
   pending: "text-yellow-600 animate-pulse",
 } as const;
 
@@ -43,7 +43,7 @@ export function TodoToolPart({
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
       <CollapsibleTrigger
         className={cn(
-          "flex h-9 w-full items-center gap-2 rounded-md bg-muted/50 px-3 text-xs leading-none text-muted-foreground transition-colors hover:bg-muted/70",
+          "flex h-8 w-full items-center gap-2 rounded-md px-2 text-xs leading-none text-muted-foreground transition-colors hover:text-foreground",
           hasExpandableContent ? "cursor-pointer" : "cursor-default",
         )}
         disabled={!hasExpandableContent}
@@ -74,7 +74,7 @@ export function TodoToolPart({
 
       {hasExpandableContent && (
         <CollapsibleContent className="mt-1">
-          <div className="overflow-hidden rounded-md border border-border/50 bg-muted/30">
+          <div className="overflow-hidden border-l border-border/40 pl-3">
             {totalCount > 0 && (
               <div className="space-y-1.5 px-3 py-2">
                 {todos.map((todo, index) => (
@@ -134,7 +134,7 @@ export function TodoToolPart({
             )}
 
             {toolError && (
-              <div className="border-t border-destructive/20 bg-destructive/5 px-3 py-2">
+              <div className="border-t border-destructive/20 px-3 py-2">
                 <div className="flex items-start gap-2">
                   <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
                   <pre className="whitespace-pre-wrap break-all font-mono text-xs text-destructive/80">

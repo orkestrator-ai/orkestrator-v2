@@ -115,7 +115,7 @@ export function SortableProjectGroup({
       <div
         ref={setNodeRef}
         style={style}
-        className={cn("border-b border-white/10", isDragging && "opacity-50 z-50")}
+        className={cn("px-2 py-0.5", isDragging && "opacity-50 z-50")}
       >
         <Collapsible open={!isCollapsed} onOpenChange={onToggleCollapse}>
           {/* Project Header with Context Menu */}
@@ -124,7 +124,7 @@ export function SortableProjectGroup({
               <div
                 {...attributes}
                 {...listeners}
-                className="relative flex items-center group/project cursor-grab active:cursor-grabbing pl-1 pr-2"
+                className="relative flex items-center group/project cursor-grab rounded-md active:cursor-grabbing"
                 onMouseEnter={() => setIsHovered(true)}
                 onMouseLeave={() => setIsHovered(false)}
               >
@@ -132,16 +132,16 @@ export function SortableProjectGroup({
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <button
-                        className="flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent/50 transition-colors"
+                        className="flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-zinc-800/80"
                         onClick={(e) => {
                           e.stopPropagation();
                           onSelectProject();
                         }}
                       >
-                        <FolderGit2 className="h-4 w-4 shrink-0" />
+                        <FolderGit2 className="h-4 w-4 shrink-0 text-zinc-500" />
                         <span className="truncate font-medium">{project.name}</span>
                         {environments.length > 0 && (
-                          <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] bg-zinc-800 text-zinc-300">
+                          <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-zinc-800 px-1 text-[10px] text-zinc-300">
                             {environments.length}
                           </span>
                         )}
@@ -179,7 +179,7 @@ export function SortableProjectGroup({
                 {/* Chevron arrow - far right */}
                 <CollapsibleTrigger asChild>
                   <button
-                    className="shrink-0 p-1 rounded hover:bg-accent/50 transition-colors"
+                    className="shrink-0 rounded p-1 transition-colors hover:bg-zinc-800/80"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <ChevronRight
@@ -217,7 +217,7 @@ export function SortableProjectGroup({
 
           {/* Environments List */}
           <CollapsibleContent>
-            <div>
+            <div className="space-y-0.5 pb-1">
               {environments.length > 0 && (
                 <SortableContext
                   items={environments.map((e) => e.id)}

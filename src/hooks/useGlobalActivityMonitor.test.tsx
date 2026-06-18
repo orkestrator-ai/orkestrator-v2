@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@/lib/native/backend";
+import { listen } from "@/lib/native/events";
 import { useGlobalActivityMonitor } from "./useGlobalActivityMonitor";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
 import { createClaudeSessionKey, useClaudeStore } from "@/stores/claudeStore";

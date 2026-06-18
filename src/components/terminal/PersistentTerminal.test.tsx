@@ -6,10 +6,10 @@ import * as realSessionStore from "@/stores/sessionStore";
 // IMPORTANT: Do NOT mock @/stores (barrel) or @/lib/tauri here — doing so
 // pollutes the Bun module cache and breaks other test files that share
 // those modules.  Instead we use the real stores with controlled state and
-// let @/lib/tauri fall through to the global @tauri-apps/api/core mock
+// let @/lib/tauri fall through to the global @/lib/native/backend mock
 // registered in tests/setup.ts.
 
-// @tauri-apps/plugin-clipboard-manager is centrally mocked in tests/setup.ts.
+// @/lib/native/clipboard is centrally mocked in tests/setup.ts.
 // @/hooks/useClipboardImagePaste is NOT mocked — it loads the real module
 // whose clipboard dependencies are satisfied by the central mock above.
 
@@ -40,7 +40,7 @@ mock.module("@/hooks/useAgentState", () => ({
 }));
 
 // @/lib/terminal-paste is NOT mocked — let the real module load.
-// Its dependencies (@tauri-apps/plugin-clipboard-manager and
+// Its dependencies (@/lib/native/clipboard and
 // @/hooks/useClipboardImagePaste) are centrally mocked in tests/setup.ts.
 
 // --- Stores that need custom mock behavior (unique paths, no conflicts) ---

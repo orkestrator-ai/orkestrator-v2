@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { writeText } from "@/lib/native/clipboard";
 import { useTerminal } from "@/hooks/useTerminal";
 import { useAgentState } from "@/hooks/useAgentState";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";

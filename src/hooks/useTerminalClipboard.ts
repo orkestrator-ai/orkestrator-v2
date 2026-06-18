@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Terminal } from "@xterm/xterm";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { writeText } from "@/lib/native/clipboard";
 import { processClipboardPaste } from "./useClipboardImagePaste";
 
 export interface UseTerminalClipboardOptions {

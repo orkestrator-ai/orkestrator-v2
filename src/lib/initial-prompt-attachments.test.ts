@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/native/backend";
 
 const invokeMock = invoke as ReturnType<typeof mock>;
 

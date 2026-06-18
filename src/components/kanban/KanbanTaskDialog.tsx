@@ -26,8 +26,8 @@ import type { KanbanTask, KanbanStatus } from "@/stores/kanbanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
-import { readImage } from "@tauri-apps/plugin-clipboard-manager";
-import { getKanbanImageData, detectPr, detectPrLocal, openInBrowser } from "@/lib/tauri";
+import { readImage } from "@/lib/native/clipboard";
+import { getKanbanImageData, detectPr, detectPrLocal, openInBrowser } from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
 
@@ -231,14 +231,14 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
   }, []);
 
   // Handle paste events for image attachment
-  // Uses Tauri readImage() directly (like the compose bars) so native screenshots
+  // Uses Electron readImage() directly (like the compose bars) so native screenshots
   // from the system clipboard are reliably detected.
   const handlePaste = useCallback(async (e: ClipboardEvent) => {
     // Only handle if focus is within this dialog
     const activeEl = document.activeElement;
     if (!activeEl || !dialogContentRef.current?.contains(activeEl)) return;
 
-    // No early-return for text/plain clipboard — in Tauri's webview, native
+    // No early-return for text/plain clipboard — in Electron's webview, native
     // screenshots may report text/plain without any image/* type, so we must
     // always attempt readImage(). This matches the compose bar pattern.
     try {

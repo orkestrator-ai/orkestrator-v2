@@ -10,7 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FolderOpen, Loader2 } from "lucide-react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog } from "@/lib/native/dialog";
 import { getGitRemoteUrl } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 

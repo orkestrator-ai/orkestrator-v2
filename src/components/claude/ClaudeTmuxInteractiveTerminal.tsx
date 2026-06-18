@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@/lib/native/events";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
 import {
   createInteractiveTerminal,

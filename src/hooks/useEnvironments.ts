@@ -1,15 +1,15 @@
-// Hook for managing environment operations with Tauri backend
+// Hook for managing environment operations with Electron backend
 import { useCallback, useEffect } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@/lib/native/events";
 import { toast } from "sonner";
 import { useConfigStore, useEnvironmentStore, useErrorDialogStore } from "@/stores";
 import { useSessionStore } from "@/stores/sessionStore";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 import type { EnvironmentType, NetworkAccessMode, PortMapping, PrState } from "@/types";
 
 /**
  * Extract error message from various error types.
- * Tauri errors can come as plain strings, Error objects, or objects with error info.
+ * Electron errors can come as plain strings, Error objects, or objects with error info.
  */
 function getErrorMessage(err: unknown, fallback: string): string {
   if (typeof err === "string") {
@@ -104,7 +104,7 @@ export function useEnvironments(
           console.log(
             `[useEnvironments] Branch changed (${currentEnv.branch} -> ${new_branch}), clearing stale PR state`
           );
-          tauri.clearEnvironmentPr(environment_id).catch((err) => {
+          backend.clearEnvironmentPr(environment_id).catch((err) => {
             console.warn("[useEnvironments] Failed to clear PR state after branch rename:", err);
           });
           setPRInStore(environment_id, null, null, null);
@@ -132,7 +132,7 @@ export function useEnvironments(
       setLoading(true);
       setError(null);
       try {
-        const envs = await tauri.getEnvironments(pid);
+        const envs = await backend.getEnvironments(pid);
         // Merge environments for this project (uses current store state, not stale closure)
         mergeEnvironmentsForProject(pid, envs);
       } catch (err) {
@@ -149,7 +149,7 @@ export function useEnvironments(
       setLoading(true);
       setError(null);
       try {
-        const environment = await tauri.createEnvironment(pid, name, networkAccessMode, initialPrompt, portMappings, environmentType);
+        const environment = await backend.createEnvironment(pid, name, networkAccessMode, initialPrompt, portMappings, environmentType);
         addEnvironmentToStore(environment);
         useConfigStore.getState().setRepositoryLastEnvironmentType(pid, environment.environmentType);
         toast.success("Environment created");
@@ -180,7 +180,7 @@ export function useEnvironments(
         // Delete all sessions for this environment first (cleans up buffer files too)
         await deleteSessionsByEnvironment(environmentId);
 
-        await tauri.deleteEnvironment(environmentId);
+        await backend.deleteEnvironment(environmentId);
         removeEnvironmentFromStore(environmentId);
         toast.success("Environment deleted");
       } catch (err) {
@@ -238,9 +238,9 @@ export function useEnvironments(
       try {
         console.log("[useEnvironments] Setting status to creating...");
         updateStatusInStore(environmentId, "creating");
-        console.log("[useEnvironments] Calling tauri.startEnvironment...");
-        const result = await tauri.startEnvironment(environmentId);
-        console.log("[useEnvironments] tauri.startEnvironment completed, refreshing environment...", { setupCommands: result.setupCommands });
+        console.log("[useEnvironments] Calling backend.startEnvironment...");
+        const result = await backend.startEnvironment(environmentId);
+        console.log("[useEnvironments] backend.startEnvironment completed, refreshing environment...", { setupCommands: result.setupCommands });
 
         // Store real setup commands BEFORE updating the environment store
         // (which sets worktreePath and triggers isLocalEnvironmentReady).
@@ -249,7 +249,7 @@ export function useEnvironments(
         }
 
         // Refresh the full environment data (including containerId / worktreePath)
-        const updatedEnv = await tauri.getEnvironment(environmentId);
+        const updatedEnv = await backend.getEnvironment(environmentId);
         if (updatedEnv) {
           console.log("[useEnvironments] Got updated environment:", updatedEnv);
           if (updatedEnv.environmentType === "local" && !updatedEnv.worktreePath) {
@@ -301,9 +301,9 @@ export function useEnvironments(
         // Immediately set status to stopping for user feedback
         console.log("[useEnvironments] Setting status to stopping...");
         updateStatusInStore(environmentId, "stopping");
-        console.log("[useEnvironments] Calling tauri.stopEnvironment...");
-        await tauri.stopEnvironment(environmentId);
-        console.log("[useEnvironments] tauri.stopEnvironment completed, updating status...");
+        console.log("[useEnvironments] Calling backend.stopEnvironment...");
+        await backend.stopEnvironment(environmentId);
+        console.log("[useEnvironments] backend.stopEnvironment completed, updating status...");
         updateStatusInStore(environmentId, "stopped");
         console.log("[useEnvironments] Status updated to stopped");
 
@@ -354,7 +354,7 @@ export function useEnvironments(
   const syncEnvironmentStatus = useCallback(
     async (environmentId: string) => {
       try {
-        const updatedEnv = await tauri.syncEnvironmentStatus(environmentId);
+        const updatedEnv = await backend.syncEnvironmentStatus(environmentId);
         updateEnvironmentInStore(environmentId, updatedEnv);
         return updatedEnv;
       } catch (err) {
@@ -371,7 +371,7 @@ export function useEnvironments(
       reorderEnvironmentsInStore(pid, environmentIds);
       try {
         // Persist to backend
-        const reorderedEnvs = await tauri.reorderEnvironments(pid, environmentIds);
+        const reorderedEnvs = await backend.reorderEnvironments(pid, environmentIds);
         // Update with the server response (uses current store state, not stale closure)
         mergeEnvironmentsForProject(pid, reorderedEnvs);
       } catch (err) {
@@ -397,7 +397,7 @@ export function useEnvironments(
   const updatePortMappings = useCallback(
     async (environmentId: string, portMappings: PortMapping[]) => {
       try {
-        const updated = await tauri.updatePortMappings(environmentId, portMappings);
+        const updated = await backend.updatePortMappings(environmentId, portMappings);
         updateEnvironmentInStore(environmentId, updated);
         return updated;
       } catch (err) {
@@ -422,7 +422,7 @@ export function useEnvironments(
       try {
         // Stop the environment
         updateStatusInStore(environmentId, "stopping");
-        await tauri.stopEnvironment(environmentId);
+        await backend.stopEnvironment(environmentId);
 
         // Disconnect all sessions since container is stopped
         await disconnectEnvironmentSessions(environmentId);

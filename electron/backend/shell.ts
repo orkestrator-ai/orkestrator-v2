@@ -1,0 +1,119 @@
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+
+export type ExecResult = {
+  stdout: string;
+  stderr: string;
+};
+
+export async function runCommand(
+  command: string,
+  args: string[] = [],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+): Promise<ExecResult> {
+  try {
+    const { stdout, stderr } = await execFileAsync(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      timeout: options.timeoutMs ?? 60_000,
+      maxBuffer: 50 * 1024 * 1024,
+    });
+    return { stdout: stdout.toString(), stderr: stderr.toString() };
+  } catch (error) {
+    if (error && typeof error === "object" && "stdout" in error && "stderr" in error) {
+      const withOutput = error as { message?: string; stdout?: Buffer | string; stderr?: Buffer | string };
+      const stderr = withOutput.stderr?.toString() ?? "";
+      const stdout = withOutput.stdout?.toString() ?? "";
+      throw new Error((stderr || stdout || withOutput.message || "Command failed").trim());
+    }
+    throw error;
+  }
+}
+
+export function spawnCommand(
+  command: string,
+  args: string[] = [],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): ChildProcessWithoutNullStreams {
+  return spawn(command, args, {
+    cwd: options.cwd,
+    env: options.env,
+    stdio: "pipe",
+  });
+}
+
+export async function commandExists(command: string): Promise<boolean> {
+  const lookupCommand = process.platform === "win32" ? "where" : "which";
+  try {
+    await runCommand(lookupCommand, [command], { timeoutMs: 5_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function homePath(...segments: string[]): string {
+  return path.join(os.homedir(), ...segments);
+}
+
+export async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function readFileBase64(filePath: string): Promise<string> {
+  return (await fs.readFile(filePath)).toString("base64");
+}
+
+export async function writeFileBase64(rootPath: string, relativePath: string, base64Data: string): Promise<string> {
+  if (path.isAbsolute(relativePath) || relativePath.split(path.sep).includes("..")) {
+    throw new Error(`Invalid relative file path: ${relativePath}`);
+  }
+
+  const fullPath = path.join(rootPath, relativePath);
+  await fs.mkdir(path.dirname(fullPath), { recursive: true });
+  await fs.writeFile(fullPath, Buffer.from(base64Data, "base64"));
+  return fullPath;
+}
+
+export function inferLanguage(filePath: string): string {
+  const extension = path.extname(filePath).slice(1).toLowerCase();
+  const aliases: Record<string, string> = {
+    js: "javascript",
+    jsx: "javascript",
+    ts: "typescript",
+    tsx: "typescript",
+    rs: "rust",
+    py: "python",
+    rb: "ruby",
+    sh: "shell",
+    zsh: "shell",
+    bash: "shell",
+    md: "markdown",
+    yml: "yaml",
+    yaml: "yaml",
+  };
+  return aliases[extension] ?? extension;
+}
+
+export async function readTextFile(rootPath: string, relativePath: string): Promise<{ path: string; content: string; language: string }> {
+  if (path.isAbsolute(relativePath) || relativePath.split(path.sep).includes("..")) {
+    throw new Error(`Invalid relative file path: ${relativePath}`);
+  }
+
+  const fullPath = path.join(rootPath, relativePath);
+  return {
+    path: relativePath,
+    content: await fs.readFile(fullPath, "utf8"),
+    language: inferLanguage(relativePath),
+  };
+}

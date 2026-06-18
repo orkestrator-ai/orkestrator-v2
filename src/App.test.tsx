@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "@/lib/native/events";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
@@ -31,7 +31,7 @@ import * as realHooks from "@/hooks";
 import * as realTauri from "@/lib/tauri";
 import * as realSonner from "sonner";
 import * as realLucideReact from "lucide-react";
-import * as realProcess from "@tauri-apps/plugin-process";
+import * as realProcess from "@/lib/native/process";
 
 const realLayoutSnapshot = { ...realLayout };
 const realTooltipSnapshot = { ...realTooltip };
@@ -218,7 +218,7 @@ mock.module("lucide-react", () => ({
   Loader2: (props: React.SVGProps<SVGSVGElement>) => <svg {...props} />,
 }));
 
-mock.module("@tauri-apps/plugin-process", () => ({
+mock.module("@/lib/native/process", () => ({
   exit: mockExit,
 }));
 
@@ -370,7 +370,7 @@ afterAll(() => {
   mock.module("@/lib/tauri", () => realTauriSnapshot);
   mock.module("sonner", () => realSonnerSnapshot);
   mock.module("lucide-react", () => realLucideReactSnapshot);
-  mock.module("@tauri-apps/plugin-process", () => realProcessSnapshot);
+  mock.module("@/lib/native/process", () => realProcessSnapshot);
 });
 
 describe("App background processing mounts", () => {

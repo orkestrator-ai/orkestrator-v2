@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { invoke } from "@tauri-apps/api/core";
-import { getSetupCommands, setEnvironmentSetupComplete } from "./tauri";
+import { invoke } from "@/lib/native/backend";
+import { getSetupCommands, setEnvironmentSetupComplete } from "./backend";
 
 const invokeMock = invoke as unknown as {
   mockReset: () => void;
@@ -8,13 +8,13 @@ const invokeMock = invoke as unknown as {
   mock: { calls: unknown[][] };
 };
 
-describe("tauri setup wrappers", () => {
+describe("backend setup wrappers", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockResolvedValue(undefined);
   });
 
-  test("calls the setup-complete Tauri command with the expected payload", async () => {
+  test("calls the setup-complete Electron command with the expected payload", async () => {
     await setEnvironmentSetupComplete("env-1", true);
 
     expect(invokeMock.mock.calls).toEqual([
@@ -22,7 +22,7 @@ describe("tauri setup wrappers", () => {
     ]);
   });
 
-  test("calls the get-setup-commands Tauri command with the environment id", async () => {
+  test("calls the get-setup-commands Electron command with the environment id", async () => {
     invokeMock.mockResolvedValue(["bun install"]);
 
     const commands = await getSetupCommands("env-1");

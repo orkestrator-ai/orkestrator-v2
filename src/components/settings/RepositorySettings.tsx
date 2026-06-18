@@ -23,7 +23,7 @@ import type { CodexReasoningEffort } from "@/lib/codex-client";
 import { CODEX_MODELS } from "@/lib/codex-client";
 import { Loader2, Network, Plus, Trash2, FolderOpen, ExternalLink, FileText, Bot, Settings2, GitBranch } from "lucide-react";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog } from "@/lib/native/dialog";
 import type { Project, RepositoryConfig, PortMapping, PortProtocol, DefaultAgent, AgentStyle, ClaudeNativeBackend } from "@/types";
 
 interface RepositorySettingsProps {

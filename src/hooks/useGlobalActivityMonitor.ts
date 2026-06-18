@@ -10,7 +10,7 @@
  * Native mode (Claude/OpenCode/Codex): derives activity from session stores
  */
 import { useEffect, useRef } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@/lib/native/events";
 import * as tauri from "@/lib/tauri";
 import { useEnvironmentStore } from "@/stores";
 import {

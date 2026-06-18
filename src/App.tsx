@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { exit } from "@tauri-apps/plugin-process";
+import { listen } from "@/lib/native/events";
+import { exit } from "@/lib/native/process";
 import { toast } from "sonner";
 import { AppShell } from "@/components/layout";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -27,7 +27,7 @@ import { getBackgroundProcessingEnvironments } from "@/lib/background-pipelines"
 import { cn, getEnvironmentIdFromSessionKey } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
-import { checkDocker, checkClaudeCli, checkClaudeConfig, checkCodexCli, checkOpencodeCli, checkGithubCli, getAvailableAiCli, getConfig, syncAllEnvironmentsWithDocker } from "@/lib/tauri";
+import { checkDocker, checkClaudeCli, checkClaudeConfig, checkCodexCli, checkOpencodeCli, checkGithubCli, getAvailableAiCli, getConfig, syncAllEnvironmentsWithDocker } from "@/lib/backend";
 import { usePrMonitorService } from "@/hooks/usePrMonitorService";
 import { useGlobalActivityMonitor } from "@/hooks/useGlobalActivityMonitor";
 import { useEnvironments } from "@/hooks";
@@ -362,7 +362,7 @@ function App() {
     };
   }, []);
 
-  // Listen for menu zoom events from Tauri backend
+  // Listen for menu zoom events from Electron backend
   useEffect(() => {
     const unlisten = listen<string>("menu-zoom", (event) => {
       switch (event.payload) {

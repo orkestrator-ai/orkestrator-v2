@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import Editor, { type OnMount, type OnChange, type BeforeMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { cn } from "@/lib/utils";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 import { Loader2, AlertCircle, FileCode, Image as ImageIcon } from "lucide-react";
 import { toast } from "sonner";
 import { useConfigStore, useFileDirtyStore } from "@/stores";
@@ -147,9 +147,9 @@ export function FileViewerTab({
             const fullPath = filePath.startsWith("/")
               ? filePath
               : `${worktreePath}/${filePath}`;
-            base64Content = await tauri.readFileBase64(fullPath);
+            base64Content = await backend.readFileBase64(fullPath);
           } else if (containerId) {
-            base64Content = await tauri.readContainerFileBase64(containerId, filePath);
+            base64Content = await backend.readContainerFileBase64(containerId, filePath);
           } else {
             throw new Error("No container ID or worktree path available for image viewing");
           }
@@ -158,11 +158,11 @@ export function FileViewerTab({
           }
         } else {
           // Load text file - use appropriate command based on environment type
-          let fileContent: tauri.FileContent;
+          let fileContent: backend.FileContent;
           if (isLocalEnvironment && worktreePath) {
-            fileContent = await tauri.readLocalFile(worktreePath, filePath);
+            fileContent = await backend.readLocalFile(worktreePath, filePath);
           } else if (containerId) {
-            fileContent = await tauri.readContainerFile(containerId, filePath);
+            fileContent = await backend.readContainerFile(containerId, filePath);
           } else {
             throw new Error("No container ID or worktree path available");
           }
@@ -216,7 +216,7 @@ export function FileViewerTab({
 
     setIsSaving(true);
     try {
-      // Convert content to base64 for Tauri API (handles UTF-8)
+      // Convert content to base64 for Electron API (handles UTF-8)
       // Process in chunks to avoid stack overflow with large files
       const encoder = new TextEncoder();
       const bytes = encoder.encode(contentToSave);
@@ -230,9 +230,9 @@ export function FileViewerTab({
 
       // Save to appropriate target based on environment type
       if (isLocalEnvironment && worktreePath) {
-        await tauri.writeLocalFile(worktreePath, filePath, base64Data);
+        await backend.writeLocalFile(worktreePath, filePath, base64Data);
       } else if (containerId) {
-        await tauri.writeContainerFile(containerId, filePath, base64Data);
+        await backend.writeContainerFile(containerId, filePath, base64Data);
       }
 
       // Update dirty state - file is now saved

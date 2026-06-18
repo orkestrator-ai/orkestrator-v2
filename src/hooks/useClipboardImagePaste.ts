@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useRef } from "react";
-import { readImage, readText } from "@tauri-apps/plugin-clipboard-manager";
+import { readImage, readText } from "@/lib/native/clipboard";
 import { writeContainerFile, writeLocalFile } from "@/lib/tauri";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
 

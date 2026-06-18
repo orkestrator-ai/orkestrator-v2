@@ -2,8 +2,8 @@ import { useState, useRef, useEffect, useCallback, KeyboardEvent } from "react";
 import { X, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { readImage } from "@tauri-apps/plugin-clipboard-manager";
-import { writeContainerFile, writeLocalFile } from "@/lib/tauri";
+import { readImage } from "@/lib/native/clipboard";
+import { writeContainerFile, writeLocalFile } from "@/lib/backend";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
 import { toast } from "sonner";
 import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
@@ -82,7 +82,7 @@ export function ComposeBar({
     // Only handle paste if THIS compose bar's textarea has focus
     if (document.activeElement !== textareaRef.current) return;
 
-    // Try to get image from clipboard via Tauri
+    // Try to get image from clipboard via Electron
     try {
       const image = await readImage();
       const rgba = await image.rgba();

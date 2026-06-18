@@ -1,6 +1,6 @@
 import { describe, test, expect, mock, beforeEach } from "bun:test";
 
-// @tauri-apps/plugin-clipboard-manager is centrally mocked in tests/setup.ts.
+// @/lib/native/clipboard is centrally mocked in tests/setup.ts.
 // Import the shared mock function for readText.
 import { mockReadText } from "../../mocks/clipboard";
 

@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, promises as fs } from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -95,7 +96,13 @@ function createEnvironment(overrides: Partial<Environment> = {}): Environment {
   };
 }
 
-function createContext(environmentOrEnvironments: Environment | Environment[]): {
+function createContext(
+  environmentOrEnvironments: Environment | Environment[],
+  options: {
+    project?: { id: string; name: string; gitUrl: string; localPath: string | null; addedAt: string; order: number };
+    repositoryConfig?: { defaultBranch: string; prBaseBranch: string };
+  } = {},
+): {
   context: CommandContext;
   updates: Array<Record<string, unknown>>;
   emitted: Array<{ event: string; payload: unknown }>;
@@ -150,6 +157,18 @@ function createContext(environmentOrEnvironments: Environment | Environment[]): 
         Object.assign(environment, update);
         return environment;
       }),
+      getProject: mock(async (projectId: string) => {
+        if (options.project) return options.project.id === projectId ? options.project : null;
+        return {
+          id: "project-1",
+          name: "Project",
+          gitUrl: "https://github.com/acme/project.git",
+          localPath: null,
+          addedAt: new Date(0).toISOString(),
+          order: 0,
+        };
+      }),
+      getRepositoryConfig: mock(async () => options.repositoryConfig ?? { defaultBranch: "main", prBaseBranch: "main" }),
     },
   } as unknown as CommandContext;
 
@@ -753,6 +772,142 @@ printf '%s\\n' '{}' > "$out"
     await expect(commands.get("get_environment_status")?.({ environmentId: environment.id }, context)).resolves.toBe("running");
     await expect(commands.get("get_environments")?.({ projectId: environment.projectId }, context)).resolves.toEqual([environment]);
     expect(updates).toHaveLength(0);
+  });
+
+  test("creates local worktrees from the fetched remote base branch", async () => {
+    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    const updater = await createTempDir("ork-electron-remote-updater-");
+    await runGit(updater, ["clone", remote, "."]);
+    await runGit(updater, ["checkout", "main"]);
+    await fs.writeFile(path.join(updater, "tracked.txt"), "remote\n");
+    await runGit(updater, ["add", "tracked.txt"]);
+    await runGit(updater, ["commit", "-m", "remote update"]);
+    await runGit(updater, ["push", "origin", "main"]);
+
+    const environment = createEnvironment({
+      status: "stopped",
+      worktreePath: undefined,
+      branch: "feature/remote-base",
+      environmentType: "local",
+    });
+    const projectName = `Remote Base ${randomUUID().slice(0, 8)}`;
+    const { context } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: projectName,
+        gitUrl: remote,
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: { defaultBranch: "main", prBaseBranch: "main" },
+    });
+    const commands = createCommandRegistry();
+
+    try {
+      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual({ setupCommands: [] });
+
+      expect(environment.worktreePath).toBeDefined();
+      expect(environment.branch).toBe("feature-remote-base");
+      expect(await fs.readFile(path.join(environment.worktreePath!, "tracked.txt"), "utf8")).toBe("remote\n");
+    } finally {
+      if (environment.worktreePath) await fs.rm(environment.worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("creates local worktrees from a configured remote default branch", async () => {
+    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    await runGit(worktree, ["checkout", "-b", "develop"]);
+    await fs.writeFile(path.join(worktree, "tracked.txt"), "develop\n");
+    await runGit(worktree, ["add", "tracked.txt"]);
+    await runGit(worktree, ["commit", "-m", "develop base"]);
+    await runGit(worktree, ["push", "-u", "origin", "develop"]);
+
+    const environment = createEnvironment({
+      status: "stopped",
+      worktreePath: undefined,
+      branch: "feature/custom-base",
+      environmentType: "local",
+    });
+    const projectName = `Custom Base ${randomUUID().slice(0, 8)}`;
+    const { context } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: projectName,
+        gitUrl: remote,
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: { defaultBranch: "develop", prBaseBranch: "develop" },
+    });
+    const commands = createCommandRegistry();
+
+    try {
+      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual({ setupCommands: [] });
+
+      expect(environment.worktreePath).toBeDefined();
+      expect(environment.branch).toBe("feature-custom-base");
+      expect(await fs.readFile(path.join(environment.worktreePath!, "tracked.txt"), "utf8")).toBe("develop\n");
+    } finally {
+      if (environment.worktreePath) await fs.rm(environment.worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("marks local environment errored when the remote base branch is missing", async () => {
+    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    const environment = createEnvironment({
+      status: "stopped",
+      worktreePath: undefined,
+      branch: "feature/missing-base",
+      environmentType: "local",
+    });
+    const { context, updates } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: `Missing Base ${randomUUID().slice(0, 8)}`,
+        gitUrl: remote,
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: { defaultBranch: "missing-base", prBaseBranch: "missing-base" },
+    });
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).rejects.toThrow();
+
+    expect(environment.status).toBe("error");
+    expect(environment.worktreePath).toBeUndefined();
+    expect(updates.map((update) => update.status)).toEqual(["creating", "error"]);
+  });
+
+  test("marks local environment errored when the project repository has no origin remote", async () => {
+    const repo = await createGitRepoOnBranch("main");
+    const environment = createEnvironment({
+      status: "stopped",
+      worktreePath: undefined,
+      branch: "feature/no-origin",
+      environmentType: "local",
+    });
+    const { context, updates } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: `No Origin ${randomUUID().slice(0, 8)}`,
+        gitUrl: "",
+        localPath: repo,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: { defaultBranch: "main", prBaseBranch: "main" },
+    });
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).rejects.toThrow();
+
+    expect(environment.status).toBe("error");
+    expect(environment.worktreePath).toBeUndefined();
+    expect(updates.map((update) => update.status)).toEqual(["creating", "error"]);
   });
 
   test("matches short and full container IDs before removing orphaned Docker containers", async () => {

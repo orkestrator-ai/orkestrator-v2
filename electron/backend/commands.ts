@@ -398,14 +398,34 @@ function terminalEnv(): NodeJS.ProcessEnv {
 function ensureNodePtySpawnHelperExecutable(): void {
   if (process.platform !== "darwin") return;
 
-  const packageJsonPath = nodeRequire.resolve("node-pty/package.json");
-  const helperPath = path.join(path.dirname(packageJsonPath), "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper");
-  if (!existsSync(helperPath)) return;
+  let packageRoot: string;
+  try {
+    packageRoot = path.dirname(nodeRequire.resolve("node-pty/package.json"));
+  } catch {
+    return;
+  }
 
-  const stat = statSync(helperPath);
-  if ((stat.mode & 0o111) !== 0) return;
+  // When packaged, node-pty lives inside app.asar but its native binaries are
+  // unpacked to app.asar.unpacked (see asarUnpack in package.json). The asar
+  // path is a read-only virtual file, so chmod must target the unpacked copy —
+  // this also matches the path node-pty itself spawns (it does the same swap).
+  packageRoot = packageRoot.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
 
-  chmodSync(helperPath, stat.mode | 0o755);
+  const candidates = [
+    path.join(packageRoot, "build", "Release", "spawn-helper"),
+    path.join(packageRoot, "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper"),
+  ];
+
+  for (const helperPath of candidates) {
+    try {
+      if (!existsSync(helperPath)) continue;
+      const stat = statSync(helperPath);
+      if ((stat.mode & 0o111) !== 0) continue;
+      chmodSync(helperPath, stat.mode | 0o755);
+    } catch {
+      // Best-effort: never let a chmod failure block terminal startup.
+    }
+  }
 }
 
 function resolveLocalShellPath(): string {
@@ -688,7 +708,7 @@ async function startLocalServer(
   const port = await allocateLocalPort();
   let command = "";
   let cwd = environment.worktreePath;
-  const env = { ...process.env, PORT: String(port), HOSTNAME: "127.0.0.1", CWD: environment.worktreePath };
+  const env: NodeJS.ProcessEnv = { ...process.env, PORT: String(port), HOSTNAME: "127.0.0.1", CWD: environment.worktreePath };
 
   if (kind === "opencode") {
     command = "opencode";
@@ -698,6 +718,9 @@ async function startLocalServer(
   } else {
     command = "node";
     cwd = getBridgePath(context, "codex-bridge");
+    // Point the bundled codex-sdk at our shipped codex binary so it does not
+    // depend on a system install / PATH lookup in the packaged app.
+    env.CODEX_PATH = resolveCodexBinary(context);
   }
 
   const bridgeEntrypoint = path.join(cwd, "dist", "index.js");

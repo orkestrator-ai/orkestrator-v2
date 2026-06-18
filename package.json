@@ -36,6 +36,9 @@
       "dist-electron/**",
       "package.json"
     ],
+    "asarUnpack": [
+      "**/node_modules/node-pty/**"
+    ],
     "extraResources": [
       {
         "from": "bridges/claude-bridge",

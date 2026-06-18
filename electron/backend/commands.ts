@@ -272,6 +272,106 @@ type GhPrListEntry = {
   updatedAt?: unknown;
 };
 
+type GitHubPullRequestRef = {
+  owner: string;
+  repo: string;
+  number: string;
+};
+
+type GitHubPullRequestHead = {
+  head?: {
+    ref?: unknown;
+    repo?: {
+      full_name?: unknown;
+    } | null;
+  } | null;
+};
+
+function parseGitHubPullRequestUrl(url: string): GitHubPullRequestRef {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid PR URL: ${url}`);
+  }
+
+  if (parsed.protocol !== "https:" || parsed.hostname !== "github.com") {
+    throw new Error(`Invalid PR URL: ${url}`);
+  }
+
+  const [owner, repo, pullSegment, number, ...rest] = parsed.pathname
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => decodeURIComponent(segment));
+
+  if (!owner || !repo || pullSegment !== "pull" || !number || rest.length > 0 || !/^\d+$/.test(number)) {
+    throw new Error(`Invalid PR URL: ${url}`);
+  }
+
+  return { owner, repo, number };
+}
+
+function parseMergeMethod(value: unknown): "squash" | "merge" | "rebase" {
+  if (value === undefined || value === null || value === "") return "squash";
+  if (value === "squash" || value === "merge" || value === "rebase") return value;
+  throw new Error(`Invalid merge method: ${String(value)}`);
+}
+
+function encodeGitHubPathSegment(value: string): string {
+  return encodeURIComponent(value);
+}
+
+function encodeGitRefPath(ref: string): string {
+  return ref.split("/").map(encodeGitHubPathSegment).join("/");
+}
+
+async function mergePullRequestViaGitHubApi(
+  prUrl: string,
+  method: "squash" | "merge" | "rebase",
+  deleteBranch: boolean,
+  cwd: string,
+): Promise<void> {
+  const pr = parseGitHubPullRequestUrl(prUrl);
+  const pullEndpoint = `repos/${encodeGitHubPathSegment(pr.owner)}/${encodeGitHubPathSegment(pr.repo)}/pulls/${pr.number}`;
+  const mergeEndpoint = `${pullEndpoint}/merge`;
+
+  let head: GitHubPullRequestHead | null = null;
+  if (deleteBranch) {
+    const { stdout } = await runCommand("gh", ["api", pullEndpoint], { cwd, timeoutMs: 30_000 });
+    head = JSON.parse(stdout) as GitHubPullRequestHead;
+  }
+
+  await runCommand("gh", [
+    "api",
+    mergeEndpoint,
+    "--method",
+    "PUT",
+    "-f",
+    `merge_method=${method}`,
+  ], { cwd, timeoutMs: 120_000 });
+
+  if (!deleteBranch) return;
+
+  const headRefName = typeof head?.head?.ref === "string" ? head.head.ref : "";
+  const headRepositoryNameWithOwner = typeof head?.head?.repo?.full_name === "string" ? head.head.repo.full_name : "";
+  const [headOwner, headRepo] = headRepositoryNameWithOwner.split("/");
+  if (!headRefName || !headOwner || !headRepo) return;
+
+  try {
+    await runCommand("gh", [
+      "api",
+      `repos/${encodeGitHubPathSegment(headOwner)}/${encodeGitHubPathSegment(headRepo)}/git/refs/heads/${encodeGitRefPath(headRefName)}`,
+      "--method",
+      "DELETE",
+    ], { cwd, timeoutMs: 30_000 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("HTTP 404") && !message.toLowerCase().includes("not found")) {
+      throw error;
+    }
+  }
+}
+
 function isExpectedPrAbsenceOutput(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed.length === 0 || trimmed === "[]") return true;
@@ -1609,9 +1709,13 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("merge_pr_local", async ({ environmentId, method, deleteBranch }, { storage }) => {
     const env = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!env?.worktreePath) throw new Error("Local environment worktree is not available");
-    const args = ["pr", "merge", asOptionalString(method) ? `--${asOptionalString(method)}` : "--squash"];
-    if (asBoolean(deleteBranch, true)) args.push("--delete-branch");
-    await runCommand("gh", args, { cwd: env.worktreePath, timeoutMs: 120_000 });
+    if (!env.prUrl) throw new Error("Local environment PR URL is not available");
+    await mergePullRequestViaGitHubApi(
+      env.prUrl,
+      parseMergeMethod(method),
+      asBoolean(deleteBranch, true),
+      env.worktreePath,
+    );
   });
   register("merge_pr", ({ containerId, method, deleteBranch }) =>
     dockerExec(asString(containerId, "containerId"), `gh pr merge --${asOptionalString(method) ?? "squash"} ${asBoolean(deleteBranch, true) ? "--delete-branch" : ""}`).then(() => undefined),

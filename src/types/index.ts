@@ -285,7 +285,7 @@ export interface UIState {
 }
 
 // Pane layout types
-export * from "./paneLayout";
+export * from "./paneLayout.js";
 
 // File mention types for @ references in compose bar
 

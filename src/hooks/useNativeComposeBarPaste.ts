@@ -1,12 +1,12 @@
 import { useCallback, useEffect, type RefObject } from "react";
-import { readImage } from "@tauri-apps/plugin-clipboard-manager";
+import { readImage } from "@/lib/native/clipboard";
 import { toast } from "sonner";
 import {
   MAX_IMAGE_DIMENSION,
   resizeCanvasIfNeeded,
   resizeCanvasToMaxDimension,
 } from "@/lib/canvas-utils";
-import { writeContainerFile, writeLocalFile } from "@/lib/tauri";
+import { writeContainerFile, writeLocalFile } from "@/lib/backend";
 
 /** Maximum final PNG size in bytes (8MB) */
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
@@ -66,7 +66,7 @@ function isExpectedClipboardError(error: unknown): boolean {
 
 /**
  * Document-level paste handler shared by the native compose bars (Claude,
- * Codex, OpenCode). Reads an image from the Tauri clipboard, resizes it to
+ * Codex, OpenCode). Reads an image from the Electron clipboard, resizes it to
  * safe bounds, writes it into the environment, and hands a ready-to-use
  * attachment descriptor back via `onAttach`. Non-image pastes fall through
  * to the browser's default text-paste behavior.

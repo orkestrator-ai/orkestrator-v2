@@ -1,7 +1,7 @@
 import { describe, test, expect, mock, beforeEach } from "bun:test";
 
 // Use shared clipboard mocks registered centrally in tests/setup.ts.
-// Do NOT call mock.module() for @tauri-apps/plugin-clipboard-manager here.
+// Do NOT call mock.module() for @/lib/native/clipboard here.
 import { mockReadImage, mockReadText } from "../../mocks/clipboard";
 
 // Mock image data

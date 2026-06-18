@@ -13,6 +13,7 @@ import {
   DEFAULT_TERMINAL_APPEARANCE,
   resolveTerminalBackgroundColor,
 } from "@/constants/terminal";
+import { getCurrentWindow } from "@/lib/native/window";
 import { cn } from "@/lib/utils";
 
 interface AppShellProps {
@@ -46,11 +47,7 @@ export function AppShell({ children }: AppShellProps) {
   const handleTitleBarMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
 
-    void import("@tauri-apps/api/window")
-      .then(({ getCurrentWindow }) => getCurrentWindow().startDragging())
-      .catch(() => {
-        // No-op outside Tauri runtime
-      });
+    void getCurrentWindow().startDragging();
   };
 
   return (
@@ -59,10 +56,11 @@ export function AppShell({ children }: AppShellProps) {
       {/* Custom title bar - replaces macOS title bar (Overlay mode) */}
       <div
         className="flex h-7 w-full shrink-0 items-center justify-center bg-black"
-        data-tauri-drag-region
+        data-backend-drag-region
         onMouseDown={handleTitleBarMouseDown}
+        style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
       >
-        <span className="text-xs font-medium text-muted-foreground" data-tauri-drag-region>
+        <span className="text-xs font-medium text-muted-foreground" data-backend-drag-region>
           Orkestrator AI
         </span>
       </div>

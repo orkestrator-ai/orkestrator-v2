@@ -6,19 +6,16 @@ process.env.CODEX_BRIDGE_NO_SERVER ??= "1";
 // Register happy-dom globals for React testing
 GlobalRegistrator.register();
 
-// Mock @tauri-apps/api modules
+// Mock native backend modules
 import { mock } from "bun:test";
 
-// Mock the core invoke function and Resource class
-mock.module("@tauri-apps/api/core", () => ({
+// Mock the command invoke function.
+mock.module("@/lib/native/backend", () => ({
   invoke: mock(() => Promise.resolve()),
-  Resource: class Resource {
-    close() { return Promise.resolve(); }
-  },
 }));
 
 // Mock the event listener
-mock.module("@tauri-apps/api/event", () => ({
+mock.module("@/lib/native/events", () => ({
   listen: mock(() => Promise.resolve(() => {})),
   emit: mock(() => Promise.resolve()),
 }));
@@ -30,7 +27,7 @@ mock.module("@tauri-apps/api/event", () => ({
 import { mockReadImage, mockReadText, mockWriteText } from "./mocks/clipboard";
 
 // Mock clipboard plugin (used by PersistentTerminal, useClipboardImagePaste, terminal-paste tests)
-mock.module("@tauri-apps/plugin-clipboard-manager", () => ({
+mock.module("@/lib/native/clipboard", () => ({
   readImage: mockReadImage,
   readText: mockReadText,
   writeText: mockWriteText,

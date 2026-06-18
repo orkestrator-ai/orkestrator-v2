@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/native/backend";
 import { waitFor } from "@testing-library/react";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import type { Environment } from "@/types";

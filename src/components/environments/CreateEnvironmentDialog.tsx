@@ -27,7 +27,7 @@ import {
 import { Loader2, Shield, Globe, Network, Plus, Trash2, ChevronDown, Container, Laptop, Terminal, Bot, X } from "lucide-react";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { cn } from "@/lib/utils";
-import { readImage } from "@tauri-apps/plugin-clipboard-manager";
+import { readImage } from "@/lib/native/clipboard";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
 import { toast } from "sonner";
 import type {

@@ -31,7 +31,7 @@ mock.module("@/lib/tauri", () => ({
 }));
 
 // Capture the event listener callback registered via listen()
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "@/lib/native/events";
 const mockListen = listen as ReturnType<typeof mock>;
 
 // Import hook AFTER mocking

@@ -1,8 +1,8 @@
-// Hook for managing terminal sessions with Tauri backend
+// Hook for managing terminal sessions with Electron backend
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { listen, UnlistenFn } from "@/lib/native/events";
 import { toast } from "sonner";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 
 interface UseTerminalOptions {
   containerId: string | null;
@@ -71,9 +71,9 @@ export function useTerminal({
       }
       // Detach terminal (use appropriate method based on isLocal)
       if (isLocalRef.current) {
-        tauri.closeLocalTerminalSession(sessionId).catch(() => {});
+        backend.closeLocalTerminalSession(sessionId).catch(() => {});
       } else {
-        tauri.detachTerminal(sessionId).catch(() => {});
+        backend.detachTerminal(sessionId).catch(() => {});
       }
       // Clear ref immediately to prevent stale writes
       sessionIdRef.current = null;
@@ -117,11 +117,11 @@ export function useTerminal({
       if (sessionIdRef.current && !persistSessionRef.current) {
         console.log("[useTerminal] Detaching terminal session:", sessionIdRef.current, "isLocal:", isLocalRef.current);
         if (isLocalRef.current) {
-          tauri.closeLocalTerminalSession(sessionIdRef.current).catch((err) => {
+          backend.closeLocalTerminalSession(sessionIdRef.current).catch((err) => {
             console.error("[useTerminal] Error closing local terminal:", err);
           });
         } else {
-          tauri.detachTerminal(sessionIdRef.current).catch((err) => {
+          backend.detachTerminal(sessionIdRef.current).catch((err) => {
             console.error("[useTerminal] Error detaching terminal:", err);
           });
         }
@@ -155,20 +155,37 @@ export function useTerminal({
 
     try {
       let targetSessionId: string;
+      let shouldStartSession = true;
 
       // If we have an existing session, try to reconnect to it
       if (existingSessionId) {
         console.log("[useTerminal] Reconnecting to existing session:", existingSessionId);
-        targetSessionId = existingSessionId;
+        const existingStatus = await backend.getTerminalSession(existingSessionId).catch((err) => {
+          console.warn("[useTerminal] Failed to check existing terminal session, creating a new one:", err);
+          return null;
+        });
+
+        if (existingStatus?.running) {
+          targetSessionId = existingSessionId;
+          shouldStartSession = false;
+        } else if (isLocal && environmentId) {
+          console.log("[useTerminal] Existing terminal session is stale, creating a new local session");
+          targetSessionId = await backend.createLocalTerminalSession(environmentId, cols, rows);
+          console.log("[useTerminal] Got replacement local sessionId:", targetSessionId);
+        } else {
+          console.log("[useTerminal] Existing terminal session is stale, creating a new container session");
+          targetSessionId = await backend.createTerminalSession(containerId!, cols, rows, user);
+          console.log("[useTerminal] Got replacement sessionId:", targetSessionId);
+        }
       } else if (isLocal && environmentId) {
         // Create new local session
         console.log("[useTerminal] Creating local terminal session for environment:", environmentId);
-        targetSessionId = await tauri.createLocalTerminalSession(environmentId, cols, rows);
+        targetSessionId = await backend.createLocalTerminalSession(environmentId, cols, rows);
         console.log("[useTerminal] Got local sessionId:", targetSessionId);
       } else {
         // Create new container session
         console.log("[useTerminal] Calling createTerminalSession...");
-        targetSessionId = await tauri.createTerminalSession(containerId!, cols, rows, user);
+        targetSessionId = await backend.createTerminalSession(containerId!, cols, rows, user);
         console.log("[useTerminal] Got sessionId:", targetSessionId);
       }
 
@@ -189,12 +206,12 @@ export function useTerminal({
       unlistenRef.current = unlisten;
 
       // Only start session if it's new (existing sessions are already running)
-      if (!existingSessionId) {
+      if (shouldStartSession) {
         console.log("[useTerminal] Starting terminal session...", isLocal ? "(local)" : "(container)");
         if (isLocal) {
-          await tauri.startLocalTerminalSession(targetSessionId);
+          await backend.startLocalTerminalSession(targetSessionId);
         } else {
-          await tauri.startTerminalSession(targetSessionId);
+          await backend.startTerminalSession(targetSessionId);
         }
       }
 
@@ -223,9 +240,9 @@ export function useTerminal({
         try {
           let newSessionId: string;
           if (isLocal && environmentId) {
-            newSessionId = await tauri.createLocalTerminalSession(environmentId, cols, rows);
+            newSessionId = await backend.createLocalTerminalSession(environmentId, cols, rows);
           } else {
-            newSessionId = await tauri.createTerminalSession(containerId!, cols, rows, user);
+            newSessionId = await backend.createTerminalSession(containerId!, cols, rows, user);
           }
           console.log("[useTerminal] Created fallback session:", newSessionId);
 
@@ -242,9 +259,9 @@ export function useTerminal({
           unlistenRef.current = unlisten;
 
           if (isLocal) {
-            await tauri.startLocalTerminalSession(newSessionId);
+            await backend.startLocalTerminalSession(newSessionId);
           } else {
-            await tauri.startTerminalSession(newSessionId);
+            await backend.startTerminalSession(newSessionId);
           }
           setIsConnected(true);
           console.log("[useTerminal] Fallback session connected successfully");
@@ -264,9 +281,9 @@ export function useTerminal({
         if (sessionIdRef.current) {
           try {
             if (isLocal) {
-              await tauri.closeLocalTerminalSession(sessionIdRef.current);
+              await backend.closeLocalTerminalSession(sessionIdRef.current);
             } else {
-              await tauri.detachTerminal(sessionIdRef.current);
+              await backend.detachTerminal(sessionIdRef.current);
             }
           } catch (detachErr) {
             console.error("[useTerminal] Error detaching after failure:", detachErr);
@@ -292,9 +309,9 @@ export function useTerminal({
 
       // Detach terminal (use appropriate method based on isLocal)
       if (isLocalRef.current) {
-        await tauri.closeLocalTerminalSession(sessionId);
+        await backend.closeLocalTerminalSession(sessionId);
       } else {
-        await tauri.detachTerminal(sessionId);
+        await backend.detachTerminal(sessionId);
       }
     } catch (err) {
       console.error("Failed to disconnect terminal:", err);
@@ -312,9 +329,9 @@ export function useTerminal({
 
       try {
         if (isLocalRef.current) {
-          await tauri.resizeLocalTerminal(sessionId, newCols, newRows);
+          await backend.resizeLocalTerminal(sessionId, newCols, newRows);
         } else {
-          await tauri.resizeTerminal(sessionId, newCols, newRows);
+          await backend.resizeTerminal(sessionId, newCols, newRows);
         }
       } catch (err) {
         // Session not found errors are expected during cleanup/tab switching
@@ -338,9 +355,9 @@ export function useTerminal({
 
       try {
         if (isLocalRef.current) {
-          await tauri.writeLocalTerminal(currentSessionId, data);
+          await backend.writeLocalTerminal(currentSessionId, data);
         } else {
-          await tauri.writeTerminal(currentSessionId, data);
+          await backend.writeTerminal(currentSessionId, data);
         }
       } catch (err) {
         console.error("[useTerminal] Failed to write to terminal:", err);

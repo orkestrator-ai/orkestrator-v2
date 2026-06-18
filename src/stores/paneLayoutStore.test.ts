@@ -411,4 +411,111 @@ describe("paneLayoutStore environment scoping", () => {
     expect(envA.root.activeTabId).toBeNull();
     expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-b");
   });
+
+  test("removes a tab from an explicit environment without touching the active environment", () => {
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        ["env-a", {
+          root: {
+            kind: "leaf",
+            id: "pane-a",
+            tabs: [
+              { id: "tab-a-1", type: "plain" },
+              { id: "tab-a-2", type: "plain" },
+            ],
+            activeTabId: "tab-a-2",
+          },
+          activePaneId: "pane-a",
+          containerId: "container-a",
+        }],
+        ["env-b", {
+          root: {
+            kind: "leaf",
+            id: "pane-b",
+            tabs: [{ id: "tab-b", type: "plain" }],
+            activeTabId: "tab-b",
+          },
+          activePaneId: "pane-b",
+          containerId: "container-b",
+        }],
+      ]),
+      activeEnvironmentId: "env-b",
+    });
+
+    usePaneLayoutStore.getState().removeTab("pane-a", "tab-a-2", "env-a");
+
+    const envA = usePaneLayoutStore.getState().environments.get("env-a");
+    expect(envA?.root.kind).toBe("leaf");
+    if (!envA || envA.root.kind !== "leaf") {
+      throw new Error("env-a root should be a leaf");
+    }
+    expect(envA.root.tabs.map((tab) => tab.id)).toEqual(["tab-a-1"]);
+    expect(envA.root.activeTabId).toBe("tab-a-1");
+    expect(usePaneLayoutStore.getState().environments.get("env-b")?.activePaneId).toBe("pane-b");
+    expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-b");
+  });
+
+  test("moves a tab inside an explicit environment without relying on the active environment", () => {
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        ["env-a", {
+          root: {
+            kind: "split",
+            id: "split-a",
+            direction: "horizontal",
+            sizes: [50, 50],
+            depth: 1,
+            children: [
+              {
+                kind: "leaf",
+                id: "pane-a-left",
+                tabs: [
+                  { id: "tab-a", type: "plain" },
+                  { id: "tab-a-left-other", type: "plain" },
+                ],
+                activeTabId: "tab-a",
+              },
+              {
+                kind: "leaf",
+                id: "pane-a-right",
+                tabs: [{ id: "tab-a-right", type: "plain" }],
+                activeTabId: "tab-a-right",
+              },
+            ],
+          },
+          activePaneId: "pane-a-left",
+          containerId: "container-a",
+        }],
+        ["env-b", {
+          root: {
+            kind: "leaf",
+            id: "pane-b",
+            tabs: [{ id: "tab-b", type: "plain" }],
+            activeTabId: "tab-b",
+          },
+          activePaneId: "pane-b",
+          containerId: "container-b",
+        }],
+      ]),
+      activeEnvironmentId: "env-b",
+    });
+
+    usePaneLayoutStore
+      .getState()
+      .moveTab("pane-a-left", "pane-a-right", "tab-a", undefined, "env-a");
+
+    const envA = usePaneLayoutStore.getState().environments.get("env-a");
+    expect(envA?.root.kind).toBe("split");
+    if (!envA || envA.root.kind !== "split") {
+      throw new Error("env-a root should be a split");
+    }
+    const rightPane = envA.root.children[1];
+    expect(rightPane.kind).toBe("leaf");
+    if (rightPane.kind !== "leaf") {
+      throw new Error("right pane should be a leaf");
+    }
+    expect(rightPane.tabs.map((tab) => tab.id)).toEqual(["tab-a-right", "tab-a"]);
+    expect(envA.activePaneId).toBe("pane-a-right");
+    expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-b");
+  });
 });

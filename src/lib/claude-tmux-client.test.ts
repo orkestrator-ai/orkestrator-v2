@@ -1,5 +1,5 @@
 // Verifies that claude-tmux-client wrappers forward the right Tauri command
-// names and argument shapes. We re-mock `@tauri-apps/api/core` *for this file
+// names and argument shapes. We re-mock `@/lib/native/backend` *for this file
 // only* (tests/setup.ts installs a no-op mock; we replace it with one whose
 // implementation captures calls). The replacement is restored in afterAll so
 // the rest of the suite is unaffected.
@@ -8,7 +8,7 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
 const calls: Array<{ cmd: string; args: unknown }> = [];
 
-mock.module("@tauri-apps/api/core", () => ({
+mock.module("@/lib/native/backend", () => ({
   invoke: mock(async (cmd: string, args?: unknown) => {
     calls.push({ cmd, args });
     return undefined;
@@ -21,7 +21,7 @@ mock.module("@tauri-apps/api/core", () => ({
 }));
 
 afterAll(() => {
-  mock.module("@tauri-apps/api/core", () => ({
+  mock.module("@/lib/native/backend", () => ({
     invoke: mock(() => Promise.resolve()),
     Resource: class Resource {
       close() {

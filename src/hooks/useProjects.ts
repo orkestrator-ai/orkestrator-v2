@@ -1,8 +1,8 @@
-// Hook for managing project operations with Tauri backend
+// Hook for managing project operations with Electron backend
 import { useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { useProjectStore } from "@/stores";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 
 export function useProjects() {
   const {
@@ -28,7 +28,7 @@ export function useProjects() {
     setLoading(true);
     setError(null);
     try {
-      const projects = await tauri.getProjects();
+      const projects = await backend.getProjects();
       setProjects(projects);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load projects");
@@ -42,7 +42,7 @@ export function useProjects() {
       setLoading(true);
       setError(null);
       try {
-        const project = await tauri.addProject(gitUrl, localPath);
+        const project = await backend.addProject(gitUrl, localPath);
         addProjectToStore(project);
         toast.success("Project added", { description: project.name });
         return project;
@@ -63,7 +63,7 @@ export function useProjects() {
       setLoading(true);
       setError(null);
       try {
-        await tauri.removeProject(projectId);
+        await backend.removeProject(projectId);
         removeProjectFromStore(projectId);
         toast.success("Project removed");
       } catch (err) {
@@ -80,7 +80,7 @@ export function useProjects() {
 
   const validateGitUrl = useCallback(async (url: string) => {
     try {
-      return await tauri.validateGitUrl(url);
+      return await backend.validateGitUrl(url);
     } catch {
       return false;
     }
@@ -92,7 +92,7 @@ export function useProjects() {
       reorderProjectsInStore(projectIds);
       try {
         // Persist to backend
-        const reorderedProjects = await tauri.reorderProjects(projectIds);
+        const reorderedProjects = await backend.reorderProjects(projectIds);
         setProjects(reorderedProjects);
       } catch (err) {
         // Reload from backend on error to restore correct state
@@ -109,7 +109,7 @@ export function useProjects() {
   const updateProject = useCallback(
     async (project: { id: string; name: string; localPath: string | null }) => {
       try {
-        const updated = await tauri.updateProject(project.id, {
+        const updated = await backend.updateProject(project.id, {
           name: project.name,
           localPath: project.localPath,
         });

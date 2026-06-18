@@ -146,18 +146,18 @@ interface PaneLayoutState {
 
   // Tab management
   addTab: (paneId: string, tab: TabInfo, environmentId?: string) => void;
-  removeTab: (paneId: string, tabId: string) => void;
+  removeTab: (paneId: string, tabId: string, environmentId?: string) => void;
   setActiveTab: (paneId: string, tabId: string, environmentId?: string) => void;
-  moveTab: (fromPaneId: string, toPaneId: string, tabId: string, toIndex?: number) => void;
-  reorderTabs: (paneId: string, fromIndex: number, toIndex: number) => void;
+  moveTab: (fromPaneId: string, toPaneId: string, tabId: string, toIndex?: number, environmentId?: string) => void;
+  reorderTabs: (paneId: string, fromIndex: number, toIndex: number, environmentId?: string) => void;
   clearTabInitialPrompt: (tabId: string, environmentId?: string) => void;
 
   // Pane management
-  splitPane: (paneId: string, direction: "horizontal" | "vertical", tabId: string) => void;
-  splitPaneAtEdge: (targetPaneId: string, edge: EdgeDirection, tabId: string, fromPaneId: string) => void;
-  closePane: (paneId: string) => void;
+  splitPane: (paneId: string, direction: "horizontal" | "vertical", tabId: string, environmentId?: string) => void;
+  splitPaneAtEdge: (targetPaneId: string, edge: EdgeDirection, tabId: string, fromPaneId: string, environmentId?: string) => void;
+  closePane: (paneId: string, environmentId?: string) => void;
   setActivePane: (paneId: string, environmentId?: string) => void;
-  updateSizes: (splitId: string, sizes: [number, number]) => void;
+  updateSizes: (splitId: string, sizes: [number, number], environmentId?: string) => void;
 
   // Getters for current environment state
   getRoot: (environmentId?: string) => PaneNode;
@@ -422,9 +422,9 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     set({ environments: newEnvs });
   },
 
-  removeTab: (paneId, tabId) => {
+  removeTab: (paneId, tabId, environmentId) => {
     const state = get();
-    const envId = state.activeEnvironmentId;
+    const envId = environmentId ?? state.activeEnvironmentId;
     if (!envId) return;
 
     const envState = state.environments.get(envId);
@@ -453,7 +453,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     if (remainingTabs.length === 0) {
       const parentSplit = findParentSplit(envState.root, paneId);
       if (parentSplit) {
-        get().closePane(paneId);
+        get().closePane(paneId, envId);
       } else {
         const newRoot = updateLeaf(envState.root, paneId, () => ({
           ...leaf,
@@ -501,9 +501,9 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     set({ environments: newEnvs });
   },
 
-  moveTab: (fromPaneId, toPaneId, tabId, toIndex) => {
+  moveTab: (fromPaneId, toPaneId, tabId, toIndex, environmentId) => {
     const state = get();
-    const envId = state.activeEnvironmentId;
+    const envId = environmentId ?? state.activeEnvironmentId;
     if (!envId) {
       console.warn("[paneLayoutStore] moveTab failed: no activeEnvironmentId");
       return;
@@ -534,7 +534,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     if (fromPaneId === toPaneId) {
       const fromIndex = fromLeaf.tabs.findIndex((t) => t.id === tabId);
       if (toIndex !== undefined && fromIndex !== toIndex) {
-        get().reorderTabs(fromPaneId, fromIndex, toIndex);
+        get().reorderTabs(fromPaneId, fromIndex, toIndex, envId);
       }
       return;
     }
@@ -564,7 +564,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
       set({ environments: newEnvs });
 
       // Then close empty source pane
-      get().closePane(fromPaneId);
+      get().closePane(fromPaneId, envId);
       return;
     }
 
@@ -598,9 +598,9 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     set({ environments: newEnvs });
   },
 
-  reorderTabs: (paneId, fromIndex, toIndex) => {
+  reorderTabs: (paneId, fromIndex, toIndex, environmentId) => {
     const state = get();
-    const envId = state.activeEnvironmentId;
+    const envId = environmentId ?? state.activeEnvironmentId;
     if (!envId) return;
 
     const envState = state.environments.get(envId);
@@ -649,9 +649,9 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     console.debug("[PaneLayout] Cleared initialPrompt for tab:", tabId);
   },
 
-  splitPane: (paneId, direction, tabId) => {
+  splitPane: (paneId, direction, tabId, environmentId) => {
     const state = get();
-    const envId = state.activeEnvironmentId;
+    const envId = environmentId ?? state.activeEnvironmentId;
     if (!envId) return;
 
     const envState = state.environments.get(envId);
@@ -709,9 +709,9 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     set({ environments: newEnvs });
   },
 
-  splitPaneAtEdge: (targetPaneId, edge, tabId, fromPaneId) => {
+  splitPaneAtEdge: (targetPaneId, edge, tabId, fromPaneId, environmentId) => {
     const state = get();
-    const envId = state.activeEnvironmentId;
+    const envId = environmentId ?? state.activeEnvironmentId;
     if (!envId) {
       console.warn("[paneLayoutStore] splitPaneAtEdge failed: no activeEnvironmentId");
       return;
@@ -842,14 +842,14 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
       const updatedSourceLeaf = findLeaf(newRoot, fromPaneId);
       if (updatedSourceLeaf && updatedSourceLeaf.tabs.length === 0) {
         // Use a timeout to avoid state update conflicts
-        setTimeout(() => get().closePane(fromPaneId), 0);
+        setTimeout(() => get().closePane(fromPaneId, envId), 0);
       }
     }
   },
 
-  closePane: (paneId) => {
+  closePane: (paneId, environmentId) => {
     const state = get();
-    const envId = state.activeEnvironmentId;
+    const envId = environmentId ?? state.activeEnvironmentId;
     if (!envId) return;
 
     const envState = state.environments.get(envId);
@@ -895,9 +895,9 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     set({ environments: newEnvs });
   },
 
-  updateSizes: (splitId, sizes) => {
+  updateSizes: (splitId, sizes, environmentId) => {
     const state = get();
-    const envId = state.activeEnvironmentId;
+    const envId = environmentId ?? state.activeEnvironmentId;
     if (!envId) return;
 
     const envState = state.environments.get(envId);

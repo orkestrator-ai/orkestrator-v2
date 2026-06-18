@@ -33,7 +33,7 @@ mock.module("@/lib/tauri", () => ({
   updateProject: mockUpdateProject,
 }));
 
-mock.module("@tauri-apps/plugin-dialog", () => ({
+mock.module("@/lib/native/dialog", () => ({
   open: mockOpenDialog,
 }));
 

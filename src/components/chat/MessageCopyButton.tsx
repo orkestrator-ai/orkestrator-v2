@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Check, Copy } from "lucide-react";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { writeText } from "@/lib/native/clipboard";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 

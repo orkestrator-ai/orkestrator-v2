@@ -19,8 +19,8 @@ import {
 } from "@/stores/prMonitorStore";
 import { useEnvironmentStore, useUIStore, useAgentActivityStore } from "@/stores";
 import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
-import * as tauri from "@/lib/tauri";
-import type { PrDetectionResult } from "@/lib/tauri";
+import * as backend from "@/lib/backend";
+import type { PrDetectionResult } from "@/lib/backend";
 import type { PrState } from "@/types";
 
 /** How often the tick loop runs (1 second) */
@@ -53,8 +53,8 @@ async function detectPR(
 
   try {
     const result = isLocal
-      ? await tauri.detectPrLocal(environmentId, branch)
-      : await tauri.detectPr(containerId!, branch);
+      ? await backend.detectPrLocal(environmentId, branch)
+      : await backend.detectPr(containerId!, branch);
 
     if (result) {
       return { status: "success", data: result };
@@ -68,7 +68,7 @@ async function detectPR(
 }
 
 /**
- * Save PR state to both backend (Tauri) and frontend (Zustand) stores.
+ * Save PR state to both backend (Electron) and frontend (Zustand) stores.
  * Only updates state on successful detection or when clearing a previously stored PR.
  */
 async function savePRState(
@@ -86,7 +86,7 @@ async function savePRState(
   if (detectionResult.status === "success") {
     const { data } = detectionResult;
     // Save to backend
-    await tauri.setEnvironmentPr(
+    await backend.setEnvironmentPr(
       environmentId,
       data.url,
       data.state,
@@ -112,7 +112,7 @@ async function savePRState(
       return;
     }
     // Only clear for open PRs - this handles cases where the PR was deleted/removed
-    await tauri.clearEnvironmentPr(environmentId);
+    await backend.clearEnvironmentPr(environmentId);
     setEnvironmentPR(environmentId, null, null, null);
   }
   // On error, keep existing state - don't update

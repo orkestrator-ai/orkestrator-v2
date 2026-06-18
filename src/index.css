@@ -82,8 +82,8 @@ body {
   overflow: hidden;
 }
 
-/* Tauri draggable regions for custom title bars */
-*[data-tauri-drag-region] {
+/* Electron draggable regions for custom title bars */
+*[data-backend-drag-region] {
   app-region: drag;
   -webkit-app-region: drag;
   user-select: none;

@@ -1,9 +1,9 @@
-// Claude tmux mode client: thin wrapper around Tauri invoke + event listeners.
+// Claude tmux mode client: thin wrapper around Electron invoke + event listeners.
 // Commands are scoped by `(environmentId, tabId)` so first tabs named
 // "default" in different environments never share a Claude session.
 
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { invoke } from "@/lib/native/backend";
+import { listen, type UnlistenFn } from "@/lib/native/events";
 
 /** Channel emitted by the Rust `claude_tmux` module. */
 export const CLAUDE_TMUX_EVENT = "claude-tmux:event";

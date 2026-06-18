@@ -1,4 +1,4 @@
-import { memo, useEffect, useCallback, useMemo } from "react";
+import { memo, useCallback, useLayoutEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { usePaneLayoutStore, getAllLeaves } from "@/stores/paneLayoutStore";
@@ -64,6 +64,7 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
     createTerminal,
     disposeTerminal,
     hasTerminal,
+    getPaneHost,
   } = useTerminalPortalStore();
 
   // Get workspace ready and setup scripts running setters from environment store
@@ -142,7 +143,7 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
   }, [terminalTabsMap]);
 
   // Create terminals for new tabs, dispose terminals for removed tabs
-  useEffect(() => {
+  useLayoutEffect(() => {
     // Skip if no active environment
     if (!activeEnvironmentId) return;
 
@@ -199,7 +200,10 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
     }
 
     const { tab, paneId } = tabInfo;
-    const portalTarget = terminalData.portalElement;
+    const portalTarget = getPaneHost(environmentId, paneId);
+    if (!portalTarget) {
+      continue;
+    }
 
     // Get the active tab for this pane to determine visibility
     const paneLeaf = leaves.find((l) => l.id === paneId);
@@ -210,25 +214,29 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
 
     portalElements.push(
       createPortal(
-        <PersistentTerminal
-          key={`${environmentId}::${tabId}`}
-          terminalData={terminalData}
-          tabId={tabId}
-          tabType={tab.type}
-          containerId={containerId}
-          environmentId={environmentId}
-          isEnvironmentVisible={environmentId === activeEnvironmentId}
-          isActive={isActive}
-          isFocused={isFocused}
-          isFirstTab={tabId === "default" && paneId === "default"}
-          initialPrompt={tab.initialPrompt}
-          initialCommands={tab.initialCommands}
-          isReviewTab={tab.isReviewTab}
-          paneId={paneId}
-          isSetupTab={tab.isSetupTab}
-          onReady={handleWorkspaceReady}
-          onSetupComplete={tab.isSetupTab ? handleSetupComplete : undefined}
-        />,
+        <div
+          className={`absolute inset-0 ${isActive ? "pointer-events-auto" : "pointer-events-none"}`}
+        >
+          <PersistentTerminal
+            key={`${environmentId}::${tabId}`}
+            terminalData={terminalData}
+            tabId={tabId}
+            tabType={tab.type}
+            containerId={containerId}
+            environmentId={environmentId}
+            isEnvironmentVisible={environmentId === activeEnvironmentId}
+            isActive={isActive}
+            isFocused={isFocused}
+            isFirstTab={tabId === "default" && paneId === "default"}
+            initialPrompt={tab.initialPrompt}
+            initialCommands={tab.initialCommands}
+            isReviewTab={tab.isReviewTab}
+            paneId={paneId}
+            isSetupTab={tab.isSetupTab}
+            onReady={handleWorkspaceReady}
+            onSetupComplete={tab.isSetupTab ? handleSetupComplete : undefined}
+          />
+        </div>,
         portalTarget,
         `terminal-portal-${environmentId}::${tabId}`
       )

@@ -2,7 +2,7 @@
 // Container-level state (for sidebar icons) and polling lifecycle are
 // handled globally by useGlobalActivityMonitor in App.tsx.
 import { useEffect, useRef } from "react";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { listen, UnlistenFn } from "@/lib/native/events";
 import {
   useAgentActivityStore,
   type AgentActivityState,
@@ -15,7 +15,7 @@ interface AgentStateEvent {
 
 /**
  * Hook to monitor agent activity state for a terminal tab.
- * Listens for Tauri events and updates tab-level state only.
+ * Listens for Electron events and updates tab-level state only.
  * Polling and container-level state are managed by useGlobalActivityMonitor.
  *
  * @param containerId - The Docker container ID to monitor (null to disable)

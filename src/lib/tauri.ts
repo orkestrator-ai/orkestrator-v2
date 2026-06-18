@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/native/backend";
 import type {
   Project,
   Environment,
@@ -30,8 +30,7 @@ export interface PrDetectionResult {
   hasMergeConflicts: boolean;
 }
 
-// Typed invoke wrapper for Tauri commands
-// These will be implemented as the Rust backend is developed
+// Typed command wrapper for the Electron backend.
 
 // --- Project Commands ---
 
@@ -156,6 +155,17 @@ export async function createTerminalSession(
 
 export async function startTerminalSession(sessionId: string): Promise<void> {
   return invoke("start_terminal_session", { sessionId });
+}
+
+export interface TerminalSessionStatus {
+  id: string;
+  running: boolean;
+}
+
+export async function getTerminalSession(
+  sessionId: string
+): Promise<TerminalSessionStatus> {
+  return invoke<TerminalSessionStatus>("get_terminal_session", { sessionId });
 }
 
 export async function detachTerminal(sessionId: string): Promise<void> {
@@ -1060,7 +1070,7 @@ export async function readFileBase64(path: string): Promise<string> {
 
 /** Read a binary file from the local filesystem (deprecated: use readFileBase64 instead) */
 export async function readBinaryFile(path: string): Promise<Uint8Array> {
-  // Use our custom Tauri command instead of the fs plugin (which has permission issues)
+  // Use our custom Electron command instead of the fs plugin (which has permission issues)
   const base64 = await readFileBase64(path);
   // Convert base64 to Uint8Array
   const binaryString = atob(base64);

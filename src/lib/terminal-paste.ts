@@ -2,7 +2,7 @@
  * Shared terminal paste utilities for handling clipboard paste in terminal components.
  */
 
-import { readText } from "@tauri-apps/plugin-clipboard-manager";
+import { readText } from "@/lib/native/clipboard";
 import { processClipboardPaste, processLocalClipboardPaste } from "@/hooks/useClipboardImagePaste";
 
 const TERMINAL_PATH_ESCAPE_PATTERN = /([\s\\"'`$&|;<>()[\]{}*?!#~])/g;
@@ -73,7 +73,7 @@ export async function handleTerminalPaste({
       }
     );
   } else {
-    // No target available - text-only paste using Tauri clipboard API
+    // No target available - text-only paste using Electron clipboard API
     try {
       const text = await readText();
       if (text) {

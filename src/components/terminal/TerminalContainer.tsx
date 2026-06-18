@@ -1033,7 +1033,7 @@ export function TerminalContainer({
   const handleCloseActiveTab = useCallback(() => {
     const activePane = getActivePane(environmentId);
     if (activePane && activePane.activeTabId) {
-      removeTab(activePaneId, activePane.activeTabId);
+      removeTab(activePaneId, activePane.activeTabId, environmentId);
     }
   }, [activePaneId, environmentId, getActivePane, removeTab]);
 
@@ -1162,16 +1162,16 @@ export function TerminalContainer({
 
       if (action.type === "split") {
         console.debug("[TerminalContainer] Split at edge:", action.edge, "from pane:", action.fromPaneId);
-        splitPaneAtEdge(action.targetPaneId, action.edge, action.tabId, action.fromPaneId);
+        splitPaneAtEdge(action.targetPaneId, action.edge, action.tabId, action.fromPaneId, environmentId);
       } else if (action.type === "reorder") {
         console.debug("[TerminalContainer] Reordering tabs:", action.fromIndex, "->", action.toIndex);
-        reorderTabs(action.paneId, action.fromIndex, action.toIndex);
+        reorderTabs(action.paneId, action.fromIndex, action.toIndex, environmentId);
       } else if (action.type === "move") {
         console.debug("[TerminalContainer] Moving tab to pane:", action.toPaneId, "index:", action.toIndex);
-        moveTab(action.fromPaneId, action.toPaneId, action.tabId, action.toIndex);
+        moveTab(action.fromPaneId, action.toPaneId, action.tabId, action.toIndex, environmentId);
       }
     },
-    [dragOverPaneId, getPane, moveTab, reorderTabs, splitPaneAtEdge]
+    [dragOverPaneId, environmentId, getPane, moveTab, reorderTabs, splitPaneAtEdge]
   );
 
   const handleStartOverlayClick = useCallback(

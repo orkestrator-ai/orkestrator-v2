@@ -1,5 +1,5 @@
 /**
- * Shared mock functions for @tauri-apps/plugin-clipboard-manager.
+ * Shared mock functions for @/lib/native/clipboard.
  *
  * Registered once in tests/setup.ts so that every test file shares the same
  * mock instances.  Individual tests configure behaviour via mockImplementation

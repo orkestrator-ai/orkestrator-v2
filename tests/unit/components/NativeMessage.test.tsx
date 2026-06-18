@@ -11,9 +11,11 @@ import {
 
 const mockOpenInBrowser = mock(async () => {});
 const mockReadFileBase64 = mock(async () => "image-base64");
+const mockReadContainerFileBase64 = mock(async () => "container-image-base64");
 
 mock.module("@/lib/tauri", () => ({
   openInBrowser: mockOpenInBrowser,
+  readContainerFileBase64: mockReadContainerFileBase64,
   readFileBase64: mockReadFileBase64,
 }));
 
@@ -56,6 +58,8 @@ describe("NativeMessage", () => {
     mockOpenInBrowser.mockImplementation(async () => {});
     mockReadFileBase64.mockReset();
     mockReadFileBase64.mockImplementation(async () => "image-base64");
+    mockReadContainerFileBase64.mockReset();
+    mockReadContainerFileBase64.mockImplementation(async () => "container-image-base64");
     mockWriteText.mockReset();
     mockWriteText.mockImplementation(async () => {});
   });
@@ -324,6 +328,67 @@ describe("NativeMessage", () => {
     await waitFor(() => {
       expect(screen.queryByAltText("screenshot.png")).toBeNull();
     });
+  });
+
+  test("loads safe container image previews through the container reader", async () => {
+    const message: NativeMessageType = {
+      id: "msg-container-file-preview",
+      role: "user",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "file",
+          content: "/workspace/.orkestrator/clipboard/screenshot.png",
+          fileUrl: "/workspace/.orkestrator/clipboard/screenshot.png",
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} containerId="container-1" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /screenshot\.png/i }));
+
+    const image = await screen.findByAltText("screenshot.png");
+    expect(mockReadContainerFileBase64).toHaveBeenCalledWith(
+      "container-1",
+      "/workspace/.orkestrator/clipboard/screenshot.png",
+    );
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+    expect(image.getAttribute("src")).toBe("data:image/png;base64,container-image-base64");
+  });
+
+  test("does not fall back to host file reads for unsafe container image paths", async () => {
+    const consoleError = console.error;
+    console.error = mock(() => {}) as typeof console.error;
+    const message: NativeMessageType = {
+      id: "msg-unsafe-container-file-preview",
+      role: "user",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "file",
+          content: "/etc/passwd.png",
+          fileUrl: "/etc/passwd.png",
+        },
+      ],
+    };
+
+    try {
+      render(<NativeMessage message={message} containerId="container-1" />);
+
+      fireEvent.click(screen.getByRole("button", { name: /passwd\.png/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText("(error)")).toBeTruthy();
+      });
+      expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
+      expect(mockReadFileBase64).not.toHaveBeenCalled();
+      expect(screen.queryByAltText("passwd.png")).toBeNull();
+    } finally {
+      console.error = consoleError;
+    }
   });
 
   test("opens data URL and remote image previews without local file reads", async () => {

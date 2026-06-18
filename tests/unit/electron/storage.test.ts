@@ -26,6 +26,10 @@ afterEach(async () => {
 });
 
 describe("Electron StorageService", () => {
+  test("default config uses the shared dark terminal background", () => {
+    expect(defaultConfig().global.terminalAppearance.backgroundColor).toBe("#141414");
+  });
+
   test("recovers JSON from a rotated backup when the primary file is malformed", async () => {
     const dataDir = await createTempDir("ork-storage-json-");
     const storage = new StorageService(dataDir);

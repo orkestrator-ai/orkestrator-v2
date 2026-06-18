@@ -23,11 +23,11 @@
     "test": "bun test",
     "test:unit": "bun test tests/unit",
     "docker:build": "docker build -t orkestrator-v2:latest --no-cache -f docker/Dockerfile .",
-    "package": "bun run build:all && bunx electron-builder"
+    "package": "bun run build:all && bunx electron-builder && bun scripts/install-packaged-app.ts"
   },
   "build": {
     "appId": "com.orkestrator.v2",
-    "productName": "Orkestrator AI",
+    "productName": "OrkestratorV2",
     "directories": {
       "output": "release"
     },

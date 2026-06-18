@@ -778,19 +778,23 @@ function FilePart({
         return;
       }
 
-      const filePath = fileUrl?.startsWith("file://")
+      const localFilePath = fileUrl?.startsWith("file://")
         ? parseLocalFilePathFromUrl(fileUrl)
-        : path.startsWith("/")
-          ? path
-          : null;
+        : null;
 
-      if (containerId && isSafeContainerPath(path)) {
+      if (containerId && !localFilePath) {
+        if (!isSafeContainerPath(path)) {
+          throw new Error("Unsafe container image path");
+        }
+
         const base64 = await readContainerFileBase64(containerId, path);
         const mimeType = getMimeType(path);
         setImageSrc(`data:${mimeType};base64,${base64}`);
         setPreviewOpen(true);
         return;
       }
+
+      const filePath = localFilePath ?? (path.startsWith("/") ? path : null);
 
       if (!filePath) {
         throw new Error("No readable local image path available");

@@ -978,6 +978,74 @@ exit 0
     });
   });
 
+  test("merges local PRs through the GitHub API without updating worktree branches", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ] && [ "$3" = "--method" ] && [ "$4" = "PUT" ]; then
+  printf '%s\\n' '{"merged":true}'
+  exit 0
+fi
+printf 'unexpected gh args: %s\\n' "$*" >&2
+exit 1
+`, async (logPath) => {
+      await expect(commands.get("merge_pr_local")?.(
+        { environmentId: environment.id, method: "squash", deleteBranch: false },
+        context,
+      )).resolves.toBeUndefined();
+
+      const ghLog = await fs.readFile(logPath, "utf8");
+      expect(ghLog).toContain("api repos/acme/repo/pulls/42 --method PUT -f merge_method=squash");
+      expect(ghLog).not.toContain("pr merge");
+      expect(ghLog).not.toContain("--delete-branch");
+    });
+  });
+
+  test("deletes the remote head branch after local API merge when requested", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-delete-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ] && [ "$3" = "" ]; then
+  printf '%s\\n' '{"head":{"ref":"feature/local-work","repo":{"full_name":"acme/repo"}}}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ] && [ "$3" = "--method" ] && [ "$4" = "PUT" ]; then
+  printf '%s\\n' '{"merged":true}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/local-work" ] && [ "$3" = "--method" ] && [ "$4" = "DELETE" ]; then
+  exit 0
+fi
+printf 'unexpected gh args: %s\\n' "$*" >&2
+exit 1
+`, async (logPath) => {
+      await expect(commands.get("merge_pr_local")?.(
+        { environmentId: environment.id, method: "rebase", deleteBranch: true },
+        context,
+      )).resolves.toBeUndefined();
+
+      const ghLog = await fs.readFile(logPath, "utf8");
+      expect(ghLog).toContain("api repos/acme/repo/pulls/42");
+      expect(ghLog).toContain("api repos/acme/repo/pulls/42 --method PUT -f merge_method=rebase");
+      expect(ghLog).toContain("api repos/acme/repo/git/refs/heads/feature/local-work --method DELETE");
+      expect(ghLog).not.toContain("pr merge");
+    });
+  });
+
   test("waits for a local bridge server to pass health before persisting pid and port", async () => {
     const appRoot = await createTempDir("ork-electron-app-");
     const worktreePath = await createTempDir("ork-electron-worktree-");

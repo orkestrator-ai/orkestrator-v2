@@ -188,6 +188,45 @@ function sanitizeGeneratedEnvironmentName(rawName: string): string {
   return name.split("-").filter(Boolean).slice(0, 3).join("-");
 }
 
+const PROMPT_NAME_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "at",
+  "be",
+  "by",
+  "can",
+  "could",
+  "for",
+  "from",
+  "in",
+  "is",
+  "of",
+  "on",
+  "or",
+  "please",
+  "should",
+  "that",
+  "the",
+  "these",
+  "this",
+  "those",
+  "to",
+  "with",
+  "would",
+]);
+
+function generateInitialEnvironmentName(prompt: string): string | undefined {
+  const words = prompt.match(/[A-Za-z0-9]+/g) ?? [];
+  const meaningfulWords = words
+    .map((word) => word.toLowerCase())
+    .filter((word) => word.length > 1 && !PROMPT_NAME_STOP_WORDS.has(word));
+  const selectedWords = (meaningfulWords.length > 0 ? meaningfulWords : words.map((word) => word.toLowerCase())).slice(0, 3);
+  if (selectedWords.length === 0) return undefined;
+  return sanitizeGeneratedEnvironmentName(selectedWords.join("-"));
+}
+
 function makeUniqueEnvironmentSlug(baseSlug: string, existingEnvironments: Environment[], extraBranches: string[] = []): string {
   const used = new Set<string>();
   for (const environment of existingEnvironments) {
@@ -238,15 +277,6 @@ async function generateEnvironmentNameWithCodexExec(prompt: string, context: Com
     return sanitizeGeneratedEnvironmentName(parseSlugFromResponse(response.trim()));
   } finally {
     await fs.rm(outputPath, { force: true }).catch(() => undefined);
-  }
-}
-
-async function generateInitialEnvironmentName(prompt: string, context: CommandContext): Promise<string | undefined> {
-  try {
-    return await generateEnvironmentNameWithCodexExec(prompt, context);
-  } catch (error) {
-    console.warn("[ElectronBackend] Failed to generate initial environment name:", error);
-    return undefined;
   }
 }
 
@@ -1138,12 +1168,12 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const initialPromptText = asOptionalString(initialPrompt);
     const trimmedInitialPrompt = initialPromptText?.trim();
     const generatedInitialName = !explicitName && trimmedInitialPrompt
-      ? await generateInitialEnvironmentName(trimmedInitialPrompt, context)
+      ? generateInitialEnvironmentName(trimmedInitialPrompt)
       : undefined;
     const baseName = explicitName
       ? sanitizeEnvironmentName(explicitName)
       : generatedInitialName;
-    const existingEnvironments = baseName ? await storage.loadEnvironments() : [];
+    const existingEnvironments = baseName ? await storage.getEnvironmentsByProject(project.id) : [];
     const existingGitBranches = baseName && project.localPath
       ? await listGitBranchesAtPath(project.localPath, true)
       : [];

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { registerTmuxBackendCommands } from "../../../electron/backend/tmux";
 import type { Environment } from "../../../electron/backend/models";
 
@@ -137,6 +138,15 @@ async function invoke(
   });
 }
 
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await delay(25);
+  }
+  throw new Error("timed out waiting for condition");
+}
+
 describe("Electron tmux backend command registration", () => {
   test("registers the tmux command surface", () => {
     const handlers = createHandlers();
@@ -267,6 +277,145 @@ describe("Electron tmux backend command registration", () => {
       expect(tmuxLog).toContain("-- BSpace");
       expect(emitted.some((item) => item.event === "claude-tmux:event")).toBe(true);
       expect(emitted.some((item) => item.event === `terminal-output-${terminalSessionId}`)).toBe(true);
+    });
+  });
+
+  test("falls back to the newest current-session transcript when Claude writes a different JSONL filename", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ worktree, home, environment }) => {
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+
+      const status = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-fallback", environmentId: environment.id },
+        context,
+      ) as { session_id: string; running: boolean };
+      expect(status.running).toBe(true);
+
+      const transcriptDir = path.join(home, ".claude", "projects", encodeCwd(worktree));
+      await fs.mkdir(transcriptDir, { recursive: true });
+
+      const oldPath = path.join(transcriptDir, "old-session.jsonl");
+      await fs.writeFile(oldPath, `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: "Old" } })}\n`);
+      await fs.utimes(oldPath, new Date(0), new Date(0));
+
+      const fallbackPath = path.join(transcriptDir, "claude-owned-session.jsonl");
+      await fs.writeFile(
+        fallbackPath,
+        `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: "Visible" } })}\n`,
+      );
+
+      await expect(invoke(
+        handlers,
+        "claude_tmux_transcript",
+        { tabId: "tab-fallback", environmentId: environment.id },
+      )).resolves.toEqual([
+        { type: "assistant", message: { role: "assistant", content: "Visible" } },
+      ]);
+
+      await invoke(handlers, "claude_tmux_stop", { tabId: "tab-fallback", environmentId: environment.id }, context);
+    });
+  });
+
+  test("does not use transcript fallback when fresh candidates are ambiguous", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ worktree, home, environment }) => {
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+
+      const status = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-ambiguous", environmentId: environment.id },
+        context,
+      ) as { running: boolean };
+      expect(status.running).toBe(true);
+
+      const transcriptDir = path.join(home, ".claude", "projects", encodeCwd(worktree));
+      await fs.mkdir(transcriptDir, { recursive: true });
+      await fs.writeFile(
+        path.join(transcriptDir, "first-fresh.jsonl"),
+        `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: "First" } })}\n`,
+      );
+      await fs.writeFile(
+        path.join(transcriptDir, "second-fresh.jsonl"),
+        `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: "Second" } })}\n`,
+      );
+
+      await expect(invoke(
+        handlers,
+        "claude_tmux_transcript",
+        { tabId: "tab-ambiguous", environmentId: environment.id },
+      )).resolves.toEqual([]);
+
+      await invoke(handlers, "claude_tmux_stop", { tabId: "tab-ambiguous", environmentId: environment.id }, context);
+    });
+  });
+
+  test("continues tailing live transcript lines after non-ASCII content", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ worktree, home, environment }) => {
+      const emitted: Array<{ event: string; payload: unknown }> = [];
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+        },
+        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        appRoot: "",
+        resourceRoot: "",
+      };
+
+      const status = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-tail", environmentId: environment.id },
+        context,
+      ) as { session_id: string; running: boolean };
+      expect(status.running).toBe(true);
+
+      const transcriptDir = path.join(home, ".claude", "projects", encodeCwd(worktree));
+      await fs.mkdir(transcriptDir, { recursive: true });
+      const transcriptPath = path.join(transcriptDir, `${status.session_id}.jsonl`);
+      await fs.writeFile(
+        transcriptPath,
+        `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: "Hello £" } })}\n`,
+      );
+
+      await waitFor(() => emitted.some((item) =>
+        item.event === "claude-tmux:event" &&
+        (item.payload as { kind?: string; line?: { message?: { content?: string } } }).kind === "transcript-line" &&
+        (item.payload as { line?: { message?: { content?: string } } }).line?.message?.content === "Hello £"
+      ));
+
+      await fs.appendFile(
+        transcriptPath,
+        `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: "Second message" } })}\n`,
+      );
+
+      await waitFor(() => emitted.some((item) =>
+        item.event === "claude-tmux:event" &&
+        (item.payload as { kind?: string; line?: { message?: { content?: string } } }).kind === "transcript-line" &&
+        (item.payload as { line?: { message?: { content?: string } } }).line?.message?.content === "Second message"
+      ));
+
+      await invoke(handlers, "claude_tmux_stop", { tabId: "tab-tail", environmentId: environment.id }, context);
     });
   });
 });

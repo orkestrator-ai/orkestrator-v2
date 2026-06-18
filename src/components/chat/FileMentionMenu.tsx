@@ -45,7 +45,7 @@ export function FileMentionMenu({
         role="listbox"
         aria-label="File and folder suggestions"
         className={cn(
-          "absolute z-50 max-h-96 w-96 overflow-y-auto rounded-md border border-border bg-popover shadow-lg",
+          "absolute z-50 max-h-96 w-96 overflow-y-auto rounded-xl border border-zinc-700/70 bg-zinc-900/95 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm",
           "animate-in fade-in-0 zoom-in-95"
         )}
         style={{ bottom: "100%", left: 0, marginBottom: "4px" }}
@@ -63,7 +63,7 @@ export function FileMentionMenu({
       role="listbox"
       aria-label="File and folder suggestions"
       className={cn(
-        "absolute z-50 max-h-96 w-96 overflow-y-auto rounded-md border border-border bg-popover shadow-lg",
+        "absolute z-50 max-h-96 w-96 overflow-y-auto rounded-xl border border-zinc-700/70 bg-zinc-900/95 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm",
         "animate-in fade-in-0 zoom-in-95"
       )}
       style={{ bottom: "100%", left: 0, marginBottom: "4px" }}
@@ -98,8 +98,8 @@ export function FileMentionMenu({
               className={cn(
                 "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm transition-colors",
                 isSelected
-                  ? "bg-primary text-primary-foreground"
-                  : "hover:bg-accent/50 hover:text-accent-foreground"
+                  ? "bg-zinc-800/80 text-foreground"
+                  : "hover:bg-zinc-800/70 hover:text-foreground"
               )}
             >
               {file.isDirectory ? (

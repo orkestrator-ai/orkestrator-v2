@@ -57,7 +57,7 @@ mock.module("@/lib/context-usage", () => ({
   extractContextUsage: () => null,
 }));
 
-// Mock sonner (toast) used by transitive deps (ClaudeMessage, etc.)
+// Mock sonner (toast) used by transitive UI deps.
 mock.module("sonner", () => ({
   toast: { success: () => {}, error: () => {} },
 }));

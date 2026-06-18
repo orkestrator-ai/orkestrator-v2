@@ -162,7 +162,7 @@ export function defaultConfig(): AppConfig {
       terminalAppearance: {
         fontFamily: "FiraCode Nerd Font",
         fontSize: 14,
-        backgroundColor: "#1e1e1e",
+        backgroundColor: "#141414",
       },
       terminalScrollback: 1000,
       experimentalCodexRawEventLogging: true,

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { NativeMessage } from "@/components/chat/NativeMessage";
+import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useConfigStore, useCodexStore, useEnvironmentStore } from "@/stores";
 import type { BuildPhase, PipelineSession } from "@/stores/buildPipelineStore";
@@ -1111,8 +1112,12 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
                     .map((message, index, filteredMessages) => (
                       <NativeMessage
                         key={message.id}
-                        message={message}
-                        previousMessage={index > 0 ? filteredMessages[index - 1] ?? null : null}
+                        message={normalizeCodexNativeMessage(message)}
+                        previousMessage={
+                          index > 0
+                            ? normalizeCodexNativeMessage(filteredMessages[index - 1]!)
+                            : null
+                        }
                         assistantLabel="Codex"
                       />
                     ))}

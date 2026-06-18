@@ -2,7 +2,9 @@ import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import { Loader2, AlertCircle, RefreshCw, ArrowDown, History } from "lucide-react";
 import { useVirtuosoScrollState, clearPersistedVirtuosoState, useElapsedTimer } from "@/hooks";
 import { formatElapsed } from "@/lib/format-elapsed";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -37,7 +39,7 @@ import {
   getLocalClaudeServerStatus,
   renameEnvironmentFromPrompt,
 } from "@/lib/tauri";
-import { ClaudeMessage } from "./ClaudeMessage";
+import { NativeMessage } from "@/components/chat/NativeMessage";
 import { ClaudeComposeBar } from "./ClaudeComposeBar";
 import { ClaudeQuestionCard } from "./ClaudeQuestionCard";
 import { ClaudePlanApprovalCard } from "./ClaudePlanApprovalCard";
@@ -47,6 +49,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import type { ClaudeAttachment } from "@/stores/claudeStore";
+import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
 
 interface ClaudeChatTabProps {
   tabId: string;
@@ -187,6 +190,8 @@ export function ClaudeChatTab({
   // Memoize messages separately to provide stable reference for child components
   // This prevents unnecessary recalculations when other session properties change
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
+  const hasMessageHistory = sessionMessages.length > 0;
+  const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
 
   // Queue length for this session - use selector to only re-render when this specific queue changes
   const queueLength = useClaudeStore(
@@ -1360,35 +1365,43 @@ export function ClaudeChatTab({
   }
 
   return (
-    <div className="@container flex flex-col h-full bg-background overflow-hidden">
-      {/* Virtualized messages area */}
-      <VirtualizedMessageList
-        messages={sessionMessages}
-        computeItemKey={(_index, msg) => msg.id}
-        renderMessage={(_index, message, prev) => (
-          <ClaudeMessage
-            message={message}
-            previousMessage={prev}
-            isStreaming={session?.isLoading}
-            containerId={containerId}
-          />
+    <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 flex-col transition-[opacity,transform] duration-300 ease-out motion-reduce:transition-none",
+          centerCompose && "pointer-events-none scale-[0.995] opacity-0",
         )}
-        emptyState={
-          <div className="flex flex-col items-center justify-center h-full min-h-[200px] text-muted-foreground gap-3">
-            <p className="text-sm">No messages yet. Start a conversation with Claude!</p>
-            {client && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setResumeDialogOpen(true)}
-              >
-                <History className="w-4 h-4 mr-2" />
-                Resume Session
-              </Button>
-            )}
-          </div>
-        }
-        footer={
+      >
+        {/* Virtualized messages area */}
+        <VirtualizedMessageList
+          messages={sessionMessages}
+          computeItemKey={(_index, msg) => msg.id}
+          renderMessage={(_index, message, prev) => (
+            <NativeMessage
+              message={normalizeClaudeMessage(message)}
+              previousMessage={prev ? normalizeClaudeMessage(prev) : null}
+              assistantLabel="Claude"
+              containerId={containerId}
+            />
+          )}
+          emptyState={
+            !centerCompose ? (
+              <div className="flex flex-col items-center justify-center h-full min-h-[200px] text-muted-foreground gap-3">
+                <p className="text-sm">No messages yet. Start a conversation with Claude!</p>
+                {client && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setResumeDialogOpen(true)}
+                  >
+                    <History className="w-4 h-4 mr-2" />
+                    Resume Session
+                  </Button>
+                )}
+              </div>
+            ) : undefined
+          }
+          footer={
           <>
             {session?.isLoading && (
               <div className="px-2 @sm:px-4 py-3">
@@ -1440,39 +1453,61 @@ export function ClaudeChatTab({
                 </div>
               </div>
             )}
-          </>
+              <div className="h-32" aria-hidden="true" />
+            </>
+          }
+          scrollProps={scrollProps}
+          virtuosoRef={virtuosoRef}
+        />
+
+        {/* Scroll to bottom button - positioned above compose bar */}
+        {!isAtBottom && (
+          <div className="flex justify-end px-4 py-1">
+            <button
+              onClick={scrollToBottom}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 shadow-sm transition-colors"
+              aria-label="Scroll to bottom of conversation"
+            >
+              <ArrowDown className="w-3.5 h-3.5" />
+              <span>Scroll down</span>
+            </button>
+          </div>
+        )}
+      </div>
+
+      <NativeComposeDock
+        centered={centerCompose}
+        actions={
+          client ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setResumeDialogOpen(true)}
+              className="rounded-full text-muted-foreground transition-colors hover:text-foreground"
+              aria-hidden={!centerCompose}
+              tabIndex={centerCompose ? 0 : -1}
+            >
+              <History className="mr-2 h-4 w-4" />
+              Resume Session
+            </Button>
+          ) : null
         }
-        scrollProps={scrollProps}
-        virtuosoRef={virtuosoRef}
-      />
-
-      {/* Scroll to bottom button - positioned above compose bar */}
-      {!isAtBottom && (
-        <div className="flex justify-end px-4 py-1">
-          <button
-            onClick={scrollToBottom}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 shadow-sm transition-colors"
-            aria-label="Scroll to bottom of conversation"
-          >
-            <ArrowDown className="w-3.5 h-3.5" />
-            <span>Scroll down</span>
-          </button>
-        </div>
-      )}
-
-      <ClaudeComposeBar
-        environmentId={environmentId}
-        tabId={tabId}
-        containerId={containerId}
-        models={models}
-        onSend={handleSend}
-        disabled={!client || !session}
-        isLoading={session?.isLoading ?? false}
-        queueLength={queueLength}
-        onStop={handleStop}
-        onQueue={handleQueue}
-        showAddressAll={showAddressAll}
-      />
+      >
+        <ClaudeComposeBar
+          environmentId={environmentId}
+          tabId={tabId}
+          containerId={containerId}
+          models={models}
+          onSend={handleSend}
+          disabled={!client || !session}
+          isLoading={session?.isLoading ?? false}
+          queueLength={queueLength}
+          onStop={handleStop}
+          onQueue={handleQueue}
+          showAddressAll={showAddressAll}
+          layout={centerCompose ? "centered" : "bottom"}
+        />
+      </NativeComposeDock>
 
       {client && (
         <ResumeSessionDialog

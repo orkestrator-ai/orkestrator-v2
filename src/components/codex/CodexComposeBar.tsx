@@ -79,6 +79,7 @@ interface CodexComposeBarProps {
   onFastModeChange: (enabled: boolean) => void;
   /** Show the review follow-up action for review workflow tabs. */
   showAddressAll?: boolean;
+  layout?: "bottom" | "centered";
 }
 
 export function CodexComposeBar({
@@ -103,6 +104,7 @@ export function CodexComposeBar({
   onReasoningEffortChange,
   onFastModeChange,
   showAddressAll = false,
+  layout = "bottom",
 }: CodexComposeBarProps) {
   const [isSending, setIsSending] = useState(false);
   const inputRef = useRef<MentionableInputRef>(null);
@@ -389,7 +391,12 @@ export function CodexComposeBar({
   );
 
   return (
-    <div className="shrink-0 border-t border-border bg-background p-3">
+    <div
+      className={cn(
+        "mx-auto w-[min(calc(100%_-_2rem),56rem)] shrink-0 rounded-2xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20",
+        layout === "bottom" ? "mb-4 mt-2" : "my-0",
+      )}
+    >
       {attachments.length > 0 ? (
         <div className="mb-2 flex flex-wrap gap-2">
           {attachments.map((attachment) => (
@@ -514,10 +521,10 @@ export function CodexComposeBar({
           </button>
 
           {showAttachmentMenu ? (
-            <div className="absolute bottom-full left-0 z-50 mb-1 w-56 rounded-md border border-border bg-popover p-1 shadow-md">
+            <div className="absolute bottom-full left-0 z-50 mb-1 w-56 rounded-xl border border-zinc-700/70 bg-zinc-900/95 p-1 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm">
               <button
                 type="button"
-                className="flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-muted-foreground"
+                className="flex w-full cursor-default items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted-foreground"
                 disabled
               >
                 <FileText className="h-4 w-4" />
@@ -525,7 +532,7 @@ export function CodexComposeBar({
               </button>
               <button
                 type="button"
-                className="flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-muted-foreground"
+                className="flex w-full cursor-default items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted-foreground"
                 disabled
               >
                 <ImageIcon className="h-4 w-4" />

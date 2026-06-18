@@ -212,6 +212,19 @@ describe("ClaudeChatTab", () => {
     mock.restore();
   });
 
+  test("shows the shared ready title before message history exists", () => {
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    expect(screen.getByText("Ready to build!")).toBeTruthy();
+    expect(screen.queryByText("No messages yet. Start a conversation with Claude!")).toBeNull();
+  });
+
   test("renders timer states from the real elapsed timer hook", async () => {
     installTimerHarness(1_000_000);
     act(() => {

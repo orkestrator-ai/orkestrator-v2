@@ -18,14 +18,14 @@ export function FilesPanelHeader() {
   const isLoading = activeTab === "changes" ? isLoadingChanges : isLoadingTree;
 
   return (
-    <div className="flex h-12 items-center justify-between px-3 bg-zinc-900/80 border-b border-border">
+    <div className="flex h-12 items-center justify-between border-b border-border/80 bg-zinc-800/60 px-3">
       {/* Tab switcher */}
       <Tabs
         value={activeTab}
         onValueChange={(v) => setActiveTab(v as FilesPanelTab)}
       >
-        <TabsList className="h-8 bg-black">
-          <TabsTrigger value="changes" className="px-2 text-xs data-[state=active]:!bg-black">
+        <TabsList className="h-8 bg-zinc-900/80">
+          <TabsTrigger value="changes" className="px-2 text-xs data-[state=active]:!bg-zinc-800">
             Changes
             {changesCount > 0 && (
               <span className="ml-1.5 rounded-full bg-primary px-1.5 text-[10px] text-primary-foreground">
@@ -33,7 +33,7 @@ export function FilesPanelHeader() {
               </span>
             )}
           </TabsTrigger>
-          <TabsTrigger value="all-files" className="px-2 text-xs data-[state=active]:!bg-black">
+          <TabsTrigger value="all-files" className="px-2 text-xs data-[state=active]:!bg-zinc-800">
             All files
           </TabsTrigger>
         </TabsList>

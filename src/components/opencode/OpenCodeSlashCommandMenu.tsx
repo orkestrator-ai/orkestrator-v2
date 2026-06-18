@@ -48,7 +48,7 @@ export function OpenCodeSlashCommandMenu({
       ref={menuRef}
       className={cn(
         "absolute z-50 max-h-64 w-full max-w-[36rem] overflow-y-auto",
-        "animate-in fade-in-0 zoom-in-95 rounded-md border border-border bg-popover shadow-lg",
+        "animate-in fade-in-0 zoom-in-95 rounded-xl border border-zinc-700/70 bg-zinc-900/95 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm",
       )}
       style={{ bottom: "100%", left: 0, marginBottom: "4px" }}
     >
@@ -67,8 +67,8 @@ export function OpenCodeSlashCommandMenu({
               className={cn(
                 "flex w-full min-w-0 items-center gap-2 rounded-sm px-2 py-1.5 text-sm transition-colors",
                 isSelected
-                  ? "bg-accent text-accent-foreground"
-                  : "hover:bg-accent/50 hover:text-accent-foreground",
+                  ? "bg-zinc-800/80 text-foreground"
+                  : "hover:bg-zinc-800/70 hover:text-foreground",
               )}
             >
               <Command className="h-4 w-4 shrink-0 text-muted-foreground" />

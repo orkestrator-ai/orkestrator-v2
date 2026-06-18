@@ -1,8 +1,8 @@
 // State for the Claude tmux mode tabs.
 //
 // We deliberately emit `ClaudeMessage` (the same shape used by Claude native
-// mode) so the same `<ClaudeMessage>` renderer can be reused — that's what
-// gives tmux mode visual parity with the native Agent SDK tab.
+// mode), then normalize it at the UI boundary so tmux mode uses the shared
+// native message renderer.
 //
 // Keyed by an environment-scoped tab key (each tab owns its own claude
 // session); the underlying environmentId is recorded on each tab's state so
@@ -127,7 +127,7 @@ interface TmuxTabState {
   sessionId: string | null;
   /** True once the tmux session is up. */
   running: boolean;
-  /** Native-shaped messages, ready for `<ClaudeMessage>`. */
+  /** Claude-shaped messages, normalized by native tab renderers. */
   messages: ClaudeMessage[];
   pendingApprovals: TmuxPendingApproval[];
   pendingQuestions: TmuxPendingQuestion[];

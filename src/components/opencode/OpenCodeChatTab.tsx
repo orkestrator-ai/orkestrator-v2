@@ -12,7 +12,9 @@ import {
   createOptimisticNativeMessage,
 } from "@/lib/chat/client-only-messages";
 import { formatElapsed } from "@/lib/format-elapsed";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import {
   useOpenCodeStore,
@@ -58,6 +60,7 @@ import {
   type OpenCodeModelPreferences,
 } from "@/lib/tauri";
 import { NativeMessage } from "@/components/chat/NativeMessage";
+import { normalizeOpenCodeNativeMessage } from "@/lib/chat/native-message-adapters";
 import { OpenCodeComposeBar } from "./OpenCodeComposeBar";
 import { OpenCodePermissionCard } from "./OpenCodePermissionCard";
 import { OpenCodeQuestionCard } from "./OpenCodeQuestionCard";
@@ -248,6 +251,8 @@ export function OpenCodeChatTab({
   );
 
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
+  const hasMessageHistory = sessionMessages.length > 0;
+  const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
   const showAddressAll = Boolean(
     isReviewTab &&
       session &&
@@ -1570,34 +1575,42 @@ export function OpenCodeChatTab({
   }
 
   return (
-    <div className="@container flex flex-col h-full bg-background overflow-hidden">
-      {/* Virtualized messages area */}
-      <VirtualizedMessageList
-        messages={sessionMessages}
-        computeItemKey={(_index, msg) => msg.id}
-        renderMessage={(_index, message, prev) => (
-          <NativeMessage
-            message={message}
-            previousMessage={prev}
-            assistantLabel="OpenCode"
-          />
+    <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 flex-col transition-[opacity,transform] duration-300 ease-out motion-reduce:transition-none",
+          centerCompose && "pointer-events-none scale-[0.995] opacity-0",
         )}
-        emptyState={
-          <div className="flex flex-col items-center justify-center h-full min-h-[200px] text-muted-foreground gap-3">
-            <p className="text-sm">No messages yet. Start a conversation!</p>
-            {client && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setResumeDialogOpen(true)}
-              >
-                <History className="w-4 h-4 mr-2" />
-                Resume Session
-              </Button>
-            )}
-          </div>
-        }
-        footer={
+      >
+        {/* Virtualized messages area */}
+        <VirtualizedMessageList
+          messages={sessionMessages}
+          computeItemKey={(_index, msg) => msg.id}
+          renderMessage={(_index, message, prev) => (
+            <NativeMessage
+              message={normalizeOpenCodeNativeMessage(message)}
+              previousMessage={prev ? normalizeOpenCodeNativeMessage(prev) : null}
+              assistantLabel="OpenCode"
+            />
+          )}
+          emptyState={
+            !centerCompose ? (
+              <div className="flex flex-col items-center justify-center h-full min-h-[200px] text-muted-foreground gap-3">
+                <p className="text-sm">No messages yet. Start a conversation!</p>
+                {client && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setResumeDialogOpen(true)}
+                  >
+                    <History className="w-4 h-4 mr-2" />
+                    Resume Session
+                  </Button>
+                )}
+              </div>
+            ) : undefined
+          }
+          footer={
           <>
             {session?.isLoading && (
               <div className="px-2 @sm:px-4 py-3">
@@ -1646,43 +1659,64 @@ export function OpenCodeChatTab({
                 </div>
               </div>
             )}
-          </>
+              <div className="h-32" aria-hidden="true" />
+            </>
+          }
+          scrollProps={scrollProps}
+          virtuosoRef={virtuosoRef}
+        />
+
+        {/* Scroll to bottom button - positioned above compose bar */}
+        {!isAtBottom && (
+          <div className="flex justify-end px-4 py-1">
+            <button
+              onClick={scrollToBottom}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 shadow-sm transition-colors"
+              aria-label="Scroll to bottom of conversation"
+            >
+              <ArrowDown className="w-3.5 h-3.5" />
+              <span>Scroll down</span>
+            </button>
+          </div>
+        )}
+      </div>
+
+      <NativeComposeDock
+        centered={centerCompose}
+        actions={
+          client ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setResumeDialogOpen(true)}
+              className="rounded-full text-muted-foreground transition-colors hover:text-foreground"
+              aria-hidden={!centerCompose}
+              tabIndex={centerCompose ? 0 : -1}
+            >
+              <History className="mr-2 h-4 w-4" />
+              Resume Session
+            </Button>
+          ) : null
         }
-        scrollProps={scrollProps}
-        virtuosoRef={virtuosoRef}
-      />
-
-      {/* Scroll to bottom button - positioned above compose bar */}
-      {!isAtBottom && (
-        <div className="flex justify-end px-4 py-1">
-          <button
-            onClick={scrollToBottom}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 shadow-sm transition-colors"
-            aria-label="Scroll to bottom of conversation"
-          >
-            <ArrowDown className="w-3.5 h-3.5" />
-            <span>Scroll down</span>
-          </button>
-        </div>
-      )}
-
-      {/* Compose bar */}
-      <OpenCodeComposeBar
-        environmentId={environmentId}
-        tabId={tabId}
-        containerId={containerId}
-        models={models}
-        slashCommands={slashCommands}
-        favoriteModelIds={favoriteModelIds}
-        onSend={handleSend}
-        disabled={!client || !session}
-        isLoading={session?.isLoading ?? false}
-        queueLength={queueLength}
-        onStop={handleStop}
-        onQueue={handleQueue}
-        onRefreshModels={refreshModels}
-        showAddressAll={showAddressAll}
-      />
+      >
+        <OpenCodeComposeBar
+          environmentId={environmentId}
+          tabId={tabId}
+          containerId={containerId}
+          models={models}
+          slashCommands={slashCommands}
+          favoriteModelIds={favoriteModelIds}
+          onSend={handleSend}
+          disabled={!client || !session}
+          isLoading={session?.isLoading ?? false}
+          queueLength={queueLength}
+          onStop={handleStop}
+          onQueue={handleQueue}
+          onRefreshModels={refreshModels}
+          showAddressAll={showAddressAll}
+          layout={centerCompose ? "centered" : "bottom"}
+        />
+      </NativeComposeDock>
 
       {client && (
         <OpenCodeResumeSessionDialog

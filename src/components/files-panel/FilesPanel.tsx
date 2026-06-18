@@ -13,7 +13,7 @@ export function FilesPanel() {
   useFilesPanel();
 
   return (
-    <div className="flex h-full flex-col bg-black">
+    <div className="flex h-full flex-col bg-zinc-900">
       <FilesPanelHeader />
       <ScrollArea className="min-h-0 flex-1">
         {activeTab === "changes" ? <ChangesView /> : <AllFilesView />}

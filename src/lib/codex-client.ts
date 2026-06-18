@@ -1,4 +1,4 @@
-import type { NativeMessagePart } from "./chat/native-message-types";
+import type { NativeMessage, NativeMessagePart } from "./chat/native-message-types";
 
 export interface CodexReasoningOption {
   effort: CodexReasoningEffort;
@@ -84,7 +84,7 @@ export interface CodexClient {
 
 export interface CodexMessage {
   id: string;
-  role: "user" | "assistant";
+  role: NativeMessage["role"];
   content: string;
   parts: NativeMessagePart[];
   createdAt: string;

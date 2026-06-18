@@ -1,0 +1,53 @@
+- generic [active]:
+  - generic:
+    - generic:
+      - generic:
+        - generic: Orkestrator AI
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - generic: Projects
+                  - button:
+                    - img
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - img
+                          - paragraph: No projects yet
+                          - button: Add your first project
+        - separator
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - button:
+                      - img
+                    - button:
+                      - img
+                  - generic:
+                    - generic: Select an environment to get started
+              - main:
+                - generic:
+                  - generic:
+                    - heading [level=2]: Welcome to Orkestrator AI
+                    - paragraph: Add a project to get started, then create an environment to begin coding.
+    - region "Notifications alt+T"
+  - alertdialog "Docker Required" [ref=e2]:
+    - generic [ref=e3]:
+      - heading "Docker Required" [level=2] [ref=e4]
+      - paragraph [ref=e5]:
+        - text: Docker is not running or not installed on your system. Orkestrator AI requires Docker to create and manage development environments.
+        - text: Please install Docker Desktop from
+        - link "docker.com" [ref=e6] [cursor=pointer]:
+          - /url: https://docker.com
+        - text: and ensure it is running before starting the application.
+    - generic [ref=e7]:
+      - button "Retry" [ref=e8]
+      - button "Close Application" [ref=e9]

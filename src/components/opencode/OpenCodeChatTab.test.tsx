@@ -91,6 +91,7 @@ mock.module("./OpenCodeComposeBar", () => ({
     disabled,
     isLoading,
     showAddressAll,
+    layout,
   }: {
     onSend: (text: string, attachments: typeof composeAttachments) => Promise<void>;
     onStop?: () => Promise<void>;
@@ -98,8 +99,10 @@ mock.module("./OpenCodeComposeBar", () => ({
     disabled?: boolean;
     isLoading?: boolean;
     showAddressAll?: boolean;
+    layout?: "bottom" | "centered";
   }) => (
     <>
+      <div data-testid="opencode-compose-layout">{layout}</div>
       <div data-testid="opencode-address-all-state">
         {showAddressAll ? "shown" : "hidden"}
       </div>
@@ -298,6 +301,25 @@ describe("OpenCodeChatTab", () => {
     globalThis.setInterval = ORIGINAL_SET_INTERVAL;
     globalThis.clearInterval = ORIGINAL_CLEAR_INTERVAL;
     mock.restore();
+  });
+
+  test("centers the compose bar with the ready title until message history exists", async () => {
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    expect(screen.getByText("Ready to build!")).toBeTruthy();
+    expect(screen.getByTestId("opencode-compose-layout").textContent).toBe("centered");
+
+    fireEvent.click(screen.getByTestId("opencode-send"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("opencode-compose-layout").textContent).toBe("bottom");
+    });
   });
 
   test("shows the first prompt and naming feedback before the rename completes", async () => {

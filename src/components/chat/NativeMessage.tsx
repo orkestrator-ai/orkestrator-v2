@@ -21,8 +21,7 @@ import {
 } from "lucide-react";
 import { type Components } from "react-markdown";
 import { cn } from "@/lib/utils";
-import { openInBrowser } from "@/lib/tauri";
-import { readFileBase64 } from "@/lib/tauri";
+import { openInBrowser, readContainerFileBase64, readFileBase64 } from "@/lib/tauri";
 import {
   Collapsible,
   CollapsibleContent,
@@ -41,10 +40,14 @@ import { TodoToolPart } from "@/components/todo/TodoToolPart";
 import { MessageErrorAlert, MessageShell } from "@/components/chat/MessageShell";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { MessageCopyButton } from "@/components/chat/MessageCopyButton";
+import { formatElapsed } from "@/lib/format-elapsed";
 import {
   type NativeMessage as NativeMessageType,
   type NativeMessagePart,
+  type NativeTaskGroupPart,
+  type NativeToolGroupPart,
 } from "@/lib/chat/native-message-types";
+import { normalizeNativeMessage } from "@/lib/chat/native-message-adapters";
 
 /** Custom link component that opens URLs in the system browser */
 function ExternalLink({
@@ -87,6 +90,7 @@ interface NativeMessageProps {
   message: NativeMessageType;
   previousMessage?: NativeMessageType | null;
   assistantLabel?: string;
+  containerId?: string;
 }
 
 /** Render a thinking/reasoning part inline */
@@ -101,7 +105,7 @@ function ThinkingPart({ content }: { content: string }) {
     return (
       <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
         <CollapsibleTrigger
-          className="flex items-center gap-2 w-full text-xs text-muted-foreground py-2 px-3 bg-muted/50 rounded-md hover:bg-muted/70 transition-colors cursor-pointer"
+          className="flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md transition-colors hover:text-foreground cursor-pointer"
         >
           <ChevronRight
             className={cn(
@@ -118,7 +122,7 @@ function ThinkingPart({ content }: { content: string }) {
           )}
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <div className="mt-1 rounded-md border border-border/30 bg-muted/20 p-3">
+          <div className="mt-1 border-l border-border/40 pl-3">
             <MessageMarkdown
               content={content}
               components={markdownComponents}
@@ -132,7 +136,7 @@ function ThinkingPart({ content }: { content: string }) {
   }
 
   return (
-    <div className="my-1.5 flex items-center gap-2 w-full text-xs text-muted-foreground py-2 px-3 bg-muted/50 rounded-md">
+    <div className="my-1 flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md">
       <Brain className="w-3.5 h-3.5 shrink-0" />
       <span className="font-medium shrink-0">thinking</span>
       <span className="font-mono text-muted-foreground/80 truncate min-w-0">
@@ -162,7 +166,7 @@ function ToolPart({
 
   const stateColors = {
     success: "text-green-600",
-    failure: "text-red-600",
+    failure: "text-red-400",
     pending: "text-yellow-600 animate-pulse",
   };
 
@@ -231,7 +235,7 @@ function ToolPart({
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
       <CollapsibleTrigger
         className={cn(
-          "flex items-center gap-2 w-full text-xs text-muted-foreground py-2 px-3 bg-muted/50 rounded-md hover:bg-muted/70 transition-colors",
+          "flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md transition-colors hover:text-foreground",
           hasExpandableContent && "cursor-pointer",
           !hasExpandableContent && "cursor-default",
         )}
@@ -267,7 +271,7 @@ function ToolPart({
 
       {hasExpandableContent && (
         <CollapsibleContent className="mt-1">
-          <div className="rounded-md bg-muted/30 border border-border/50 overflow-hidden">
+          <div className="overflow-hidden border-l border-border/40 pl-3">
             {/* Input/Command section */}
             {formattedInput && (
               <div className="px-3 py-2 border-b border-border/30">
@@ -288,7 +292,7 @@ function ToolPart({
 
             {/* Error section */}
             {toolError && (
-              <div className="px-3 py-2 bg-destructive/10">
+              <div className="px-3 py-2">
                 <div className="flex items-start gap-2">
                   <AlertCircle className="w-3.5 h-3.5 text-destructive shrink-0 mt-0.5" />
                   <pre className="text-xs font-mono text-destructive whitespace-pre-wrap break-all">
@@ -428,7 +432,7 @@ function EditToolPart({
 
   const stateColors = {
     success: "text-green-600",
-    failure: "text-red-600",
+    failure: "text-red-400",
     pending: "text-yellow-600 animate-pulse",
   };
 
@@ -496,7 +500,7 @@ function EditToolPart({
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
       <CollapsibleTrigger
         className={cn(
-          "flex items-center gap-2 w-full text-xs text-muted-foreground py-2 px-3 bg-muted/50 rounded-md hover:bg-muted/70 transition-colors",
+          "flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md transition-colors hover:text-foreground",
           hasExpandableContent && "cursor-pointer",
           !hasExpandableContent && "cursor-default",
         )}
@@ -528,7 +532,7 @@ function EditToolPart({
               <span className="text-green-500 font-mono">+{additions}</span>
             )}
             {deletions > 0 && (
-              <span className="text-red-500 font-mono">-{deletions}</span>
+              <span className="text-red-400 font-mono">-{deletions}</span>
             )}
           </span>
         )}
@@ -543,9 +547,9 @@ function EditToolPart({
 
       {hasExpandableContent && (
         <CollapsibleContent className="mt-1">
-          <div className="rounded-md bg-muted/30 border border-border/50 overflow-hidden">
+          <div className="overflow-hidden border-l border-border/40 pl-3">
             {/* Header with file path and pop-out button */}
-            <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/30 bg-muted/20">
+            <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/30">
               <span className="text-xs font-mono text-muted-foreground truncate">
                 {filePath || "Unknown file"}
               </span>
@@ -596,7 +600,7 @@ function EditToolPart({
 
             {/* Error section */}
             {toolError && (
-              <div className="px-3 py-2 bg-destructive/10">
+              <div className="px-3 py-2">
                 <div className="flex items-start gap-2">
                   <AlertCircle className="w-3.5 h-3.5 text-destructive shrink-0 mt-0.5" />
                   <pre className="text-xs font-mono text-destructive whitespace-pre-wrap break-all">
@@ -724,7 +728,25 @@ function parseLocalFilePathFromUrl(fileUrl: string): string | null {
   }
 }
 
-function FilePart({ path, fileUrl }: { path: string; fileUrl?: string }) {
+function isSafeContainerPath(path: string): boolean {
+  if (!path || path.includes("\0") || path.includes("\n") || path.includes("\r")) {
+    return false;
+  }
+  if (path.split(/[\\/]+/).some((segment) => segment === "..")) {
+    return false;
+  }
+  return !path.startsWith("/") || path === "/workspace" || path.startsWith("/workspace/");
+}
+
+function FilePart({
+  path,
+  fileUrl,
+  containerId,
+}: {
+  path: string;
+  fileUrl?: string;
+  containerId?: string;
+}) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -756,11 +778,23 @@ function FilePart({ path, fileUrl }: { path: string; fileUrl?: string }) {
         return;
       }
 
-      const filePath = fileUrl?.startsWith("file://")
+      const localFilePath = fileUrl?.startsWith("file://")
         ? parseLocalFilePathFromUrl(fileUrl)
-        : path.startsWith("/")
-          ? path
-          : null;
+        : null;
+
+      if (containerId && !localFilePath) {
+        if (!isSafeContainerPath(path)) {
+          throw new Error("Unsafe container image path");
+        }
+
+        const base64 = await readContainerFileBase64(containerId, path);
+        const mimeType = getMimeType(path);
+        setImageSrc(`data:${mimeType};base64,${base64}`);
+        setPreviewOpen(true);
+        return;
+      }
+
+      const filePath = localFilePath ?? (path.startsWith("/") ? path : null);
 
       if (!filePath) {
         throw new Error("No readable local image path available");
@@ -779,7 +813,7 @@ function FilePart({ path, fileUrl }: { path: string; fileUrl?: string }) {
     } finally {
       setLoading(false);
     }
-  }, [isImage, imageSrc, path, fileUrl]);
+  }, [isImage, imageSrc, path, fileUrl, containerId]);
 
   return (
     <>
@@ -822,7 +856,9 @@ function FilePart({ path, fileUrl }: { path: string; fileUrl?: string }) {
 function shouldAddTextLeadIn(previousPart?: NativeMessagePart | null): boolean {
   return (
     previousPart?.type === "tool-invocation" ||
-    previousPart?.type === "subagent"
+    previousPart?.type === "subagent" ||
+    previousPart?.type === "tool-group" ||
+    previousPart?.type === "task-group"
   );
 }
 
@@ -843,14 +879,21 @@ function getPreviousRenderedPart(
 function TextPart({
   content,
   followsToolActivity = false,
+  showCopy = true,
 }: {
   content: string;
   followsToolActivity?: boolean;
+  showCopy?: boolean;
 }) {
   return (
-    <div className={cn(followsToolActivity && "pt-2")}>
+    <div className={cn("group", followsToolActivity && "pt-2")}>
       <MessageMarkdown content={content} components={markdownComponents} />
-      <MessageCopyButton content={content} />
+      {showCopy ? (
+        <MessageCopyButton
+          content={content}
+          wrapperClassName="opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100"
+        />
+      ) : null}
     </div>
   );
 }
@@ -914,7 +957,7 @@ function SubagentPart({ part }: { part: NativeMessagePart }) {
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
       <CollapsibleTrigger
-        className="w-full rounded-lg border border-border/40 bg-muted/40 px-3 py-3 text-left transition-colors hover:bg-muted/60 cursor-pointer"
+        className="w-full rounded-md px-2 py-2 text-left transition-colors hover:text-foreground cursor-pointer"
       >
         <div className="flex items-start gap-3">
           <ChevronRight
@@ -953,9 +996,9 @@ function SubagentPart({ part }: { part: NativeMessagePart }) {
       </CollapsibleTrigger>
 
       <CollapsibleContent className="mt-1">
-        <div className="rounded-md border border-border/40 bg-muted/20 p-3">
+        <div className="border-l border-border/40 pl-3">
           {part.subagentPrompt ? (
-            <div className="mb-3 rounded-md border border-border/30 bg-background/40 px-3 py-2">
+            <div className="mb-3 border-l border-border/30 pl-3">
               <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
                 Task
               </div>
@@ -977,7 +1020,7 @@ function SubagentPart({ part }: { part: NativeMessagePart }) {
               />
             ))}
             {subagentActions.length === 0 ? (
-              <div className="rounded-md border border-dashed border-border/40 px-3 py-2 text-xs text-muted-foreground/70">
+              <div className="px-3 py-2 text-xs text-muted-foreground/70">
                 No child actions yet.
               </div>
             ) : null}
@@ -988,13 +1031,85 @@ function SubagentPart({ part }: { part: NativeMessagePart }) {
   );
 }
 
+function ToolGroupPart({
+  part,
+  containerId,
+}: {
+  part: NativeToolGroupPart;
+  containerId?: string;
+}) {
+  return (
+    <div className="my-2 rounded-lg border border-zinc-700/70 bg-zinc-800/35 p-2">
+      {part.parts.map((child, index) => (
+        <MessagePart
+          key={`tool-group-part-${index}-${child.type}`}
+          part={child}
+          previousPart={index > 0 ? part.parts[index - 1] : null}
+          containerId={containerId}
+        />
+      ))}
+    </div>
+  );
+}
+
+function TaskGroupPart({
+  part,
+  containerId,
+}: {
+  part: NativeTaskGroupPart;
+  containerId?: string;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const taskName = part.task.toolTitle || part.task.toolName || "Task";
+  const childCount = part.childTools.length;
+
+  return (
+    <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
+      <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:text-foreground">
+        <ChevronRight
+          className={cn(
+            "h-3 w-3 shrink-0 transition-transform",
+            isOpen && "rotate-90",
+          )}
+        />
+        <Layers className="h-3.5 w-3.5 shrink-0" />
+        <span className="font-medium">{taskName}</span>
+        <span className="truncate text-muted-foreground/70">
+          {childCount === 0 ? "No child tools" : `${childCount} child tool${childCount === 1 ? "" : "s"}`}
+        </span>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="mt-1 space-y-1 border-l border-border/40 pl-3">
+          <MessagePart
+            part={part.task}
+            previousPart={null}
+            containerId={containerId}
+          />
+          {part.childTools.map((child, index) => (
+            <MessagePart
+              key={`task-child-${index}-${child.toolUseId ?? child.toolName ?? child.type}`}
+              part={child}
+              previousPart={index > 0 ? part.childTools[index - 1] : part.task}
+              containerId={containerId}
+            />
+          ))}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 /** Render a single message part based on its type */
 function MessagePart({
   part,
   previousPart,
+  showTextCopy = true,
+  containerId,
 }: {
   part: NativeMessagePart;
   previousPart?: NativeMessagePart | null;
+  showTextCopy?: boolean;
+  containerId?: string;
 }) {
   switch (part.type) {
     case "thinking":
@@ -1006,6 +1121,7 @@ function MessagePart({
         <TextPart
           content={part.content}
           followsToolActivity={shouldAddTextLeadIn(previousPart)}
+          showCopy={showTextCopy}
         />
       );
     case "tool-invocation":
@@ -1049,9 +1165,13 @@ function MessagePart({
       // Tool results are typically shown inline with tool invocations
       return null;
     case "file":
-      return <FilePart path={part.content} fileUrl={part.fileUrl} />;
+      return <FilePart path={part.content} fileUrl={part.fileUrl} containerId={containerId} />;
     case "subagent":
       return <SubagentPart part={part} />;
+    case "tool-group":
+      return <ToolGroupPart part={part} containerId={containerId} />;
+    case "task-group":
+      return <TaskGroupPart part={part} containerId={containerId} />;
     default:
       return null;
   }
@@ -1061,18 +1181,53 @@ export const NativeMessage = memo(function NativeMessage({
   message,
   previousMessage = null,
   assistantLabel = "Assistant",
+  containerId,
 }: NativeMessageProps) {
+  const normalizedMessage = useMemo(() => normalizeNativeMessage(message), [message]);
+  const normalizedPreviousMessage = useMemo(
+    () => previousMessage ? normalizeNativeMessage(previousMessage) : null,
+    [previousMessage],
+  );
+  message = normalizedMessage;
+  previousMessage = normalizedPreviousMessage;
+
   const isUser = message.role === "user";
   const isError = message.id.startsWith(ERROR_MESSAGE_PREFIX);
-  const isSystem = message.id.startsWith(SYSTEM_MESSAGE_PREFIX);
+  const isSystem = message.role === "system" || message.id.startsWith(SYSTEM_MESSAGE_PREFIX);
   const isContinuation =
     !isUser &&
+    !isSystem &&
     !isError &&
     previousMessage?.role === "assistant" &&
     !previousMessage.id.startsWith(ERROR_MESSAGE_PREFIX) &&
     isSameMinute(previousMessage.createdAt, message.createdAt);
 
   const hasTextParts = message.parts.some((part) => part.type === "text");
+  const userCopyContent = isUser
+    ? (
+        message.parts
+          .filter((part) => part.type === "text")
+          .map((part) => part.content)
+          .join("\n\n")
+          .trim() || message.content
+      )
+    : "";
+  const assistantCopyContent = !isUser
+    ? (
+        message.parts
+          .filter((part) => part.type === "text")
+          .map((part) => part.content)
+          .join("\n\n")
+          .trim() || message.content
+      )
+    : "";
+  const durationLabel = useMemo(() => {
+    if (isUser || isError || isSystem || previousMessage?.role !== "user") {
+      return null;
+    }
+
+    return formatResponseDuration(previousMessage.createdAt, message.createdAt);
+  }, [isUser, isError, isSystem, previousMessage, message.createdAt]);
 
   // Render error messages with special styling
   if (isError) {
@@ -1102,16 +1257,19 @@ export const NativeMessage = memo(function NativeMessage({
       isUser={isUser}
       authorLabel={isUser ? "You" : assistantLabel}
       timestampLabel={formatTime(message.createdAt)}
+      durationLabel={durationLabel}
       showHeader={!isContinuation}
       className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
+      actions={
+        (isUser ? userCopyContent : assistantCopyContent) ? (
+          <MessageCopyButton
+            content={isUser ? userCopyContent : assistantCopyContent}
+            wrapperClassName="mt-0 pr-0"
+          />
+        ) : undefined
+      }
     >
-      {message.parts.map((part, index) => (
-        <MessagePart
-          key={`${message.id}-part-${index}-${part.type}`}
-          part={part}
-          previousPart={getPreviousRenderedPart(message.parts, index)}
-        />
-      ))}
+      {renderMessageParts(message, { showTextCopy: false, containerId })}
 
       {!hasTextParts && message.content && (
         <TextPart
@@ -1119,11 +1277,27 @@ export const NativeMessage = memo(function NativeMessage({
           followsToolActivity={shouldAddTextLeadIn(
             getPreviousRenderedPart(message.parts, message.parts.length),
           )}
+          showCopy={false}
         />
       )}
     </MessageShell>
   );
 });
+
+function renderMessageParts(
+  message: NativeMessageType,
+  options: { showTextCopy?: boolean; containerId?: string } = {},
+) {
+  return message.parts.map((part, index) => (
+      <MessagePart
+        key={`${message.id}-part-${index}-${part.type}`}
+        part={part}
+        previousPart={getPreviousRenderedPart(message.parts, index)}
+        showTextCopy={options.showTextCopy ?? true}
+        containerId={options.containerId}
+      />
+  ));
+}
 
 function formatTime(isoString: string): string {
   try {
@@ -1135,6 +1309,17 @@ function formatTime(isoString: string): string {
   } catch {
     return "";
   }
+}
+
+function formatResponseDuration(startIso: string, endIso: string): string | null {
+  const start = new Date(startIso).getTime();
+  const end = new Date(endIso).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return null;
+  }
+
+  const seconds = Math.max(1, Math.round((end - start) / 1000));
+  return `responded in ${formatElapsed(seconds)}`;
 }
 
 function isSameMinute(a: string, b: string): boolean {

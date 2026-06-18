@@ -4,9 +4,8 @@
 // surfaces a chat UI by reading the JSONL transcript and listening to
 // Claude Code hooks. No Agent SDK required.
 //
-// Visual parity with the native Claude tab is achieved by reusing the
-// `<ClaudeMessage>` renderer; we only build a slim compose bar of our own
-// that matches the native styling and adds model / plan-mode controls.
+// Visual parity with the native tabs is achieved by normalizing transcript
+// messages into the shared native message model before rendering.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
@@ -27,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { useVirtuosoScrollState } from "@/hooks";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import {
   Dialog,
@@ -41,7 +41,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ClaudeMessage } from "@/components/claude/ClaudeMessage";
+import { NativeMessage } from "@/components/chat/NativeMessage";
 import { ClaudeQuestionCard } from "@/components/claude/ClaudeQuestionCard";
 import { ClaudeTmuxInteractiveTerminal } from "@/components/claude/ClaudeTmuxInteractiveTerminal";
 import { ResumeTmuxSessionDialog } from "@/components/claude/ResumeTmuxSessionDialog";
@@ -94,6 +94,7 @@ import {
   type TmuxQueuedMessage,
 } from "@/stores/claudeTmuxStore";
 import { collapseTaskToolUpdates } from "@/lib/task-tool-snapshots";
+import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
 import type { ClaudeEffortLevel, ClaudeModel } from "@/lib/claude-client";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -387,6 +388,14 @@ export function ClaudeTmuxChatTab({
     () => collapseTaskToolUpdates(compactConsecutiveAssistantMessages(messages)),
     [messages],
   );
+  const hasMessageHistory = displayMessages.length > 0;
+  const centerCompose =
+    showStartScreen &&
+    !showTui &&
+    !hasPendingHookCards &&
+    !hasMessageHistory &&
+    !running &&
+    !isThinking;
   const showAddressAll = Boolean(
     isReviewTab &&
       running &&
@@ -1224,7 +1233,7 @@ export function ClaudeTmuxChatTab({
           className="flex-1"
         />
       ) : (
-        <>
+        <div className="@container relative flex min-h-0 flex-1 flex-col overflow-hidden">
           {/* Raw TUI panel (debug) */}
           {showTui && (
             <div className="border-b border-border bg-black p-2 shrink-0">
@@ -1237,42 +1246,48 @@ export function ClaudeTmuxChatTab({
             </div>
           )}
 
-          {/* Messages */}
-          <VirtualizedMessageList
-            messages={displayMessages}
-            computeItemKey={(_index, message) => message.id}
-            renderMessage={(_index, message, previousMessage) => (
-              <ClaudeMessage
-                message={message}
-                previousMessage={previousMessage}
-                isStreaming={running}
-                containerId={containerId}
-              />
+          <div
+            className={cn(
+              "flex min-h-0 flex-1 flex-col transition-[opacity,transform] duration-300 ease-out motion-reduce:transition-none",
+              centerCompose && "pointer-events-none scale-[0.995] opacity-0",
             )}
-            emptyState={
-              !hasPendingHookCards ? (
-                showStartScreen ? (
-                  <StartScreen
-                    onStartFresh={() => launchSession()}
-                    onPickResume={() => setResumeDialogOpen(true)}
-                    selectedModel={selectedModelObj.name}
-                    effortLabel={
-                      effortOptions.length > 0
-                        ? EFFORT_LABELS[effectiveEffort]
-                        : null
-                    }
-                    planMode={planMode}
-                  />
-                ) : (
-                  <div className="text-xs text-muted-foreground italic py-8 text-center">
-                    {running
-                      ? "Waiting for Claude..."
-                      : "Starting Claude under tmux..."}
-                  </div>
-                )
-              ) : undefined
-            }
-            footer={
+          >
+            {/* Messages */}
+            <VirtualizedMessageList
+              messages={displayMessages}
+              computeItemKey={(_index, message) => message.id}
+              renderMessage={(_index, message, previousMessage) => (
+                <NativeMessage
+                  message={normalizeClaudeMessage(message)}
+                  previousMessage={previousMessage ? normalizeClaudeMessage(previousMessage) : null}
+                  assistantLabel="Claude"
+                  containerId={containerId}
+                />
+              )}
+              emptyState={
+                !centerCompose && !hasPendingHookCards ? (
+                  showStartScreen ? (
+                    <StartScreen
+                      onStartFresh={() => launchSession()}
+                      onPickResume={() => setResumeDialogOpen(true)}
+                      selectedModel={selectedModelObj.name}
+                      effortLabel={
+                        effortOptions.length > 0
+                          ? EFFORT_LABELS[effectiveEffort]
+                          : null
+                      }
+                      planMode={planMode}
+                    />
+                  ) : (
+                    <div className="text-xs text-muted-foreground italic py-8 text-center">
+                      {running
+                        ? "Waiting for Claude..."
+                        : "Starting Claude under tmux..."}
+                    </div>
+                  )
+                ) : undefined
+              }
+              footer={
               <div className="max-w-3xl mx-auto min-w-0 px-2 @sm:px-4 py-3">
                 {pendingApprovals.map((a) => (
                   <ApprovalCard
@@ -1357,67 +1372,101 @@ export function ClaudeTmuxChatTab({
                     </div>
                   </div>
                 )}
-              </div>
-            }
-            scrollProps={scrollProps}
-            virtuosoRef={virtuosoRef}
-          />
 
-          {!isAtBottom && (
-            <div className="flex justify-end px-4 py-1">
-              <button
-                type="button"
-                onClick={scrollToBottom}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 shadow-sm transition-colors"
-                aria-label="Scroll to bottom of conversation"
-              >
-                <ArrowDown className="w-3.5 h-3.5" />
-                <span>Scroll down</span>
-              </button>
-            </div>
-          )}
+                <div className="h-32" aria-hidden="true" />
+              </div>
+              }
+              scrollProps={scrollProps}
+              virtuosoRef={virtuosoRef}
+            />
+
+            {!isAtBottom && (
+              <div className="flex justify-end px-4 py-1">
+                <button
+                  type="button"
+                  onClick={scrollToBottom}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 shadow-sm transition-colors"
+                  aria-label="Scroll to bottom of conversation"
+                >
+                  <ArrowDown className="w-3.5 h-3.5" />
+                  <span>Scroll down</span>
+                </button>
+              </div>
+            )}
+          </div>
 
           {/* Compose bar — stays "busy" for the full turn (HTTP submit + Claude
               processing) so a user can't queue a second message before the
               previous one finishes. Mirrors the spinner condition above. */}
-          <TmuxComposeBar
-            sessionKey={storeKey}
-            containerId={containerId}
-            worktreePath={worktreePath}
-            disabled={!running}
-            busy={isThinking}
-            submitting={sending || modelSwitching || effortSwitching}
-            autoFocus={isActive}
-            onSubmit={handleSubmit}
-            onQueue={handleQueue}
-            queueLength={queueLength}
-            showAddressAll={showAddressAll}
-            onAddressAll={handleAddressAll}
-            onInterrupt={handleInterrupt}
-            models={availableModels}
-            selectedModel={selectedModel}
-            onSelectModel={(modelId) => {
-              void handleSelectModel(modelId);
-            }}
-            selectedEffort={effectiveEffort}
-            effortOptions={effortOptions}
-            onSelectEffort={(level) => {
-              void handleSelectEffort(level);
-            }}
-            planMode={planMode}
-            onTogglePlanMode={setPlanMode}
-            modelDisabled={
-              (hasStarted && !running) ||
-              sending ||
-              isThinking ||
-              modelSwitching ||
-              effortSwitching
+          <NativeComposeDock
+            centered={centerCompose}
+            actions={
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => launchSession()}
+                  className="rounded-full text-muted-foreground transition-colors hover:text-foreground"
+                  aria-hidden={!centerCompose}
+                  tabIndex={centerCompose ? 0 : -1}
+                >
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  Start fresh
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setResumeDialogOpen(true)}
+                  className="rounded-full text-muted-foreground transition-colors hover:text-foreground"
+                  aria-hidden={!centerCompose}
+                  tabIndex={centerCompose ? 0 : -1}
+                >
+                  <History className="mr-2 h-4 w-4" />
+                  Resume previous session...
+                </Button>
+              </div>
             }
-            modelSwitching={modelSwitching}
-            effortSwitching={effortSwitching}
-            planLocked={hasStarted}
-          />
-        </>
+          >
+            <TmuxComposeBar
+              sessionKey={storeKey}
+              containerId={containerId}
+              worktreePath={worktreePath}
+              disabled={!running}
+              busy={isThinking}
+              submitting={sending || modelSwitching || effortSwitching}
+              autoFocus={isActive}
+              onSubmit={handleSubmit}
+              onQueue={handleQueue}
+              queueLength={queueLength}
+              showAddressAll={showAddressAll}
+              onAddressAll={handleAddressAll}
+              onInterrupt={handleInterrupt}
+              models={availableModels}
+              selectedModel={selectedModel}
+              onSelectModel={(modelId) => {
+                void handleSelectModel(modelId);
+              }}
+              selectedEffort={effectiveEffort}
+              effortOptions={effortOptions}
+              onSelectEffort={(level) => {
+                void handleSelectEffort(level);
+              }}
+              planMode={planMode}
+              onTogglePlanMode={setPlanMode}
+              modelDisabled={
+                (hasStarted && !running) ||
+                sending ||
+                isThinking ||
+                modelSwitching ||
+                effortSwitching
+              }
+              modelSwitching={modelSwitching}
+              effortSwitching={effortSwitching}
+              planLocked={hasStarted}
+              layout={centerCompose ? "centered" : "bottom"}
+            />
+          </NativeComposeDock>
+        </div>
       )}
 
       <ResumeTmuxSessionDialog
@@ -2156,6 +2205,7 @@ interface TmuxComposeBarProps {
   modelSwitching: boolean;
   effortSwitching: boolean;
   planLocked: boolean;
+  layout?: "bottom" | "centered";
 }
 
 function TmuxComposeBar({
@@ -2184,6 +2234,7 @@ function TmuxComposeBar({
   modelSwitching,
   effortSwitching,
   planLocked,
+  layout = "bottom",
 }: TmuxComposeBarProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
@@ -2427,7 +2478,12 @@ function TmuxComposeBar({
   );
 
   return (
-    <div className="shrink-0 border-t border-border bg-background p-3">
+    <div
+      className={cn(
+        "mx-auto w-[min(calc(100%_-_2rem),56rem)] shrink-0 rounded-2xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20",
+        layout === "bottom" ? "mb-4 mt-2" : "my-0",
+      )}
+    >
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-2">
           {attachments.map((attachment) => (

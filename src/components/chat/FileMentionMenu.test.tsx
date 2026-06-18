@@ -52,15 +52,15 @@ describe("FileMentionMenu", () => {
     expect(onSelect).toHaveBeenCalledWith(files[1]);
   });
 
-  test("highlights the selected option with the primary blue treatment", () => {
+  test("highlights the selected option with the input-bar popup treatment", () => {
     render(<FileMentionMenu files={files} selectedIndex={0} onSelect={() => {}} onClose={() => {}} />);
 
     const selectedOption = screen.getByRole("option", { name: /Button.tsx/ });
     const unselectedOption = screen.getByRole("option", { name: /hooks/ });
 
-    expect(selectedOption.className).toContain("bg-primary");
-    expect(selectedOption.className).toContain("text-primary-foreground");
-    expect(unselectedOption.className).not.toContain("bg-primary");
+    expect(selectedOption.className).toContain("bg-zinc-800/80");
+    expect(selectedOption.className).toContain("text-foreground");
+    expect(unselectedOption.className).not.toContain("bg-zinc-800/80");
   });
 
   test("closes when clicking outside the menu", () => {

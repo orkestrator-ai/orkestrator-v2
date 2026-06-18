@@ -173,7 +173,7 @@ export function EnvironmentItem({
                 onClick={handleClick}
                 onKeyDown={handleKeyDown}
                 className={cn(
-                  "group flex w-full cursor-pointer items-center gap-2 py-1.5 pr-2 text-left text-sm transition-colors",
+                  "group flex w-full cursor-pointer items-center gap-2 py-1.5 pr-2 text-left text-[13px] transition-colors",
                   isSelected && !isMultiSelectMode
                     ? "text-foreground"
                     : "text-muted-foreground hover:text-foreground",
@@ -214,7 +214,7 @@ export function EnvironmentItem({
                     )} />
                   )
                 )}
-                <span className={cn("flex-1 truncate", isBuildEnvironment && "text-yellow-400")}>
+                <span className={cn("flex-1 truncate font-medium", isBuildEnvironment && "text-yellow-400")}>
                   {isBuildEnvironment ? environment.name.replace(/^Build:\s*/, "") : environment.name}
                 </span>
                 {diffStats && (diffStats.additions > 0 || diffStats.deletions > 0 || diffStats.filesChanged > 0) && (
@@ -223,7 +223,7 @@ export function EnvironmentItem({
                       <span className="text-green-500">+{diffStats.additions}</span>
                     )}
                     {diffStats.deletions > 0 && (
-                      <span className="text-red-500">-{diffStats.deletions}</span>
+                      <span className="text-red-400">-{diffStats.deletions}</span>
                     )}
                     {diffStats.additions === 0 && diffStats.deletions === 0 && diffStats.filesChanged > 0 && (
                       <span className="text-muted-foreground">{diffStats.filesChanged}F</span>
@@ -280,7 +280,7 @@ export function EnvironmentItem({
                       <span className="text-green-500">+{diffStats.additions} added</span>
                     )}
                     {diffStats.deletions > 0 && (
-                      <span className="text-red-500">-{diffStats.deletions} removed</span>
+                      <span className="text-red-400">-{diffStats.deletions} removed</span>
                     )}
                   </div>
                 </div>

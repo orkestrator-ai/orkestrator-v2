@@ -104,7 +104,7 @@ describe("NativeMessage task list rendering", () => {
     expect(container.textContent).not.toContain("[ ]");
   });
 
-  test("renders an icon-only copy button under text parts", async () => {
+  test("renders an icon-only copy button in the assistant metadata row", async () => {
     mockWriteText.mockClear();
     mockWriteText.mockImplementation(async () => {});
     const message = makeMessage([
@@ -118,7 +118,8 @@ describe("NativeMessage task list rendering", () => {
 
     const copyButton = screen.getByRole("button", { name: "Copy text" });
     expect(copyButton.textContent).toBe("");
-    expect(copyButton.parentElement?.className).toContain("pr-3");
+    expect(copyButton.parentElement?.className).toContain("pr-0");
+    expect(screen.getByText(/Assistant/)).toBeTruthy();
 
     fireEvent.click(copyButton);
 

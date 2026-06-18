@@ -29,7 +29,7 @@ import {
   getClaudeServerStatus,
   getProjectNotes,
 } from "@/lib/tauri";
-import { ClaudeMessage } from "@/components/claude/ClaudeMessage";
+import { NativeMessage } from "@/components/chat/NativeMessage";
 import type { BuildTabData } from "@/types/paneLayout";
 import { extractContextUsage } from "@/lib/context-usage";
 import { cn } from "@/lib/utils";
@@ -46,6 +46,7 @@ import { isSetupPending } from "@/lib/setup-commands";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { resolveActiveBuildPipelineAgent } from "@/lib/build-pipeline-agent";
+import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
 import * as tauri from "@/lib/tauri";
 
 // Reference to kanban store for non-reactive reads
@@ -1405,11 +1406,15 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
                     return true;
                   })
                   .map((message, filteredIndex, filteredMessages) => (
-                    <ClaudeMessage
+                    <NativeMessage
                       key={message.id}
-                      message={message}
-                      previousMessage={filteredIndex > 0 ? filteredMessages[filteredIndex - 1] ?? null : null}
-                      isStreaming={sessionData.isLoading && filteredIndex === filteredMessages.length - 1}
+                      message={normalizeClaudeMessage(message)}
+                      previousMessage={
+                        filteredIndex > 0
+                          ? normalizeClaudeMessage(filteredMessages[filteredIndex - 1]!)
+                          : null
+                      }
+                      assistantLabel="Claude"
                     />
                   ))}
                 {sessionData.isLoading && (

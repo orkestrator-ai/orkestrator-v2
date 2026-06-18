@@ -3,6 +3,11 @@
 
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import { isEditTool } from "./tool-names";
+import type {
+  NativeMessage,
+  NativeMessagePart,
+  NativeToolDiffMetadata,
+} from "./chat/native-message-types";
 
 export { type OpencodeClient };
 
@@ -97,64 +102,9 @@ function resolveDefaultVariant(defaultConfig: unknown): string | undefined {
   return undefined;
 }
 
-/** Diff metadata for edit tool operations */
-export interface ToolDiffMetadata {
-  /** File path that was edited */
-  filePath?: string;
-  /** Number of lines added */
-  additions?: number;
-  /** Number of lines removed */
-  deletions?: number;
-  /** Content before the edit (for diff view) */
-  before?: string;
-  /** Content after the edit (for diff view) */
-  after?: string;
-  /** Unified diff string (from metadata.diff) */
-  diff?: string;
-}
-
-/** Part types for OpenCode messages */
-export interface OpenCodeMessagePart {
-  type: "text" | "thinking" | "tool-invocation" | "tool-result" | "file" | "subagent";
-  content: string;
-  /** Internal source part id for incremental streaming updates */
-  sourcePartId?: string;
-  /** Internal source message id for incremental streaming updates */
-  sourceMessageId?: string;
-  /** For file parts - original URL from SDK (may be data URL or file:// URL) */
-  fileUrl?: string;
-  /** For tool invocations - the tool name */
-  toolName?: string;
-  /** For tool invocations - the tool arguments */
-  toolArgs?: Record<string, unknown>;
-  /** For tool results - success/failure state */
-  toolState?: "success" | "failure" | "pending";
-  /** For tool invocations - human-readable title/description */
-  toolTitle?: string;
-  /** For tool invocations - the output/result when completed */
-  toolOutput?: string;
-  /** For tool invocations - the error message when failed */
-  toolError?: string;
-  /** For edit tools - diff metadata */
-  toolDiff?: ToolDiffMetadata;
-  /** For Codex transcript-derived subagent groups */
-  subagentId?: string;
-  subagentName?: string;
-  subagentRole?: string;
-  subagentPrompt?: string;
-  subagentActions?: OpenCodeMessagePart[];
-  subagentActionCount?: number;
-}
-
-export interface OpenCodeMessage {
-  id: string;
-  role: "user" | "assistant";
-  /** Raw text content (for backwards compatibility) */
-  content: string;
-  /** Structured parts with type information */
-  parts: OpenCodeMessagePart[];
-  createdAt: string;
-}
+export type ToolDiffMetadata = NativeToolDiffMetadata;
+export type OpenCodeMessagePart = NativeMessagePart;
+export type OpenCodeMessage = NativeMessage;
 
 
 export interface OpenCodeSession {

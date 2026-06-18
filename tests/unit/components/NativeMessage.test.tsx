@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import type { NativeMessage as NativeMessageType } from "../../../src/lib/chat/native-message-types";
+import { mockWriteText } from "../../mocks/clipboard";
 import {
   type CreateFileTabOptions,
   TerminalProvider,
@@ -10,9 +11,11 @@ import {
 
 const mockOpenInBrowser = mock(async () => {});
 const mockReadFileBase64 = mock(async () => "image-base64");
+const mockReadContainerFileBase64 = mock(async () => "container-image-base64");
 
 mock.module("@/lib/tauri", () => ({
   openInBrowser: mockOpenInBrowser,
+  readContainerFileBase64: mockReadContainerFileBase64,
   readFileBase64: mockReadFileBase64,
 }));
 
@@ -55,6 +58,10 @@ describe("NativeMessage", () => {
     mockOpenInBrowser.mockImplementation(async () => {});
     mockReadFileBase64.mockReset();
     mockReadFileBase64.mockImplementation(async () => "image-base64");
+    mockReadContainerFileBase64.mockReset();
+    mockReadContainerFileBase64.mockImplementation(async () => "container-image-base64");
+    mockWriteText.mockReset();
+    mockWriteText.mockImplementation(async () => {});
   });
 
   test("renders single newlines as visible line breaks in text parts", () => {
@@ -75,6 +82,33 @@ describe("NativeMessage", () => {
     expect(container.textContent).toContain("Second line");
     expect(container.textContent).toContain("Third line");
     expect(lineBreaks).toHaveLength(2);
+  });
+
+  test("renders user copy control below the bubble with the timestamp row", async () => {
+    const message: NativeMessageType = {
+      id: "msg-user-copy",
+      role: "user",
+      content: "Copy this user prompt",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        { type: "text", content: "Copy this user prompt" },
+      ],
+    };
+
+    const { container } = render(<NativeMessage message={message} />);
+    const bubble = screen.getByText("Copy this user prompt").closest(".rounded-xl") as HTMLElement;
+    expect(bubble.textContent).not.toContain("12:00");
+    expect(bubble.className).toContain("[&_.prose_p]:my-0");
+
+    const hiddenRow = container.querySelector(".group-hover\\:opacity-100") as HTMLElement;
+    expect(hiddenRow).not.toBeNull();
+    expect(hiddenRow.textContent).toContain("12:00");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
+
+    await waitFor(() => {
+      expect(mockWriteText).toHaveBeenCalledWith("Copy this user prompt");
+    });
   });
 
   test("opens markdown links through the system browser", () => {
@@ -209,7 +243,7 @@ describe("NativeMessage", () => {
     );
   });
 
-  test("renders system and error messages distinctly and compacts continuations", () => {
+  test("renders system and error messages distinctly and shows continuation metadata", () => {
     const systemMessage: NativeMessageType = {
       id: "system-naming-1",
       role: "assistant",
@@ -264,7 +298,7 @@ describe("NativeMessage", () => {
     );
 
     expect(screen.getByText("Continuation response")).toBeTruthy();
-    expect(screen.queryByText("Worker")).toBeNull();
+    expect(screen.getByText("Worker")).toBeTruthy();
   });
 
   test("opens local image previews and closes the overlay with Escape", async () => {
@@ -294,6 +328,67 @@ describe("NativeMessage", () => {
     await waitFor(() => {
       expect(screen.queryByAltText("screenshot.png")).toBeNull();
     });
+  });
+
+  test("loads safe container image previews through the container reader", async () => {
+    const message: NativeMessageType = {
+      id: "msg-container-file-preview",
+      role: "user",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "file",
+          content: "/workspace/.orkestrator/clipboard/screenshot.png",
+          fileUrl: "/workspace/.orkestrator/clipboard/screenshot.png",
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} containerId="container-1" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /screenshot\.png/i }));
+
+    const image = await screen.findByAltText("screenshot.png");
+    expect(mockReadContainerFileBase64).toHaveBeenCalledWith(
+      "container-1",
+      "/workspace/.orkestrator/clipboard/screenshot.png",
+    );
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+    expect(image.getAttribute("src")).toBe("data:image/png;base64,container-image-base64");
+  });
+
+  test("does not fall back to host file reads for unsafe container image paths", async () => {
+    const consoleError = console.error;
+    console.error = mock(() => {}) as typeof console.error;
+    const message: NativeMessageType = {
+      id: "msg-unsafe-container-file-preview",
+      role: "user",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "file",
+          content: "/etc/passwd.png",
+          fileUrl: "/etc/passwd.png",
+        },
+      ],
+    };
+
+    try {
+      render(<NativeMessage message={message} containerId="container-1" />);
+
+      fireEvent.click(screen.getByRole("button", { name: /passwd\.png/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText("(error)")).toBeTruthy();
+      });
+      expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
+      expect(mockReadFileBase64).not.toHaveBeenCalled();
+      expect(screen.queryByAltText("passwd.png")).toBeNull();
+    } finally {
+      console.error = consoleError;
+    }
   });
 
   test("opens data URL and remote image previews without local file reads", async () => {

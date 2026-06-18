@@ -26,9 +26,13 @@ let mockFileMentionMenuOpen = false;
 // renders the real SlashCommandMenu and would otherwise see this file's
 // null-component stub via Bun's module cache).
 import * as realSlashCommandMenu from "@/components/claude/SlashCommandMenu";
+import * as realMentionableInput from "@/components/chat/MentionableInput";
+import * as realFileMentionMenu from "@/components/chat/FileMentionMenu";
 import * as realUseFileMentions from "@/hooks/useFileMentions";
 import * as realUseFileSearch from "@/hooks/useFileSearch";
 const realSlashCommandMenuSnapshot = { ...realSlashCommandMenu };
+const realMentionableInputSnapshot = { ...realMentionableInput };
+const realFileMentionMenuSnapshot = { ...realFileMentionMenu };
 const realUseFileMentionsSnapshot = { ...realUseFileMentions };
 const realUseFileSearchSnapshot = { ...realUseFileSearch };
 
@@ -37,6 +41,8 @@ afterAll(() => {
     "@/components/claude/SlashCommandMenu",
     () => realSlashCommandMenuSnapshot,
   );
+  mock.module("@/components/chat/MentionableInput", () => realMentionableInputSnapshot);
+  mock.module("@/components/chat/FileMentionMenu", () => realFileMentionMenuSnapshot);
   mock.module("@/hooks/useFileMentions", () => realUseFileMentionsSnapshot);
   mock.module("@/hooks/useFileSearch", () => realUseFileSearchSnapshot);
 });
@@ -62,7 +68,7 @@ mock.module("sonner", () => ({
 // terminal-paste tests that rely on them.
 
 // Stub complex child components to isolate compose bar logic
-mock.module("@/components/claude/MentionableInput", () => ({
+mock.module("@/components/chat/MentionableInput", () => ({
   MentionableInput: (props: {
     value: string;
     placeholder?: string;
@@ -96,7 +102,7 @@ mock.module("@/components/claude/SlashCommandMenu", () => ({
     }),
 }));
 
-mock.module("@/components/claude/FileMentionMenu", () => ({
+mock.module("@/components/chat/FileMentionMenu", () => ({
   FileMentionMenu: () => null,
 }));
 

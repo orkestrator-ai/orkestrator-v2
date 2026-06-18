@@ -35,7 +35,7 @@ export function ChangedFileItem({ change, onClick }: ChangedFileItemProps) {
           <span className="text-green-500">+{change.additions}</span>
         )}
         {change.deletions > 0 && (
-          <span className="text-red-500">-{change.deletions}</span>
+          <span className="text-red-400">-{change.deletions}</span>
         )}
       </div>
     </button>

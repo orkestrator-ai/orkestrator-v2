@@ -56,11 +56,11 @@ export function AppShell({ children }: AppShellProps) {
       {/* Custom title bar - replaces macOS title bar (Overlay mode) */}
       <div
         className="flex h-7 w-full shrink-0 items-center justify-center bg-black"
-        data-electron-drag-region
+        data-backend-drag-region
         onMouseDown={handleTitleBarMouseDown}
         style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
       >
-        <span className="text-xs font-medium text-muted-foreground" data-electron-drag-region>
+        <span className="text-xs font-medium text-muted-foreground" data-backend-drag-region>
           Orkestrator AI
         </span>
       </div>

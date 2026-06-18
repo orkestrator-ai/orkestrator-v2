@@ -671,6 +671,41 @@ describe("PersistentTerminal", () => {
     });
   });
 
+  it("stores a replacement PTY session id over a stale existing id", async () => {
+    useTerminalSessionStore.setState({
+      sessions: new Map([
+        [
+          "container-1:tab-1",
+          {
+            sessionId: "stale-session",
+            hasLaunchedCommand: false,
+          },
+        ],
+      ]),
+      composeDraftText: new Map(),
+      composeDraftImages: new Map(),
+    });
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        paneId="pane-1"
+      />
+    );
+
+    await waitFor(() => {
+      expect(useTerminalSessionStore.getState().sessions.get("container-1:tab-1")?.sessionId).toBe("session-1");
+    });
+  });
+
   it("only signals setup completion when the OSC success marker arrives", async () => {
     const onSetupComplete = mock((_payload: { persistSetupComplete: boolean }) => {});
 

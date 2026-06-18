@@ -21,6 +21,7 @@ import {
 
 interface DraggableTabBarProps {
   pane: PaneLeaf;
+  environmentId: string;
   onTabSelect: (tabId: string) => void;
   isDropTarget?: boolean;
   /** Currently dragged tab ID (for cross-pane visual feedback) */
@@ -33,6 +34,7 @@ interface DraggableTabBarProps {
 
 export function DraggableTabBar({
   pane,
+  environmentId,
   onTabSelect,
   isDropTarget = false,
   activeDragId,
@@ -100,10 +102,10 @@ export function DraggableTabBar({
       }
 
       for (let i = idsInPane.length - 1; i >= 0; i--) {
-        removeTab(pane.id, idsInPane[i]!);
+        removeTab(pane.id, idsInPane[i]!, environmentId);
       }
     },
-    [pane.id, pane.tabs, removeTab, isDirty],
+    [environmentId, pane.id, pane.tabs, removeTab, isDirty],
   );
 
   const handleClose = useCallback(
@@ -152,12 +154,12 @@ export function DraggableTabBar({
     }
 
     for (let i = pendingCloseTabIds.length - 1; i >= 0; i--) {
-      removeTab(pane.id, pendingCloseTabIds[i]!);
+      removeTab(pane.id, pendingCloseTabIds[i]!, environmentId);
     }
 
     setPendingCloseTabIds([]);
     setPendingCloseTabNames([]);
-  }, [pendingCloseTabIds, pane.id, clearDirty, removeTab]);
+  }, [environmentId, pendingCloseTabIds, pane.id, clearDirty, removeTab]);
 
   const handleCancelClose = useCallback(() => {
     setPendingCloseTabIds([]);

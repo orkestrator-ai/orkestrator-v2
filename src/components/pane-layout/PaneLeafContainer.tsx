@@ -2,7 +2,7 @@ import { memo, useCallback, useRef, useLayoutEffect } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { useShallow } from "zustand/react/shallow";
 import { usePaneLayoutStore, useEnvironmentStore, useConfigStore } from "@/stores";
-import { useTerminalPortalStore, createTerminalKey } from "@/stores/terminalPortalStore";
+import { useTerminalPortalStore } from "@/stores/terminalPortalStore";
 import type { PaneLeaf } from "@/types/paneLayout";
 import { createTabbarDroppableId } from "@/types/paneLayout";
 import { cn } from "@/lib/utils";
@@ -36,17 +36,16 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
 }: PaneLeafContainerProps) {
   // Use selectors to only subscribe to the specific values we need
   // This prevents re-renders when other parts of the store change
-  const { setActivePane, setActiveTab, environments, activeEnvironmentId } = usePaneLayoutStore(
+  const { setActivePane, setActiveTab, environments } = usePaneLayoutStore(
     useShallow((state) => ({
       setActivePane: state.setActivePane,
       setActiveTab: state.setActiveTab,
       environments: state.environments,
-      activeEnvironmentId: state.activeEnvironmentId,
     }))
   );
 
   // Derive activePaneId from current environment state
-  const currentEnvState = activeEnvironmentId ? environments.get(activeEnvironmentId) : null;
+  const currentEnvState = environments.get(environmentId);
   const activePaneId = currentEnvState?.activePaneId ?? "default";
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -68,7 +67,6 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
       unregisterPaneHost: state.unregisterPaneHost,
     }))
   );
-  const terminals = useTerminalPortalStore((state) => state.terminals);
 
   // Register this pane's content area as a terminal host
   useLayoutEffect(() => {
@@ -81,51 +79,6 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
       unregisterPaneHost(environmentId, pane.id);
     };
   }, [environmentId, pane.id, registerPaneHost, unregisterPaneHost]);
-
-  // Keep terminal portal elements attached to this pane host
-  useLayoutEffect(() => {
-    const host = portalHostRef.current;
-    if (!host) return;
-
-    // Collect portal elements for this pane's terminal tabs
-    const portalElements: HTMLDivElement[] = [];
-    for (const tab of pane.tabs) {
-      // Skip non-terminal tabs (file and native agent tabs render directly)
-      if (
-        tab.type === "file"
-        || tab.type === "opencode-native"
-        || tab.type === "claude-native"
-        || tab.type === "claude-tmux"
-        || tab.type === "codex-native"
-        || tab.type === "claude-build"
-      ) {
-        continue;
-      }
-      const terminalKey = createTerminalKey(environmentId, tab.id);
-      const terminalData = terminals.get(terminalKey);
-      if (terminalData?.portalElement) {
-        portalElements.push(terminalData.portalElement);
-      }
-    }
-
-    // Ensure host contains exactly these portals (preserve existing to avoid unnecessary DOM churn)
-    const existing = Array.from(host.children) as HTMLElement[];
-    const existingSet = new Set(existing);
-
-    // Remove stale children
-    for (const child of existing) {
-      if (!portalElements.includes(child as HTMLDivElement)) {
-        host.removeChild(child);
-      }
-    }
-
-    // Append missing portals
-    for (const portalElement of portalElements) {
-      if (!existingSet.has(portalElement)) {
-        host.appendChild(portalElement);
-      }
-    }
-  }, [pane.tabs, terminals, environmentId]);
 
   // Handle clicking on the pane to focus it
   const handlePaneClick = useCallback(() => {
@@ -158,6 +111,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
       <div ref={setNodeRef}>
         <DraggableTabBar
           pane={pane}
+          environmentId={environmentId}
           onTabSelect={handleTabSelect}
           isDropTarget={isOver}
           activeDragId={activeDragId}

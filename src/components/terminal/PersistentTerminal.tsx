@@ -513,7 +513,7 @@ export function PersistentTerminal({
 
   // Store session ID when we get one
   useEffect(() => {
-    if (sessionId && !existingSessionId) {
+    if (sessionId && sessionId !== existingSessionId) {
       console.debug("[PersistentTerminal] Storing new session ID for sessionKey:", sessionKey, sessionId);
       const currentSession = useTerminalSessionStore.getState().sessions.get(sessionKey);
       setSession(sessionKey, {

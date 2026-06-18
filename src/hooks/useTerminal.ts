@@ -155,11 +155,28 @@ export function useTerminal({
 
     try {
       let targetSessionId: string;
+      let shouldStartSession = true;
 
       // If we have an existing session, try to reconnect to it
       if (existingSessionId) {
         console.log("[useTerminal] Reconnecting to existing session:", existingSessionId);
-        targetSessionId = existingSessionId;
+        const existingStatus = await backend.getTerminalSession(existingSessionId).catch((err) => {
+          console.warn("[useTerminal] Failed to check existing terminal session, creating a new one:", err);
+          return null;
+        });
+
+        if (existingStatus?.running) {
+          targetSessionId = existingSessionId;
+          shouldStartSession = false;
+        } else if (isLocal && environmentId) {
+          console.log("[useTerminal] Existing terminal session is stale, creating a new local session");
+          targetSessionId = await backend.createLocalTerminalSession(environmentId, cols, rows);
+          console.log("[useTerminal] Got replacement local sessionId:", targetSessionId);
+        } else {
+          console.log("[useTerminal] Existing terminal session is stale, creating a new container session");
+          targetSessionId = await backend.createTerminalSession(containerId!, cols, rows, user);
+          console.log("[useTerminal] Got replacement sessionId:", targetSessionId);
+        }
       } else if (isLocal && environmentId) {
         // Create new local session
         console.log("[useTerminal] Creating local terminal session for environment:", environmentId);
@@ -189,7 +206,7 @@ export function useTerminal({
       unlistenRef.current = unlisten;
 
       // Only start session if it's new (existing sessions are already running)
-      if (!existingSessionId) {
+      if (shouldStartSession) {
         console.log("[useTerminal] Starting terminal session...", isLocal ? "(local)" : "(container)");
         if (isLocal) {
           await backend.startLocalTerminalSession(targetSessionId);

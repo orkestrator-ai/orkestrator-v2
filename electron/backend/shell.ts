@@ -3,6 +3,11 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  assertBase64PayloadWithinLimit,
+  resolveReadableHostFilePath,
+  validateRelativeFilePath,
+} from "./path-safety.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -71,15 +76,14 @@ export async function pathExists(filePath: string): Promise<boolean> {
 }
 
 export async function readFileBase64(filePath: string): Promise<string> {
-  return (await fs.readFile(filePath)).toString("base64");
+  return (await fs.readFile(await resolveReadableHostFilePath(filePath))).toString("base64");
 }
 
 export async function writeFileBase64(rootPath: string, relativePath: string, base64Data: string): Promise<string> {
-  if (path.isAbsolute(relativePath) || relativePath.split(path.sep).includes("..")) {
-    throw new Error(`Invalid relative file path: ${relativePath}`);
-  }
+  const safeRelativePath = validateRelativeFilePath(relativePath, "relative file path");
+  assertBase64PayloadWithinLimit(base64Data);
 
-  const fullPath = path.join(rootPath, relativePath);
+  const fullPath = path.join(rootPath, safeRelativePath);
   await fs.mkdir(path.dirname(fullPath), { recursive: true });
   await fs.writeFile(fullPath, Buffer.from(base64Data, "base64"));
   return fullPath;
@@ -106,14 +110,12 @@ export function inferLanguage(filePath: string): string {
 }
 
 export async function readTextFile(rootPath: string, relativePath: string): Promise<{ path: string; content: string; language: string }> {
-  if (path.isAbsolute(relativePath) || relativePath.split(path.sep).includes("..")) {
-    throw new Error(`Invalid relative file path: ${relativePath}`);
-  }
+  const safeRelativePath = validateRelativeFilePath(relativePath, "relative file path");
 
-  const fullPath = path.join(rootPath, relativePath);
+  const fullPath = path.join(rootPath, safeRelativePath);
   return {
-    path: relativePath,
+    path: safeRelativePath,
     content: await fs.readFile(fullPath, "utf8"),
-    language: inferLanguage(relativePath),
+    language: inferLanguage(safeRelativePath),
   };
 }

@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { OrkestratorBackend } from "./backend/index.js";
 import { APP_SLUG, PRODUCT_NAME } from "./backend/constants.js";
+import { resolveRendererIndexPath, resolveRuntimeRoots } from "./paths.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -79,7 +80,7 @@ async function createWindow(): Promise<void> {
     await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:1420");
     mainWindow.webContents.openDevTools({ mode: "detach" });
   } else {
-    await mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"));
+    await mainWindow.loadFile(resolveRendererIndexPath(app.getAppPath()));
   }
 }
 
@@ -132,8 +133,12 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(async () => {
-  const appRoot = isDev ? path.resolve(__dirname, "..") : app.getAppPath();
-  const resourceRoot = isDev ? appRoot : process.resourcesPath;
+  const { appRoot, resourceRoot } = resolveRuntimeRoots({
+    isDev,
+    dirname: __dirname,
+    appPath: app.getAppPath(),
+    resourcesPath: process.resourcesPath,
+  });
   backend = new OrkestratorBackend({
     dataDir: app.getPath("userData"),
     appRoot,

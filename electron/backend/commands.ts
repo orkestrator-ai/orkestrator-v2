@@ -1,9 +1,12 @@
-import { existsSync, promises as fs } from "node:fs";
+import { chmodSync, existsSync, promises as fs, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { shell } from "electron";
+import { createRequire } from "node:module";
+import { dialog, shell } from "electron";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import * as pty from "node-pty";
+import type { IPty } from "node-pty";
 import type { Environment, EnvironmentStatus, EnvironmentType, PortMapping, PrState, SessionStatus, SessionType } from "./models.js";
 import {
   APP_SLUG,
@@ -37,6 +40,12 @@ import {
   spawnCommand,
   writeFileBase64,
 } from "./shell.js";
+import {
+  assertBase64PayloadWithinLimit,
+  MAX_BINARY_FILE_BYTES,
+  validateRelativeFilePath,
+  workspaceFilePath,
+} from "./path-safety.js";
 import { registerTmuxBackendCommands } from "./tmux.js";
 
 export type BackendEmit = (event: string, payload: unknown) => void;
@@ -50,7 +59,14 @@ export type CommandContext = {
 
 type CommandHandler = (args: JsonRecord, context: CommandContext) => Promise<unknown> | unknown;
 
-const terminalProcesses = new Map<string, ChildProcessWithoutNullStreams>();
+const nodeRequire = createRequire(import.meta.url);
+
+type TerminalSessionConfig =
+  | { kind: "container"; containerId: string; cols: number; rows: number; user?: string }
+  | { kind: "local"; environmentId: string; cols: number; rows: number };
+
+const terminalProcesses = new Map<string, IPty>();
+const terminalSessionConfigs = new Map<string, TerminalSessionConfig>();
 const localServerProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 
 function asString(value: unknown, name: string): string {
@@ -71,6 +87,10 @@ function asNumber(value: unknown, name: string): number {
   return value;
 }
 
+function asTerminalDimension(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
@@ -85,6 +105,93 @@ function asEnvironmentType(value: unknown): EnvironmentType {
 
 function quoteShell(value: string): string {
   return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+function bytesPayload(data: string | Buffer): number[] {
+  return Array.from(Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8"));
+}
+
+function terminalEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    TERM: process.env.TERM || "xterm-256color",
+    COLORTERM: process.env.COLORTERM || "truecolor",
+    LANG: process.env.LANG || "en_US.UTF-8",
+  };
+}
+
+function ensureNodePtySpawnHelperExecutable(): void {
+  if (process.platform !== "darwin") return;
+
+  const packageJsonPath = nodeRequire.resolve("node-pty/package.json");
+  const helperPath = path.join(path.dirname(packageJsonPath), "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper");
+  if (!existsSync(helperPath)) return;
+
+  const stat = statSync(helperPath);
+  if ((stat.mode & 0o111) !== 0) return;
+
+  chmodSync(helperPath, stat.mode | 0o755);
+}
+
+function resolveLocalShellPath(): string {
+  const configuredShell = process.env.SHELL?.trim();
+  if (configuredShell && path.isAbsolute(configuredShell) && existsSync(configuredShell)) {
+    return configuredShell;
+  }
+
+  for (const candidate of ["/bin/zsh", "/bin/bash", "/bin/sh"]) {
+    if (existsSync(candidate)) return candidate;
+  }
+
+  return configuredShell || "zsh";
+}
+
+function rememberTerminalSession(id: string, config: TerminalSessionConfig): string {
+  terminalSessionConfigs.set(id, config);
+  return id;
+}
+
+function cleanupTerminalSession(id: string): void {
+  terminalProcesses.delete(id);
+  terminalSessionConfigs.delete(id);
+}
+
+function spawnTerminalProcess(
+  id: string,
+  command: string,
+  args: string[],
+  options: { cwd?: string; cols: number; rows: number },
+  emit: BackendEmit,
+): IPty {
+  const existing = terminalProcesses.get(id);
+  if (existing) return existing;
+
+  ensureNodePtySpawnHelperExecutable();
+
+  const terminalProcess = pty.spawn(command, args, {
+    name: "xterm-256color",
+    cols: options.cols,
+    rows: options.rows,
+    cwd: options.cwd,
+    env: terminalEnv(),
+  });
+
+  terminalProcesses.set(id, terminalProcess);
+  terminalProcess.onData((data) => emit(`terminal-output-${id}`, bytesPayload(data)));
+  terminalProcess.onExit(() => cleanupTerminalSession(id));
+  return terminalProcess;
+}
+
+function parsePositiveInteger(value: string, name: string): number {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(`Invalid ${name}: ${trimmed}`);
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`Invalid ${name}: ${trimmed}`);
+  }
+  return parsed;
 }
 
 function parseDockerStatus(status: string): EnvironmentStatus {
@@ -213,12 +320,24 @@ async function dockerExecDetached(containerId: string, command: string): Promise
 }
 
 async function checkHttpHealth(port: number, pathName = "/global/health"): Promise<boolean> {
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}${pathName}`, { signal: AbortSignal.timeout(2_000) });
-    return response.ok;
-  } catch {
-    return false;
-  }
+  const http = await import("node:http");
+  return new Promise((resolve) => {
+    let settled = false;
+    const complete = (healthy: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(healthy);
+    };
+    const request = http.get({ host: "127.0.0.1", port, path: pathName, timeout: 2_000 }, (response) => {
+      response.resume();
+      complete((response.statusCode ?? 0) >= 200 && (response.statusCode ?? 0) < 300);
+    });
+    request.once("timeout", () => {
+      request.destroy();
+      complete(false);
+    });
+    request.once("error", () => complete(false));
+  });
 }
 
 async function waitForHealth(port: number, pathName = "/global/health", attempts = 75): Promise<void> {
@@ -227,6 +346,38 @@ async function waitForHealth(port: number, pathName = "/global/health", attempts
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   throw new Error(`Server on port ${port} did not become healthy`);
+}
+
+async function waitForLocalServerStartup(
+  child: ChildProcessWithoutNullStreams,
+  port: number,
+  kind: "opencode" | "claude" | "codex",
+): Promise<void> {
+  let settled = false;
+
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      child.off("error", onError);
+      child.off("exit", onExit);
+    };
+    const complete = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve();
+    };
+    const onError = (error: Error) => complete(error);
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      complete(new Error(`${kind} server exited before becoming healthy (code ${code ?? "null"}, signal ${signal ?? "null"})`));
+    };
+
+    child.once("error", onError);
+    child.once("exit", onExit);
+    waitForHealth(port).then(() => complete(), (error: unknown) => {
+      complete(error instanceof Error ? error : new Error(String(error)));
+    });
+  });
 }
 
 function getBridgePath(context: CommandContext, bridgeName: "claude-bridge" | "codex-bridge"): string {
@@ -245,7 +396,11 @@ async function startLocalServer(
   if (existing && !existing.killed && existing.pid) {
     const env = await context.storage.getEnvironment(environmentId);
     const port = kind === "opencode" ? env?.localOpencodePort : kind === "claude" ? env?.localClaudePort : env?.localCodexPort;
-    return { port: port ?? 0, pid: existing.pid, wasRunning: true };
+    if (port && await checkHttpHealth(port)) {
+      return { port, pid: existing.pid, wasRunning: true };
+    }
+    existing.kill();
+    localServerProcesses.delete(key);
   }
 
   const environment = await context.storage.getEnvironment(environmentId);
@@ -266,9 +421,15 @@ async function startLocalServer(
     cwd = getBridgePath(context, "codex-bridge");
   }
 
+  const bridgeEntrypoint = path.join(cwd, "dist", "index.js");
+  if (kind !== "opencode") {
+    if (!existsSync(cwd)) throw new Error(`${kind} bridge directory not found: ${cwd}`);
+    if (!existsSync(bridgeEntrypoint)) throw new Error(`${kind} bridge entrypoint not found: ${bridgeEntrypoint}`);
+  }
+
   const args = kind === "opencode"
     ? ["serve", "--port", String(port), "--hostname", "127.0.0.1"]
-    : [path.join(cwd, "dist", "index.js")];
+    : [bridgeEntrypoint];
   const child = spawnCommand(command, args, { cwd, env });
   localServerProcesses.set(key, child);
   child.stdout.on("data", (data) => console.debug(`[${kind}:${environmentId}] ${data.toString()}`));
@@ -277,6 +438,14 @@ async function startLocalServer(
 
   const field = kind === "opencode" ? "localOpencodePort" : kind === "claude" ? "localClaudePort" : "localCodexPort";
   const pidField = kind === "opencode" ? "opencodePid" : kind === "claude" ? "claudeBridgePid" : "codexBridgePid";
+  try {
+    await waitForLocalServerStartup(child, port, kind);
+  } catch (error) {
+    child.kill();
+    localServerProcesses.delete(key);
+    await context.storage.updateEnvironment(environmentId, { [field]: null, [pidField]: null }).catch(() => undefined);
+    throw error;
+  }
   await context.storage.updateEnvironment(environmentId, { [field]: port, [pidField]: child.pid });
   return { port, pid: child.pid ?? 0, wasRunning: false };
 }
@@ -463,6 +632,11 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   const register = (name: string, handler: CommandHandler) => commands.set(name, handler);
 
   register("greet", ({ name }) => `Hello, ${asString(name, "name")}! You've been greeted from Electron backend!`);
+  register("browse_for_directory", async () => {
+    const result = await dialog.showOpenDialog({ properties: ["openDirectory"] });
+    if (result.canceled) return null;
+    return result.filePaths[0] ?? null;
+  });
 
   register("get_projects", (_args, { storage }) => storage.loadProjects());
   register("add_project", ({ gitUrl, localPath }, { storage }) => storage.addProject(createProject(asString(gitUrl, "gitUrl"), asOptionalString(localPath))));
@@ -830,43 +1004,90 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("reorder_sessions", ({ environmentId, sessionIds }, { storage }) => storage.reorderSessions(asString(environmentId, "environmentId"), asStringArray(sessionIds)));
   register("cleanup_orphaned_buffers", (_args, { storage }) => storage.cleanupOrphanedBuffers());
 
-  register("create_terminal_session", ({ containerId }) => `${asString(containerId, "containerId")}:${randomUUID()}`);
-  register("attach_terminal", ({ containerId }) => `${asString(containerId, "containerId")}:${randomUUID()}`);
+  register("create_terminal_session", ({ containerId, cols, rows, user }) => {
+    const id = `${asString(containerId, "containerId")}:${randomUUID()}`;
+    return rememberTerminalSession(id, {
+      kind: "container",
+      containerId: asString(containerId, "containerId"),
+      cols: asTerminalDimension(cols, 80),
+      rows: asTerminalDimension(rows, 24),
+      user: asOptionalString(user),
+    });
+  });
+  register("attach_terminal", ({ containerId, cols, rows, user }, { emit }) => {
+    const id = `${asString(containerId, "containerId")}:${randomUUID()}`;
+    const config = {
+      kind: "container" as const,
+      containerId: asString(containerId, "containerId"),
+      cols: asTerminalDimension(cols, 80),
+      rows: asTerminalDimension(rows, 24),
+      user: asOptionalString(user),
+    };
+    rememberTerminalSession(id, config);
+    const dockerArgs = ["exec", "-it"];
+    if (config.user) dockerArgs.push("--user", config.user);
+    dockerArgs.push(config.containerId, "zsh", "-l");
+    spawnTerminalProcess(id, "docker", dockerArgs, config, emit);
+    return id;
+  });
   register("start_terminal_session", ({ sessionId }, { emit }) => {
     const id = asString(sessionId, "sessionId");
-    const containerId = id.split(":")[0] ?? id;
-    const child = spawnCommand("docker", ["exec", "-i", containerId, "zsh", "-l"]);
-    terminalProcesses.set(id, child);
-    child.stdout.on("data", (data) => emit(`terminal-output-${id}`, data.toString()));
-    child.stderr.on("data", (data) => emit(`terminal-output-${id}`, data.toString()));
-    child.once("exit", () => terminalProcesses.delete(id));
+    const storedConfig = terminalSessionConfigs.get(id);
+    const config = storedConfig?.kind === "container" ? storedConfig : {
+      kind: "container" as const,
+      containerId: id.split(":")[0] ?? id,
+      cols: 80,
+      rows: 24,
+    };
+    const dockerArgs = ["exec", "-it"];
+    if (config.user) dockerArgs.push("--user", config.user);
+    dockerArgs.push(config.containerId, "zsh", "-l");
+    spawnTerminalProcess(id, "docker", dockerArgs, config, emit);
   });
-  register("terminal_write", ({ sessionId, data }) => terminalProcesses.get(asString(sessionId, "sessionId"))?.stdin.write(asString(data, "data")));
-  register("terminal_resize", () => undefined);
+  register("terminal_write", ({ sessionId, data }) => terminalProcesses.get(asString(sessionId, "sessionId"))?.write(asString(data, "data")));
+  register("terminal_resize", ({ sessionId, cols, rows }) => terminalProcesses.get(asString(sessionId, "sessionId"))?.resize(
+    asTerminalDimension(cols, 80),
+    asTerminalDimension(rows, 24),
+  ));
   register("detach_terminal", ({ sessionId }) => {
     terminalProcesses.get(asString(sessionId, "sessionId"))?.kill();
-    terminalProcesses.delete(asString(sessionId, "sessionId"));
+    cleanupTerminalSession(asString(sessionId, "sessionId"));
   });
   register("list_terminal_sessions", () => Array.from(terminalProcesses.keys()));
   register("get_terminal_session", ({ sessionId }) => ({ id: asString(sessionId, "sessionId"), running: terminalProcesses.has(asString(sessionId, "sessionId")) }));
 
-  register("create_local_terminal_session", ({ environmentId }) => `${asString(environmentId, "environmentId")}:${randomUUID()}`);
+  register("create_local_terminal_session", ({ environmentId, cols, rows }) => {
+    const id = `${asString(environmentId, "environmentId")}:${randomUUID()}`;
+    return rememberTerminalSession(id, {
+      kind: "local",
+      environmentId: asString(environmentId, "environmentId"),
+      cols: asTerminalDimension(cols, 80),
+      rows: asTerminalDimension(rows, 24),
+    });
+  });
   register("start_local_terminal_session", async ({ sessionId }, { storage, emit }) => {
     const id = asString(sessionId, "sessionId");
-    const environmentId = id.split(":")[0] ?? id;
+    const storedConfig = terminalSessionConfigs.get(id);
+    const config = storedConfig?.kind === "local" ? storedConfig : {
+      kind: "local" as const,
+      environmentId: id.split(":")[0] ?? id,
+      cols: 80,
+      rows: 24,
+    };
+    const environmentId = config.environmentId;
     const env = await storage.getEnvironment(environmentId);
     if (!env?.worktreePath) throw new Error("Local environment worktree is not available");
-    const child = spawnCommand(process.env.SHELL || "zsh", ["-l"], { cwd: env.worktreePath });
-    terminalProcesses.set(id, child);
-    child.stdout.on("data", (data) => emit(`terminal-output-${id}`, data.toString()));
-    child.stderr.on("data", (data) => emit(`terminal-output-${id}`, data.toString()));
-    child.once("exit", () => terminalProcesses.delete(id));
+    if (!await pathExists(env.worktreePath)) throw new Error(`Local environment worktree does not exist: ${env.worktreePath}`);
+    spawnTerminalProcess(id, resolveLocalShellPath(), ["-l"], { cwd: env.worktreePath, cols: config.cols, rows: config.rows }, emit);
   });
-  register("local_terminal_write", ({ sessionId, data }) => terminalProcesses.get(asString(sessionId, "sessionId"))?.stdin.write(asString(data, "data")));
-  register("local_terminal_resize", () => undefined);
+  register("local_terminal_write", ({ sessionId, data }) => terminalProcesses.get(asString(sessionId, "sessionId"))?.write(asString(data, "data")));
+  register("local_terminal_resize", ({ sessionId, cols, rows }) => terminalProcesses.get(asString(sessionId, "sessionId"))?.resize(
+    asTerminalDimension(cols, 80),
+    asTerminalDimension(rows, 24),
+  ));
   register("close_local_terminal_session", ({ sessionId }) => {
     terminalProcesses.get(asString(sessionId, "sessionId"))?.kill();
-    terminalProcesses.delete(asString(sessionId, "sessionId"));
+    cleanupTerminalSession(asString(sessionId, "sessionId"));
   });
 
   register("get_local_git_status", ({ worktreePath, targetBranch }) => getLocalGitStatus(asString(worktreePath, "worktreePath"), asString(targetBranch, "targetBranch")));
@@ -892,31 +1113,39 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     return output.split("\n").filter(Boolean).map((filePath) => ({ name: path.basename(filePath), path: filePath, isDirectory: false, extension: path.extname(filePath) }));
   });
   register("read_container_file", async ({ containerId, filePath }) => {
-    const target = asString(filePath, "filePath");
-    const content = await dockerExec(asString(containerId, "containerId"), `cat /workspace/${quoteShell(target)}`);
+    const target = validateRelativeFilePath(asString(filePath, "filePath"));
+    const content = await dockerExec(asString(containerId, "containerId"), `cat ${quoteShell(workspaceFilePath(target))}`);
     return { path: target, content, language: path.extname(target).slice(1) };
   });
   register("read_file_at_branch", async ({ containerId, filePath, branch }) => {
-    const target = asString(filePath, "filePath");
+    const target = validateRelativeFilePath(asString(filePath, "filePath"));
     const content = await dockerExec(asString(containerId, "containerId"), `git show ${quoteShell(asString(branch, "branch"))}:${quoteShell(target)} 2>/dev/null || true`);
     return content ? { path: target, content, language: path.extname(target).slice(1) } : null;
   });
-  register("read_container_file_base64", async ({ containerId, filePath }) => (await dockerExec(asString(containerId, "containerId"), `base64 -w 0 /workspace/${quoteShell(asString(filePath, "filePath"))}`)).trim());
+  register("read_container_file_base64", async ({ containerId, filePath }) => {
+    const fullPath = workspaceFilePath(asString(filePath, "filePath"));
+    const size = parsePositiveInteger(await dockerExec(asString(containerId, "containerId"), `stat -c %s ${quoteShell(fullPath)}`), "file size");
+    if (size > MAX_BINARY_FILE_BYTES) {
+      throw new Error(`File exceeds ${MAX_BINARY_FILE_BYTES} bytes: ${fullPath}`);
+    }
+    return (await dockerExec(asString(containerId, "containerId"), `base64 -w 0 ${quoteShell(fullPath)}`)).trim();
+  });
   register("write_container_file", async ({ containerId, filePath, base64Data }) => {
     const id = asString(containerId, "containerId");
-    const target = asString(filePath, "filePath");
+    const target = validateRelativeFilePath(asString(filePath, "filePath"));
+    const fullPath = workspaceFilePath(target);
+    const directory = path.posix.dirname(fullPath);
     const data = asString(base64Data, "base64Data");
-    await runCommand("docker", ["exec", id, "bash", "-lc", `mkdir -p /workspace/${quoteShell(path.dirname(target))} && base64 -d > /workspace/${quoteShell(target)}`], { timeoutMs: 30_000 }).catch(async () => {
-      await dockerExec(id, `mkdir -p /workspace/${quoteShell(path.dirname(target))}`);
-    });
-    const child = spawnCommand("docker", ["exec", "-i", id, "bash", "-lc", `base64 -d > /workspace/${quoteShell(target)}`]);
+    assertBase64PayloadWithinLimit(data);
+    await dockerExec(id, `mkdir -p ${quoteShell(directory)}`);
+    const child = spawnCommand("docker", ["exec", "-i", id, "bash", "-lc", `base64 -d > ${quoteShell(fullPath)}`]);
     child.stdin.write(data);
     child.stdin.end();
     await new Promise<void>((resolve, reject) => {
       child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`docker exec exited with ${code}`)));
       child.once("error", reject);
     });
-    return `/workspace/${target}`;
+    return fullPath;
   });
 
   register("detect_pr_local", async ({ environmentId, branch }, { storage }) => {

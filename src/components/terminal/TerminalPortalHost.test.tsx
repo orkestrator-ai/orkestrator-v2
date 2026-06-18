@@ -1,6 +1,6 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect } from "react";
-import { render, waitFor } from "@testing-library/react";
+import { cleanup, render, waitFor } from "@testing-library/react";
 import * as realPersistentTerminal from "./PersistentTerminal";
 import * as realTerminalPortalStore from "@/stores/terminalPortalStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -13,6 +13,7 @@ const markSetupScriptsCompleteMock = mock(() => {});
 const createTerminalMock = mock(() => {});
 const disposeTerminalMock = mock(() => {});
 const clearTerminalsForEnvironmentMock = mock(() => {});
+const paneHost = document.createElement("div");
 
 let terminalBehavior:
   | ((props: {
@@ -66,6 +67,7 @@ const terminalPortalStoreState = () => ({
   disposeTerminal: disposeTerminalMock,
   clearTerminalsForEnvironment: clearTerminalsForEnvironmentMock,
   hasTerminal: () => true,
+  getPaneHost: () => paneHost,
 });
 
 const useTerminalPortalStoreMock = (<T,>(selector?: (state: {
@@ -80,6 +82,7 @@ const useTerminalPortalStoreMock = (<T,>(selector?: (state: {
     disposeTerminal: typeof disposeTerminalMock;
     clearTerminalsForEnvironment: typeof clearTerminalsForEnvironmentMock;
     hasTerminal: (environmentId: string, tabId: string) => boolean;
+    getPaneHost: (environmentId: string, paneId: string) => HTMLDivElement | undefined;
   }) => T) => {
     const state = terminalPortalStoreState();
 
@@ -180,6 +183,11 @@ describe("TerminalPortalHost", () => {
       isLoading: false,
       error: null,
     });
+  });
+
+  afterEach(() => {
+    cleanup();
+    paneHost.replaceChildren();
   });
 
   test("persists completion when a container terminal reports successful readiness", async () => {

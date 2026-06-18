@@ -157,6 +157,17 @@ export async function startTerminalSession(sessionId: string): Promise<void> {
   return invoke("start_terminal_session", { sessionId });
 }
 
+export interface TerminalSessionStatus {
+  id: string;
+  running: boolean;
+}
+
+export async function getTerminalSession(
+  sessionId: string
+): Promise<TerminalSessionStatus> {
+  return invoke<TerminalSessionStatus>("get_terminal_session", { sessionId });
+}
+
 export async function detachTerminal(sessionId: string): Promise<void> {
   return invoke("detach_terminal", { sessionId });
 }

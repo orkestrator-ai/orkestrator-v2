@@ -76,11 +76,11 @@ export const PaneSplitContainer = memo(function PaneSplitContainer({
 
         // Debounce the store update to avoid re-renders during drag
         debounceTimeoutRef.current = setTimeout(() => {
-          updateSizes(split.id, [firstSize, secondSize]);
+          updateSizes(split.id, [firstSize, secondSize], environmentId);
         }, RESIZE_DEBOUNCE_MS);
       }
     },
-    [split.id, firstPanelId, secondPanelId, updateSizes]
+    [environmentId, split.id, firstPanelId, secondPanelId, updateSizes]
   );
 
   return (

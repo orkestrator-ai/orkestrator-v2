@@ -1,7 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import sharp from "sharp";
 import type {
   AppConfig,
   Environment,
@@ -54,6 +53,11 @@ type ProjectNotes = {
   content: string;
   updatedAt: string;
 };
+
+async function resizeKanbanImage(rawBytes: Buffer): Promise<Buffer> {
+  const { default: sharp } = await import("sharp");
+  return sharp(rawBytes).resize({ width: 2000, height: 2000, fit: "inside", withoutEnlargement: true }).webp().toBuffer();
+}
 
 const MAX_JSON_BACKUPS = 5;
 const MAX_SESSIONS_PER_ENVIRONMENT = 20;
@@ -760,7 +764,7 @@ export class StorageService {
     if (!task) throw new Error(`Kanban task not found: ${taskId}`);
 
     const rawBytes = Buffer.from(data, "base64");
-    const webpBytes = await sharp(rawBytes).resize({ width: 2000, height: 2000, fit: "inside", withoutEnlargement: true }).webp().toBuffer();
+    const webpBytes = await resizeKanbanImage(rawBytes);
     await fs.mkdir(this.kanbanImagesDir(), { recursive: true });
     const image: KanbanImage = { id: randomUUID(), filename, createdAt: nowIso() };
     await fs.writeFile(this.kanbanImageFile(image.id), webpBytes);

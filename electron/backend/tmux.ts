@@ -653,13 +653,63 @@ async function findTranscriptPath(
   claudeHome: string,
   cwd: string,
   sessionId: string,
+  minMtimeUnix?: number,
 ): Promise<string | undefined> {
   const projectDir = `${claudeHome}/projects/${encodeCwd(cwd)}`;
   const exact = `${projectDir}/${sessionId}.jsonl`;
   if (await backend.fileSize(exact) > 0 || await backend.readFile(exact) !== undefined) {
     return exact;
   }
+  if (minMtimeUnix !== undefined) {
+    return newestJsonlInDir(backend, projectDir, minMtimeUnix);
+  }
   return undefined;
+}
+
+/**
+ * Builds the shell command that lists fresh `.jsonl` files in `dirPath` newest-first,
+ * emitting `<mtime> <path>` lines. Relies on GNU `find` (`-printf`/`-newermt`), which is
+ * available inside the Linux container backend.
+ */
+export function newestJsonlFindCommand(dirPath: string, minMtimeUnix: number): string {
+  return `find ${shellArg(dirPath)}/ -mindepth 1 -maxdepth 1 -type f -name '*.jsonl' -newermt @${minMtimeUnix} -printf '%T@ %p\\n' 2>/dev/null | sort -rn`;
+}
+
+/**
+ * Selects the single newest `.jsonl` path from `find -printf '%T@ %p'` output (sorted
+ * newest-first). Returns undefined unless exactly one candidate exists, mirroring the
+ * local backend's "only act when unambiguous" rule.
+ */
+export function selectSingleNewestJsonl(findOutput: string): string | undefined {
+  const lines = findOutput.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (lines.length !== 1) return undefined;
+  const firstSpace = lines[0]!.indexOf(" ");
+  if (firstSpace < 0) return undefined;
+  const candidatePath = lines[0]!.slice(firstSpace + 1).trim();
+  return candidatePath.length > 0 ? candidatePath : undefined;
+}
+
+async function newestJsonlInDir(
+  backend: TmuxBackend,
+  dirPath: string,
+  minMtimeUnix: number,
+): Promise<string | undefined> {
+  if (backend.kind === "container") {
+    const out = await backend.exec(["sh", "-c", newestJsonlFindCommand(dirPath, minMtimeUnix)]);
+    return selectSingleNewestJsonl(out.stdout);
+  }
+
+  const names = await backend.listDir(dirPath);
+  const candidates: Array<{ path: string; mtime: number }> = [];
+  for (const name of names) {
+    if (!name.endsWith(".jsonl")) continue;
+    const fullPath = `${dirPath}/${name}`;
+    const mtime = await backend.fileMtimeUnix(fullPath);
+    if (mtime < minMtimeUnix) continue;
+    candidates.push({ path: fullPath, mtime });
+  }
+  if (candidates.length !== 1) return undefined;
+  return candidates[0]?.path;
 }
 
 async function listPreviousSessions(
@@ -752,7 +802,8 @@ class TranscriptTail {
     const size = await backend.fileSize(this.filePath);
     if (size <= this.offset) return [];
     const full = await backend.readFile(this.filePath) ?? "";
-    const newChunk = full.slice(this.offset);
+    const bytes = Buffer.from(full, "utf8");
+    const newChunk = bytes.subarray(this.offset).toString("utf8");
     this.offset = Buffer.byteLength(full);
     const combined = `${this.partial}${newChunk}`;
     this.partial = "";
@@ -796,6 +847,7 @@ class TmuxSession {
   readonly resumed: boolean;
   private readonly tmuxCommand = "tmux";
   private readonly claudeCommand: string;
+  private readonly startedAtUnix: number;
   private pollLoopRunning = false;
   private stopRequested = false;
   private transcriptPath: string | undefined;
@@ -816,6 +868,7 @@ class TmuxSession {
     this.workspaceHookPaths = workspaceHookPaths(`${RUNTIME_ROOT_PREFIX}/${environmentId}`, this.workspace);
     this.sessionHookPaths = sessionHookPaths(this.workspaceHookPaths, this.sessionId);
     this.claudeCommand = claudeCommand ?? "claude";
+    this.startedAtUnix = Math.max(0, Math.floor(Date.now() / 1000) - 5);
   }
 
   status(running: boolean): TmuxStatus {
@@ -833,7 +886,13 @@ class TmuxSession {
 
   async discoverTranscriptPath(): Promise<string | undefined> {
     if (this.transcriptPath) return this.transcriptPath;
-    const found = await findTranscriptPath(this.backend, this.claudeHome, this.workspace, this.sessionId);
+    const found = await findTranscriptPath(
+      this.backend,
+      this.claudeHome,
+      this.workspace,
+      this.sessionId,
+      this.startedAtUnix,
+    );
     if (found) this.transcriptPath = found;
     return found;
   }

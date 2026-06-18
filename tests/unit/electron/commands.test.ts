@@ -193,6 +193,46 @@ async function createGitWorktreeWithOrigin(): Promise<{ worktree: string; remote
   return { worktree, remote };
 }
 
+// Points the codex binary lookup at an empty dir so `resolveCodexBinary` falls back to the
+// fake `codex` on PATH instead of the real binary bundled at `binaries/codex`.
+async function isolateCodexBinaryLookup(context: CommandContext): Promise<void> {
+  const root = await createTempDir("ork-codex-root-");
+  context.appRoot = root;
+  context.resourceRoot = root;
+}
+
+async function createGitRepoOnBranch(branch: string): Promise<string> {
+  const repo = await createTempDir("ork-electron-rename-repo-");
+  await runGit(repo, ["init"]);
+  await runGit(repo, ["checkout", "-b", branch]);
+  await fs.writeFile(path.join(repo, "tracked.txt"), "base\n");
+  await runGit(repo, ["add", "tracked.txt"]);
+  await runGit(repo, ["commit", "-m", "base"]);
+  return repo;
+}
+
+async function currentGitBranch(repo: string): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["-C", repo, "branch", "--show-current"]);
+  return stdout.trim();
+}
+
+// Stub `codex` that writes the requested slug JSON to the --output-last-message path.
+function codexSlugScript(slug: string): string {
+  return `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_CODEX_LOG"
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--output-last-message" ]; then
+    out="$arg"
+  fi
+  prev="$arg"
+done
+[ -n "$out" ] || exit 2
+printf '%s\\n' '{"slug":"${slug}"}' > "$out"
+`;
+}
+
 async function withFakeDocker(scriptBody: string, run: (logs: { all: string; rm: string; exec: string }) => Promise<void>): Promise<void> {
   const root = await createTempDir("ork-electron-fake-docker-");
   const binDir = path.join(root, "bin");
@@ -223,6 +263,52 @@ async function withFakeDocker(scriptBody: string, run: (logs: { all: string; rm:
     else process.env.FAKE_DOCKER_RM_LOG = originalDockerRmLog;
     if (originalDockerExecLog === undefined) delete process.env.FAKE_DOCKER_EXEC_LOG;
     else process.env.FAKE_DOCKER_EXEC_LOG = originalDockerExecLog;
+  }
+}
+
+async function withFakeGh(scriptBody: string, run: (logPath: string) => Promise<void>): Promise<void> {
+  const root = await createTempDir("ork-electron-fake-gh-");
+  const binDir = path.join(root, "bin");
+  const log = path.join(root, "gh.log");
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.writeFile(path.join(binDir, "gh"), scriptBody);
+  await fs.chmod(path.join(binDir, "gh"), 0o755);
+
+  const originalPath = process.env.PATH;
+  const originalGhLog = process.env.FAKE_GH_LOG;
+  process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+  process.env.FAKE_GH_LOG = log;
+
+  try {
+    await run(log);
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    if (originalGhLog === undefined) delete process.env.FAKE_GH_LOG;
+    else process.env.FAKE_GH_LOG = originalGhLog;
+  }
+}
+
+async function withFakeCodex(scriptBody: string, run: (logPath: string) => Promise<void>): Promise<void> {
+  const root = await createTempDir("ork-electron-fake-codex-");
+  const binDir = path.join(root, "bin");
+  const log = path.join(root, "codex.log");
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.writeFile(path.join(binDir, "codex"), scriptBody);
+  await fs.chmod(path.join(binDir, "codex"), 0o755);
+
+  const originalPath = process.env.PATH;
+  const originalCodexLog = process.env.FAKE_CODEX_LOG;
+  process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+  process.env.FAKE_CODEX_LOG = log;
+
+  try {
+    await run(log);
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    if (originalCodexLog === undefined) delete process.env.FAKE_CODEX_LOG;
+    else process.env.FAKE_CODEX_LOG = originalCodexLog;
   }
 }
 
@@ -261,6 +347,236 @@ describe("Electron backend command registry", () => {
     const commands = createCommandRegistry();
     await expect(commands.get("browse_for_directory")?.({}, createContext(createEnvironment()).context)).resolves.toBe("/tmp/project");
     expect(showOpenDialog).toHaveBeenCalledWith({ properties: ["openDirectory"] });
+  });
+
+  test("renames environments from prompts using codex exec output", async () => {
+    const environment = createEnvironment({
+      environmentType: "containerized",
+      worktreePath: undefined,
+      branch: "old-branch",
+      prUrl: "https://github.com/acme/repo/pull/1",
+      prState: "open",
+      hasMergeConflicts: true,
+    });
+    const { context, emitted } = createContext(environment);
+    const appRoot = await createTempDir("ork-electron-codex-app-");
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_CODEX_LOG"
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--output-last-message" ]; then
+    out="$arg"
+  fi
+  prev="$arg"
+done
+[ -n "$out" ] || exit 2
+printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
+`, async (logPath) => {
+      await expect(commands.get("rename_environment_from_prompt")?.(
+        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+        context,
+      )).resolves.toBeUndefined();
+
+      expect(environment.name).toBe("review-oauth-flow");
+      expect(environment.branch).toBe("review-oauth-flow");
+      expect(environment.prUrl).toBeNull();
+      expect(environment.prState).toBeNull();
+      expect(environment.hasMergeConflicts).toBeNull();
+      expect(emitted).toContainEqual({
+        event: "environment-renamed",
+        payload: {
+          environment_id: environment.id,
+          new_name: "review-oauth-flow",
+          new_branch: "review-oauth-flow",
+        },
+      });
+
+      const codexLog = await fs.readFile(logPath, "utf8");
+      expect(codexLog).toContain("exec --skip-git-repo-check --ephemeral --ignore-rules --sandbox read-only");
+      expect(codexLog).toContain("--output-last-message");
+      expect(codexLog).not.toContain("claude");
+    });
+  });
+
+  test("renames the live local git branch and advances stored branch on success", async () => {
+    const worktreePath = await createGitRepoOnBranch("old-branch");
+    const environment = createEnvironment({
+      environmentType: "local",
+      worktreePath,
+      branch: "old-branch",
+      prUrl: "https://github.com/acme/repo/pull/1",
+      prState: "open",
+      hasMergeConflicts: true,
+    });
+    const { context, emitted } = createContext(environment);
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+      await expect(commands.get("rename_environment_from_prompt")?.(
+        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+        context,
+      )).resolves.toBeUndefined();
+
+      expect(environment.name).toBe("review-oauth-flow");
+      expect(environment.branch).toBe("review-oauth-flow");
+      expect(environment.prUrl).toBeNull();
+      expect(environment.prState).toBeNull();
+      expect(environment.hasMergeConflicts).toBeNull();
+      expect(await currentGitBranch(worktreePath)).toBe("review-oauth-flow");
+      expect(emitted).toContainEqual({
+        event: "environment-renamed",
+        payload: { environment_id: environment.id, new_name: "review-oauth-flow", new_branch: "review-oauth-flow" },
+      });
+    });
+  });
+
+  test("renames the running container git branch and advances stored branch", async () => {
+    const environment = createEnvironment({
+      id: "env-container-rename",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+      branch: "old-branch",
+      prUrl: "https://github.com/acme/repo/pull/1",
+      prState: "open",
+      hasMergeConflicts: true,
+    });
+    const { context } = createContext(environment);
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+      await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "exec" ]; then
+  printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+fi
+exit 0
+`, async (logs) => {
+        await expect(commands.get("rename_environment_from_prompt")?.(
+          { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+          context,
+        )).resolves.toBeUndefined();
+
+        expect(environment.name).toBe("review-oauth-flow");
+        expect(environment.branch).toBe("review-oauth-flow");
+        expect(environment.prUrl).toBeNull();
+
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(execLog).toContain("git -C /workspace branch -m -- 'old-branch' 'review-oauth-flow'");
+      });
+    });
+  });
+
+  test("keeps stored branch and PR metadata when the live git branch rename fails", async () => {
+    // worktreePath is a plain directory (not a git repo) so `git branch -m` fails.
+    const worktreePath = await createTempDir("ork-electron-rename-nonrepo-");
+    const environment = createEnvironment({
+      environmentType: "local",
+      worktreePath,
+      branch: "old-branch",
+      prUrl: "https://github.com/acme/repo/pull/1",
+      prState: "open",
+      hasMergeConflicts: true,
+    });
+    const { context, emitted, updates } = createContext(environment);
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+      await expect(commands.get("rename_environment_from_prompt")?.(
+        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+        context,
+      )).resolves.toBeUndefined();
+
+      // Display name advances, but the branch and PR metadata stay put (no divergence).
+      expect(environment.name).toBe("review-oauth-flow");
+      expect(environment.branch).toBe("old-branch");
+      expect(environment.prUrl).toBe("https://github.com/acme/repo/pull/1");
+      expect(environment.prState).toBe("open");
+      expect(environment.hasMergeConflicts).toBe(true);
+      expect(updates).toEqual([{ name: "review-oauth-flow" }]);
+      expect(emitted).toContainEqual({
+        event: "environment-renamed",
+        payload: { environment_id: environment.id, new_name: "review-oauth-flow", new_branch: "old-branch" },
+      });
+    });
+  });
+
+  test("rejects renaming from an empty prompt without touching storage", async () => {
+    const environment = createEnvironment({ environmentType: "local", worktreePath: undefined });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("rename_environment_from_prompt")?.(
+      { environmentId: environment.id, prompt: "   " },
+      context,
+    )).rejects.toThrow("Prompt cannot be empty");
+    expect(updates).toHaveLength(0);
+  });
+
+  test("surfaces codex failures during rename", async () => {
+    const environment = createEnvironment({ environmentType: "local", worktreePath: undefined });
+    const { context, updates } = createContext(environment);
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(`#!/bin/sh
+printf 'codex auth required\\n' >&2
+exit 1
+`, async () => {
+      await expect(commands.get("rename_environment_from_prompt")?.(
+        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+        context,
+      )).rejects.toThrow("codex auth required");
+      expect(updates).toHaveLength(0);
+    });
+  });
+
+  test("rejects when codex output has no extractable slug", async () => {
+    const environment = createEnvironment({ environmentType: "local", worktreePath: undefined });
+    const { context, updates } = createContext(environment);
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(`#!/bin/sh
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--output-last-message" ]; then out="$arg"; fi
+  prev="$arg"
+done
+[ -n "$out" ] || exit 2
+printf '%s\\n' '{}' > "$out"
+`, async () => {
+      await expect(commands.get("rename_environment_from_prompt")?.(
+        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+        context,
+      )).rejects.toThrow("Could not extract slug");
+      expect(updates).toHaveLength(0);
+    });
+  });
+
+  test("rejects when codex slug sanitizes to an empty name", async () => {
+    const environment = createEnvironment({ environmentType: "local", worktreePath: undefined });
+    const { context, updates } = createContext(environment);
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(codexSlugScript("###"), async () => {
+      await expect(commands.get("rename_environment_from_prompt")?.(
+        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+        context,
+      )).rejects.toThrow("Generated name is empty");
+      expect(updates).toHaveLength(0);
+    });
   });
 
   test("keeps running local environments running during status sync", async () => {
@@ -535,6 +851,130 @@ exit 0
       const [, message] = result.failed[0]!;
       expect(message).not.toContain("secret-token-123");
       expect(message).toContain("***");
+    });
+  });
+
+  test("detects local PRs by listing all PRs for the environment branch", async () => {
+    const worktreePath = await createTempDir("ork-electron-pr-worktree-");
+    const environment = createEnvironment({ worktreePath, branch: "feature/pr" });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/1","state":"CLOSED","mergeable":"MERGEABLE","updatedAt":"2026-01-01T00:00:00Z"},{"url":"https://github.com/acme/repo/pull/2","state":"OPEN","mergeable":"CONFLICTING","updatedAt":"2026-01-02T00:00:00Z"}]'
+`, async (logPath) => {
+      await expect(commands.get("detect_pr_local")?.(
+        { environmentId: environment.id, branch: environment.branch },
+        context,
+      )).resolves.toEqual({
+        url: "https://github.com/acme/repo/pull/2",
+        state: "open",
+        hasMergeConflicts: true,
+      });
+
+      const ghLog = await fs.readFile(logPath, "utf8");
+      expect(ghLog).toContain("pr list --head feature/pr --state all --limit 30 --json url,state,mergeable,updatedAt");
+    });
+  });
+
+  test("returns null when local PR listing reports no PRs", async () => {
+    const worktreePath = await createTempDir("ork-electron-pr-empty-");
+    const environment = createEnvironment({ worktreePath, branch: "feature/no-pr" });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+printf '[]\\n'
+`, async () => {
+      await expect(commands.get("detect_pr_local")?.(
+        { environmentId: environment.id, branch: environment.branch },
+        context,
+      )).resolves.toBeNull();
+    });
+  });
+
+  test("surfaces gh failures during local PR detection", async () => {
+    const worktreePath = await createTempDir("ork-electron-pr-fail-");
+    const environment = createEnvironment({ worktreePath, branch: "feature/fail" });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf 'auth required\\n' >&2
+exit 1
+`, async () => {
+      await expect(commands.get("detect_pr_local")?.(
+        { environmentId: environment.id, branch: environment.branch },
+        context,
+      )).rejects.toThrow("auth required");
+    });
+  });
+
+  test("throws when local PR detection output is not valid JSON", async () => {
+    const worktreePath = await createTempDir("ork-electron-pr-badjson-");
+    const environment = createEnvironment({ worktreePath, branch: "feature/bad" });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf 'not-json{\\n'
+`, async () => {
+      await expect(commands.get("detect_pr_local")?.(
+        { environmentId: environment.id, branch: environment.branch },
+        context,
+      )).rejects.toThrow("Failed to parse gh pr list output");
+    });
+  });
+
+  test("throws when local PR detection output is not a JSON array", async () => {
+    const worktreePath = await createTempDir("ork-electron-pr-object-");
+    const environment = createEnvironment({ worktreePath, branch: "feature/object" });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/1"}'
+`, async () => {
+      await expect(commands.get("detect_pr_local")?.(
+        { environmentId: environment.id, branch: environment.branch },
+        context,
+      )).rejects.toThrow("Failed to parse gh pr list output");
+    });
+  });
+
+  test("detects container PRs with gh pr list instead of gh pr view", async () => {
+    const { context } = createContext(createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+      branch: "feature/container-pr",
+    }));
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "exec" ]; then
+  printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+  printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/9","state":"MERGED","mergeable":"MERGEABLE","updatedAt":"2026-01-03T00:00:00Z"}]'
+  exit 0
+fi
+exit 0
+`, async (logs) => {
+      await expect(commands.get("detect_pr")?.(
+        { containerId: "container-1", branch: "feature/container-pr" },
+        context,
+      )).resolves.toEqual({
+        url: "https://github.com/acme/repo/pull/9",
+        state: "merged",
+        hasMergeConflicts: false,
+      });
+
+      const execLog = await fs.readFile(logs.exec, "utf8");
+      expect(execLog).toContain("gh pr list --head 'feature/container-pr' --state all --limit 30 --json url,state,mergeable,updatedAt");
+      expect(execLog).not.toContain("gh pr view");
     });
   });
 

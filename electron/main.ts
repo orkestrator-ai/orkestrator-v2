@@ -3,12 +3,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { OrkestratorBackend } from "./backend/index.js";
 import { APP_SLUG, PRODUCT_NAME } from "./backend/constants.js";
+import { fixPath } from "./backend/fix-path.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRendererIndexPath, resolveRuntimeRoots } from "./paths.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const isDev = process.env.ELECTRON_DEV === "1";
+
+// Restore a usable PATH so spawned CLIs (docker, git, gh, …) resolve when the
+// app is launched as a packaged GUI app rather than from a terminal.
+fixPath();
 
 app.setName(PRODUCT_NAME);
 app.setPath("userData", path.join(app.getPath("appData"), APP_SLUG));

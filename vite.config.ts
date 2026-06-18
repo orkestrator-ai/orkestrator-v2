@@ -8,6 +8,9 @@ const host = process.env.VITE_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
+  // Use relative asset paths so the packaged app can load assets over file://
+  base: "./",
+
   plugins: [react(), tailwindcss()],
 
   resolve: {

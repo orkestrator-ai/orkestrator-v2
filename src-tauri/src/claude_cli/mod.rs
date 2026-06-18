@@ -702,4 +702,46 @@ mod tests {
     fn test_parse_slug_rejects_empty_response() {
         assert!(parse_slug_from_response("").is_err());
     }
+
+    #[test]
+    fn test_truncate_prompt_short_is_unchanged() {
+        assert_eq!(truncate_prompt("fix the bug"), "fix the bug");
+        assert_eq!(truncate_prompt(""), "");
+    }
+
+    #[test]
+    fn test_truncate_prompt_long_is_capped_with_ellipsis() {
+        let prompt = "a".repeat(250);
+        let truncated = truncate_prompt(&prompt);
+        assert!(truncated.ends_with("..."));
+        // 200 retained chars plus the "..." marker.
+        assert_eq!(truncated.chars().count(), 203);
+    }
+
+    #[test]
+    fn test_truncate_prompt_respects_utf8_boundaries() {
+        // 250 multi-byte chars must not be sliced mid-codepoint.
+        let prompt = "é".repeat(250);
+        let truncated = truncate_prompt(&prompt);
+        assert!(truncated.ends_with("..."));
+        assert_eq!(truncated.chars().filter(|&c| c == 'é').count(), 200);
+    }
+
+    #[test]
+    fn test_build_slug_generation_prompt_embeds_truncated_prompt() {
+        let prompt = build_slug_generation_prompt("Review the OAuth flow");
+        assert!(prompt.contains("Review the OAuth flow"));
+        assert!(prompt.contains("slug generator"));
+        assert!(prompt.contains(r#"{"slug": "your-slug-here"}"#));
+    }
+
+    #[test]
+    fn test_codex_output_path_format_and_location() {
+        let output_path = codex_output_path();
+        assert!(output_path.starts_with(std::env::temp_dir()));
+        let name = output_path.file_name().unwrap().to_string_lossy();
+        // Includes the pid so concurrent processes do not collide on the temp file.
+        assert!(name.starts_with(&format!("orkestrator-name-{}-", std::process::id())));
+        assert!(name.ends_with(".txt"));
+    }
 }

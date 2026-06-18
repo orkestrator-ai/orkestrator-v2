@@ -666,21 +666,37 @@ async function findTranscriptPath(
   return undefined;
 }
 
+/**
+ * Builds the shell command that lists fresh `.jsonl` files in `dirPath` newest-first,
+ * emitting `<mtime> <path>` lines. Relies on GNU `find` (`-printf`/`-newermt`), which is
+ * available inside the Linux container backend.
+ */
+export function newestJsonlFindCommand(dirPath: string, minMtimeUnix: number): string {
+  return `find ${shellArg(dirPath)}/ -mindepth 1 -maxdepth 1 -type f -name '*.jsonl' -newermt @${minMtimeUnix} -printf '%T@ %p\\n' 2>/dev/null | sort -rn`;
+}
+
+/**
+ * Selects the single newest `.jsonl` path from `find -printf '%T@ %p'` output (sorted
+ * newest-first). Returns undefined unless exactly one candidate exists, mirroring the
+ * local backend's "only act when unambiguous" rule.
+ */
+export function selectSingleNewestJsonl(findOutput: string): string | undefined {
+  const lines = findOutput.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (lines.length !== 1) return undefined;
+  const firstSpace = lines[0]!.indexOf(" ");
+  if (firstSpace < 0) return undefined;
+  const candidatePath = lines[0]!.slice(firstSpace + 1).trim();
+  return candidatePath.length > 0 ? candidatePath : undefined;
+}
+
 async function newestJsonlInDir(
   backend: TmuxBackend,
   dirPath: string,
   minMtimeUnix: number,
 ): Promise<string | undefined> {
   if (backend.kind === "container") {
-    const findCommand = `find ${shellArg(dirPath)}/ -mindepth 1 -maxdepth 1 -type f -name '*.jsonl' -newermt @${minMtimeUnix} -printf '%T@ %p\\n' 2>/dev/null | sort -rn`;
-    const script = [
-      `matches="$(${findCommand})"`,
-      `count="$(printf '%s\\n' "$matches" | sed '/^$/d' | wc -l | tr -d ' ')"`,
-      `if [ "$count" = "1" ]; then printf '%s\\n' "$matches" | head -1 | cut -d' ' -f2-; fi`,
-    ].join("; ");
-    const out = await backend.exec(["sh", "-c", script]);
-    const found = out.stdout.trim();
-    return found.length > 0 ? found : undefined;
+    const out = await backend.exec(["sh", "-c", newestJsonlFindCommand(dirPath, minMtimeUnix)]);
+    return selectSingleNewestJsonl(out.stdout);
   }
 
   const names = await backend.listDir(dirPath);

@@ -3,7 +3,11 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { registerTmuxBackendCommands } from "../../../electron/backend/tmux";
+import {
+  newestJsonlFindCommand,
+  registerTmuxBackendCommands,
+  selectSingleNewestJsonl,
+} from "../../../electron/backend/tmux";
 import type { Environment } from "../../../electron/backend/models";
 
 const tempDirs: string[] = [];
@@ -417,5 +421,43 @@ describe("Electron tmux backend command registration", () => {
 
       await invoke(handlers, "claude_tmux_stop", { tabId: "tab-tail", environmentId: environment.id }, context);
     });
+  });
+});
+
+describe("container transcript discovery helpers", () => {
+  test("builds a GNU find query scoped to fresh jsonl files in the project dir", () => {
+    const command = newestJsonlFindCommand("/home/node/.claude/projects/-workspace", 1_700_000_000);
+    expect(command).toContain("'/home/node/.claude/projects/-workspace'/");
+    expect(command).toContain("-name '*.jsonl'");
+    expect(command).toContain("-newermt @1700000000");
+    expect(command).toContain("-printf '%T@ %p\\n'");
+    expect(command).toContain("sort -rn");
+  });
+
+  test("selects the single newest jsonl path from find output", () => {
+    const output = "1700000002.5 /home/node/.claude/projects/p/new.jsonl\n";
+    expect(selectSingleNewestJsonl(output)).toBe("/home/node/.claude/projects/p/new.jsonl");
+  });
+
+  test("returns undefined when find output is empty", () => {
+    expect(selectSingleNewestJsonl("")).toBeUndefined();
+    expect(selectSingleNewestJsonl("\n  \n")).toBeUndefined();
+  });
+
+  test("returns undefined when find output is ambiguous (more than one candidate)", () => {
+    const output = [
+      "1700000003 /home/node/.claude/projects/p/b.jsonl",
+      "1700000002 /home/node/.claude/projects/p/a.jsonl",
+    ].join("\n");
+    expect(selectSingleNewestJsonl(output)).toBeUndefined();
+  });
+
+  test("preserves spaces in the selected path", () => {
+    const output = "1700000002 /home/node/.claude/projects/p/with space.jsonl\n";
+    expect(selectSingleNewestJsonl(output)).toBe("/home/node/.claude/projects/p/with space.jsonl");
+  });
+
+  test("returns undefined when the single line lacks a path field", () => {
+    expect(selectSingleNewestJsonl("1700000002")).toBeUndefined();
   });
 });

@@ -224,6 +224,41 @@ async function generateEnvironmentNameWithCodexExec(prompt: string, context: Com
   }
 }
 
+/**
+ * Renames the git branch backing an environment, returning whether the stored branch
+ * may now be advanced to `newBranch`.
+ *
+ * When a live git branch already exists (an existing worktree, or a running container)
+ * it is renamed in place and the stored branch is advanced only if that rename succeeds —
+ * otherwise storage would diverge from the real git branch. When no live branch exists yet
+ * (e.g. a stopped or not-yet-provisioned container) the branch is materialized from storage
+ * at provision time, so the stored branch may be advanced freely.
+ */
+async function renameLiveGitBranch(environment: Environment, oldBranch: string, newBranch: string): Promise<boolean> {
+  if (environment.worktreePath) {
+    try {
+      await runCommand("git", ["-C", environment.worktreePath, "branch", "-m", "--", oldBranch, newBranch], { timeoutMs: 30_000 });
+      return true;
+    } catch (error) {
+      console.warn("[ElectronBackend] Failed to rename local git branch:", error);
+      return false;
+    }
+  }
+  if (environment.containerId && environment.status === "running") {
+    try {
+      await dockerExec(
+        environment.containerId,
+        `git -C /workspace branch -m -- ${quoteShell(oldBranch)} ${quoteShell(newBranch)}`,
+      );
+      return true;
+    } catch (error) {
+      console.warn("[ElectronBackend] Failed to rename container git branch:", error);
+      return false;
+    }
+  }
+  return true;
+}
+
 type PrDetectionResult = {
   url: string;
   state: PrState;
@@ -1062,21 +1097,16 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const newBranch = sanitizeBranchName(newName);
     const oldBranch = environment.branch;
     const branchChanged = oldBranch !== newBranch;
+
+    // Rename any live git branch before persisting, and only advance the stored branch
+    // (and clear stale PR metadata) when that rename succeeds, so storage never diverges
+    // from the real git branch.
+    const persistBranch = branchChanged && (await renameLiveGitBranch(environment, oldBranch, newBranch));
+
     const updated = await context.storage.updateEnvironment(envId, {
       name: newName,
-      branch: newBranch,
-      ...(branchChanged ? { prUrl: null, prState: null, hasMergeConflicts: null } : {}),
+      ...(persistBranch ? { branch: newBranch, prUrl: null, prState: null, hasMergeConflicts: null } : {}),
     });
-
-    if (branchChanged && environment.worktreePath) {
-      await runCommand("git", ["-C", environment.worktreePath, "branch", "-m", "--", oldBranch, newBranch], { timeoutMs: 30_000 })
-        .catch((error) => console.warn("[ElectronBackend] Failed to rename local git branch:", error));
-    } else if (branchChanged && environment.containerId && environment.status === "running") {
-      await dockerExec(
-        environment.containerId,
-        `git -C /workspace branch -m -- ${quoteShell(oldBranch)} ${quoteShell(newBranch)}`,
-      ).catch((error) => console.warn("[ElectronBackend] Failed to rename container git branch:", error));
-    }
 
     context.emit("environment-renamed", { environment_id: updated.id, new_name: updated.name, new_branch: updated.branch });
   });

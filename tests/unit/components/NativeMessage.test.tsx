@@ -84,6 +84,85 @@ describe("NativeMessage", () => {
     expect(lineBreaks).toHaveLength(2);
   });
 
+  test("truncates user prompts longer than 12 lines by default", () => {
+    const content = Array.from(
+      { length: 13 },
+      (_, index) => `Line ${index + 1}`,
+    ).join("\n");
+    const message: NativeMessageType = {
+      id: "msg-long-user-prompt",
+      role: "user",
+      content,
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "text", content }],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    const toggle = screen.getByRole("button", { name: "show more" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      (toggle.previousElementSibling as HTMLElement).style.maxHeight,
+    ).toContain("12");
+
+    fireEvent.click(toggle);
+
+    const collapseToggle = screen.getByRole("button", { name: "show less" });
+    expect(collapseToggle.getAttribute("aria-expanded")).toBe("true");
+    expect((collapseToggle.previousElementSibling as HTMLElement).style.maxHeight).toBe("");
+
+    fireEvent.click(collapseToggle);
+
+    expect(
+      screen
+        .getByRole("button", { name: "show more" })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+  });
+
+  test("does not add prompt truncation controls to short user or assistant messages", () => {
+    const shortContent = Array.from(
+      { length: 12 },
+      (_, index) => `Line ${index + 1}`,
+    ).join("\n");
+    const longContent = Array.from(
+      { length: 13 },
+      (_, index) => `Line ${index + 1}`,
+    ).join("\n");
+    const shortUserMessage: NativeMessageType = {
+      id: "msg-short-user-prompt",
+      role: "user",
+      content: shortContent,
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "text",
+          content: shortContent,
+        },
+      ],
+    };
+    const longAssistantMessage: NativeMessageType = {
+      id: "msg-long-assistant-message",
+      role: "assistant",
+      content: longContent,
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "text",
+          content: longContent,
+        },
+      ],
+    };
+
+    const { rerender } = render(<NativeMessage message={shortUserMessage} />);
+
+    expect(screen.queryByRole("button", { name: "show more" })).toBeNull();
+
+    rerender(<NativeMessage message={longAssistantMessage} />);
+
+    expect(screen.queryByRole("button", { name: "show more" })).toBeNull();
+  });
+
   test("renders user copy control below the bubble with the timestamp row", async () => {
     const message: NativeMessageType = {
       id: "msg-user-copy",

@@ -585,8 +585,8 @@ async function createLocalWorktree(
     suffix += 1;
   }
 
-  const args = ["-C", projectPath, "worktree", "add", "-b", finalBranch, worktreePath];
-  if (baseBranch?.trim()) args.push(baseBranch.trim());
+  const startPoint = await resolveRemoteWorktreeStartPoint(projectPath, baseBranch?.trim() || "main");
+  const args = ["-C", projectPath, "worktree", "add", "-b", finalBranch, worktreePath, startPoint];
   await runCommand("git", args, { timeoutMs: 120_000 });
 
   await fs.mkdir(path.join(worktreePath, ".orkestrator"), { recursive: true });
@@ -903,6 +903,17 @@ async function countLocalFileLines(rootPath: string, relativePath: string): Prom
 async function gitRefExists(worktreePath: string, refName: string): Promise<boolean> {
   return runCommand("git", ["-C", worktreePath, "rev-parse", "--verify", "--quiet", `${refName}^{commit}`], { timeoutMs: 10_000 })
     .then(() => true, () => false);
+}
+
+async function resolveRemoteWorktreeStartPoint(projectPath: string, baseBranch: string): Promise<string> {
+  const branch = validateGitRefName(baseBranch, "base branch");
+  await runCommand("git", ["-C", projectPath, "fetch", "origin", branch], { timeoutMs: 120_000 });
+
+  const remoteRef = `origin/${branch}`;
+  if (!await gitRefExists(projectPath, remoteRef)) {
+    throw new Error(`Remote base branch not found: ${remoteRef}`);
+  }
+  return remoteRef;
 }
 
 async function resolveLocalGitBase(worktreePath: string, targetBranch: string): Promise<string> {

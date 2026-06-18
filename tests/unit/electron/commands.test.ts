@@ -1,10 +1,14 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import { execFile } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { Environment } from "../../../electron/backend/models";
 import type { CommandContext } from "../../../electron/backend/commands";
+
+const execFileAsync = promisify(execFile);
 
 const showOpenDialog = mock(async () => ({ canceled: false, filePaths: ["/tmp/project"] }));
 mock.module("electron", () => ({
@@ -91,11 +95,12 @@ function createEnvironment(overrides: Partial<Environment> = {}): Environment {
   };
 }
 
-function createContext(environment: Environment): {
+function createContext(environmentOrEnvironments: Environment | Environment[]): {
   context: CommandContext;
   updates: Array<Record<string, unknown>>;
   emitted: Array<{ event: string; payload: unknown }>;
 } {
+  const environments = Array.isArray(environmentOrEnvironments) ? environmentOrEnvironments : [environmentOrEnvironments];
   const updates: Array<Record<string, unknown>> = [];
   const emitted: Array<{ event: string; payload: unknown }> = [];
   const context = {
@@ -105,8 +110,12 @@ function createContext(environment: Environment): {
       emitted.push({ event, payload });
     }),
     storage: {
-      getEnvironment: mock(async () => environment),
-      updateEnvironment: mock(async (_environmentId: string, update: Record<string, unknown>) => {
+      getEnvironment: mock(async (environmentId: string) => environments.find((environment) => environment.id === environmentId) ?? null),
+      getEnvironmentsByProject: mock(async (projectId: string) => environments.filter((environment) => environment.projectId === projectId)),
+      loadEnvironments: mock(async () => environments),
+      updateEnvironment: mock(async (environmentId: string, update: Record<string, unknown>) => {
+        const environment = environments.find((candidate) => candidate.id === environmentId);
+        if (!environment) throw new Error(`Environment not found: ${environmentId}`);
         updates.push(update);
         Object.assign(environment, update);
         return environment;
@@ -151,6 +160,72 @@ async function requestOk(port: number, requestPath: string): Promise<boolean> {
   });
 }
 
+async function runGit(cwd: string, args: string[]): Promise<void> {
+  await execFileAsync("git", args, {
+    cwd,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Test User",
+      GIT_AUTHOR_EMAIL: "test@example.com",
+      GIT_COMMITTER_NAME: "Test User",
+      GIT_COMMITTER_EMAIL: "test@example.com",
+    },
+  });
+}
+
+async function createGitWorktreeWithOrigin(): Promise<{ worktree: string; remote: string }> {
+  const root = await createTempDir("ork-electron-git-");
+  const remote = path.join(root, "origin.git");
+  const worktree = path.join(root, "worktree");
+
+  await runGit(root, ["init", "--bare", remote]);
+  await fs.mkdir(worktree, { recursive: true });
+  await runGit(worktree, ["init"]);
+  await runGit(worktree, ["checkout", "-b", "main"]);
+  await runGit(worktree, ["config", "user.name", "Test User"]);
+  await runGit(worktree, ["config", "user.email", "test@example.com"]);
+  await fs.writeFile(path.join(worktree, "tracked.txt"), "base\n");
+  await runGit(worktree, ["add", "tracked.txt"]);
+  await runGit(worktree, ["commit", "-m", "base"]);
+  await runGit(worktree, ["remote", "add", "origin", remote]);
+  await runGit(worktree, ["push", "-u", "origin", "main"]);
+
+  return { worktree, remote };
+}
+
+async function withFakeDocker(scriptBody: string, run: (logs: { all: string; rm: string; exec: string }) => Promise<void>): Promise<void> {
+  const root = await createTempDir("ork-electron-fake-docker-");
+  const binDir = path.join(root, "bin");
+  const all = path.join(root, "docker.log");
+  const rm = path.join(root, "docker-rm.log");
+  const exec = path.join(root, "docker-exec.log");
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.writeFile(path.join(binDir, "docker"), scriptBody);
+  await fs.chmod(path.join(binDir, "docker"), 0o755);
+
+  const originalPath = process.env.PATH;
+  const originalDockerLog = process.env.FAKE_DOCKER_LOG;
+  const originalDockerRmLog = process.env.FAKE_DOCKER_RM_LOG;
+  const originalDockerExecLog = process.env.FAKE_DOCKER_EXEC_LOG;
+  process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+  process.env.FAKE_DOCKER_LOG = all;
+  process.env.FAKE_DOCKER_RM_LOG = rm;
+  process.env.FAKE_DOCKER_EXEC_LOG = exec;
+
+  try {
+    await run({ all, rm, exec });
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    if (originalDockerLog === undefined) delete process.env.FAKE_DOCKER_LOG;
+    else process.env.FAKE_DOCKER_LOG = originalDockerLog;
+    if (originalDockerRmLog === undefined) delete process.env.FAKE_DOCKER_RM_LOG;
+    else process.env.FAKE_DOCKER_RM_LOG = originalDockerRmLog;
+    if (originalDockerExecLog === undefined) delete process.env.FAKE_DOCKER_EXEC_LOG;
+    else process.env.FAKE_DOCKER_EXEC_LOG = originalDockerExecLog;
+  }
+}
+
 function expectedLocalShellPath(): string {
   const configuredShell = process.env.SHELL?.trim();
   if (configuredShell && path.isAbsolute(configuredShell) && existsSync(configuredShell)) {
@@ -186,6 +261,191 @@ describe("Electron backend command registry", () => {
     const commands = createCommandRegistry();
     await expect(commands.get("browse_for_directory")?.({}, createContext(createEnvironment()).context)).resolves.toBe("/tmp/project");
     expect(showOpenDialog).toHaveBeenCalledWith({ properties: ["openDirectory"] });
+  });
+
+  test("keeps running local environments running during status sync", async () => {
+    const environment = createEnvironment({ status: "running", containerId: null, environmentType: "local" });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("get_environment_status")?.({ environmentId: environment.id }, context)).resolves.toBe("running");
+    await expect(commands.get("get_environments")?.({ projectId: environment.projectId }, context)).resolves.toEqual([environment]);
+    expect(updates).toHaveLength(0);
+  });
+
+  test("matches short and full container IDs before removing orphaned Docker containers", async () => {
+    const fullAssignedId = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+    const shortAssignedId = fullAssignedId.slice(0, 12);
+    const orphanId = "1234567890ab";
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: fullAssignedId,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "ps" ]; then
+  case "$*" in
+    *'{{json .}}'*)
+      printf '{"ID":"${shortAssignedId}","Names":"assigned","Status":"Up","State":"running","Image":"orkestrator"}\\n'
+      printf '{"ID":"${orphanId}","Names":"orphan","Status":"Exited","State":"exited","Image":"orkestrator"}\\n'
+      ;;
+    *)
+      printf '${shortAssignedId}\\tassigned\\n'
+      printf '${orphanId}\\torphan\\n'
+      ;;
+  esac
+  exit 0
+fi
+if [ "$1" = "rm" ]; then
+  printf '%s\\n' "$3" >> "$FAKE_DOCKER_RM_LOG"
+  exit 0
+fi
+exit 0
+`, async (logs) => {
+      const containers = await commands.get("get_orkestrator_containers")?.({}, context) as Array<{ id: string; isAssigned: boolean; environmentId: string | null }>;
+      expect(containers.find((container) => container.id === shortAssignedId)).toMatchObject({
+        isAssigned: true,
+        environmentId: "env-container",
+      });
+      expect(containers.find((container) => container.id === orphanId)).toMatchObject({ isAssigned: false });
+
+      await expect(commands.get("cleanup_orphaned_containers")?.({}, context)).resolves.toBe(1);
+      const removed = await fs.readFile(logs.rm, "utf8");
+      expect(removed).toContain(orphanId);
+      expect(removed).not.toContain(shortAssignedId);
+
+      const dockerCalls = await fs.readFile(logs.all, "utf8");
+      expect(dockerCalls).toContain("--no-trunc");
+    });
+  });
+
+  test("persists GitHub token propagation with container git config updates", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+  exit 0
+fi
+exit 0
+`, async (logs) => {
+      await expect(commands.get("propagate_github_token_to_containers")?.({ newToken: "token-value" }, context)).resolves.toEqual({
+        updated: ["env-container"],
+        failed: [],
+      });
+
+      const execLog = await fs.readFile(logs.exec, "utf8");
+      expect(execLog).toContain("git config --global --list");
+      expect(execLog).toContain("--remove-section");
+      expect(execLog).toContain("url.https://x-access-token:token-value@github.com/.insteadOf");
+      expect(execLog).toContain("https://github.com/");
+      expect(execLog).toContain("git@github.com:");
+      expect(execLog).not.toContain("export GH_TOKEN");
+    });
+  });
+
+  test("clears persisted GitHub token rewrites when propagation receives an empty token", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+  exit 0
+fi
+exit 0
+`, async (logs) => {
+      await expect(commands.get("propagate_github_token_to_containers")?.({ newToken: "" }, context)).resolves.toEqual({
+        updated: ["env-container"],
+        failed: [],
+      });
+
+      const execLog = await fs.readFile(logs.exec, "utf8");
+      expect(execLog).toContain("grep '^url\\.https://x-access-token:'");
+      expect(execLog).toContain("--remove-section");
+      expect(execLog).not.toContain(".insteadOf");
+    });
+  });
+
+  test("reports local git stats against origin target and includes untracked files", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\n");
+    await fs.writeFile(path.join(worktree, "new file.txt"), "one\ntwo\n");
+    const commands = createCommandRegistry();
+
+    const changes = await commands.get("get_local_git_status")?.(
+      { worktreePath: worktree, targetBranch: "main" },
+      createContext(createEnvironment()).context,
+    ) as Array<{ path: string; additions: number; deletions: number; status: string }>;
+
+    expect(changes).toContainEqual(expect.objectContaining({
+      path: "tracked.txt",
+      additions: 1,
+      deletions: 0,
+      status: "M",
+    }));
+    expect(changes).toContainEqual(expect.objectContaining({
+      path: "new file.txt",
+      additions: 2,
+      deletions: 0,
+      status: "?",
+    }));
+  });
+
+  test("reads local branch files from origin and returns null for files missing in the base", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    await fs.writeFile(path.join(worktree, "tracked.txt"), "local branch content\n");
+    await runGit(worktree, ["add", "tracked.txt"]);
+    await runGit(worktree, ["commit", "-m", "local-only-main-change"]);
+    await fs.writeFile(path.join(worktree, "feature-only.txt"), "feature content\n");
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("read_local_file_at_branch")?.(
+      { worktreePath: worktree, filePath: "tracked.txt", branch: "main" },
+      createContext(createEnvironment()).context,
+    )).resolves.toMatchObject({
+      path: "tracked.txt",
+      content: "base\n",
+      language: "txt",
+    });
+
+    await expect(commands.get("read_local_file_at_branch")?.(
+      { worktreePath: worktree, filePath: "feature-only.txt", branch: "main" },
+      createContext(createEnvironment()).context,
+    )).resolves.toBeNull();
+
+    await expect(commands.get("read_local_file_at_branch")?.(
+      { worktreePath: worktree, filePath: "../outside.txt", branch: "main" },
+      createContext(createEnvironment()).context,
+    )).rejects.toThrow("Invalid filePath");
   });
 
   test("waits for a local bridge server to pass health before persisting pid and port", async () => {

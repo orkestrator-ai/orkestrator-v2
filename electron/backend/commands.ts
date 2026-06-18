@@ -33,6 +33,7 @@ import {
 import {
   commandExists,
   homePath,
+  inferLanguage,
   pathExists,
   readFileBase64,
   readTextFile,
@@ -105,6 +106,33 @@ function asEnvironmentType(value: unknown): EnvironmentType {
 
 function quoteShell(value: string): string {
   return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+function validateGitRefName(value: string, name = "git ref"): string {
+  const trimmed = value.trim();
+  if (
+    trimmed.length === 0 ||
+    trimmed.startsWith("-") ||
+    trimmed.endsWith(".") ||
+    trimmed.endsWith("/") ||
+    trimmed.includes("..") ||
+    trimmed.includes("//") ||
+    /[\x00-\x20\x7f~^:?*[\\]/.test(trimmed) ||
+    trimmed.split("/").some((part) => part.length === 0 || part.startsWith(".") || part.endsWith(".lock"))
+  ) {
+    throw new Error(`Invalid ${name}: ${value}`);
+  }
+  return trimmed;
+}
+
+function containerIdMatches(known: string, candidate: string): boolean {
+  const left = known.trim();
+  const right = candidate.trim();
+  return left.length > 0 && right.length > 0 && (left === right || left.startsWith(right) || right.startsWith(left));
+}
+
+function findEnvironmentByContainerId(environments: Environment[], containerId: string): Environment | undefined {
+  return environments.find((environment) => environment.containerId && containerIdMatches(environment.containerId, containerId));
 }
 
 function bytesPayload(data: string | Buffer): number[] {
@@ -237,6 +265,10 @@ async function getHostPort(containerId: string, containerPort: number, protocol 
 }
 
 async function syncStoredEnvironmentStatus(environment: Environment, storage: StorageService): Promise<Environment> {
+  if (environment.environmentType === "local") {
+    return environment;
+  }
+
   if (!environment.containerId) {
     if (environment.status !== "stopped") {
       return storage.updateEnvironment(environment.id, { status: "stopped" });
@@ -518,27 +550,125 @@ async function buildFileTree(rootPath: string, relativePath = ""): Promise<Array
 }
 
 async function getLocalGitStatus(worktreePath: string, targetBranch: string): Promise<unknown[]> {
-  await runCommand("git", ["-C", worktreePath, "fetch", "origin", targetBranch], { timeoutMs: 60_000 }).catch(() => undefined);
-  const base = `origin/${targetBranch}`;
-  const { stdout } = await runCommand("git", ["-C", worktreePath, "diff", "--numstat", "--name-status", base], { timeoutMs: 60_000 }).catch(async () =>
-    runCommand("git", ["-C", worktreePath, "diff", "--numstat", "--name-status", targetBranch], { timeoutMs: 60_000 }),
-  );
-  return stdout
+  const base = await resolveLocalGitBase(worktreePath, targetBranch);
+  const [nameStatus, numstat, porcelain] = await Promise.all([
+    runCommand("git", ["-C", worktreePath, "diff", "--name-status", base], { timeoutMs: 60_000 }),
+    runCommand("git", ["-C", worktreePath, "diff", "--numstat", base], { timeoutMs: 60_000 }),
+    runCommand("git", ["-C", worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"], { timeoutMs: 60_000 }),
+  ]);
+
+  const stats = new Map<string, { additions: number; deletions: number }>();
+  for (const line of numstat.stdout.split("\n").filter(Boolean)) {
+    const [additions = "0", deletions = "0", ...paths] = line.split("\t");
+    const normalizedPath = paths.at(-1) ?? "";
+    stats.set(normalizedPath, {
+      additions: additions === "-" ? 0 : Number.parseInt(additions, 10) || 0,
+      deletions: deletions === "-" ? 0 : Number.parseInt(deletions, 10) || 0,
+    });
+  }
+
+  const changes = nameStatus.stdout
     .split("\n")
     .filter(Boolean)
     .map((line) => {
       const parts = line.split("\t");
       const status = parts[0] ?? "";
       const filePath = parts.at(-1) ?? "";
+      const fileStats = stats.get(filePath) ?? { additions: 0, deletions: 0 };
       return {
         path: filePath,
         filename: path.basename(filePath),
         directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
-        additions: 0,
-        deletions: 0,
+        additions: fileStats.additions,
+        deletions: fileStats.deletions,
         status,
       };
     });
+
+  const existingPaths = new Set(changes.map((change) => change.path));
+  for (const line of porcelain.stdout.split("\0").filter(Boolean)) {
+    if (!line.startsWith("?? ")) continue;
+    const filePath = line.slice(3);
+    if (existingPaths.has(filePath)) continue;
+    const additions = await countLocalFileLines(worktreePath, filePath).catch(() => 0);
+    changes.push({
+      path: filePath,
+      filename: path.basename(filePath),
+      directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
+      additions,
+      deletions: 0,
+      status: "?",
+    });
+  }
+
+  return changes;
+}
+
+async function countLocalFileLines(rootPath: string, relativePath: string): Promise<number> {
+  const target = validateRelativeFilePath(relativePath, "git status path");
+  const fullPath = path.join(rootPath, target);
+  const stat = await fs.stat(fullPath);
+  if (stat.size === 0 || stat.size > MAX_BINARY_FILE_BYTES) return 0;
+  const buffer = await fs.readFile(fullPath);
+  if (buffer.includes(0)) return 0;
+  const text = buffer.toString("utf8");
+  if (!text) return 0;
+  const trailingNewline = text.endsWith("\n") || text.endsWith("\r");
+  return text.split(/\r\n|\r|\n/).length - (trailingNewline ? 1 : 0);
+}
+
+async function gitRefExists(worktreePath: string, refName: string): Promise<boolean> {
+  return runCommand("git", ["-C", worktreePath, "rev-parse", "--verify", "--quiet", `${refName}^{commit}`], { timeoutMs: 10_000 })
+    .then(() => true, () => false);
+}
+
+async function resolveLocalGitBase(worktreePath: string, targetBranch: string): Promise<string> {
+  const branch = validateGitRefName(targetBranch, "target branch");
+  await runCommand("git", ["-C", worktreePath, "fetch", "origin", branch], { timeoutMs: 60_000 }).catch(() => undefined);
+
+  const remoteRef = `origin/${branch}`;
+  if (await gitRefExists(worktreePath, remoteRef)) return remoteRef;
+  if (await gitRefExists(worktreePath, branch)) return branch;
+  return remoteRef;
+}
+
+function isGitShowMissingPathError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("exists on disk, but not in") ||
+    message.includes("does not exist in") ||
+    message.includes("Path ") && message.includes(" does not exist")
+  );
+}
+
+async function readLocalFileAtBranch(worktreePath: string, filePath: string, branch: string): Promise<{ path: string; content: string; language: string } | null> {
+  const target = validateRelativeFilePath(filePath, "filePath");
+  const base = await resolveLocalGitBase(worktreePath, branch);
+  try {
+    const { stdout } = await runCommand("git", ["-C", worktreePath, "show", `${base}:${target}`], { timeoutMs: 30_000 });
+    return { path: target, content: stdout, language: inferLanguage(target) };
+  } catch (error) {
+    if (isGitShowMissingPathError(error)) return null;
+    throw error;
+  }
+}
+
+function clearGitHubTokenGitConfigCommand(): string {
+  return "git config --global --list 2>/dev/null | grep '^url\\.https://x-access-token:' | sed 's/\\.insteadof=.*//' | sort -u | while read -r section; do git config --global --remove-section \"$section\" 2>/dev/null || true; done";
+}
+
+function setGitHubTokenGitConfigCommand(token: string): string {
+  const tokenUrl = `https://x-access-token:${token}@github.com/`;
+  const rewrites = ["https://github.com/", "https://github.com", "git@github.com:"];
+  return [
+    clearGitHubTokenGitConfigCommand(),
+    ...rewrites.map((rewrite) => `git config --global --add ${quoteShell(`url.${tokenUrl}.insteadOf`)} ${quoteShell(rewrite)}`),
+  ].join("\n");
+}
+
+function githubTokenPropagationCommand(newToken: string | undefined): string {
+  const token = newToken?.trim();
+  return token ? setGitHubTokenGitConfigCommand(token) : clearGitHubTokenGitConfigCommand();
 }
 
 async function createDockerContainer(environment: Environment, context: CommandContext): Promise<string> {
@@ -823,7 +953,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("docker_remove_container", ({ containerId }) => runCommand("docker", ["rm", "-f", asString(containerId, "containerId")], { timeoutMs: 60_000 }).then(() => undefined));
   register("docker_container_status", ({ containerId }) => getDockerStatus(asString(containerId, "containerId")));
   register("list_docker_containers", async () => {
-    const { stdout } = await runCommand("docker", ["ps", "-a", "--filter", `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`, "--format", "{{.ID}}\t{{.Names}}"], { timeoutMs: 10_000 });
+    const { stdout } = await runCommand("docker", ["ps", "-a", "--no-trunc", "--filter", `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`, "--format", "{{.ID}}\t{{.Names}}"], { timeoutMs: 10_000 });
     return stdout.split("\n").filter(Boolean).map((line) => line.split("\t"));
   });
   register("get_container_host_port", ({ containerId, containerPort }) => getHostPort(asString(containerId, "containerId"), asNumber(containerPort, "containerPort")));
@@ -849,22 +979,20 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   });
   register("get_orkestrator_containers", async ({}, { storage }) => {
     const environments = await storage.loadEnvironments();
-    const assigned = new Map(environments.filter((env) => env.containerId).map((env) => [env.containerId, env]));
-    const { stdout } = await runCommand("docker", ["ps", "-a", "--filter", `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`, "--format", "{{json .}}"], { timeoutMs: 20_000 });
+    const { stdout } = await runCommand("docker", ["ps", "-a", "--no-trunc", "--filter", `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`, "--format", "{{json .}}"], { timeoutMs: 20_000 });
     return stdout.split("\n").filter(Boolean).map((line) => {
       const row = JSON.parse(line) as Record<string, string>;
       const id = row.ID ?? "";
-      const env = assigned.get(id);
+      const env = findEnvironmentByContainerId(environments, id);
       return { id, name: row.Names ?? "", status: row.Status ?? "", state: row.State ?? "", image: row.Image ?? "", created: 0, environmentId: env?.id ?? null, projectId: env?.projectId ?? null, isAssigned: !!env, cpuPercent: null };
     });
   });
   register("cleanup_orphaned_containers", async (_args, { storage }) => {
     const environments = await storage.loadEnvironments();
-    const known = new Set(environments.map((env) => env.containerId).filter(Boolean));
     const containers = await commands.get("list_docker_containers")?.({}, { storage, emit: () => undefined, appRoot: "", resourceRoot: "" }) as string[][];
     let removed = 0;
     for (const [containerId] of containers) {
-      if (containerId && !known.has(containerId)) {
+      if (containerId && !findEnvironmentByContainerId(environments, containerId)) {
         await runCommand("docker", ["rm", "-f", containerId], { timeoutMs: 60_000 }).catch(() => undefined);
         removed += 1;
       }
@@ -884,7 +1012,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     for (const env of environments) {
       if (!env.containerId || await getDockerStatus(env.containerId).catch(() => "stopped") !== "running") continue;
       try {
-        await dockerExec(env.containerId, `export GH_TOKEN=${quoteShell(asOptionalString(newToken) ?? "")}`);
+        await dockerExec(env.containerId, githubTokenPropagationCommand(asOptionalString(newToken)));
         updated.push(env.id);
       } catch (error) {
         failed.push([env.id, error instanceof Error ? error.message : String(error)]);
@@ -1093,11 +1221,9 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("get_local_git_status", ({ worktreePath, targetBranch }) => getLocalGitStatus(asString(worktreePath, "worktreePath"), asString(targetBranch, "targetBranch")));
   register("get_local_file_tree", ({ worktreePath }) => buildFileTree(asString(worktreePath, "worktreePath")));
   register("read_local_file", ({ worktreePath, filePath }) => readTextFile(asString(worktreePath, "worktreePath"), asString(filePath, "filePath")));
-  register("read_local_file_at_branch", async ({ worktreePath, filePath, branch }) => {
-    const target = asString(filePath, "filePath");
-    const { stdout } = await runCommand("git", ["-C", asString(worktreePath, "worktreePath"), "show", `${asString(branch, "branch")}:${target}`], { timeoutMs: 30_000 });
-    return { path: target, content: stdout, language: path.extname(target).slice(1) };
-  });
+  register("read_local_file_at_branch", ({ worktreePath, filePath, branch }) =>
+    readLocalFileAtBranch(asString(worktreePath, "worktreePath"), asString(filePath, "filePath"), asString(branch, "branch")),
+  );
   register("read_file_base64", ({ filePath }) => readFileBase64(asString(filePath, "filePath")));
   register("write_local_file", ({ worktreePath, filePath, base64Data }) => writeFileBase64(asString(worktreePath, "worktreePath"), asString(filePath, "filePath"), asString(base64Data, "base64Data")));
 

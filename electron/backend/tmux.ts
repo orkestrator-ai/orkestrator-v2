@@ -644,6 +644,10 @@ function encodeCwd(cwd: string): string {
   return cwd.replace(/\/+$/, "").replaceAll("/", "-");
 }
 
+function localClaudeHome(): string {
+  return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+}
+
 async function findTranscriptPath(
   backend: TmuxBackend,
   claudeHome: string,
@@ -808,7 +812,7 @@ class TmuxSession {
     this.sessionId = resumeSessionId ?? randomUUID();
     this.tmuxSession = tmuxSessionName(environmentId, tabId);
     this.workspace = backend.kind === "local" ? backend.cwd ?? process.cwd() : "/workspace";
-    this.claudeHome = backend.kind === "local" ? path.join(os.homedir(), ".claude") : "/home/node/.claude";
+    this.claudeHome = backend.kind === "local" ? localClaudeHome() : "/home/node/.claude";
     this.workspaceHookPaths = workspaceHookPaths(`${RUNTIME_ROOT_PREFIX}/${environmentId}`, this.workspace);
     this.sessionHookPaths = sessionHookPaths(this.workspaceHookPaths, this.sessionId);
     this.claudeCommand = claudeCommand ?? "claude";
@@ -1283,7 +1287,7 @@ const tmuxManager = new TmuxSessionManager();
 function workspaceAndClaudeHome(backend: TmuxBackend): { workspace: string; claudeHome: string } {
   return {
     workspace: backend.kind === "local" ? backend.cwd ?? process.cwd() : "/workspace",
-    claudeHome: backend.kind === "local" ? path.join(os.homedir(), ".claude") : "/home/node/.claude",
+    claudeHome: backend.kind === "local" ? localClaudeHome() : "/home/node/.claude",
   };
 }
 

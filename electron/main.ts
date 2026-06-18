@@ -1,8 +1,9 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, type OpenDialogOptions } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { OrkestratorBackend } from "./backend/index.js";
 import { APP_SLUG, PRODUCT_NAME } from "./backend/constants.js";
+import { registerMainIpc } from "./ipc.js";
 import { resolveRendererIndexPath, resolveRuntimeRoots } from "./paths.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -85,51 +86,15 @@ async function createWindow(): Promise<void> {
 }
 
 function registerIpc(): void {
-  ipcMain.handle("orkestrator:invoke", async (_event, command: string, args?: Record<string, unknown>) => {
-    if (!backend) throw new Error("Backend is not initialized");
-    return backend.invoke(command, args ?? {});
+  registerMainIpc({
+    getBackend: () => backend,
+    getMainWindow: () => mainWindow,
+    ipc: ipcMain,
+    clipboardApi: clipboard,
+    dialogApi: dialog,
+    appApi: app,
+    nativeImageApi: nativeImage,
   });
-
-  ipcMain.handle("orkestrator:clipboard:read-text", () => clipboard.readText());
-  ipcMain.handle("orkestrator:clipboard:write-text", (_event, text: string) => {
-    clipboard.writeText(text);
-  });
-  ipcMain.handle("orkestrator:clipboard:read-image", () => {
-    const image = clipboard.readImage();
-    if (image.isEmpty()) return null;
-    const size = image.getSize();
-    return {
-      width: size.width,
-      height: size.height,
-      dataUrl: image.toDataURL(),
-    };
-  });
-  ipcMain.handle("orkestrator:clipboard:write-image", (_event, dataUrl: string) => {
-    clipboard.writeImage(nativeImage.createFromDataURL(dataUrl));
-  });
-
-  ipcMain.handle("orkestrator:dialog:open", async (_event, options?: { directory?: boolean; multiple?: boolean; title?: string; defaultPath?: string }) => {
-    const properties: NonNullable<OpenDialogOptions["properties"]> = [
-      options?.directory ? "openDirectory" : "openFile",
-      ...(options?.multiple ? ["multiSelections" as const] : []),
-    ];
-    const dialogOptions: OpenDialogOptions = {
-      title: options?.title,
-      defaultPath: options?.defaultPath,
-      properties,
-    };
-    const result = mainWindow
-      ? await dialog.showOpenDialog(mainWindow, dialogOptions)
-      : await dialog.showOpenDialog(dialogOptions);
-    if (result.canceled) return null;
-    return options?.multiple ? result.filePaths : result.filePaths[0] ?? null;
-  });
-
-  ipcMain.handle("orkestrator:process:exit", (_event, code?: number) => {
-    app.exit(code ?? 0);
-  });
-
-  ipcMain.handle("orkestrator:window:start-dragging", () => undefined);
 }
 
 app.whenReady().then(async () => {

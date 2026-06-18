@@ -333,6 +333,7 @@ async function mergePullRequestViaGitHubApi(
 ): Promise<void> {
   const pr = parseGitHubPullRequestUrl(prUrl);
   const pullEndpoint = `repos/${encodeGitHubPathSegment(pr.owner)}/${encodeGitHubPathSegment(pr.repo)}/pulls/${pr.number}`;
+  const mergeEndpoint = `${pullEndpoint}/merge`;
 
   let head: GitHubPullRequestHead | null = null;
   if (deleteBranch) {
@@ -342,7 +343,7 @@ async function mergePullRequestViaGitHubApi(
 
   await runCommand("gh", [
     "api",
-    pullEndpoint,
+    mergeEndpoint,
     "--method",
     "PUT",
     "-f",

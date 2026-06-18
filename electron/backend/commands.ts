@@ -188,6 +188,62 @@ function sanitizeGeneratedEnvironmentName(rawName: string): string {
   return name.split("-").filter(Boolean).slice(0, 3).join("-");
 }
 
+const PROMPT_NAME_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "at",
+  "be",
+  "by",
+  "can",
+  "could",
+  "for",
+  "from",
+  "in",
+  "is",
+  "of",
+  "on",
+  "or",
+  "please",
+  "should",
+  "that",
+  "the",
+  "these",
+  "this",
+  "those",
+  "to",
+  "with",
+  "would",
+]);
+
+function generateInitialEnvironmentName(prompt: string): string | undefined {
+  const words = prompt.match(/[A-Za-z0-9]+/g) ?? [];
+  const meaningfulWords = words
+    .map((word) => word.toLowerCase())
+    .filter((word) => word.length > 1 && !PROMPT_NAME_STOP_WORDS.has(word));
+  const selectedWords = (meaningfulWords.length > 0 ? meaningfulWords : words.map((word) => word.toLowerCase())).slice(0, 3);
+  if (selectedWords.length === 0) return undefined;
+  return sanitizeGeneratedEnvironmentName(selectedWords.join("-"));
+}
+
+function makeUniqueEnvironmentSlug(baseSlug: string, existingEnvironments: Environment[], extraBranches: string[] = []): string {
+  const used = new Set<string>();
+  for (const environment of existingEnvironments) {
+    used.add(environment.name);
+    used.add(environment.branch);
+  }
+  for (const branch of extraBranches) used.add(branch);
+
+  let candidate = baseSlug;
+  let suffix = 1;
+  while (used.has(candidate)) {
+    candidate = `${baseSlug}-${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
+}
+
 function resolveCodexBinary(context: CommandContext): string {
   const candidates = [
     path.join(context.resourceRoot, "bin", "codex"),
@@ -221,6 +277,26 @@ async function generateEnvironmentNameWithCodexExec(prompt: string, context: Com
     return sanitizeGeneratedEnvironmentName(parseSlugFromResponse(response.trim()));
   } finally {
     await fs.rm(outputPath, { force: true }).catch(() => undefined);
+  }
+}
+
+async function listGitBranchesAtPath(repoPath: string, fetchFirst: boolean): Promise<string[]> {
+  if (fetchFirst) {
+    await runCommand("git", ["-C", repoPath, "fetch", "origin", "--prune"], { timeoutMs: 60_000 }).catch(() => undefined);
+  }
+
+  try {
+    const { stdout } = await runCommand("git", ["-C", repoPath, "branch", "-a", "--format=%(refname:short)"], { timeoutMs: 30_000 });
+    const branches = stdout
+      .split("\n")
+      .map((branch) => branch.trim())
+      .filter(Boolean)
+      .map((branch) => branch.replace(/^remotes\/origin\//, "").replace(/^origin\//, ""))
+      .filter((branch) => branch !== "HEAD");
+    return Array.from(new Set(branches)).sort();
+  } catch (error) {
+    console.warn("[ElectronBackend] Failed to list git branches for environment naming:", error);
+    return [];
   }
 }
 
@@ -1183,14 +1259,31 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   });
   register("get_environment", ({ environmentId }, { storage }) => storage.getEnvironment(asString(environmentId, "environmentId")));
   register("reorder_environments", ({ projectId, environmentIds }, { storage }) => storage.reorderEnvironments(asString(projectId, "projectId"), asStringArray(environmentIds)));
-  register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType }, { storage }) => {
+  register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType }, context) => {
+    const { storage } = context;
     const project = await storage.getProject(asString(projectId, "projectId"));
     if (!project) throw new Error(`Project not found: ${projectId}`);
     const repoConfig = await storage.getRepositoryConfig(project.id);
+    const explicitName = asOptionalString(name)?.trim();
+    const initialPromptText = asOptionalString(initialPrompt);
+    const trimmedInitialPrompt = initialPromptText?.trim();
+    const generatedInitialName = !explicitName && trimmedInitialPrompt
+      ? generateInitialEnvironmentName(trimmedInitialPrompt)
+      : undefined;
+    const baseName = explicitName
+      ? sanitizeEnvironmentName(explicitName)
+      : generatedInitialName;
+    const existingEnvironments = baseName ? await storage.getEnvironmentsByProject(project.id) : [];
+    const existingGitBranches = baseName && project.localPath
+      ? await listGitBranchesAtPath(project.localPath, true)
+      : [];
+    const uniqueName = baseName
+      ? makeUniqueEnvironmentSlug(baseName, existingEnvironments, existingGitBranches)
+      : undefined;
     const env = createEnvironment(project.id, {
-      name: asOptionalString(name),
+      name: uniqueName,
       networkAccessMode: networkAccessMode === "full" ? "full" : networkAccessMode === "restricted" ? "restricted" : undefined,
-      initialPrompt: asOptionalString(initialPrompt),
+      initialPrompt: initialPromptText,
       portMappings: asPortMappings(portMappings),
       environmentType: asEnvironmentType(environmentType),
       entryPort: repoConfig.entryPort,

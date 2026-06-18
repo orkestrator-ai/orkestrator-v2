@@ -101,6 +101,24 @@ function createContext(environmentOrEnvironments: Environment | Environment[]): 
   emitted: Array<{ event: string; payload: unknown }>;
 } {
   const environments = Array.isArray(environmentOrEnvironments) ? environmentOrEnvironments : [environmentOrEnvironments];
+  const projects = [{
+    id: "project-1",
+    name: "repo",
+    gitUrl: "https://github.com/acme/repo.git",
+    localPath: null,
+    addedAt: new Date(0).toISOString(),
+    order: 0,
+  }];
+  const config = {
+    version: "1.0.0",
+    global: {},
+    repositories: {
+      "project-1": {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+      },
+    },
+  };
   const updates: Array<Record<string, unknown>> = [];
   const emitted: Array<{ event: string; payload: unknown }> = [];
   const context = {
@@ -110,9 +128,21 @@ function createContext(environmentOrEnvironments: Environment | Environment[]): 
       emitted.push({ event, payload });
     }),
     storage: {
+      getProject: mock(async (projectId: string) => projects.find((project) => project.id === projectId) ?? null),
+      getRepositoryConfig: mock(async (projectId: string) => config.repositories[projectId as "project-1"] ?? { defaultBranch: "main", prBaseBranch: "main" }),
+      loadConfig: mock(async () => config),
+      saveConfig: mock(async (nextConfig: typeof config) => {
+        Object.assign(config, nextConfig);
+      }),
       getEnvironment: mock(async (environmentId: string) => environments.find((environment) => environment.id === environmentId) ?? null),
       getEnvironmentsByProject: mock(async (projectId: string) => environments.filter((environment) => environment.projectId === projectId)),
       loadEnvironments: mock(async () => environments),
+      addEnvironment: mock(async (environment: Environment) => {
+        environment.order =
+          Math.max(-1, ...environments.filter((item) => item.projectId === environment.projectId).map((item) => item.order)) + 1;
+        environments.push(environment);
+        return environment;
+      }),
       updateEnvironment: mock(async (environmentId: string, update: Record<string, unknown>) => {
         const environment = environments.find((candidate) => candidate.id === environmentId);
         if (!environment) throw new Error(`Environment not found: ${environmentId}`);
@@ -347,6 +377,142 @@ describe("Electron backend command registry", () => {
     const commands = createCommandRegistry();
     await expect(commands.get("browse_for_directory")?.({}, createContext(createEnvironment()).context)).resolves.toBe("/tmp/project");
     expect(showOpenDialog).toHaveBeenCalledWith({ properties: ["openDirectory"] });
+  });
+
+  test("creates unnamed environments with a local slug generated from the initial prompt", async () => {
+    const { context } = createContext([]);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_CODEX_LOG"
+exit 77
+`, async (logPath) => {
+      const result = await commands.get("create_environment")?.(
+        {
+          projectId: "project-1",
+          initialPrompt: "Please review the OAuth callback flow",
+          environmentType: "local",
+        },
+        context,
+      ) as Environment;
+
+      expect(result.name).toBe("review-oauth-callback");
+      expect(result.branch).toBe("review-oauth-callback");
+      expect(result.initialPrompt).toBe("Please review the OAuth callback flow");
+      await expect(fs.readFile(logPath, "utf8")).rejects.toThrow();
+    });
+  });
+
+  test("suffixes prompt-generated environment slugs when an existing branch uses the slug", async () => {
+    const existing = createEnvironment({
+      id: "env-existing",
+      name: "existing",
+      branch: "review-oauth-callback",
+    });
+    const { context } = createContext(existing);
+    const commands = createCommandRegistry();
+
+    const result = await commands.get("create_environment")?.(
+      {
+        projectId: "project-1",
+        initialPrompt: "Please review the OAuth callback flow",
+        environmentType: "local",
+      },
+      context,
+    ) as Environment;
+
+    expect(result.name).toBe("review-oauth-callback-1");
+    expect(result.branch).toBe("review-oauth-callback-1");
+  });
+
+  test("suffixes prompt-generated environment slugs when the local repo already has the branch", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    await runGit(worktree, ["branch", "review-oauth-callback"]);
+    const { context } = createContext([]);
+    (context.storage.getProject as ReturnType<typeof mock>).mockImplementation(async () => ({
+      id: "project-1",
+      name: "repo",
+      gitUrl: "https://github.com/acme/repo.git",
+      localPath: worktree,
+      addedAt: new Date(0).toISOString(),
+      order: 0,
+    }));
+    const commands = createCommandRegistry();
+
+    const result = await commands.get("create_environment")?.(
+      {
+        projectId: "project-1",
+        initialPrompt: "Please review the OAuth callback flow",
+        environmentType: "local",
+      },
+      context,
+    ) as Environment;
+
+    expect(result.name).toBe("review-oauth-callback-1");
+    expect(result.branch).toBe("review-oauth-callback-1");
+  });
+
+  test("falls back to the default timestamp name when an initial prompt cannot form a slug", async () => {
+    const { context } = createContext([]);
+    const commands = createCommandRegistry();
+
+    const result = await commands.get("create_environment")?.(
+      {
+        projectId: "project-1",
+        initialPrompt: "🔥🔥🔥",
+        environmentType: "local",
+      },
+      context,
+    ) as Environment;
+
+    expect(result.name).toMatch(/^\d{15}$/);
+    expect(result.branch).toBe(result.name);
+    expect(result.initialPrompt).toBe("🔥🔥🔥");
+  });
+
+  test("suffixes explicit environment names when the current project already uses the slug", async () => {
+    const existing = createEnvironment({
+      id: "env-existing",
+      name: "custom-name",
+      branch: "custom-name",
+    });
+    const { context } = createContext(existing);
+    const commands = createCommandRegistry();
+
+    const result = await commands.get("create_environment")?.(
+      {
+        projectId: "project-1",
+        name: "Custom Name",
+        environmentType: "local",
+      },
+      context,
+    ) as Environment;
+
+    expect(result.name).toBe("custom-name-1");
+    expect(result.branch).toBe("custom-name-1");
+  });
+
+  test("does not suffix generated names for duplicate slugs in a different project", async () => {
+    const otherProjectEnvironment = createEnvironment({
+      id: "env-other-project",
+      projectId: "project-2",
+      name: "review-oauth-callback",
+      branch: "review-oauth-callback",
+    });
+    const { context } = createContext(otherProjectEnvironment);
+    const commands = createCommandRegistry();
+
+    const result = await commands.get("create_environment")?.(
+      {
+        projectId: "project-1",
+        initialPrompt: "Please review the OAuth callback flow",
+        environmentType: "local",
+      },
+      context,
+    ) as Environment;
+
+    expect(result.name).toBe("review-oauth-callback");
+    expect(result.branch).toBe("review-oauth-callback");
   });
 
   test("renames environments from prompts using codex exec output", async () => {

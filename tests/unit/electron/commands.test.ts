@@ -649,6 +649,101 @@ printf '%s\\n' '{}' > "$out"
     }
   });
 
+  test("creates local worktrees from a configured remote default branch", async () => {
+    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    await runGit(worktree, ["checkout", "-b", "develop"]);
+    await fs.writeFile(path.join(worktree, "tracked.txt"), "develop\n");
+    await runGit(worktree, ["add", "tracked.txt"]);
+    await runGit(worktree, ["commit", "-m", "develop base"]);
+    await runGit(worktree, ["push", "-u", "origin", "develop"]);
+
+    const environment = createEnvironment({
+      status: "stopped",
+      worktreePath: undefined,
+      branch: "feature/custom-base",
+      environmentType: "local",
+    });
+    const projectName = `Custom Base ${randomUUID().slice(0, 8)}`;
+    const { context } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: projectName,
+        gitUrl: remote,
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: { defaultBranch: "develop", prBaseBranch: "develop" },
+    });
+    const commands = createCommandRegistry();
+
+    try {
+      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual({ setupCommands: [] });
+
+      expect(environment.worktreePath).toBeDefined();
+      expect(environment.branch).toBe("feature-custom-base");
+      expect(await fs.readFile(path.join(environment.worktreePath!, "tracked.txt"), "utf8")).toBe("develop\n");
+    } finally {
+      if (environment.worktreePath) await fs.rm(environment.worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("marks local environment errored when the remote base branch is missing", async () => {
+    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    const environment = createEnvironment({
+      status: "stopped",
+      worktreePath: undefined,
+      branch: "feature/missing-base",
+      environmentType: "local",
+    });
+    const { context, updates } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: `Missing Base ${randomUUID().slice(0, 8)}`,
+        gitUrl: remote,
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: { defaultBranch: "missing-base", prBaseBranch: "missing-base" },
+    });
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).rejects.toThrow();
+
+    expect(environment.status).toBe("error");
+    expect(environment.worktreePath).toBeUndefined();
+    expect(updates.map((update) => update.status)).toEqual(["creating", "error"]);
+  });
+
+  test("marks local environment errored when the project repository has no origin remote", async () => {
+    const repo = await createGitRepoOnBranch("main");
+    const environment = createEnvironment({
+      status: "stopped",
+      worktreePath: undefined,
+      branch: "feature/no-origin",
+      environmentType: "local",
+    });
+    const { context, updates } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: `No Origin ${randomUUID().slice(0, 8)}`,
+        gitUrl: "",
+        localPath: repo,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: { defaultBranch: "main", prBaseBranch: "main" },
+    });
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).rejects.toThrow();
+
+    expect(environment.status).toBe("error");
+    expect(environment.worktreePath).toBeUndefined();
+    expect(updates.map((update) => update.status)).toEqual(["creating", "error"]);
+  });
+
   test("matches short and full container IDs before removing orphaned Docker containers", async () => {
     const fullAssignedId = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
     const shortAssignedId = fullAssignedId.slice(0, 12);

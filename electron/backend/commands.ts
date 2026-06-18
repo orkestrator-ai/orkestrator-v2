@@ -1172,32 +1172,37 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     await storage.updateEnvironment(environment.id, { status: "creating" });
 
-    if (environment.environmentType === "local") {
-      if (environment.worktreePath && await pathExists(environment.worktreePath)) {
-        await storage.updateEnvironment(environment.id, { status: "running" });
-        return { setupCommands: environment.setupScriptsComplete ? undefined : await readSetupLocalCommands(environment.worktreePath) };
+    try {
+      if (environment.environmentType === "local") {
+        if (environment.worktreePath && await pathExists(environment.worktreePath)) {
+          await storage.updateEnvironment(environment.id, { status: "running" });
+          return { setupCommands: environment.setupScriptsComplete ? undefined : await readSetupLocalCommands(environment.worktreePath) };
+        }
+        const project = await storage.getProject(environment.projectId);
+        if (!project?.localPath) throw new Error("Project has no local path - cannot create a local worktree");
+        const repoConfig = await storage.getRepositoryConfig(project.id);
+        const worktree = await createLocalWorktree(project.localPath, project.name, environment.branch, repoConfig.defaultBranch);
+        await storage.updateEnvironment(environment.id, { worktreePath: worktree.path, branch: worktree.branch, status: "running" });
+        return { setupCommands: await readSetupLocalCommands(worktree.path) };
       }
-      const project = await storage.getProject(environment.projectId);
-      if (!project?.localPath) throw new Error("Project has no local path - cannot create a local worktree");
-      const repoConfig = await storage.getRepositoryConfig(project.id);
-      const worktree = await createLocalWorktree(project.localPath, project.name, environment.branch, repoConfig.defaultBranch);
-      await storage.updateEnvironment(environment.id, { worktreePath: worktree.path, branch: worktree.branch, status: "running" });
-      return { setupCommands: await readSetupLocalCommands(worktree.path) };
-    }
 
-    let containerId = environment.containerId;
-    if (!containerId) {
-      containerId = await createDockerContainer(environment, { storage, emit: () => undefined, appRoot: "", resourceRoot: "" });
-      await storage.updateEnvironment(environment.id, { containerId });
+      let containerId = environment.containerId;
+      if (!containerId) {
+        containerId = await createDockerContainer(environment, { storage, emit: () => undefined, appRoot: "", resourceRoot: "" });
+        await storage.updateEnvironment(environment.id, { containerId });
+      }
+      await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
+      const hostEntryPort = environment.entryPort ? await getHostPort(containerId, environment.entryPort) : null;
+      await storage.updateEnvironment(environment.id, {
+        status: "running",
+        entryPort: environment.entryPort ?? null,
+        hostEntryPort,
+      });
+      return {};
+    } catch (error) {
+      await storage.updateEnvironment(environment.id, { status: "error" }).catch(() => undefined);
+      throw error;
     }
-    await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
-    const hostEntryPort = environment.entryPort ? await getHostPort(containerId, environment.entryPort) : null;
-    await storage.updateEnvironment(environment.id, {
-      status: "running",
-      entryPort: environment.entryPort ?? null,
-      hostEntryPort,
-    });
-    return {};
   });
   register("stop_environment", async ({ environmentId }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));

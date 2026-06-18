@@ -4,7 +4,11 @@ This file provides specific guidance for AI agents working on this codebase.
 
 ## Project Overview
 
-Orkestrator AI is a Tauri desktop application for managing isolated Docker-based and local-worktree development environments for Claude Code, Codex, and OpenCode.
+Orkestrator AI was a Tauri desktop application for managing isolated Docker-based and local-worktree development environments for Claude Code, Codex, and OpenCode.
+It is now being migrated to an Electron app. Please do not make changes to the Tauri app. Going forward, we will only use electron and eventually remove the tauri code.
+The Tauri code is only there for reference while we make these changes.
+
+
 
 ## Background Environment Reliability
 
@@ -20,13 +24,12 @@ When adding or changing background behavior (agent sessions, tmux sessions, term
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|------------|
+| Layer    | Technology                                                |
+| -------- | --------------------------------------------------------- |
 | Frontend | React 19, TypeScript, Tailwind CSS v4, shadcn/ui, Zustand |
-| Terminal | xterm.js |
-| Backend | Rust, Tauri v2 |
-| Docker | Bollard (Rust Docker client) |
-| OpenCode | `@opencode-ai/sdk` v2 |
+| Terminal | xterm.js                                                  |
+| Docker   |                                                           |
+| OpenCode | `@opencode-ai/sdk` v2                                     |
 
 ## Project Structure
 
@@ -115,14 +118,14 @@ These APIs only exist in v2:
 
 ### OpenCode Components
 
-| Component | Purpose |
-|-----------|---------|
-| `OpenCodeChatTab` | Main chat interface, SSE event handling |
-| `OpenCodeComposeBar` | Message input with attachments |
-| `OpenCodeMessage` | Message rendering with tool display |
-| `OpenCodeQuestionCard` | Interactive question/answer UI |
-| `openCodeStore` | Zustand store for sessions, questions |
-| `opencode-client.ts` | SDK wrapper functions |
+| Component              | Purpose                                 |
+| ---------------------- | --------------------------------------- |
+| `OpenCodeChatTab`      | Main chat interface, SSE event handling |
+| `OpenCodeComposeBar`   | Message input with attachments          |
+| `OpenCodeMessage`      | Message rendering with tool display     |
+| `OpenCodeQuestionCard` | Interactive question/answer UI          |
+| `openCodeStore`        | Zustand store for sessions, questions   |
+| `opencode-client.ts`   | SDK wrapper functions                   |
 
 ### SSE Event Types
 
@@ -155,13 +158,13 @@ debug!("Starting background naming task");
 
 ### Log Levels
 
-| Level | Use Case |
-|-------|----------|
-| `error!` | Critical failures that need immediate attention |
-| `warn!` | Unexpected conditions that don't prevent operation |
-| `info!` | Important operational events (container started, etc.) |
-| `debug!` | Detailed information useful for debugging |
-| `trace!` | Very detailed information (loop iterations) |
+| Level    | Use Case                                               |
+| -------- | ------------------------------------------------------ |
+| `error!` | Critical failures that need immediate attention        |
+| `warn!`  | Unexpected conditions that don't prevent operation     |
+| `info!`  | Important operational events (container started, etc.) |
+| `debug!` | Detailed information useful for debugging              |
+| `trace!` | Very detailed information (loop iterations)            |
 
 ### Import Convention
 
@@ -182,34 +185,34 @@ use tracing::*;              // Avoid - imports everything
 
 ### Frontend
 
-| File | Purpose |
-|------|---------|
-| `src/components/codex/CodexChatTab.tsx` | Codex Native Mode chat |
-| `src/components/terminal/TerminalContainer.tsx` | xterm.js integration |
-| `src/components/opencode/OpenCodeChatTab.tsx` | OpenCode Native Mode chat |
-| `src/lib/codex-client.ts` | Codex bridge client wrapper |
-| `src/lib/opencode-client.ts` | OpenCode SDK v2 wrapper |
-| `src/stores/codexStore.ts` | Codex state management |
-| `src/stores/openCodeStore.ts` | OpenCode state management |
-| `src/lib/tauri.ts` | Tauri IPC wrappers |
+| File                                            | Purpose                     |
+| ----------------------------------------------- | --------------------------- |
+| `src/components/codex/CodexChatTab.tsx`         | Codex Native Mode chat      |
+| `src/components/terminal/TerminalContainer.tsx` | xterm.js integration        |
+| `src/components/opencode/OpenCodeChatTab.tsx`   | OpenCode Native Mode chat   |
+| `src/lib/codex-client.ts`                       | Codex bridge client wrapper |
+| `src/lib/opencode-client.ts`                    | OpenCode SDK v2 wrapper     |
+| `src/stores/codexStore.ts`                      | Codex state management      |
+| `src/stores/openCodeStore.ts`                   | OpenCode state management   |
+| `src/lib/tauri.ts`                              | Tauri IPC wrappers          |
 
 ### Backend
 
-| File | Purpose |
-|------|---------|
-| `src-tauri/src/commands/codex.rs` | Codex bridge commands |
-| `src-tauri/src/docker/client.rs` | Core Docker API client |
-| `src-tauri/src/docker/container.rs` | Container provisioning |
-| `src-tauri/src/commands/environments.rs` | Environment CRUD commands |
-| `src-tauri/src/local/servers.rs` | Local Claude/Codex/OpenCode server lifecycle |
-| `src-tauri/src/commands/opencode.rs` | OpenCode server management |
+| File                                     | Purpose                                      |
+| ---------------------------------------- | -------------------------------------------- |
+| `src-tauri/src/commands/codex.rs`        | Codex bridge commands                        |
+| `src-tauri/src/docker/client.rs`         | Core Docker API client                       |
+| `src-tauri/src/docker/container.rs`      | Container provisioning                       |
+| `src-tauri/src/commands/environments.rs` | Environment CRUD commands                    |
+| `src-tauri/src/local/servers.rs`         | Local Claude/Codex/OpenCode server lifecycle |
+| `src-tauri/src/commands/opencode.rs`     | OpenCode server management                   |
 
 ### Docker
 
-| File | Purpose |
-|------|---------|
-| `docker/Dockerfile` | Base image definition |
-| `docker/entrypoint.sh` | Container entrypoint |
+| File                      | Purpose                |
+| ------------------------- | ---------------------- |
+| `docker/Dockerfile`       | Base image definition  |
+| `docker/entrypoint.sh`    | Container entrypoint   |
 | `docker/init-firewall.sh` | Network firewall rules |
 
 ## Docker Base Image

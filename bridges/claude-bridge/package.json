@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "bun build src/index.ts --target=node --format=esm --external @anthropic-ai/claude-agent-sdk --outfile=dist/index.js && bun run vendor",
-    "vendor": "rm -rf dist/node_modules && mkdir -p dist/node_modules/@anthropic-ai && cp -R node_modules/@anthropic-ai/claude-agent-sdk dist/node_modules/@anthropic-ai/claude-agent-sdk",
+    "vendor": "rm -rf dist/node_modules && mkdir -p dist/node_modules/@anthropic-ai && cp -R node_modules/@anthropic-ai/claude-agent-sdk node_modules/@anthropic-ai/claude-agent-sdk-* dist/node_modules/@anthropic-ai/",
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts"

@@ -44,7 +44,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [makeEnv("e1")],
       "e1",
-      [makeEnv("e1")],
     );
     expect(result).toEqual([]);
   });
@@ -57,7 +56,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [makeEnv("e1")],
       null,
-      [],
     );
     expect(result).toEqual([]);
   });
@@ -70,7 +68,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [makeEnv("e1")],
       null,
-      [],
     );
     expect(result).toEqual([]);
   });
@@ -83,7 +80,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [makeEnv("e1")],
       null,
-      [],
     );
     expect(result).toEqual([]);
   });
@@ -98,25 +94,39 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [env1],
       null,
-      [],
     );
     expect(result).toHaveLength(1);
     expect(result[0]!.id).toBe("e1");
   });
 
-  test("excludes environments already visible in the main content", () => {
+  test("excludes the selected environment already visible in the main content", () => {
     const env1 = makeEnv("e1", "proj-1");
     const pipelines = new Map([
       ["p1", makePipeline("p1", "e1", "building")],
     ]);
-    // e1 is in projectEnvironments and selectedEnvironmentId is set → visible
+    // e1 is the selected foreground environment.
     const result = getBackgroundProcessingEnvironments(
       pipelines,
       [env1],
       "e1",
-      [env1],
     );
     expect(result).toEqual([]);
+  });
+
+  test("returns active sibling project environments because only the selected environment is foreground-mounted", () => {
+    const env1 = makeEnv("e1", "proj-1");
+    const env2 = makeEnv("e2", "proj-1");
+    const pipelines = new Map([
+      ["p1", makePipeline("p1", "e2", "building")],
+    ]);
+
+    const result = getBackgroundProcessingEnvironments(
+      pipelines,
+      [env1, env2],
+      "e1",
+    );
+
+    expect(result).toEqual([env2]);
   });
 
   test("returns pipeline env from a different project when user views another project", () => {
@@ -125,12 +135,11 @@ describe("getBackgroundProcessingEnvironments", () => {
     const pipelines = new Map([
       ["p1", makePipeline("p1", "eA", "reviewing")],
     ]);
-    // User is viewing proj-B; envB is the visible project env
+    // User is viewing proj-B with envB selected; envA stays background.
     const result = getBackgroundProcessingEnvironments(
       pipelines,
       [envA, envB],
       "eB",
-      [envB],
     );
     expect(result).toHaveLength(1);
     expect(result[0]!.id).toBe("eA");
@@ -145,14 +154,13 @@ describe("getBackgroundProcessingEnvironments", () => {
       ["p2", makePipeline("p2", "e2", "verifying")],
       ["p3", makePipeline("p3", "e3", "complete")], // complete — excluded
     ]);
-    // User views proj-1, e1 is visible via projectEnvironments
+    // User views proj-1 with e1 selected; only e1 is foreground-mounted.
     const result = getBackgroundProcessingEnvironments(
       pipelines,
       [env1, env2, env3],
       "e1",
-      [env1, env3],
     );
-    // e1 is visible (in projectEnvironments), e3's pipeline is complete → only e2
+    // e1 is visible, e3's pipeline is complete → only e2
     expect(result).toHaveLength(1);
     expect(result[0]!.id).toBe("e2");
   });
@@ -169,7 +177,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [env1, env2],
       null,
-      [],
     );
     expect(result).toHaveLength(2);
     const ids = result.map((e) => e.id).sort();
@@ -194,7 +201,7 @@ describe("getBackgroundProcessingEnvironments", () => {
       const pipelines = new Map([
         ["p1", makePipeline("p1", "e1", phase)],
       ]);
-      const result = getBackgroundProcessingEnvironments(pipelines, [env], null, []);
+      const result = getBackgroundProcessingEnvironments(pipelines, [env], null);
       expect(result).toHaveLength(1);
     }
   });
@@ -207,7 +214,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [makeEnv("e-other")],
       null,
-      [],
     );
     expect(result).toEqual([]);
   });
@@ -219,7 +225,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [env],
       null,
-      [],
       new Set(["e1"]),
     );
 
@@ -233,7 +238,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [env],
       null,
-      [],
       new Set(),
       ["e1"],
     );
@@ -248,7 +252,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [env],
       null,
-      [],
       new Set(),
       [],
       ["e1"],
@@ -264,7 +267,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [env],
       null,
-      [],
       new Set(),
       [],
       [],
@@ -281,7 +283,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [env],
       null,
-      [],
       new Set(),
       [],
       [],
@@ -299,7 +300,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [env],
       "e1",
-      [env],
       new Set(),
       [],
       [],
@@ -316,7 +316,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [env],
       "e1",
-      [env],
       new Set(),
       [],
       [],
@@ -338,7 +337,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [env1, env2],
       null,
-      [],
       new Set(),
       [],
       [],
@@ -356,7 +354,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [env],
       "e1",
-      [env],
       new Set(["e1"]),
     );
 
@@ -373,7 +370,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [env],
       null,
-      [],
     );
 
     expect(result).toEqual([env]);
@@ -390,7 +386,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [env1, env2],
       null,
-      [],
       new Set(["e1", "e2"]),
     );
 

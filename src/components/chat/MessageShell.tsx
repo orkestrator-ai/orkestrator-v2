@@ -58,7 +58,7 @@ export function MessageShell({
               </div>
             ) : null}
 
-            <div className="space-y-2 break-words">{children}</div>
+            <div className="space-y-6 break-words">{children}</div>
 
             {showAssistantActionRow ? (
               <div className="mt-1 flex min-h-6 items-center justify-between gap-3 text-[10px] leading-none text-muted-foreground/55">

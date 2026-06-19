@@ -854,41 +854,15 @@ function FilePart({
   );
 }
 
-/** Whether text following the given part should get extra lead-in spacing */
-function shouldAddTextLeadIn(previousPart?: NativeMessagePart | null): boolean {
-  return (
-    previousPart?.type === "tool-invocation" ||
-    previousPart?.type === "subagent" ||
-    previousPart?.type === "tool-group" ||
-    previousPart?.type === "task-group"
-  );
-}
-
-/** Find the previous rendered part, skipping non-rendered tool-result parts */
-function getPreviousRenderedPart(
-  parts: NativeMessagePart[],
-  index: number,
-): NativeMessagePart | null {
-  for (let i = index - 1; i >= 0; i--) {
-    const part = parts[i];
-    if (part && part.type !== "tool-result") {
-      return part;
-    }
-  }
-  return null;
-}
-
 /** Render a text content part with markdown support */
 function TextPart({
   content,
   showCopy = true,
   truncateUserPrompt = false,
-  followsToolActivity = false,
 }: {
   content: string;
   showCopy?: boolean;
   truncateUserPrompt?: boolean;
-  followsToolActivity?: boolean;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const lineCount = useMemo(
@@ -899,7 +873,7 @@ function TextPart({
     truncateUserPrompt && lineCount > USER_PROMPT_COLLAPSED_LINE_COUNT;
 
   return (
-    <div className={cn("group", followsToolActivity && "pt-2")}>
+    <div className="group">
       <div
         className={cn(
           "[&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0",
@@ -1053,7 +1027,6 @@ function SubagentPart({ part }: { part: NativeMessagePart }) {
               <MessagePart
                 key={`${part.subagentId || part.content}-subagent-part-${index}-${childPart.type}`}
                 part={childPart}
-                previousPart={getPreviousRenderedPart(subagentActions, index)}
               />
             ))}
             {subagentActions.length === 0 ? (
@@ -1081,7 +1054,6 @@ function ToolGroupPart({
         <MessagePart
           key={`tool-group-part-${index}-${child.type}`}
           part={child}
-          previousPart={index > 0 ? part.parts[index - 1] : null}
           containerId={containerId}
         />
       ))}
@@ -1119,14 +1091,12 @@ function TaskGroupPart({
         <div className="mt-1 space-y-1 border-l border-border/40 pl-3">
           <MessagePart
             part={part.task}
-            previousPart={null}
             containerId={containerId}
           />
           {part.childTools.map((child, index) => (
             <MessagePart
               key={`task-child-${index}-${child.toolUseId ?? child.toolName ?? child.type}`}
               part={child}
-              previousPart={index > 0 ? part.childTools[index - 1] : part.task}
               containerId={containerId}
             />
           ))}
@@ -1139,13 +1109,11 @@ function TaskGroupPart({
 /** Render a single message part based on its type */
 function MessagePart({
   part,
-  previousPart,
   showTextCopy = true,
   truncateUserPrompt = false,
   containerId,
 }: {
   part: NativeMessagePart;
-  previousPart?: NativeMessagePart | null;
   showTextCopy?: boolean;
   truncateUserPrompt?: boolean;
   containerId?: string;
@@ -1161,7 +1129,6 @@ function MessagePart({
           content={part.content}
           showCopy={showTextCopy}
           truncateUserPrompt={truncateUserPrompt}
-          followsToolActivity={shouldAddTextLeadIn(previousPart)}
         />
       );
     case "tool-invocation":
@@ -1316,9 +1283,6 @@ export const NativeMessage = memo(function NativeMessage({
           content={message.content}
           showCopy={false}
           truncateUserPrompt={isUser}
-          followsToolActivity={shouldAddTextLeadIn(
-            getPreviousRenderedPart(message.parts, message.parts.length),
-          )}
         />
       )}
     </MessageShell>
@@ -1333,7 +1297,6 @@ function renderMessageParts(
       <MessagePart
         key={`${message.id}-part-${index}-${part.type}`}
         part={part}
-        previousPart={getPreviousRenderedPart(message.parts, index)}
         showTextCopy={options.showTextCopy ?? true}
         truncateUserPrompt={message.role === "user"}
         containerId={options.containerId}

@@ -149,7 +149,7 @@ describe("NativeMessage task list rendering", () => {
 
     render(<NativeMessage message={message} />);
 
-    const toolButton = screen.getByRole("button", { name: /bash/i });
+    const toolButton = screen.getByRole("button", { name: /run_command/i });
     expect(toolButton.parentElement?.className).toContain("my-0");
 
     const text = screen.getByText("Text after tool");
@@ -161,6 +161,23 @@ describe("NativeMessage task list rendering", () => {
       "[&_.prose>:last-child]:mb-0",
     );
     expect(markdownWrapper?.parentElement?.className).not.toContain("pt-2");
+  });
+
+  test("displays bash tool invocations as run_command", () => {
+    const message = makeMessage([
+      {
+        type: "tool-invocation",
+        content: "ls",
+        toolName: "bash",
+        toolArgs: { command: "ls" },
+        toolState: "success",
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByRole("button", { name: /run_command/i })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /\bbash\b/i })).toBeNull();
   });
 
   test("uses uniform outer spacing for native part wrapper variants", () => {

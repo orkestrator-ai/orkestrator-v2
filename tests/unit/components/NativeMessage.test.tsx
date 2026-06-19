@@ -661,6 +661,37 @@ describe("NativeMessage", () => {
     });
   });
 
+  test("renders edit tool labels through the shared display-name helper", () => {
+    const message: NativeMessageType = {
+      id: "msg-edit-display-label",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "success",
+          toolDiff: {
+            filePath: "/workspace/src/example.ts",
+            before: "const value = 1;",
+            after: "const value = 2;",
+          },
+        },
+      ],
+    };
+
+    render(
+      <TerminalContextHarness>
+        <NativeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+
+    expect(screen.getByRole("button", { name: /edit/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /example\.ts/i })).toBeTruthy();
+  });
+
   test("renders transcript-derived subagent groups as collapsible activity stacks", () => {
     const message: NativeMessageType = {
       id: "msg-subagent",
@@ -821,5 +852,65 @@ describe("NativeMessage", () => {
 
     expect(screen.getByText("Summarized the repository layout.")).toBeTruthy();
     expect(screen.getByText("grep")).toBeTruthy();
+  });
+
+  test("uses display names for subagent tool-name previews without commands or titles", () => {
+    const message: NativeMessageType = {
+      id: "msg-subagent-display-tool-name",
+      role: "assistant",
+      content: "Main agent response",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "subagent",
+          content: "Hamilton",
+          subagentId: "agent-display-name-preview",
+          subagentName: "Hamilton",
+          subagentRole: "worker",
+          subagentActionCount: 1,
+          toolState: "success",
+          subagentActions: [
+            {
+              type: "tool-invocation",
+              content: "shell",
+              toolName: "bash",
+              toolState: "success",
+            },
+          ],
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("run_command")).toBeTruthy();
+    expect(screen.queryByText("bash")).toBeNull();
+  });
+
+  test("uses display names for task-group titles when no tool title is present", () => {
+    const message: NativeMessageType = {
+      id: "msg-task-group-display-tool-name",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "task-group",
+          content: "",
+          task: {
+            type: "tool-invocation",
+            content: "",
+            toolName: "bash",
+            toolState: "success",
+          },
+          childTools: [],
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByRole("button", { name: /run_command/i })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /\bbash\b/i })).toBeNull();
   });
 });

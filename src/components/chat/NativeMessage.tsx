@@ -34,7 +34,7 @@ import {
   SYSTEM_MESSAGE_PREFIX,
   type ToolDiffMetadata,
 } from "@/lib/opencode-client";
-import { isEditTool } from "@/lib/tool-names";
+import { getToolDisplayName, isEditTool } from "@/lib/tool-names";
 import { isTodoTool } from "@/lib/todo-tool";
 import { TodoToolPart } from "@/components/todo/TodoToolPart";
 import { MessageErrorAlert, MessageShell } from "@/components/chat/MessageShell";
@@ -164,6 +164,7 @@ function ToolPart({
   toolError?: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const displayToolName = getToolDisplayName(toolName);
 
   const stateColors = {
     success: "text-green-600",
@@ -250,7 +251,7 @@ function ToolPart({
           )}
         />
         <Wrench className="w-3.5 h-3.5 shrink-0" />
-        <span className="font-medium">{toolName || "Unknown tool"}</span>
+        <span className="font-medium">{displayToolName}</span>
         {displayInfo && (
           <span className="font-mono text-muted-foreground/80 truncate flex-1 text-left">
             {displayInfo}
@@ -430,6 +431,7 @@ function EditToolPart({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const { createFileTab } = useTerminalContext();
+  const displayToolName = getToolDisplayName(toolName, "edit");
 
   const stateColors = {
     success: "text-green-600",
@@ -515,7 +517,7 @@ function EditToolPart({
           )}
         />
         <Pencil className="w-3.5 h-3.5 shrink-0" />
-        <span className="font-medium">{toolName || "edit"}</span>
+        <span className="font-medium">{displayToolName}</span>
         {fileName && (
           <span className="font-mono text-muted-foreground/80 truncate flex-1 text-left">
             {fileName}
@@ -951,7 +953,7 @@ function getSubagentPreview(part: NativeMessagePart): string {
     return command;
   }
 
-  return latestAction.toolTitle || latestAction.toolName || latestAction.content;
+  return latestAction.toolTitle || getToolDisplayName(latestAction.toolName, latestAction.content);
 }
 
 function SubagentPart({ part }: { part: NativeMessagePart }) {
@@ -1069,7 +1071,7 @@ function TaskGroupPart({
   containerId?: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const taskName = part.task.toolTitle || part.task.toolName || "Task";
+  const taskName = part.task.toolTitle || getToolDisplayName(part.task.toolName, "Task");
   const childCount = part.childTools.length;
 
   return (

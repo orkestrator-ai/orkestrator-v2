@@ -960,6 +960,68 @@ exit 0
     });
   });
 
+  test("captures container HEAD commit when frontend marks setup complete", async () => {
+    const environment = createEnvironment({
+      id: "env-container-frontend-complete",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *rev-parse*)
+      printf '2222222222222222222222222222222222222222\\n'
+      ;;
+  esac
+  exit 0
+fi
+exit 0
+`, async () => {
+      const updated = await commands.get("set_environment_setup_complete")?.(
+        { environmentId: environment.id, complete: true },
+        context,
+      ) as Environment;
+
+      expect(updated.setupScriptsComplete).toBe(true);
+      expect(updated.createdFromCommit).toBe("2222222222222222222222222222222222222222");
+    });
+  });
+
+  test("does not throw when docker exec fails while capturing container HEAD commit", async () => {
+    const environment = createEnvironment({
+      id: "env-container-commit-fail",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf 'container gone\\n' >&2
+  exit 1
+fi
+exit 0
+`, async () => {
+      const updated = await commands.get("set_environment_setup_complete")?.(
+        { environmentId: environment.id, complete: true },
+        context,
+      ) as Environment;
+
+      expect(updated.setupScriptsComplete).toBe(true);
+      expect(updated.createdFromCommit).toBeUndefined();
+    });
+  });
+
   test("does not pass host gh auth token into newly created containers without configured token", async () => {
     const environment = createEnvironment({
       id: "env-container-create",

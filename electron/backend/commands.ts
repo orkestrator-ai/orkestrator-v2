@@ -836,7 +836,7 @@ async function captureCreatedFromCommit(environment: Environment, storage: Stora
   if (environment.createdFromCommit) return environment;
   const commit = environment.environmentType === "local"
     ? environment.worktreePath ? await readLocalHeadCommit(environment.worktreePath).catch(() => undefined) : undefined
-    : environment.containerId ? await readContainerHeadCommit(environment.containerId) : undefined;
+    : environment.containerId ? await readContainerHeadCommit(environment.containerId).catch(() => undefined) : undefined;
   return commit ? storage.updateEnvironment(environment.id, { createdFromCommit: commit }) : environment;
 }
 

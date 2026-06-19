@@ -5,6 +5,7 @@ interface NativeComposeDockProps {
   centered: boolean;
   children: ReactNode;
   actions?: ReactNode;
+  topAccessory?: ReactNode;
   title?: string;
 }
 
@@ -12,6 +13,7 @@ export function NativeComposeDock({
   centered,
   children,
   actions,
+  topAccessory,
   title = "Ready to build!",
 }: NativeComposeDockProps) {
   return (
@@ -32,6 +34,12 @@ export function NativeComposeDock({
         >
           <h2 className="text-2xl font-bold text-white">{title}</h2>
         </div>
+
+        {topAccessory && !centered ? (
+          <div className="pointer-events-auto mx-auto mb-1 flex w-[min(calc(100%_-_2rem),56rem)] justify-end">
+            {topAccessory}
+          </div>
+        ) : null}
 
         {children}
 

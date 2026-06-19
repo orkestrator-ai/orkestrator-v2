@@ -23,6 +23,7 @@ const realSlashCommandDirectorySnapshot = { ...realSlashCommandDirectory };
 const realSlashCommandRegistrySnapshot = { ...realSlashCommandRegistry };
 const realHooksSnapshot = { ...realHooks };
 const mockScrollToBottom = mock(() => {});
+let mockIsAtBottom = true;
 
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
 const mockSendPrompt = mock(async () => ({ success: true }));
@@ -167,8 +168,8 @@ mock.module("./slash-command-registry", () => ({
 mock.module("@/hooks", () => ({
   ...realHooksSnapshot,
   useVirtuosoScrollState: mock(() => ({
-    isAtBottom: true,
-    isAtBottomRef: { current: true },
+    isAtBottom: mockIsAtBottom,
+    isAtBottomRef: { current: mockIsAtBottom },
     scrollToBottom: mockScrollToBottom,
     virtuosoRef: { current: null },
     scrollProps: {},
@@ -292,6 +293,7 @@ describe("OpenCodeChatTab", () => {
       variant: {},
     }));
     mockScrollToBottom.mockClear();
+    mockIsAtBottom = true;
     resetStores();
   });
 
@@ -320,6 +322,39 @@ describe("OpenCodeChatTab", () => {
     await waitFor(() => {
       expect(screen.getByTestId("opencode-compose-layout").textContent).toBe("bottom");
     });
+  });
+
+  test("shows the scroll down accessory and scrolls to the bottom when clicked", () => {
+    mockIsAtBottom = false;
+    useOpenCodeStore.setState((state) => {
+      const sessions = new Map(state.sessions);
+      sessions.set(SESSION_KEY, {
+        sessionId: "session-1",
+        messages: [
+          {
+            id: "message-1",
+            role: "assistant",
+            content: "Existing response",
+            parts: [{ type: "text", text: "Existing response" }],
+            createdAt: "2026-04-15T10:00:00.000Z",
+          } as any,
+        ],
+        isLoading: false,
+      });
+      return { sessions };
+    });
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Scroll to bottom of conversation" }));
+
+    expect(mockScrollToBottom).toHaveBeenCalledTimes(1);
   });
 
   test("shows the first prompt and naming feedback before the rename completes", async () => {

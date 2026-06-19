@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
-import { getSetupCommands, setEnvironmentSetupComplete } from "./backend";
+import { getSetupCommands, runEnvironmentSetup, setEnvironmentSetupComplete } from "./backend";
 
 const invokeMock = invoke as unknown as {
   mockReset: () => void;
@@ -30,6 +30,14 @@ describe("backend setup wrappers", () => {
     expect(commands).toEqual(["bun install"]);
     expect(invokeMock.mock.calls).toEqual([
       ["get_setup_commands", { environmentId: "env-1" }],
+    ]);
+  });
+
+  test("calls the run-environment-setup Electron command with the environment id", async () => {
+    await runEnvironmentSetup("env-1");
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["run_environment_setup", { environmentId: "env-1" }],
     ]);
   });
 });

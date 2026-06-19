@@ -17,6 +17,7 @@ export interface PendingNativeAgentLaunch {
   initialPrompt?: string;
   targetPaneId: string;
   agentType: AgentType;
+  launchMode?: "native" | "terminal";
   claudeNativeBackend?: ClaudeNativeBackend;
 }
 

@@ -1098,9 +1098,17 @@ export function PersistentTerminal({
     }
   }, [terminalIsOpened, isConnected, isConnecting, connect, tabId]);
 
-  // Launch command based on tab type once environment is ready
+  // Launch command based on tab type once environment is ready.
+  // Setup tabs are the exception: their initial command is what produces the
+  // container setup readiness marker, so waiting for readiness would deadlock.
   useEffect(() => {
-    if (isEnvironmentReady && isConnected && !hasLaunchedCommandRef.current) {
+    const shouldLaunchSetupCommand =
+      isSetupTab &&
+      tabType === "plain" &&
+      !!initialCommands?.length;
+    const canLaunch = isConnected && (isEnvironmentReady || shouldLaunchSetupCommand);
+
+    if (canLaunch && !hasLaunchedCommandRef.current) {
       hasLaunchedCommandRef.current = true;
       setHasLaunchedCommandStore(sessionKey, true);
 

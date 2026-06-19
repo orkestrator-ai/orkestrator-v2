@@ -825,6 +825,180 @@ printf '%s\\n' '{}' > "$out"
     expect(updates).toHaveLength(0);
   });
 
+  test("returns container workspace setup command from the backend setup plan", async () => {
+    const environment = createEnvironment({
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const setupCommands = await commands.get("get_setup_commands")?.({ environmentId: environment.id }, context) as string[];
+    expect(setupCommands).toHaveLength(1);
+    expect(setupCommands[0]).toContain("/usr/local/bin/workspace-setup.sh");
+    expect(setupCommands[0]).toContain("flock");
+  });
+
+  test("runs inactive container setup in the backend and persists completion", async () => {
+    const environment = createEnvironment({
+      id: "env-container-setup",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context, emitted } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+  exit 0
+fi
+exit 0
+`, async (logs) => {
+      const updated = await commands.get("run_environment_setup")?.({ environmentId: environment.id }, context) as Environment;
+
+      expect(updated.setupScriptsComplete).toBe(true);
+      expect(environment.setupScriptsComplete).toBe(true);
+      const execLog = await fs.readFile(logs.exec, "utf8");
+      expect(execLog).toContain("/usr/local/bin/workspace-setup.sh");
+      expect(execLog).toContain("flock");
+      expect(emitted).toContainEqual({
+        event: "environment-setup-complete",
+        payload: {
+          environment_id: environment.id,
+          success: true,
+          environment: updated,
+        },
+      });
+    });
+  });
+
+  test("returns completed container environments without rerunning backend setup", async () => {
+    const environment = createEnvironment({
+      id: "env-container-setup-complete",
+      environmentType: "containerized",
+      setupScriptsComplete: true,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context, emitted } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
+exit 1
+`, async () => {
+      const result = await commands.get("run_environment_setup")?.({ environmentId: environment.id }, context);
+
+      expect(result).toBe(environment);
+      expect(emitted).toEqual([]);
+    });
+  });
+
+  test("emits a failure event when inactive container setup fails", async () => {
+    const environment = createEnvironment({
+      id: "env-container-setup-fails",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context, emitted } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "inspect" ]; then
+  printf 'running\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  printf 'setup exploded\n' >&2
+  exit 9
+fi
+exit 0
+`, async () => {
+      await expect(commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("setup exploded");
+
+      expect(environment.setupScriptsComplete).toBe(false);
+      expect(emitted).toContainEqual({
+        event: "environment-setup-complete",
+        payload: {
+          environment_id: environment.id,
+          success: false,
+          error: "setup exploded",
+        },
+      });
+    });
+  });
+
+  test("does not pass host gh auth token into newly created containers without configured token", async () => {
+    const environment = createEnvironment({
+      id: "env-container-create",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      containerId: null,
+      status: "stopped",
+      branch: "feature/container-create",
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "auth" ] && [ "$2" = "token" ]; then
+  printf 'host-gh-token\\n'
+  exit 0
+fi
+exit 1
+`, async (ghLog) => {
+      await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  create) printf 'container-created\\n'; exit 0 ;;
+  start) exit 0 ;;
+esac
+exit 0
+`, async (logs) => {
+        let result: unknown;
+        try {
+          result = await commands.get("start_environment")?.({ environmentId: environment.id }, context);
+        } catch (error) {
+          const dockerCalls = await fs.readFile(logs.all, "utf8").catch(() => "");
+          const ghCalls = await fs.readFile(ghLog, "utf8").catch(() => "");
+          throw new Error(`${error instanceof Error ? error.message : String(error)}\nDocker calls:\n${dockerCalls}\nGH calls:\n${ghCalls}`);
+        }
+        const setupCommands = (result as { setupCommands: string[] }).setupCommands;
+        expect(setupCommands).toHaveLength(1);
+        expect(setupCommands[0]).toContain("/usr/local/bin/workspace-setup.sh");
+
+        const ghCalls = await fs.readFile(ghLog, "utf8").catch(() => "");
+        expect(ghCalls).toBe("");
+
+        const dockerCalls = await fs.readFile(logs.all, "utf8");
+        expect(dockerCalls).not.toContain("GITHUB_TOKEN=host-gh-token");
+        expect(dockerCalls).not.toContain("GH_TOKEN=host-gh-token");
+        expect(environment.containerId).toBe("container-created");
+      });
+    });
+  });
+
   test("creates local worktrees from the fetched remote base branch", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();
     const updater = await createTempDir("ork-electron-remote-updater-");
@@ -1223,6 +1397,33 @@ exit 0
       const [, message] = result.failed[0]!;
       expect(message).not.toContain("secret-token-123");
       expect(message).toContain("***");
+    });
+  });
+
+  test("returns no container git changes before workspace clone creates a git repo", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+if [ "$1" = "exec" ]; then
+  exit 0
+fi
+exit 1
+`, async (logs) => {
+      await expect(commands.get("get_git_status")?.(
+        { containerId: "container-1", targetBranch: "main" },
+        context,
+      )).resolves.toEqual([]);
+
+      const dockerExec = await fs.readFile(logs.exec, "utf8");
+      expect(dockerExec).toContain("git rev-parse --is-inside-work-tree");
     });
   });
 

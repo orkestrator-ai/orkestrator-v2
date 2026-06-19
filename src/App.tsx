@@ -72,6 +72,11 @@ function App() {
     ? environments.find((env) => env.id === selectedEnvironmentId) ?? null
     : null;
   const setupScriptsRunning = useEnvironmentStore((state) => state.setupScriptsRunning);
+  const pendingSetupCommands = useEnvironmentStore((state) => state.pendingSetupCommands);
+  const pendingSetupEnvironmentIds = useMemo(
+    () => Array.from(pendingSetupCommands.keys()),
+    [pendingSetupCommands],
+  );
   const pendingNativeLaunches = useClaudeOptionsStore((state) => state.pendingNativeLaunches);
   const paneLayoutEnvironments = usePaneLayoutStore((state) => state.environments);
   const pendingInitialPromptEnvironmentIds = useMemo(() => {
@@ -168,12 +173,14 @@ function App() {
       pendingInitialPromptEnvironmentIds,
       loadingNativeSessionEnvironmentIds,
       queuedAgentPromptEnvironmentIds,
+      pendingSetupEnvironmentIds,
     ),
     [
       pipelines,
       environments,
       selectedEnvironmentId,
       setupScriptsRunning,
+      pendingSetupEnvironmentIds,
       pendingNativeLaunches,
       pendingInitialPromptEnvironmentIds,
       loadingNativeSessionEnvironmentIds,
@@ -517,7 +524,11 @@ function App() {
               SSE subscriptions and pipeline-advancement effects continue running
               even when the user navigates to a different project or kanban view. */}
           {backgroundProcessingEnvironments.length > 0 && (
-            <div className="hidden" aria-hidden="true">
+            <div
+              data-testid="background-terminal-host"
+              className="pointer-events-none fixed left-[-10000px] top-0 h-[720px] w-[1280px] overflow-hidden opacity-0"
+              aria-hidden="true"
+            >
               {backgroundProcessingEnvironments.map((environment) => (
                 <TerminalContainer
                   key={`bg-pipeline-${environment.id}`}

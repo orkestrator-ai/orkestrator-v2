@@ -69,6 +69,7 @@ type TerminalSessionConfig =
 const terminalProcesses = new Map<string, IPty>();
 const terminalSessionConfigs = new Map<string, TerminalSessionConfig>();
 const localServerProcesses = new Map<string, ChildProcessWithoutNullStreams>();
+const CONTAINER_WORKSPACE_SETUP_COMMAND = "if command -v flock >/dev/null 2>&1; then flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh'; else /usr/local/bin/workspace-setup.sh; fi";
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string") throw new Error(`Expected ${name} to be a string`);
@@ -765,6 +766,14 @@ async function readSetupLocalCommands(worktreePath: string): Promise<string[]> {
   return [];
 }
 
+async function readEnvironmentSetupCommands(environment: Environment): Promise<string[]> {
+  if (environment.setupScriptsComplete) return [];
+  if (environment.environmentType === "local") {
+    return environment.worktreePath ? readSetupLocalCommands(environment.worktreePath) : [];
+  }
+  return [CONTAINER_WORKSPACE_SETUP_COMMAND];
+}
+
 async function createLocalWorktree(
   projectPath: string,
   projectName: string,
@@ -806,8 +815,8 @@ async function removeLocalWorktree(worktreePath: string): Promise<void> {
   });
 }
 
-async function dockerExec(containerId: string, command: string): Promise<string> {
-  const { stdout } = await runCommand("docker", ["exec", containerId, "bash", "-lc", command], { timeoutMs: 120_000 });
+async function dockerExec(containerId: string, command: string, timeoutMs = 120_000): Promise<string> {
+  const { stdout } = await runCommand("docker", ["exec", containerId, "bash", "-lc", command], { timeoutMs });
   return stdout;
 }
 
@@ -1197,8 +1206,9 @@ async function createDockerContainer(environment: Environment, context: CommandC
     "TERM=xterm-256color",
   ];
 
-  if (config.global.githubToken) {
-    args.push("-e", `GITHUB_TOKEN=${config.global.githubToken}`, "-e", `GH_TOKEN=${config.global.githubToken}`);
+  const githubToken = config.global.githubToken?.trim();
+  if (githubToken) {
+    args.push("-e", `GITHUB_TOKEN=${githubToken}`, "-e", `GH_TOKEN=${githubToken}`);
   }
   if (config.global.anthropicApiKey) args.push("-e", `ANTHROPIC_API_KEY=${config.global.anthropicApiKey}`);
   if (config.global.opencodeModel) args.push("-e", `OPENCODE_MODEL=${config.global.opencodeModel}`);
@@ -1390,14 +1400,14 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       if (environment.environmentType === "local") {
         if (environment.worktreePath && await pathExists(environment.worktreePath)) {
           await storage.updateEnvironment(environment.id, { status: "running" });
-          return { setupCommands: environment.setupScriptsComplete ? undefined : await readSetupLocalCommands(environment.worktreePath) };
+          return { setupCommands: await readEnvironmentSetupCommands(environment) };
         }
         const project = await storage.getProject(environment.projectId);
         if (!project?.localPath) throw new Error("Project has no local path - cannot create a local worktree");
         const repoConfig = await storage.getRepositoryConfig(project.id);
         const worktree = await createLocalWorktree(project.localPath, project.name, environment.branch, repoConfig.defaultBranch);
-        await storage.updateEnvironment(environment.id, { worktreePath: worktree.path, branch: worktree.branch, status: "running" });
-        return { setupCommands: await readSetupLocalCommands(worktree.path) };
+        const updated = await storage.updateEnvironment(environment.id, { worktreePath: worktree.path, branch: worktree.branch, status: "running" });
+        return { setupCommands: await readEnvironmentSetupCommands(updated) };
       }
 
       let containerId = environment.containerId;
@@ -1407,12 +1417,12 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       }
       await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
       const hostEntryPort = environment.entryPort ? await getHostPort(containerId, environment.entryPort) : null;
-      await storage.updateEnvironment(environment.id, {
+      const updated = await storage.updateEnvironment(environment.id, {
         status: "running",
         entryPort: environment.entryPort ?? null,
         hostEntryPort,
       });
-      return {};
+      return { setupCommands: await readEnvironmentSetupCommands(updated) };
     } catch (error) {
       await storage.updateEnvironment(environment.id, { status: "error" }).catch(() => undefined);
       throw error;
@@ -1441,10 +1451,44 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("set_environment_setup_complete", ({ environmentId, complete }, { storage }) =>
     storage.updateEnvironment(asString(environmentId, "environmentId"), { setupScriptsComplete: asBoolean(complete) }),
   );
+  register("run_environment_setup", async ({ environmentId }, context) => {
+    const environment = await context.storage.getEnvironment(asString(environmentId, "environmentId"));
+    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+    if (environment.setupScriptsComplete) {
+      return environment;
+    }
+    if (environment.environmentType !== "containerized") {
+      throw new Error("Backend setup runner is only supported for containerized environments");
+    }
+    if (!environment.containerId) {
+      throw new Error(`Environment has no container: ${environment.id}`);
+    }
+    if (!await isContainerRunning(environment.containerId)) {
+      throw new Error(`Container is not running: ${environment.containerId}`);
+    }
+
+    try {
+      await dockerExec(environment.containerId, CONTAINER_WORKSPACE_SETUP_COMMAND, 30 * 60_000);
+      const updated = await context.storage.updateEnvironment(environment.id, { setupScriptsComplete: true });
+      context.emit("environment-setup-complete", {
+        environment_id: environment.id,
+        success: true,
+        environment: updated,
+      });
+      return updated;
+    } catch (error) {
+      context.emit("environment-setup-complete", {
+        environment_id: environment.id,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  });
   register("get_setup_commands", async ({ environmentId }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
-    if (!environment?.worktreePath) return null;
-    const setupCommands = await readSetupLocalCommands(environment.worktreePath);
+    if (!environment) return null;
+    const setupCommands = await readEnvironmentSetupCommands(environment);
     return setupCommands.length > 0 ? setupCommands : null;
   });
   register("update_port_mappings", ({ environmentId, portMappings }, { storage }) =>
@@ -1763,7 +1807,14 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("write_local_file", ({ worktreePath, filePath, base64Data }) => writeFileBase64(asString(worktreePath, "worktreePath"), asString(filePath, "filePath"), asString(base64Data, "base64Data")));
 
   register("get_git_status", async ({ containerId, targetBranch }) => {
-    const output = await dockerExec(asString(containerId, "containerId"), `git fetch origin ${quoteShell(asString(targetBranch, "targetBranch"))} >/dev/null 2>&1 || true; git diff --name-status origin/${quoteShell(asString(targetBranch, "targetBranch"))} 2>/dev/null || git diff --name-status ${quoteShell(asString(targetBranch, "targetBranch"))}`);
+    const branch = quoteShell(asString(targetBranch, "targetBranch"));
+    const output = await dockerExec(asString(containerId, "containerId"), `
+      if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        exit 0
+      fi
+      git fetch origin ${branch} >/dev/null 2>&1 || true
+      git diff --name-status origin/${branch} 2>/dev/null || git diff --name-status ${branch} 2>/dev/null || true
+    `);
     return output.split("\n").filter(Boolean).map((line) => {
       const [status, filePath = ""] = line.split("\t");
       return { path: filePath, filename: path.basename(filePath), directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath), additions: 0, deletions: 0, status };

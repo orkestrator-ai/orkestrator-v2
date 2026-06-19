@@ -293,13 +293,16 @@ fi
 
 # Configure GitHub token if provided (avoid interactive prompts)
 TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+# Host git configs can contain absolute credential helper paths copied from
+# macOS, such as /opt/homebrew/bin/gh, which do not exist in containers.
+git config --global --replace-all credential.helper "" 2>/dev/null || true
+export GIT_TERMINAL_PROMPT=0
 if [ -n "$TOKEN" ]; then
     echo -e "${BLUE}>>> Configuring GitHub token for HTTPS <<<${NC}"
     git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
     git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com"
     # Also rewrite SSH URLs to use token auth (belt and suspenders)
     git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "git@github.com:"
-    export GIT_TERMINAL_PROMPT=0
 fi
 
 print_workspace_disk_status() {

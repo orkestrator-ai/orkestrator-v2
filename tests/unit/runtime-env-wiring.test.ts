@@ -73,6 +73,26 @@ describe("container runtime environment wiring", () => {
     expect(helper).not.toContain("printenv");
   });
 
+  test("container setup disables host credential helpers and interactive git prompts", () => {
+    const setup = read("docker/workspace-setup.sh");
+    const entrypoint = read("docker/entrypoint.sh");
+
+    expect(entrypoint).toContain("git config --global --replace-all credential.helper \"\"");
+    expect(setup).toContain("git config --global --replace-all credential.helper \"\"");
+    expect(setup).toContain("export GIT_TERMINAL_PROMPT=0");
+  });
+
+  test("workspace setup exits early when a prior setup already completed", () => {
+    const setup = read("docker/workspace-setup.sh");
+    const completionGuard = setup.indexOf("if [ -f /tmp/.workspace-setup-complete ]; then");
+    const cloneBlock = setup.indexOf("if [ -n \"$GIT_URL\" ] && [ ! -d \"/workspace/.git\" ]; then");
+
+    expect(completionGuard).toBeGreaterThan(0);
+    expect(cloneBlock).toBeGreaterThan(completionGuard);
+    expect(setup).toContain("Workspace already set up.");
+    expect(setup).toContain("exit 0");
+  });
+
   test("container native launch paths source the captured runtime environment", () => {
     const files = [
       "src-tauri/src/commands/claude.rs",

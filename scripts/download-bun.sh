@@ -7,12 +7,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BINARIES_DIR="$PROJECT_ROOT/binaries"
 
-# Fetch the latest Bun version from GitHub
-BUN_VERSION=$(curl -fsSL "https://api.github.com/repos/oven-sh/bun/releases/latest" | grep '"tag_name"' | sed -E 's/.*"bun-v([^"]+)".*/\1/')
-if [ -z "$BUN_VERSION" ]; then
-    echo "Failed to fetch latest Bun version"
-    exit 1
-fi
+# Pin the bundled Bun to the same version as the container runtime
+# (docker/Dockerfile `FROM oven/bun:<version>-debian`) so the host bridge and
+# the in-container bridge run on an identical runtime. tests/unit/version-drift
+# enforces this match; bump both together.
+BUN_VERSION="1.3.14"
 
 # Detect architecture
 ARCH=$(uname -m)

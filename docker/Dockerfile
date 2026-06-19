@@ -1,10 +1,20 @@
-FROM node:20
+# Bun is the primary runtime: it builds and runs the bridge servers. The
+# `-debian` variant is glibc-based (Debian), which keeps the musl-delete logic
+# for the Claude Agent SDK below valid. (An Alpine/musl base would invert it.)
+FROM oven/bun:1.3.14-debian
 
 ARG TZ
 ENV TZ="$TZ"
 
-# Install basic development tools and iptables/ipset
+# Install basic development tools and iptables/ipset. curl/wget/xz-utils/
+# ca-certificates are not present in the bun base image (the node base bundled
+# them) and are needed by the tool installers below.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+  ca-certificates \
+  curl \
+  wget \
+  xz-utils \
+  openssh-client \
   less \
   git \
   procps \
@@ -28,6 +38,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   locales \
   && apt-get clean && rm -rf /var/lib/apt/lists/* \
   && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
+
+# The bun base image ships a `bun` user (uid/gid 1000). The app hardcodes
+# `docker exec -u node` and /home/node paths, so rename it to `node` while
+# preserving uid/gid 1000 (keeps workspace bind-mount ownership consistent).
+RUN groupmod -n node bun \
+  && usermod -l node -d /home/node -m bun
+
+# Install a real Node.js 20 runtime. bun runs our bridge servers, but the agent
+# CLIs — especially `claude`, which is a Node app launched directly in container
+# terminals — need genuine Node (not bun's node shim). This also provides npm
+# for the global CLI installs below. /usr/local/bin precedes the bun-node
+# fallback on PATH, so this node takes precedence.
+ARG NODE_VERSION=20.18.0
+RUN ARCH="$(dpkg --print-architecture)" && \
+  case "$ARCH" in \
+    amd64) NODE_ARCH=x64 ;; \
+    arm64) NODE_ARCH=arm64 ;; \
+    *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
+  esac && \
+  NODE_TARBALL="node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" && \
+  cd /tmp && \
+  curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${NODE_TARBALL}" && \
+  curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" -o SHASUMS256.txt && \
+  # Verify the tarball against the published checksum before extracting, rather
+  # than piping curl straight into tar (a corrupted/MITM'd download would
+  # otherwise become the runtime that executes agent code).
+  grep " ${NODE_TARBALL}\$" SHASUMS256.txt | sha256sum -c - && \
+  tar -xJf "${NODE_TARBALL}" -C /usr/local --strip-components=1 --no-same-owner && \
+  rm -f "${NODE_TARBALL}" SHASUMS256.txt
 
 # Ensure default node user has access to /usr/local/share
 RUN mkdir -p /usr/local/share/npm-global && \
@@ -105,22 +144,30 @@ ENV PATH="/usr/local/share/npm-global/bin:/home/node/.opencode/bin:$PATH"
 # Copy and build Claude Bridge Server
 COPY --chown=node:node bridges/claude-bridge /opt/claude-bridge
 WORKDIR /opt/claude-bridge
-# Delete musl variants so the SDK picks the glibc binary matching our Debian base.
-# The SDK prefers musl first on Linux, but node:20 is glibc — without this, spawns fail
-# with "Claude Code native binary not found". If switching to an Alpine/musl base, invert.
-# The rm MUST come after `npm prune --production`: prune reconciles against the lockfile
-# and re-installs deleted optional deps, undoing an earlier rm.
-RUN npm install \
- && npm run build \
- && npm prune --production \
- && rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl
+# The build bundles src into dist/index.js and the `vendor` step copies the
+# Claude Agent SDK (which is kept external) into dist/node_modules — so the top-
+# level node_modules is build-only and is discarded afterward. The SDK selects
+# its native binary at runtime by libc: on this glibc base bun reports
+# glibcVersionRuntime, so the SDK tries the `-linux-<arch>` (gnu) variant first.
+# We strip the unused `-musl` variant from the vendored tree (the path actually
+# resolved at runtime — the old top-level rm never touched it) to make resolution
+# unambiguous and drop ~225MB of dead weight. If switching to an Alpine/musl
+# base, keep musl and strip gnu instead.
+# Verified in oven/bun:1.3.14-debian: bridge boots and /global/health returns 200,
+# resolving the gnu binary.
+RUN bun install \
+ && bun run build \
+ && rm -rf node_modules \
+ && rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl
 
-# Copy and build Codex Bridge Server
+# Copy and build Codex Bridge Server. Its build bundles every dependency into
+# dist/index.js (nothing is kept external), so node_modules is build-only and is
+# removed entirely after the build.
 COPY --chown=node:node bridges/codex-bridge /opt/codex-bridge
 WORKDIR /opt/codex-bridge
-RUN npm install \
- && npm run build \
- && npm prune --production
+RUN bun install \
+ && bun run build \
+ && rm -rf node_modules
 WORKDIR /workspace
 
 # Copy and set up firewall scripts

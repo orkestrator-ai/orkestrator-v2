@@ -38,7 +38,51 @@ function getShellVar(scriptRel: string, varName: string): string {
   return match[1];
 }
 
+function getDockerfileBaseImageTag(): string {
+  const dockerfile = read("docker/Dockerfile");
+  const match = dockerfile.match(/^FROM\s+oven\/bun:(\S+)/m);
+  if (!match) {
+    throw new Error("Expected `FROM oven/bun:<tag>` in docker/Dockerfile");
+  }
+  return match[1];
+}
+
 describe("version drift between SDK pins and bundled/container CLIs", () => {
+  test("Bun: host-bundled runtime matches the container base image", () => {
+    // The bridges run on Bun both on the host (bundled binary) and inside the
+    // container (oven/bun base). Pinning both to the same version keeps the two
+    // bridge runtimes from drifting apart.
+    const hostPin = getShellVar("scripts/download-bun.sh", "BUN_VERSION");
+    const baseImageTag = getDockerfileBaseImageTag();
+
+    // Base image tag is `<version>-debian`; compare the version segment.
+    expect(baseImageTag).toBe(`${hostPin}-debian`);
+  });
+
+  test("Bun: host download script pins an exact version, not `latest`", () => {
+    const script = read("scripts/download-bun.sh");
+    expect(script).not.toContain("releases/latest");
+    expect(getShellVar("scripts/download-bun.sh", "BUN_VERSION")).toMatch(
+      /^\d+\.\d+\.\d+$/,
+    );
+  });
+
+  test("Claude bridge: musl variant is stripped from the vendored runtime tree, not top-level node_modules", () => {
+    // The claude-bridge build vendors the SDK into dist/node_modules, which is the
+    // tree the SDK actually resolves its native binary from at runtime. Stripping
+    // musl from top-level node_modules (the historical location) is a no-op against
+    // that runtime path. This guards against regressing to the ineffective form.
+    // Verified in oven/bun:1.3.14-debian: the bridge boots and resolves the gnu binary.
+    const dockerfile = read("docker/Dockerfile");
+    expect(dockerfile).toContain(
+      "rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl",
+    );
+    expect(dockerfile).not.toContain(
+      "rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl",
+    );
+  });
+
+
   test("Claude: bundled binary and Docker CLI match", () => {
     const downloadScriptPin = getShellVar(
       "scripts/download-claude.sh",

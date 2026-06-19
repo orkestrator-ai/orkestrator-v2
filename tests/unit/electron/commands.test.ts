@@ -76,6 +76,19 @@ async function createTempDir(prefix: string): Promise<string> {
   return dir;
 }
 
+async function reserveFreePort(): Promise<number> {
+  const net = await import("node:net");
+  return new Promise<number>((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close(() => (port ? resolve(port) : reject(new Error("Failed to reserve a port"))));
+    });
+  });
+}
+
 function createEnvironment(overrides: Partial<Environment> = {}): Environment {
   return {
     id: "env-local",
@@ -1529,6 +1542,109 @@ exit 1
     await expect(requestOk(result.port, "/global/health")).resolves.toBe(true);
 
     await commands.get("stop_local_codex_server_cmd")?.({ environmentId: environment.id }, context);
+  });
+
+  test("launches the local claude bridge through the bundled bun binary in resources", async () => {
+    // The bridges run on bun, not node. resolveBunBinary prefers the bun shipped
+    // in app resources (resourceRoot/bin/bun) over a host PATH lookup; this proves
+    // that preferred binary is the one actually spawned, and that bun can run the
+    // bridge entrypoint end-to-end (health passes).
+    const appRoot = await createTempDir("ork-electron-app-bun-");
+    const resourceRoot = await createTempDir("ork-electron-res-bun-");
+    const worktreePath = await createTempDir("ork-electron-worktree-bun-");
+    await writeBridgeServer(appRoot, "claude-bridge");
+
+    const markerPath = path.join(resourceRoot, "bun-was-used.log");
+    const bunWrapperDir = path.join(resourceRoot, "bin");
+    await fs.mkdir(bunWrapperDir, { recursive: true });
+    // Wrapper records that it ran, then delegates to the real bun on PATH.
+    await fs.writeFile(
+      path.join(bunWrapperDir, "bun"),
+      `#!/bin/sh\nprintf 'used\\n' >> "${markerPath}"\nexec bun "$@"\n`,
+    );
+    await fs.chmod(path.join(bunWrapperDir, "bun"), 0o755);
+
+    const environment = createEnvironment({ worktreePath });
+    const { context, updates } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = resourceRoot;
+
+    const commands = createCommandRegistry();
+    const result = await commands.get("start_local_claude_server_cmd")?.({ environmentId: environment.id }, context) as {
+      port: number;
+      pid: number;
+      wasRunning: boolean;
+    };
+
+    try {
+      expect(result.wasRunning).toBe(false);
+      expect(result.port).toBeGreaterThan(0);
+      await expect(requestOk(result.port, "/global/health")).resolves.toBe(true);
+      expect(await fs.readFile(markerPath, "utf8")).toContain("used");
+      expect(updates).toContainEqual({ localClaudePort: result.port, claudeBridgePid: result.pid });
+    } finally {
+      await commands.get("stop_local_claude_server_cmd")?.({ environmentId: environment.id }, context);
+    }
+  });
+
+  test("starts in-container bridges with bun, not node", async () => {
+    const hostPort = await reserveFreePort();
+    const pidFile = path.join(await createTempDir("ork-bridge-pid-"), "pid");
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+    const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
+    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+    process.env.FAKE_BRIDGE_PID_FILE = pidFile;
+
+    // Fake docker: report the container running, map the bridge port to our host
+    // port, and on `exec -d` spin up a real health endpoint so waitForHealth
+    // resolves. stdout is redirected so the detached server does not keep the
+    // `docker exec` pipe open. The exec command itself is logged for assertions.
+    const dockerScript = `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
+    printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
+    exit 0 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async (logs) => {
+        const result = await commands.get("start_claude_server")?.({ containerId: "container-1" }, context);
+        expect(result).toEqual({ hostPort, wasRunning: false });
+
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(execLog).toContain("setsid bun /opt/claude-bridge/dist/index.js");
+        expect(execLog).not.toContain("setsid node");
+      });
+    } finally {
+      const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
+      if (pid) {
+        try {
+          process.kill(Number(pid));
+        } catch {
+          // already gone
+        }
+      }
+      if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
+      else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
+      if (previousPidFile === undefined) delete process.env.FAKE_BRIDGE_PID_FILE;
+      else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
+    }
   });
 
   test("does not persist local bridge process state when the bridge entrypoint is missing", async () => {

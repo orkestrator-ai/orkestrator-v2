@@ -1,6 +1,6 @@
 {
   "name": "orkestrator-ai",
-  "version": "0.5.14",
+  "version": "2.1.1",
   "private": true,
   "type": "module",
   "main": "dist-electron/electron/main.js",
@@ -43,22 +43,34 @@
       {
         "from": "bridges/claude-bridge",
         "to": "claude-bridge",
-        "filter": ["dist/**", "package.json", "node_modules/**"]
+        "filter": [
+          "dist/**",
+          "package.json",
+          "node_modules/**"
+        ]
       },
       {
         "from": "bridges/codex-bridge",
         "to": "codex-bridge",
-        "filter": ["dist/**", "package.json", "node_modules/**"]
+        "filter": [
+          "dist/**",
+          "package.json",
+          "node_modules/**"
+        ]
       },
       {
         "from": "binaries",
         "to": "bin",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
-      "target": ["dmg"]
+      "target": [
+        "dmg"
+      ]
     }
   },
   "dependencies": {

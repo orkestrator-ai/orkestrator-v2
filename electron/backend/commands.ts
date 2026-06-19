@@ -253,6 +253,18 @@ function resolveCodexBinary(context: CommandContext): string {
   return candidates.find((candidate) => existsSync(candidate)) ?? "codex";
 }
 
+// Prefer the bun binary bundled with the app (binaries/ -> bin/ in resources)
+// so the local bridge servers do not depend on a host-installed bun. Falls back
+// to a PATH lookup in dev / if the bundled binary is missing.
+function resolveBunBinary(context: CommandContext): string {
+  const candidates = [
+    path.join(context.resourceRoot, "bin", "bun"),
+    path.join(context.appRoot, "binaries", "bun"),
+    path.join(context.appRoot, "bin", "bun"),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? "bun";
+}
+
 async function generateEnvironmentNameWithCodexExec(prompt: string, context: CommandContext): Promise<string> {
   const trimmedPrompt = prompt.trim();
   if (!trimmedPrompt) throw new Error("Prompt cannot be empty");
@@ -889,10 +901,10 @@ async function startLocalServer(
   if (kind === "opencode") {
     command = "opencode";
   } else if (kind === "claude") {
-    command = "node";
+    command = resolveBunBinary(context);
     cwd = getBridgePath(context, "claude-bridge");
   } else {
-    command = "node";
+    command = resolveBunBinary(context);
     cwd = getBridgePath(context, "codex-bridge");
     // Point the bundled codex-sdk at our shipped codex binary so it does not
     // depend on a system install / PATH lookup in the packaged app.
@@ -1564,7 +1576,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       orkestrator_source_runtime_env 2>/dev/null || true
       export PORT=${CLAUDE_BRIDGE_PORT}
       export HOSTNAME=0.0.0.0
-      setsid node /opt/claude-bridge/dist/index.js > /tmp/claude-bridge.log 2>&1 &
+      setsid bun /opt/claude-bridge/dist/index.js > /tmp/claude-bridge.log 2>&1 &
     `),
   );
   register("stop_claude_server", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "pkill -f 'claude-bridge' || true").then(() => undefined));
@@ -1585,7 +1597,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       export HOSTNAME=0.0.0.0
       export CWD=/workspace
       export CODEX_PATH="$(command -v codex 2>/dev/null || echo codex)"
-      setsid node /opt/codex-bridge/dist/index.js > /tmp/codex-bridge.log 2>&1 &
+      setsid bun /opt/codex-bridge/dist/index.js > /tmp/codex-bridge.log 2>&1 &
     `),
   );
   register("stop_codex_server", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "pkill -f 'codex-bridge' || true").then(() => undefined));

@@ -163,6 +163,79 @@ describe("NativeMessage task list rendering", () => {
     expect(markdownWrapper?.parentElement?.className).not.toContain("pt-2");
   });
 
+  test("uses uniform outer spacing for native part wrapper variants", () => {
+    const message = makeMessage([
+      {
+        type: "thinking",
+        content: "- [ ] Check wrapper spacing",
+      },
+      {
+        type: "thinking",
+        content: "Regular thinking wrapper",
+      },
+      {
+        type: "file",
+        content: "/workspace/screenshot.png",
+      },
+      {
+        type: "subagent",
+        content: "Lovelace",
+        subagentName: "Lovelace",
+        toolState: "success",
+        subagentActions: [],
+      },
+      {
+        type: "tool-group",
+        content: "",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: "Read",
+            toolState: "success",
+          },
+        ],
+      },
+      {
+        type: "task-group",
+        content: "",
+        task: {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Task",
+          toolTitle: "Task wrapper",
+          toolState: "success",
+        },
+        childTools: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: "Bash",
+            toolState: "success",
+          },
+        ],
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(
+      screen.getByRole("button", { name: /task list/i }).parentElement?.className,
+    ).toContain("my-0");
+    expect(
+      screen.getByText("Regular thinking wrapper").parentElement?.className,
+    ).toContain("my-0");
+    expect(screen.getByRole("button", { name: /screenshot\.png/i }).className)
+      .toContain("my-0");
+    expect(
+      screen.getByRole("button", { name: /lovelace/i }).parentElement?.className,
+    ).toContain("my-0");
+    expect(container.innerHTML).toContain("my-0 rounded-lg border border-zinc-700/70");
+    expect(
+      screen.getByRole("button", { name: /task wrapper/i }).parentElement?.className,
+    ).toContain("my-0");
+  });
+
   test("shows an error toast when copying text fails", async () => {
     const consoleError = console.error;
     console.error = mock(() => {}) as typeof console.error;

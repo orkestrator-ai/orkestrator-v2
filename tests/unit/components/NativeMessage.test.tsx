@@ -515,7 +515,10 @@ describe("NativeMessage", () => {
       </TerminalContextHarness>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+    const editTrigger = screen.getByRole("button", { name: /edit/i });
+    expect(editTrigger.parentElement?.className).toContain("my-0");
+
+    fireEvent.click(editTrigger);
     fireEvent.click(screen.getByTitle("Open diff in new tab"));
 
     expect(createFileTab).toHaveBeenCalledWith("/workspace/src/example.ts", {

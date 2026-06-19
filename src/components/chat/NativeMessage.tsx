@@ -103,7 +103,7 @@ function ThinkingPart({ content }: { content: string }) {
 
   if (hasTaskList) {
     return (
-      <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
+      <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
         <CollapsibleTrigger
           className="flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md transition-colors hover:text-foreground cursor-pointer"
         >
@@ -136,7 +136,7 @@ function ThinkingPart({ content }: { content: string }) {
   }
 
   return (
-    <div className="my-1 flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md">
+    <div className="my-0 flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md">
       <Brain className="w-3.5 h-3.5 shrink-0" />
       <span className="font-medium shrink-0">thinking</span>
       <span className="font-mono text-muted-foreground/80 truncate min-w-0">
@@ -232,7 +232,7 @@ function ToolPart({
   const formattedInput = formatInput();
 
   return (
-    <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
+    <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
       <CollapsibleTrigger
         className={cn(
           "flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md transition-colors hover:text-foreground",
@@ -497,7 +497,7 @@ function EditToolPart({
   );
 
   return (
-    <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
+    <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
       <CollapsibleTrigger
         className={cn(
           "flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md transition-colors hover:text-foreground",
@@ -821,7 +821,7 @@ function FilePart({
         onClick={handleClick}
         disabled={!isImage || loading}
         className={cn(
-          "inline-flex items-center gap-1.5 text-xs my-1.5 py-1.5 px-2.5 rounded-md border transition-colors",
+          "inline-flex items-center gap-1.5 text-xs my-0 py-1.5 px-2.5 rounded-md border transition-colors",
           isImage
             ? "bg-muted/50 border-border hover:bg-muted hover:border-border/80 cursor-pointer"
             : "bg-muted/30 border-border/50 cursor-default",
@@ -853,40 +853,16 @@ function FilePart({
   );
 }
 
-function shouldAddTextLeadIn(previousPart?: NativeMessagePart | null): boolean {
-  return (
-    previousPart?.type === "tool-invocation" ||
-    previousPart?.type === "subagent" ||
-    previousPart?.type === "tool-group" ||
-    previousPart?.type === "task-group"
-  );
-}
-
-function getPreviousRenderedPart(
-  parts: NativeMessagePart[],
-  index: number,
-): NativeMessagePart | null {
-  for (let i = index - 1; i >= 0; i--) {
-    const part = parts[i];
-    if (part && part.type !== "tool-result") {
-      return part;
-    }
-  }
-  return null;
-}
-
 /** Render a text content part with markdown support */
 function TextPart({
   content,
-  followsToolActivity = false,
   showCopy = true,
 }: {
   content: string;
-  followsToolActivity?: boolean;
   showCopy?: boolean;
 }) {
   return (
-    <div className={cn("group", followsToolActivity && "pt-2")}>
+    <div className="group [&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0">
       <MessageMarkdown content={content} components={markdownComponents} />
       {showCopy ? (
         <MessageCopyButton
@@ -955,7 +931,7 @@ function SubagentPart({ part }: { part: NativeMessagePart }) {
   const preview = useMemo(() => getSubagentPreview(part), [part]);
 
   return (
-    <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
+    <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
       <CollapsibleTrigger
         className="w-full rounded-md px-2 py-2 text-left transition-colors hover:text-foreground cursor-pointer"
       >
@@ -1016,7 +992,6 @@ function SubagentPart({ part }: { part: NativeMessagePart }) {
               <MessagePart
                 key={`${part.subagentId || part.content}-subagent-part-${index}-${childPart.type}`}
                 part={childPart}
-                previousPart={getPreviousRenderedPart(subagentActions, index)}
               />
             ))}
             {subagentActions.length === 0 ? (
@@ -1039,12 +1014,11 @@ function ToolGroupPart({
   containerId?: string;
 }) {
   return (
-    <div className="my-2 rounded-lg border border-zinc-700/70 bg-zinc-800/35 p-2">
+    <div className="my-0 rounded-lg border border-zinc-700/70 bg-zinc-800/35 p-2">
       {part.parts.map((child, index) => (
         <MessagePart
           key={`tool-group-part-${index}-${child.type}`}
           part={child}
-          previousPart={index > 0 ? part.parts[index - 1] : null}
           containerId={containerId}
         />
       ))}
@@ -1064,7 +1038,7 @@ function TaskGroupPart({
   const childCount = part.childTools.length;
 
   return (
-    <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
+    <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
       <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:text-foreground">
         <ChevronRight
           className={cn(
@@ -1082,14 +1056,12 @@ function TaskGroupPart({
         <div className="mt-1 space-y-1 border-l border-border/40 pl-3">
           <MessagePart
             part={part.task}
-            previousPart={null}
             containerId={containerId}
           />
           {part.childTools.map((child, index) => (
             <MessagePart
               key={`task-child-${index}-${child.toolUseId ?? child.toolName ?? child.type}`}
               part={child}
-              previousPart={index > 0 ? part.childTools[index - 1] : part.task}
               containerId={containerId}
             />
           ))}
@@ -1102,12 +1074,10 @@ function TaskGroupPart({
 /** Render a single message part based on its type */
 function MessagePart({
   part,
-  previousPart,
   showTextCopy = true,
   containerId,
 }: {
   part: NativeMessagePart;
-  previousPart?: NativeMessagePart | null;
   showTextCopy?: boolean;
   containerId?: string;
 }) {
@@ -1120,7 +1090,6 @@ function MessagePart({
       return (
         <TextPart
           content={part.content}
-          followsToolActivity={shouldAddTextLeadIn(previousPart)}
           showCopy={showTextCopy}
         />
       );
@@ -1274,9 +1243,6 @@ export const NativeMessage = memo(function NativeMessage({
       {!hasTextParts && message.content && (
         <TextPart
           content={message.content}
-          followsToolActivity={shouldAddTextLeadIn(
-            getPreviousRenderedPart(message.parts, message.parts.length),
-          )}
           showCopy={false}
         />
       )}
@@ -1292,7 +1258,6 @@ function renderMessageParts(
       <MessagePart
         key={`${message.id}-part-${index}-${part.type}`}
         part={part}
-        previousPart={getPreviousRenderedPart(message.parts, index)}
         showTextCopy={options.showTextCopy ?? true}
         containerId={options.containerId}
       />

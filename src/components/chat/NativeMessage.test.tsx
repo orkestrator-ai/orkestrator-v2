@@ -129,7 +129,7 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.getByRole("button", { name: "Copied text" })).toBeTruthy();
   });
 
-  test("adds lead-in spacing to text after visible tool activity", () => {
+  test("uses uniform part spacing for tool and text blocks", () => {
     const message = makeMessage([
       {
         type: "tool-invocation",
@@ -149,9 +149,18 @@ describe("NativeMessage task list rendering", () => {
 
     render(<NativeMessage message={message} />);
 
+    const toolButton = screen.getByRole("button", { name: /bash/i });
+    expect(toolButton.parentElement?.className).toContain("my-0");
+
     const text = screen.getByText("Text after tool");
     const markdownWrapper = text.closest(".prose");
-    expect(markdownWrapper?.parentElement?.className).toContain("pt-2");
+    expect(markdownWrapper?.parentElement?.className).toContain(
+      "[&_.prose>:first-child]:mt-0",
+    );
+    expect(markdownWrapper?.parentElement?.className).toContain(
+      "[&_.prose>:last-child]:mb-0",
+    );
+    expect(markdownWrapper?.parentElement?.className).not.toContain("pt-2");
   });
 
   test("shows an error toast when copying text fails", async () => {

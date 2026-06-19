@@ -278,6 +278,11 @@ async function currentGitBranch(repo: string): Promise<string> {
   return stdout.trim();
 }
 
+async function currentGitCommit(repo: string): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["-C", repo, "rev-parse", "HEAD"]);
+  return stdout.trim();
+}
+
 // Stub `codex` that writes the requested slug JSON to the --output-last-message path.
 function codexSlugScript(slug: string): string {
   return `#!/bin/sh
@@ -861,6 +866,11 @@ if [ "$1" = "inspect" ]; then
 fi
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+  case "$*" in
+    *rev-parse*)
+      printf '1111111111111111111111111111111111111111\\n'
+      ;;
+  esac
   exit 0
 fi
 exit 0
@@ -868,9 +878,12 @@ exit 0
       const updated = await commands.get("run_environment_setup")?.({ environmentId: environment.id }, context) as Environment;
 
       expect(updated.setupScriptsComplete).toBe(true);
+      expect(updated.createdFromCommit).toBe("1111111111111111111111111111111111111111");
       expect(environment.setupScriptsComplete).toBe(true);
+      expect(environment.createdFromCommit).toBe("1111111111111111111111111111111111111111");
       const execLog = await fs.readFile(logs.exec, "utf8");
       expect(execLog).toContain("/usr/local/bin/workspace-setup.sh");
+      expect(execLog).toContain("git -C /workspace rev-parse HEAD");
       expect(execLog).toContain("flock");
       expect(emitted).toContainEqual({
         event: "environment-setup-complete",
@@ -1035,6 +1048,8 @@ exit 0
       expect(environment.worktreePath).toBeDefined();
       expect(environment.branch).toBe("feature-remote-base");
       expect(await fs.readFile(path.join(environment.worktreePath!, "tracked.txt"), "utf8")).toBe("remote\n");
+      expect(environment.createdFromCommit).toMatch(/^[0-9a-f]{40}$/);
+      await expect(currentGitCommit(environment.worktreePath!)).resolves.toBe(environment.createdFromCommit);
     } finally {
       if (environment.worktreePath) await fs.rm(environment.worktreePath, { recursive: true, force: true });
     }
@@ -1279,6 +1294,25 @@ exit 0
       additions: 2,
       deletions: 0,
       status: "?",
+    }));
+  });
+
+  test("reports local git stats against an environment creation commit", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const creationCommit = await currentGitCommit(worktree);
+    await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\n");
+    const commands = createCommandRegistry();
+
+    const changes = await commands.get("get_local_git_status")?.(
+      { worktreePath: worktree, targetBranch: creationCommit },
+      createContext(createEnvironment()).context,
+    ) as Array<{ path: string; additions: number; deletions: number; status: string }>;
+
+    expect(changes).toContainEqual(expect.objectContaining({
+      path: "tracked.txt",
+      additions: 1,
+      deletions: 0,
+      status: "M",
     }));
   });
 

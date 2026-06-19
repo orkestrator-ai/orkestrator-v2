@@ -172,6 +172,24 @@ describe("useEnvironmentDiffStats", () => {
     expect(useEnvironmentDiffStore.getState().stats.has("env-stopped")).toBe(false);
   });
 
+  test("polls diff stats against the environment creation commit when available", async () => {
+    const environment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+      createdFromCommit: "abc123def456",
+    });
+    resetStores([environment]);
+
+    renderHook(() => useEnvironmentDiffStats());
+
+    await waitFor(() => {
+      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "abc123def456");
+    });
+  });
+
   test("prunes stale stats when environments disappear", async () => {
     const environment = createMockEnvironment({
       id: "env-current",

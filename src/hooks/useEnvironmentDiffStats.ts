@@ -15,6 +15,7 @@ interface DiffPollEnv {
   worktreePath?: string;
   status: string;
   containerId?: string | null;
+  createdFromCommit?: string;
 }
 
 /**
@@ -40,6 +41,7 @@ export function useEnvironmentDiffStats() {
         worktreePath: e.worktreePath,
         status: e.status,
         containerId: e.containerId,
+        createdFromCommit: e.createdFromCommit,
       })),
     [environments]
   );
@@ -49,7 +51,7 @@ export function useEnvironmentDiffStats() {
   const envKey = useMemo(
     () =>
       envSnapshot
-        .map((e) => `${e.id}:${e.status}:${e.worktreePath ?? ""}:${e.containerId ?? ""}`)
+        .map((e) => `${e.id}:${e.status}:${e.worktreePath ?? ""}:${e.containerId ?? ""}:${e.createdFromCommit ?? ""}`)
         .join("|"),
     [envSnapshot]
   );
@@ -74,15 +76,15 @@ export function useEnvironmentDiffStats() {
       if (!isAvailable) return;
 
       const repoConfig = getRepositoryConfigRef.current(env.projectId);
-      const targetBranch = repoConfig?.prBaseBranch || "main";
+      const comparisonRef = env.createdFromCommit || repoConfig?.prBaseBranch || "main";
 
       loadingRef.current.add(env.id);
       try {
         let changes: tauri.GitFileChange[];
         if (isLocal && env.worktreePath) {
-          changes = await tauri.getLocalGitStatus(env.worktreePath, targetBranch);
+          changes = await tauri.getLocalGitStatus(env.worktreePath, comparisonRef);
         } else if (env.containerId) {
-          changes = await tauri.getGitStatus(env.containerId, targetBranch);
+          changes = await tauri.getGitStatus(env.containerId, comparisonRef);
         } else {
           return;
         }

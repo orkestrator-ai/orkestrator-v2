@@ -37,6 +37,7 @@ export interface Environment {
   prState: PrState | null;
   hasMergeConflicts: boolean | null;
   createdAt: string;
+  createdFromCommit?: string;
   networkAccessMode: NetworkAccessMode;
   allowedDomains?: string[];
   order: number;

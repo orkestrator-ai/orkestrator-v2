@@ -42,9 +42,10 @@ export function useFilesPanel() {
     ? !!worktreePath
     : selectedEnvironment?.status === "running" && !!containerId;
 
-  // Get the target branch for comparison from repository config
+  // Prefer the commit captured when the environment was created. Older
+  // environments fall back to the repository PR base branch.
   const repoConfig = projectId ? getRepositoryConfig(projectId) : null;
-  const targetBranch = repoConfig?.prBaseBranch || "main";
+  const comparisonRef = selectedEnvironment?.createdFromCommit || repoConfig?.prBaseBranch || "main";
 
   // Track loading state for changes and tree separately to allow concurrent loads
   // of different data types while preventing duplicate requests of the same type
@@ -53,8 +54,8 @@ export function useFilesPanel() {
 
   // Store the target branch so other components can access it
   useEffect(() => {
-    setTargetBranch(targetBranch);
-  }, [targetBranch, setTargetBranch]);
+    setTargetBranch(comparisonRef);
+  }, [comparisonRef, setTargetBranch]);
 
   // Load git changes from environment (silent mode for auto-refresh)
   const loadChanges = useCallback(async (silent = false) => {
@@ -72,14 +73,14 @@ export function useFilesPanel() {
       setLoadingChanges(true);
     }
     try {
-      // Compare against the target branch (prBaseBranch from repo config)
+      // Compare against the environment creation commit when available.
       let changes: tauri.GitFileChange[] = [];
       if (isLocalEnvironment && worktreePath) {
         // Local environment - use local git status command
-        changes = await tauri.getLocalGitStatus(worktreePath, targetBranch);
+        changes = await tauri.getLocalGitStatus(worktreePath, comparisonRef);
       } else if (containerId) {
         // Container environment - use container git status command
-        changes = await tauri.getGitStatus(containerId, targetBranch);
+        changes = await tauri.getGitStatus(containerId, comparisonRef);
       }
       setChanges(changes);
     } catch (err) {
@@ -94,7 +95,7 @@ export function useFilesPanel() {
         setLoadingChanges(false);
       }
     }
-  }, [isAvailable, isLocalEnvironment, worktreePath, containerId, targetBranch, setChanges, setLoadingChanges]);
+  }, [isAvailable, isLocalEnvironment, worktreePath, containerId, comparisonRef, setChanges, setLoadingChanges]);
 
   // Load file tree from environment (silent mode for auto-refresh)
   const loadFileTree = useCallback(async (silent = false) => {

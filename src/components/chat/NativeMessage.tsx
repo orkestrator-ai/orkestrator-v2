@@ -85,6 +85,7 @@ const markdownComponents: Components = {
 };
 
 const TASK_LIST_SYNTAX_PATTERN = /(^|\n)\s*(?:[-*+]|\d+\.)\s+\[(?: |x|X)\]\s+/m;
+const USER_PROMPT_COLLAPSED_LINE_COUNT = 12;
 
 interface NativeMessageProps {
   message: NativeMessageType;
@@ -857,13 +858,47 @@ function FilePart({
 function TextPart({
   content,
   showCopy = true,
+  truncateUserPrompt = false,
 }: {
   content: string;
   showCopy?: boolean;
+  truncateUserPrompt?: boolean;
 }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const lineCount = useMemo(
+    () => content.split(/\r\n|\r|\n/).length,
+    [content],
+  );
+  const shouldTruncate =
+    truncateUserPrompt && lineCount > USER_PROMPT_COLLAPSED_LINE_COUNT;
+
   return (
-    <div className="group [&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0">
-      <MessageMarkdown content={content} components={markdownComponents} />
+    <div className="group">
+      <div
+        className={cn(
+          "[&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0",
+          shouldTruncate && !isExpanded && "overflow-hidden",
+        )}
+        style={
+          shouldTruncate && !isExpanded
+            ? {
+                maxHeight: `calc(${USER_PROMPT_COLLAPSED_LINE_COUNT} * 1.625rem)`,
+              }
+            : undefined
+        }
+      >
+        <MessageMarkdown content={content} components={markdownComponents} />
+      </div>
+      {shouldTruncate ? (
+        <button
+          type="button"
+          className="mt-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+          aria-expanded={isExpanded}
+          onClick={() => setIsExpanded((current) => !current)}
+        >
+          {isExpanded ? "show less" : "show more"}
+        </button>
+      ) : null}
       {showCopy ? (
         <MessageCopyButton
           content={content}
@@ -1075,10 +1110,12 @@ function TaskGroupPart({
 function MessagePart({
   part,
   showTextCopy = true,
+  truncateUserPrompt = false,
   containerId,
 }: {
   part: NativeMessagePart;
   showTextCopy?: boolean;
+  truncateUserPrompt?: boolean;
   containerId?: string;
 }) {
   switch (part.type) {
@@ -1091,6 +1128,7 @@ function MessagePart({
         <TextPart
           content={part.content}
           showCopy={showTextCopy}
+          truncateUserPrompt={truncateUserPrompt}
         />
       );
     case "tool-invocation":
@@ -1244,6 +1282,7 @@ export const NativeMessage = memo(function NativeMessage({
         <TextPart
           content={message.content}
           showCopy={false}
+          truncateUserPrompt={isUser}
         />
       )}
     </MessageShell>
@@ -1259,6 +1298,7 @@ function renderMessageParts(
         key={`${message.id}-part-${index}-${part.type}`}
         part={part}
         showTextCopy={options.showTextCopy ?? true}
+        truncateUserPrompt={message.role === "user"}
         containerId={options.containerId}
       />
   ));

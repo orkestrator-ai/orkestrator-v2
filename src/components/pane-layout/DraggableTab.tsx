@@ -195,8 +195,8 @@ export function DraggableTab({
               className={cn(
                 "group relative flex items-center gap-1.5 px-3 text-xs cursor-grab active:cursor-grabbing select-none self-stretch",
                 isActive
-                  ? "bg-black text-foreground"
-                  : "text-muted-foreground hover:text-foreground hover:bg-[#2a2a2a]",
+                  ? "bg-background text-foreground"
+                  : "bg-zinc-800/85 text-muted-foreground hover:bg-zinc-800 hover:text-foreground",
                 isDragging && "opacity-50 z-50",
               )}
               onClick={onSelect}

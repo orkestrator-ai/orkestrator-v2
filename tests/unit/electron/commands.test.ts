@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, promises as fs } from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -95,12 +96,36 @@ function createEnvironment(overrides: Partial<Environment> = {}): Environment {
   };
 }
 
-function createContext(environmentOrEnvironments: Environment | Environment[]): {
+function createContext(
+  environmentOrEnvironments: Environment | Environment[],
+  options: {
+    project?: { id: string; name: string; gitUrl: string; localPath: string | null; addedAt: string; order: number };
+    repositoryConfig?: { defaultBranch: string; prBaseBranch: string };
+  } = {},
+): {
   context: CommandContext;
   updates: Array<Record<string, unknown>>;
   emitted: Array<{ event: string; payload: unknown }>;
 } {
   const environments = Array.isArray(environmentOrEnvironments) ? environmentOrEnvironments : [environmentOrEnvironments];
+  const projects = [{
+    id: "project-1",
+    name: "repo",
+    gitUrl: "https://github.com/acme/repo.git",
+    localPath: null,
+    addedAt: new Date(0).toISOString(),
+    order: 0,
+  }];
+  const config = {
+    version: "1.0.0",
+    global: {},
+    repositories: {
+      "project-1": {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+      },
+    },
+  };
   const updates: Array<Record<string, unknown>> = [];
   const emitted: Array<{ event: string; payload: unknown }> = [];
   const context = {
@@ -110,9 +135,21 @@ function createContext(environmentOrEnvironments: Environment | Environment[]): 
       emitted.push({ event, payload });
     }),
     storage: {
+      getProject: mock(async (projectId: string) => projects.find((project) => project.id === projectId) ?? null),
+      getRepositoryConfig: mock(async (projectId: string) => config.repositories[projectId as "project-1"] ?? { defaultBranch: "main", prBaseBranch: "main" }),
+      loadConfig: mock(async () => config),
+      saveConfig: mock(async (nextConfig: typeof config) => {
+        Object.assign(config, nextConfig);
+      }),
       getEnvironment: mock(async (environmentId: string) => environments.find((environment) => environment.id === environmentId) ?? null),
       getEnvironmentsByProject: mock(async (projectId: string) => environments.filter((environment) => environment.projectId === projectId)),
       loadEnvironments: mock(async () => environments),
+      addEnvironment: mock(async (environment: Environment) => {
+        environment.order =
+          Math.max(-1, ...environments.filter((item) => item.projectId === environment.projectId).map((item) => item.order)) + 1;
+        environments.push(environment);
+        return environment;
+      }),
       updateEnvironment: mock(async (environmentId: string, update: Record<string, unknown>) => {
         const environment = environments.find((candidate) => candidate.id === environmentId);
         if (!environment) throw new Error(`Environment not found: ${environmentId}`);
@@ -120,6 +157,18 @@ function createContext(environmentOrEnvironments: Environment | Environment[]): 
         Object.assign(environment, update);
         return environment;
       }),
+      getProject: mock(async (projectId: string) => {
+        if (options.project) return options.project.id === projectId ? options.project : null;
+        return {
+          id: "project-1",
+          name: "Project",
+          gitUrl: "https://github.com/acme/project.git",
+          localPath: null,
+          addedAt: new Date(0).toISOString(),
+          order: 0,
+        };
+      }),
+      getRepositoryConfig: mock(async () => options.repositoryConfig ?? { defaultBranch: "main", prBaseBranch: "main" }),
     },
   } as unknown as CommandContext;
 
@@ -347,6 +396,142 @@ describe("Electron backend command registry", () => {
     const commands = createCommandRegistry();
     await expect(commands.get("browse_for_directory")?.({}, createContext(createEnvironment()).context)).resolves.toBe("/tmp/project");
     expect(showOpenDialog).toHaveBeenCalledWith({ properties: ["openDirectory"] });
+  });
+
+  test("creates unnamed environments with a local slug generated from the initial prompt", async () => {
+    const { context } = createContext([]);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_CODEX_LOG"
+exit 77
+`, async (logPath) => {
+      const result = await commands.get("create_environment")?.(
+        {
+          projectId: "project-1",
+          initialPrompt: "Please review the OAuth callback flow",
+          environmentType: "local",
+        },
+        context,
+      ) as Environment;
+
+      expect(result.name).toBe("review-oauth-callback");
+      expect(result.branch).toBe("review-oauth-callback");
+      expect(result.initialPrompt).toBe("Please review the OAuth callback flow");
+      await expect(fs.readFile(logPath, "utf8")).rejects.toThrow();
+    });
+  });
+
+  test("suffixes prompt-generated environment slugs when an existing branch uses the slug", async () => {
+    const existing = createEnvironment({
+      id: "env-existing",
+      name: "existing",
+      branch: "review-oauth-callback",
+    });
+    const { context } = createContext(existing);
+    const commands = createCommandRegistry();
+
+    const result = await commands.get("create_environment")?.(
+      {
+        projectId: "project-1",
+        initialPrompt: "Please review the OAuth callback flow",
+        environmentType: "local",
+      },
+      context,
+    ) as Environment;
+
+    expect(result.name).toBe("review-oauth-callback-1");
+    expect(result.branch).toBe("review-oauth-callback-1");
+  });
+
+  test("suffixes prompt-generated environment slugs when the local repo already has the branch", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    await runGit(worktree, ["branch", "review-oauth-callback"]);
+    const { context } = createContext([]);
+    (context.storage.getProject as ReturnType<typeof mock>).mockImplementation(async () => ({
+      id: "project-1",
+      name: "repo",
+      gitUrl: "https://github.com/acme/repo.git",
+      localPath: worktree,
+      addedAt: new Date(0).toISOString(),
+      order: 0,
+    }));
+    const commands = createCommandRegistry();
+
+    const result = await commands.get("create_environment")?.(
+      {
+        projectId: "project-1",
+        initialPrompt: "Please review the OAuth callback flow",
+        environmentType: "local",
+      },
+      context,
+    ) as Environment;
+
+    expect(result.name).toBe("review-oauth-callback-1");
+    expect(result.branch).toBe("review-oauth-callback-1");
+  });
+
+  test("falls back to the default timestamp name when an initial prompt cannot form a slug", async () => {
+    const { context } = createContext([]);
+    const commands = createCommandRegistry();
+
+    const result = await commands.get("create_environment")?.(
+      {
+        projectId: "project-1",
+        initialPrompt: "🔥🔥🔥",
+        environmentType: "local",
+      },
+      context,
+    ) as Environment;
+
+    expect(result.name).toMatch(/^\d{15}$/);
+    expect(result.branch).toBe(result.name);
+    expect(result.initialPrompt).toBe("🔥🔥🔥");
+  });
+
+  test("suffixes explicit environment names when the current project already uses the slug", async () => {
+    const existing = createEnvironment({
+      id: "env-existing",
+      name: "custom-name",
+      branch: "custom-name",
+    });
+    const { context } = createContext(existing);
+    const commands = createCommandRegistry();
+
+    const result = await commands.get("create_environment")?.(
+      {
+        projectId: "project-1",
+        name: "Custom Name",
+        environmentType: "local",
+      },
+      context,
+    ) as Environment;
+
+    expect(result.name).toBe("custom-name-1");
+    expect(result.branch).toBe("custom-name-1");
+  });
+
+  test("does not suffix generated names for duplicate slugs in a different project", async () => {
+    const otherProjectEnvironment = createEnvironment({
+      id: "env-other-project",
+      projectId: "project-2",
+      name: "review-oauth-callback",
+      branch: "review-oauth-callback",
+    });
+    const { context } = createContext(otherProjectEnvironment);
+    const commands = createCommandRegistry();
+
+    const result = await commands.get("create_environment")?.(
+      {
+        projectId: "project-1",
+        initialPrompt: "Please review the OAuth callback flow",
+        environmentType: "local",
+      },
+      context,
+    ) as Environment;
+
+    expect(result.name).toBe("review-oauth-callback");
+    expect(result.branch).toBe("review-oauth-callback");
   });
 
   test("renames environments from prompts using codex exec output", async () => {
@@ -587,6 +772,142 @@ printf '%s\\n' '{}' > "$out"
     await expect(commands.get("get_environment_status")?.({ environmentId: environment.id }, context)).resolves.toBe("running");
     await expect(commands.get("get_environments")?.({ projectId: environment.projectId }, context)).resolves.toEqual([environment]);
     expect(updates).toHaveLength(0);
+  });
+
+  test("creates local worktrees from the fetched remote base branch", async () => {
+    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    const updater = await createTempDir("ork-electron-remote-updater-");
+    await runGit(updater, ["clone", remote, "."]);
+    await runGit(updater, ["checkout", "main"]);
+    await fs.writeFile(path.join(updater, "tracked.txt"), "remote\n");
+    await runGit(updater, ["add", "tracked.txt"]);
+    await runGit(updater, ["commit", "-m", "remote update"]);
+    await runGit(updater, ["push", "origin", "main"]);
+
+    const environment = createEnvironment({
+      status: "stopped",
+      worktreePath: undefined,
+      branch: "feature/remote-base",
+      environmentType: "local",
+    });
+    const projectName = `Remote Base ${randomUUID().slice(0, 8)}`;
+    const { context } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: projectName,
+        gitUrl: remote,
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: { defaultBranch: "main", prBaseBranch: "main" },
+    });
+    const commands = createCommandRegistry();
+
+    try {
+      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual({ setupCommands: [] });
+
+      expect(environment.worktreePath).toBeDefined();
+      expect(environment.branch).toBe("feature-remote-base");
+      expect(await fs.readFile(path.join(environment.worktreePath!, "tracked.txt"), "utf8")).toBe("remote\n");
+    } finally {
+      if (environment.worktreePath) await fs.rm(environment.worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("creates local worktrees from a configured remote default branch", async () => {
+    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    await runGit(worktree, ["checkout", "-b", "develop"]);
+    await fs.writeFile(path.join(worktree, "tracked.txt"), "develop\n");
+    await runGit(worktree, ["add", "tracked.txt"]);
+    await runGit(worktree, ["commit", "-m", "develop base"]);
+    await runGit(worktree, ["push", "-u", "origin", "develop"]);
+
+    const environment = createEnvironment({
+      status: "stopped",
+      worktreePath: undefined,
+      branch: "feature/custom-base",
+      environmentType: "local",
+    });
+    const projectName = `Custom Base ${randomUUID().slice(0, 8)}`;
+    const { context } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: projectName,
+        gitUrl: remote,
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: { defaultBranch: "develop", prBaseBranch: "develop" },
+    });
+    const commands = createCommandRegistry();
+
+    try {
+      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual({ setupCommands: [] });
+
+      expect(environment.worktreePath).toBeDefined();
+      expect(environment.branch).toBe("feature-custom-base");
+      expect(await fs.readFile(path.join(environment.worktreePath!, "tracked.txt"), "utf8")).toBe("develop\n");
+    } finally {
+      if (environment.worktreePath) await fs.rm(environment.worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("marks local environment errored when the remote base branch is missing", async () => {
+    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    const environment = createEnvironment({
+      status: "stopped",
+      worktreePath: undefined,
+      branch: "feature/missing-base",
+      environmentType: "local",
+    });
+    const { context, updates } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: `Missing Base ${randomUUID().slice(0, 8)}`,
+        gitUrl: remote,
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: { defaultBranch: "missing-base", prBaseBranch: "missing-base" },
+    });
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).rejects.toThrow();
+
+    expect(environment.status).toBe("error");
+    expect(environment.worktreePath).toBeUndefined();
+    expect(updates.map((update) => update.status)).toEqual(["creating", "error"]);
+  });
+
+  test("marks local environment errored when the project repository has no origin remote", async () => {
+    const repo = await createGitRepoOnBranch("main");
+    const environment = createEnvironment({
+      status: "stopped",
+      worktreePath: undefined,
+      branch: "feature/no-origin",
+      environmentType: "local",
+    });
+    const { context, updates } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: `No Origin ${randomUUID().slice(0, 8)}`,
+        gitUrl: "",
+        localPath: repo,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: { defaultBranch: "main", prBaseBranch: "main" },
+    });
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).rejects.toThrow();
+
+    expect(environment.status).toBe("error");
+    expect(environment.worktreePath).toBeUndefined();
+    expect(updates.map((update) => update.status)).toEqual(["creating", "error"]);
   });
 
   test("matches short and full container IDs before removing orphaned Docker containers", async () => {
@@ -975,6 +1296,212 @@ exit 0
       const execLog = await fs.readFile(logs.exec, "utf8");
       expect(execLog).toContain("gh pr list --head 'feature/container-pr' --state all --limit 30 --json url,state,mergeable,updatedAt");
       expect(execLog).not.toContain("gh pr view");
+    });
+  });
+
+  test("merges local PRs through the GitHub API without updating worktree branches", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ] && [ "$3" = "--method" ] && [ "$4" = "PUT" ]; then
+  printf '%s\\n' '{"merged":true}'
+  exit 0
+fi
+printf 'unexpected gh args: %s\\n' "$*" >&2
+exit 1
+`, async (logPath) => {
+      await expect(commands.get("merge_pr_local")?.(
+        { environmentId: environment.id, method: "squash", deleteBranch: false },
+        context,
+      )).resolves.toBeUndefined();
+
+      const ghLog = await fs.readFile(logPath, "utf8");
+      expect(ghLog).toContain("api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash");
+      expect(ghLog).not.toContain("pr merge");
+      expect(ghLog).not.toContain("--delete-branch");
+    });
+  });
+
+  test("deletes the remote head branch after local API merge when requested", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-delete-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ] && [ "$3" = "" ]; then
+  printf '%s\\n' '{"head":{"ref":"feature/local-work","repo":{"full_name":"acme/repo"}}}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ] && [ "$3" = "--method" ] && [ "$4" = "PUT" ]; then
+  printf '%s\\n' '{"merged":true}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/local-work" ] && [ "$3" = "--method" ] && [ "$4" = "DELETE" ]; then
+  exit 0
+fi
+printf 'unexpected gh args: %s\\n' "$*" >&2
+exit 1
+`, async (logPath) => {
+      await expect(commands.get("merge_pr_local")?.(
+        { environmentId: environment.id, method: "rebase", deleteBranch: true },
+        context,
+      )).resolves.toBeUndefined();
+
+      const ghLog = await fs.readFile(logPath, "utf8");
+      expect(ghLog).toContain("api repos/acme/repo/pulls/42");
+      expect(ghLog).toContain("api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=rebase");
+      expect(ghLog).toContain("api repos/acme/repo/git/refs/heads/feature/local-work --method DELETE");
+      expect(ghLog).not.toContain("pr merge");
+    });
+  });
+
+  test("defaults local API merge method to squash", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-default-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ] && [ "$3" = "--method" ] && [ "$4" = "PUT" ]; then
+  printf '%s\\n' '{"merged":true}'
+  exit 0
+fi
+printf 'unexpected gh args: %s\\n' "$*" >&2
+exit 1
+`, async (logPath) => {
+      await expect(commands.get("merge_pr_local")?.(
+        { environmentId: environment.id, deleteBranch: false },
+        context,
+      )).resolves.toBeUndefined();
+
+      const ghLog = await fs.readFile(logPath, "utf8");
+      expect(ghLog).toContain("api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash");
+    });
+  });
+
+  test("rejects local API merge when the environment has no PR URL", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-no-pr-worktree-");
+    const environment = createEnvironment({ worktreePath, prUrl: null });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("merge_pr_local")?.(
+      { environmentId: environment.id, method: "squash", deleteBranch: false },
+      context,
+    )).rejects.toThrow("Local environment PR URL is not available");
+  });
+
+  test("rejects invalid local API merge inputs before invoking gh", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-invalid-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+printf 'gh should not be called\\n' >&2
+exit 1
+`, async (logPath) => {
+      await expect(commands.get("merge_pr_local")?.(
+        { environmentId: environment.id, method: "fast-forward", deleteBranch: false },
+        context,
+      )).rejects.toThrow("Invalid merge method: fast-forward");
+
+      environment.prUrl = "https://example.com/acme/repo/pull/42";
+      await expect(commands.get("merge_pr_local")?.(
+        { environmentId: environment.id, method: "squash", deleteBranch: false },
+        context,
+      )).rejects.toThrow("Invalid PR URL: https://example.com/acme/repo/pull/42");
+
+      expect(existsSync(logPath)).toBe(false);
+    });
+  });
+
+  test("ignores a 404 while deleting the remote head branch after local API merge", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-delete-404-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ] && [ "$3" = "" ]; then
+  printf '%s\\n' '{"head":{"ref":"feature/already-deleted","repo":{"full_name":"acme/repo"}}}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ] && [ "$3" = "--method" ] && [ "$4" = "PUT" ]; then
+  printf '%s\\n' '{"merged":true}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/already-deleted" ] && [ "$3" = "--method" ] && [ "$4" = "DELETE" ]; then
+  printf '%s\\n' 'HTTP 404: Not Found' >&2
+  exit 1
+fi
+printf 'unexpected gh args: %s\\n' "$*" >&2
+exit 1
+`, async (logPath) => {
+      await expect(commands.get("merge_pr_local")?.(
+        { environmentId: environment.id, method: "merge", deleteBranch: true },
+        context,
+      )).resolves.toBeUndefined();
+
+      const ghLog = await fs.readFile(logPath, "utf8");
+      expect(ghLog).toContain("api repos/acme/repo/git/refs/heads/feature/already-deleted --method DELETE");
+    });
+  });
+
+  test("propagates non-404 remote branch delete failures after local API merge", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-delete-fail-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ] && [ "$3" = "" ]; then
+  printf '%s\\n' '{"head":{"ref":"feature/protected","repo":{"full_name":"acme/repo"}}}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ] && [ "$3" = "--method" ] && [ "$4" = "PUT" ]; then
+  printf '%s\\n' '{"merged":true}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/protected" ] && [ "$3" = "--method" ] && [ "$4" = "DELETE" ]; then
+  printf '%s\\n' 'HTTP 403: Resource protected' >&2
+  exit 1
+fi
+printf 'unexpected gh args: %s\\n' "$*" >&2
+exit 1
+`, async () => {
+      await expect(commands.get("merge_pr_local")?.(
+        { environmentId: environment.id, method: "merge", deleteBranch: true },
+        context,
+      )).rejects.toThrow("HTTP 403: Resource protected");
     });
   });
 

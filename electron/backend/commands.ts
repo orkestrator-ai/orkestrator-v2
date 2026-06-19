@@ -188,6 +188,62 @@ function sanitizeGeneratedEnvironmentName(rawName: string): string {
   return name.split("-").filter(Boolean).slice(0, 3).join("-");
 }
 
+const PROMPT_NAME_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "at",
+  "be",
+  "by",
+  "can",
+  "could",
+  "for",
+  "from",
+  "in",
+  "is",
+  "of",
+  "on",
+  "or",
+  "please",
+  "should",
+  "that",
+  "the",
+  "these",
+  "this",
+  "those",
+  "to",
+  "with",
+  "would",
+]);
+
+function generateInitialEnvironmentName(prompt: string): string | undefined {
+  const words = prompt.match(/[A-Za-z0-9]+/g) ?? [];
+  const meaningfulWords = words
+    .map((word) => word.toLowerCase())
+    .filter((word) => word.length > 1 && !PROMPT_NAME_STOP_WORDS.has(word));
+  const selectedWords = (meaningfulWords.length > 0 ? meaningfulWords : words.map((word) => word.toLowerCase())).slice(0, 3);
+  if (selectedWords.length === 0) return undefined;
+  return sanitizeGeneratedEnvironmentName(selectedWords.join("-"));
+}
+
+function makeUniqueEnvironmentSlug(baseSlug: string, existingEnvironments: Environment[], extraBranches: string[] = []): string {
+  const used = new Set<string>();
+  for (const environment of existingEnvironments) {
+    used.add(environment.name);
+    used.add(environment.branch);
+  }
+  for (const branch of extraBranches) used.add(branch);
+
+  let candidate = baseSlug;
+  let suffix = 1;
+  while (used.has(candidate)) {
+    candidate = `${baseSlug}-${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
+}
+
 function resolveCodexBinary(context: CommandContext): string {
   const candidates = [
     path.join(context.resourceRoot, "bin", "codex"),
@@ -221,6 +277,26 @@ async function generateEnvironmentNameWithCodexExec(prompt: string, context: Com
     return sanitizeGeneratedEnvironmentName(parseSlugFromResponse(response.trim()));
   } finally {
     await fs.rm(outputPath, { force: true }).catch(() => undefined);
+  }
+}
+
+async function listGitBranchesAtPath(repoPath: string, fetchFirst: boolean): Promise<string[]> {
+  if (fetchFirst) {
+    await runCommand("git", ["-C", repoPath, "fetch", "origin", "--prune"], { timeoutMs: 60_000 }).catch(() => undefined);
+  }
+
+  try {
+    const { stdout } = await runCommand("git", ["-C", repoPath, "branch", "-a", "--format=%(refname:short)"], { timeoutMs: 30_000 });
+    const branches = stdout
+      .split("\n")
+      .map((branch) => branch.trim())
+      .filter(Boolean)
+      .map((branch) => branch.replace(/^remotes\/origin\//, "").replace(/^origin\//, ""))
+      .filter((branch) => branch !== "HEAD");
+    return Array.from(new Set(branches)).sort();
+  } catch (error) {
+    console.warn("[ElectronBackend] Failed to list git branches for environment naming:", error);
+    return [];
   }
 }
 
@@ -271,6 +347,106 @@ type GhPrListEntry = {
   mergeable?: unknown;
   updatedAt?: unknown;
 };
+
+type GitHubPullRequestRef = {
+  owner: string;
+  repo: string;
+  number: string;
+};
+
+type GitHubPullRequestHead = {
+  head?: {
+    ref?: unknown;
+    repo?: {
+      full_name?: unknown;
+    } | null;
+  } | null;
+};
+
+function parseGitHubPullRequestUrl(url: string): GitHubPullRequestRef {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid PR URL: ${url}`);
+  }
+
+  if (parsed.protocol !== "https:" || parsed.hostname !== "github.com") {
+    throw new Error(`Invalid PR URL: ${url}`);
+  }
+
+  const [owner, repo, pullSegment, number, ...rest] = parsed.pathname
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => decodeURIComponent(segment));
+
+  if (!owner || !repo || pullSegment !== "pull" || !number || rest.length > 0 || !/^\d+$/.test(number)) {
+    throw new Error(`Invalid PR URL: ${url}`);
+  }
+
+  return { owner, repo, number };
+}
+
+function parseMergeMethod(value: unknown): "squash" | "merge" | "rebase" {
+  if (value === undefined || value === null || value === "") return "squash";
+  if (value === "squash" || value === "merge" || value === "rebase") return value;
+  throw new Error(`Invalid merge method: ${String(value)}`);
+}
+
+function encodeGitHubPathSegment(value: string): string {
+  return encodeURIComponent(value);
+}
+
+function encodeGitRefPath(ref: string): string {
+  return ref.split("/").map(encodeGitHubPathSegment).join("/");
+}
+
+async function mergePullRequestViaGitHubApi(
+  prUrl: string,
+  method: "squash" | "merge" | "rebase",
+  deleteBranch: boolean,
+  cwd: string,
+): Promise<void> {
+  const pr = parseGitHubPullRequestUrl(prUrl);
+  const pullEndpoint = `repos/${encodeGitHubPathSegment(pr.owner)}/${encodeGitHubPathSegment(pr.repo)}/pulls/${pr.number}`;
+  const mergeEndpoint = `${pullEndpoint}/merge`;
+
+  let head: GitHubPullRequestHead | null = null;
+  if (deleteBranch) {
+    const { stdout } = await runCommand("gh", ["api", pullEndpoint], { cwd, timeoutMs: 30_000 });
+    head = JSON.parse(stdout) as GitHubPullRequestHead;
+  }
+
+  await runCommand("gh", [
+    "api",
+    mergeEndpoint,
+    "--method",
+    "PUT",
+    "-f",
+    `merge_method=${method}`,
+  ], { cwd, timeoutMs: 120_000 });
+
+  if (!deleteBranch) return;
+
+  const headRefName = typeof head?.head?.ref === "string" ? head.head.ref : "";
+  const headRepositoryNameWithOwner = typeof head?.head?.repo?.full_name === "string" ? head.head.repo.full_name : "";
+  const [headOwner, headRepo] = headRepositoryNameWithOwner.split("/");
+  if (!headRefName || !headOwner || !headRepo) return;
+
+  try {
+    await runCommand("gh", [
+      "api",
+      `repos/${encodeGitHubPathSegment(headOwner)}/${encodeGitHubPathSegment(headRepo)}/git/refs/heads/${encodeGitRefPath(headRefName)}`,
+      "--method",
+      "DELETE",
+    ], { cwd, timeoutMs: 30_000 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("HTTP 404") && !message.toLowerCase().includes("not found")) {
+      throw error;
+    }
+  }
+}
 
 function isExpectedPrAbsenceOutput(text: string): boolean {
   const trimmed = text.trim();
@@ -585,8 +761,8 @@ async function createLocalWorktree(
     suffix += 1;
   }
 
-  const args = ["-C", projectPath, "worktree", "add", "-b", finalBranch, worktreePath];
-  if (baseBranch?.trim()) args.push(baseBranch.trim());
+  const startPoint = await resolveRemoteWorktreeStartPoint(projectPath, baseBranch?.trim() || "main");
+  const args = ["-C", projectPath, "worktree", "add", "-b", finalBranch, worktreePath, startPoint];
   await runCommand("git", args, { timeoutMs: 120_000 });
 
   await fs.mkdir(path.join(worktreePath, ".orkestrator"), { recursive: true });
@@ -905,6 +1081,17 @@ async function gitRefExists(worktreePath: string, refName: string): Promise<bool
     .then(() => true, () => false);
 }
 
+async function resolveRemoteWorktreeStartPoint(projectPath: string, baseBranch: string): Promise<string> {
+  const branch = validateGitRefName(baseBranch, "base branch");
+  await runCommand("git", ["-C", projectPath, "fetch", "origin", branch], { timeoutMs: 120_000 });
+
+  const remoteRef = `origin/${branch}`;
+  if (!await gitRefExists(projectPath, remoteRef)) {
+    throw new Error(`Remote base branch not found: ${remoteRef}`);
+  }
+  return remoteRef;
+}
+
 async function resolveLocalGitBase(worktreePath: string, targetBranch: string): Promise<string> {
   const branch = validateGitRefName(targetBranch, "target branch");
   await runCommand("git", ["-C", worktreePath, "fetch", "origin", branch], { timeoutMs: 60_000 }).catch(() => undefined);
@@ -1083,14 +1270,31 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   });
   register("get_environment", ({ environmentId }, { storage }) => storage.getEnvironment(asString(environmentId, "environmentId")));
   register("reorder_environments", ({ projectId, environmentIds }, { storage }) => storage.reorderEnvironments(asString(projectId, "projectId"), asStringArray(environmentIds)));
-  register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType }, { storage }) => {
+  register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType }, context) => {
+    const { storage } = context;
     const project = await storage.getProject(asString(projectId, "projectId"));
     if (!project) throw new Error(`Project not found: ${projectId}`);
     const repoConfig = await storage.getRepositoryConfig(project.id);
+    const explicitName = asOptionalString(name)?.trim();
+    const initialPromptText = asOptionalString(initialPrompt);
+    const trimmedInitialPrompt = initialPromptText?.trim();
+    const generatedInitialName = !explicitName && trimmedInitialPrompt
+      ? generateInitialEnvironmentName(trimmedInitialPrompt)
+      : undefined;
+    const baseName = explicitName
+      ? sanitizeEnvironmentName(explicitName)
+      : generatedInitialName;
+    const existingEnvironments = baseName ? await storage.getEnvironmentsByProject(project.id) : [];
+    const existingGitBranches = baseName && project.localPath
+      ? await listGitBranchesAtPath(project.localPath, true)
+      : [];
+    const uniqueName = baseName
+      ? makeUniqueEnvironmentSlug(baseName, existingEnvironments, existingGitBranches)
+      : undefined;
     const env = createEnvironment(project.id, {
-      name: asOptionalString(name),
+      name: uniqueName,
       networkAccessMode: networkAccessMode === "full" ? "full" : networkAccessMode === "restricted" ? "restricted" : undefined,
-      initialPrompt: asOptionalString(initialPrompt),
+      initialPrompt: initialPromptText,
       portMappings: asPortMappings(portMappings),
       environmentType: asEnvironmentType(environmentType),
       entryPort: repoConfig.entryPort,
@@ -1161,32 +1365,37 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     await storage.updateEnvironment(environment.id, { status: "creating" });
 
-    if (environment.environmentType === "local") {
-      if (environment.worktreePath && await pathExists(environment.worktreePath)) {
-        await storage.updateEnvironment(environment.id, { status: "running" });
-        return { setupCommands: environment.setupScriptsComplete ? undefined : await readSetupLocalCommands(environment.worktreePath) };
+    try {
+      if (environment.environmentType === "local") {
+        if (environment.worktreePath && await pathExists(environment.worktreePath)) {
+          await storage.updateEnvironment(environment.id, { status: "running" });
+          return { setupCommands: environment.setupScriptsComplete ? undefined : await readSetupLocalCommands(environment.worktreePath) };
+        }
+        const project = await storage.getProject(environment.projectId);
+        if (!project?.localPath) throw new Error("Project has no local path - cannot create a local worktree");
+        const repoConfig = await storage.getRepositoryConfig(project.id);
+        const worktree = await createLocalWorktree(project.localPath, project.name, environment.branch, repoConfig.defaultBranch);
+        await storage.updateEnvironment(environment.id, { worktreePath: worktree.path, branch: worktree.branch, status: "running" });
+        return { setupCommands: await readSetupLocalCommands(worktree.path) };
       }
-      const project = await storage.getProject(environment.projectId);
-      if (!project?.localPath) throw new Error("Project has no local path - cannot create a local worktree");
-      const repoConfig = await storage.getRepositoryConfig(project.id);
-      const worktree = await createLocalWorktree(project.localPath, project.name, environment.branch, repoConfig.defaultBranch);
-      await storage.updateEnvironment(environment.id, { worktreePath: worktree.path, branch: worktree.branch, status: "running" });
-      return { setupCommands: await readSetupLocalCommands(worktree.path) };
-    }
 
-    let containerId = environment.containerId;
-    if (!containerId) {
-      containerId = await createDockerContainer(environment, { storage, emit: () => undefined, appRoot: "", resourceRoot: "" });
-      await storage.updateEnvironment(environment.id, { containerId });
+      let containerId = environment.containerId;
+      if (!containerId) {
+        containerId = await createDockerContainer(environment, { storage, emit: () => undefined, appRoot: "", resourceRoot: "" });
+        await storage.updateEnvironment(environment.id, { containerId });
+      }
+      await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
+      const hostEntryPort = environment.entryPort ? await getHostPort(containerId, environment.entryPort) : null;
+      await storage.updateEnvironment(environment.id, {
+        status: "running",
+        entryPort: environment.entryPort ?? null,
+        hostEntryPort,
+      });
+      return {};
+    } catch (error) {
+      await storage.updateEnvironment(environment.id, { status: "error" }).catch(() => undefined);
+      throw error;
     }
-    await runCommand("docker", ["start", containerId], { timeoutMs: 60_000 });
-    const hostEntryPort = environment.entryPort ? await getHostPort(containerId, environment.entryPort) : null;
-    await storage.updateEnvironment(environment.id, {
-      status: "running",
-      entryPort: environment.entryPort ?? null,
-      hostEntryPort,
-    });
-    return {};
   });
   register("stop_environment", async ({ environmentId }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
@@ -1609,9 +1818,13 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("merge_pr_local", async ({ environmentId, method, deleteBranch }, { storage }) => {
     const env = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!env?.worktreePath) throw new Error("Local environment worktree is not available");
-    const args = ["pr", "merge", asOptionalString(method) ? `--${asOptionalString(method)}` : "--squash"];
-    if (asBoolean(deleteBranch, true)) args.push("--delete-branch");
-    await runCommand("gh", args, { cwd: env.worktreePath, timeoutMs: 120_000 });
+    if (!env.prUrl) throw new Error("Local environment PR URL is not available");
+    await mergePullRequestViaGitHubApi(
+      env.prUrl,
+      parseMergeMethod(method),
+      asBoolean(deleteBranch, true),
+      env.worktreePath,
+    );
   });
   register("merge_pr", ({ containerId, method, deleteBranch }) =>
     dockerExec(asString(containerId, "containerId"), `gh pr merge --${asOptionalString(method) ?? "squash"} ${asBoolean(deleteBranch, true) ? "--delete-branch" : ""}`).then(() => undefined),

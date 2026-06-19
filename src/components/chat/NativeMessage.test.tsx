@@ -129,7 +129,7 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.getByRole("button", { name: "Copied text" })).toBeTruthy();
   });
 
-  test("adds lead-in spacing to text after visible tool activity", () => {
+  test("uses uniform part spacing for tool and text blocks", () => {
     const message = makeMessage([
       {
         type: "tool-invocation",
@@ -149,9 +149,91 @@ describe("NativeMessage task list rendering", () => {
 
     render(<NativeMessage message={message} />);
 
+    const toolButton = screen.getByRole("button", { name: /bash/i });
+    expect(toolButton.parentElement?.className).toContain("my-0");
+
     const text = screen.getByText("Text after tool");
     const markdownWrapper = text.closest(".prose");
-    expect(markdownWrapper?.parentElement?.className).toContain("pt-2");
+    expect(markdownWrapper?.parentElement?.className).toContain(
+      "[&_.prose>:first-child]:mt-0",
+    );
+    expect(markdownWrapper?.parentElement?.className).toContain(
+      "[&_.prose>:last-child]:mb-0",
+    );
+    expect(markdownWrapper?.parentElement?.className).not.toContain("pt-2");
+  });
+
+  test("uses uniform outer spacing for native part wrapper variants", () => {
+    const message = makeMessage([
+      {
+        type: "thinking",
+        content: "- [ ] Check wrapper spacing",
+      },
+      {
+        type: "thinking",
+        content: "Regular thinking wrapper",
+      },
+      {
+        type: "file",
+        content: "/workspace/screenshot.png",
+      },
+      {
+        type: "subagent",
+        content: "Lovelace",
+        subagentName: "Lovelace",
+        toolState: "success",
+        subagentActions: [],
+      },
+      {
+        type: "tool-group",
+        content: "",
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: "Read",
+            toolState: "success",
+          },
+        ],
+      },
+      {
+        type: "task-group",
+        content: "",
+        task: {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Task",
+          toolTitle: "Task wrapper",
+          toolState: "success",
+        },
+        childTools: [
+          {
+            type: "tool-invocation",
+            content: "",
+            toolName: "Bash",
+            toolState: "success",
+          },
+        ],
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(
+      screen.getByRole("button", { name: /task list/i }).parentElement?.className,
+    ).toContain("my-0");
+    expect(
+      screen.getByText("Regular thinking wrapper").parentElement?.className,
+    ).toContain("my-0");
+    expect(screen.getByRole("button", { name: /screenshot\.png/i }).className)
+      .toContain("my-0");
+    expect(
+      screen.getByRole("button", { name: /lovelace/i }).parentElement?.className,
+    ).toContain("my-0");
+    expect(container.innerHTML).toContain("my-0 rounded-lg border border-zinc-700/70");
+    expect(
+      screen.getByRole("button", { name: /task wrapper/i }).parentElement?.className,
+    ).toContain("my-0");
   });
 
   test("shows an error toast when copying text fails", async () => {

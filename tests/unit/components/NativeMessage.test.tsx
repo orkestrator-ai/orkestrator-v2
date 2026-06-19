@@ -296,7 +296,7 @@ describe("NativeMessage", () => {
     expect(secondTextIndex).toBeGreaterThan(fileIndex);
   });
 
-  test("adds lead-in spacing after subagents and for fallback text after tools", () => {
+  test("uses uniform part spacing after subagents and for fallback text after tools", () => {
     const subagentMessage: NativeMessageType = {
       id: "msg-subagent-lead-in",
       role: "assistant",
@@ -336,6 +336,9 @@ describe("NativeMessage", () => {
 
     const topLevelText = screen.getByText("Top-level text after subagent");
     expect(topLevelText.closest(".prose")?.parentElement?.className).toContain(
+      "[&_.prose>:first-child]:mt-0",
+    );
+    expect(topLevelText.closest(".prose")?.parentElement?.className).not.toContain(
       "pt-2",
     );
 
@@ -345,6 +348,9 @@ describe("NativeMessage", () => {
       .find((element) => element.closest(".prose"));
     expect(childText).toBeTruthy();
     expect(childText!.closest(".prose")?.parentElement?.className).toContain(
+      "[&_.prose>:first-child]:mt-0",
+    );
+    expect(childText!.closest(".prose")?.parentElement?.className).not.toContain(
       "pt-2",
     );
 
@@ -373,6 +379,9 @@ describe("NativeMessage", () => {
 
     const fallbackText = screen.getByText("Fallback text after tool");
     expect(fallbackText.closest(".prose")?.parentElement?.className).toContain(
+      "[&_.prose>:first-child]:mt-0",
+    );
+    expect(fallbackText.closest(".prose")?.parentElement?.className).not.toContain(
       "pt-2",
     );
   });
@@ -640,7 +649,10 @@ describe("NativeMessage", () => {
       </TerminalContextHarness>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+    const editTrigger = screen.getByRole("button", { name: /edit/i });
+    expect(editTrigger.parentElement?.className).toContain("my-0");
+
+    fireEvent.click(editTrigger);
     fireEvent.click(screen.getByTitle("Open diff in new tab"));
 
     expect(createFileTab).toHaveBeenCalledWith("/workspace/src/example.ts", {

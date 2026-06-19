@@ -40,7 +40,7 @@ export function TodoToolPart({
     totalCount > 0 || Boolean(toolOutput) || Boolean(toolError);
 
   return (
-    <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-1.5">
+    <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
       <CollapsibleTrigger
         className={cn(
           "flex h-8 w-full items-center gap-2 rounded-md px-2 text-xs leading-none text-muted-foreground transition-colors hover:text-foreground",

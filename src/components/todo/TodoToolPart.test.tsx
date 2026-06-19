@@ -25,6 +25,9 @@ describe("TodoToolPart", () => {
     expect(container.textContent).toContain("TodoWrite");
     expect(container.textContent).toContain("1/3 complete");
     expect(container.textContent).toContain("success");
+    expect(
+      screen.getByRole("button", { name: /todowrite/i }).parentElement?.className,
+    ).toContain("my-0");
   });
 
   test("displays 'Todo List' label for codex todo_list tool", () => {

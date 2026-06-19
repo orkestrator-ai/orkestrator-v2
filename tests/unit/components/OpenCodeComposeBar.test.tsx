@@ -398,7 +398,7 @@ describe("OpenCodeComposeBar", () => {
     await waitFor(() => {
       expect(mockCreateMention).toHaveBeenCalledWith(selectedFile);
     });
-    expect(mockCloseFileMentionMenu).toHaveBeenCalled();
+    expect(mockCloseFileMentionMenu).toHaveBeenCalledWith({ suppressReopenFor: "app.ts" });
     expect(onSend).not.toHaveBeenCalled();
   });
 

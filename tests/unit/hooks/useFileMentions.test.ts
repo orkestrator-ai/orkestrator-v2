@@ -143,6 +143,53 @@ describe("useFileMentions", () => {
     expect(result.current.isMenuOpen).toBe(false);
   });
 
+  test("does not reopen after Tab or Space selects a file and cursor briefly lands inside the accepted mention", () => {
+    for (const key of ["Tab", " "]) {
+      const onSelect = mock(() => {});
+      const { result, unmount } = renderHook(() =>
+        useFileMentions({
+          searchFiles: () => files,
+        }),
+      );
+
+      act(() => {
+        result.current.handleCursorChange(2, "@a");
+      });
+
+      act(() => {
+        expect(result.current.handleKeyDown(keyEvent(key), onSelect)).toBe(true);
+      });
+
+      expect(onSelect).toHaveBeenCalledWith(files[0]);
+
+      act(() => {
+        result.current.handleCursorChange(3, "@alpha.ts ");
+      });
+
+      expect(result.current.isMenuOpen).toBe(false);
+      unmount();
+    }
+  });
+
+  test("suppresses transient reopen with case-insensitive accepted filenames", () => {
+    const { result } = renderHook(() =>
+      useFileMentions({
+        searchFiles: () => files,
+      }),
+    );
+
+    act(() => {
+      result.current.handleCursorChange(1, "@");
+      result.current.closeMenu({ suppressReopenFor: "Alpha.TS" });
+    });
+
+    act(() => {
+      result.current.handleCursorChange(3, "@alpha.ts ");
+    });
+
+    expect(result.current.isMenuOpen).toBe(false);
+  });
+
   test("does not reopen after closing for a mouse-selected file from an empty at trigger", () => {
     const { result } = renderHook(() =>
       useFileMentions({

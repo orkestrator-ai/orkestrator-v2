@@ -1038,6 +1038,32 @@ describe("TerminalContainer", () => {
     });
   });
 
+  test("clears setup-running state when inactive backend setup fails", async () => {
+    seedContainerSetupCommands();
+    runEnvironmentSetupMock.mockRejectedValueOnce(new Error("setup exploded"));
+    useClaudeOptionsStore.setState({
+      options: {},
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      expect(runEnvironmentSetupMock).toHaveBeenCalledWith("env-hidden");
+      expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-hidden")).toBe(false);
+    });
+    expect(useEnvironmentStore.getState().isWorkspaceReady("env-hidden")).toBe(false);
+  });
+
   test("fetches backend setup plan before initializing a rehydrated running container", async () => {
     getSetupCommandsMock.mockResolvedValue([TEST_CONTAINER_SETUP_COMMAND]);
 

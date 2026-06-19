@@ -883,7 +883,71 @@ exit 0
     });
   });
 
-  test("passes host gh auth token into newly created containers when no token is configured", async () => {
+  test("returns completed container environments without rerunning backend setup", async () => {
+    const environment = createEnvironment({
+      id: "env-container-setup-complete",
+      environmentType: "containerized",
+      setupScriptsComplete: true,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context, emitted } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
+exit 1
+`, async () => {
+      const result = await commands.get("run_environment_setup")?.({ environmentId: environment.id }, context);
+
+      expect(result).toBe(environment);
+      expect(emitted).toEqual([]);
+    });
+  });
+
+  test("emits a failure event when inactive container setup fails", async () => {
+    const environment = createEnvironment({
+      id: "env-container-setup-fails",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context, emitted } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "inspect" ]; then
+  printf 'running\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  printf 'setup exploded\n' >&2
+  exit 9
+fi
+exit 0
+`, async () => {
+      await expect(commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      )).rejects.toThrow("setup exploded");
+
+      expect(environment.setupScriptsComplete).toBe(false);
+      expect(emitted).toContainEqual({
+        event: "environment-setup-complete",
+        payload: {
+          environment_id: environment.id,
+          success: false,
+          error: "setup exploded",
+        },
+      });
+    });
+  });
+
+  test("does not pass host gh auth token into newly created containers without configured token", async () => {
     const environment = createEnvironment({
       id: "env-container-create",
       environmentType: "containerized",
@@ -924,12 +988,12 @@ exit 0
         expect(setupCommands).toHaveLength(1);
         expect(setupCommands[0]).toContain("/usr/local/bin/workspace-setup.sh");
 
-        const ghCalls = await fs.readFile(ghLog, "utf8");
-        expect(ghCalls).toContain("auth token");
+        const ghCalls = await fs.readFile(ghLog, "utf8").catch(() => "");
+        expect(ghCalls).toBe("");
 
         const dockerCalls = await fs.readFile(logs.all, "utf8");
-        expect(dockerCalls).toContain("-e GITHUB_TOKEN=host-gh-token");
-        expect(dockerCalls).toContain("-e GH_TOKEN=host-gh-token");
+        expect(dockerCalls).not.toContain("GITHUB_TOKEN=host-gh-token");
+        expect(dockerCalls).not.toContain("GH_TOKEN=host-gh-token");
         expect(environment.containerId).toBe("container-created");
       });
     });

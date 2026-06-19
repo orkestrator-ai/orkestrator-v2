@@ -1171,19 +1171,6 @@ function githubTokenPropagationCommand(newToken: string | undefined): string {
   return token ? setGitHubTokenGitConfigCommand(token) : clearGitHubTokenGitConfigCommand();
 }
 
-async function resolveGithubToken(configuredToken: string | undefined): Promise<string | undefined> {
-  const token = configuredToken?.trim();
-  if (token) return token;
-
-  try {
-    const { stdout } = await runCommand("gh", ["auth", "token"], { timeoutMs: 10_000 });
-    const ghToken = stdout.trim();
-    return ghToken || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function redactSecret(message: string, secret: string | undefined): string {
   const trimmed = secret?.trim();
   if (!trimmed) return message;
@@ -1219,7 +1206,7 @@ async function createDockerContainer(environment: Environment, context: CommandC
     "TERM=xterm-256color",
   ];
 
-  const githubToken = await resolveGithubToken(config.global.githubToken);
+  const githubToken = config.global.githubToken?.trim();
   if (githubToken) {
     args.push("-e", `GITHUB_TOKEN=${githubToken}`, "-e", `GH_TOKEN=${githubToken}`);
   }

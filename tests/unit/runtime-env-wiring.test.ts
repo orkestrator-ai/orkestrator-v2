@@ -82,6 +82,17 @@ describe("container runtime environment wiring", () => {
     expect(setup).toContain("export GIT_TERMINAL_PROMPT=0");
   });
 
+  test("workspace setup exits early when a prior setup already completed", () => {
+    const setup = read("docker/workspace-setup.sh");
+    const completionGuard = setup.indexOf("if [ -f /tmp/.workspace-setup-complete ]; then");
+    const cloneBlock = setup.indexOf("if [ -n \"$GIT_URL\" ] && [ ! -d \"/workspace/.git\" ]; then");
+
+    expect(completionGuard).toBeGreaterThan(0);
+    expect(cloneBlock).toBeGreaterThan(completionGuard);
+    expect(setup).toContain("Workspace already set up.");
+    expect(setup).toContain("exit 0");
+  });
+
   test("container native launch paths source the captured runtime environment", () => {
     const files = [
       "src-tauri/src/commands/claude.rs",

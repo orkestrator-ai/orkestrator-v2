@@ -173,9 +173,12 @@ function isCodexBuildDebugEnabled() {
   }
 }
 
-function debugCodexBuild(event: string, details: Record<string, unknown>) {
+// Accepts a thunk so the (potentially expensive) details payload is only built
+// when debug logging is enabled — avoids running summarize* over message parts
+// on every render of every row when ORK_CODEX_DEBUG is unset.
+function debugCodexBuild(event: string, getDetails: () => Record<string, unknown>) {
   if (!isCodexBuildDebugEnabled()) return;
-  console.info(`[CodexBuildChatTab][debug] ${event}`, details);
+  console.info(`[CodexBuildChatTab][debug] ${event}`, getDetails());
 }
 
 function summarizeCodexMessage(message: CodexMessage | undefined) {
@@ -230,7 +233,7 @@ function LoggedNativeMessage({
     [previousMessage],
   );
 
-  debugCodexBuild("NativeMessage render", {
+  debugCodexBuild("NativeMessage render", () => ({
     sessionKey,
     sessionPhase,
     messageIndex,
@@ -238,24 +241,24 @@ function LoggedNativeMessage({
     raw: summarizeCodexMessage(message),
     normalized: summarizeNativeMessage(normalizedMessage),
     previous: summarizeCodexMessage(previousMessage ?? undefined),
-  });
+  }));
 
   useEffect(() => {
-    debugCodexBuild("NativeMessage committed", {
+    debugCodexBuild("NativeMessage committed", () => ({
       sessionKey,
       sessionPhase,
       messageIndex,
       messageId: message.id,
       normalized: summarizeNativeMessage(normalizedMessage),
-    });
+    }));
 
     return () => {
-      debugCodexBuild("NativeMessage unmounted", {
+      debugCodexBuild("NativeMessage unmounted", () => ({
         sessionKey,
         sessionPhase,
         messageIndex,
         messageId: message.id,
-      });
+      }));
     };
   }, [message.id, messageIndex, normalizedMessage, sessionKey, sessionPhase]);
 
@@ -344,7 +347,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
   useEffect(() => {
     if (!pipeline) return;
 
-    debugCodexBuild("message snapshot committed", {
+    debugCodexBuild("message snapshot committed", () => ({
       pipelineId,
       environmentId,
       phase: pipeline.phase,
@@ -359,7 +362,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         messageCount: sessionData.messages.length,
         lastMessage: summarizeCodexMessage(sessionData.messages[sessionData.messages.length - 1]),
       })),
-    });
+    }));
   }, [allSessionMessages, environmentId, pipeline, pipelineId]);
 
   const currentPipelineSession = pipeline?.sessions[pipeline.currentSessionIndex];
@@ -977,7 +980,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       const messages = await getSessionMessages(client, currentSdkSessionId);
       if (cancelled) return;
 
-      debugCodexBuild("poll result", {
+      debugCodexBuild("poll result", () => ({
         pipelineId,
         currentSessionKey,
         currentSdkSessionId,
@@ -986,21 +989,21 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         statusError: status?.error,
         incomingMessageCount: messages.length,
         incomingLastMessage: summarizeCodexMessage(messages[messages.length - 1]),
-      });
+      }));
 
       const storedSession = useCodexStore.getState().sessions.get(currentSessionKey);
 
       if (messages.length > 0) {
         const existingMessages = storedSession?.messages ?? [];
         if (!codexMessagesEqual(existingMessages, messages)) {
-          debugCodexBuild("set messages", {
+          debugCodexBuild("set messages", () => ({
             pipelineId,
             currentSessionKey,
             previousCount: existingMessages.length,
             nextCount: messages.length,
             previousLastMessage: summarizeCodexMessage(existingMessages[existingMessages.length - 1]),
             nextLastMessage: summarizeCodexMessage(messages[messages.length - 1]),
-          });
+          }));
           setMessages(currentSessionKey, messages);
         }
       }
@@ -1017,11 +1020,11 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
 
       if (status.status === "running") {
         if (latestSession?.isLoading !== true) {
-          debugCodexBuild("set loading true from poll", {
+          debugCodexBuild("set loading true from poll", () => ({
             pipelineId,
             currentSessionKey,
             currentSdkSessionId,
-          });
+          }));
           setSessionLoading(currentSessionKey, true);
         }
         return;
@@ -1047,12 +1050,12 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         setSessionError(currentSessionKey, undefined);
       }
       if (latestSession?.isLoading !== false) {
-        debugCodexBuild("set loading false from poll", {
+        debugCodexBuild("set loading false from poll", () => ({
           pipelineId,
           currentSessionKey,
           currentSdkSessionId,
           status: status.status,
-        });
+        }));
         setSessionLoading(currentSessionKey, false);
       }
     };

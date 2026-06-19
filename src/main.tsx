@@ -18,14 +18,6 @@ function logReactRootError(
     stack,
     componentStack,
   });
-
-  console.error(`[ReactRoot] ${label} message:\n${message}`);
-  if (stack) {
-    console.error(`[ReactRoot] ${label} stack:\n${stack}`);
-  }
-  if (componentStack) {
-    console.error(`[ReactRoot] ${label} component stack:\n${componentStack}`);
-  }
 }
 
 window.addEventListener("error", (event) => {

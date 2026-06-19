@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Environment, Project } from "../../../src/types";
 import * as realSortable from "@dnd-kit/sortable";
 import * as realEnvironmentItem from "@/components/environments/EnvironmentItem";
@@ -133,5 +133,80 @@ describe("sortable sidebar items", () => {
 
     fireEvent.click(projectButton);
     expect(onSelectProject).toHaveBeenCalled();
+  });
+
+  function renderProjectGroup(overrides: Partial<React.ComponentProps<typeof SortableProjectGroup>> = {}) {
+    return render(
+      <SortableProjectGroup
+        project={project}
+        environments={[environment]}
+        isCollapsed={false}
+        onToggleCollapse={() => {}}
+        selectedEnvironmentId="env-1"
+        onSelectProject={() => {}}
+        onSelectEnvironment={() => {}}
+        onDeleteProject={() => {}}
+        onOpenSettings={() => {}}
+        onDeleteEnvironment={() => {}}
+        onStartEnvironment={() => {}}
+        onStopEnvironment={() => {}}
+        onRestartEnvironment={() => {}}
+        onCreateEnvironment={() => {}}
+        {...overrides}
+      />,
+    );
+  }
+
+  test("SortableProjectGroup shows the git url and local path in a hover tooltip", async () => {
+    renderProjectGroup();
+
+    const projectButton = screen.getByRole("button", { name: /Project One/i });
+    fireEvent.mouseEnter(projectButton);
+
+    // HoverTooltip opens after a delay and portals its content into document.body.
+    await waitFor(() => {
+      expect(screen.getByText("https://github.com/acme/project-one.git")).toBeTruthy();
+    });
+    expect(screen.getByText("/workspace/project-one")).toBeTruthy();
+    expect(screen.getByText("Click to open board")).toBeTruthy();
+  });
+
+  test("SortableProjectGroup renders the collapse chevron rotated when expanded", () => {
+    const { container } = renderProjectGroup({ isCollapsed: false });
+
+    const chevron = container.querySelector("svg.lucide-chevron-right");
+    expect(chevron).not.toBeNull();
+    expect(chevron!.getAttribute("class")).toContain("rotate-90");
+  });
+
+  test("SortableProjectGroup chevron is not rotated when collapsed", () => {
+    const { container } = renderProjectGroup({ isCollapsed: true });
+
+    const chevron = container.querySelector("svg.lucide-chevron-right");
+    expect(chevron).not.toBeNull();
+    expect(chevron!.getAttribute("class")).not.toContain("rotate-90");
+  });
+
+  test("SortableProjectGroup toggles collapse when the chevron is clicked", () => {
+    const onToggleCollapse = mock(() => {});
+    const { container } = renderProjectGroup({ onToggleCollapse });
+
+    const chevronButton = container.querySelector("svg.lucide-chevron-right")?.closest("button");
+    expect(chevronButton).toBeTruthy();
+
+    fireEvent.click(chevronButton!);
+    expect(onToggleCollapse).toHaveBeenCalled();
+  });
+
+  test("SortableProjectGroup add action does not also trigger project selection", () => {
+    const onCreateEnvironment = mock(() => {});
+    const onSelectProject = mock(() => {});
+    renderProjectGroup({ onCreateEnvironment, onSelectProject });
+
+    fireEvent.click(screen.getByTitle("Create environment"));
+
+    expect(onCreateEnvironment).toHaveBeenCalledTimes(1);
+    // The add button stops propagation so it must not select the project too.
+    expect(onSelectProject).not.toHaveBeenCalled();
   });
 });

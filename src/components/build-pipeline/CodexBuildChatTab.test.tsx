@@ -640,6 +640,103 @@ describe("CodexBuildChatTab", () => {
     expect(mockSendPrompt).not.toHaveBeenCalled();
   });
 
+  test("fails the pipeline when the bridge reports the session errored during advance", async () => {
+    seedPipeline("building", "running");
+    seedCodexStore(false);
+    // The re-check before advancing reports an error rather than completion.
+    mockGetSessionStatus.mockImplementation(async () => ({ status: "error" as const, error: "boom" }));
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("failed");
+      expect(pipeline?.error).toBe("boom");
+    });
+
+    const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+    expect(session?.error).toBe("boom");
+    expect(session?.isLoading).toBe(false);
+    // The pipeline must not have advanced to a review session.
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+    expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions).toHaveLength(1);
+  });
+
+  test("uses a generic message when the errored session has no error text", async () => {
+    seedPipeline("building", "running");
+    seedCodexStore(false);
+    mockGetSessionStatus.mockImplementation(async () => ({ status: "error" as const }));
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("failed");
+      expect(pipeline?.error).toBe("Codex session failed");
+    });
+  });
+
+  test("does not re-check or advance a pipeline already in the failed phase", async () => {
+    // The advance effect guards on phase === "failed" so a terminal pipeline
+    // never re-checks status or restarts work when the tab re-mounts.
+    useBuildPipelineStore.setState({
+      pipelines: new Map([
+        [
+          PIPELINE_ID,
+          {
+            id: PIPELINE_ID,
+            taskId: TASK_ID,
+            projectId: "project-1",
+            environmentId: ENV_ID,
+            environmentType: "containerized",
+            agentType: "codex",
+            phase: "failed",
+            error: "previous failure",
+            sessions: [
+              {
+                phase: "build",
+                iteration: 0,
+                sessionKey: SESSION_KEY,
+                sdkSessionId: SESSION_ID,
+                status: "running",
+                startedAt: "2026-04-15T00:00:00.000Z",
+                label: "Build Session",
+              },
+            ],
+            currentSessionIndex: 0,
+            iteration: 0,
+            maxIterations: 3,
+            createdAt: "2026-04-15T00:00:00.000Z",
+            taskTitle: "Test task",
+            taskSnapshot: {
+              title: "Test task",
+              description: "desc",
+              acceptanceCriteria: "ac",
+              comments: [],
+              images: [],
+            },
+          },
+        ],
+      ]),
+      buildEnvironmentIds: new Set([ENV_ID]),
+    });
+    seedCodexStore(false);
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+
+    // Session is not loading, so polling never runs; the failed-phase guard
+    // keeps the advance/verify effects from re-checking status.
+    expect(mockGetSessionStatus).not.toHaveBeenCalled();
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+    expect(pipeline?.phase).toBe("failed");
+    expect(pipeline?.error).toBe("previous failure");
+  });
+
   test("does not start verification while the address-issues prompt is being accepted", async () => {
     seedReviewPipeline();
     seedCodexStore(false);
@@ -671,6 +768,83 @@ describe("CodexBuildChatTab", () => {
     await act(async () => {
       resolvePrompt?.(true);
     });
+  });
+
+  function seedAddressingPipeline() {
+    useBuildPipelineStore.setState({
+      pipelines: new Map([
+        [
+          PIPELINE_ID,
+          {
+            id: PIPELINE_ID,
+            taskId: TASK_ID,
+            projectId: "project-1",
+            environmentId: ENV_ID,
+            environmentType: "containerized",
+            agentType: "codex",
+            phase: "addressing",
+            sessions: [
+              {
+                phase: "review",
+                iteration: 0,
+                sessionKey: SESSION_KEY,
+                sdkSessionId: SESSION_ID,
+                status: "running",
+                startedAt: "2026-04-15T00:00:00.000Z",
+                label: "Review Session",
+              },
+            ],
+            currentSessionIndex: 0,
+            iteration: 0,
+            maxIterations: 3,
+            createdAt: "2026-04-15T00:00:00.000Z",
+            taskTitle: "Test task",
+            taskSnapshot: {
+              title: "Test task",
+              description: "desc",
+              acceptanceCriteria: "ac",
+              comments: [],
+              images: [],
+            },
+          },
+        ],
+      ]),
+      buildEnvironmentIds: new Set([ENV_ID]),
+    });
+  }
+
+  test("does not start verification while the bridge still reports the addressing session running", async () => {
+    seedAddressingPipeline();
+    seedCodexStore(false);
+    // The verify effect re-checks status before starting verification.
+    mockGetSessionStatus.mockImplementation(async () => ({ status: "running" as const }));
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+    });
+
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+    expect(pipeline?.phase).toBe("addressing");
+    // Still running, so no verification session is created.
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("fails the pipeline when the addressing session errors before verification", async () => {
+    seedAddressingPipeline();
+    seedCodexStore(false);
+    mockGetSessionStatus.mockImplementation(async () => ({ status: "error" as const, error: "addressing blew up" }));
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("failed");
+      expect(pipeline?.error).toBe("addressing blew up");
+    });
+
+    expect(mockCreateSession).not.toHaveBeenCalled();
   });
 
   test("starts verification after the address-issues prompt is accepted and the review session idles", async () => {

@@ -15,7 +15,6 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { Plus, FolderGit2, Square, Trash2, RotateCw } from "lucide-react";
 import { SortableProjectGroup } from "./SortableProjectGroup";
@@ -550,7 +549,7 @@ export function HierarchicalSidebar() {
       </div>
 
       {/* Projects List */}
-      <ScrollArea className="flex-1">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="py-2">
           {projectsLoading && projects.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
@@ -623,7 +622,7 @@ export function HierarchicalSidebar() {
             </DndContext>
           )}
         </div>
-      </ScrollArea>
+      </div>
 
       {/* Add Project Dialog */}
       <AddProjectDialog

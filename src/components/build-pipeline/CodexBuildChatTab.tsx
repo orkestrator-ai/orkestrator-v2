@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AlertCircle, ArrowDown, ArrowUp, Hammer, Loader2, PlayCircle, RefreshCw, StopCircle } from "lucide-react";
-import { useScrollLock } from "@/hooks";
+import { useVirtuosoScrollState } from "@/hooks";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { NativeMessage } from "@/components/chat/NativeMessage";
+import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useConfigStore, useCodexStore, useEnvironmentStore } from "@/stores";
@@ -133,6 +133,23 @@ function buildErrorMessage(content: string): CodexMessage {
   };
 }
 
+function codexMessagesEqual(a: CodexMessage[], b: CodexMessage[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+
+  return a.every((message, index) => {
+    const other = b[index];
+    if (!other) return false;
+
+    return (
+      message.id === other.id
+      && message.role === other.role
+      && message.content === other.content
+      && JSON.stringify(message.parts) === JSON.stringify(other.parts)
+    );
+  });
+}
+
 function appendCodexMessage(sessionKey: string, message: CodexMessage) {
   useCodexStore.setState((state) => {
     const session = state.sessions.get(sessionKey);
@@ -146,9 +163,131 @@ function appendCodexMessage(sessionKey: string, message: CodexMessage) {
   });
 }
 
+function isCodexBuildDebugEnabled() {
+  if (typeof window === "undefined") return false;
+
+  try {
+    return window.localStorage.getItem("ORK_CODEX_DEBUG") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function debugCodexBuild(event: string, details: Record<string, unknown>) {
+  if (!isCodexBuildDebugEnabled()) return;
+  console.info(`[CodexBuildChatTab][debug] ${event}`, details);
+}
+
+function summarizeCodexMessage(message: CodexMessage | undefined) {
+  if (!message) return null;
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+
+  return {
+    id: message.id,
+    role: message.role,
+    contentLength: message.content?.length ?? 0,
+    contentPreview: message.content?.slice(0, 160),
+    partCount: parts.length,
+    partTypes: parts.map((part) => part?.type ?? typeof part).slice(0, 12),
+  };
+}
+
+function summarizeNativeMessage(message: ReturnType<typeof normalizeCodexNativeMessage>) {
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+
+  return {
+    id: message.id,
+    role: message.role,
+    contentLength: message.content?.length ?? 0,
+    contentPreview: message.content?.slice(0, 160),
+    partCount: parts.length,
+    partTypes: parts.map((part) => part?.type ?? typeof part).slice(0, 12),
+  };
+}
+
+function LoggedNativeMessage({
+  message,
+  previousMessage,
+  sessionKey,
+  sessionPhase,
+  messageIndex,
+}: {
+  message: CodexMessage;
+  previousMessage: CodexMessage | null;
+  sessionKey: string;
+  sessionPhase: string;
+  messageIndex: number;
+}) {
+  const renderCountRef = useRef(0);
+  renderCountRef.current += 1;
+
+  const normalizedMessage = useMemo(
+    () => normalizeCodexNativeMessage(message),
+    [message],
+  );
+  const normalizedPreviousMessage = useMemo(
+    () => previousMessage ? normalizeCodexNativeMessage(previousMessage) : null,
+    [previousMessage],
+  );
+
+  debugCodexBuild("NativeMessage render", {
+    sessionKey,
+    sessionPhase,
+    messageIndex,
+    renderCount: renderCountRef.current,
+    raw: summarizeCodexMessage(message),
+    normalized: summarizeNativeMessage(normalizedMessage),
+    previous: summarizeCodexMessage(previousMessage ?? undefined),
+  });
+
+  useEffect(() => {
+    debugCodexBuild("NativeMessage committed", {
+      sessionKey,
+      sessionPhase,
+      messageIndex,
+      messageId: message.id,
+      normalized: summarizeNativeMessage(normalizedMessage),
+    });
+
+    return () => {
+      debugCodexBuild("NativeMessage unmounted", {
+        sessionKey,
+        sessionPhase,
+        messageIndex,
+        messageId: message.id,
+      });
+    };
+  }, [message.id, messageIndex, normalizedMessage, sessionKey, sessionPhase]);
+
+  return (
+    <NativeMessage
+      message={normalizedMessage}
+      previousMessage={normalizedPreviousMessage}
+      assistantLabel="Codex"
+    />
+  );
+}
+
+/**
+ * A single row in the virtualized build transcript. Sessions are flattened into
+ * a divider row followed by their message rows (and an optional loading row) so
+ * the whole pipeline renders through one Virtuoso list, matching the native tab.
+ */
+type BuildRow =
+  | { kind: "divider"; key: string; session: PipelineSession; sessionIndex: number }
+  | {
+      kind: "message";
+      key: string;
+      message: CodexMessage;
+      previousMessage: CodexMessage | null;
+      sessionKey: string;
+      sessionPhase: string;
+      messageIndex: number;
+    }
+  | { kind: "loading"; key: string };
+
 export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
   const { environmentId, pipelineId, isLocal } = data;
-  const scrollRef = useRef<HTMLDivElement>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const isInitializedRef = useRef(false);
@@ -202,12 +341,109 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     });
   }, [pipeline, sessionsMap]);
 
-  const { isAtBottom, scrollToBottom } = useScrollLock(scrollRef, {
-    scrollTrigger: allSessionMessages,
-    mountTrigger: connectionState,
+  useEffect(() => {
+    if (!pipeline) return;
+
+    debugCodexBuild("message snapshot committed", {
+      pipelineId,
+      environmentId,
+      phase: pipeline.phase,
+      currentSessionIndex: pipeline.currentSessionIndex,
+      sessions: allSessionMessages.map((sessionData, index) => ({
+        index,
+        sessionKey: sessionData.pipelineSession.sessionKey,
+        sdkSessionId: sessionData.pipelineSession.sdkSessionId,
+        phase: sessionData.pipelineSession.phase,
+        status: sessionData.pipelineSession.status,
+        isLoading: sessionData.isLoading,
+        messageCount: sessionData.messages.length,
+        lastMessage: summarizeCodexMessage(sessionData.messages[sessionData.messages.length - 1]),
+      })),
+    });
+  }, [allSessionMessages, environmentId, pipeline, pipelineId]);
+
+  const currentPipelineSession = pipeline?.sessions[pipeline.currentSessionIndex];
+  const currentSessionKey = currentPipelineSession?.sessionKey;
+  const currentSdkSessionId = currentPipelineSession?.sdkSessionId;
+  const currentSessionIsLoading = useCodexStore((state) =>
+    currentSessionKey ? state.sessions.get(currentSessionKey)?.isLoading : undefined
+  );
+
+  const { isAtBottom, scrollToBottom, virtuosoRef, scrollProps } = useVirtuosoScrollState({
     isActive,
     persistKey: `build-${pipelineId}`,
+    environmentId,
   });
+
+  // Flatten sessions into a single ordered list of rows (divider → messages →
+  // optional loading) so the entire pipeline transcript renders through one
+  // Virtuoso list, exactly like the native Codex tab. previousMessage is
+  // precomputed per session so continuation/lead-in spacing never bridges a
+  // divider into the prior session.
+  const messageRows = useMemo<BuildRow[]>(() => {
+    const rows: BuildRow[] = [];
+    allSessionMessages.forEach((sessionData, sessionIndex) => {
+      const { pipelineSession } = sessionData;
+      rows.push({
+        kind: "divider",
+        key: `divider-${pipelineSession.sessionKey}`,
+        session: pipelineSession,
+        sessionIndex,
+      });
+
+      const phase = pipelineSession.phase;
+      const filtered = sessionData.messages.filter((message, index) => {
+        if ((phase === "review" || phase === "pr") && index === 0 && message.role === "user") {
+          return false;
+        }
+        return true;
+      });
+
+      filtered.forEach((message, index) => {
+        rows.push({
+          kind: "message",
+          key: `${pipelineSession.sessionKey}-${message.id}`,
+          message,
+          previousMessage: index > 0 ? filtered[index - 1]! : null,
+          sessionKey: pipelineSession.sessionKey,
+          sessionPhase: pipelineSession.phase,
+          messageIndex: index,
+        });
+      });
+
+      if (sessionData.isLoading) {
+        rows.push({ kind: "loading", key: `loading-${pipelineSession.sessionKey}` });
+      }
+    });
+    return rows;
+  }, [allSessionMessages]);
+
+  const renderBuildRow = useCallback((row: BuildRow): ReactNode => {
+    if (row.kind === "divider") {
+      return <SessionDivider session={row.session} index={row.sessionIndex} />;
+    }
+    if (row.kind === "loading") {
+      return (
+        <div className="px-2 @sm:px-4 py-3">
+          <div className="mx-auto max-w-3xl min-w-0">
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span className="text-xs">Codex is working...</span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <LoggedNativeMessage
+        message={row.message}
+        previousMessage={row.previousMessage}
+        sessionKey={row.sessionKey}
+        sessionPhase={row.sessionPhase}
+        messageIndex={row.messageIndex}
+      />
+    );
+  }, []);
 
   const resolveCodexPreferences = useCallback(
     (projectId: string): { model: string; effort: CodexReasoningEffort } => {
@@ -727,56 +963,98 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
   );
 
   useEffect(() => {
-    if (!client || connectionState !== "connected" || !pipeline) return;
+    if (!client || connectionState !== "connected") return;
+    if (!currentSessionKey || !currentSdkSessionId || !currentSessionIsLoading) return;
+    if (pollingSessionIdRef.current === currentSdkSessionId) return;
 
-    const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
-    if (!currentSession) return;
-
-    const sessionState = sessionsMap.get(currentSession.sessionKey);
-    if (!sessionState?.isLoading) return;
-    if (pollingSessionIdRef.current === currentSession.sdkSessionId) return;
-
-    pollingSessionIdRef.current = currentSession.sdkSessionId;
+    pollingSessionIdRef.current = currentSdkSessionId;
     let cancelled = false;
 
     const poll = async () => {
       if (cancelled) return;
 
-      const status = await getSessionStatus(client, currentSession.sdkSessionId);
-      const messages = await getSessionMessages(client, currentSession.sdkSessionId);
+      const status = await getSessionStatus(client, currentSdkSessionId);
+      const messages = await getSessionMessages(client, currentSdkSessionId);
       if (cancelled) return;
 
+      debugCodexBuild("poll result", {
+        pipelineId,
+        currentSessionKey,
+        currentSdkSessionId,
+        status: status?.status,
+        statusTitle: status?.title,
+        statusError: status?.error,
+        incomingMessageCount: messages.length,
+        incomingLastMessage: summarizeCodexMessage(messages[messages.length - 1]),
+      });
+
+      const storedSession = useCodexStore.getState().sessions.get(currentSessionKey);
+
       if (messages.length > 0) {
-        setMessages(currentSession.sessionKey, messages);
+        const existingMessages = storedSession?.messages ?? [];
+        if (!codexMessagesEqual(existingMessages, messages)) {
+          debugCodexBuild("set messages", {
+            pipelineId,
+            currentSessionKey,
+            previousCount: existingMessages.length,
+            nextCount: messages.length,
+            previousLastMessage: summarizeCodexMessage(existingMessages[existingMessages.length - 1]),
+            nextLastMessage: summarizeCodexMessage(messages[messages.length - 1]),
+          });
+          setMessages(currentSessionKey, messages);
+        }
       }
 
       if (!status) {
         return;
       }
 
-      if (status.title) {
-        setSessionTitle(currentSession.sessionKey, status.title);
+      const latestSession = useCodexStore.getState().sessions.get(currentSessionKey);
+
+      if (status.title && latestSession?.title !== status.title) {
+        setSessionTitle(currentSessionKey, status.title);
       }
 
       if (status.status === "running") {
-        setSessionLoading(currentSession.sessionKey, true);
+        if (latestSession?.isLoading !== true) {
+          debugCodexBuild("set loading true from poll", {
+            pipelineId,
+            currentSessionKey,
+            currentSdkSessionId,
+          });
+          setSessionLoading(currentSessionKey, true);
+        }
         return;
       }
 
-      if (pendingPromptDispatchesRef.current.has(currentSession.sdkSessionId)) {
+      if (pendingPromptDispatchesRef.current.has(currentSdkSessionId)) {
         return;
       }
 
       if (status.status === "error") {
         const message = status.error?.trim() || "Codex session failed";
-        appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
-        setSessionError(currentSession.sessionKey, message);
-        setSessionLoading(currentSession.sessionKey, false);
+        if (latestSession?.error !== message) {
+          appendCodexMessage(currentSessionKey, buildErrorMessage(message));
+          setSessionError(currentSessionKey, message);
+        }
+        if (latestSession?.isLoading !== false) {
+          setSessionLoading(currentSessionKey, false);
+        }
         return;
       }
 
-      setSessionError(currentSession.sessionKey, undefined);
-      setSessionLoading(currentSession.sessionKey, false);
+      if (latestSession?.error !== undefined) {
+        setSessionError(currentSessionKey, undefined);
+      }
+      if (latestSession?.isLoading !== false) {
+        debugCodexBuild("set loading false from poll", {
+          pipelineId,
+          currentSessionKey,
+          currentSdkSessionId,
+          status: status.status,
+        });
+        setSessionLoading(currentSessionKey, false);
+      }
     };
 
     void poll();
@@ -789,12 +1067,23 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       pollingSessionIdRef.current = null;
       window.clearInterval(intervalId);
     };
-  }, [client, connectionState, pipeline, sessionsMap, setMessages, setSessionError, setSessionLoading, setSessionTitle]);
+  }, [
+    client,
+    connectionState,
+    currentSdkSessionId,
+    currentSessionIsLoading,
+    currentSessionKey,
+    setMessages,
+    setSessionError,
+    setSessionLoading,
+    setSessionTitle,
+  ]);
 
   useEffect(() => {
     if (!pipeline || !client || connectionState !== "connected" || pipelineAdvancingRef.current) return;
     if (pipeline.phase === "addressing") return;
     if (pipeline.phase === "paused") return;
+    if (pipeline.phase === "failed") return;
 
     const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
     if (!currentSession) return;
@@ -809,14 +1098,43 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     }
 
     if (currentSession.status === "running") {
-      markSessionIdle(pipelineId, currentSession.sdkSessionId);
       pipelineAdvancingRef.current = true;
-      advancePipeline(pipeline, currentSession).finally(() => {
+      void (async () => {
+        const status = await getSessionStatus(client, currentSession.sdkSessionId);
+        if (status?.status === "running") {
+          setSessionLoading(currentSession.sessionKey, true);
+          return;
+        }
+
+        if (status?.status === "error") {
+          const message = status.error?.trim() || "Codex session failed";
+          appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
+          setSessionError(currentSession.sessionKey, message);
+          setSessionLoading(currentSession.sessionKey, false);
+          setPipelineError(pipelineId, message);
+          return;
+        }
+
+        markSessionIdle(pipelineId, currentSession.sdkSessionId);
+        await advancePipeline(pipeline, currentSession);
+      })().finally(() => {
         pipelineAdvancingRef.current = false;
         setAdvanceTick((value) => value + 1);
       });
     }
-  }, [advancePipeline, advanceTick, client, connectionState, markSessionIdle, pipeline, pipelineId, sessionsMap, setPipelineError]);
+  }, [
+    advancePipeline,
+    advanceTick,
+    client,
+    connectionState,
+    markSessionIdle,
+    pipeline,
+    pipelineId,
+    sessionsMap,
+    setPipelineError,
+    setSessionError,
+    setSessionLoading,
+  ]);
 
   useEffect(() => {
     if (!pipeline || pipeline.phase !== "paused") return;
@@ -847,14 +1165,43 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     }
 
     if (currentSession.status === "running") {
-      markSessionIdle(pipelineId, currentSession.sdkSessionId);
       pipelineAdvancingRef.current = true;
-      startVerifySession(pipeline).finally(() => {
+      void (async () => {
+        const status = await getSessionStatus(client, currentSession.sdkSessionId);
+        if (status?.status === "running") {
+          setSessionLoading(currentSession.sessionKey, true);
+          return;
+        }
+
+        if (status?.status === "error") {
+          const message = status.error?.trim() || "Codex session failed";
+          appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
+          setSessionError(currentSession.sessionKey, message);
+          setSessionLoading(currentSession.sessionKey, false);
+          setPipelineError(pipelineId, message);
+          return;
+        }
+
+        markSessionIdle(pipelineId, currentSession.sdkSessionId);
+        await startVerifySession(pipeline);
+      })().finally(() => {
         pipelineAdvancingRef.current = false;
         setAdvanceTick((value) => value + 1);
       });
     }
-  }, [advanceTick, client, connectionState, markSessionIdle, pipeline, pipelineId, sessionsMap, setPipelineError, startVerifySession]);
+  }, [
+    advanceTick,
+    client,
+    connectionState,
+    markSessionIdle,
+    pipeline,
+    pipelineId,
+    sessionsMap,
+    setPipelineError,
+    setSessionError,
+    setSessionLoading,
+    startVerifySession,
+  ]);
 
   useEffect(() => {
     if (connectionState !== "connected" || !client || !pipeline) return;
@@ -1089,60 +1436,27 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         </div>
       )}
 
-      <ScrollArea ref={scrollRef} className="min-h-0 flex-1">
-        <div className="min-w-[320px] py-4">
-          {allSessionMessages.length === 0 ? (
-            <div className="flex min-h-[200px] flex-col items-center justify-center gap-3 text-muted-foreground">
-              <Loader2 className="h-6 w-6 animate-spin" />
-              <p className="text-sm">Initializing build pipeline...</p>
-            </div>
-          ) : (
-            allSessionMessages.map((sessionData, sessionIndex) => (
-              <div key={sessionData.pipelineSession.sessionKey}>
-                <SessionDivider session={sessionData.pipelineSession} index={sessionIndex} />
-                <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-2 py-5 @sm:px-4">
-                  {sessionData.messages
-                    .filter((message, index) => {
-                      const phase = sessionData.pipelineSession.phase;
-                      if ((phase === "review" || phase === "pr") && index === 0 && message.role === "user") {
-                        return false;
-                      }
-                      return true;
-                    })
-                    .map((message, index, filteredMessages) => (
-                      <NativeMessage
-                        key={message.id}
-                        message={normalizeCodexNativeMessage(message)}
-                        previousMessage={
-                          index > 0
-                            ? normalizeCodexNativeMessage(filteredMessages[index - 1]!)
-                            : null
-                        }
-                        assistantLabel="Codex"
-                      />
-                    ))}
-                  {sessionData.isLoading && (
-                    <div className="px-2 py-3 @sm:px-4">
-                      <div className="mx-auto max-w-3xl min-w-0">
-                        <div className="flex items-center gap-2 text-muted-foreground">
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          <span className="text-xs">Codex is working...</span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </ScrollArea>
+      <VirtualizedMessageList
+        messages={messageRows}
+        computeItemKey={(_index, row) => row.key}
+        renderMessage={(_index, row) => renderBuildRow(row)}
+        emptyState={
+          <div className="flex min-h-[200px] flex-col items-center justify-center gap-3 text-muted-foreground">
+            <Loader2 className="h-6 w-6 animate-spin" />
+            <p className="text-sm">Initializing build pipeline...</p>
+          </div>
+        }
+        footer={<div className="h-32" aria-hidden="true" />}
+        scrollProps={scrollProps}
+        virtuosoRef={virtuosoRef}
+      />
 
       {!isAtBottom && (
         <div className="flex justify-end px-4 py-1">
           <button
             onClick={scrollToBottom}
             className="flex items-center gap-1.5 rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
+            aria-label="Scroll to bottom of conversation"
           >
             <ArrowDown className="h-3.5 w-3.5" />
             <span>Scroll down</span>

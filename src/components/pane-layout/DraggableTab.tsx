@@ -1,12 +1,9 @@
+import { useCallback, useRef } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { FileCode, Terminal as TerminalIcon, X, Hammer } from "lucide-react";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -85,6 +82,8 @@ export function DraggableTab({
   } = useSortable({
     id: createDraggableTabId(tab.id, paneId),
   });
+  const fileTooltipAnchorRef = useRef<HTMLDivElement | null>(null);
+  const fileTooltip = useHoverTooltip();
 
   // Get session for this tab to check for custom name
   const sessions = useSessionStore((state) => state.sessions);
@@ -185,54 +184,68 @@ export function DraggableTab({
   const title = getTabTitle();
   const icon = getTabIcon();
   const titleElement = <span className="max-w-[120px] truncate">{title}</span>;
+  const isFileTab = tab.type === "file" && !!tab.fileData;
+  const setTabRefs = useCallback((node: HTMLDivElement | null) => {
+    setNodeRef(node);
+    fileTooltipAnchorRef.current = node;
+  }, [setNodeRef]);
+  const tabTrigger = (
+    <div
+      ref={setTabRefs}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className={cn(
+        "group relative flex items-center gap-1.5 px-3 text-xs cursor-grab active:cursor-grabbing select-none self-stretch",
+        isActive
+          ? "bg-background text-foreground"
+          : "bg-zinc-800/85 text-muted-foreground hover:bg-zinc-800 hover:text-foreground",
+        isDragging && "opacity-50 z-50",
+      )}
+      onClick={onSelect}
+      onMouseEnter={isFileTab ? fileTooltip.show : undefined}
+      onMouseLeave={isFileTab ? fileTooltip.hide : undefined}
+      onFocus={isFileTab ? fileTooltip.show : undefined}
+      onBlur={isFileTab ? fileTooltip.hide : undefined}
+    >
+      {/* Blue focus indicator line at top */}
+      {isFocused && (
+        <div className="absolute top-0 left-0 right-0 h-0.5 bg-primary" />
+      )}
+      {icon}
+      {titleElement}
+      {isDirty && (
+        <span
+          className="h-2 w-2 rounded-full bg-muted-foreground"
+          title="Unsaved changes"
+        />
+      )}
+      {canClose && (
+        <button
+          className="ml-1 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity"
+          onClick={handleClose}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <X className="h-3 w-3" />
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div
-          ref={setNodeRef}
-          style={style}
-          {...attributes}
-          {...listeners}
-          className={cn(
-            "group relative flex items-center gap-1.5 px-3 text-xs cursor-grab active:cursor-grabbing select-none self-stretch",
-            isActive
-              ? "bg-background text-foreground"
-              : "bg-zinc-800/85 text-muted-foreground hover:bg-zinc-800 hover:text-foreground",
-            isDragging && "opacity-50 z-50",
-          )}
-          onClick={onSelect}
+      <ContextMenuTrigger className="contents">{tabTrigger}</ContextMenuTrigger>
+      {isFileTab && (
+        <HoverTooltipContent
+          anchorRef={fileTooltipAnchorRef}
+          open={fileTooltip.open}
+          side="bottom"
+          onMouseEnter={fileTooltip.show}
+          onMouseLeave={fileTooltip.hide}
         >
-          {/* Blue focus indicator line at top */}
-          {isFocused && (
-            <div className="absolute top-0 left-0 right-0 h-0.5 bg-primary" />
-          )}
-          {icon}
-          {tab.type === "file" && tab.fileData ? (
-            <Tooltip>
-              <TooltipTrigger asChild>{titleElement}</TooltipTrigger>
-              <TooltipContent side="bottom">{tab.fileData.filePath}</TooltipContent>
-            </Tooltip>
-          ) : (
-            titleElement
-          )}
-          {isDirty && (
-            <span
-              className="h-2 w-2 rounded-full bg-muted-foreground"
-              title="Unsaved changes"
-            />
-          )}
-          {canClose && (
-            <button
-              className="ml-1 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity"
-              onClick={handleClose}
-              onMouseDown={(e) => e.stopPropagation()}
-            >
-              <X className="h-3 w-3" />
-            </button>
-          )}
-        </div>
-      </ContextMenuTrigger>
+          {tab.fileData?.filePath}
+        </HoverTooltipContent>
+      )}
 
       <ContextMenuContent>
         <ContextMenuItem onClick={onClose} disabled={!canClose || !onClose}>

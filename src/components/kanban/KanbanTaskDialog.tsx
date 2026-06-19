@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -579,6 +580,9 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
       <Dialog open={!!previewImage} onOpenChange={(open) => { if (!open) setPreviewImage(null); }}>
         <DialogContent className="max-w-[90vw] max-h-[90vh] p-2 flex flex-col items-center justify-center">
           <DialogTitle className="sr-only">{previewImage.filename}</DialogTitle>
+          <DialogDescription className="sr-only">
+            Full-size preview of the attached task image.
+          </DialogDescription>
           <div className="text-xs text-muted-foreground mb-1">{previewImage.filename}</div>
           <img
             src={previewImage.url}
@@ -601,6 +605,9 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
             onInteractOutside={(e) => e.preventDefault()}
           >
             <DialogHeader>
+              <DialogDescription className="sr-only">
+                Create a Kanban task with optional acceptance criteria and images.
+              </DialogDescription>
               <div className="flex items-center gap-2">
                 <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">
                   Backlog
@@ -702,6 +709,9 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
           onInteractOutside={(e) => e.preventDefault()}
         >
           <DialogHeader>
+            <DialogDescription className="sr-only">
+              View and edit task details, build actions, images, and comments.
+            </DialogDescription>
             <div className="flex items-center justify-between pr-6">
               <div className="flex items-center gap-2">
                 <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">

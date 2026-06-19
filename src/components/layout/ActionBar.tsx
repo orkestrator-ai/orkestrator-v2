@@ -1,10 +1,16 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { Button } from "@/components/ui/button";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+  cloneElement,
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  type FocusEvent as ReactFocusEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactElement,
+  type ReactNode,
+} from "react";
+import { Button } from "@/components/ui/button";
+import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -52,6 +58,94 @@ function isEditableShortcutTarget(target: EventTarget | null): boolean {
   }
 
   return !!target.closest("input, textarea, select, [contenteditable='true'], .xterm");
+}
+
+function ToolbarContextMenuTrigger({
+  children,
+  tooltip,
+}: {
+  children: ReactElement;
+  tooltip: ReactNode;
+}) {
+  type TriggerProps = Record<string, unknown> & {
+    onBlur?: (event: ReactFocusEvent<HTMLElement>) => void;
+    onFocus?: (event: ReactFocusEvent<HTMLElement>) => void;
+    onMouseEnter?: (event: ReactMouseEvent<HTMLElement>) => void;
+    onMouseLeave?: (event: ReactMouseEvent<HTMLElement>) => void;
+  };
+
+  const tooltipAnchorRef = useRef<HTMLElement | null>(null);
+  const tooltipState = useHoverTooltip();
+  const child = children as ReactElement<TriggerProps>;
+  const trigger = cloneElement(child, {
+    "data-toolbar-custom-context-menu": "true",
+    ref: tooltipAnchorRef,
+    onBlur: (event: ReactFocusEvent<HTMLElement>) => {
+      child.props.onBlur?.(event);
+      tooltipState.hide();
+    },
+    onFocus: (event: ReactFocusEvent<HTMLElement>) => {
+      child.props.onFocus?.(event);
+      tooltipState.show();
+    },
+    onMouseEnter: (event: ReactMouseEvent<HTMLElement>) => {
+      child.props.onMouseEnter?.(event);
+      tooltipState.show();
+    },
+    onMouseLeave: (event: ReactMouseEvent<HTMLElement>) => {
+      child.props.onMouseLeave?.(event);
+      tooltipState.hide();
+    },
+  } as Partial<TriggerProps> & {
+    "data-toolbar-custom-context-menu": string;
+    ref: typeof tooltipAnchorRef;
+  });
+
+  return (
+    <>
+      <ContextMenuTrigger className="contents">{trigger}</ContextMenuTrigger>
+      <HoverTooltipContent
+        anchorRef={tooltipAnchorRef}
+        open={tooltipState.open}
+        onMouseEnter={tooltipState.show}
+        onMouseLeave={tooltipState.hide}
+      >
+        {tooltip}
+      </HoverTooltipContent>
+    </>
+  );
+}
+
+function ToolbarTooltipTrigger({
+  children,
+  tooltip,
+}: {
+  children: ReactElement;
+  tooltip: ReactNode;
+}) {
+  const tooltipAnchorRef = useRef<HTMLSpanElement | null>(null);
+  const tooltipState = useHoverTooltip();
+
+  return (
+    <span
+      ref={tooltipAnchorRef}
+      className="inline-flex"
+      onBlur={tooltipState.hide}
+      onFocus={tooltipState.show}
+      onMouseEnter={tooltipState.show}
+      onMouseLeave={tooltipState.hide}
+    >
+      {children}
+      <HoverTooltipContent
+        anchorRef={tooltipAnchorRef}
+        open={tooltipState.open}
+        onMouseEnter={tooltipState.show}
+        onMouseLeave={tooltipState.hide}
+      >
+        {tooltip}
+      </HoverTooltipContent>
+    </span>
+  );
 }
 
 export function ActionBar() {
@@ -598,8 +692,7 @@ export function ActionBar() {
         >
           {/* Left side: Controls */}
           <div className="flex shrink-0 items-center gap-2">
-          <Tooltip>
-            <TooltipTrigger asChild>
+          <ToolbarTooltipTrigger tooltip="Global settings">
               <Button
                 variant="ghost"
                 size="icon"
@@ -608,12 +701,9 @@ export function ActionBar() {
               >
                 <SlidersHorizontal className="h-4 w-4" />
               </Button>
-            </TooltipTrigger>
-            <TooltipContent>Global settings</TooltipContent>
-          </Tooltip>
+          </ToolbarTooltipTrigger>
 
-          <Tooltip>
-            <TooltipTrigger asChild>
+          <ToolbarTooltipTrigger tooltip="Docker configuration">
               <Button
                 variant="ghost"
                 size="icon"
@@ -622,13 +712,10 @@ export function ActionBar() {
               >
                 <DockerIcon className="h-4 w-4" />
               </Button>
-            </TooltipTrigger>
-            <TooltipContent>Docker configuration</TooltipContent>
-          </Tooltip>
+          </ToolbarTooltipTrigger>
 
           {repoName && (
-            <Tooltip>
-              <TooltipTrigger asChild>
+            <ToolbarTooltipTrigger tooltip="Repository settings">
                 <Button
                   variant="ghost"
                   size="icon"
@@ -637,14 +724,11 @@ export function ActionBar() {
                 >
                   <FolderGit2 className="h-4 w-4" />
                 </Button>
-              </TooltipTrigger>
-              <TooltipContent>Repository settings</TooltipContent>
-            </Tooltip>
+            </ToolbarTooltipTrigger>
           )}
 
           {selectedEnvironment && (
-            <Tooltip>
-              <TooltipTrigger asChild>
+            <ToolbarTooltipTrigger tooltip="Environment settings">
                 <Button
                   variant="ghost"
                   size="icon"
@@ -653,17 +737,21 @@ export function ActionBar() {
                 >
                   <Container className="h-4 w-4" />
                 </Button>
-              </TooltipTrigger>
-              <TooltipContent>Environment settings</TooltipContent>
-            </Tooltip>
+            </ToolbarTooltipTrigger>
           )}
 
           {/* Terminal tab buttons */}
           {selectedEnvironment && (
             <>
               <div className="mx-2 h-4 w-px bg-border" />
-              <Tooltip>
-                <TooltipTrigger asChild>
+              <ToolbarTooltipTrigger
+                tooltip={
+                  <>
+                    <p>New Terminal Tab</p>
+                    <p className="text-xs text-muted-foreground">⌘T</p>
+                  </>
+                }
+              >
                   <Button
                     variant="ghost"
                     size="icon"
@@ -673,15 +761,16 @@ export function ActionBar() {
                   >
                     <Plus className="h-4 w-4" />
                   </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>New Terminal Tab</p>
-                  <p className="text-xs text-muted-foreground">⌘T</p>
-                </TooltipContent>
-              </Tooltip>
+              </ToolbarTooltipTrigger>
 
-              <Tooltip>
-                <TooltipTrigger asChild>
+              <ToolbarTooltipTrigger
+                tooltip={
+                  <>
+                    <p>New Root Terminal</p>
+                    <p className="text-xs text-red-500">Full root privileges inside container</p>
+                  </>
+                }
+              >
                   <Button
                     variant="ghost"
                     size="icon"
@@ -691,35 +780,27 @@ export function ActionBar() {
                   >
                     <Shield className="h-4 w-4" />
                   </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>New Root Terminal</p>
-                  <p className="text-xs text-red-500">Full root privileges inside container</p>
-                </TooltipContent>
-              </Tooltip>
+              </ToolbarTooltipTrigger>
 
               <ContextMenu>
-                <Tooltip>
-                  <ContextMenuTrigger asChild>
-                    <TooltipTrigger asChild>
-                      <span className="inline-flex" data-toolbar-custom-context-menu="true">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => handleCreateAgentTab("claude")}
-                          disabled={!canCreateTab}
-                        >
-                          <ClaudeIcon className="h-4 w-4" />
-                        </Button>
-                      </span>
-                    </TooltipTrigger>
-                  </ContextMenuTrigger>
-                  <TooltipContent>
-                    <p>New Tab with Claude</p>
-                    <p className="text-xs text-muted-foreground">⌘N · Right-click for mode</p>
-                  </TooltipContent>
-                </Tooltip>
+                <ToolbarContextMenuTrigger
+                  tooltip={
+                    <>
+                      <p>New Tab with Claude</p>
+                      <p className="text-xs text-muted-foreground">⌘N · Right-click for mode</p>
+                    </>
+                  }
+                >
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => handleCreateAgentTab("claude")}
+                    disabled={!canCreateTab}
+                  >
+                    <ClaudeIcon className="h-4 w-4" />
+                  </Button>
+                </ToolbarContextMenuTrigger>
                 <ContextMenuContent>
                   <ContextMenuItem onClick={() => handleCreateAgentTab("claude", "cli")} disabled={!canCreateTab}>
                     <ClaudeIcon className="mr-2 h-4 w-4" />
@@ -737,27 +818,24 @@ export function ActionBar() {
               </ContextMenu>
 
               <ContextMenu>
-                <Tooltip>
-                  <ContextMenuTrigger asChild>
-                    <TooltipTrigger asChild>
-                      <span className="inline-flex" data-toolbar-custom-context-menu="true">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => handleCreateAgentTab("opencode")}
-                          disabled={!canCreateTab}
-                        >
-                          <OpenCodeIcon className="h-4 w-4" />
-                        </Button>
-                      </span>
-                    </TooltipTrigger>
-                  </ContextMenuTrigger>
-                  <TooltipContent>
-                    <p>New Tab with OpenCode</p>
-                    <p className="text-xs text-muted-foreground">⌘M · Right-click for mode</p>
-                  </TooltipContent>
-                </Tooltip>
+                <ToolbarContextMenuTrigger
+                  tooltip={
+                    <>
+                      <p>New Tab with OpenCode</p>
+                      <p className="text-xs text-muted-foreground">⌘M · Right-click for mode</p>
+                    </>
+                  }
+                >
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => handleCreateAgentTab("opencode")}
+                    disabled={!canCreateTab}
+                  >
+                    <OpenCodeIcon className="h-4 w-4" />
+                  </Button>
+                </ToolbarContextMenuTrigger>
                 <ContextMenuContent>
                   <ContextMenuItem onClick={() => handleCreateAgentTab("opencode", "cli")} disabled={!canCreateTab}>
                     <OpenCodeIcon className="mr-2 h-4 w-4" />
@@ -771,27 +849,24 @@ export function ActionBar() {
               </ContextMenu>
 
               <ContextMenu>
-                <Tooltip>
-                  <ContextMenuTrigger asChild>
-                    <TooltipTrigger asChild>
-                      <span className="inline-flex" data-toolbar-custom-context-menu="true">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => handleCreateAgentTab("codex")}
-                          disabled={!canCreateTab}
-                        >
-                          <CodexIcon className="h-4 w-4" />
-                        </Button>
-                      </span>
-                    </TooltipTrigger>
-                  </ContextMenuTrigger>
-                  <TooltipContent>
-                    <p>New Tab with Codex</p>
-                    <p className="text-xs text-muted-foreground">Right-click for mode</p>
-                  </TooltipContent>
-                </Tooltip>
+                <ToolbarContextMenuTrigger
+                  tooltip={
+                    <>
+                      <p>New Tab with Codex</p>
+                      <p className="text-xs text-muted-foreground">Right-click for mode</p>
+                    </>
+                  }
+                >
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => handleCreateAgentTab("codex")}
+                    disabled={!canCreateTab}
+                  >
+                    <CodexIcon className="h-4 w-4" />
+                  </Button>
+                </ToolbarContextMenuTrigger>
                 <ContextMenuContent>
                   <ContextMenuItem onClick={() => handleCreateAgentTab("codex", "cli")} disabled={!canCreateTab}>
                     <CodexIcon className="mr-2 h-4 w-4" />
@@ -805,28 +880,25 @@ export function ActionBar() {
               </ContextMenu>
 
               <ContextMenu>
-                <Tooltip>
-                  <ContextMenuTrigger asChild>
-                    <TooltipTrigger asChild>
-                      <span className="inline-flex" data-toolbar-custom-context-menu="true">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => handleReview()}
-                          disabled={!canCreateTab}
-                        >
-                          <Eye className="h-4 w-4" />
-                        </Button>
-                      </span>
-                    </TooltipTrigger>
-                  </ContextMenuTrigger>
-                  <TooltipContent>
-                    <p>Code Review</p>
-                    <p className="text-xs text-muted-foreground">Commit changes and review code</p>
-                    <p className="text-xs text-muted-foreground">⌘R · Right-click for agent</p>
-                  </TooltipContent>
-                </Tooltip>
+                <ToolbarContextMenuTrigger
+                  tooltip={
+                    <>
+                      <p>Code Review</p>
+                      <p className="text-xs text-muted-foreground">Commit changes and review code</p>
+                      <p className="text-xs text-muted-foreground">⌘R · Right-click for agent</p>
+                    </>
+                  }
+                >
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => handleReview()}
+                    disabled={!canCreateTab}
+                  >
+                    <Eye className="h-4 w-4" />
+                  </Button>
+                </ToolbarContextMenuTrigger>
                 <ContextMenuContent>
                   <ContextMenuItem onClick={() => handleReview("claude")}>
                     <ClaudeIcon className="mr-2 h-4 w-4" />
@@ -845,38 +917,35 @@ export function ActionBar() {
 
               {/* Play Button - Run Commands */}
               <ContextMenu>
-                <Tooltip>
-                  <ContextMenuTrigger asChild>
-                    <TooltipTrigger asChild>
-                      <span className="inline-flex" data-toolbar-custom-context-menu="true">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className={`h-8 w-8 ${!canRunCommands ? "opacity-50 cursor-not-allowed" : ""}`}
-                          onClick={handleRunButtonClick}
-                          aria-disabled={!canRunCommands}
-                        >
-                          {isLoadingRunCommands || setupRunning ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Play className="h-4 w-4" />
-                          )}
-                        </Button>
-                      </span>
-                    </TooltipTrigger>
-                  </ContextMenuTrigger>
-                  <TooltipContent>
-                    <p>Run Commands</p>
-                    <p className="text-xs text-muted-foreground">
-                      {setupRunning
-                        ? "Waiting for setup scripts to finish..."
-                        : hasRunCommands
-                          ? "Execute run commands from orkestrator-ai.json"
-                          : "Add 'run' array to orkestrator-ai.json to enable"}
-                    </p>
-                    <p className="text-xs text-muted-foreground">⌘P · Right-click for script menu</p>
-                  </TooltipContent>
-                </Tooltip>
+                <ToolbarContextMenuTrigger
+                  tooltip={
+                    <>
+                      <p>Run Commands</p>
+                      <p className="text-xs text-muted-foreground">
+                        {setupRunning
+                          ? "Waiting for setup scripts to finish..."
+                          : hasRunCommands
+                            ? "Execute run commands from orkestrator-ai.json"
+                            : "Add 'run' array to orkestrator-ai.json to enable"}
+                      </p>
+                      <p className="text-xs text-muted-foreground">⌘P · Right-click for script menu</p>
+                    </>
+                  }
+                >
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={`h-8 w-8 ${!canRunCommands ? "opacity-50 cursor-not-allowed" : ""}`}
+                    onClick={handleRunButtonClick}
+                    aria-disabled={!canRunCommands}
+                  >
+                    {isLoadingRunCommands || setupRunning ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Play className="h-4 w-4" />
+                    )}
+                  </Button>
+                </ToolbarContextMenuTrigger>
                 <ContextMenuContent>
                   <ContextMenuItem
                     onClick={handleRun}
@@ -908,11 +977,16 @@ export function ActionBar() {
                   </ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>
-
               <div className="mx-2 h-4 w-px bg-border" />
 
-              <Tooltip>
-                <TooltipTrigger asChild>
+              <ToolbarTooltipTrigger
+                tooltip={
+                  <>
+                    <p>Open in {config.global.preferredEditor === "cursor" ? "Cursor" : "VS Code"}</p>
+                    <p className="text-xs text-muted-foreground">⌘O</p>
+                  </>
+                }
+              >
                   <Button
                     variant="ghost"
                     size="icon"
@@ -926,15 +1000,19 @@ export function ActionBar() {
                       <Code2 className="h-4 w-4" />
                     )}
                   </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Open in {config.global.preferredEditor === "cursor" ? "Cursor" : "VS Code"}</p>
-                  <p className="text-xs text-muted-foreground">⌘O</p>
-                </TooltipContent>
-              </Tooltip>
+              </ToolbarTooltipTrigger>
 
-              <Tooltip>
-                <TooltipTrigger asChild>
+              <ToolbarTooltipTrigger
+                tooltip={
+                  <>
+                    <p>{environmentPortAddress ? "Copy URL" : "No mapped URL"}</p>
+                    {environmentPortAddress && (
+                      <p className="text-xs text-muted-foreground">{environmentPortAddress}</p>
+                    )}
+                    {environmentPortAddress && <p className="text-xs text-muted-foreground">Ctrl⇧C</p>}
+                  </>
+                }
+              >
                   <Button
                     variant="ghost"
                     size="icon"
@@ -945,15 +1023,7 @@ export function ActionBar() {
                   >
                     <Copy className="h-4 w-4" />
                   </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>{environmentPortAddress ? "Copy URL" : "No mapped URL"}</p>
-                  {environmentPortAddress && (
-                    <p className="text-xs text-muted-foreground">{environmentPortAddress}</p>
-                  )}
-                  {environmentPortAddress && <p className="text-xs text-muted-foreground">Ctrl⇧C</p>}
-                </TooltipContent>
-              </Tooltip>
+              </ToolbarTooltipTrigger>
 
               <div className="mx-2 h-4 w-px bg-border" />
             </>
@@ -961,31 +1031,26 @@ export function ActionBar() {
 
           {selectedEnvironment && !hasPR && (
             <ContextMenu>
-              <Tooltip>
-                <ContextMenuTrigger asChild>
-                  <TooltipTrigger asChild>
-                    <span className="inline-flex" data-toolbar-custom-context-menu="true">
-                      <Button
-                        variant="default"
-                        size="sm"
-                        className="gap-2"
-                        onClick={() => handleCreatePR()}
-                        disabled={!isRunning || !canCreateTab}
-                      >
-                        <GitPullRequest className="h-4 w-4" />
-                        Create PR
-                      </Button>
-                    </span>
-                  </TooltipTrigger>
-                </ContextMenuTrigger>
-                <TooltipContent>
-                  {!isRunning
+              <ToolbarContextMenuTrigger
+                tooltip={
+                  !isRunning
                     ? "Container must be running"
                     : !canCreateTab
                       ? "Maximum tabs reached"
-                      : "Launch agent to create a pull request (right-click for agent)"}
-                </TooltipContent>
-              </Tooltip>
+                      : "Launch agent to create a pull request (right-click for agent)"
+                }
+              >
+                <Button
+                  variant="default"
+                  size="sm"
+                  className="gap-2"
+                  onClick={() => handleCreatePR()}
+                  disabled={!isRunning || !canCreateTab}
+                >
+                  <GitPullRequest className="h-4 w-4" />
+                  Create PR
+                </Button>
+              </ToolbarContextMenuTrigger>
               <ContextMenuContent>
                 <ContextMenuItem onClick={() => handleCreatePR("claude")}>
                   <ClaudeIcon className="mr-2 h-4 w-4" />
@@ -1005,8 +1070,15 @@ export function ActionBar() {
 
           {selectedEnvironment && hasPR && (
             <>
-              <Tooltip>
-                <TooltipTrigger asChild>
+              <ToolbarTooltipTrigger
+                tooltip={
+                  isPRMerged
+                    ? "PR has been merged - click to view"
+                    : isPRClosed
+                      ? "PR was closed without merging - click to view"
+                      : "Open PR in browser"
+                }
+              >
                   <Button
                     variant={isPRFinished ? "secondary" : "outline"}
                     size="sm"
@@ -1022,19 +1094,18 @@ export function ActionBar() {
                     )}
                     {isPRMerged ? "PR Merged" : isPRClosed ? "PR Closed" : "View PR"}
                   </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {isPRMerged
-                    ? "PR has been merged - click to view"
-                    : isPRClosed
-                      ? "PR was closed without merging - click to view"
-                      : "Open PR in browser"}
-                </TooltipContent>
-              </Tooltip>
+              </ToolbarTooltipTrigger>
 
               {!isPRFinished && hasMergeConflicts === false && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
+                <ToolbarTooltipTrigger
+                  tooltip={
+                    isMerging
+                      ? "Merge in progress..."
+                      : !isRunning
+                        ? (isLocalEnvironment ? "Environment must be ready" : "Container must be running")
+                        : "Squash and merge this PR"
+                  }
+                >
                     <Button
                       variant="default"
                       size="sm"
@@ -1054,44 +1125,31 @@ export function ActionBar() {
                         </>
                       )}
                     </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {isMerging
-                      ? "Merge in progress..."
-                      : !isRunning
-                        ? (isLocalEnvironment ? "Environment must be ready" : "Container must be running")
-                        : "Squash and merge this PR"}
-                  </TooltipContent>
-                </Tooltip>
+                </ToolbarTooltipTrigger>
               )}
 
               {!isPRFinished && hasMergeConflicts && (
                 <ContextMenu>
-                  <Tooltip>
-                    <ContextMenuTrigger asChild>
-                      <TooltipTrigger asChild>
-                        <span className="inline-flex" data-toolbar-custom-context-menu="true">
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            className="gap-2"
-                            onClick={() => handleResolveConflicts()}
-                            disabled={!isRunning || !canCreateTab}
-                          >
-                            <AlertTriangle className="h-4 w-4" />
-                            Resolve
-                          </Button>
-                        </span>
-                      </TooltipTrigger>
-                    </ContextMenuTrigger>
-                    <TooltipContent>
-                      {!isRunning
+                  <ToolbarContextMenuTrigger
+                    tooltip={
+                      !isRunning
                         ? (isLocalEnvironment ? "Environment must be ready" : "Container must be running")
                         : !canCreateTab
                           ? "Maximum tabs reached"
-                          : "PR has merge conflicts - launch agent to resolve them"}
-                    </TooltipContent>
-                  </Tooltip>
+                          : "PR has merge conflicts - launch agent to resolve them"
+                    }
+                  >
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      className="gap-2"
+                      onClick={() => handleResolveConflicts()}
+                      disabled={!isRunning || !canCreateTab}
+                    >
+                      <AlertTriangle className="h-4 w-4" />
+                      Resolve
+                    </Button>
+                  </ToolbarContextMenuTrigger>
                   <ContextMenuContent>
                     <ContextMenuItem onClick={() => handleResolveConflicts("claude")}>
                       <ClaudeIcon className="mr-2 h-4 w-4" />
@@ -1110,8 +1168,9 @@ export function ActionBar() {
               )}
 
               {isPRFinished && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
+                <ToolbarTooltipTrigger
+                  tooltip={`Delete this environment (PR is ${isPRMerged ? "merged" : "closed"})`}
+                >
                     <Button
                       variant="destructive"
                       size="sm"
@@ -1121,40 +1180,31 @@ export function ActionBar() {
                       <Trash2 className="h-4 w-4" />
                       Clean Up
                     </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    Delete this environment (PR is {isPRMerged ? "merged" : "closed"})
-                  </TooltipContent>
-                </Tooltip>
+                </ToolbarTooltipTrigger>
               )}
 
               {!isPRFinished && changes.length > 0 && (
                 <ContextMenu>
-                  <Tooltip>
-                    <ContextMenuTrigger asChild>
-                      <TooltipTrigger asChild>
-                        <span className="inline-flex" data-toolbar-custom-context-menu="true">
-                          <Button
-                            variant="default"
-                            size="sm"
-                            className="gap-2"
-                            onClick={() => handlePushChanges()}
-                            disabled={!isRunning || !canCreateTab}
-                          >
-                            <Upload className="h-4 w-4" />
-                            Push Changes
-                          </Button>
-                        </span>
-                      </TooltipTrigger>
-                    </ContextMenuTrigger>
-                    <TooltipContent>
-                      {!isRunning
+                  <ToolbarContextMenuTrigger
+                    tooltip={
+                      !isRunning
                         ? "Container must be running"
                         : !canCreateTab
                           ? "Maximum tabs reached"
-                          : "Launch agent to commit and push changes"}
-                    </TooltipContent>
-                  </Tooltip>
+                          : "Launch agent to commit and push changes"
+                    }
+                  >
+                    <Button
+                      variant="default"
+                      size="sm"
+                      className="gap-2"
+                      onClick={() => handlePushChanges()}
+                      disabled={!isRunning || !canCreateTab}
+                    >
+                      <Upload className="h-4 w-4" />
+                      Push Changes
+                    </Button>
+                  </ToolbarContextMenuTrigger>
                   <ContextMenuContent>
                     <ContextMenuItem onClick={() => handlePushChanges("claude")}>
                       <ClaudeIcon className="mr-2 h-4 w-4" />
@@ -1191,8 +1241,14 @@ export function ActionBar() {
             )}
 
             {selectedEnvironment && (
-              <Tooltip>
-                <TooltipTrigger asChild>
+              <ToolbarTooltipTrigger
+                tooltip={
+                  <>
+                    <p>{filesPanelOpen ? "Hide" : "Show"} file panel</p>
+                    <p className="text-xs text-muted-foreground">⌘E</p>
+                  </>
+                }
+              >
                   <Button
                     variant={filesPanelOpen ? "secondary" : "ghost"}
                     size="icon"
@@ -1204,12 +1260,7 @@ export function ActionBar() {
                       <span className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-primary" />
                     )}
                   </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>{filesPanelOpen ? "Hide" : "Show"} file panel</p>
-                  <p className="text-xs text-muted-foreground">⌘E</p>
-                </TooltipContent>
-              </Tooltip>
+              </ToolbarTooltipTrigger>
             )}
           </div>
         </div>

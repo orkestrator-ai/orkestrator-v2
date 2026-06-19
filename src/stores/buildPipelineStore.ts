@@ -196,6 +196,9 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
     set((state) => {
       const pipeline = state.pipelines.get(pipelineId);
       if (!pipeline) return state;
+      // No-op if already failed with the same error, so subscribers don't
+      // re-render in a loop (prevents "Maximum update depth exceeded").
+      if (pipeline.phase === "failed" && pipeline.error === error) return state;
       const newMap = new Map(state.pipelines);
       newMap.set(pipelineId, { ...pipeline, phase: "failed", error });
       return { pipelines: newMap };

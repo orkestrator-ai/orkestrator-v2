@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { TabInfo } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
@@ -191,7 +191,7 @@ describe("DraggableTab tooltip and context menu structure", () => {
     cleanup();
   });
 
-  test("wraps the title of a file tab in the path tooltip trigger", () => {
+  test("shows a path tooltip for file tabs", async () => {
     const tab: TabInfo = {
       id: "tab-file",
       type: "file",
@@ -200,11 +200,13 @@ describe("DraggableTab tooltip and context menu structure", () => {
 
     renderTab(tab, 0);
 
-    // The local TooltipTrigger wrapper tags its child with this data-slot, and
-    // `asChild` forwards it onto the title span — present only for file tabs.
-    expect(screen.getByText("Bar.tsx").getAttribute("data-slot")).toBe(
-      "tooltip-trigger",
-    );
+    const trigger = screen.getByText("Bar.tsx").closest("div");
+    expect(trigger).toBeTruthy();
+    fireEvent.mouseEnter(trigger!);
+
+    await waitFor(() => {
+      expect(screen.getByText("src/components/Foo/Bar.tsx")).toBeTruthy();
+    });
   });
 
   test("does not wrap the title of a non-file tab in a tooltip trigger", () => {

@@ -513,6 +513,26 @@ describe("CodexBuildChatTab", () => {
     expect(mockAbortSession).toHaveBeenCalledWith({ baseUrl: "http://127.0.0.1:9999" }, SESSION_ID);
   });
 
+  test("polls a loading codex build session without immediately restarting the poll loop", async () => {
+    seedPipeline("building", "running");
+    seedCodexStore(true);
+    mockGetSessionStatus.mockImplementation(async () => ({ status: "running" as const }));
+    mockGetSessionMessages.mockImplementation(async () => []);
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(mockGetSessionStatus).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    expect(mockGetSessionStatus.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(mockGetSessionMessages.mock.calls.length).toBeLessThanOrEqual(2);
+  });
+
   test("paused pipelines expose jump-in controls and send messages to the active codex session", async () => {
     seedPipeline("paused", "idle");
     seedCodexStore(false);
@@ -602,6 +622,22 @@ describe("CodexBuildChatTab", () => {
     await act(async () => {
       resolvePrompt?.(true);
     });
+  });
+
+  test("does not send the address-issues prompt while the codex bridge still reports the review session running", async () => {
+    seedReviewPipeline();
+    seedCodexStore(false);
+    mockGetSessionStatus.mockImplementation(async () => ({ status: "running" as const }));
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+    });
+
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+    expect(pipeline?.phase).toBe("reviewing");
+    expect(mockSendPrompt).not.toHaveBeenCalled();
   });
 
   test("does not start verification while the address-issues prompt is being accepted", async () => {

@@ -1,5 +1,5 @@
-import { describe, test, expect, mock, beforeEach } from "bun:test";
-import { render, fireEvent, waitFor } from "@testing-library/react";
+import { afterEach, describe, test, expect, mock, beforeEach } from "bun:test";
+import { cleanup, render, fireEvent, waitFor } from "@testing-library/react";
 import type { Environment } from "../../../src/types";
 
 const toastSuccessMock = mock(() => {});
@@ -154,18 +154,29 @@ function findMenuItem(container: HTMLElement, label: string) {
   return Array.from(menuItems).find((item) => item.textContent?.includes(label));
 }
 
+function showTooltip(container: HTMLElement) {
+  const trigger = container.querySelector('div[role="button"]');
+  expect(trigger).not.toBeNull();
+  fireEvent.mouseEnter(trigger!);
+}
+
 beforeEach(() => {
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
   settingsDialogPropsMock.mockClear();
 });
 
+afterEach(() => {
+  cleanup();
+});
+
 describe("EnvironmentItem tooltip port display", () => {
   test("shows full port mapping when both entryPort and hostEntryPort are set", () => {
     const env = makeEnvironment({ entryPort: 3000, hostEntryPort: 49152 });
     const { container } = renderItem(env);
+    showTooltip(container);
 
-    const html = container.innerHTML;
+    const html = document.body.innerHTML;
     expect(html).toContain("localhost:49152");
     expect(html).toContain("3000/tcp");
   });
@@ -173,8 +184,9 @@ describe("EnvironmentItem tooltip port display", () => {
   test("shows 'not mapped' when entryPort is set but hostEntryPort is missing", () => {
     const env = makeEnvironment({ entryPort: 8080 });
     const { container } = renderItem(env);
+    showTooltip(container);
 
-    const html = container.innerHTML;
+    const html = document.body.innerHTML;
     expect(html).toContain("8080/tcp");
     expect(html).toContain("(not mapped)");
   });
@@ -182,8 +194,9 @@ describe("EnvironmentItem tooltip port display", () => {
   test("does not show port info when entryPort is not set", () => {
     const env = makeEnvironment();
     const { container } = renderItem(env);
+    showTooltip(container);
 
-    const html = container.innerHTML;
+    const html = document.body.innerHTML;
     expect(html).not.toContain("Port:");
     expect(html).not.toContain("/tcp");
   });
@@ -195,8 +208,9 @@ describe("EnvironmentItem tooltip port display", () => {
       hostEntryPort: 49152,
     });
     const { container } = renderItem(env);
+    showTooltip(container);
 
-    const html = container.innerHTML;
+    const html = document.body.innerHTML;
     expect(html).not.toContain("Port:");
     expect(html).not.toContain("3000/tcp");
   });
@@ -217,8 +231,9 @@ describe("EnvironmentItem copy address", () => {
   test("clicking localhost address in tooltip copies to clipboard", () => {
     const env = makeEnvironment({ entryPort: 3000, hostEntryPort: 49152 });
     const { container } = renderItem(env);
+    showTooltip(container);
 
-    const clickableSpan = container.querySelector('span[role="button"]');
+    const clickableSpan = document.body.querySelector('span[role="button"]');
     expect(clickableSpan).not.toBeNull();
     expect(clickableSpan!.textContent).toBe("localhost:49152");
 
@@ -257,8 +272,9 @@ describe("EnvironmentItem copy address", () => {
   test("tooltip address is not clickable when port is not mapped", () => {
     const env = makeEnvironment({ entryPort: 3000 });
     const { container } = renderItem(env);
+    showTooltip(container);
 
-    const clickableSpan = container.querySelector('span[role="button"]');
+    const clickableSpan = document.body.querySelector('span[role="button"]');
     expect(clickableSpan).toBeNull();
   });
 });

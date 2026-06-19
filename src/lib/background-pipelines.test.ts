@@ -44,7 +44,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [makeEnv("e1")],
       "e1",
-      [makeEnv("e1")],
     );
     expect(result).toEqual([]);
   });
@@ -57,7 +56,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [makeEnv("e1")],
       null,
-      [],
     );
     expect(result).toEqual([]);
   });
@@ -70,7 +68,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [makeEnv("e1")],
       null,
-      [],
     );
     expect(result).toEqual([]);
   });
@@ -83,7 +80,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [makeEnv("e1")],
       null,
-      [],
     );
     expect(result).toEqual([]);
   });
@@ -98,7 +94,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [env1],
       null,
-      [],
     );
     expect(result).toHaveLength(1);
     expect(result[0]!.id).toBe("e1");
@@ -114,7 +109,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [env1],
       "e1",
-      [env1],
     );
     expect(result).toEqual([]);
   });
@@ -130,7 +124,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [env1, env2],
       "e1",
-      [env1, env2],
     );
 
     expect(result).toEqual([env2]);
@@ -142,12 +135,11 @@ describe("getBackgroundProcessingEnvironments", () => {
     const pipelines = new Map([
       ["p1", makePipeline("p1", "eA", "reviewing")],
     ]);
-    // User is viewing proj-B; envB is the visible project env
+    // User is viewing proj-B with envB selected; envA stays background.
     const result = getBackgroundProcessingEnvironments(
       pipelines,
       [envA, envB],
       "eB",
-      [envB],
     );
     expect(result).toHaveLength(1);
     expect(result[0]!.id).toBe("eA");
@@ -167,7 +159,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [env1, env2, env3],
       "e1",
-      [env1, env3],
     );
     // e1 is visible, e3's pipeline is complete → only e2
     expect(result).toHaveLength(1);
@@ -186,7 +177,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [env1, env2],
       null,
-      [],
     );
     expect(result).toHaveLength(2);
     const ids = result.map((e) => e.id).sort();
@@ -211,7 +201,7 @@ describe("getBackgroundProcessingEnvironments", () => {
       const pipelines = new Map([
         ["p1", makePipeline("p1", "e1", phase)],
       ]);
-      const result = getBackgroundProcessingEnvironments(pipelines, [env], null, []);
+      const result = getBackgroundProcessingEnvironments(pipelines, [env], null);
       expect(result).toHaveLength(1);
     }
   });
@@ -224,7 +214,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [makeEnv("e-other")],
       null,
-      [],
     );
     expect(result).toEqual([]);
   });
@@ -236,7 +225,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [env],
       null,
-      [],
       new Set(["e1"]),
     );
 
@@ -250,7 +238,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [env],
       null,
-      [],
       new Set(),
       ["e1"],
     );
@@ -265,7 +252,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [env],
       null,
-      [],
       new Set(),
       [],
       ["e1"],
@@ -281,7 +267,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [env],
       null,
-      [],
       new Set(),
       [],
       [],
@@ -298,7 +283,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [env],
       null,
-      [],
       new Set(),
       [],
       [],
@@ -316,7 +300,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [env],
       "e1",
-      [env],
       new Set(),
       [],
       [],
@@ -333,7 +316,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [env],
       "e1",
-      [env],
       new Set(),
       [],
       [],
@@ -355,7 +337,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [env1, env2],
       null,
-      [],
       new Set(),
       [],
       [],
@@ -373,7 +354,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       new Map(),
       [env],
       "e1",
-      [env],
       new Set(["e1"]),
     );
 
@@ -390,7 +370,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [env],
       null,
-      [],
     );
 
     expect(result).toEqual([env]);
@@ -407,7 +386,6 @@ describe("getBackgroundProcessingEnvironments", () => {
       pipelines,
       [env1, env2],
       null,
-      [],
       new Set(["e1", "e2"]),
     );
 

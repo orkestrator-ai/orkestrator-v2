@@ -16,7 +16,6 @@ export function getBackgroundProcessingEnvironments(
   pipelines: Map<string, BuildPipeline>,
   environments: Environment[],
   selectedEnvironmentId: string | null,
-  _projectEnvironments: Environment[],
   setupRunningEnvironmentIds: Set<string> = new Set(),
   pendingNativeLaunchEnvironmentIds: Iterable<string> = [],
   pendingInitialPromptEnvironmentIds: Iterable<string> = [],

@@ -68,9 +68,6 @@ function App() {
   const [isCheckingClaude, setIsCheckingClaude] = useState(false);
   const [githubCliWarningDismissed, setGithubCliWarningDismissed] = useState(false);
 
-  const projectEnvironments = selectedProjectId
-    ? environments.filter((env) => env.projectId === selectedProjectId)
-    : [];
   const selectedEnvironment = selectedEnvironmentId
     ? environments.find((env) => env.id === selectedEnvironmentId) ?? null
     : null;
@@ -166,7 +163,6 @@ function App() {
       pipelines,
       environments,
       selectedEnvironmentId,
-      projectEnvironments,
       setupScriptsRunning,
       Object.keys(pendingNativeLaunches),
       pendingInitialPromptEnvironmentIds,
@@ -177,7 +173,6 @@ function App() {
       pipelines,
       environments,
       selectedEnvironmentId,
-      projectEnvironments,
       setupScriptsRunning,
       pendingNativeLaunches,
       pendingInitialPromptEnvironmentIds,

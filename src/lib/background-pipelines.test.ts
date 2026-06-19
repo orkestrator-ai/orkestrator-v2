@@ -104,12 +104,12 @@ describe("getBackgroundProcessingEnvironments", () => {
     expect(result[0]!.id).toBe("e1");
   });
 
-  test("excludes environments already visible in the main content", () => {
+  test("excludes the selected environment already visible in the main content", () => {
     const env1 = makeEnv("e1", "proj-1");
     const pipelines = new Map([
       ["p1", makePipeline("p1", "e1", "building")],
     ]);
-    // e1 is in projectEnvironments and selectedEnvironmentId is set → visible
+    // e1 is the selected foreground environment.
     const result = getBackgroundProcessingEnvironments(
       pipelines,
       [env1],
@@ -117,6 +117,23 @@ describe("getBackgroundProcessingEnvironments", () => {
       [env1],
     );
     expect(result).toEqual([]);
+  });
+
+  test("returns active sibling project environments because only the selected environment is foreground-mounted", () => {
+    const env1 = makeEnv("e1", "proj-1");
+    const env2 = makeEnv("e2", "proj-1");
+    const pipelines = new Map([
+      ["p1", makePipeline("p1", "e2", "building")],
+    ]);
+
+    const result = getBackgroundProcessingEnvironments(
+      pipelines,
+      [env1, env2],
+      "e1",
+      [env1, env2],
+    );
+
+    expect(result).toEqual([env2]);
   });
 
   test("returns pipeline env from a different project when user views another project", () => {
@@ -145,14 +162,14 @@ describe("getBackgroundProcessingEnvironments", () => {
       ["p2", makePipeline("p2", "e2", "verifying")],
       ["p3", makePipeline("p3", "e3", "complete")], // complete — excluded
     ]);
-    // User views proj-1, e1 is visible via projectEnvironments
+    // User views proj-1 with e1 selected; only e1 is foreground-mounted.
     const result = getBackgroundProcessingEnvironments(
       pipelines,
       [env1, env2, env3],
       "e1",
       [env1, env3],
     );
-    // e1 is visible (in projectEnvironments), e3's pipeline is complete → only e2
+    // e1 is visible, e3's pipeline is complete → only e2
     expect(result).toHaveLength(1);
     expect(result[0]!.id).toBe("e2");
   });

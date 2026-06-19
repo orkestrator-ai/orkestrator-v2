@@ -421,6 +421,25 @@ describe("App background processing mounts", () => {
     });
   });
 
+  test("does not foreground-mount inactive sibling environments in the selected project", async () => {
+    resetStores({
+      environments: [
+        makeEnvironment("env-visible", "project-1"),
+        makeEnvironment("env-sibling", "project-1"),
+      ],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("terminal-env-visible")).toBeTruthy();
+    });
+
+    expect(screen.queryByTestId("terminal-env-sibling")).toBeNull();
+  });
+
   test("keeps off-screen environments with a pending native launch mounted", async () => {
     resetStores({
       environments: [

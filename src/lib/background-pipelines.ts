@@ -16,7 +16,7 @@ export function getBackgroundProcessingEnvironments(
   pipelines: Map<string, BuildPipeline>,
   environments: Environment[],
   selectedEnvironmentId: string | null,
-  projectEnvironments: Environment[],
+  _projectEnvironments: Environment[],
   setupRunningEnvironmentIds: Set<string> = new Set(),
   pendingNativeLaunchEnvironmentIds: Iterable<string> = [],
   pendingInitialPromptEnvironmentIds: Iterable<string> = [],
@@ -53,9 +53,11 @@ export function getBackgroundProcessingEnvironments(
 
   if (backgroundEnvIds.size === 0) return [];
 
-  // Exclude environments already rendered in the main content area
+  // Exclude only the environment rendered in the foreground terminal area.
+  // Sibling environments in the selected project are not mounted unless they
+  // have one of the explicit background-processing signals above.
   const visibleEnvIds = new Set(
-    selectedEnvironmentId ? projectEnvironments.map((e) => e.id) : []
+    selectedEnvironmentId ? [selectedEnvironmentId] : []
   );
   return environments.filter(
     (env) => backgroundEnvIds.has(env.id) && !visibleEnvIds.has(env.id)

@@ -6,10 +6,11 @@ import { useEnvironmentStore } from "../../../src/stores/environmentStore";
 import { useFilesPanelStore } from "../../../src/stores/filesPanelStore";
 import { useUIStore } from "../../../src/stores/uiStore";
 import type { FileNode, GitFileChange } from "../../../src/lib/tauri";
-import type { Environment } from "../../../src/types";
+import type { Environment, RepositoryConfig } from "../../../src/types";
 import { createMockEnvironment } from "../utils/testFactories";
 
 const realTauriSnapshot = { ...realTauri };
+const realConsoleError = console.error;
 
 const mockGetGitStatus = mock<(containerId: string, targetBranch?: string) => Promise<GitFileChange[]>>(
   () => Promise.resolve([]),
@@ -48,7 +49,15 @@ const tree: FileNode[] = [
   },
 ];
 
-function resetStores(environment: Environment | null = null) {
+function resetStores(
+  environment: Environment | null = null,
+  repositoryConfig: RepositoryConfig | null = environment
+    ? {
+        defaultBranch: "main",
+        prBaseBranch: "develop",
+      }
+    : null,
+) {
   useEnvironmentStore.setState({
     environments: environment ? [environment] : [],
     isLoading: false,
@@ -96,12 +105,9 @@ function resetStores(environment: Environment | null = null) {
         codexNativeFastModeDefault: false,
         experimentalCodexRawEventLogging: true,
       },
-      repositories: environment
+      repositories: environment && repositoryConfig
         ? {
-            [environment.projectId]: {
-              defaultBranch: "main",
-              prBaseBranch: "develop",
-            },
+            [environment.projectId]: repositoryConfig,
           }
         : {},
     },
@@ -112,6 +118,7 @@ function resetStores(environment: Environment | null = null) {
 
 describe("useFilesPanel", () => {
   beforeEach(() => {
+    console.error = mock(() => {}) as typeof console.error;
     mockGetGitStatus.mockClear();
     mockGetLocalGitStatus.mockClear();
     mockGetFileTree.mockClear();
@@ -123,6 +130,7 @@ describe("useFilesPanel", () => {
   });
 
   afterEach(() => {
+    console.error = realConsoleError;
     cleanup();
     resetStores();
   });
@@ -177,6 +185,73 @@ describe("useFilesPanel", () => {
     expect(result.current.isAvailable).toBe(true);
     expect(mockGetLocalFileTree).not.toHaveBeenCalled();
     expect(useFilesPanelStore.getState().isLoadingTree).toBe(false);
+  });
+
+  test("loads container changes against the repository PR base branch", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
+    mockGetGitStatus.mockImplementation(() => Promise.resolve([change]));
+
+    renderHook(() => useFilesPanel());
+
+    await waitFor(() => {
+      expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop");
+      expect(useFilesPanelStore.getState().changes).toEqual([change]);
+    });
+
+    expect(mockGetLocalGitStatus).not.toHaveBeenCalled();
+    expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
+  });
+
+  test("loads local file tree for available local environments", async () => {
+    const environment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+    });
+    resetStores(environment);
+    useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
+    mockGetLocalFileTree.mockImplementation(() => Promise.resolve(tree));
+
+    const { result } = renderHook(() => useFilesPanel());
+
+    await waitFor(() => {
+      expect(mockGetLocalFileTree).toHaveBeenCalledWith("/tmp/worktree");
+      expect(useFilesPanelStore.getState().fileTree).toEqual(tree);
+    });
+
+    expect(result.current.isLocalEnvironment).toBe(true);
+    expect(mockGetFileTree).not.toHaveBeenCalled();
+    expect(useFilesPanelStore.getState().isLoadingTree).toBe(false);
+  });
+
+  test("falls back to main when repository config has no PR base branch", async () => {
+    const environment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+    });
+    resetStores(environment, { defaultBranch: "main" });
+    useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
+    mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([change]));
+
+    renderHook(() => useFilesPanel());
+
+    await waitFor(() => {
+      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "main");
+      expect(useFilesPanelStore.getState().targetBranch).toBe("main");
+    });
   });
 
   test("clears stale panel data when the selected environment is unavailable", () => {
@@ -241,5 +316,129 @@ describe("useFilesPanel", () => {
 
     expect(useFilesPanelStore.getState().changes).toEqual([change]);
     expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
+  });
+
+  test("manual changes load failure clears stale changes and resets loading", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    useFilesPanelStore.setState({ changes: [change] });
+    mockGetGitStatus.mockImplementation(() => Promise.reject(new Error("git failed")));
+
+    const { result } = renderHook(() => useFilesPanel());
+
+    await act(async () => {
+      await result.current.loadChanges();
+    });
+
+    expect(useFilesPanelStore.getState().changes).toEqual([]);
+    expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
+  });
+
+  test("silent changes load failure preserves existing changes and avoids loading indicator", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    useFilesPanelStore.setState({ changes: [change] });
+    mockGetGitStatus.mockImplementation(() => Promise.reject(new Error("git failed")));
+
+    const { result } = renderHook(() => useFilesPanel());
+
+    await act(async () => {
+      await result.current.loadChanges(true);
+    });
+
+    expect(useFilesPanelStore.getState().changes).toEqual([change]);
+    expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
+  });
+
+  test("manual file tree load failure clears stale tree and resets loading", async () => {
+    const environment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+    });
+    resetStores(environment);
+    useFilesPanelStore.setState({ fileTree: tree });
+    mockGetLocalFileTree.mockImplementation(() => Promise.reject(new Error("tree failed")));
+
+    const { result } = renderHook(() => useFilesPanel());
+
+    await act(async () => {
+      await result.current.loadFileTree();
+    });
+
+    expect(useFilesPanelStore.getState().fileTree).toEqual([]);
+    expect(useFilesPanelStore.getState().isLoadingTree).toBe(false);
+  });
+
+  test("silent auto-refresh reloads the active tab without toggling loading state", async () => {
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+    let intervalCallback: (() => void) | null = null;
+    const clearIntervalMock = mock(() => {});
+
+    globalThis.setInterval = ((callback: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      if (timeout === 5000) {
+        intervalCallback = callback as () => void;
+        return 1 as unknown as ReturnType<typeof setInterval>;
+      }
+      return originalSetInterval(callback, timeout, ...args);
+    }) as typeof setInterval;
+    globalThis.clearInterval = ((intervalId: Parameters<typeof clearInterval>[0]) => {
+      if (intervalId === (1 as unknown as Parameters<typeof clearInterval>[0])) {
+        clearIntervalMock(intervalId);
+        return;
+      }
+      originalClearInterval(intervalId);
+    }) as typeof clearInterval;
+
+    try {
+      const environment = createMockEnvironment({
+        id: "env-container",
+        projectId: "project-1",
+        environmentType: "containerized",
+        containerId: "container-1",
+        status: "running",
+      });
+      resetStores(environment);
+      useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
+      mockGetGitStatus.mockImplementationOnce(() => Promise.resolve([])).mockImplementationOnce(() => Promise.resolve([change]));
+
+      const { unmount } = renderHook(() => useFilesPanel());
+
+      await waitFor(() => {
+        expect(mockGetGitStatus).toHaveBeenCalledTimes(1);
+      });
+      expect(intervalCallback).not.toBeNull();
+
+      await act(async () => {
+        intervalCallback?.();
+      });
+
+      await waitFor(() => {
+        expect(mockGetGitStatus).toHaveBeenCalledTimes(2);
+        expect(useFilesPanelStore.getState().changes).toEqual([change]);
+      });
+      expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
+
+      unmount();
+      expect(clearIntervalMock).toHaveBeenCalledWith(1);
+    } finally {
+      globalThis.setInterval = originalSetInterval;
+      globalThis.clearInterval = originalClearInterval;
+    }
   });
 });

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import {
   SortableContext,
@@ -6,7 +6,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -82,6 +82,8 @@ export function SortableProjectGroup({
 }: SortableProjectGroupProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
+  const projectTooltipAnchorRef = useRef<HTMLButtonElement>(null);
+  const projectTooltip = useHoverTooltip();
 
   const {
     attributes,
@@ -102,8 +104,9 @@ export function SortableProjectGroup({
     setShowDeleteDialog(false);
   };
 
-  const handleAddEnvironment = (e: React.MouseEvent) => {
+  const handleAddEnvironment = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
+    e.currentTarget.blur();
     onCreateEnvironment();
   };
 
@@ -119,101 +122,107 @@ export function SortableProjectGroup({
       >
         <Collapsible open={!isCollapsed} onOpenChange={onToggleCollapse}>
           {/* Project Header with Context Menu */}
-          <ContextMenu>
-            <ContextMenuTrigger asChild>
-              <div
-                {...attributes}
-                {...listeners}
-                className="relative flex items-center group/project cursor-grab rounded-md active:cursor-grabbing"
-                onMouseEnter={() => setIsHovered(true)}
-                onMouseLeave={() => setIsHovered(false)}
-              >
-                <div className="flex flex-1 items-center gap-0 rounded-md text-sm text-foreground">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        className="flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-zinc-800/80"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onSelectProject();
-                        }}
-                      >
-                        <FolderGit2 className="h-4 w-4 shrink-0 text-zinc-500" />
-                        <span className="truncate font-medium">{project.name}</span>
-                        {environments.length > 0 && (
-                          <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-zinc-800 px-1 text-[10px] text-zinc-300">
-                            {environments.length}
-                          </span>
-                        )}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="right" align="center">
-                      <p className="font-mono text-xs">{project.gitUrl}</p>
-                      {project.localPath && (
-                        <p className="text-xs text-muted-foreground">{project.localPath}</p>
-                      )}
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {environments.length} environment{environments.length !== 1 && "s"}
-                        {runningCount > 0 && ` (${runningCount} running)`}
-                      </p>
-                      <p className="text-xs text-muted-foreground">Click to open board</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </div>
-
-                {/* Action buttons - shown on hover, replacing chevron */}
-                {/* Add button - shown on hover */}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn(
-                    "h-6 w-6 text-muted-foreground hover:text-foreground transition-opacity",
-                    isHovered ? "opacity-100" : "opacity-0"
-                  )}
-                  onClick={handleAddEnvironment}
-                  title="Create environment"
+          <div
+            className="relative flex items-center group/project rounded-md"
+            onMouseEnter={() => setIsHovered(true)}
+            onMouseLeave={() => setIsHovered(false)}
+          >
+            <ContextMenu>
+              <ContextMenuTrigger className="contents">
+                <button
+                  {...attributes}
+                  {...listeners}
+                  ref={projectTooltipAnchorRef}
+                  type="button"
+                  className="flex min-w-0 flex-1 cursor-grab items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-zinc-800/80 active:cursor-grabbing"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectProject();
+                  }}
+                  onMouseEnter={projectTooltip.show}
+                  onMouseLeave={projectTooltip.hide}
+                  onFocus={projectTooltip.show}
+                  onBlur={projectTooltip.hide}
                 >
-                  <Plus className="h-3.5 w-3.5" />
-                </Button>
+                  <FolderGit2 className="h-4 w-4 shrink-0 text-zinc-500" />
+                  <span className="truncate font-medium">{project.name}</span>
+                  {environments.length > 0 && (
+                    <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-full bg-zinc-800 px-1 text-[10px] text-zinc-300">
+                      {environments.length}
+                    </span>
+                  )}
+                </button>
+              </ContextMenuTrigger>
+              <HoverTooltipContent
+                anchorRef={projectTooltipAnchorRef}
+                open={projectTooltip.open}
+                side="right"
+                align="center"
+                onMouseEnter={projectTooltip.show}
+                onMouseLeave={projectTooltip.hide}
+              >
+                <p className="font-mono text-xs">{project.gitUrl}</p>
+                {project.localPath && (
+                  <p className="text-xs text-muted-foreground">{project.localPath}</p>
+                )}
+                <p className="text-xs text-muted-foreground mt-1">
+                  {environments.length} environment{environments.length !== 1 && "s"}
+                  {runningCount > 0 && ` (${runningCount} running)`}
+                </p>
+                <p className="text-xs text-muted-foreground">Click to open board</p>
+              </HoverTooltipContent>
+              <ContextMenuContent>
+                <ContextMenuItem onClick={onSelectProject}>
+                  <LayoutGrid className="h-4 w-4 mr-2" />
+                  Open Board
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={onOpenSettings}>
+                  <Settings2 className="h-4 w-4 mr-2" />
+                  Repository Settings
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={onCreateEnvironment}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  New Environment
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem variant="destructive" onClick={() => setShowDeleteDialog(true)}>
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete Project
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
 
-                {/* Chevron arrow - far right */}
-                <CollapsibleTrigger asChild>
-                  <button
-                    className="shrink-0 rounded p-1 transition-colors hover:bg-zinc-800/80"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <ChevronRight
-                      className={cn(
-                        "h-4 w-4 text-muted-foreground transition-transform duration-200",
-                        !isCollapsed && "rotate-90"
-                      )}
-                    />
-                  </button>
-                </CollapsibleTrigger>
-              </div>
-            </ContextMenuTrigger>
-            <ContextMenuContent>
-              <ContextMenuItem onClick={onSelectProject}>
-                <LayoutGrid className="h-4 w-4 mr-2" />
-                Open Board
-              </ContextMenuItem>
-              <ContextMenuSeparator />
-              <ContextMenuItem onClick={onOpenSettings}>
-                <Settings2 className="h-4 w-4 mr-2" />
-                Repository Settings
-              </ContextMenuItem>
-              <ContextMenuSeparator />
-              <ContextMenuItem onClick={onCreateEnvironment}>
-                <Plus className="h-4 w-4 mr-2" />
-                New Environment
-              </ContextMenuItem>
-              <ContextMenuSeparator />
-              <ContextMenuItem variant="destructive" onClick={() => setShowDeleteDialog(true)}>
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete Project
-              </ContextMenuItem>
-            </ContextMenuContent>
-          </ContextMenu>
+            {/* Action buttons - shown on hover, replacing chevron */}
+            {/* Add button - shown on hover */}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={cn(
+                "h-6 w-6 text-muted-foreground hover:text-foreground transition-opacity",
+                isHovered ? "opacity-100" : "opacity-0"
+              )}
+              onClick={handleAddEnvironment}
+              title="Create environment"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+
+            {/* Chevron arrow - far right */}
+            <CollapsibleTrigger
+              className="shrink-0 rounded p-1 transition-colors hover:bg-zinc-800/80"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <ChevronRight
+                className={cn(
+                  "h-4 w-4 text-muted-foreground transition-transform duration-200",
+                  !isCollapsed && "rotate-90"
+                )}
+              />
+            </CollapsibleTrigger>
+          </div>
 
           {/* Environments List */}
           <CollapsibleContent>

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, ArrowDown, ArrowUp, Hammer, Loader2, PlayCircle, RefreshCw, StopCircle } from "lucide-react";
 import { useScrollLock } from "@/hooks";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { normalizeOpenCodeNativeMessage } from "@/lib/chat/native-message-adapters";
@@ -1143,7 +1142,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
         </div>
       )}
 
-      <ScrollArea ref={scrollRef} className="min-h-0 flex-1">
+      <div ref={scrollRef} data-scroll-viewport="true" className="min-h-0 flex-1 overflow-y-auto">
         <div className="min-w-[320px] py-4">
           {allSessionMessages.length === 0 ? (
             <div className="flex min-h-[200px] flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -1190,7 +1189,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
             ))
           )}
         </div>
-      </ScrollArea>
+      </div>
 
       {!isAtBottom && (
         <div className="flex justify-end px-4 py-1">

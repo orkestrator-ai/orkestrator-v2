@@ -170,6 +170,62 @@ describe("useScrollLock", () => {
 
       expect(result.current.isAtBottom).toBe(true);
     });
+
+    test("finds a nested viewport with the data-scroll-viewport marker", () => {
+      // The non-Radix ScrollArea/div replacement tags its scrollable element
+      // with data-scroll-viewport="true" instead of the Radix attributes.
+      const { ref } = createMockScrollContainer({
+        scrollTop: 500,
+        selector: "data-scroll-viewport",
+      });
+
+      const { result } = renderHook(() => useScrollLock(ref));
+
+      expect(result.current.isAtBottom).toBe(true);
+    });
+
+    test("uses the root element itself when it is the scroll viewport", () => {
+      // BuildChatTab passes the scrollRef directly to the scrollable <div
+      // data-scroll-viewport="true">, so the ref *is* the viewport (no child).
+      const root = document.createElement("div");
+      root.setAttribute("data-scroll-viewport", "true");
+      Object.defineProperty(root, "scrollHeight", { get: () => 1000, configurable: true });
+      Object.defineProperty(root, "clientHeight", { get: () => 500, configurable: true });
+      Object.defineProperty(root, "scrollTop", { get: () => 500, set: () => {}, configurable: true });
+      document.body.appendChild(root);
+      containers.push(root);
+
+      const ref = createRef<HTMLDivElement>() as { current: HTMLDivElement | null };
+      ref.current = root as HTMLDivElement;
+
+      const { result } = renderHook(() =>
+        useScrollLock(ref as RefObject<HTMLDivElement | null>)
+      );
+
+      // Root is treated as the viewport: scrollTop 500 of 1000 with 500 client
+      // height is exactly at the bottom.
+      expect(result.current.isAtBottom).toBe(true);
+    });
+
+    test("uses the root element when it carries the scroll-area-viewport data-slot", () => {
+      const root = document.createElement("div");
+      root.setAttribute("data-slot", "scroll-area-viewport");
+      Object.defineProperty(root, "scrollHeight", { get: () => 1000, configurable: true });
+      Object.defineProperty(root, "clientHeight", { get: () => 500, configurable: true });
+      // Scrolled up to the top — should report not at bottom.
+      Object.defineProperty(root, "scrollTop", { get: () => 0, set: () => {}, configurable: true });
+      document.body.appendChild(root);
+      containers.push(root);
+
+      const ref = createRef<HTMLDivElement>() as { current: HTMLDivElement | null };
+      ref.current = root as HTMLDivElement;
+
+      const { result } = renderHook(() =>
+        useScrollLock(ref as RefObject<HTMLDivElement | null>)
+      );
+
+      expect(result.current.isAtBottom).toBe(false);
+    });
   });
 
   describe("scroll event handling", () => {

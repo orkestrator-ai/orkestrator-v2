@@ -2,7 +2,6 @@ import { Suspense, lazy, useEffect, useRef, useCallback, useState, useMemo } fro
 import { Loader2, AlertCircle, RefreshCw, ArrowDown, Hammer, StopCircle, ArrowUp, PlayCircle } from "lucide-react";
 import { useScrollLock } from "@/hooks";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
 import { useConfigStore, useEnvironmentStore } from "@/stores";
@@ -1385,7 +1384,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       )}
 
       {/* Messages area */}
-      <ScrollArea ref={scrollRef} className="flex-1 min-h-0">
+      <div ref={scrollRef} data-scroll-viewport="true" className="min-h-0 flex-1 overflow-y-auto">
         <div className="py-4 min-w-[320px]">
           {allSessionMessages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full min-h-[200px] text-muted-foreground gap-3">
@@ -1431,7 +1430,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
             ))
           )}
         </div>
-      </ScrollArea>
+      </div>
 
       {/* Scroll to bottom button */}
       {!isAtBottom && (

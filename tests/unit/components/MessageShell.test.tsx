@@ -119,7 +119,7 @@ describe("MessageShell", () => {
     const contentDiv = container.querySelector(".max-w-3xl") as HTMLElement;
     expect(contentDiv.className).toContain("min-w-0");
 
-    const childrenDiv = contentDiv.querySelector(".space-y-2") as HTMLElement;
+    const childrenDiv = contentDiv.querySelector(".space-y-6") as HTMLElement;
     expect(childrenDiv.className).toContain("break-words");
   });
 

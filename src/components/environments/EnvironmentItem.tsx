@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -160,80 +160,92 @@ export function EnvironmentItem({
   };
 
   const createdDate = new Date(environment.createdAt).toLocaleDateString();
+  const tooltipAnchorRef = useRef<HTMLDivElement>(null);
+  const tooltip = useHoverTooltip();
 
   return (
     <>
       <ContextMenu>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <ContextMenuTrigger asChild>
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={handleClick}
-                onKeyDown={handleKeyDown}
-                className={cn(
-                  "group flex w-full cursor-pointer items-center gap-2 py-1.5 pr-2 text-left text-[13px] transition-colors",
-                  isSelected && !isMultiSelectMode
-                    ? "text-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                  isChecked && isMultiSelectMode && "bg-zinc-800/50",
-                  (isStopping || isEnvironmentDeleting) && "opacity-60"
+        <ContextMenuTrigger className="contents">
+          <div
+            ref={tooltipAnchorRef}
+            role="button"
+            tabIndex={0}
+            onClick={handleClick}
+            onKeyDown={handleKeyDown}
+            onMouseEnter={tooltip.show}
+            onMouseLeave={tooltip.hide}
+            onFocus={tooltip.show}
+            onBlur={tooltip.hide}
+            className={cn(
+              "group flex w-full cursor-pointer items-center gap-2 py-1.5 pr-2 text-left text-[13px] transition-colors",
+              isSelected && !isMultiSelectMode
+                ? "text-foreground"
+                : "text-muted-foreground hover:text-foreground",
+              isChecked && isMultiSelectMode && "bg-zinc-800/50",
+              (isStopping || isEnvironmentDeleting) && "opacity-60"
+            )}
+          >
+            {isEnvironmentDeleting ? (
+              // Show red spinner when deleting (priority over multi-select checkbox)
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-destructive" />
+            ) : isMultiSelectMode ? (
+              <Checkbox
+                checked={isChecked}
+                onCheckedChange={handleCheckboxChange}
+                onClick={(e) => e.stopPropagation()}
+                className="h-4 w-4 shrink-0"
+              />
+            ) : isTransitioning ? (
+              // Show spinner when creating/stopping
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-500" />
+            ) : (
+              // Show Laptop for local environments, Container for containerized
+              environment.environmentType === "local" ? (
+                <Laptop className={cn(
+                  "h-4 w-4 shrink-0 transition-colors",
+                  !isRunning && "text-muted-foreground",
+                  isRunning && agentActivityState === "waiting" && "text-amber-500 animate-pulse",
+                  isRunning && agentActivityState === "working" && "text-blue-500 animate-pulse",
+                  isRunning && agentActivityState === "idle" && "text-green-500"
+                )} />
+              ) : (
+                <Container className={cn(
+                  "h-4 w-4 shrink-0 transition-colors",
+                  !isRunning && "text-muted-foreground",
+                  isRunning && agentActivityState === "waiting" && "text-amber-500 animate-pulse",
+                  isRunning && agentActivityState === "working" && "text-blue-500 animate-pulse",
+                  isRunning && agentActivityState === "idle" && "text-green-500"
+                )} />
+              )
+            )}
+            <span className={cn("flex-1 truncate font-medium", isBuildEnvironment && "text-yellow-400")}>
+              {isBuildEnvironment ? environment.name.replace(/^Build:\s*/, "") : environment.name}
+            </span>
+            {diffStats && (diffStats.additions > 0 || diffStats.deletions > 0 || diffStats.filesChanged > 0) && (
+              <span className="ml-1 flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums">
+                {diffStats.additions > 0 && (
+                  <span className="text-green-500">+{diffStats.additions}</span>
                 )}
-              >
-                {isEnvironmentDeleting ? (
-                  // Show red spinner when deleting (priority over multi-select checkbox)
-                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-destructive" />
-                ) : isMultiSelectMode ? (
-                  <Checkbox
-                    checked={isChecked}
-                    onCheckedChange={handleCheckboxChange}
-                    onClick={(e) => e.stopPropagation()}
-                    className="h-4 w-4 shrink-0"
-                  />
-                ) : isTransitioning ? (
-                  // Show spinner when creating/stopping
-                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-500" />
-                ) : (
-                  // Show Laptop for local environments, Container for containerized
-                  environment.environmentType === "local" ? (
-                    <Laptop className={cn(
-                      "h-4 w-4 shrink-0 transition-colors",
-                      !isRunning && "text-muted-foreground",
-                      isRunning && agentActivityState === "waiting" && "text-amber-500 animate-pulse",
-                      isRunning && agentActivityState === "working" && "text-blue-500 animate-pulse",
-                      isRunning && agentActivityState === "idle" && "text-green-500"
-                    )} />
-                  ) : (
-                    <Container className={cn(
-                      "h-4 w-4 shrink-0 transition-colors",
-                      !isRunning && "text-muted-foreground",
-                      isRunning && agentActivityState === "waiting" && "text-amber-500 animate-pulse",
-                      isRunning && agentActivityState === "working" && "text-blue-500 animate-pulse",
-                      isRunning && agentActivityState === "idle" && "text-green-500"
-                    )} />
-                  )
+                {diffStats.deletions > 0 && (
+                  <span className="text-red-400">-{diffStats.deletions}</span>
                 )}
-                <span className={cn("flex-1 truncate font-medium", isBuildEnvironment && "text-yellow-400")}>
-                  {isBuildEnvironment ? environment.name.replace(/^Build:\s*/, "") : environment.name}
-                </span>
-                {diffStats && (diffStats.additions > 0 || diffStats.deletions > 0 || diffStats.filesChanged > 0) && (
-                  <span className="ml-1 flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums">
-                    {diffStats.additions > 0 && (
-                      <span className="text-green-500">+{diffStats.additions}</span>
-                    )}
-                    {diffStats.deletions > 0 && (
-                      <span className="text-red-400">-{diffStats.deletions}</span>
-                    )}
-                    {diffStats.additions === 0 && diffStats.deletions === 0 && diffStats.filesChanged > 0 && (
-                      <span className="text-muted-foreground">{diffStats.filesChanged}F</span>
-                    )}
-                  </span>
+                {diffStats.additions === 0 && diffStats.deletions === 0 && diffStats.filesChanged > 0 && (
+                  <span className="text-muted-foreground">{diffStats.filesChanged}F</span>
                 )}
-              </div>
-            </ContextMenuTrigger>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" align="start" sideOffset={4}>
+              </span>
+            )}
+          </div>
+        </ContextMenuTrigger>
+        <HoverTooltipContent
+          anchorRef={tooltipAnchorRef}
+          open={tooltip.open}
+          side="bottom"
+          align="start"
+          sideOffset={4}
+          onMouseEnter={tooltip.show}
+          onMouseLeave={tooltip.hide}
+        >
             <div className="space-y-1">
               <p className="font-medium">{environment.name}</p>
               <p className="text-xs text-muted-foreground">Created: {createdDate}</p>
@@ -289,8 +301,7 @@ export function EnvironmentItem({
                 <p className="text-xs text-blue-400">PR: {environment.prUrl}</p>
               )}
             </div>
-          </TooltipContent>
-        </Tooltip>
+        </HoverTooltipContent>
         <ContextMenuContent>
           <ContextMenuItem onClick={() => setShowSettingsDialog(true)}>
             <Settings2 className="h-4 w-4 mr-2" />

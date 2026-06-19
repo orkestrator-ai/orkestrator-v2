@@ -375,7 +375,7 @@ describe("ActionBar copy URL", () => {
     });
   });
 
-  test("shows the mapped address and Ctrl+Shift+C shortcut in the tooltip", () => {
+  test("shows the mapped address and Ctrl+Shift+C shortcut in the tooltip", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       entryPort: 3000,
@@ -384,8 +384,12 @@ describe("ActionBar copy URL", () => {
 
     render(<ActionBar />);
 
-    expect(screen.getByText("localhost:49152")).toBeTruthy();
-    expect(screen.getByText("Ctrl⇧C")).toBeTruthy();
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Copy URL" }).parentElement!);
+
+    await waitFor(() => {
+      expect(screen.getByText("localhost:49152")).toBeTruthy();
+      expect(screen.getByText("Ctrl⇧C")).toBeTruthy();
+    });
   });
 
   test("copies the selected environment port address with Ctrl+Shift+C", () => {
@@ -481,7 +485,7 @@ describe("ActionBar copy URL", () => {
     expect(toastSuccessMock).not.toHaveBeenCalled();
   });
 
-  test("disables the toolbar button and ignores Ctrl+Shift+C when no port address is visible", () => {
+  test("disables the toolbar button and ignores Ctrl+Shift+C when no port address is visible", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       entryPort: 3000,
@@ -490,9 +494,14 @@ describe("ActionBar copy URL", () => {
 
     render(<ActionBar />);
 
-    expect((screen.getByRole("button", { name: "No mapped URL" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText("No mapped URL")).toBeTruthy();
-    expect(screen.queryByText("Ctrl⇧C")).toBeNull();
+    const copyButton = screen.getByRole("button", { name: "No mapped URL" }) as HTMLButtonElement;
+    expect(copyButton.disabled).toBe(true);
+    fireEvent.mouseEnter(copyButton.parentElement!);
+
+    await waitFor(() => {
+      expect(screen.getByText("No mapped URL")).toBeTruthy();
+      expect(screen.queryByText("Ctrl⇧C")).toBeNull();
+    });
 
     fireEvent.keyDown(window, { key: "C", code: "KeyC", ctrlKey: true, shiftKey: true });
 

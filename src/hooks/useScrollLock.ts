@@ -101,11 +101,19 @@ export function useScrollLock(
     setViewportElement(null);
 
     const findViewport = (): HTMLElement | null => {
-      if (!scrollRef.current) return null;
+      const root = scrollRef.current;
+      if (!root) return null;
+      if (
+        root.matches('[data-slot="scroll-area-viewport"]') ||
+        root.matches('[data-scroll-viewport="true"]')
+      ) {
+        return root;
+      }
       // Try Radix's internal attribute first, then fall back to data-slot
       return (
-        scrollRef.current.querySelector("[data-radix-scroll-area-viewport]") ||
-        scrollRef.current.querySelector('[data-slot="scroll-area-viewport"]')
+        root.querySelector("[data-radix-scroll-area-viewport]") ||
+        root.querySelector('[data-slot="scroll-area-viewport"]') ||
+        root.querySelector('[data-scroll-viewport="true"]')
       ) as HTMLElement | null;
     };
 

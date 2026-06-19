@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import type { FileMention, FileCandidate } from "@/types";
 
 interface UseFileMentionsOptions {
@@ -25,13 +25,22 @@ interface UseFileMentionsReturn {
     onSelect: (file: FileCandidate) => void
   ) => boolean;
   /** Close the menu */
-  closeMenu: () => void;
+  closeMenu: (options?: CloseMenuOptions) => void;
   /** Set selected index */
   setSelectedIndex: (index: number) => void;
   /** Serialize text for LLM (replace @filename with full path) */
   serializeForLLM: (text: string, mentions: FileMention[]) => string;
   /** Create a mention from a file candidate */
   createMention: (file: FileCandidate) => FileMention;
+}
+
+interface CloseMenuOptions {
+  /**
+   * Mention insertion can briefly restore the old cursor position inside the
+   * newly rendered @filename before moving it after the trailing space.
+   * Suppress reopening for that accepted file during this transient update.
+   */
+  suppressReopenFor?: string;
 }
 
 /**
@@ -45,8 +54,10 @@ export function useFileMentions({
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const suppressedAcceptedFilenameRef = useRef<string | null>(null);
 
-  const closeMenu = useCallback(() => {
+  const closeMenu = useCallback((options?: CloseMenuOptions) => {
+    suppressedAcceptedFilenameRef.current = options?.suppressReopenFor ?? null;
     setIsMenuOpen(false);
     setSearchQuery("");
     setSelectedIndex(0);
@@ -81,6 +92,23 @@ export function useFileMentions({
       if (atMatch) {
         // Found @ trigger
         const query = atMatch[1] ?? "";
+        const suppressedFilename = suppressedAcceptedFilenameRef.current;
+        const textAfterCursor = text.slice(position).toLowerCase();
+        const normalizedSuppressedFilename = suppressedFilename?.toLowerCase() ?? "";
+        if (
+          suppressedFilename
+          && (
+            (query.length > 0 && normalizedSuppressedFilename.startsWith(query.toLowerCase()))
+            || (query.length === 0 && textAfterCursor.startsWith(normalizedSuppressedFilename))
+          )
+        ) {
+          setIsMenuOpen(false);
+          setSearchQuery("");
+          setSelectedIndex(0);
+          return;
+        }
+
+        suppressedAcceptedFilenameRef.current = null;
         setSearchQuery(query);
         setIsMenuOpen(true);
         // Reset selection when query changes
@@ -89,6 +117,7 @@ export function useFileMentions({
         }
       } else {
         // No @ trigger - close menu
+        suppressedAcceptedFilenameRef.current = null;
         setIsMenuOpen(false);
         setSearchQuery("");
       }
@@ -132,7 +161,7 @@ export function useFileMentions({
           }
           if (filteredFiles[safeSelectedIndex]) {
             const selectedFile = filteredFiles[safeSelectedIndex];
-            closeMenu();
+            closeMenu({ suppressReopenFor: selectedFile.filename });
             onSelect(selectedFile);
             return true;
           }
@@ -147,7 +176,7 @@ export function useFileMentions({
           handleMenuKey(event);
           if (filteredFiles[safeSelectedIndex]) {
             const selectedFile = filteredFiles[safeSelectedIndex];
-            closeMenu();
+            closeMenu({ suppressReopenFor: selectedFile.filename });
             onSelect(selectedFile);
             return true;
           }

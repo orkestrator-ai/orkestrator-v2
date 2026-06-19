@@ -268,8 +268,8 @@ export function OpenCodeComposeBar({
   const handleFileMentionSelect = useCallback(
     (file: FileCandidate) => {
       const mention = createMention(file);
+      closeFileMentionMenu({ suppressReopenFor: file.filename });
       inputRef.current?.insertMention(mention);
-      closeFileMentionMenu();
     },
     [closeFileMentionMenu, createMention]
   );

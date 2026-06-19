@@ -21,6 +21,7 @@ export function getBackgroundProcessingEnvironments(
   pendingInitialPromptEnvironmentIds: Iterable<string> = [],
   loadingNativeSessionEnvironmentIds: Iterable<string> = [],
   queuedAgentPromptEnvironmentIds: Iterable<string> = [],
+  pendingSetupEnvironmentIds: Iterable<string> = [],
 ): Environment[] {
   const backgroundEnvIds = new Set<string>(setupRunningEnvironmentIds);
   for (const environmentId of pendingNativeLaunchEnvironmentIds) {
@@ -39,6 +40,11 @@ export function getBackgroundProcessingEnvironments(
     }
   }
   for (const environmentId of queuedAgentPromptEnvironmentIds) {
+    if (environmentId) {
+      backgroundEnvIds.add(environmentId);
+    }
+  }
+  for (const environmentId of pendingSetupEnvironmentIds) {
     if (environmentId) {
       backgroundEnvIds.add(environmentId);
     }

@@ -211,7 +211,6 @@ export function useEnvironments(
       if (!existingEnv) {
         console.warn("[useEnvironments] startEnvironment called for unknown environment:", environmentId);
       }
-      const isLocal = existingEnv?.environmentType === "local";
       if (existingEnv) {
         console.info("[useEnvironments] startEnvironment snapshot:", {
           environmentId,
@@ -224,16 +223,15 @@ export function useEnvironments(
       }
       setError(null);
 
-      // For local environments, block TerminalContainer init and prevent auto-resolve
+      // Block TerminalContainer init and prevent auto-resolve until the backend
+      // returns the authoritative setup command plan.
       // by placing a placeholder in pendingSetupCommands BEFORE the async call.
       // This prevents the race where updateEnvironmentInStore (which sets worktreePath)
       // triggers isLocalEnvironmentReady=true and the auto-resolve fires before
       // real setup commands are stored.
-      if (isLocal) {
-        setWorkspaceReady(environmentId, false);
-        setSetupCommandsResolved(environmentId, false);
-        setPendingSetupCommands(environmentId, []);
-      }
+      setWorkspaceReady(environmentId, false);
+      setPendingSetupCommands(environmentId, []);
+      setSetupCommandsResolved(environmentId, false);
 
       try {
         console.log("[useEnvironments] Setting status to creating...");
@@ -244,7 +242,7 @@ export function useEnvironments(
 
         // Store real setup commands BEFORE updating the environment store
         // (which sets worktreePath and triggers isLocalEnvironmentReady).
-        if (isLocal && result.setupCommands && result.setupCommands.length > 0) {
+        if (result.setupCommands && result.setupCommands.length > 0) {
           setPendingSetupCommands(environmentId, result.setupCommands);
         }
 
@@ -262,10 +260,9 @@ export function useEnvironments(
           updateEnvironmentInStore(environmentId, updatedEnv);
         }
 
-        // Allow TerminalContainer init to proceed now that commands and environment are stored
-        if (isLocal) {
-          setSetupCommandsResolved(environmentId, true);
-        }
+        // Allow TerminalContainer init to proceed now that backend setup command
+        // planning and environment storage are complete.
+        setSetupCommandsResolved(environmentId, true);
 
         if (!options?.silent) {
           toast.success("Environment started");
@@ -273,9 +270,7 @@ export function useEnvironments(
         return result.setupCommands;
       } catch (err) {
         // Unblock TerminalContainer on error so it doesn't hang
-        if (isLocal) {
-          setSetupCommandsResolved(environmentId, true);
-        }
+        setSetupCommandsResolved(environmentId, true);
         console.error("[useEnvironments] Error starting environment:", err);
         const message = getErrorMessage(err, "Failed to start environment");
         setError(message);

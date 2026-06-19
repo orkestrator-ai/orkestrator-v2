@@ -402,8 +402,34 @@ describe("App background processing mounts", () => {
       expect(screen.getByTestId("terminal-env-background")).toBeTruthy();
     });
 
+    expect(
+      screen.getByTestId("background-terminal-host").className.split(/\s+/)
+    ).not.toContain("hidden");
     expect(screen.getByTestId("terminal-env-visible").getAttribute("data-active")).toBe("true");
     expect(screen.getByTestId("terminal-env-background").getAttribute("data-active")).toBe("false");
+  });
+
+  test("keeps off-screen environments with pending setup commands mounted before setup starts", async () => {
+    resetStores({
+      environments: [
+        makeEnvironment("env-visible", "project-1"),
+        makeEnvironment("env-pending-setup", "project-2"),
+      ],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+    useEnvironmentStore.getState().setPendingSetupCommands("env-pending-setup", [
+      "/usr/local/bin/workspace-setup.sh",
+    ]);
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("terminal-env-visible")).toBeTruthy();
+      expect(screen.getByTestId("terminal-env-pending-setup")).toBeTruthy();
+    });
+
+    expect(screen.getByTestId("terminal-env-pending-setup").getAttribute("data-active")).toBe("false");
   });
 
   test("does not duplicate setup-running environments that are already visible", async () => {

@@ -310,6 +310,11 @@ fi
 if [ -f "/tmp/gitconfig" ]; then
     log_progress "Setting up Git configuration from host..."
     cp /tmp/gitconfig "$HOME/.gitconfig"
+    # Host git credential helpers often contain absolute macOS paths such as
+    # /opt/homebrew/bin/gh. Those helpers do not exist inside Linux containers
+    # and cause git clone to prompt for credentials. Keep identity/remotes from
+    # the host config, but reset helper lookup inside the container.
+    git config --global --replace-all credential.helper "" 2>/dev/null || true
     log_progress "Git config copied from host"
 else
     # Configure Git user with fallback values if not set

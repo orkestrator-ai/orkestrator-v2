@@ -254,6 +254,10 @@ export async function setEnvironmentSetupComplete(
   return invoke<Environment>("set_environment_setup_complete", { environmentId, complete });
 }
 
+export async function runEnvironmentSetup(environmentId: string): Promise<Environment> {
+  return invoke<Environment>("run_environment_setup", { environmentId });
+}
+
 /**
  * Read-only fetch of a local environment's setupLocal commands from its
  * orkestrator-ai.json. Returns null for non-local envs or when no commands.

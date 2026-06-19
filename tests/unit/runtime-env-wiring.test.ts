@@ -73,6 +73,15 @@ describe("container runtime environment wiring", () => {
     expect(helper).not.toContain("printenv");
   });
 
+  test("container setup disables host credential helpers and interactive git prompts", () => {
+    const setup = read("docker/workspace-setup.sh");
+    const entrypoint = read("docker/entrypoint.sh");
+
+    expect(entrypoint).toContain("git config --global --replace-all credential.helper \"\"");
+    expect(setup).toContain("git config --global --replace-all credential.helper \"\"");
+    expect(setup).toContain("export GIT_TERMINAL_PROMPT=0");
+  });
+
   test("container native launch paths source the captured runtime environment", () => {
     const files = [
       "src-tauri/src/commands/claude.rs",

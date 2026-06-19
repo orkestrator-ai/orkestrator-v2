@@ -822,6 +822,34 @@ describe("PersistentTerminal", () => {
     expect(setupWrite).toContain("setup_failed");
   });
 
+  it("launches first container setup commands without waiting for workspace-ready output", async () => {
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        initialCommands={["/usr/local/bin/workspace-setup.sh"]}
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={true}
+        paneId="pane-1"
+        isSetupTab={true}
+      />
+    );
+
+    await waitFor(() => {
+      const writes = (writeMock as any).mock.calls.map((call: unknown[]) => call[0]);
+      expect(writes.some((entry: unknown) =>
+        typeof entry === "string" &&
+        entry.includes("/usr/local/bin/workspace-setup.sh") &&
+        entry.includes("setup_done")
+      )).toBe(true);
+    });
+  });
+
   it("persists serialized buffers for persistent sessions on cleanup", async () => {
     const view = render(
       <PersistentTerminal

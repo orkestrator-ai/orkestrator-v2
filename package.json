@@ -29,6 +29,7 @@
     "appId": "com.orkestrator.v2",
     "productName": "OrkestratorV2",
     "directories": {
+      "buildResources": "electron/resources",
       "output": "release"
     },
     "files": [
@@ -68,9 +69,16 @@
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
+      "icon": "icon.icns",
       "target": [
         "dmg"
       ]
+    },
+    "win": {
+      "icon": "icon.ico"
+    },
+    "linux": {
+      "icon": "icons"
     }
   },
   "dependencies": {

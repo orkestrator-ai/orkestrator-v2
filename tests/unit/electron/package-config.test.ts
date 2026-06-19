@@ -11,7 +11,14 @@ describe("Electron packaging configuration", () => {
     const packageJson = await readJson<{
       main: string;
       scripts: Record<string, string>;
-      build: { files: string[]; extraResources: Array<{ from: string; to: string; filter: string[] }> };
+      build: {
+        directories: { buildResources: string; output: string };
+        files: string[];
+        extraResources: Array<{ from: string; to: string; filter: string[] }>;
+        mac: { icon: string };
+        win: { icon: string };
+        linux: { icon: string };
+      };
     }>("package.json");
     const electronTsconfig = await readJson<{ compilerOptions: { outDir: string; rootDir: string }; include: string[] }>("tsconfig.electron.json");
 
@@ -19,6 +26,13 @@ describe("Electron packaging configuration", () => {
     expect(packageJson.scripts.build).toBe("bun run build:renderer && bun run build:electron");
     expect(packageJson.scripts.package).toContain("bun run build:all");
     expect(packageJson.scripts.package).toContain("electron-builder");
+    expect(packageJson.build.directories).toMatchObject({ buildResources: "electron/resources", output: "release" });
+    expect(packageJson.build.mac.icon).toBe("icon.icns");
+    expect(packageJson.build.win.icon).toBe("icon.ico");
+    expect(packageJson.build.linux.icon).toBe("icons");
+    await expect(fs.access(path.join(process.cwd(), "electron/resources/icon.icns"))).resolves.toBeNull();
+    await expect(fs.access(path.join(process.cwd(), "electron/resources/icon.ico"))).resolves.toBeNull();
+    await expect(fs.access(path.join(process.cwd(), "electron/resources/icons/512x512.png"))).resolves.toBeNull();
     expect(packageJson.build.files).toEqual(expect.arrayContaining(["dist/**", "dist-electron/**", "package.json"]));
     expect(packageJson.build.extraResources).toEqual(expect.arrayContaining([
       expect.objectContaining({ from: "bridges/claude-bridge", to: "claude-bridge" }),

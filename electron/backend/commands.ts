@@ -217,7 +217,7 @@ const PROMPT_NAME_STOP_WORDS = new Set([
   "would",
 ]);
 
-function generateInitialEnvironmentName(prompt: string): string | undefined {
+function generateFallbackInitialEnvironmentName(prompt: string): string | undefined {
   const words = prompt.match(/[A-Za-z0-9]+/g) ?? [];
   const meaningfulWords = words
     .map((word) => word.toLowerCase())
@@ -225,6 +225,15 @@ function generateInitialEnvironmentName(prompt: string): string | undefined {
   const selectedWords = (meaningfulWords.length > 0 ? meaningfulWords : words.map((word) => word.toLowerCase())).slice(0, 3);
   if (selectedWords.length === 0) return undefined;
   return sanitizeGeneratedEnvironmentName(selectedWords.join("-"));
+}
+
+async function generateInitialEnvironmentName(prompt: string, context: CommandContext): Promise<string | undefined> {
+  try {
+    return await generateEnvironmentNameWithCodexExec(prompt, context);
+  } catch (error) {
+    console.warn("[ElectronBackend] Failed to generate initial environment name with Codex Exec; using local fallback:", error);
+    return generateFallbackInitialEnvironmentName(prompt);
+  }
 }
 
 function makeUniqueEnvironmentSlug(baseSlug: string, existingEnvironments: Environment[], extraBranches: string[] = []): string {
@@ -1291,7 +1300,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const initialPromptText = asOptionalString(initialPrompt);
     const trimmedInitialPrompt = initialPromptText?.trim();
     const generatedInitialName = !explicitName && trimmedInitialPrompt
-      ? generateInitialEnvironmentName(trimmedInitialPrompt)
+      ? await generateInitialEnvironmentName(trimmedInitialPrompt, context)
       : undefined;
     const baseName = explicitName
       ? sanitizeEnvironmentName(explicitName)

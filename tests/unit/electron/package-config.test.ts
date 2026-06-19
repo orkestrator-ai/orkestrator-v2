@@ -6,12 +6,27 @@ async function readJson<T>(relativePath: string): Promise<T> {
   return JSON.parse(await fs.readFile(path.join(process.cwd(), relativePath), "utf8")) as T;
 }
 
+async function readResource(relativePath: string): Promise<Buffer> {
+  return fs.readFile(path.join(process.cwd(), "electron/resources", relativePath));
+}
+
+function expectPngSignature(bytes: Buffer): void {
+  expect([...bytes.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+}
+
 describe("Electron packaging configuration", () => {
   test("keeps package entry points and package files aligned with the Electron build output", async () => {
     const packageJson = await readJson<{
       main: string;
       scripts: Record<string, string>;
-      build: { files: string[]; extraResources: Array<{ from: string; to: string; filter: string[] }> };
+      build: {
+        directories: { buildResources: string; output: string };
+        files: string[];
+        extraResources: Array<{ from: string; to: string; filter: string[] }>;
+        mac: { icon: string };
+        win: { icon: string };
+        linux: { icon: string };
+      };
     }>("package.json");
     const electronTsconfig = await readJson<{ compilerOptions: { outDir: string; rootDir: string }; include: string[] }>("tsconfig.electron.json");
 
@@ -19,6 +34,10 @@ describe("Electron packaging configuration", () => {
     expect(packageJson.scripts.build).toBe("bun run build:renderer && bun run build:electron");
     expect(packageJson.scripts.package).toContain("bun run build:all");
     expect(packageJson.scripts.package).toContain("electron-builder");
+    expect(packageJson.build.directories).toMatchObject({ buildResources: "electron/resources", output: "release" });
+    expect(packageJson.build.mac.icon).toBe("icon.icns");
+    expect(packageJson.build.win.icon).toBe("icon.ico");
+    expect(packageJson.build.linux.icon).toBe("icons");
     expect(packageJson.build.files).toEqual(expect.arrayContaining(["dist/**", "dist-electron/**", "package.json"]));
     expect(packageJson.build.extraResources).toEqual(expect.arrayContaining([
       expect.objectContaining({ from: "bridges/claude-bridge", to: "claude-bridge" }),
@@ -28,5 +47,18 @@ describe("Electron packaging configuration", () => {
     expect(electronTsconfig.compilerOptions.outDir).toBe("dist-electron");
     expect(electronTsconfig.compilerOptions.rootDir).toBe(".");
     expect(electronTsconfig.include).toEqual(expect.arrayContaining(["electron/**/*.ts", "scripts/electron-dev.ts"]));
+  });
+
+  test("keeps valid platform icon resources available to electron-builder", async () => {
+    const macIcon = await readResource("icon.icns");
+    const windowsIcon = await readResource("icon.ico");
+    const sourcePng = await readResource("icon.png");
+    const linuxIcon = await readResource("icons/512x512.png");
+
+    expect(macIcon.subarray(0, 4).toString("ascii")).toBe("icns");
+    expect([...windowsIcon.subarray(0, 4)]).toEqual([0x00, 0x00, 0x01, 0x00]);
+    expectPngSignature(sourcePng);
+    expectPngSignature(linuxIcon);
+    expect(sourcePng.equals(linuxIcon)).toBe(true);
   });
 });

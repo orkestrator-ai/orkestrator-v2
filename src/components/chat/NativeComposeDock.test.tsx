@@ -36,4 +36,28 @@ describe("NativeComposeDock", () => {
     expect(screen.getByRole("heading", { name: "Ready to build!" }).parentElement?.className).toContain("opacity-0");
     expect(screen.getByRole("button", { name: "Resume" }).parentElement?.className).toContain("max-h-0");
   });
+
+  test("shows the top accessory only when bottom docked", () => {
+    const { rerender } = render(
+      <NativeComposeDock
+        centered={false}
+        topAccessory={<button type="button">Scroll down</button>}
+      >
+        <textarea aria-label="Prompt" />
+      </NativeComposeDock>,
+    );
+
+    expect(screen.getByRole("button", { name: "Scroll down" })).toBeTruthy();
+
+    rerender(
+      <NativeComposeDock
+        centered={true}
+        topAccessory={<button type="button">Scroll down</button>}
+      >
+        <textarea aria-label="Prompt" />
+      </NativeComposeDock>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Scroll down" })).toBeNull();
+  });
 });

@@ -18,6 +18,7 @@ const realCodexPlanModeCardSnapshot = { ...realCodexPlanModeCard };
 const realCodexResumeSessionDialogSnapshot = { ...realCodexResumeSessionDialog };
 const realHooksSnapshot = { ...realHooks };
 const mockScrollToBottom = mock(() => {});
+let mockIsAtBottom = true;
 
 const MOCK_MODELS = [
   {
@@ -215,8 +216,8 @@ mock.module("./CodexResumeSessionDialog", () => ({
 mock.module("@/hooks", () => ({
   ...realHooksSnapshot,
   useVirtuosoScrollState: mock(() => ({
-    isAtBottom: true,
-    isAtBottomRef: { current: true },
+    isAtBottom: mockIsAtBottom,
+    isAtBottomRef: { current: mockIsAtBottom },
     scrollToBottom: mockScrollToBottom,
     virtuosoRef: { current: null },
     scrollProps: {},
@@ -418,6 +419,7 @@ describe("CodexChatTab", () => {
     mockAbortSession.mockImplementation(async () => true);
     mockCreateSession.mockClear();
     mockCreateSession.mockImplementation(async () => ({ sessionId: "session-1", title: "Test session" }));
+    mockIsAtBottom = true;
     restoreTimerHarness();
 
     resetStores();
@@ -473,6 +475,23 @@ describe("CodexChatTab", () => {
     await waitFor(() => {
       expect(screen.getByTestId("codex-compose-layout").textContent).toBe("bottom");
     });
+  });
+
+  test("shows the scroll down accessory and scrolls to the bottom when clicked", () => {
+    mockIsAtBottom = false;
+    seedCodexStore([createMessage("message-1", "Existing response")]);
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Scroll to bottom of conversation" }));
+
+    expect(mockScrollToBottom).toHaveBeenCalledTimes(1);
   });
 
   test("enables the review follow-up action after a review session has messages", () => {

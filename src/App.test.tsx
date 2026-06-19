@@ -421,6 +421,61 @@ describe("App background processing mounts", () => {
     });
   });
 
+  test("does not foreground-mount inactive sibling environments in the selected project", async () => {
+    resetStores({
+      environments: [
+        makeEnvironment("env-visible", "project-1"),
+        makeEnvironment("env-sibling", "project-1"),
+      ],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("terminal-env-visible")).toBeTruthy();
+    });
+
+    expect(screen.queryByTestId("terminal-env-sibling")).toBeNull();
+  });
+
+  test("keeps an active sibling in the selected project mounted as a hidden background terminal", async () => {
+    resetStores({
+      environments: [
+        makeEnvironment("env-visible", "project-1"),
+        makeEnvironment("env-sibling", "project-1"),
+      ],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    useBuildPipelineStore.setState({
+      pipelines: new Map([
+        [
+          "pipeline-sibling",
+          {
+            id: "pipeline-sibling",
+            environmentId: "env-sibling",
+            phase: "building",
+          } as never,
+        ],
+      ]),
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("terminal-env-visible")).toBeTruthy();
+      expect(screen.getByTestId("terminal-env-sibling")).toBeTruthy();
+    });
+
+    // Selected environment is foreground; the active sibling stays mounted but
+    // inactive so its pipeline-advancement effects keep running.
+    expect(screen.getByTestId("terminal-env-visible").getAttribute("data-active")).toBe("true");
+    expect(screen.getByTestId("terminal-env-sibling").getAttribute("data-active")).toBe("false");
+  });
+
   test("keeps off-screen environments with a pending native launch mounted", async () => {
     resetStores({
       environments: [

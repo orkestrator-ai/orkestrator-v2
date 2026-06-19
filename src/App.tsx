@@ -24,7 +24,7 @@ import {
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { getBackgroundProcessingEnvironments } from "@/lib/background-pipelines";
-import { cn, getEnvironmentIdFromSessionKey } from "@/lib/utils";
+import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
 import { checkDocker, checkClaudeCli, checkClaudeConfig, checkCodexCli, checkOpencodeCli, checkGithubCli, getAvailableAiCli, getConfig, syncAllEnvironmentsWithDocker } from "@/lib/backend";
@@ -68,9 +68,9 @@ function App() {
   const [isCheckingClaude, setIsCheckingClaude] = useState(false);
   const [githubCliWarningDismissed, setGithubCliWarningDismissed] = useState(false);
 
-  const projectEnvironments = selectedProjectId
-    ? environments.filter((env) => env.projectId === selectedProjectId)
-    : [];
+  const selectedEnvironment = selectedEnvironmentId
+    ? environments.find((env) => env.id === selectedEnvironmentId) ?? null
+    : null;
   const setupScriptsRunning = useEnvironmentStore((state) => state.setupScriptsRunning);
   const pendingNativeLaunches = useClaudeOptionsStore((state) => state.pendingNativeLaunches);
   const paneLayoutEnvironments = usePaneLayoutStore((state) => state.environments);
@@ -163,7 +163,6 @@ function App() {
       pipelines,
       environments,
       selectedEnvironmentId,
-      projectEnvironments,
       setupScriptsRunning,
       Object.keys(pendingNativeLaunches),
       pendingInitialPromptEnvironmentIds,
@@ -174,7 +173,6 @@ function App() {
       pipelines,
       environments,
       selectedEnvironmentId,
-      projectEnvironments,
       setupScriptsRunning,
       pendingNativeLaunches,
       pendingInitialPromptEnvironmentIds,
@@ -182,11 +180,6 @@ function App() {
       queuedAgentPromptEnvironmentIds,
     ],
   );
-
-  // Debug logging
-  console.log("[App] selectedEnvironmentId:", selectedEnvironmentId);
-  console.log("[App] selectedProjectId:", selectedProjectId);
-  console.log("[App] projectEnvironments:", projectEnvironments.length);
 
   const refreshDockerAvailability = useCallback(async (source: "startup" | "retry") => {
     const available = await checkDocker();
@@ -488,38 +481,24 @@ function App() {
     <TooltipProvider>
       <TerminalProvider>
         <AppShell>
-          {selectedEnvironmentId ? (
+          {selectedEnvironment ? (
             <div className="relative h-full bg-background">
-              {projectEnvironments.map((environment) => {
-                const isActive = environment.id === selectedEnvironmentId;
-                return (
-                  <div
-                    key={environment.id}
-                    className={cn(
-                      "absolute inset-0 bg-background",
-                      // Active environment gets higher z-index to ensure it's on top
-                      // and receives all pointer events. Inactive environments are
-                      // hidden and non-interactive.
-                      isActive ? "z-10" : "z-0 opacity-0 pointer-events-none"
-                    )}
-                  >
-                    <TerminalContainer
-                      environmentId={environment.id}
-                      containerId={environment.containerId ?? null}
-                      isContainerRunning={environment.status === "running"}
-                      isContainerCreating={environment.status === "creating"}
-                      isActive={isActive}
-                      className="h-full"
-                      onStartContainer={(initialPrompt) => {
-                        void handleStartEnvironmentFromOverlay(environment.id, initialPrompt);
-                      }}
-                      onCreateScript={(initialPrompt) => {
-                        void handleCreateScriptFromOverlay(environment.id, initialPrompt);
-                      }}
-                    />
-                  </div>
-                );
-              })}
+              <div className="absolute inset-0 z-10 bg-background">
+                <TerminalContainer
+                  environmentId={selectedEnvironment.id}
+                  containerId={selectedEnvironment.containerId ?? null}
+                  isContainerRunning={selectedEnvironment.status === "running"}
+                  isContainerCreating={selectedEnvironment.status === "creating"}
+                  isActive
+                  className="h-full"
+                  onStartContainer={(initialPrompt) => {
+                    void handleStartEnvironmentFromOverlay(selectedEnvironment.id, initialPrompt);
+                  }}
+                  onCreateScript={(initialPrompt) => {
+                    void handleCreateScriptFromOverlay(selectedEnvironment.id, initialPrompt);
+                  }}
+                />
+              </div>
             </div>
           ) : selectedProjectId ? (
             <KanbanBoard projectId={selectedProjectId} />

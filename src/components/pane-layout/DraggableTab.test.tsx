@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { TabInfo } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
@@ -175,5 +175,111 @@ describe("DraggableTab title precedence", () => {
     renderTab(tab, 0);
 
     expect(screen.getByText("Bar.tsx")).toBeDefined();
+  });
+});
+
+describe("DraggableTab tooltip and context menu structure", () => {
+  beforeEach(() => {
+    cleanup();
+    useSessionStore.setState({ sessions: new Map() });
+    useClaudeStore.setState({ sessions: new Map() });
+    useBuildPipelineStore.setState({ pipelines: new Map() });
+    useFileDirtyStore.setState({ dirtyFiles: new Map() });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  test("wraps the title of a file tab in the path tooltip trigger", () => {
+    const tab: TabInfo = {
+      id: "tab-file",
+      type: "file",
+      fileData: { filePath: "src/components/Foo/Bar.tsx" },
+    };
+
+    renderTab(tab, 0);
+
+    // The local TooltipTrigger wrapper tags its child with this data-slot, and
+    // `asChild` forwards it onto the title span — present only for file tabs.
+    expect(screen.getByText("Bar.tsx").getAttribute("data-slot")).toBe(
+      "tooltip-trigger",
+    );
+  });
+
+  test("does not wrap the title of a non-file tab in a tooltip trigger", () => {
+    const tab: TabInfo = {
+      id: "tab-terminal",
+      type: "plain",
+    };
+
+    renderTab(tab, 0);
+
+    expect(screen.getByText("Terminal 1").getAttribute("data-slot")).toBeNull();
+  });
+
+  test("renders a close button that calls onClose without selecting the tab", () => {
+    const onClose = mock(() => {});
+    const onSelect = mock(() => {});
+
+    render(
+      <DraggableTab
+        tab={{ id: "tab-terminal", type: "plain" }}
+        paneId="pane-1"
+        index={0}
+        isActive={false}
+        canClose
+        onSelect={onSelect}
+        onClose={onClose}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button"));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // handleClose stops propagation so the tab is not also selected.
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  test("does not render a close button when canClose is false", () => {
+    render(
+      <DraggableTab
+        tab={{ id: "tab-terminal", type: "plain" }}
+        paneId="pane-1"
+        index={0}
+        isActive={false}
+        canClose={false}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  test("exposes the close actions through the context menu", () => {
+    const onClose = mock(() => {});
+
+    render(
+      <DraggableTab
+        tab={{ id: "tab-terminal", type: "plain" }}
+        paneId="pane-1"
+        index={0}
+        isActive={false}
+        canClose
+        onSelect={() => {}}
+        onClose={onClose}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByText("Terminal 1"));
+
+    expect(screen.getByText("Close")).toBeDefined();
+    expect(screen.getByText("Close all")).toBeDefined();
+    expect(screen.getByText("Close others")).toBeDefined();
+    expect(screen.getByText("Close to the right")).toBeDefined();
+
+    fireEvent.click(screen.getByText("Close"));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

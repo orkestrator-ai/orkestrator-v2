@@ -182,53 +182,57 @@ export function DraggableTab({
     onClose?.();
   };
 
+  const title = getTabTitle();
+  const icon = getTabIcon();
+  const titleElement = <span className="max-w-[120px] truncate">{title}</span>;
+
   return (
     <ContextMenu>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <ContextMenuTrigger asChild>
-            <div
-              ref={setNodeRef}
-              style={style}
-              {...attributes}
-              {...listeners}
-              className={cn(
-                "group relative flex items-center gap-1.5 px-3 text-xs cursor-grab active:cursor-grabbing select-none self-stretch",
-                isActive
-                  ? "bg-background text-foreground"
-                  : "bg-zinc-800/85 text-muted-foreground hover:bg-zinc-800 hover:text-foreground",
-                isDragging && "opacity-50 z-50",
-              )}
-              onClick={onSelect}
+      <ContextMenuTrigger asChild>
+        <div
+          ref={setNodeRef}
+          style={style}
+          {...attributes}
+          {...listeners}
+          className={cn(
+            "group relative flex items-center gap-1.5 px-3 text-xs cursor-grab active:cursor-grabbing select-none self-stretch",
+            isActive
+              ? "bg-background text-foreground"
+              : "bg-zinc-800/85 text-muted-foreground hover:bg-zinc-800 hover:text-foreground",
+            isDragging && "opacity-50 z-50",
+          )}
+          onClick={onSelect}
+        >
+          {/* Blue focus indicator line at top */}
+          {isFocused && (
+            <div className="absolute top-0 left-0 right-0 h-0.5 bg-primary" />
+          )}
+          {icon}
+          {tab.type === "file" && tab.fileData ? (
+            <Tooltip>
+              <TooltipTrigger asChild>{titleElement}</TooltipTrigger>
+              <TooltipContent side="bottom">{tab.fileData.filePath}</TooltipContent>
+            </Tooltip>
+          ) : (
+            titleElement
+          )}
+          {isDirty && (
+            <span
+              className="h-2 w-2 rounded-full bg-muted-foreground"
+              title="Unsaved changes"
+            />
+          )}
+          {canClose && (
+            <button
+              className="ml-1 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity"
+              onClick={handleClose}
+              onMouseDown={(e) => e.stopPropagation()}
             >
-              {/* Blue focus indicator line at top */}
-              {isFocused && (
-                <div className="absolute top-0 left-0 right-0 h-0.5 bg-primary" />
-              )}
-              {getTabIcon()}
-              <span className="max-w-[120px] truncate">{getTabTitle()}</span>
-              {isDirty && (
-                <span
-                  className="h-2 w-2 rounded-full bg-muted-foreground"
-                  title="Unsaved changes"
-                />
-              )}
-              {canClose && (
-                <button
-                  className="ml-1 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity"
-                  onClick={handleClose}
-                  onMouseDown={(e) => e.stopPropagation()}
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              )}
-            </div>
-          </ContextMenuTrigger>
-        </TooltipTrigger>
-        {tab.type === "file" && tab.fileData && (
-          <TooltipContent side="bottom">{tab.fileData.filePath}</TooltipContent>
-        )}
-      </Tooltip>
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      </ContextMenuTrigger>
 
       <ContextMenuContent>
         <ContextMenuItem onClick={onClose} disabled={!canClose || !onClose}>

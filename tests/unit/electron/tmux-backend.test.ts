@@ -321,12 +321,23 @@ describe("Electron tmux backend command registration", () => {
         return status?.busy === true;
       }, 3_000);
 
-      await invoke(
-        handlers,
-        "claude_tmux_stop",
-        { tabId: "tab-initial", environmentId: environment.id },
-        context,
-      );
+      try {
+        await invoke(
+          handlers,
+          "claude_tmux_stop",
+          { tabId: "tab-initial", environmentId: environment.id },
+          context,
+        );
+      } finally {
+        // After stop the session is removed from the manager; status returns null.
+        const after = await invoke(
+          handlers,
+          "claude_tmux_status",
+          { tabId: "tab-initial", environmentId: environment.id },
+          context,
+        );
+        expect(after).toBeNull();
+      }
     });
   });
 

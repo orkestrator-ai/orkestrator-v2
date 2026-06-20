@@ -539,6 +539,31 @@ describe("ClaudeTmuxChatTab", () => {
     });
   });
 
+  test("does not set busy when the backend emits a warning instead of initial-prompt-sent", async () => {
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        initialPrompt="Run the audit"
+      />,
+    );
+
+    await waitFor(() => expect(startSessionMock).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      subscribedHandler?.({
+        kind: "warning",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        message: "Failed to send initial prompt: tmux session stopped",
+      });
+    });
+
+    // Busy must remain false — the warning path must not flip the spinner on.
+    expect(useClaudeTmuxStore.getState().getTab("tab-1").busy).toBe(false);
+  });
+
   test("toggles between native transcript and interactive terminal mode while running", async () => {
     getStatusMock.mockImplementation(async () => ({
       tab_id: "tab-1",

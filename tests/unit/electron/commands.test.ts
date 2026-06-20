@@ -652,6 +652,82 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
     });
   });
 
+  test("suffixes prompt-renamed environments when another environment already uses the generated slug", async () => {
+    const environment = createEnvironment({
+      id: "env-new",
+      name: "20260415-123456",
+      branch: "20260415-123456",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      containerId: null,
+      status: "stopped",
+    });
+    const existing = createEnvironment({
+      id: "env-existing",
+      name: "review-oauth-flow",
+      branch: "review-oauth-flow",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      containerId: null,
+      status: "stopped",
+    });
+    const { context, emitted } = createContext([environment, existing]);
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+      await expect(commands.get("rename_environment_from_prompt")?.(
+        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+        context,
+      )).resolves.toBeUndefined();
+
+      expect(environment.name).toBe("review-oauth-flow-1");
+      expect(environment.branch).toBe("review-oauth-flow-1");
+      expect(existing.name).toBe("review-oauth-flow");
+      expect(existing.branch).toBe("review-oauth-flow");
+      expect(emitted).toContainEqual({
+        event: "environment-renamed",
+        payload: { environment_id: environment.id, new_name: "review-oauth-flow-1", new_branch: "review-oauth-flow-1" },
+      });
+    });
+  });
+
+  test("suffixes prompt-renamed local environments when the project already has the generated branch", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    await runGit(worktree, ["branch", "review-oauth-flow"]);
+    const environment = createEnvironment({
+      id: "env-new",
+      name: "20260415-123456",
+      branch: "20260415-123456",
+      environmentType: "local",
+      worktreePath: undefined,
+      containerId: null,
+      status: "stopped",
+    });
+    const { context } = createContext(environment, {
+      project: {
+        id: "project-1",
+        name: "repo",
+        gitUrl: "https://github.com/acme/repo.git",
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+    });
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+      await expect(commands.get("rename_environment_from_prompt")?.(
+        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+        context,
+      )).resolves.toBeUndefined();
+
+      expect(environment.name).toBe("review-oauth-flow-1");
+      expect(environment.branch).toBe("review-oauth-flow-1");
+    });
+  });
+
   test("renames the live local git branch and advances stored branch on success", async () => {
     const worktreePath = await createGitRepoOnBranch("old-branch");
     const environment = createEnvironment({
@@ -1120,6 +1196,50 @@ exit 0
       expect(await fs.readFile(path.join(environment.worktreePath!, "tracked.txt"), "utf8")).toBe("remote\n");
       expect(environment.createdFromCommit).toMatch(/^[0-9a-f]{40}$/);
       await expect(currentGitCommit(environment.worktreePath!)).resolves.toBe(environment.createdFromCommit);
+    } finally {
+      if (environment.worktreePath) await fs.rm(environment.worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("suffixes local worktree branches when origin has an unfetched branch with the stored name", async () => {
+    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    const updater = await createTempDir("ork-electron-remote-branch-");
+    await runGit(updater, ["clone", remote, "."]);
+    await runGit(updater, ["checkout", "-b", "review-oauth-callback"]);
+    await fs.writeFile(path.join(updater, "remote-only.txt"), "remote branch\n");
+    await runGit(updater, ["add", "remote-only.txt"]);
+    await runGit(updater, ["commit", "-m", "remote branch"]);
+    await runGit(updater, ["push", "origin", "review-oauth-callback"]);
+
+    const { stdout: knownBranches } = await execFileAsync("git", ["-C", worktree, "branch", "-a", "--format=%(refname:short)"]);
+    expect(knownBranches).not.toContain("review-oauth-callback");
+
+    const environment = createEnvironment({
+      status: "stopped",
+      worktreePath: undefined,
+      branch: "review-oauth-callback",
+      environmentType: "local",
+    });
+    const projectName = `Remote Branch Collision ${randomUUID().slice(0, 8)}`;
+    const { context } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: projectName,
+        gitUrl: remote,
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: { defaultBranch: "main", prBaseBranch: "main" },
+    });
+    const commands = createCommandRegistry();
+
+    try {
+      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual({ setupCommands: [] });
+
+      expect(environment.worktreePath).toBeDefined();
+      expect(environment.branch).toBe("review-oauth-callback-1");
+      await expect(currentGitBranch(environment.worktreePath!)).resolves.toBe("review-oauth-callback-1");
     } finally {
       if (environment.worktreePath) await fs.rm(environment.worktreePath, { recursive: true, force: true });
     }

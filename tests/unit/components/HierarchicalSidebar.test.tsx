@@ -191,7 +191,7 @@ describe("HierarchicalSidebar", () => {
       expect(useClaudeOptionsStore.getState().getOptions("env-created")).toEqual(
         expect.objectContaining({
           launchAgent: true,
-          agentType: "codex",
+          agentType: "claude",
           initialPrompt: "Use this screenshot",
           initialPromptAttachments: [
             expect.objectContaining({
@@ -258,5 +258,34 @@ describe("HierarchicalSidebar", () => {
     await waitFor(() => {
       expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "Implement billing exports");
     });
+  });
+
+  test("starts the environment when initial-prompt rename fails", async () => {
+    const originalConsoleError = console.error;
+    const consoleErrorMock = mock(() => undefined);
+    console.error = consoleErrorMock as unknown as typeof console.error;
+    renameEnvironmentFromPromptMock.mockImplementationOnce(async () => {
+      throw new Error("codex unavailable");
+    });
+
+    try {
+      render(<HierarchicalSidebar />);
+
+      fireEvent.click(screen.getByTitle("Create environment"));
+      const prompt = await screen.findByLabelText(/Initial Prompt/i);
+      fireEvent.change(prompt, { target: { value: "Use fallback startup" } });
+      fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+      await waitFor(() => {
+        expect(renameEnvironmentFromPromptMock).toHaveBeenCalledWith("env-created", "Use fallback startup");
+        expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "Use fallback startup");
+      });
+      expect(consoleErrorMock).toHaveBeenCalledWith(
+        "Failed to rename environment from initial prompt:",
+        expect.any(Error),
+      );
+    } finally {
+      console.error = originalConsoleError;
+    }
   });
 });

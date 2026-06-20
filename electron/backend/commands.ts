@@ -190,54 +190,6 @@ function sanitizeGeneratedEnvironmentName(rawName: string): string {
   return name.split("-").filter(Boolean).slice(0, 3).join("-");
 }
 
-const PROMPT_NAME_STOP_WORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "at",
-  "be",
-  "by",
-  "can",
-  "could",
-  "for",
-  "from",
-  "in",
-  "is",
-  "of",
-  "on",
-  "or",
-  "please",
-  "should",
-  "that",
-  "the",
-  "these",
-  "this",
-  "those",
-  "to",
-  "with",
-  "would",
-]);
-
-function generateFallbackInitialEnvironmentName(prompt: string): string | undefined {
-  const words = prompt.match(/[A-Za-z0-9]+/g) ?? [];
-  const meaningfulWords = words
-    .map((word) => word.toLowerCase())
-    .filter((word) => word.length > 1 && !PROMPT_NAME_STOP_WORDS.has(word));
-  const selectedWords = (meaningfulWords.length > 0 ? meaningfulWords : words.map((word) => word.toLowerCase())).slice(0, 3);
-  if (selectedWords.length === 0) return undefined;
-  return sanitizeGeneratedEnvironmentName(selectedWords.join("-"));
-}
-
-async function generateInitialEnvironmentName(prompt: string, context: CommandContext): Promise<string | undefined> {
-  try {
-    return await generateEnvironmentNameWithCodexExec(prompt, context);
-  } catch (error) {
-    console.warn("[ElectronBackend] Failed to generate initial environment name with Codex Exec; using local fallback:", error);
-    return generateFallbackInitialEnvironmentName(prompt);
-  }
-}
-
 function makeUniqueEnvironmentSlug(baseSlug: string, existingEnvironments: Environment[], extraBranches: string[] = []): string {
   const used = new Set<string>();
   for (const environment of existingEnvironments) {
@@ -784,17 +736,18 @@ async function createLocalWorktree(
   baseBranch?: string,
 ): Promise<{ path: string; branch: string; createdFromCommit: string }> {
   await fs.mkdir(getWorktreeBaseDir(), { recursive: true });
-  let finalBranch = sanitizeBranchName(branch);
+  const baseSlug = sanitizeBranchName(branch);
+  const startPoint = await resolveRemoteWorktreeStartPoint(projectPath, baseBranch?.trim() || "main");
+  let finalBranch = baseSlug;
   let worktreePath = path.join(getWorktreeBaseDir(), `${sanitizeEnvironmentName(projectName)}-${finalBranch}`);
 
   let suffix = 1;
-  while (await pathExists(worktreePath)) {
-    finalBranch = `${sanitizeBranchName(branch)}-${suffix}`;
+  while (await pathExists(worktreePath) || await gitBranchExists(projectPath, finalBranch)) {
+    finalBranch = `${baseSlug}-${suffix}`;
     worktreePath = path.join(getWorktreeBaseDir(), `${sanitizeEnvironmentName(projectName)}-${finalBranch}`);
     suffix += 1;
   }
 
-  const startPoint = await resolveRemoteWorktreeStartPoint(projectPath, baseBranch?.trim() || "main");
   const args = ["-C", projectPath, "worktree", "add", "-b", finalBranch, worktreePath, startPoint];
   await runCommand("git", args, { timeoutMs: 120_000 });
   const createdFromCommit = await readLocalHeadCommit(worktreePath);
@@ -811,6 +764,23 @@ async function createLocalWorktree(
   }
 
   return { path: worktreePath, branch: finalBranch, createdFromCommit };
+}
+
+async function gitBranchExists(projectPath: string, branch: string): Promise<boolean> {
+  const refName = validateGitRefName(branch, "environment branch");
+  const refs = [`refs/heads/${refName}`, `refs/remotes/origin/${refName}`];
+  for (const ref of refs) {
+    const exists = await runCommand("git", ["-C", projectPath, "show-ref", "--verify", "--quiet", ref], { timeoutMs: 10_000 })
+      .then(() => true, () => false);
+    if (exists) return true;
+  }
+
+  const { stdout } = await runCommand(
+    "git",
+    ["-C", projectPath, "ls-remote", "--heads", "origin", `refs/heads/${refName}`],
+    { timeoutMs: 30_000 },
+  );
+  return stdout.trim().length > 0;
 }
 
 async function removeLocalWorktree(worktreePath: string): Promise<void> {
@@ -1368,9 +1338,16 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const environment = await context.storage.getEnvironment(envId);
     if (!environment) throw new Error(`Environment not found: ${envId}`);
 
-    const newName = await generateEnvironmentNameWithCodexExec(asString(prompt, "prompt"), context);
-    const newBranch = sanitizeBranchName(newName);
+    const generatedName = await generateEnvironmentNameWithCodexExec(asString(prompt, "prompt"), context);
     const oldBranch = environment.branch;
+    const project = await context.storage.getProject(environment.projectId);
+    const siblingEnvironments = (await context.storage.getEnvironmentsByProject(environment.projectId))
+      .filter((candidate) => candidate.id !== envId);
+    const existingGitBranches = project?.localPath
+      ? (await listGitBranchesAtPath(project.localPath, false)).filter((branch) => branch !== oldBranch)
+      : [];
+    const newName = makeUniqueEnvironmentSlug(generatedName, siblingEnvironments, existingGitBranches);
+    const newBranch = sanitizeBranchName(newName);
     const branchChanged = oldBranch !== newBranch;
 
     // Rename any live git branch before persisting, and only advance the stored branch

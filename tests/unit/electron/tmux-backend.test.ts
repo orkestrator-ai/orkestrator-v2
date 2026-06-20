@@ -142,10 +142,13 @@ async function invoke(
   });
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 2_000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await delay(25);
   }
   throw new Error("timed out waiting for condition");
@@ -281,6 +284,60 @@ describe("Electron tmux backend command registration", () => {
       expect(tmuxLog).toContain("-- BSpace");
       expect(emitted.some((item) => item.event === "claude-tmux:event")).toBe(true);
       expect(emitted.some((item) => item.event === `terminal-output-${terminalSessionId}`)).toBe(true);
+    });
+  });
+
+  test("marks a session busy after the backend submits an initial prompt", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment }) => {
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        {
+          tabId: "tab-initial",
+          environmentId: environment.id,
+          initialPrompt: "Run the audit",
+        },
+        context,
+      );
+
+      await waitFor(async () => {
+        const status = await invoke(
+          handlers,
+          "claude_tmux_status",
+          { tabId: "tab-initial", environmentId: environment.id },
+          context,
+        ) as { busy: boolean } | null;
+        return status?.busy === true;
+      }, 3_000);
+
+      try {
+        await invoke(
+          handlers,
+          "claude_tmux_stop",
+          { tabId: "tab-initial", environmentId: environment.id },
+          context,
+        );
+      } finally {
+        // After stop the session is removed from the manager; status returns null.
+        const after = await invoke(
+          handlers,
+          "claude_tmux_status",
+          { tabId: "tab-initial", environmentId: environment.id },
+          context,
+        );
+        expect(after).toBeNull();
+      }
     });
   });
 

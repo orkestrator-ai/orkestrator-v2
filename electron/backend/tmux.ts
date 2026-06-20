@@ -1033,6 +1033,8 @@ class TmuxSession {
     if (launchedNew) await delay(800);
     await this.waitForTuiInputReady();
     await this.submit(prompt);
+    // Hooks fire asynchronously; set busy immediately so status() is accurate before the hook lands.
+    this.busy = true;
   }
 
   private async waitForTuiInputReady(): Promise<void> {

@@ -94,6 +94,7 @@ describe("native chat scroll wiring", () => {
       isActive: false,
       persistKey: "env-env-claude:tab-claude",
       environmentId: "env-claude",
+      stickToBottomOnActivation: true,
     });
   });
 
@@ -110,6 +111,7 @@ describe("native chat scroll wiring", () => {
       isActive: false,
       persistKey: "env-env-codex:tab-codex",
       environmentId: "env-codex",
+      stickToBottomOnActivation: true,
     });
   });
 
@@ -126,6 +128,7 @@ describe("native chat scroll wiring", () => {
       isActive: false,
       persistKey: "env-env-opencode:tab-opencode",
       environmentId: "env-opencode",
+      stickToBottomOnActivation: true,
     });
   });
 });

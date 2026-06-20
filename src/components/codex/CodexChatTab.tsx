@@ -268,6 +268,7 @@ export function CodexChatTab({
     isActive,
     persistKey: sessionKey,
     environmentId,
+    stickToBottomOnActivation: true,
   });
 
   // Activity state tracking is handled globally by useGlobalActivityMonitor

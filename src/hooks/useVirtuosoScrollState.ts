@@ -56,6 +56,11 @@ interface UseVirtuosoScrollStateOptions {
   /** Optional persistence key for retaining scroll state across tab switches */
   persistKey?: string;
   /**
+   * Force every activation to jump to the current bottom and re-enable
+   * stick intent, even if the user had previously scrolled up in this view.
+   */
+  stickToBottomOnActivation?: boolean;
+  /**
    * Environment this view belongs to. When provided, the hook watches the
    * globally selected environment while the view is inactive; if it changed
    * (i.e. the user switched environments), the next activation jumps to the
@@ -106,7 +111,12 @@ interface UseVirtuosoScrollStateReturn {
 export function useVirtuosoScrollState(
   options: UseVirtuosoScrollStateOptions = {}
 ): UseVirtuosoScrollStateReturn {
-  const { isActive = true, persistKey, environmentId } = options;
+  const {
+    isActive = true,
+    persistKey,
+    environmentId,
+    stickToBottomOnActivation = false,
+  } = options;
 
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const [scrollerEl, setScrollerEl] = useState<HTMLElement | null>(null);
@@ -431,37 +441,47 @@ export function useVirtuosoScrollState(
     };
   }, [scrollerEl, scrollToBottom]);
 
-  // Tab re-activation: jump to the new bottom on return when either the user
-  // was sticky when they left, or the selected environment changed while the
-  // view was away (an environment switch always lands at the absolute bottom,
-  // regardless of prior scroll position). The jump uses the instant retry
-  // loop — animating on every env switch reads as jank, and a one-shot
-  // scrollToIndex can land short while Virtuoso re-measures items that were
-  // outside the rendered window. Reset scrollInFlightRef first so a stale
-  // flag from a prior activation cycle (e.g. a smooth scroll interrupted by
-  // switching away) can't deadlock subsequent scroll attempts.
+  // Tab re-activation: jump to the new bottom on return when the user was
+  // sticky when they left, when the selected environment changed while the
+  // view was away, or when the caller explicitly wants every activation to
+  // re-lock to the bottom. The jump uses the instant retry loop — animating
+  // on every env/tab switch reads as jank, and a one-shot scrollToIndex can
+  // land short while Virtuoso re-measures items that were outside the
+  // rendered window. Reset scrollInFlightRef first so a stale flag from a
+  // prior activation cycle (e.g. a smooth scroll interrupted by switching
+  // away) can't deadlock subsequent scroll attempts.
   //
-  // Skip on the very first activation: Virtuoso handles initial position
-  // via restoreStateFrom. If the persisted snapshot is stale (content grew
-  // while the tab was inactive), the user lands at the *old* bottom on
-  // mount; totalListHeightChanged and the ResizeObserver fallback then
-  // catch up to the new bottom as items measure. (followOutput alone is
-  // not enough — it only fires on data-item appends *after* mount.)
+  // By default, skip on the very first activation: Virtuoso handles initial
+  // position via restoreStateFrom. If the persisted snapshot is stale
+  // (content grew while the tab was inactive), the user lands at the *old*
+  // bottom on mount; totalListHeightChanged and the ResizeObserver fallback
+  // then catch up to the new bottom as items measure. Callers using
+  // stickToBottomOnActivation opt out of that preservation and intentionally
+  // force the bottom lock even on first activation.
   useEffect(() => {
     if (!isActive) return;
     const isFirstActivation = !hasBeenActiveRef.current;
     hasBeenActiveRef.current = true;
     const envChanged = envChangedWhileInactiveRef.current;
     envChangedWhileInactiveRef.current = false;
-    if (isFirstActivation) return;
+    if (stickToBottomOnActivation) {
+      wantsStickRef.current = true;
+    }
+    if (isFirstActivation && !stickToBottomOnActivation) return;
     scrollInFlightRef.current = false;
-    if (!envChanged && !wantsStickRef.current) return;
+    if (
+      !stickToBottomOnActivation &&
+      !envChanged &&
+      !wantsStickRef.current
+    ) {
+      return;
+    }
     const id = requestAnimationFrame(() => {
       if (!mountedRef.current) return;
       performScrollToBottom("auto");
     });
     return () => cancelAnimationFrame(id);
-  }, [isActive, performScrollToBottom]);
+  }, [isActive, stickToBottomOnActivation, performScrollToBottom]);
 
   return {
     isAtBottom,

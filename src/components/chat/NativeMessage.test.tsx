@@ -160,6 +160,9 @@ describe("NativeMessage task list rendering", () => {
     expect(markdownWrapper?.parentElement?.className).toContain(
       "[&_.prose>:last-child]:mb-0",
     );
+    expect(markdownWrapper?.parentElement?.parentElement?.className).toContain(
+      "py-1.5",
+    );
     expect(markdownWrapper?.parentElement?.className).not.toContain("pt-2");
   });
 

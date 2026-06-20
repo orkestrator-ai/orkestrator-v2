@@ -875,7 +875,7 @@ function TextPart({
     truncateUserPrompt && lineCount > USER_PROMPT_COLLAPSED_LINE_COUNT;
 
   return (
-    <div className="group">
+    <div className={cn("group", !truncateUserPrompt && "py-1.5")}>
       <div
         className={cn(
           "[&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0",

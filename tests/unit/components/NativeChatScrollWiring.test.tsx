@@ -3,8 +3,10 @@ import { cleanup, render } from "@testing-library/react";
 import * as realHooks from "@/hooks";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useClaudeStore } from "@/stores/claudeStore";
+import { useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 
 const realHooksSnapshot = { ...realHooks };
 const useVirtuosoScrollStateMock = mock((options: any = {}) => ({
@@ -31,8 +33,10 @@ mock.module("@/hooks", () => ({
 }));
 
 const { ClaudeChatTab } = await import("@/components/claude/ClaudeChatTab");
+const { ClaudeTmuxChatTab } = await import("@/components/claude/ClaudeTmuxChatTab");
 const { CodexChatTab } = await import("@/components/codex/CodexChatTab");
 const { OpenCodeChatTab } = await import("@/components/opencode/OpenCodeChatTab");
+const { CodexBuildChatTab } = await import("@/components/build-pipeline/CodexBuildChatTab");
 
 describe("native chat scroll wiring", () => {
   afterAll(() => {
@@ -79,6 +83,15 @@ describe("native chat scroll wiring", () => {
       draftText: new Map(),
       attachments: new Map(),
     });
+    useClaudeTmuxStore.setState({
+      tabs: new Map(),
+      attachments: new Map(),
+      draftText: new Map(),
+      draftMentions: new Map(),
+      messageQueue: new Map(),
+      effortLevels: new Map(),
+    });
+    useBuildPipelineStore.setState({ pipelines: new Map() });
   });
 
   test("Claude native passes its environmentId to the Virtuoso scroll hook", () => {
@@ -128,6 +141,39 @@ describe("native chat scroll wiring", () => {
       isActive: false,
       persistKey: "env-env-opencode:tab-opencode",
       environmentId: "env-opencode",
+      stickToBottomOnActivation: true,
+    });
+  });
+
+  test("Claude tmux passes its environmentId to the Virtuoso scroll hook", () => {
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-tmux"
+        data={{ environmentId: "env-tmux" }}
+        isActive={false}
+      />,
+    );
+
+    expect(useVirtuosoScrollStateMock).toHaveBeenCalledWith({
+      isActive: false,
+      persistKey: "claude-tmux-env:env-tmux:tab:tab-tmux",
+      environmentId: "env-tmux",
+      stickToBottomOnActivation: true,
+    });
+  });
+
+  test("build pipeline passes its environmentId to the Virtuoso scroll hook", () => {
+    render(
+      <CodexBuildChatTab
+        data={{ environmentId: "env-build", pipelineId: "pipeline-1", taskId: "task-1" }}
+        isActive={false}
+      />,
+    );
+
+    expect(useVirtuosoScrollStateMock).toHaveBeenCalledWith({
+      isActive: false,
+      persistKey: "build-pipeline-1",
+      environmentId: "env-build",
       stickToBottomOnActivation: true,
     });
   });

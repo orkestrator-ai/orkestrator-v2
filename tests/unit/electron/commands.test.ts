@@ -435,8 +435,29 @@ describe("Electron backend command registry", () => {
       expect(result.branch).toBe("oauth-callback-review");
       expect(result.initialPrompt).toBe("Please review the OAuth callback flow");
       const codexLog = await fs.readFile(logPath, "utf8");
-      expect(codexLog).toContain("exec --skip-git-repo-check --ephemeral --ignore-rules --sandbox read-only");
+      expect(codexLog).toContain("exec --skip-git-repo-check --ephemeral --ignore-rules --config model_reasoning_effort=\"low\" --sandbox read-only");
       expect(codexLog).toContain("--output-last-message");
+    });
+  });
+
+  test("creates unnamed environments from a naming prompt without storing an initial prompt", async () => {
+    const { context } = createContext([]);
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(codexSlugScript("Build Pipeline Task"), async () => {
+      const result = await commands.get("create_environment")?.(
+        {
+          projectId: "project-1",
+          namingPrompt: "Build task\n\nShip the feature\n\nAll checks green",
+          environmentType: "containerized",
+        },
+        context,
+      ) as Environment;
+
+      expect(result.name).toBe("build-pipeline-task");
+      expect(result.branch).toBe("build-pipeline-task");
+      expect(result.initialPrompt).toBeUndefined();
     });
   });
 
@@ -638,7 +659,7 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
       });
 
       const codexLog = await fs.readFile(logPath, "utf8");
-      expect(codexLog).toContain("exec --skip-git-repo-check --ephemeral --ignore-rules --sandbox read-only");
+      expect(codexLog).toContain("exec --skip-git-repo-check --ephemeral --ignore-rules --config model_reasoning_effort=\"low\" --sandbox read-only");
       expect(codexLog).toContain("--output-last-message");
       expect(codexLog).not.toContain("claude");
     });

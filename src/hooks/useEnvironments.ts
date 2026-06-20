@@ -145,11 +145,11 @@ export function useEnvironments(
   );
 
   const createEnvironment = useCallback(
-    async (pid: string, name?: string, networkAccessMode?: NetworkAccessMode, initialPrompt?: string, portMappings?: PortMapping[], environmentType?: EnvironmentType) => {
+    async (pid: string, name?: string, networkAccessMode?: NetworkAccessMode, initialPrompt?: string, portMappings?: PortMapping[], environmentType?: EnvironmentType, namingPrompt?: string) => {
       setLoading(true);
       setError(null);
       try {
-        const environment = await backend.createEnvironment(pid, name, networkAccessMode, initialPrompt, portMappings, environmentType);
+        const environment = await backend.createEnvironment(pid, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt);
         addEnvironmentToStore(environment);
         useConfigStore.getState().setRepositoryLastEnvironmentType(pid, environment.environmentType);
         toast.success("Environment created");

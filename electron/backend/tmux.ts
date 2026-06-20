@@ -1033,6 +1033,7 @@ class TmuxSession {
     if (launchedNew) await delay(800);
     await this.waitForTuiInputReady();
     await this.submit(prompt);
+    this.busy = true;
   }
 
   private async waitForTuiInputReady(): Promise<void> {

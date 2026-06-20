@@ -533,6 +533,7 @@ describe("ClaudeTmuxChatTab", () => {
     });
 
     await waitFor(() => {
+      expect(useClaudeTmuxStore.getState().getTab("tab-1").busy).toBe(true);
       const tab = usePaneLayoutStore.getState().getAllTabs("env-1")[0];
       expect(tab?.initialPrompt).toBeUndefined();
     });

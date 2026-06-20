@@ -570,6 +570,9 @@ export function ClaudeTmuxChatTab({
           return;
         case "initial-prompt-sent":
           if (ev.environment_id === environmentId) {
+            // Initial prompts are submitted by the backend, so they do not go
+            // through the compose submit path that flips busy optimistically.
+            setTabBusy(storeKey, true);
             clearTabInitialPrompt(tabId, environmentId);
           }
           return;

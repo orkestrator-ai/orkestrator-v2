@@ -170,9 +170,10 @@ export function useTerminal({
     setIsConnecting(true);
     setError(null);
 
+    let targetSessionId: string | null = null;
+    let shouldStartSession = true;
+
     try {
-      let targetSessionId: string;
-      let shouldStartSession = true;
 
       // If we have an existing session, try to reconnect to it
       if (existingSessionId) {
@@ -280,11 +281,25 @@ export function useTerminal({
       setIsConnected(true);
       console.log("[useTerminal] Connected successfully");
     } catch (err) {
-      console.error("[useTerminal] Connection error:", err);
-      const message = err instanceof Error ? err.message : "Failed to connect to terminal";
-
       // Clean up listener if we set one up
       cleanupEventListener();
+
+      if (!isCurrentConnect()) {
+        if (targetSessionId && shouldStartSession) {
+          if (isLocal) {
+            await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
+          } else {
+            await backend.detachTerminal(targetSessionId).catch(() => {});
+          }
+        }
+        if (sessionIdRef.current === targetSessionId) {
+          sessionIdRef.current = null;
+        }
+        return;
+      }
+
+      console.error("[useTerminal] Connection error:", err);
+      const message = err instanceof Error ? err.message : "Failed to connect to terminal";
 
       // If we were trying to reconnect to an existing session and it failed,
       // the session may have been cleaned up on the backend. Fall back to
@@ -297,8 +312,8 @@ export function useTerminal({
         setError(null);
 
         // Try to create a fresh session instead
+        let newSessionId: string | null = null;
         try {
-          let newSessionId: string;
           if (isLocal && environmentId) {
             newSessionId = await backend.createLocalTerminalSession(environmentId, cols, rows);
             if (!isCurrentConnect()) {
@@ -356,6 +371,20 @@ export function useTerminal({
           console.log("[useTerminal] Fallback session connected successfully");
           return;
         } catch (fallbackErr) {
+          if (!isCurrentConnect()) {
+            cleanupEventListener();
+            if (newSessionId) {
+              if (isLocal) {
+                await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
+              } else {
+                await backend.detachTerminal(newSessionId).catch(() => {});
+              }
+            }
+            if (sessionIdRef.current === newSessionId) {
+              sessionIdRef.current = null;
+            }
+            return;
+          }
           console.error("[useTerminal] Fallback session creation also failed:", fallbackErr);
           const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : "Failed to create terminal session";
           setError(`Reconnect failed and new session creation failed: ${fallbackMessage}`);

@@ -1,6 +1,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realSessionStore from "@/stores/sessionStore";
+import * as realClipboardImagePaste from "@/hooks/useClipboardImagePaste";
+import { mockReadText, mockWriteText } from "../../../tests/mocks/clipboard";
 
 // Mock modules that require a real Tauri runtime or have side effects.
 // IMPORTANT: Do NOT mock @/stores (barrel) or @/lib/tauri here — doing so
@@ -10,8 +12,6 @@ import * as realSessionStore from "@/stores/sessionStore";
 // registered in tests/setup.ts.
 
 // @/lib/native/clipboard is centrally mocked in tests/setup.ts.
-// @/hooks/useClipboardImagePaste is NOT mocked — it loads the real module
-// whose clipboard dependencies are satisfied by the central mock above.
 
 const resizeMock = mock(async () => {});
 const connectMock = mock(async () => {});
@@ -19,9 +19,13 @@ const writeMock = mock(async () => {});
 let terminalOnData: ((data: Uint8Array) => void) | undefined;
 let terminalOscHandler: ((data: string) => boolean) | undefined;
 let terminalInputDisposables: Array<{ dispose: ReturnType<typeof mock> }> = [];
+let terminalKeyHandler: ((event: KeyboardEvent) => boolean) | undefined;
+let lastUseTerminalOptions: { onData?: (data: Uint8Array) => void; user?: string } | undefined;
+let clipboardImagePasteOptions: { onImageSaved: (filePath: string) => Promise<void> } | undefined;
 
 mock.module("@/hooks/useTerminal", () => ({
-  useTerminal: (options: { onData?: (data: Uint8Array) => void }) => {
+  useTerminal: (options: { onData?: (data: Uint8Array) => void; user?: string }) => {
+    lastUseTerminalOptions = options;
     terminalOnData = options.onData;
     return {
       sessionId: "session-1",
@@ -40,9 +44,15 @@ mock.module("@/hooks/useAgentState", () => ({
   useAgentState: () => {},
 }));
 
+const realClipboardImagePasteSnapshot = { ...realClipboardImagePaste };
+mock.module("@/hooks/useClipboardImagePaste", () => ({
+  useClipboardImagePaste: (options: { onImageSaved: (filePath: string) => Promise<void> }) => {
+    clipboardImagePasteOptions = options;
+  },
+}));
+
 // @/lib/terminal-paste is NOT mocked — let the real module load.
-// Its dependencies (@/lib/native/clipboard and
-// @/hooks/useClipboardImagePaste) are centrally mocked in tests/setup.ts.
+// Its clipboard dependency is centrally mocked in tests/setup.ts.
 
 // --- Stores that need custom mock behavior (unique paths, no conflicts) ---
 
@@ -80,6 +90,7 @@ mock.module("@/stores/sessionStore", () => ({
 
 afterAll(() => {
   mock.module("@/stores/sessionStore", () => realSessionStoreSnapshot);
+  mock.module("@/hooks/useClipboardImagePaste", () => realClipboardImagePasteSnapshot);
 });
 
 let storedContainerElement: HTMLDivElement;
@@ -146,6 +157,7 @@ import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { ROOT_TERMINAL_USER } from "@/constants/terminal";
 
 const { PersistentTerminal } = await import("./PersistentTerminal");
 
@@ -190,7 +202,9 @@ function createMockTerminal(): MockTerminal {
       terminalInputDisposables.push(disposable);
       return disposable;
     }),
-    attachCustomKeyEventHandler: mock(() => {}),
+    attachCustomKeyEventHandler: mock((handler: (event: KeyboardEvent) => boolean) => {
+      terminalKeyHandler = handler;
+    }),
     clear: mock(() => {}),
     write: mock(() => {}),
     scrollToBottom: mock(() => {}),
@@ -241,6 +255,12 @@ describe("PersistentTerminal", () => {
     terminalOnData = undefined;
     terminalOscHandler = undefined;
     terminalInputDisposables = [];
+    terminalKeyHandler = undefined;
+    lastUseTerminalOptions = undefined;
+    clipboardImagePasteOptions = undefined;
+    mockReadText.mockReset();
+    mockReadText.mockImplementation(() => Promise.resolve(""));
+    mockWriteText.mockClear();
     portalStoreActions.markTerminalOpened.mockClear();
     portalStoreActions.setTerminalContainer.mockClear();
     portalStoreActions.setTerminalPane.mockClear();
@@ -478,6 +498,183 @@ describe("PersistentTerminal", () => {
     view.unmount();
 
     expect(activeDisposable!.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the root terminal user to the terminal hook for root tabs", async () => {
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="root"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        paneId="pane-1"
+      />
+    );
+
+    await waitFor(() => {
+      expect(lastUseTerminalOptions?.user).toBe(ROOT_TERMINAL_USER);
+    });
+  });
+
+  it("handles terminal copy, select-all, and paste shortcuts", async () => {
+    const terminalData = createTerminalData();
+    const terminal = terminalData.terminal as unknown as MockTerminal;
+    terminal.hasSelection.mockImplementation(() => true);
+    terminal.getSelection.mockImplementation(() => "selected text");
+    mockReadText.mockImplementation(() => Promise.resolve("pasted text"));
+
+    render(
+      <PersistentTerminal
+        terminalData={terminalData}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        paneId="pane-1"
+      />
+    );
+
+    await waitFor(() => expect(terminalKeyHandler).toBeDefined());
+
+    expect(terminalKeyHandler!(
+      new KeyboardEvent("keydown", { key: "c", metaKey: true })
+    )).toBe(false);
+    await waitFor(() => {
+      expect(mockWriteText).toHaveBeenCalledWith("selected text");
+    });
+
+    expect(terminalKeyHandler!(
+      new KeyboardEvent("keydown", { key: "a", metaKey: true })
+    )).toBe(false);
+    expect(terminal.selectAll).toHaveBeenCalled();
+
+    const pasteEvent = new KeyboardEvent("keydown", { key: "v", metaKey: true });
+    const preventDefault = mock(() => {});
+    Object.defineProperty(pasteEvent, "preventDefault", { value: preventDefault });
+    expect(terminalKeyHandler!(pasteEvent)).toBe(false);
+
+    await waitFor(() => {
+      expect(preventDefault).toHaveBeenCalled();
+      expect(writeMock).toHaveBeenCalledWith("pasted text");
+    });
+  });
+
+  it("writes escaped local image paths from the image paste hook", async () => {
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "local-env",
+          branch: "main",
+          containerId: null,
+          status: "running",
+          prUrl: null,
+          prState: null,
+          hasMergeConflicts: null,
+          createdAt: "2024-01-01T00:00:00.000Z",
+          networkAccessMode: "restricted",
+          order: 0,
+          environmentType: "local",
+          worktreePath: "/tmp/local-env",
+        },
+      ],
+    });
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData({ containerId: null })}
+        tabId="tab-1"
+        tabType="plain"
+        containerId={null}
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        paneId="pane-1"
+      />
+    );
+
+    await waitFor(() => expect(clipboardImagePasteOptions).toBeDefined());
+    await act(async () => {
+      await clipboardImagePasteOptions!.onImageSaved("/tmp/local env/image one.png");
+    });
+
+    expect(writeMock).toHaveBeenCalledWith("/tmp/local\\ env/image\\ one.png ");
+  });
+
+  it("restores the serialized buffer when a terminal moves panes", async () => {
+    const terminalData = createTerminalData({ serializedBuffer: "pane-buffer" });
+    const terminal = terminalData.terminal as unknown as MockTerminal;
+    const view = render(
+      <PersistentTerminal
+        terminalData={terminalData}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        paneId="pane-1"
+      />
+    );
+
+    view.rerender(
+      <PersistentTerminal
+        terminalData={terminalData}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        paneId="pane-2"
+      />
+    );
+
+    await waitFor(() => {
+      expect(terminal.clear).toHaveBeenCalled();
+      expect(terminal.write).toHaveBeenCalledWith("pane-buffer");
+      expect(terminal.scrollToBottom).toHaveBeenCalled();
+    });
+  });
+
+  it("recreates the terminal when the persisted container has lost xterm DOM", async () => {
+    const terminalData = createTerminalData();
+    storedContainerElement.textContent = "";
+
+    render(
+      <PersistentTerminal
+        terminalData={terminalData}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        paneId="pane-1"
+      />
+    );
+
+    await waitFor(() => {
+      expect(portalStoreActions.recreateTerminal).toHaveBeenCalledWith("env-1", "tab-1");
+    });
   });
 
   it("launches Codex terminal mode with the initial prompt", async () => {

@@ -81,7 +81,7 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function defaultEnvironmentName(): string {
+export function defaultEnvironmentName(): string {
   const iso = nowIso();
   return [
     iso.slice(0, 4),

@@ -23,6 +23,7 @@ import {
 import {
   createEnvironment,
   createProject,
+  defaultEnvironmentName,
   defaultRepositoryConfig,
   parseUpdateObject,
   sanitizeBranchName,
@@ -1337,14 +1338,12 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       : undefined;
     const baseName = explicitName
       ? sanitizeEnvironmentName(explicitName)
-      : generatedInitialName;
-    const existingEnvironments = baseName ? await storage.getEnvironmentsByProject(project.id) : [];
-    const existingGitBranches = baseName && project.localPath
+      : (generatedInitialName ?? defaultEnvironmentName());
+    const existingEnvironments = await storage.getEnvironmentsByProject(project.id);
+    const existingGitBranches = project.localPath
       ? await listGitBranchesAtPath(project.localPath, true)
       : [];
-    const uniqueName = baseName
-      ? makeUniqueEnvironmentSlug(baseName, existingEnvironments, existingGitBranches)
-      : undefined;
+    const uniqueName = makeUniqueEnvironmentSlug(baseName, existingEnvironments, existingGitBranches);
     const env = createEnvironment(project.id, {
       name: uniqueName,
       networkAccessMode: networkAccessMode === "full" ? "full" : networkAccessMode === "restricted" ? "restricted" : undefined,

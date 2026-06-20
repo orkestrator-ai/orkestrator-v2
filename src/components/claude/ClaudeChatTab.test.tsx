@@ -21,6 +21,7 @@ const mockSendPrompt = mock(async () => {});
 const mockAbortSession = mock(async () => true);
 const mockReadFileBase64 = mock(async () => "chat-local-base64");
 const mockReadContainerFileBase64 = mock(async () => "chat-container-base64");
+const mockRenameEnvironmentFromPrompt = mock(async () => {});
 
 mock.module("@/hooks", () => ({
   ...realHooksSnapshot,
@@ -70,7 +71,7 @@ mock.module("@/lib/tauri", () => ({
   getClaudeServerLog: mock(async () => ""),
   startLocalClaudeServer: mock(async () => ({ running: true, port: 9999, pid: 1234 })),
   getLocalClaudeServerStatus: mock(async () => ({ running: true, port: 9999, pid: 1234 })),
-  renameEnvironmentFromPrompt: mock(async () => {}),
+  renameEnvironmentFromPrompt: mockRenameEnvironmentFromPrompt,
   readFileBase64: mockReadFileBase64,
   readContainerFileBase64: mockReadContainerFileBase64,
   // Needed by ClaudeComposeBar/useFileSearch rendered inside ClaudeChatTab
@@ -109,7 +110,7 @@ function createData(overrides: Partial<ClaudeNativeData> = {}): ClaudeNativeData
   };
 }
 
-function resetStores() {
+function resetStores(environmentName = "review-table") {
   useConfigStore.setState((state) => ({
     ...state,
     config: {
@@ -157,7 +158,7 @@ function resetStores() {
       {
         id: ENVIRONMENT_ID,
         projectId: "project-1",
-        name: "review-table",
+        name: environmentName,
         branch: "main",
         containerId: "container-1",
         status: "running",
@@ -200,6 +201,8 @@ describe("ClaudeChatTab", () => {
     mockSendPrompt.mockClear();
     mockAbortSession.mockClear();
     mockAbortSession.mockImplementation(async () => true);
+    mockRenameEnvironmentFromPrompt.mockClear();
+    mockRenameEnvironmentFromPrompt.mockImplementation(async () => {});
     mockReadContainerFileBase64.mockReset();
     mockReadContainerFileBase64.mockImplementation(async () => "chat-container-base64");
     mockReadFileBase64.mockReset();
@@ -528,6 +531,35 @@ describe("ClaudeChatTab", () => {
           permissionMode: "bypassPermissions",
         }),
       );
+    });
+  });
+
+  test("renames compact Electron timestamp environments before draining the first queued prompt", async () => {
+    resetStores("202604151234567");
+    mockSendPrompt.mockImplementation(async () => true as any);
+    useClaudeStore.getState().addToQueue(SESSION_KEY, {
+      id: "queue-1",
+      text: "Run the queued rename",
+      attachments: [],
+      effort: "high",
+      planModeEnabled: false,
+      fastModeEnabled: false,
+    });
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
+        ENVIRONMENT_ID,
+        "Run the queued rename",
+      );
+      expect(mockSendPrompt).toHaveBeenCalled();
     });
   });
 

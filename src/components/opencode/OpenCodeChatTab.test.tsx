@@ -400,6 +400,29 @@ describe("OpenCodeChatTab", () => {
     });
   });
 
+  test("renames compact Electron timestamp environments on the first prompt", async () => {
+    resetStores("202604151234567");
+    composeText = "Audit the flaky reconnect flow";
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("opencode-send"));
+
+    await waitFor(() => {
+      expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
+        ENVIRONMENT_ID,
+        composeText,
+      );
+      expect(mockSendPrompt).toHaveBeenCalled();
+    });
+  });
+
   test("enables the review follow-up action after a review session has messages", () => {
     useOpenCodeStore.setState((state) => {
       const sessions = new Map(state.sessions);

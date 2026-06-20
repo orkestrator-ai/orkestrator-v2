@@ -46,6 +46,7 @@ import { ClaudeQuestionCard } from "@/components/claude/ClaudeQuestionCard";
 import { ClaudeTmuxInteractiveTerminal } from "@/components/claude/ClaudeTmuxInteractiveTerminal";
 import { ResumeTmuxSessionDialog } from "@/components/claude/ResumeTmuxSessionDialog";
 import { formatElapsed } from "@/lib/format-elapsed";
+import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import {
   parseSlashCommands,
   SlashCommandMenu,
@@ -102,7 +103,6 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { renameEnvironmentFromPrompt, updateGlobalConfig } from "@/lib/tauri";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
-import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import type { ClaudeTmuxData } from "@/types/paneLayout";
 import type { FileCandidate, FileMention } from "@/types";
 

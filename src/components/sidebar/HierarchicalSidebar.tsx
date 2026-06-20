@@ -34,7 +34,7 @@ import { useProjects } from "@/hooks/useProjects";
 import { useEnvironments } from "@/hooks/useEnvironments";
 import { useUIStore, useClaudeOptionsStore, useConfigStore } from "@/stores";
 import { RepositorySettings } from "@/components/settings/RepositorySettings";
-import { updateEnvironmentAgentSettings } from "@/lib/tauri";
+import { renameEnvironmentFromPrompt, updateEnvironmentAgentSettings } from "@/lib/tauri";
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import type { Environment, Project } from "@/types";
 
@@ -307,11 +307,24 @@ export function HierarchicalSidebar() {
       // Auto-start after the environment is visible. Local startup creates the
       // worktree and may fetch from the remote, so it should not keep the modal
       // open or hide the newly-created environment.
-      void startEnvironment(configuredEnvironment.id, options.initialPrompt)
-        .catch((startErr) => {
+      const initialPromptForNaming = options.initialPrompt.trim();
+      const shouldRenameFromInitialPrompt = !options.environmentName.trim() && initialPromptForNaming.length > 0;
+      void (async () => {
+        if (shouldRenameFromInitialPrompt) {
+          try {
+            await renameEnvironmentFromPrompt(configuredEnvironment.id, initialPromptForNaming);
+          } catch (renameErr) {
+            console.error("Failed to rename environment from initial prompt:", renameErr);
+          }
+        }
+
+        try {
+          await startEnvironment(configuredEnvironment.id, options.initialPrompt);
+        } catch (startErr) {
           console.error("Failed to auto-start environment:", startErr);
           // Environment was created successfully, user can manually start it.
-        });
+        }
+      })();
     } finally {
       setIsCreatingEnv(false);
     }

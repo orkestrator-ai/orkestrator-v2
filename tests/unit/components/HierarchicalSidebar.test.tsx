@@ -41,6 +41,7 @@ const createdEnvironment: Environment = {
 
 const createEnvironmentMock = mock(async () => createdEnvironment);
 const updateEnvironmentAgentSettingsMock = mock(async () => createdEnvironment);
+const renameEnvironmentFromPromptMock = mock(async () => {});
 const updateEnvironmentMock = mock(() => {});
 const startEnvironmentMock = mock(async () => undefined);
 const loadEnvironmentsMock = mock(async () => {});
@@ -77,6 +78,7 @@ mock.module("@/hooks/useEnvironmentDiffStats", () => ({
 
 mock.module("@/lib/tauri", () => ({
   ...realTauriSnapshot,
+  renameEnvironmentFromPrompt: renameEnvironmentFromPromptMock,
   updateEnvironmentAgentSettings: updateEnvironmentAgentSettingsMock,
 }));
 
@@ -111,6 +113,7 @@ describe("HierarchicalSidebar", () => {
     cleanup();
     createEnvironmentMock.mockClear();
     updateEnvironmentAgentSettingsMock.mockClear();
+    renameEnvironmentFromPromptMock.mockClear();
     updateEnvironmentMock.mockClear();
     startEnvironmentMock.mockClear();
     loadEnvironmentsMock.mockClear();
@@ -183,11 +186,12 @@ describe("HierarchicalSidebar", () => {
         "containerized",
       );
       expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled();
+      expect(renameEnvironmentFromPromptMock).toHaveBeenCalledWith("env-created", "Use this screenshot");
       expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "Use this screenshot");
       expect(useClaudeOptionsStore.getState().getOptions("env-created")).toEqual(
         expect.objectContaining({
           launchAgent: true,
-          agentType: "claude",
+          agentType: "codex",
           initialPrompt: "Use this screenshot",
           initialPromptAttachments: [
             expect.objectContaining({
@@ -219,10 +223,40 @@ describe("HierarchicalSidebar", () => {
 
     await waitFor(() => {
       expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled();
+      expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
       expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "");
       expect(screen.queryByText("Create Ork (Environment)")).toBeNull();
     });
 
     resolveStart?.();
+  });
+
+  test("closes the create dialog while initial-prompt rename runs before auto-start", async () => {
+    let resolveRename: (() => void) | undefined;
+    renameEnvironmentFromPromptMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRename = resolve;
+        }),
+    );
+
+    render(<HierarchicalSidebar />);
+
+    fireEvent.click(screen.getByTitle("Create environment"));
+    const prompt = await screen.findByLabelText(/Initial Prompt/i);
+    fireEvent.change(prompt, { target: { value: "Implement billing exports" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(renameEnvironmentFromPromptMock).toHaveBeenCalledWith("env-created", "Implement billing exports");
+      expect(screen.queryByText("Create Ork (Environment)")).toBeNull();
+    });
+    expect(startEnvironmentMock).not.toHaveBeenCalled();
+
+    resolveRename?.();
+
+    await waitFor(() => {
+      expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "Implement billing exports");
+    });
   });
 });

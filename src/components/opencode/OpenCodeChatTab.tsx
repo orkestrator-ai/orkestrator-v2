@@ -12,6 +12,7 @@ import {
   createOptimisticNativeMessage,
 } from "@/lib/chat/client-only-messages";
 import { formatElapsed } from "@/lib/format-elapsed";
+import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
@@ -23,7 +24,6 @@ import {
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
-import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import {
   createClient,

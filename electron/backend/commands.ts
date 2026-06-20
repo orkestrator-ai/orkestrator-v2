@@ -23,6 +23,7 @@ import {
 import {
   createEnvironment,
   createProject,
+  defaultEnvironmentName,
   defaultRepositoryConfig,
   parseUpdateObject,
   sanitizeBranchName,
@@ -1323,30 +1324,21 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   });
   register("get_environment", ({ environmentId }, { storage }) => storage.getEnvironment(asString(environmentId, "environmentId")));
   register("reorder_environments", ({ projectId, environmentIds }, { storage }) => storage.reorderEnvironments(asString(projectId, "projectId"), asStringArray(environmentIds)));
-  register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt }, context) => {
+  register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType }, context) => {
     const { storage } = context;
     const project = await storage.getProject(asString(projectId, "projectId"));
     if (!project) throw new Error(`Project not found: ${projectId}`);
     const repoConfig = await storage.getRepositoryConfig(project.id);
     const explicitName = asOptionalString(name)?.trim();
     const initialPromptText = asOptionalString(initialPrompt);
-    const trimmedInitialPrompt = initialPromptText?.trim();
-    const namingPromptText = asOptionalString(namingPrompt)?.trim();
-    const generatedInitialName = !explicitName && namingPromptText
-      ? await generateInitialEnvironmentName(namingPromptText, context)
-      : !explicitName && trimmedInitialPrompt
-        ? generateFallbackInitialEnvironmentName(trimmedInitialPrompt)
-        : undefined;
     const baseName = explicitName
       ? sanitizeEnvironmentName(explicitName)
-      : generatedInitialName;
-    const existingEnvironments = baseName ? await storage.getEnvironmentsByProject(project.id) : [];
-    const existingGitBranches = baseName && project.localPath
+      : defaultEnvironmentName();
+    const existingEnvironments = await storage.getEnvironmentsByProject(project.id);
+    const existingGitBranches = project.localPath
       ? await listGitBranchesAtPath(project.localPath, false)
       : [];
-    const uniqueName = baseName
-      ? makeUniqueEnvironmentSlug(baseName, existingEnvironments, existingGitBranches)
-      : undefined;
+    const uniqueName = makeUniqueEnvironmentSlug(baseName, existingEnvironments, existingGitBranches);
     const env = createEnvironment(project.id, {
       name: uniqueName,
       networkAccessMode: networkAccessMode === "full" ? "full" : networkAccessMode === "restricted" ? "restricted" : undefined,

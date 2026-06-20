@@ -81,6 +81,19 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+export function defaultEnvironmentName(): string {
+  const iso = nowIso();
+  return [
+    iso.slice(0, 4),
+    iso.slice(5, 7),
+    iso.slice(8, 10),
+    "-",
+    iso.slice(11, 13),
+    iso.slice(14, 16),
+    iso.slice(17, 19),
+  ].join("");
+}
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -202,7 +215,7 @@ export function createEnvironment(
   } = {},
 ): Environment {
   const rawName =
-    options.name?.trim() || new Date().toISOString().replace(/[-:T.]/g, "").slice(0, 15);
+    options.name?.trim() || defaultEnvironmentName();
   const name = sanitizeEnvironmentName(rawName);
   const environmentType = options.environmentType ?? "containerized";
 

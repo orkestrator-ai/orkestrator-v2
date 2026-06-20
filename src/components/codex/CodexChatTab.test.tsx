@@ -656,6 +656,29 @@ describe("CodexChatTab", () => {
     expect(mockRenameEnvironmentFromPrompt).not.toHaveBeenCalled();
   });
 
+  test("renames compact Electron timestamp environments on the first prompt", async () => {
+    composeText = "Add pagination to the review table";
+    seedEnvironment("202604151234567");
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
+        ENVIRONMENT_ID,
+        composeText,
+      );
+      expect(mockSendPrompt).toHaveBeenCalled();
+    });
+  });
+
   test("continues sending the prompt when renaming fails", async () => {
     composeText = "Investigate the failing setup flow";
     mockRenameEnvironmentFromPrompt.mockImplementation(async () => {

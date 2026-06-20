@@ -3011,6 +3011,45 @@ describe("ClaudeTmuxChatTab", () => {
     expect(callOrder).toEqual(["rename", "submit"]);
   });
 
+  test("renames a compact Electron timestamp environment before submitting the first tmux prompt", async () => {
+    seedEnvironment({
+      name: "202604151234567",
+      branch: "202604151234567",
+    });
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    const textarea = screen.getByPlaceholderText(
+      /Ask Claude anything/,
+    ) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Implement the billing export" } });
+    fireEvent.click(screen.getByTitle("Send (↵)"));
+
+    await waitFor(() => {
+      expect(renameEnvironmentFromPromptMock).toHaveBeenCalledWith(
+        "env-1",
+        "Implement the billing export",
+      );
+      expect(submitMock).toHaveBeenCalledWith(
+        "tab-1",
+        "Implement the billing export",
+        "env-1",
+      );
+    });
+  });
+
   test("does not rename a custom-named environment before submitting a tmux prompt", async () => {
     seedEnvironment({ name: "custom-env", branch: "custom-env" });
     useClaudeTmuxStore

@@ -109,7 +109,6 @@ export function useBuildPipeline() {
           undefined, // no initial prompt - we handle it via the pipeline
           undefined, // no port mappings
           environmentType,
-          buildNamingPrompt || task.title,
         );
 
         // 3. Link pipeline to environment
@@ -146,6 +145,19 @@ export function useBuildPipeline() {
         // 6. Expand the project if collapsed and select the environment in the UI
         setProjectCollapsed(task.projectId, false);
         selectProjectAndEnvironment(task.projectId, configuredEnvironment.id);
+
+        const environmentNamingPrompt = (buildNamingPrompt || task.title).trim();
+        if (environmentNamingPrompt) {
+          try {
+            await tauri.renameEnvironmentFromPrompt(configuredEnvironment.id, environmentNamingPrompt);
+            const renamedEnvironment = await tauri.getEnvironment(configuredEnvironment.id);
+            if (renamedEnvironment) {
+              useEnvironmentStore.getState().updateEnvironment(configuredEnvironment.id, renamedEnvironment);
+            }
+          } catch (renameErr) {
+            console.warn("[useBuildPipeline] Failed to rename environment from task prompt:", renameErr);
+          }
+        }
 
         // 7. Start the environment
         setPhase(pipelineId, "starting-environment");

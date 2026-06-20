@@ -2,7 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { defaultConfig, StorageService } from "../../../electron/backend/storage";
+import { createEnvironment, defaultConfig, defaultEnvironmentName, StorageService } from "../../../electron/backend/storage";
 
 mock.module("sharp", () => {
   const pipeline = {
@@ -21,6 +21,41 @@ async function createTempDir(prefix: string): Promise<string> {
   return dir;
 }
 
+function withFixedDate<T>(iso: string, fn: () => T): T {
+  const RealDate = Date;
+  const fixedTime = new RealDate(iso).getTime();
+
+  globalThis.Date = class FixedDate extends RealDate {
+    constructor(...args: any[]) {
+      if (args.length === 0) {
+        super(fixedTime);
+      } else if (args.length === 1) {
+        super(args[0]);
+      } else {
+        super(
+          args[0],
+          args[1],
+          args[2] ?? 1,
+          args[3] ?? 0,
+          args[4] ?? 0,
+          args[5] ?? 0,
+          args[6] ?? 0,
+        );
+      }
+    }
+
+    static now() {
+      return fixedTime;
+    }
+  } as DateConstructor;
+
+  try {
+    return fn();
+  } finally {
+    globalThis.Date = RealDate;
+  }
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -28,6 +63,19 @@ afterEach(async () => {
 describe("Electron StorageService", () => {
   test("default config uses the shared dark terminal background", () => {
     expect(defaultConfig().global.terminalAppearance.backgroundColor).toBe("#141414");
+  });
+
+  test("formats default environment names from UTC timestamps", () => {
+    expect(withFixedDate("2026-04-15T12:34:56.789Z", () => defaultEnvironmentName())).toBe(
+      "20260415-123456",
+    );
+  });
+
+  test("creates unnamed environments with legacy-compatible timestamp names", () => {
+    const environment = createEnvironment("project-1");
+
+    expect(environment.name).toMatch(/^\d{8}-\d{6}$/);
+    expect(environment.branch).toBe(environment.name);
   });
 
   test("recovers JSON from a rotated backup when the primary file is malformed", async () => {

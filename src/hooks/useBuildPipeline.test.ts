@@ -24,6 +24,22 @@ const mockCreateEnvironment = mock(async () => ({
   environmentType: "containerized" as const,
 }));
 const mockStartEnvironment = mock(async () => ({ setupCommands: undefined }));
+const mockRenameEnvironmentFromPrompt = mock(async () => {});
+const mockGetEnvironment = mock(async () => ({
+  id: "env-build",
+  projectId: "project-1",
+  name: "build-task",
+  branch: "build-task",
+  containerId: "container-build",
+  status: "running" as const,
+  prUrl: null,
+  prState: null,
+  hasMergeConflicts: null,
+  createdAt: "2024-01-01T00:00:00.000Z",
+  networkAccessMode: "restricted" as const,
+  order: 0,
+  environmentType: "containerized" as const,
+}));
 const mockUpdateEnvironmentAgentSettings = mock(async (
   environmentId: string,
   defaultAgent: string | null,
@@ -66,7 +82,8 @@ mock.module("@/lib/tauri", () => ({
   createEnvironment: mockCreateEnvironment,
   startEnvironment: mockStartEnvironment,
   getEnvironments: mock(async () => []),
-  getEnvironment: mock(async () => null),
+  getEnvironment: mockGetEnvironment,
+  renameEnvironmentFromPrompt: mockRenameEnvironmentFromPrompt,
   deleteEnvironment: mock(async () => {}),
   stopEnvironment: mock(async () => {}),
   syncEnvironmentStatus: mock(async () => ({
@@ -122,6 +139,8 @@ describe("useBuildPipeline", () => {
   beforeEach(() => {
     mockCreateEnvironment.mockClear();
     mockStartEnvironment.mockClear();
+    mockRenameEnvironmentFromPrompt.mockClear();
+    mockGetEnvironment.mockClear();
     mockUpdateEnvironmentAgentSettings.mockClear();
     mockToastSuccess.mockClear();
     mockToastError.mockClear();
@@ -298,6 +317,10 @@ describe("useBuildPipeline", () => {
       undefined,
       undefined,
       "containerized",
+      undefined,
+    );
+    expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
+      "env-build",
       "Build task\n\nShip the feature\n\nAll checks green",
     );
     expect(useClaudeOptionsStore.getState().options["env-build"]).toBeUndefined();

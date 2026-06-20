@@ -109,6 +109,41 @@ function createEnvironment(overrides: Partial<Environment> = {}): Environment {
   };
 }
 
+async function withFixedDate<T>(iso: string, fn: () => Promise<T> | T): Promise<T> {
+  const RealDate = Date;
+  const fixedTime = new RealDate(iso).getTime();
+
+  globalThis.Date = class FixedDate extends RealDate {
+    constructor(...args: any[]) {
+      if (args.length === 0) {
+        super(fixedTime);
+      } else if (args.length === 1) {
+        super(args[0]);
+      } else {
+        super(
+          args[0],
+          args[1],
+          args[2] ?? 1,
+          args[3] ?? 0,
+          args[4] ?? 0,
+          args[5] ?? 0,
+          args[6] ?? 0,
+        );
+      }
+    }
+
+    static now() {
+      return fixedTime;
+    }
+  } as DateConstructor;
+
+  try {
+    return await fn();
+  } finally {
+    globalThis.Date = RealDate;
+  }
+}
+
 function createContext(
   environmentOrEnvironments: Environment | Environment[],
   options: {
@@ -416,7 +451,7 @@ describe("Electron backend command registry", () => {
     expect(showOpenDialog).toHaveBeenCalledWith({ properties: ["openDirectory"] });
   });
 
-  test("creates unnamed environments with a local slug generated from the initial prompt", async () => {
+  test("creates unnamed environments with a default timestamp while storing the initial prompt", async () => {
     const { context } = createContext([]);
     await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
@@ -425,40 +460,48 @@ describe("Electron backend command registry", () => {
 printf '%s\\n' "$*" >> "$FAKE_CODEX_LOG"
 exit 42
 `, async (logPath) => {
-      const result = await commands.get("create_environment")?.(
-        {
-          projectId: "project-1",
-          initialPrompt: "Please review the OAuth callback flow",
-          environmentType: "local",
-        },
-        context,
-      ) as Environment;
+      const result = await withFixedDate("2026-04-15T12:34:56.789Z", async () =>
+        commands.get("create_environment")?.(
+          {
+            projectId: "project-1",
+            initialPrompt: "Please review the OAuth callback flow",
+            environmentType: "local",
+          },
+          context,
+        ) as Promise<Environment>,
+      );
 
-      expect(result.name).toBe("review-oauth-callback");
-      expect(result.branch).toBe("review-oauth-callback");
+      expect(result.name).toBe("20260415-123456");
+      expect(result.branch).toBe("20260415-123456");
       expect(result.initialPrompt).toBe("Please review the OAuth callback flow");
       await expect(fs.readFile(logPath, "utf8")).rejects.toThrow();
     });
   });
 
-  test("creates unnamed environments from a naming prompt without storing an initial prompt", async () => {
+  test("creates unnamed environments from a naming prompt without running codex during create", async () => {
     const { context } = createContext([]);
     await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
 
-    await withFakeCodex(codexSlugScript("Build Pipeline Task"), async () => {
-      const result = await commands.get("create_environment")?.(
-        {
-          projectId: "project-1",
-          namingPrompt: "Build task\n\nShip the feature\n\nAll checks green",
-          environmentType: "containerized",
-        },
-        context,
-      ) as Environment;
+    await withFakeCodex(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_CODEX_LOG"
+exit 42
+`, async (logPath) => {
+      const result = await withFixedDate("2026-04-15T12:34:56.789Z", async () =>
+        commands.get("create_environment")?.(
+          {
+            projectId: "project-1",
+            namingPrompt: "Build task\n\nShip the feature\n\nAll checks green",
+            environmentType: "containerized",
+          },
+          context,
+        ) as Promise<Environment>,
+      );
 
-      expect(result.name).toBe("build-pipeline-task");
-      expect(result.branch).toBe("build-pipeline-task");
+      expect(result.name).toBe("20260415-123456");
+      expect(result.branch).toBe("20260415-123456");
       expect(result.initialPrompt).toBeUndefined();
+      await expect(fs.readFile(logPath, "utf8")).rejects.toThrow();
     });
   });
 
@@ -472,87 +515,65 @@ printf '%s\\n' "$*" >> "$FAKE_CODEX_LOG"
 printf 'codex auth required\\n' >&2
 exit 1
 `, async (logPath) => {
-      const result = await commands.get("create_environment")?.(
-        {
-          projectId: "project-1",
-          initialPrompt: "Please review the OAuth callback flow",
-          environmentType: "local",
-        },
-        context,
-      ) as Environment;
+      const result = await withFixedDate("2026-04-15T12:34:56.789Z", async () =>
+        commands.get("create_environment")?.(
+          {
+            projectId: "project-1",
+            initialPrompt: "Please review the OAuth callback flow",
+            environmentType: "local",
+          },
+          context,
+        ) as Promise<Environment>,
+      );
 
-      expect(result.name).toBe("review-oauth-callback");
-      expect(result.branch).toBe("review-oauth-callback");
+      expect(result.name).toBe("20260415-123456");
+      expect(result.branch).toBe("20260415-123456");
       expect(result.initialPrompt).toBe("Please review the OAuth callback flow");
       await expect(fs.readFile(logPath, "utf8")).rejects.toThrow();
     });
-  });
-
-  test("suffixes initial-prompt environment slugs when an existing branch uses the slug", async () => {
-    const existing = createEnvironment({
-      id: "env-existing",
-      name: "existing",
-      branch: "review-oauth-callback",
-    });
-    const { context } = createContext(existing);
-    const commands = createCommandRegistry();
-
-    const result = await commands.get("create_environment")?.(
-      {
-        projectId: "project-1",
-        initialPrompt: "Please review the OAuth callback flow",
-        environmentType: "local",
-      },
-      context,
-    ) as Environment;
-
-    expect(result.name).toBe("review-oauth-callback-1");
-    expect(result.branch).toBe("review-oauth-callback-1");
-  });
-
-  test("suffixes initial-prompt environment slugs when the local repo already has the branch", async () => {
-    const { worktree } = await createGitWorktreeWithOrigin();
-    await runGit(worktree, ["branch", "review-oauth-callback"]);
-    const { context } = createContext([]);
-    (context.storage.getProject as ReturnType<typeof mock>).mockImplementation(async () => ({
-      id: "project-1",
-      name: "repo",
-      gitUrl: "https://github.com/acme/repo.git",
-      localPath: worktree,
-      addedAt: new Date(0).toISOString(),
-      order: 0,
-    }));
-    const commands = createCommandRegistry();
-
-    const result = await commands.get("create_environment")?.(
-      {
-        projectId: "project-1",
-        initialPrompt: "Please review the OAuth callback flow",
-        environmentType: "local",
-      },
-      context,
-    ) as Environment;
-
-    expect(result.name).toBe("review-oauth-callback-1");
-    expect(result.branch).toBe("review-oauth-callback-1");
   });
 
   test("falls back to the default timestamp name when an initial prompt cannot form a slug", async () => {
     const { context } = createContext([]);
     const commands = createCommandRegistry();
 
-    const result = await commands.get("create_environment")?.(
-      {
-        projectId: "project-1",
-        initialPrompt: "🔥🔥🔥",
-        environmentType: "local",
-      },
-      context,
-    ) as Environment;
+    const result = await withFixedDate("2026-04-15T12:34:56.789Z", async () =>
+      commands.get("create_environment")?.(
+        {
+          projectId: "project-1",
+          initialPrompt: "🔥🔥🔥",
+          environmentType: "local",
+        },
+        context,
+      ) as Promise<Environment>,
+    );
 
-    expect(result.name).toMatch(/^\d{15}$/);
+    expect(result.name).toBe("20260415-123456");
     expect(result.branch).toBe(result.name);
     expect(result.initialPrompt).toBe("🔥🔥🔥");
+  });
+
+  test("suffixes default timestamp names when another environment already uses the same timestamp", async () => {
+    const existing = createEnvironment({
+      id: "env-existing",
+      name: "20260415-123456",
+      branch: "20260415-123456",
+    });
+    const { context } = createContext(existing);
+    const commands = createCommandRegistry();
+
+    const result = await withFixedDate("2026-04-15T12:34:56.789Z", async () =>
+      commands.get("create_environment")?.(
+        {
+          projectId: "project-1",
+          environmentType: "local",
+        },
+        context,
+      ) as Promise<Environment>,
+    );
+
+    expect(result.name).toBe("20260415-123456-1");
+    expect(result.branch).toBe("20260415-123456-1");
   });
 
   test("suffixes explicit environment names when the current project already uses the slug", async () => {
@@ -575,29 +596,6 @@ exit 1
 
     expect(result.name).toBe("custom-name-1");
     expect(result.branch).toBe("custom-name-1");
-  });
-
-  test("does not suffix initial-prompt names for duplicate slugs in a different project", async () => {
-    const otherProjectEnvironment = createEnvironment({
-      id: "env-other-project",
-      projectId: "project-2",
-      name: "review-oauth-callback",
-      branch: "review-oauth-callback",
-    });
-    const { context } = createContext(otherProjectEnvironment);
-    const commands = createCommandRegistry();
-
-    const result = await commands.get("create_environment")?.(
-      {
-        projectId: "project-1",
-        initialPrompt: "Please review the OAuth callback flow",
-        environmentType: "local",
-      },
-      context,
-    ) as Environment;
-
-    expect(result.name).toBe("review-oauth-callback");
-    expect(result.branch).toBe("review-oauth-callback");
   });
 
   test("renames environments from prompts using codex exec output", async () => {

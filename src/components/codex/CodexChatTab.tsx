@@ -11,6 +11,7 @@ import {
   createOptimisticNativeMessage,
 } from "@/lib/chat/client-only-messages";
 import { formatElapsed } from "@/lib/format-elapsed";
+import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import {
   type CodexConversationMode,
   type CodexMessage,
@@ -55,7 +56,6 @@ import {
 } from "./codex-preferences";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
-import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { cn } from "@/lib/utils";
 import type { CodexNativeData } from "@/types/paneLayout";

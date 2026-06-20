@@ -407,6 +407,7 @@ export function ClaudeTmuxChatTab({
     isActive: isActive && !interactiveMode,
     persistKey: `claude-tmux-${stateKey}`,
     environmentId,
+    stickToBottomOnActivation: true,
   });
   const queueLength = useClaudeTmuxStore(
     useCallback(

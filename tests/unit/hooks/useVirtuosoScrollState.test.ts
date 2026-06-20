@@ -975,6 +975,49 @@ describe("useVirtuosoScrollState", () => {
       }
     });
 
+    test("stickToBottomOnActivation jumps and re-engages stick even after user scrolled up", async () => {
+      const { result, rerender } = renderHook(
+        ({ isActive }) =>
+          useVirtuosoScrollState({
+            isActive,
+            stickToBottomOnActivation: true,
+          }),
+        { initialProps: { isActive: false } }
+      );
+
+      const scrollToIndexCalls: any[] = [];
+      const scrollToCalls: any[] = [];
+      result.current.virtuosoRef.current = {
+        scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
+        scrollTo: (opts: any) => scrollToCalls.push(opts),
+        getState: () => {},
+      } as any;
+
+      const el = document.createElement("div");
+      document.body.appendChild(el);
+      try {
+        act(() => result.current.scrollProps.scrollerRef(el));
+        act(() => {
+          el.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+        });
+        expect(result.current.scrollProps.followOutput(false)).toBe(false);
+
+        rerender({ isActive: true });
+
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        });
+
+        expect(scrollToIndexCalls).toEqual([{ index: "LAST", align: "end" }]);
+        expect(scrollToCalls).toEqual([
+          { top: 10_000_000, behavior: "auto" },
+        ]);
+        expect(result.current.scrollProps.followOutput(false)).toBe("smooth");
+      } finally {
+        document.body.removeChild(el);
+      }
+    });
+
     test("cancels pending activation scroll if isActive flips false before rAF fires", async () => {
       // The activation effect schedules its instant jump via rAF and
       // returns a cleanup that cancels it. If the user toggles tabs again

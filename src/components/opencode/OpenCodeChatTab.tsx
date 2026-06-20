@@ -265,6 +265,7 @@ export function OpenCodeChatTab({
     isActive,
     persistKey: sessionKey,
     environmentId,
+    stickToBottomOnActivation: true,
   });
 
   // Get pending questions for this session - subscribe to the Map for reactivity

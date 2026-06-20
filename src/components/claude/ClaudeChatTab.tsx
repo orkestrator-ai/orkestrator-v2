@@ -163,6 +163,7 @@ export function ClaudeChatTab({
     isActive,
     persistKey: sessionKey,
     environmentId,
+    stickToBottomOnActivation: true,
   });
 
   const pendingQuestions = useMemo(() => {

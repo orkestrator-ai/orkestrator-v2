@@ -587,6 +587,58 @@ describe("NativeMessage", () => {
     expect(mockReadFileBase64).not.toHaveBeenCalled();
   });
 
+  test("reads decoded local image paths from file URLs", async () => {
+    const windowsFileUrlMessage: NativeMessageType = {
+      id: "msg-windows-file-url-preview",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "file",
+          content: "windows-shot.png",
+          fileUrl: "file:///C:/Users/Ada/Pictures/windows-shot.png",
+        },
+      ],
+    };
+
+    const { rerender } = render(
+      <NativeMessage message={windowsFileUrlMessage} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /windows-shot\.png/i }));
+
+    await screen.findByAltText("windows-shot.png");
+    expect(mockReadFileBase64).toHaveBeenCalledWith(
+      "C:/Users/Ada/Pictures/windows-shot.png",
+    );
+
+    mockReadFileBase64.mockClear();
+
+    const uncFileUrlMessage: NativeMessageType = {
+      id: "msg-unc-file-url-preview",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "file",
+          content: "network-shot.png",
+          fileUrl: "file://server/share/folder/network-shot.png",
+        },
+      ],
+    };
+
+    rerender(<NativeMessage message={uncFileUrlMessage} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /network-shot\.png/i }));
+
+    await screen.findByAltText("network-shot.png");
+    expect(mockReadFileBase64).toHaveBeenCalledWith(
+      "//server/share/folder/network-shot.png",
+    );
+  });
+
   test("shows an error state when local image preview loading fails", async () => {
     const consoleError = console.error;
     console.error = mock(() => {}) as typeof console.error;
@@ -692,6 +744,93 @@ describe("NativeMessage", () => {
     expect(screen.getByRole("button", { name: /example\.ts/i })).toBeTruthy();
   });
 
+  test("renders unified edit diffs, raw output fallbacks, and error-only edit details", () => {
+    const unifiedDiffMessage: NativeMessageType = {
+      id: "msg-edit-unified-diff",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "success",
+          toolDiff: {
+            filePath: "/workspace/src/example.ts",
+            diff:
+              "--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-old\n+new",
+          },
+        },
+      ],
+    };
+
+    const { rerender } = render(
+      <TerminalContextHarness>
+        <NativeMessage message={unifiedDiffMessage} />
+      </TerminalContextHarness>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /edit example\.ts success/i }),
+    );
+    expect(screen.getByText("--- a/src/example.ts")).toBeTruthy();
+    expect(screen.getByText("+++ b/src/example.ts")).toBeTruthy();
+    expect(screen.getByText("-old")).toBeTruthy();
+    expect(screen.getByText("+new")).toBeTruthy();
+
+    const rawOutputMessage: NativeMessageType = {
+      id: "msg-edit-raw-output",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "success",
+          toolOutput: "Applied patch without a diff preview",
+        },
+      ],
+    };
+
+    rerender(
+      <TerminalContextHarness>
+        <NativeMessage message={rawOutputMessage} />
+      </TerminalContextHarness>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /edit success/i }));
+    expect(screen.getByText("Applied patch without a diff preview")).toBeTruthy();
+    expect(screen.getByText("Unknown file")).toBeTruthy();
+
+    const errorOnlyMessage: NativeMessageType = {
+      id: "msg-edit-error-only",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "failure",
+          toolError: "Patch failed to apply",
+        },
+      ],
+    };
+
+    rerender(
+      <TerminalContextHarness>
+        <NativeMessage message={errorOnlyMessage} />
+      </TerminalContextHarness>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /edit failure/i }));
+    expect(screen.getByText("Patch failed to apply")).toBeTruthy();
+  });
+
   test("shows shell commands in collapsed Claude Bash tool rows", () => {
     const message: NativeMessageType = {
       id: "msg-claude-bash-command-summary",
@@ -722,6 +861,108 @@ describe("NativeMessage", () => {
 
     fireEvent.click(trigger);
     expect(screen.getByText("$ pwd && rg --files | head -200")).toBeTruthy();
+  });
+
+  test("shows search, URL, and query arguments in collapsed generic tool rows", () => {
+    const message: NativeMessageType = {
+      id: "msg-generic-tool-summaries",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Glob",
+          toolName: "Glob",
+          toolArgs: { pattern: "src/**/*.tsx" },
+          toolState: "success",
+        },
+        {
+          type: "tool-invocation",
+          content: "Grep",
+          toolName: "Grep",
+          toolArgs: { regex: "TODO|FIXME" },
+          toolState: "success",
+        },
+        {
+          type: "tool-invocation",
+          content: "WebFetch",
+          toolName: "WebFetch",
+          toolArgs: { url: "https://docs.example.com/reference" },
+          toolState: "success",
+        },
+        {
+          type: "tool-invocation",
+          content: "WebFetch",
+          toolName: "WebFetch",
+          toolArgs: { url: "not a valid url" },
+          toolState: "failure",
+        },
+        {
+          type: "tool-invocation",
+          content: "WebSearch",
+          toolName: "WebSearch",
+          toolArgs: { query: "react suspense testing" },
+          toolState: "success",
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    expect(
+      screen.getByRole("button", { name: /glob src\/\*\*\/\*\.tsx success/i }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /grep todo\|fixme success/i }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: /webfetch docs\.example\.com success/i,
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: /webfetch not a valid url failure/i,
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: /websearch react suspense testing success/i,
+      }),
+    ).toBeTruthy();
+  });
+
+  test("renders task-list thinking parts as collapsible activity", () => {
+    const message: NativeMessageType = {
+      id: "msg-thinking-task-list",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "thinking",
+          content: "- [ ] Review diff\n- [x] Run tests",
+        },
+      ],
+    };
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    const trigger = screen.getByRole("button", { name: /thinking task list/i });
+    expect(trigger).toBeTruthy();
+
+    fireEvent.click(trigger);
+
+    expect(screen.getByText("Review diff")).toBeTruthy();
+    expect(screen.getByText("Run tests")).toBeTruthy();
+    expect(container.querySelectorAll("[data-task-list-icon]")).toHaveLength(2);
+    expect(
+      container.querySelector("[data-task-list-icon][data-state='checked']"),
+    ).toBeTruthy();
+    expect(
+      container.querySelector("[data-task-list-icon][data-state='unchecked']"),
+    ).toBeTruthy();
   });
 
   test("renders transcript-derived subagent groups as collapsible activity stacks", () => {

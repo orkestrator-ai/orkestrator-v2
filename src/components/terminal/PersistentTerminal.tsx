@@ -47,6 +47,7 @@ import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 // If new buffer is less than 50% of stored buffer size, it likely represents a cleared
 // or intermediate state that shouldn't overwrite the valid stored content.
 const BUFFER_SIZE_THRESHOLD = 0.5;
+const terminalInputDisposables = new WeakMap<object, { dispose: () => void }>();
 
 interface PersistentTerminalProps {
   /** Pre-created terminal data from portal store */
@@ -867,11 +868,14 @@ export function PersistentTerminal({
     // Always update pane tracking
     setTerminalPane(environmentId, tabId, paneId);
 
-    // Handle user input - must be set up on every mount because disposable is cleaned up on unmount
+    // Handle user input. The xterm instance persists across portal moves, so
+    // defensively remove any older input handler before installing this owner.
+    terminalInputDisposables.get(terminal)?.dispose();
     const dataDisposable = terminal.onData((data) => {
       writeRef.current(data);
       updateActivityThrottledRef.current();
     });
+    terminalInputDisposables.set(terminal, dataDisposable);
 
     // Intercept clipboard shortcuts
     terminal.attachCustomKeyEventHandler((event) => {
@@ -970,7 +974,10 @@ export function PersistentTerminal({
         console.error(`[PersistentTerminal] Cleanup - failed to serialize buffer:`, err);
       }
 
-      dataDisposable.dispose();
+      if (terminalInputDisposables.get(terminal) === dataDisposable) {
+        terminalInputDisposables.delete(terminal);
+        dataDisposable.dispose();
+      }
       // NOTE: Don't remove the container element from DOM here
       // It will be moved when the component remounts with a new portal target
     };

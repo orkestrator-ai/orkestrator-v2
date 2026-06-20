@@ -2,7 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { defaultConfig, StorageService } from "../../../electron/backend/storage";
+import { createEnvironment, defaultConfig, StorageService } from "../../../electron/backend/storage";
 
 mock.module("sharp", () => {
   const pipeline = {
@@ -28,6 +28,13 @@ afterEach(async () => {
 describe("Electron StorageService", () => {
   test("default config uses the shared dark terminal background", () => {
     expect(defaultConfig().global.terminalAppearance.backgroundColor).toBe("#141414");
+  });
+
+  test("creates unnamed environments with legacy-compatible timestamp names", () => {
+    const environment = createEnvironment("project-1");
+
+    expect(environment.name).toMatch(/^\d{8}-\d{6}$/);
+    expect(environment.branch).toBe(environment.name);
   });
 
   test("recovers JSON from a rotated backup when the primary file is malformed", async () => {

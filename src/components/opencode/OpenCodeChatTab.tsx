@@ -12,6 +12,7 @@ import {
   createOptimisticNativeMessage,
 } from "@/lib/chat/client-only-messages";
 import { formatElapsed } from "@/lib/format-elapsed";
+import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
@@ -1162,7 +1163,7 @@ export function OpenCodeChatTab({
       // This avoids renaming the branch while the agent is doing git operations.
       if (!session.messages.length) {
         const env = useEnvironmentStore.getState().getEnvironmentById(environmentId);
-        if (env && /^\d{8}-\d{6}$/.test(env.name)) {
+        if (env && isDefaultTimestampEnvironmentName(env.name)) {
           const namingMsgId = `${SYSTEM_MESSAGE_PREFIX}naming-${crypto.randomUUID()}`;
           addMessage(sessionKey, {
             id: namingMsgId,

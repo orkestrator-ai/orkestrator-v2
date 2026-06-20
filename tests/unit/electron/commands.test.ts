@@ -557,7 +557,7 @@ exit 1
         context,
       ) as Environment;
 
-      expect(result.name).toMatch(/^\d{15}$/);
+      expect(result.name).toMatch(/^\d{8}-\d{6}$/);
       expect(result.branch).toBe(result.name);
       expect(result.initialPrompt).toBe("🔥🔥🔥");
     });

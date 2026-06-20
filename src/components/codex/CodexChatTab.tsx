@@ -11,6 +11,7 @@ import {
   createOptimisticNativeMessage,
 } from "@/lib/chat/client-only-messages";
 import { formatElapsed } from "@/lib/format-elapsed";
+import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import {
   type CodexConversationMode,
   type CodexMessage,
@@ -306,7 +307,7 @@ export function CodexChatTab({
 
       if (!session.messages.length) {
         const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
-        if (environment && /^\d{8}-\d{6}$/.test(environment.name)) {
+        if (environment && isDefaultTimestampEnvironmentName(environment.name)) {
           const namingMessageId = `${SYSTEM_MESSAGE_PREFIX}naming-${crypto.randomUUID()}`;
           addMessage(sessionKey, {
             id: namingMessageId,

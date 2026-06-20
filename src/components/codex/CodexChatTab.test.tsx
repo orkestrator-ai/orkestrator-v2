@@ -490,7 +490,7 @@ describe("CodexChatTab", () => {
     );
 
     const scrollButton = screen.getByRole("button", { name: "Scroll to bottom of conversation" });
-    expect(scrollButton.closest(".absolute")).not.toBeNull();
+    expect(scrollButton.closest('[data-testid="compose-dock"]')).not.toBeNull();
 
     fireEvent.click(scrollButton);
 
@@ -548,7 +548,7 @@ describe("CodexChatTab", () => {
     );
 
     const planCard = screen.getByTestId("codex-plan-mode-card");
-    const composeDock = screen.getByTestId("codex-compose-layout").closest(".absolute");
+    const composeDock = screen.getByTestId("codex-compose-layout").closest('[data-testid="compose-dock"]');
     expect(composeDock?.contains(planCard)).toBe(true);
   });
 

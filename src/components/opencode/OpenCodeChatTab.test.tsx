@@ -353,7 +353,7 @@ describe("OpenCodeChatTab", () => {
     );
 
     const scrollButton = screen.getByRole("button", { name: "Scroll to bottom of conversation" });
-    expect(scrollButton.closest(".absolute")).not.toBeNull();
+    expect(scrollButton.closest('[data-testid="compose-dock"]')).not.toBeNull();
 
     fireEvent.click(scrollButton);
 

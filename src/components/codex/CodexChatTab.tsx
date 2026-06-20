@@ -1339,6 +1339,7 @@ export function CodexChatTab({
                 </div>
               )}
 
+              {/* h-32 ≈ compose bar; h-80 adds room for the plan card (~230px) above it */}
               <div className={showPlanModeCard ? "h-80" : "h-32"} aria-hidden="true" />
             </>
           }

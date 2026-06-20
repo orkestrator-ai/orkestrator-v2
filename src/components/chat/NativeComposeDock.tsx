@@ -18,6 +18,7 @@ export function NativeComposeDock({
 }: NativeComposeDockProps) {
   return (
     <div
+      data-testid="compose-dock"
       className={cn(
         "absolute inset-x-0 z-20 px-4 transition-[top,transform] duration-300 ease-out motion-reduce:transition-none",
         centered ? "top-1/2 -translate-y-1/2" : "top-full -translate-y-full",

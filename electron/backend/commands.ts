@@ -286,6 +286,8 @@ async function generateEnvironmentNameWithCodexExec(prompt: string, context: Com
       "--skip-git-repo-check",
       "--ephemeral",
       "--ignore-rules",
+      "--config",
+      "model_reasoning_effort=\"low\"",
       "--sandbox",
       "read-only",
       "--cd",
@@ -293,7 +295,7 @@ async function generateEnvironmentNameWithCodexExec(prompt: string, context: Com
       "--output-last-message",
       outputPath,
       buildSlugGenerationPrompt(trimmedPrompt),
-    ], { timeoutMs: 30_000 });
+    ], { timeoutMs: 90_000 });
 
     const response = await fs.readFile(outputPath, "utf8").catch(() => stdout);
     return sanitizeGeneratedEnvironmentName(parseSlugFromResponse(response.trim()));
@@ -779,7 +781,7 @@ async function createLocalWorktree(
   projectName: string,
   branch: string,
   baseBranch?: string,
-): Promise<{ path: string; branch: string }> {
+): Promise<{ path: string; branch: string; createdFromCommit: string }> {
   await fs.mkdir(getWorktreeBaseDir(), { recursive: true });
   let finalBranch = sanitizeBranchName(branch);
   let worktreePath = path.join(getWorktreeBaseDir(), `${sanitizeEnvironmentName(projectName)}-${finalBranch}`);
@@ -794,6 +796,7 @@ async function createLocalWorktree(
   const startPoint = await resolveRemoteWorktreeStartPoint(projectPath, baseBranch?.trim() || "main");
   const args = ["-C", projectPath, "worktree", "add", "-b", finalBranch, worktreePath, startPoint];
   await runCommand("git", args, { timeoutMs: 120_000 });
+  const createdFromCommit = await readLocalHeadCommit(worktreePath);
 
   await fs.mkdir(path.join(worktreePath, ".orkestrator"), { recursive: true });
   await fs.appendFile(path.join(worktreePath, ".git", "info", "exclude"), "\n.orkestrator/\n").catch(() => undefined);
@@ -806,7 +809,7 @@ async function createLocalWorktree(
     }
   }
 
-  return { path: worktreePath, branch: finalBranch };
+  return { path: worktreePath, branch: finalBranch, createdFromCommit };
 }
 
 async function removeLocalWorktree(worktreePath: string): Promise<void> {
@@ -818,6 +821,25 @@ async function removeLocalWorktree(worktreePath: string): Promise<void> {
 async function dockerExec(containerId: string, command: string, timeoutMs = 120_000): Promise<string> {
   const { stdout } = await runCommand("docker", ["exec", containerId, "bash", "-lc", command], { timeoutMs });
   return stdout;
+}
+
+async function readLocalHeadCommit(worktreePath: string): Promise<string> {
+  const { stdout } = await runCommand("git", ["-C", worktreePath, "rev-parse", "HEAD"], { timeoutMs: 30_000 });
+  return stdout.trim();
+}
+
+async function readContainerHeadCommit(containerId: string): Promise<string | undefined> {
+  const commit = await dockerExec(containerId, "git -C /workspace rev-parse HEAD 2>/dev/null || true", 30_000);
+  const trimmed = commit.trim();
+  return /^[0-9a-f]{40}$/i.test(trimmed) ? trimmed : undefined;
+}
+
+async function captureCreatedFromCommit(environment: Environment, storage: StorageService): Promise<Environment> {
+  if (environment.createdFromCommit) return environment;
+  const commit = environment.environmentType === "local"
+    ? environment.worktreePath ? await readLocalHeadCommit(environment.worktreePath).catch(() => undefined) : undefined
+    : environment.containerId ? await readContainerHeadCommit(environment.containerId).catch(() => undefined) : undefined;
+  return commit ? storage.updateEnvironment(environment.id, { createdFromCommit: commit }) : environment;
 }
 
 async function dockerExecDetached(containerId: string, command: string): Promise<void> {
@@ -1301,7 +1323,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   });
   register("get_environment", ({ environmentId }, { storage }) => storage.getEnvironment(asString(environmentId, "environmentId")));
   register("reorder_environments", ({ projectId, environmentIds }, { storage }) => storage.reorderEnvironments(asString(projectId, "projectId"), asStringArray(environmentIds)));
-  register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType }, context) => {
+  register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt }, context) => {
     const { storage } = context;
     const project = await storage.getProject(asString(projectId, "projectId"));
     if (!project) throw new Error(`Project not found: ${projectId}`);
@@ -1309,8 +1331,9 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const explicitName = asOptionalString(name)?.trim();
     const initialPromptText = asOptionalString(initialPrompt);
     const trimmedInitialPrompt = initialPromptText?.trim();
-    const generatedInitialName = !explicitName && trimmedInitialPrompt
-      ? await generateInitialEnvironmentName(trimmedInitialPrompt, context)
+    const namingPromptText = asOptionalString(namingPrompt)?.trim() || trimmedInitialPrompt;
+    const generatedInitialName = !explicitName && namingPromptText
+      ? await generateInitialEnvironmentName(namingPromptText, context)
       : undefined;
     const baseName = explicitName
       ? sanitizeEnvironmentName(explicitName)
@@ -1406,7 +1429,12 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
         if (!project?.localPath) throw new Error("Project has no local path - cannot create a local worktree");
         const repoConfig = await storage.getRepositoryConfig(project.id);
         const worktree = await createLocalWorktree(project.localPath, project.name, environment.branch, repoConfig.defaultBranch);
-        const updated = await storage.updateEnvironment(environment.id, { worktreePath: worktree.path, branch: worktree.branch, status: "running" });
+        const updated = await storage.updateEnvironment(environment.id, {
+          worktreePath: worktree.path,
+          branch: worktree.branch,
+          createdFromCommit: worktree.createdFromCommit,
+          status: "running",
+        });
         return { setupCommands: await readEnvironmentSetupCommands(updated) };
       }
 
@@ -1448,9 +1476,10 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     storage.updateEnvironment(asString(environmentId, "environmentId"), { prUrl: null, prState: null, hasMergeConflicts: null }).then(() => undefined),
   );
   register("get_environment_pr_url", async ({ environmentId }, { storage }) => (await storage.getEnvironment(asString(environmentId, "environmentId")))?.prUrl ?? null);
-  register("set_environment_setup_complete", ({ environmentId, complete }, { storage }) =>
-    storage.updateEnvironment(asString(environmentId, "environmentId"), { setupScriptsComplete: asBoolean(complete) }),
-  );
+  register("set_environment_setup_complete", async ({ environmentId, complete }, { storage }) => {
+    const updated = await storage.updateEnvironment(asString(environmentId, "environmentId"), { setupScriptsComplete: asBoolean(complete) });
+    return asBoolean(complete) ? captureCreatedFromCommit(updated, storage) : updated;
+  });
   register("run_environment_setup", async ({ environmentId }, context) => {
     const environment = await context.storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
@@ -1469,7 +1498,8 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
 
     try {
       await dockerExec(environment.containerId, CONTAINER_WORKSPACE_SETUP_COMMAND, 30 * 60_000);
-      const updated = await context.storage.updateEnvironment(environment.id, { setupScriptsComplete: true });
+      const completed = await context.storage.updateEnvironment(environment.id, { setupScriptsComplete: true });
+      const updated = await captureCreatedFromCommit(completed, context.storage);
       context.emit("environment-setup-complete", {
         environment_id: environment.id,
         success: true,

@@ -217,6 +217,7 @@ export function createEnvironment(
     prState: null,
     hasMergeConflicts: null,
     createdAt: nowIso(),
+    createdFromCommit: undefined,
     networkAccessMode: options.networkAccessMode ?? (environmentType === "local" ? "full" : "restricted"),
     allowedDomains: undefined,
     order: 0,
@@ -502,6 +503,7 @@ export class StorageService {
       "opencodeMode",
       "codexMode",
       "initialPrompt",
+      "createdFromCommit",
     ] as const;
     for (const field of stringFields) {
       if (field in updates) {

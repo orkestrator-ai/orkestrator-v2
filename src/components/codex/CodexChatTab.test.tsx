@@ -489,7 +489,10 @@ describe("CodexChatTab", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Scroll to bottom of conversation" }));
+    const scrollButton = screen.getByRole("button", { name: "Scroll to bottom of conversation" });
+    expect(scrollButton.closest('[data-testid="compose-dock"]')).not.toBeNull();
+
+    fireEvent.click(scrollButton);
 
     expect(mockScrollToBottom).toHaveBeenCalledTimes(1);
   });
@@ -544,7 +547,9 @@ describe("CodexChatTab", () => {
       />,
     );
 
-    expect(screen.getByTestId("codex-plan-mode-card")).toBeTruthy();
+    const planCard = screen.getByTestId("codex-plan-mode-card");
+    const composeDock = screen.getByTestId("codex-compose-layout").closest('[data-testid="compose-dock"]');
+    expect(composeDock?.contains(planCard)).toBe(true);
   });
 
   test("does not show plan approval for an empty plan-review assistant message", () => {

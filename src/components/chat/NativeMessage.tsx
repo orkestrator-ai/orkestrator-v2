@@ -180,6 +180,12 @@ function ToolPart({
   const getDisplayInfo = (): string | null => {
     if (!toolArgs) return null;
 
+    // For shell commands, show the command in the collapsed row.
+    const command = toolArgs.command as string | undefined;
+    if (command) {
+      return command;
+    }
+
     // For Read tool - show filename
     const filePath = toolArgs.file_path as string | undefined;
     if (filePath) {
@@ -875,7 +881,7 @@ function TextPart({
     truncateUserPrompt && lineCount > USER_PROMPT_COLLAPSED_LINE_COUNT;
 
   return (
-    <div className="group">
+    <div className={cn("group", !truncateUserPrompt && "py-1.5")}>
       <div
         className={cn(
           "[&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0",

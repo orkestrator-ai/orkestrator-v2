@@ -49,10 +49,15 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
   const activePaneId = currentEnvState?.activePaneId ?? "default";
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Read target branch reactively from config store (not stale tab data)
-  const projectId = useEnvironmentStore((state) => state.getEnvironmentById(environmentId)?.projectId);
+  // Read the diff baseline reactively from the environment/config stores.
+  const { projectId, createdFromCommit } = useEnvironmentStore(
+    useShallow((state) => {
+      const env = state.getEnvironmentById(environmentId);
+      return { projectId: env?.projectId, createdFromCommit: env?.createdFromCommit };
+    })
+  );
   const repositories = useConfigStore((state) => state.config.repositories);
-  const targetBranch = projectId ? (repositories[projectId]?.prBaseBranch || "main") : "main";
+  const comparisonRef = createdFromCommit || (projectId ? (repositories[projectId]?.prBaseBranch || "main") : "main");
 
   // Set up droppable for tabbar
   const { setNodeRef, isOver } = useDroppable({
@@ -143,7 +148,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                 language={tab.fileData.language}
                 isDiff={tab.fileData.isDiff}
                 gitStatus={tab.fileData.gitStatus}
-                baseBranch={tab.fileData.isDiff ? targetBranch : tab.fileData.baseBranch}
+                baseBranch={tab.fileData.isDiff ? comparisonRef : tab.fileData.baseBranch}
               />
             );
           }

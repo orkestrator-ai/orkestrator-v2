@@ -376,6 +376,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     isActive,
     persistKey: `build-${pipelineId}`,
     environmentId,
+    stickToBottomOnActivation: true,
   });
 
   // Flatten sessions into a single ordered list of rows (divider → messages →

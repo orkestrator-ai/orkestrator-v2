@@ -50,11 +50,22 @@ export function useTerminal({
 
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const onDataRef = useRef(onData);
+  const isConnectedRef = useRef(false);
+  const isConnectingRef = useRef(false);
+  const connectGenerationRef = useRef(0);
 
   // Keep onData ref up to date
   useEffect(() => {
     onDataRef.current = onData;
   }, [onData]);
+
+  const cleanupEventListener = useCallback(() => {
+    const unlisten = unlistenRef.current;
+    if (unlisten) {
+      unlisten();
+      unlistenRef.current = null;
+    }
+  }, []);
 
   // Track previous containerId to detect changes
   const previousContainerIdRef = useRef<string | null>(null);
@@ -64,11 +75,9 @@ export function useTerminal({
     // If containerId changed and we have an active session, disconnect
     if (previousContainerIdRef.current !== containerId && sessionId) {
       console.log("[useTerminal] Container changed, disconnecting from previous session");
+      connectGenerationRef.current += 1;
       // Clean up event listener
-      if (unlistenRef.current) {
-        unlistenRef.current();
-        unlistenRef.current = null;
-      }
+      cleanupEventListener();
       // Detach terminal (use appropriate method based on isLocal)
       if (isLocalRef.current) {
         backend.closeLocalTerminalSession(sessionId).catch(() => {});
@@ -77,13 +86,15 @@ export function useTerminal({
       }
       // Clear ref immediately to prevent stale writes
       sessionIdRef.current = null;
+      isConnectedRef.current = false;
+      isConnectingRef.current = false;
       setSessionId(null);
       setIsConnected(false);
       setIsConnecting(false);
       setError(null);
     }
     previousContainerIdRef.current = containerId;
-  }, [containerId, sessionId]);
+  }, [containerId, sessionId, cleanupEventListener]);
 
   // Track sessionId in a ref for cleanup on unmount
   const sessionIdRef = useRef<string | null>(null);
@@ -108,11 +119,11 @@ export function useTerminal({
   useEffect(() => {
     return () => {
       console.log("[useTerminal] Cleanup on unmount, sessionId:", sessionIdRef.current, "persist:", persistSessionRef.current);
+      connectGenerationRef.current += 1;
       if (unlistenRef.current) {
         console.log("[useTerminal] Unlistening from events");
-        unlistenRef.current();
-        unlistenRef.current = null;
       }
+      cleanupEventListener();
       // Only detach if we're NOT persisting the session
       if (sessionIdRef.current && !persistSessionRef.current) {
         console.log("[useTerminal] Detaching terminal session:", sessionIdRef.current, "isLocal:", isLocalRef.current);
@@ -126,8 +137,10 @@ export function useTerminal({
           });
         }
       }
+      isConnectedRef.current = false;
+      isConnectingRef.current = false;
     };
-  }, []); // Empty deps - only run on unmount
+  }, [cleanupEventListener]);
 
   const connect = useCallback(async () => {
     console.log("[useTerminal] connect called, containerId:", containerId, "environmentId:", environmentId, "isLocal:", isLocal, "existingSessionId:", existingSessionId);
@@ -145,17 +158,22 @@ export function useTerminal({
       }
     }
 
-    if (isConnecting || isConnected) {
+    if (isConnectingRef.current || isConnectedRef.current) {
       console.log("[useTerminal] Already connecting or connected, skipping");
       return;
     }
 
+    isConnectingRef.current = true;
+    const connectGeneration = connectGenerationRef.current + 1;
+    connectGenerationRef.current = connectGeneration;
+    const isCurrentConnect = () => connectGenerationRef.current === connectGeneration;
     setIsConnecting(true);
     setError(null);
 
+    let targetSessionId: string | null = null;
+    let shouldStartSession = true;
+
     try {
-      let targetSessionId: string;
-      let shouldStartSession = true;
 
       // If we have an existing session, try to reconnect to it
       if (existingSessionId) {
@@ -164,6 +182,7 @@ export function useTerminal({
           console.warn("[useTerminal] Failed to check existing terminal session, creating a new one:", err);
           return null;
         });
+        if (!isCurrentConnect()) return;
 
         if (existingStatus?.running) {
           targetSessionId = existingSessionId;
@@ -181,17 +200,38 @@ export function useTerminal({
         // Create new local session
         console.log("[useTerminal] Creating local terminal session for environment:", environmentId);
         targetSessionId = await backend.createLocalTerminalSession(environmentId, cols, rows);
+        if (!isCurrentConnect()) {
+          await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
+          return;
+        }
         console.log("[useTerminal] Got local sessionId:", targetSessionId);
       } else {
         // Create new container session
         console.log("[useTerminal] Calling createTerminalSession...");
         targetSessionId = await backend.createTerminalSession(containerId!, cols, rows, user);
+        if (!isCurrentConnect()) {
+          await backend.detachTerminal(targetSessionId).catch(() => {});
+          return;
+        }
         console.log("[useTerminal] Got sessionId:", targetSessionId);
+      }
+
+      if (!isCurrentConnect()) {
+        if (shouldStartSession) {
+          if (isLocal) {
+            await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
+          } else {
+            await backend.detachTerminal(targetSessionId).catch(() => {});
+          }
+        }
+        return;
       }
 
       // Update ref immediately so write() can use it right away
       sessionIdRef.current = targetSessionId;
       setSessionId(targetSessionId);
+
+      cleanupEventListener();
 
       // Listen for terminal output events
       const eventName = `terminal-output-${targetSessionId}`;
@@ -202,6 +242,17 @@ export function useTerminal({
           onDataRef.current(data);
         }
       });
+      if (!isCurrentConnect()) {
+        unlisten();
+        if (shouldStartSession) {
+          if (isLocal) {
+            await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
+          } else {
+            await backend.detachTerminal(targetSessionId).catch(() => {});
+          }
+        }
+        return;
+      }
 
       unlistenRef.current = unlisten;
 
@@ -214,18 +265,41 @@ export function useTerminal({
           await backend.startTerminalSession(targetSessionId);
         }
       }
+      if (!isCurrentConnect()) {
+        cleanupEventListener();
+        if (shouldStartSession) {
+          if (isLocal) {
+            await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
+          } else {
+            await backend.detachTerminal(targetSessionId).catch(() => {});
+          }
+        }
+        return;
+      }
 
+      isConnectedRef.current = true;
       setIsConnected(true);
       console.log("[useTerminal] Connected successfully");
     } catch (err) {
+      // Clean up listener if we set one up
+      cleanupEventListener();
+
+      if (!isCurrentConnect()) {
+        if (targetSessionId && shouldStartSession) {
+          if (isLocal) {
+            await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
+          } else {
+            await backend.detachTerminal(targetSessionId).catch(() => {});
+          }
+        }
+        if (sessionIdRef.current === targetSessionId) {
+          sessionIdRef.current = null;
+        }
+        return;
+      }
+
       console.error("[useTerminal] Connection error:", err);
       const message = err instanceof Error ? err.message : "Failed to connect to terminal";
-
-      // Clean up listener if we set one up
-      if (unlistenRef.current) {
-        unlistenRef.current();
-        unlistenRef.current = null;
-      }
 
       // If we were trying to reconnect to an existing session and it failed,
       // the session may have been cleaned up on the backend. Fall back to
@@ -233,21 +307,32 @@ export function useTerminal({
       if (existingSessionId) {
         console.log("[useTerminal] Reconnect failed, falling back to new session");
         sessionIdRef.current = null;
+        isConnectedRef.current = false;
         setSessionId(null);
         setError(null);
 
         // Try to create a fresh session instead
+        let newSessionId: string | null = null;
         try {
-          let newSessionId: string;
           if (isLocal && environmentId) {
             newSessionId = await backend.createLocalTerminalSession(environmentId, cols, rows);
+            if (!isCurrentConnect()) {
+              await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
+              return;
+            }
           } else {
             newSessionId = await backend.createTerminalSession(containerId!, cols, rows, user);
+            if (!isCurrentConnect()) {
+              await backend.detachTerminal(newSessionId).catch(() => {});
+              return;
+            }
           }
           console.log("[useTerminal] Created fallback session:", newSessionId);
 
           sessionIdRef.current = newSessionId;
           setSessionId(newSessionId);
+
+          cleanupEventListener();
 
           const eventName = `terminal-output-${newSessionId}`;
           const unlisten = await listen<number[]>(eventName, (event) => {
@@ -256,6 +341,15 @@ export function useTerminal({
               onDataRef.current(data);
             }
           });
+          if (!isCurrentConnect()) {
+            unlisten();
+            if (isLocal) {
+              await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
+            } else {
+              await backend.detachTerminal(newSessionId).catch(() => {});
+            }
+            return;
+          }
           unlistenRef.current = unlisten;
 
           if (isLocal) {
@@ -263,10 +357,34 @@ export function useTerminal({
           } else {
             await backend.startTerminalSession(newSessionId);
           }
+          if (!isCurrentConnect()) {
+            cleanupEventListener();
+            if (isLocal) {
+              await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
+            } else {
+              await backend.detachTerminal(newSessionId).catch(() => {});
+            }
+            return;
+          }
+          isConnectedRef.current = true;
           setIsConnected(true);
           console.log("[useTerminal] Fallback session connected successfully");
           return;
         } catch (fallbackErr) {
+          if (!isCurrentConnect()) {
+            cleanupEventListener();
+            if (newSessionId) {
+              if (isLocal) {
+                await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
+              } else {
+                await backend.detachTerminal(newSessionId).catch(() => {});
+              }
+            }
+            if (sessionIdRef.current === newSessionId) {
+              sessionIdRef.current = null;
+            }
+            return;
+          }
           console.error("[useTerminal] Fallback session creation also failed:", fallbackErr);
           const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : "Failed to create terminal session";
           setError(`Reconnect failed and new session creation failed: ${fallbackMessage}`);
@@ -290,22 +408,24 @@ export function useTerminal({
           }
           sessionIdRef.current = null;
         }
+        isConnectedRef.current = false;
         setSessionId(null);
       }
     } finally {
-      setIsConnecting(false);
+      if (isCurrentConnect()) {
+        isConnectingRef.current = false;
+        setIsConnecting(false);
+      }
     }
-  }, [containerId, environmentId, isLocal, cols, rows, isConnecting, isConnected, existingSessionId, user]);
+  }, [containerId, environmentId, isLocal, cols, rows, existingSessionId, user, cleanupEventListener]);
 
   const disconnect = useCallback(async () => {
     if (!sessionId) return;
+    connectGenerationRef.current += 1;
 
     try {
       // Stop listening for events
-      if (unlistenRef.current) {
-        unlistenRef.current();
-        unlistenRef.current = null;
-      }
+      cleanupEventListener();
 
       // Detach terminal (use appropriate method based on isLocal)
       if (isLocalRef.current) {
@@ -318,10 +438,12 @@ export function useTerminal({
     } finally {
       // Clear ref immediately to prevent stale writes
       sessionIdRef.current = null;
+      isConnectedRef.current = false;
+      isConnectingRef.current = false;
       setSessionId(null);
       setIsConnected(false);
     }
-  }, [sessionId]);
+  }, [sessionId, cleanupEventListener]);
 
   const resize = useCallback(
     async (newCols: number, newRows: number) => {

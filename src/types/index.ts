@@ -48,6 +48,8 @@ export interface Environment {
   /** Whether the PR has merge conflicts with the target branch */
   hasMergeConflicts: boolean | null;
   createdAt: string;
+  /** Git commit that this environment was originally created from. */
+  createdFromCommit?: string;
   /** Network access mode (defaults to "restricted" for security) */
   networkAccessMode: NetworkAccessMode;
   /** Custom allowed domains for this environment (overrides global if set) */

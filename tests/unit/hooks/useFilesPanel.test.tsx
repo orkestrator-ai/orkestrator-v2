@@ -163,6 +163,27 @@ describe("useFilesPanel", () => {
     expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
   });
 
+  test("loads local changes against the environment creation commit when available", async () => {
+    const environment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+      createdFromCommit: "abc123def456",
+    });
+    resetStores(environment);
+    useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
+    mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([change]));
+
+    renderHook(() => useFilesPanel());
+
+    await waitFor(() => {
+      expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "abc123def456");
+      expect(useFilesPanelStore.getState().targetBranch).toBe("abc123def456");
+    });
+  });
+
   test("loads container file tree only when a container environment is running", async () => {
     const environment = createMockEnvironment({
       id: "env-container",
@@ -208,6 +229,27 @@ describe("useFilesPanel", () => {
 
     expect(mockGetLocalGitStatus).not.toHaveBeenCalled();
     expect(useFilesPanelStore.getState().isLoadingChanges).toBe(false);
+  });
+
+  test("loads container changes against the environment creation commit when available", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+      createdFromCommit: "abc123def456",
+    });
+    resetStores(environment);
+    useFilesPanelStore.setState({ isOpen: true, activeTab: "changes" });
+    mockGetGitStatus.mockImplementation(() => Promise.resolve([change]));
+
+    renderHook(() => useFilesPanel());
+
+    await waitFor(() => {
+      expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "abc123def456");
+      expect(useFilesPanelStore.getState().changes).toEqual([change]);
+    });
   });
 
   test("loads local file tree for available local environments", async () => {

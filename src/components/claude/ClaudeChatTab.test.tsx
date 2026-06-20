@@ -12,6 +12,7 @@ import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessag
 const realHooksSnapshot = { ...realHooks };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 const mockScrollToBottom = mock(() => {});
+let mockIsAtBottom = true;
 const mockCreateSession = mock(async () => ({ sessionId: "session-1" }));
 const mockGetModels = mock(async () => []);
 const mockGetSessionMessages = mock(async (): Promise<ClaudeMessageType[]> => []);
@@ -24,8 +25,8 @@ const mockReadContainerFileBase64 = mock(async () => "chat-container-base64");
 mock.module("@/hooks", () => ({
   ...realHooksSnapshot,
   useVirtuosoScrollState: mock(() => ({
-    isAtBottom: true,
-    isAtBottomRef: { current: true },
+    isAtBottom: mockIsAtBottom,
+    isAtBottomRef: { current: mockIsAtBottom },
     scrollToBottom: mockScrollToBottom,
     virtuosoRef: { current: null },
     scrollProps: {},
@@ -188,6 +189,7 @@ describe("ClaudeChatTab", () => {
   beforeEach(() => {
     cleanup();
     resetStores();
+    mockIsAtBottom = true;
     mockScrollToBottom.mockClear();
     mockCreateSession.mockClear();
     mockGetModels.mockReset();
@@ -223,6 +225,40 @@ describe("ClaudeChatTab", () => {
 
     expect(screen.getByText("Ready to build!")).toBeTruthy();
     expect(screen.queryByText("No messages yet. Start a conversation with Claude!")).toBeNull();
+  });
+
+  test("shows the scroll down accessory in the compose dock and scrolls to the bottom when clicked", () => {
+    mockIsAtBottom = false;
+    const message: ClaudeMessageType = {
+      id: "msg-existing-response",
+      role: "assistant" as const,
+      content: "Existing response",
+      parts: [{ type: "text" as const, content: "Existing response" }],
+      timestamp: "2026-03-07T12:00:00.000Z",
+    };
+
+    act(() => {
+      useClaudeStore.getState().setSession(SESSION_KEY, {
+        sessionId: "session-1",
+        isLoading: false,
+        messages: [message],
+      });
+    });
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    const scrollButton = screen.getByRole("button", { name: "Scroll to bottom of conversation" });
+    expect(scrollButton.closest('[data-testid="compose-dock"]')).not.toBeNull();
+
+    fireEvent.click(scrollButton);
+
+    expect(mockScrollToBottom).toHaveBeenCalledTimes(1);
   });
 
   test("renders timer states from the real elapsed timer hook", async () => {

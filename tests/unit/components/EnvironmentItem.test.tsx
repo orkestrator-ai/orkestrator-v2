@@ -97,6 +97,7 @@ mock.module("@/lib/tauri", () => ({
 }));
 
 import { EnvironmentItem } from "../../../src/components/environments/EnvironmentItem";
+import { useAgentActivityStore } from "../../../src/stores/agentActivityStore";
 
 function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
   return {
@@ -172,10 +173,28 @@ beforeEach(() => {
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
   settingsDialogPropsMock.mockClear();
+  useAgentActivityStore.setState({
+    tabStates: {},
+    containerStates: {},
+    containerRefCounts: {},
+    stateChangeCallbacks: new Map(),
+  });
 });
 
 afterEach(() => {
   cleanup();
+});
+
+describe("EnvironmentItem activity icon", () => {
+  test("shows a pulsing blue container icon while tmux activity is working", () => {
+    useAgentActivityStore.getState().setContainerState("env-1", "working");
+
+    const { container } = renderItem(makeEnvironment());
+
+    const icon = container.querySelector('div[role="button"] svg');
+    expect(icon?.getAttribute("class")).toContain("text-blue-500");
+    expect(icon?.getAttribute("class")).toContain("animate-pulse");
+  });
 });
 
 describe("EnvironmentItem tooltip port display", () => {

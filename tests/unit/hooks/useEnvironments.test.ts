@@ -2,13 +2,21 @@ import { describe, test, expect, beforeEach, mock } from "bun:test";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useConfigStore } from "../../../src/stores/configStore";
 import { useEnvironmentStore } from "../../../src/stores/environmentStore";
-import type { Environment } from "../../../src/types";
+import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping } from "../../../src/types";
 import { createMockEnvironment } from "../utils/testFactories";
 
 // Mock tauri module BEFORE importing the hook
 const mockGetEnvironments = mock<(projectId: string) => Promise<Environment[]>>(() => Promise.resolve([]));
 const mockGetEnvironment = mock<(environmentId: string) => Promise<Environment | null>>(() => Promise.resolve(null));
-const mockCreateEnvironment = mock<(projectId: string) => Promise<Environment>>((projectId) =>
+const mockCreateEnvironment = mock<(
+  projectId: string,
+  name?: string,
+  networkAccessMode?: NetworkAccessMode,
+  initialPrompt?: string,
+  portMappings?: PortMapping[],
+  environmentType?: EnvironmentType,
+  namingPrompt?: string,
+) => Promise<Environment>>((projectId) =>
   Promise.resolve(createMockEnvironment({ id: "new-env-id", projectId, name: "test-env" }))
 );
 const mockDeleteEnvironment = mock<(environmentId: string) => Promise<void>>(() => Promise.resolve());
@@ -126,6 +134,37 @@ describe("useEnvironments", () => {
     expect(result.current.allEnvironments).toHaveLength(1);
     expect(result.current.error).toBeNull();
     expect(useConfigStore.getState().config.repositories["project-1"]?.lastEnvironmentType).toBe("containerized");
+  });
+
+  test("createEnvironment forwards optional creation parameters", async () => {
+    const { result } = renderHook(() => useEnvironments("project-1"));
+    const portMappings = [{ hostPort: 5173, containerPort: 5173, protocol: "tcp" as const }];
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.createEnvironment(
+        "project-1",
+        undefined,
+        "restricted",
+        undefined,
+        portMappings,
+        "containerized",
+        "Build task\n\nShip the feature",
+      );
+    });
+
+    expect(mockCreateEnvironment).toHaveBeenCalledWith(
+      "project-1",
+      undefined,
+      "restricted",
+      undefined,
+      portMappings,
+      "containerized",
+      "Build task\n\nShip the feature",
+    );
   });
 
   test("createEnvironment sets error on failure", async () => {

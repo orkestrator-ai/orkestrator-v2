@@ -278,6 +278,11 @@ async function currentGitBranch(repo: string): Promise<string> {
   return stdout.trim();
 }
 
+async function currentGitCommit(repo: string): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["-C", repo, "rev-parse", "HEAD"]);
+  return stdout.trim();
+}
+
 // Stub `codex` that writes the requested slug JSON to the --output-last-message path.
 function codexSlugScript(slug: string): string {
   return `#!/bin/sh
@@ -430,8 +435,29 @@ describe("Electron backend command registry", () => {
       expect(result.branch).toBe("oauth-callback-review");
       expect(result.initialPrompt).toBe("Please review the OAuth callback flow");
       const codexLog = await fs.readFile(logPath, "utf8");
-      expect(codexLog).toContain("exec --skip-git-repo-check --ephemeral --ignore-rules --sandbox read-only");
+      expect(codexLog).toContain("exec --skip-git-repo-check --ephemeral --ignore-rules --config model_reasoning_effort=\"low\" --sandbox read-only");
       expect(codexLog).toContain("--output-last-message");
+    });
+  });
+
+  test("creates unnamed environments from a naming prompt without storing an initial prompt", async () => {
+    const { context } = createContext([]);
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(codexSlugScript("Build Pipeline Task"), async () => {
+      const result = await commands.get("create_environment")?.(
+        {
+          projectId: "project-1",
+          namingPrompt: "Build task\n\nShip the feature\n\nAll checks green",
+          environmentType: "containerized",
+        },
+        context,
+      ) as Environment;
+
+      expect(result.name).toBe("build-pipeline-task");
+      expect(result.branch).toBe("build-pipeline-task");
+      expect(result.initialPrompt).toBeUndefined();
     });
   });
 
@@ -633,7 +659,7 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
       });
 
       const codexLog = await fs.readFile(logPath, "utf8");
-      expect(codexLog).toContain("exec --skip-git-repo-check --ephemeral --ignore-rules --sandbox read-only");
+      expect(codexLog).toContain("exec --skip-git-repo-check --ephemeral --ignore-rules --config model_reasoning_effort=\"low\" --sandbox read-only");
       expect(codexLog).toContain("--output-last-message");
       expect(codexLog).not.toContain("claude");
     });
@@ -861,6 +887,11 @@ if [ "$1" = "inspect" ]; then
 fi
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+  case "$*" in
+    *rev-parse*)
+      printf '1111111111111111111111111111111111111111\\n'
+      ;;
+  esac
   exit 0
 fi
 exit 0
@@ -868,9 +899,12 @@ exit 0
       const updated = await commands.get("run_environment_setup")?.({ environmentId: environment.id }, context) as Environment;
 
       expect(updated.setupScriptsComplete).toBe(true);
+      expect(updated.createdFromCommit).toBe("1111111111111111111111111111111111111111");
       expect(environment.setupScriptsComplete).toBe(true);
+      expect(environment.createdFromCommit).toBe("1111111111111111111111111111111111111111");
       const execLog = await fs.readFile(logs.exec, "utf8");
       expect(execLog).toContain("/usr/local/bin/workspace-setup.sh");
+      expect(execLog).toContain("git -C /workspace rev-parse HEAD");
       expect(execLog).toContain("flock");
       expect(emitted).toContainEqual({
         event: "environment-setup-complete",
@@ -944,6 +978,68 @@ exit 0
           error: "setup exploded",
         },
       });
+    });
+  });
+
+  test("captures container HEAD commit when frontend marks setup complete", async () => {
+    const environment = createEnvironment({
+      id: "env-container-frontend-complete",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *rev-parse*)
+      printf '2222222222222222222222222222222222222222\\n'
+      ;;
+  esac
+  exit 0
+fi
+exit 0
+`, async () => {
+      const updated = await commands.get("set_environment_setup_complete")?.(
+        { environmentId: environment.id, complete: true },
+        context,
+      ) as Environment;
+
+      expect(updated.setupScriptsComplete).toBe(true);
+      expect(updated.createdFromCommit).toBe("2222222222222222222222222222222222222222");
+    });
+  });
+
+  test("does not throw when docker exec fails while capturing container HEAD commit", async () => {
+    const environment = createEnvironment({
+      id: "env-container-commit-fail",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+if [ "$1" = "exec" ]; then
+  printf 'container gone\\n' >&2
+  exit 1
+fi
+exit 0
+`, async () => {
+      const updated = await commands.get("set_environment_setup_complete")?.(
+        { environmentId: environment.id, complete: true },
+        context,
+      ) as Environment;
+
+      expect(updated.setupScriptsComplete).toBe(true);
+      expect(updated.createdFromCommit).toBeUndefined();
     });
   });
 
@@ -1035,6 +1131,8 @@ exit 0
       expect(environment.worktreePath).toBeDefined();
       expect(environment.branch).toBe("feature-remote-base");
       expect(await fs.readFile(path.join(environment.worktreePath!, "tracked.txt"), "utf8")).toBe("remote\n");
+      expect(environment.createdFromCommit).toMatch(/^[0-9a-f]{40}$/);
+      await expect(currentGitCommit(environment.worktreePath!)).resolves.toBe(environment.createdFromCommit);
     } finally {
       if (environment.worktreePath) await fs.rm(environment.worktreePath, { recursive: true, force: true });
     }
@@ -1279,6 +1377,25 @@ exit 0
       additions: 2,
       deletions: 0,
       status: "?",
+    }));
+  });
+
+  test("reports local git stats against an environment creation commit", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const creationCommit = await currentGitCommit(worktree);
+    await fs.writeFile(path.join(worktree, "tracked.txt"), "base\nchanged\n");
+    const commands = createCommandRegistry();
+
+    const changes = await commands.get("get_local_git_status")?.(
+      { worktreePath: worktree, targetBranch: creationCommit },
+      createContext(createEnvironment()).context,
+    ) as Array<{ path: string; additions: number; deletions: number; status: string }>;
+
+    expect(changes).toContainEqual(expect.objectContaining({
+      path: "tracked.txt",
+      additions: 1,
+      deletions: 0,
+      status: "M",
     }));
   });
 

@@ -1,12 +1,24 @@
-import { beforeEach, describe, expect, test } from "bun:test";
-import { invoke } from "@/lib/native/backend";
-import { getSetupCommands, runEnvironmentSetup, setEnvironmentSetupComplete } from "./backend";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
-const invokeMock = invoke as unknown as {
-  mockReset: () => void;
-  mockResolvedValue: (value: unknown) => void;
-  mock: { calls: unknown[][] };
-};
+const invokeMock = mock<(...args: unknown[]) => Promise<unknown>>(() => Promise.resolve());
+
+mock.module("@/lib/native/backend", () => ({
+  invoke: invokeMock,
+}));
+
+afterAll(() => {
+  mock.module("@/lib/native/backend", () => ({
+    invoke: mock(() => Promise.resolve()),
+  }));
+});
+
+const wrapperModulePath = "./tauri.ts?wrapper-test";
+const {
+  createEnvironment,
+  getSetupCommands,
+  runEnvironmentSetup,
+  setEnvironmentSetupComplete,
+} = await import(wrapperModulePath) as typeof import("./tauri");
 
 describe("backend setup wrappers", () => {
   beforeEach(() => {
@@ -38,6 +50,30 @@ describe("backend setup wrappers", () => {
 
     expect(invokeMock.mock.calls).toEqual([
       ["run_environment_setup", { environmentId: "env-1" }],
+    ]);
+  });
+
+  test("calls the create-environment Electron command with naming prompt", async () => {
+    await createEnvironment(
+      "project-1",
+      undefined,
+      "restricted",
+      undefined,
+      [{ hostPort: 5173, containerPort: 5173, protocol: "tcp" }],
+      "containerized",
+      "Build task\n\nShip the feature",
+    );
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["create_environment", {
+        projectId: "project-1",
+        name: undefined,
+        networkAccessMode: "restricted",
+        initialPrompt: undefined,
+        portMappings: [{ hostPort: 5173, containerPort: 5173, protocol: "tcp" }],
+        environmentType: "containerized",
+        namingPrompt: "Build task\n\nShip the feature",
+      }],
     ]);
   });
 });

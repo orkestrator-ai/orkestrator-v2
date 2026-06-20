@@ -295,9 +295,10 @@ describe("useBuildPipeline", () => {
       "project-1",
       undefined,
       "restricted",
-      "Build task\n\nShip the feature\n\nAll checks green",
+      undefined,
       undefined,
       "containerized",
+      "Build task\n\nShip the feature\n\nAll checks green",
     );
     expect(useClaudeOptionsStore.getState().options["env-build"]).toBeUndefined();
   });

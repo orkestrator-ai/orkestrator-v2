@@ -1323,7 +1323,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   });
   register("get_environment", ({ environmentId }, { storage }) => storage.getEnvironment(asString(environmentId, "environmentId")));
   register("reorder_environments", ({ projectId, environmentIds }, { storage }) => storage.reorderEnvironments(asString(projectId, "projectId"), asStringArray(environmentIds)));
-  register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType }, context) => {
+  register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt }, context) => {
     const { storage } = context;
     const project = await storage.getProject(asString(projectId, "projectId"));
     if (!project) throw new Error(`Project not found: ${projectId}`);
@@ -1331,8 +1331,9 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const explicitName = asOptionalString(name)?.trim();
     const initialPromptText = asOptionalString(initialPrompt);
     const trimmedInitialPrompt = initialPromptText?.trim();
-    const generatedInitialName = !explicitName && trimmedInitialPrompt
-      ? await generateInitialEnvironmentName(trimmedInitialPrompt, context)
+    const namingPromptText = asOptionalString(namingPrompt)?.trim() || trimmedInitialPrompt;
+    const generatedInitialName = !explicitName && namingPromptText
+      ? await generateInitialEnvironmentName(namingPromptText, context)
       : undefined;
     const baseName = explicitName
       ? sanitizeEnvironmentName(explicitName)

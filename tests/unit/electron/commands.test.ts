@@ -440,6 +440,27 @@ describe("Electron backend command registry", () => {
     });
   });
 
+  test("creates unnamed environments from a naming prompt without storing an initial prompt", async () => {
+    const { context } = createContext([]);
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(codexSlugScript("Build Pipeline Task"), async () => {
+      const result = await commands.get("create_environment")?.(
+        {
+          projectId: "project-1",
+          namingPrompt: "Build task\n\nShip the feature\n\nAll checks green",
+          environmentType: "containerized",
+        },
+        context,
+      ) as Environment;
+
+      expect(result.name).toBe("build-pipeline-task");
+      expect(result.branch).toBe("build-pipeline-task");
+      expect(result.initialPrompt).toBeUndefined();
+    });
+  });
+
   test("falls back to a local prompt slug when codex exec initial naming fails", async () => {
     const { context } = createContext([]);
     await isolateCodexBinaryLookup(context);

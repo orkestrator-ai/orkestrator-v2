@@ -106,9 +106,10 @@ export function useBuildPipeline() {
           task.projectId,
           undefined,
           environmentType === "containerized" ? "restricted" : "full",
-          buildNamingPrompt || task.title,
+          undefined, // no initial prompt - we handle it via the pipeline
           undefined, // no port mappings
           environmentType,
+          buildNamingPrompt || task.title,
         );
 
         // 3. Link pipeline to environment

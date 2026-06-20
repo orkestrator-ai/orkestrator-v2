@@ -1339,36 +1339,42 @@ export function CodexChatTab({
                 </div>
               )}
 
-              <div className="h-32" aria-hidden="true" />
+              <div className={showPlanModeCard ? "h-80" : "h-32"} aria-hidden="true" />
             </>
           }
           scrollProps={scrollProps}
           virtuosoRef={virtuosoRef}
         />
 
-        {showPlanModeCard ? (
-          <CodexPlanModeCard
-            isSubmitting={isPlanTransitionPending}
-            onApproveAndBuild={handleApprovePlan}
-            onSwitchToBuild={handleSwitchPlanToBuild}
-            onDismiss={() => setDismissedPlanReviewMessageId(latestAssistantMessage?.id ?? null)}
-          />
-        ) : null}
       </div>
 
       <NativeComposeDock
         centered={centerCompose}
         topAccessory={
-          !isAtBottom ? (
-            <button
-              type="button"
-              onClick={scrollToBottom}
-              className="flex items-center gap-1.5 rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
-              aria-label="Scroll to bottom of conversation"
-            >
-              <ArrowDown className="h-3.5 w-3.5" />
-              <span>Scroll down</span>
-            </button>
+          !isAtBottom || showPlanModeCard ? (
+            <div className="flex w-full flex-col gap-2">
+              {!isAtBottom ? (
+                <button
+                  type="button"
+                  onClick={scrollToBottom}
+                  className="flex items-center gap-1.5 self-end rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
+                  aria-label="Scroll to bottom of conversation"
+                >
+                  <ArrowDown className="h-3.5 w-3.5" />
+                  <span>Scroll down</span>
+                </button>
+              ) : null}
+
+              {showPlanModeCard ? (
+                <CodexPlanModeCard
+                  className="mx-0 my-0"
+                  isSubmitting={isPlanTransitionPending}
+                  onApproveAndBuild={handleApprovePlan}
+                  onSwitchToBuild={handleSwitchPlanToBuild}
+                  onDismiss={() => setDismissedPlanReviewMessageId(latestAssistantMessage?.id ?? null)}
+                />
+              ) : null}
+            </div>
           ) : null
         }
         actions={

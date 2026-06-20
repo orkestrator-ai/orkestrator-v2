@@ -1460,23 +1460,23 @@ export function ClaudeChatTab({
           virtuosoRef={virtuosoRef}
         />
 
-        {/* Scroll to bottom button - positioned above compose bar */}
-        {!isAtBottom && (
-          <div className="flex justify-end px-4 py-1">
-            <button
-              onClick={scrollToBottom}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 shadow-sm transition-colors"
-              aria-label="Scroll to bottom of conversation"
-            >
-              <ArrowDown className="w-3.5 h-3.5" />
-              <span>Scroll down</span>
-            </button>
-          </div>
-        )}
       </div>
 
       <NativeComposeDock
         centered={centerCompose}
+        topAccessory={
+          !isAtBottom ? (
+            <button
+              type="button"
+              onClick={scrollToBottom}
+              className="flex items-center gap-1.5 rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
+              aria-label="Scroll to bottom of conversation"
+            >
+              <ArrowDown className="h-3.5 w-3.5" />
+              <span>Scroll down</span>
+            </button>
+          ) : null
+        }
         actions={
           client ? (
             <Button

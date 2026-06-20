@@ -352,7 +352,10 @@ describe("OpenCodeChatTab", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Scroll to bottom of conversation" }));
+    const scrollButton = screen.getByRole("button", { name: "Scroll to bottom of conversation" });
+    expect(scrollButton.closest(".absolute")).not.toBeNull();
+
+    fireEvent.click(scrollButton);
 
     expect(mockScrollToBottom).toHaveBeenCalledTimes(1);
   });

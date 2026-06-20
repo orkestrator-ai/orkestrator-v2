@@ -7,6 +7,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useUIStore } from "@/stores/uiStore";
+import type { Environment } from "@/types";
 
 const mockCreateEnvironment = mock(async () => ({
   id: "env-build",
@@ -24,6 +25,22 @@ const mockCreateEnvironment = mock(async () => ({
   environmentType: "containerized" as const,
 }));
 const mockStartEnvironment = mock(async () => ({ setupCommands: undefined }));
+const mockRenameEnvironmentFromPrompt = mock(async () => {});
+const mockGetEnvironment = mock(async (): Promise<Environment | null> => ({
+  id: "env-build",
+  projectId: "project-1",
+  name: "build-task",
+  branch: "build-task",
+  containerId: "container-build",
+  status: "running" as const,
+  prUrl: null,
+  prState: null,
+  hasMergeConflicts: null,
+  createdAt: "2024-01-01T00:00:00.000Z",
+  networkAccessMode: "restricted" as const,
+  order: 0,
+  environmentType: "containerized" as const,
+}));
 const mockUpdateEnvironmentAgentSettings = mock(async (
   environmentId: string,
   defaultAgent: string | null,
@@ -66,7 +83,8 @@ mock.module("@/lib/tauri", () => ({
   createEnvironment: mockCreateEnvironment,
   startEnvironment: mockStartEnvironment,
   getEnvironments: mock(async () => []),
-  getEnvironment: mock(async () => null),
+  getEnvironment: mockGetEnvironment,
+  renameEnvironmentFromPrompt: mockRenameEnvironmentFromPrompt,
   deleteEnvironment: mock(async () => {}),
   stopEnvironment: mock(async () => {}),
   syncEnvironmentStatus: mock(async () => ({
@@ -122,6 +140,8 @@ describe("useBuildPipeline", () => {
   beforeEach(() => {
     mockCreateEnvironment.mockClear();
     mockStartEnvironment.mockClear();
+    mockRenameEnvironmentFromPrompt.mockClear();
+    mockGetEnvironment.mockClear();
     mockUpdateEnvironmentAgentSettings.mockClear();
     mockToastSuccess.mockClear();
     mockToastError.mockClear();
@@ -298,8 +318,115 @@ describe("useBuildPipeline", () => {
       undefined,
       undefined,
       "containerized",
+      undefined,
+    );
+    expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
+      "env-build",
       "Build task\n\nShip the feature\n\nAll checks green",
     );
     expect(useClaudeOptionsStore.getState().options["env-build"]).toBeUndefined();
+  });
+
+  test("startBuild continues when prompt rename fails", async () => {
+    const originalConsoleWarn = console.warn;
+    const consoleWarnMock = mock(() => undefined);
+    console.warn = consoleWarnMock as unknown as typeof console.warn;
+    mockRenameEnvironmentFromPrompt.mockImplementationOnce(async () => {
+      throw new Error("rename failed");
+    });
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        ["env-build", {
+          root: {
+            kind: "leaf",
+            id: "pane-build",
+            tabs: [],
+            activeTabId: null,
+          },
+          activePaneId: "pane-build",
+          containerId: "container-build",
+        }],
+      ]),
+      activeEnvironmentId: "env-visible",
+    });
+
+    try {
+      const { result } = renderHook(() => useBuildPipeline());
+
+      await act(async () => {
+        await result.current.startBuild({
+          id: "task-rename-fail",
+          projectId: "project-1",
+          title: "Build task",
+          description: "Ship the feature",
+          acceptanceCriteria: "All checks green",
+          status: "backlog",
+          comments: [],
+          images: [],
+          environmentId: undefined,
+          createdAt: "2024-01-01T00:00:00.000Z",
+          order: 0,
+        }, "containerized");
+      });
+
+      expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
+        "env-build",
+        "Build task\n\nShip the feature\n\nAll checks green",
+      );
+      expect(consoleWarnMock).toHaveBeenCalledWith(
+        "[useBuildPipeline] Failed to rename environment from task prompt:",
+        expect.any(Error),
+      );
+      expect(mockStartEnvironment).toHaveBeenCalledWith("env-build");
+      expect(mockToastSuccess).toHaveBeenCalledWith("Build pipeline started");
+    } finally {
+      console.warn = originalConsoleWarn;
+    }
+  });
+
+  test("startBuild tolerates a missing environment refresh after prompt rename", async () => {
+    mockGetEnvironment.mockImplementationOnce(async () => null);
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        ["env-build", {
+          root: {
+            kind: "leaf",
+            id: "pane-build",
+            tabs: [],
+            activeTabId: null,
+          },
+          activePaneId: "pane-build",
+          containerId: "container-build",
+        }],
+      ]),
+      activeEnvironmentId: "env-visible",
+    });
+
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuild({
+        id: "task-null-refresh",
+        projectId: "project-1",
+        title: "Build task",
+        description: "Ship the feature",
+        acceptanceCriteria: "All checks green",
+        status: "backlog",
+        comments: [],
+        images: [],
+        environmentId: undefined,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        order: 0,
+      }, "containerized");
+    });
+
+    expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
+      "env-build",
+      "Build task\n\nShip the feature\n\nAll checks green",
+    );
+    expect(mockGetEnvironment).toHaveBeenCalledWith("env-build");
+    expect(mockGetEnvironment).toHaveBeenCalledTimes(2);
+    expect(mockStartEnvironment).toHaveBeenCalledWith("env-build");
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-build")?.name).toBe("build-task");
   });
 });

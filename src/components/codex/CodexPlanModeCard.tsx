@@ -1,7 +1,9 @@
 import { FileText, Check, ArrowRight, X, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 interface CodexPlanModeCardProps {
+  className?: string;
   isSubmitting?: boolean;
   onApproveAndBuild: () => Promise<void> | void;
   onSwitchToBuild: () => Promise<void> | void;
@@ -9,13 +11,19 @@ interface CodexPlanModeCardProps {
 }
 
 export function CodexPlanModeCard({
+  className,
   isSubmitting = false,
   onApproveAndBuild,
   onSwitchToBuild,
   onDismiss,
 }: CodexPlanModeCardProps) {
   return (
-    <div className="mx-4 my-3 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+    <div
+      className={cn(
+        "mx-4 my-3 overflow-hidden rounded-lg border border-border bg-card shadow-sm",
+        className,
+      )}
+    >
       <div className="flex items-center gap-2 border-b border-border bg-amber-500/10 px-4 py-2.5">
         <FileText className="h-4 w-4 text-amber-500" />
         <span className="text-sm font-medium text-foreground">Plan Mode</span>

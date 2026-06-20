@@ -200,6 +200,74 @@ describe("native message adapters", () => {
     }
   });
 
+  test("matches the agent task tool case-insensitively", () => {
+    const message: ClaudeMessage = {
+      id: "claude-agent-upper",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-18T12:02:30.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          toolName: "AGENT",
+          content: "Run reviewer",
+          toolUseId: "agent-2",
+        },
+        {
+          type: "tool-invocation",
+          toolName: "Read",
+          content: "Read",
+          parentTaskUseId: "agent-2",
+        },
+      ],
+    };
+
+    const normalized = normalizeClaudeMessage(message);
+
+    expect(normalized.parts[0]?.type).toBe("tool-group");
+    if (normalized.parts[0]?.type === "tool-group") {
+      expect(normalized.parts[0].parts[0]?.type).toBe("task-group");
+      const taskGroup = normalized.parts[0].parts[0];
+      if (taskGroup?.type === "task-group") {
+        expect(taskGroup.task.toolName).toBe("AGENT");
+        expect(taskGroup.childTools.map((part) => part.toolName)).toEqual(["Read"]);
+      }
+    }
+  });
+
+  test("does not treat tool names that merely contain 'agent' as task tools", () => {
+    const message: ClaudeMessage = {
+      id: "claude-agentic",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-18T12:02:30.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          toolName: "agentic",
+          content: "Agentic tool",
+          toolUseId: "agentic-1",
+        },
+        {
+          type: "tool-invocation",
+          toolName: "Read",
+          content: "Read",
+          parentTaskUseId: "agentic-1",
+        },
+      ],
+    };
+
+    const normalized = normalizeClaudeMessage(message);
+
+    // No task-group should be created; the parts stay as plain grouped tools.
+    const taskGroupTypes = normalized.parts.flatMap((part) =>
+      part.type === "tool-group"
+        ? part.parts.map((child) => child.type)
+        : [part.type],
+    );
+    expect(taskGroupTypes).not.toContain("task-group");
+  });
+
   test("Codex adapter uses the same grouped native shape", () => {
     const message: NativeMessage = {
       id: "codex-1",

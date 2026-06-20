@@ -36,7 +36,6 @@ export interface NativeBasePart {
   subagentId?: string;
   subagentName?: string;
   subagentRole?: string;
-  subagentDescription?: string;
   subagentPrompt?: string;
   subagentActions?: NativeMessagePart[];
   subagentActionCount?: number;

@@ -1010,11 +1010,6 @@ function SubagentPart({ part }: { part: NativeMessagePart }) {
               <span className="min-w-0 truncate text-sm font-medium text-foreground">
                 {displayLabel}
               </span>
-              {part.subagentDescription ? (
-                <span className="min-w-0 truncate text-sm text-muted-foreground/75">
-                  {part.subagentDescription}
-                </span>
-              ) : null}
               <span
                 className={cn(
                   "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium",

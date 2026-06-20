@@ -308,6 +308,180 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.getByRole("button", { name: /Read App\.swift success/i })).toBeTruthy();
   });
 
+  test("uses an explicit agent name with the description as a secondary header label", () => {
+    const message = makeMessage([
+      {
+        type: "task-group",
+        content: "Run reviewer",
+        task: {
+          type: "tool-invocation",
+          content: "Run reviewer",
+          toolName: "Agent",
+          toolTitle: "Agent",
+          toolState: "success",
+          toolArgs: {
+            agent_name: "Presentation Reviewer",
+            description: "Review presentation polish",
+            role: "explorer",
+          },
+        },
+        childTools: [
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+            toolTitle: "Read",
+            toolState: "success",
+            toolArgs: { file_path: "/workspace/a.ts" },
+          },
+        ],
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    // Explicit name drives the primary label (with role), description is secondary.
+    expect(
+      screen.getByText("Presentation Reviewer (explorer)"),
+    ).toBeTruthy();
+    expect(screen.getByText("Review presentation polish")).toBeTruthy();
+    expect(screen.getByText("Success")).toBeTruthy();
+  });
+
+  test("falls back to a non-generic tool label when no name or description is present", () => {
+    const message = makeMessage([
+      {
+        type: "task-group",
+        content: "Custom tool",
+        task: {
+          type: "tool-invocation",
+          content: "Custom tool",
+          toolName: "CustomReviewer",
+          toolTitle: "CustomReviewer",
+          toolState: "pending",
+          toolArgs: {},
+        },
+        childTools: [],
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("CustomReviewer")).toBeTruthy();
+  });
+
+  test("falls back to the Subagent label for a generic agent tool with no metadata", () => {
+    const message = makeMessage([
+      {
+        type: "task-group",
+        content: "Agent",
+        task: {
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolTitle: "Agent",
+          toolState: "pending",
+        },
+        childTools: [],
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("Subagent")).toBeTruthy();
+  });
+
+  test("shows a waiting preview and empty state while a pending agent has no child tools", () => {
+    const message = makeMessage([
+      {
+        type: "task-group",
+        content: "Agent",
+        task: {
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolTitle: "Agent",
+          toolState: "pending",
+          toolArgs: { subagent_type: "explorer" },
+        },
+        childTools: [],
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("Waiting for activity.")).toBeTruthy();
+    expect(screen.getByText("0 tools")).toBeTruthy();
+    expect(screen.getByText("0 updates")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /subagent/i }));
+
+    expect(screen.getByText("No child actions yet.")).toBeTruthy();
+  });
+
+  test("shows a no-activity preview when a finished agent captured no child tools", () => {
+    const message = makeMessage([
+      {
+        type: "task-group",
+        content: "Agent",
+        task: {
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolTitle: "Agent",
+          toolState: "success",
+          toolArgs: {},
+        },
+        childTools: [],
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("No activity captured.")).toBeTruthy();
+  });
+
+  test("previews the latest child command in the collapsed agent row", () => {
+    const message = makeMessage([
+      {
+        type: "task-group",
+        content: "Agent",
+        task: {
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolTitle: "Agent",
+          toolState: "pending",
+          toolArgs: { description: "Investigate build" },
+        },
+        childTools: [
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+            toolTitle: "Read",
+            toolState: "success",
+            toolArgs: { file_path: "/workspace/a.ts" },
+          },
+          {
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+            toolTitle: "Bash",
+            toolState: "pending",
+            toolArgs: { command: "bun run build" },
+          },
+        ],
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    // Preview prefers the latest child's command over the task description.
+    expect(screen.getByText("bun run build")).toBeTruthy();
+    expect(screen.getByText("2 tools")).toBeTruthy();
+  });
+
   test("shows an error toast when copying text fails", async () => {
     const consoleError = console.error;
     console.error = mock(() => {}) as typeof console.error;

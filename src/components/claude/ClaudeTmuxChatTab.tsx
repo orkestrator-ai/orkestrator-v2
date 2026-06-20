@@ -102,6 +102,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { renameEnvironmentFromPrompt, updateGlobalConfig } from "@/lib/tauri";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import type { ClaudeTmuxData } from "@/types/paneLayout";
 import type { FileCandidate, FileMention } from "@/types";
 
@@ -762,7 +763,7 @@ export function ClaudeTmuxChatTab({
     try {
       if (text && !resumedSession && messages.length === 0) {
         const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
-        if (environment && /^\d{8}-\d{6}$/.test(environment.name)) {
+        if (environment && isDefaultTimestampEnvironmentName(environment.name)) {
           try {
             await renameEnvironmentFromPrompt(environmentId, text);
           } catch (e) {

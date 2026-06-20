@@ -55,6 +55,7 @@ import {
 } from "./codex-preferences";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
+import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { cn } from "@/lib/utils";
 import type { CodexNativeData } from "@/types/paneLayout";
@@ -306,7 +307,7 @@ export function CodexChatTab({
 
       if (!session.messages.length) {
         const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
-        if (environment && /^\d{8}-\d{6}$/.test(environment.name)) {
+        if (environment && isDefaultTimestampEnvironmentName(environment.name)) {
           const namingMessageId = `${SYSTEM_MESSAGE_PREFIX}naming-${crypto.randomUUID()}`;
           addMessage(sessionKey, {
             id: namingMessageId,

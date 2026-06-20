@@ -1331,16 +1331,18 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const explicitName = asOptionalString(name)?.trim();
     const initialPromptText = asOptionalString(initialPrompt);
     const trimmedInitialPrompt = initialPromptText?.trim();
-    const namingPromptText = asOptionalString(namingPrompt)?.trim() || trimmedInitialPrompt;
+    const namingPromptText = asOptionalString(namingPrompt)?.trim();
     const generatedInitialName = !explicitName && namingPromptText
       ? await generateInitialEnvironmentName(namingPromptText, context)
-      : undefined;
+      : !explicitName && trimmedInitialPrompt
+        ? generateFallbackInitialEnvironmentName(trimmedInitialPrompt)
+        : undefined;
     const baseName = explicitName
       ? sanitizeEnvironmentName(explicitName)
       : generatedInitialName;
     const existingEnvironments = baseName ? await storage.getEnvironmentsByProject(project.id) : [];
     const existingGitBranches = baseName && project.localPath
-      ? await listGitBranchesAtPath(project.localPath, true)
+      ? await listGitBranchesAtPath(project.localPath, false)
       : [];
     const uniqueName = baseName
       ? makeUniqueEnvironmentSlug(baseName, existingEnvironments, existingGitBranches)

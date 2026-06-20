@@ -416,12 +416,15 @@ describe("Electron backend command registry", () => {
     expect(showOpenDialog).toHaveBeenCalledWith({ properties: ["openDirectory"] });
   });
 
-  test("creates unnamed environments with a slug generated from the initial prompt via codex exec", async () => {
+  test("creates unnamed environments with a local slug generated from the initial prompt", async () => {
     const { context } = createContext([]);
     await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
 
-    await withFakeCodex(codexSlugScript("OAuth Callback Review"), async (logPath) => {
+    await withFakeCodex(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_CODEX_LOG"
+exit 42
+`, async (logPath) => {
       const result = await commands.get("create_environment")?.(
         {
           projectId: "project-1",
@@ -431,12 +434,10 @@ describe("Electron backend command registry", () => {
         context,
       ) as Environment;
 
-      expect(result.name).toBe("oauth-callback-review");
-      expect(result.branch).toBe("oauth-callback-review");
+      expect(result.name).toBe("review-oauth-callback");
+      expect(result.branch).toBe("review-oauth-callback");
       expect(result.initialPrompt).toBe("Please review the OAuth callback flow");
-      const codexLog = await fs.readFile(logPath, "utf8");
-      expect(codexLog).toContain("exec --skip-git-repo-check --ephemeral --ignore-rules --config model_reasoning_effort=\"low\" --sandbox read-only");
-      expect(codexLog).toContain("--output-last-message");
+      await expect(fs.readFile(logPath, "utf8")).rejects.toThrow();
     });
   });
 
@@ -461,7 +462,7 @@ describe("Electron backend command registry", () => {
     });
   });
 
-  test("falls back to a local prompt slug when codex exec initial naming fails", async () => {
+  test("does not run codex exec for initial-prompt-only environment naming", async () => {
     const { context } = createContext([]);
     await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
@@ -483,36 +484,33 @@ exit 1
       expect(result.name).toBe("review-oauth-callback");
       expect(result.branch).toBe("review-oauth-callback");
       expect(result.initialPrompt).toBe("Please review the OAuth callback flow");
-      expect(await fs.readFile(logPath, "utf8")).toContain("exec --skip-git-repo-check");
+      await expect(fs.readFile(logPath, "utf8")).rejects.toThrow();
     });
   });
 
-  test("suffixes prompt-generated environment slugs when an existing branch uses the slug", async () => {
+  test("suffixes initial-prompt environment slugs when an existing branch uses the slug", async () => {
     const existing = createEnvironment({
       id: "env-existing",
       name: "existing",
       branch: "review-oauth-callback",
     });
     const { context } = createContext(existing);
-    await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
 
-    await withFakeCodex(codexSlugScript("Review OAuth Callback"), async () => {
-      const result = await commands.get("create_environment")?.(
-        {
-          projectId: "project-1",
-          initialPrompt: "Please review the OAuth callback flow",
-          environmentType: "local",
-        },
-        context,
-      ) as Environment;
+    const result = await commands.get("create_environment")?.(
+      {
+        projectId: "project-1",
+        initialPrompt: "Please review the OAuth callback flow",
+        environmentType: "local",
+      },
+      context,
+    ) as Environment;
 
-      expect(result.name).toBe("review-oauth-callback-1");
-      expect(result.branch).toBe("review-oauth-callback-1");
-    });
+    expect(result.name).toBe("review-oauth-callback-1");
+    expect(result.branch).toBe("review-oauth-callback-1");
   });
 
-  test("suffixes prompt-generated environment slugs when the local repo already has the branch", async () => {
+  test("suffixes initial-prompt environment slugs when the local repo already has the branch", async () => {
     const { worktree } = await createGitWorktreeWithOrigin();
     await runGit(worktree, ["branch", "review-oauth-callback"]);
     const { context } = createContext([]);
@@ -524,43 +522,37 @@ exit 1
       addedAt: new Date(0).toISOString(),
       order: 0,
     }));
-    await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
 
-    await withFakeCodex(codexSlugScript("Review OAuth Callback"), async () => {
-      const result = await commands.get("create_environment")?.(
-        {
-          projectId: "project-1",
-          initialPrompt: "Please review the OAuth callback flow",
-          environmentType: "local",
-        },
-        context,
-      ) as Environment;
+    const result = await commands.get("create_environment")?.(
+      {
+        projectId: "project-1",
+        initialPrompt: "Please review the OAuth callback flow",
+        environmentType: "local",
+      },
+      context,
+    ) as Environment;
 
-      expect(result.name).toBe("review-oauth-callback-1");
-      expect(result.branch).toBe("review-oauth-callback-1");
-    });
+    expect(result.name).toBe("review-oauth-callback-1");
+    expect(result.branch).toBe("review-oauth-callback-1");
   });
 
   test("falls back to the default timestamp name when an initial prompt cannot form a slug", async () => {
     const { context } = createContext([]);
-    await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
 
-    await withFakeCodex(codexSlugScript("###"), async () => {
-      const result = await commands.get("create_environment")?.(
-        {
-          projectId: "project-1",
-          initialPrompt: "🔥🔥🔥",
-          environmentType: "local",
-        },
-        context,
-      ) as Environment;
+    const result = await commands.get("create_environment")?.(
+      {
+        projectId: "project-1",
+        initialPrompt: "🔥🔥🔥",
+        environmentType: "local",
+      },
+      context,
+    ) as Environment;
 
-      expect(result.name).toMatch(/^\d{15}$/);
-      expect(result.branch).toBe(result.name);
-      expect(result.initialPrompt).toBe("🔥🔥🔥");
-    });
+    expect(result.name).toMatch(/^\d{15}$/);
+    expect(result.branch).toBe(result.name);
+    expect(result.initialPrompt).toBe("🔥🔥🔥");
   });
 
   test("suffixes explicit environment names when the current project already uses the slug", async () => {
@@ -585,7 +577,7 @@ exit 1
     expect(result.branch).toBe("custom-name-1");
   });
 
-  test("does not suffix generated names for duplicate slugs in a different project", async () => {
+  test("does not suffix initial-prompt names for duplicate slugs in a different project", async () => {
     const otherProjectEnvironment = createEnvironment({
       id: "env-other-project",
       projectId: "project-2",
@@ -593,22 +585,19 @@ exit 1
       branch: "review-oauth-callback",
     });
     const { context } = createContext(otherProjectEnvironment);
-    await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
 
-    await withFakeCodex(codexSlugScript("Review OAuth Callback"), async () => {
-      const result = await commands.get("create_environment")?.(
-        {
-          projectId: "project-1",
-          initialPrompt: "Please review the OAuth callback flow",
-          environmentType: "local",
-        },
-        context,
-      ) as Environment;
+    const result = await commands.get("create_environment")?.(
+      {
+        projectId: "project-1",
+        initialPrompt: "Please review the OAuth callback flow",
+        environmentType: "local",
+      },
+      context,
+    ) as Environment;
 
-      expect(result.name).toBe("review-oauth-callback");
-      expect(result.branch).toBe("review-oauth-callback");
-    });
+    expect(result.name).toBe("review-oauth-callback");
+    expect(result.branch).toBe("review-oauth-callback");
   });
 
   test("renames environments from prompts using codex exec output", async () => {

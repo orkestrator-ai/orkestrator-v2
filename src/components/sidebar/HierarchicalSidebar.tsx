@@ -301,17 +301,17 @@ export function HierarchicalSidebar() {
       // Always select the newly created environment
       selectProjectAndEnvironment(createEnvProjectId, configuredEnvironment.id);
 
-      // Always auto-start the environment after creation.
-      // Setup command handling is centralized in useEnvironments.startEnvironment().
-      try {
-        await startEnvironment(configuredEnvironment.id, options.initialPrompt);
-      } catch (startErr) {
-        console.error("Failed to auto-start environment:", startErr);
-        // Environment was created successfully, user can manually start it
-      }
-
       setShowCreateEnvDialog(false);
       setCreateEnvProjectId(null);
+
+      // Auto-start after the environment is visible. Local startup creates the
+      // worktree and may fetch from the remote, so it should not keep the modal
+      // open or hide the newly-created environment.
+      void startEnvironment(configuredEnvironment.id, options.initialPrompt)
+        .catch((startErr) => {
+          console.error("Failed to auto-start environment:", startErr);
+          // Environment was created successfully, user can manually start it.
+        });
     } finally {
       setIsCreatingEnv(false);
     }

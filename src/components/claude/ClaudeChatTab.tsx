@@ -47,6 +47,7 @@ import { ResumeSessionDialog } from "./ResumeSessionDialog";
 import type { ClaudeNativeData } from "@/types/paneLayout";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { isSetupPending } from "@/lib/setup-commands";
+import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import type { ClaudeAttachment } from "@/stores/claudeStore";
 import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
@@ -1037,7 +1038,7 @@ export function ClaudeChatTab({
       // This avoids renaming the branch while the agent is doing git operations.
       if (!session.messages.length) {
         const env = useEnvironmentStore.getState().getEnvironmentById(environmentId);
-        if (env && /^\d{8}-\d{6}$/.test(env.name)) {
+        if (env && isDefaultTimestampEnvironmentName(env.name)) {
           const namingMsgId = `${SYSTEM_MESSAGE_PREFIX}naming-${crypto.randomUUID()}`;
           addMessage(sessionKey, {
             id: namingMsgId,

@@ -200,4 +200,29 @@ describe("HierarchicalSidebar", () => {
       );
     });
   });
+
+  test("closes the create dialog before auto-start finishes", async () => {
+    let resolveStart: (() => void) | undefined;
+    startEnvironmentMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+
+    render(<HierarchicalSidebar />);
+
+    fireEvent.click(screen.getByTitle("Create environment"));
+    await screen.findByText("Create Ork (Environment)");
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled();
+      expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "");
+      expect(screen.queryByText("Create Ork (Environment)")).toBeNull();
+    });
+
+    resolveStart?.();
+  });
 });

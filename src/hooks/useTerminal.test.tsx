@@ -110,4 +110,62 @@ describe("useTerminal reconnect behavior", () => {
     expect(startLocalTerminalSessionMock).toHaveBeenCalledWith("session-new-local");
     expect(listenMock).toHaveBeenCalledWith("terminal-output-session-new-local", expect.any(Function));
   });
+
+  it("ignores overlapping connect calls before React connection state updates", async () => {
+    const { result } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        isLocal: false,
+        persistSession: true,
+      }),
+    );
+
+    await act(async () => {
+      await Promise.all([
+        result.current.connect(),
+        result.current.connect(),
+      ]);
+    });
+
+    await waitFor(() => expect(result.current.sessionId).toBe("session-new-container"));
+    expect(createTerminalSessionMock).toHaveBeenCalledTimes(1);
+    expect(startTerminalSessionMock).toHaveBeenCalledTimes(1);
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(listenMock).toHaveBeenCalledWith("terminal-output-session-new-container", expect.any(Function));
+  });
+
+  it("does not attach an event listener from a stale in-flight connect after unmount", async () => {
+    let resolveCreateSession: (sessionId: string) => void = () => {};
+    createTerminalSessionMock.mockImplementation(
+      async () =>
+        new Promise<string>((resolve) => {
+          resolveCreateSession = resolve;
+        }),
+    );
+
+    const { result, unmount } = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        isLocal: false,
+        persistSession: true,
+      }),
+    );
+
+    let connectPromise!: Promise<void>;
+    act(() => {
+      connectPromise = result.current.connect();
+    });
+    act(() => {
+      unmount();
+    });
+    resolveCreateSession("session-after-unmount");
+
+    await act(async () => {
+      await connectPromise;
+    });
+
+    expect(listenMock).not.toHaveBeenCalled();
+    expect(startTerminalSessionMock).not.toHaveBeenCalled();
+    expect(detachTerminalMock).toHaveBeenCalledWith("session-after-unmount");
+  });
 });

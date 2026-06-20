@@ -18,6 +18,7 @@ const connectMock = mock(async () => {});
 const writeMock = mock(async () => {});
 let terminalOnData: ((data: Uint8Array) => void) | undefined;
 let terminalOscHandler: ((data: string) => boolean) | undefined;
+let terminalInputDisposables: Array<{ dispose: ReturnType<typeof mock> }> = [];
 
 mock.module("@/hooks/useTerminal", () => ({
   useTerminal: (options: { onData?: (data: Uint8Array) => void }) => {
@@ -184,7 +185,11 @@ function createMockTerminal(): MockTerminal {
     getSelection: mock(() => ""),
     selectAll: mock(() => {}),
     onSelectionChange: mock(() => ({ dispose: mock(() => {}) })),
-    onData: mock(() => ({ dispose: mock(() => {}) })),
+    onData: mock(() => {
+      const disposable = { dispose: mock(() => {}) };
+      terminalInputDisposables.push(disposable);
+      return disposable;
+    }),
     attachCustomKeyEventHandler: mock(() => {}),
     clear: mock(() => {}),
     write: mock(() => {}),
@@ -235,6 +240,7 @@ describe("PersistentTerminal", () => {
     writeMock.mockClear();
     terminalOnData = undefined;
     terminalOscHandler = undefined;
+    terminalInputDisposables = [];
     portalStoreActions.markTerminalOpened.mockClear();
     portalStoreActions.setTerminalContainer.mockClear();
     portalStoreActions.setTerminalPane.mockClear();
@@ -424,6 +430,54 @@ describe("PersistentTerminal", () => {
 
     expect(usePaneLayoutStore.getState().environments.get("env-1")?.activePaneId).toBe("pane-1");
     expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-2");
+  });
+
+  it("keeps only one input handler attached to a persistent xterm instance", async () => {
+    const terminalData = createTerminalData();
+
+    const view = render(
+      <>
+        <PersistentTerminal
+          terminalData={terminalData}
+          tabId="tab-1"
+          tabType="claude"
+          containerId="container-1"
+          environmentId="env-1"
+          isEnvironmentVisible={true}
+          isActive={true}
+          isFocused={true}
+          isFirstTab={false}
+          paneId="pane-1"
+        />
+        <PersistentTerminal
+          terminalData={terminalData}
+          tabId="tab-1"
+          tabType="claude"
+          containerId="container-1"
+          environmentId="env-1"
+          isEnvironmentVisible={true}
+          isActive={true}
+          isFocused={true}
+          isFirstTab={false}
+          paneId="pane-1"
+        />
+      </>
+    );
+
+    await waitFor(() => {
+      expect(terminalInputDisposables.length).toBeGreaterThanOrEqual(2);
+    });
+
+    const activeDisposable = terminalInputDisposables.at(-1);
+    expect(activeDisposable).toBeDefined();
+    for (const staleDisposable of terminalInputDisposables.slice(0, -1)) {
+      expect(staleDisposable.dispose).toHaveBeenCalledTimes(1);
+    }
+    expect(activeDisposable!.dispose).not.toHaveBeenCalled();
+
+    view.unmount();
+
+    expect(activeDisposable!.dispose).toHaveBeenCalledTimes(1);
   });
 
   it("launches Codex terminal mode with the initial prompt", async () => {

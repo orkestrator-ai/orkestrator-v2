@@ -435,7 +435,7 @@ describe("Electron backend command registry", () => {
       expect(result.branch).toBe("oauth-callback-review");
       expect(result.initialPrompt).toBe("Please review the OAuth callback flow");
       const codexLog = await fs.readFile(logPath, "utf8");
-      expect(codexLog).toContain("exec --skip-git-repo-check --ephemeral --ignore-rules --sandbox read-only");
+      expect(codexLog).toContain("exec --skip-git-repo-check --ephemeral --ignore-rules --config model_reasoning_effort=\"low\" --sandbox read-only");
       expect(codexLog).toContain("--output-last-message");
     });
   });
@@ -638,7 +638,7 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
       });
 
       const codexLog = await fs.readFile(logPath, "utf8");
-      expect(codexLog).toContain("exec --skip-git-repo-check --ephemeral --ignore-rules --sandbox read-only");
+      expect(codexLog).toContain("exec --skip-git-repo-check --ephemeral --ignore-rules --config model_reasoning_effort=\"low\" --sandbox read-only");
       expect(codexLog).toContain("--output-last-message");
       expect(codexLog).not.toContain("claude");
     });

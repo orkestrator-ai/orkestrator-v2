@@ -291,6 +291,14 @@ describe("useBuildPipeline", () => {
       );
     });
 
+    expect(mockCreateEnvironment).toHaveBeenCalledWith(
+      "project-1",
+      undefined,
+      "restricted",
+      "Build task\n\nShip the feature\n\nAll checks green",
+      undefined,
+      "containerized",
+    );
     expect(useClaudeOptionsStore.getState().options["env-build"]).toBeUndefined();
   });
 });

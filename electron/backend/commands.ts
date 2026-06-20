@@ -286,6 +286,8 @@ async function generateEnvironmentNameWithCodexExec(prompt: string, context: Com
       "--skip-git-repo-check",
       "--ephemeral",
       "--ignore-rules",
+      "--config",
+      "model_reasoning_effort=\"low\"",
       "--sandbox",
       "read-only",
       "--cd",
@@ -293,7 +295,7 @@ async function generateEnvironmentNameWithCodexExec(prompt: string, context: Com
       "--output-last-message",
       outputPath,
       buildSlugGenerationPrompt(trimmedPrompt),
-    ], { timeoutMs: 30_000 });
+    ], { timeoutMs: 90_000 });
 
     const response = await fs.readFile(outputPath, "utf8").catch(() => stdout);
     return sanitizeGeneratedEnvironmentName(parseSlugFromResponse(response.trim()));

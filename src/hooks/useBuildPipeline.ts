@@ -96,14 +96,17 @@ export function useBuildPipeline() {
           },
         });
 
-        // 2. Create environment named after the ticket
-        const envName = task.title.slice(0, 60);
+        const buildNamingPrompt = [
+          task.title,
+          task.description,
+          task.acceptanceCriteria,
+        ].filter((part) => part.trim().length > 0).join("\n\n");
 
         const environment = await createEnvironment(
           task.projectId,
-          envName,
+          undefined,
           environmentType === "containerized" ? "restricted" : "full",
-          undefined, // no initial prompt - we handle it via the pipeline
+          buildNamingPrompt || task.title,
           undefined, // no port mappings
           environmentType,
         );

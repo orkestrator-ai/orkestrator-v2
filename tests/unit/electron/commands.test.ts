@@ -109,6 +109,41 @@ function createEnvironment(overrides: Partial<Environment> = {}): Environment {
   };
 }
 
+async function withFixedDate<T>(iso: string, fn: () => Promise<T> | T): Promise<T> {
+  const RealDate = Date;
+  const fixedTime = new RealDate(iso).getTime();
+
+  globalThis.Date = class FixedDate extends RealDate {
+    constructor(...args: any[]) {
+      if (args.length === 0) {
+        super(fixedTime);
+      } else if (args.length === 1) {
+        super(args[0]);
+      } else {
+        super(
+          args[0],
+          args[1],
+          args[2] ?? 1,
+          args[3] ?? 0,
+          args[4] ?? 0,
+          args[5] ?? 0,
+          args[6] ?? 0,
+        );
+      }
+    }
+
+    static now() {
+      return fixedTime;
+    }
+  } as DateConstructor;
+
+  try {
+    return await fn();
+  } finally {
+    globalThis.Date = RealDate;
+  }
+}
+
 function createContext(
   environmentOrEnvironments: Environment | Environment[],
   options: {
@@ -557,10 +592,33 @@ exit 1
         context,
       ) as Environment;
 
-      expect(result.name).toMatch(/^\d{15}$/);
+      expect(result.name).toMatch(/^\d{8}-\d{6}$/);
       expect(result.branch).toBe(result.name);
       expect(result.initialPrompt).toBe("🔥🔥🔥");
     });
+  });
+
+  test("suffixes default timestamp names when another environment already uses the same timestamp", async () => {
+    const existing = createEnvironment({
+      id: "env-existing",
+      name: "20260415-123456",
+      branch: "20260415-123456",
+    });
+    const { context } = createContext(existing);
+    const commands = createCommandRegistry();
+
+    const result = await withFixedDate("2026-04-15T12:34:56.789Z", async () =>
+      commands.get("create_environment")?.(
+        {
+          projectId: "project-1",
+          environmentType: "local",
+        },
+        context,
+      ) as Promise<Environment>,
+    );
+
+    expect(result.name).toBe("20260415-123456-1");
+    expect(result.branch).toBe("20260415-123456-1");
   });
 
   test("suffixes explicit environment names when the current project already uses the slug", async () => {

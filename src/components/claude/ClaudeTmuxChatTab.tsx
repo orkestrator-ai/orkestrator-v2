@@ -46,6 +46,7 @@ import { ClaudeQuestionCard } from "@/components/claude/ClaudeQuestionCard";
 import { ClaudeTmuxInteractiveTerminal } from "@/components/claude/ClaudeTmuxInteractiveTerminal";
 import { ResumeTmuxSessionDialog } from "@/components/claude/ResumeTmuxSessionDialog";
 import { formatElapsed } from "@/lib/format-elapsed";
+import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import {
   parseSlashCommands,
   SlashCommandMenu,
@@ -762,7 +763,7 @@ export function ClaudeTmuxChatTab({
     try {
       if (text && !resumedSession && messages.length === 0) {
         const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
-        if (environment && /^\d{8}-\d{6}$/.test(environment.name)) {
+        if (environment && isDefaultTimestampEnvironmentName(environment.name)) {
           try {
             await renameEnvironmentFromPrompt(environmentId, text);
           } catch (e) {

@@ -180,6 +180,12 @@ function ToolPart({
   const getDisplayInfo = (): string | null => {
     if (!toolArgs) return null;
 
+    // For shell commands, show the command in the collapsed row.
+    const command = toolArgs.command as string | undefined;
+    if (command) {
+      return command;
+    }
+
     // For Read tool - show filename
     const filePath = toolArgs.file_path as string | undefined;
     if (filePath) {

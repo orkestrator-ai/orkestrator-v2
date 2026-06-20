@@ -692,6 +692,38 @@ describe("NativeMessage", () => {
     expect(screen.getByRole("button", { name: /example\.ts/i })).toBeTruthy();
   });
 
+  test("shows shell commands in collapsed Claude Bash tool rows", () => {
+    const message: NativeMessageType = {
+      id: "msg-claude-bash-command-summary",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolTitle: "Bash",
+          toolArgs: {
+            command: "pwd && rg --files | head -200",
+          },
+          toolState: "success",
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    const trigger = screen.getByRole("button", {
+      name: /run_command pwd && rg --files \| head -200 success/i,
+    });
+    expect(trigger).toBeTruthy();
+    expect(screen.queryByText("Bash")).toBeNull();
+
+    fireEvent.click(trigger);
+    expect(screen.getByText("$ pwd && rg --files | head -200")).toBeTruthy();
+  });
+
   test("renders transcript-derived subagent groups as collapsible activity stacks", () => {
     const message: NativeMessageType = {
       id: "msg-subagent",
@@ -737,7 +769,7 @@ describe("NativeMessage", () => {
     fireEvent.click(screen.getByRole("button", { name: /lovelace/i }));
 
     expect(screen.getByText("Inspect the Codex integration")).toBeTruthy();
-    expect(screen.getAllByText("exec_command")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: /exec_command rg -n "codex" src success/i })).toBeTruthy();
     fireEvent.click(screen.getAllByText("exec_command")[0]!);
     expect(screen.getByText("$ rg -n \"codex\" src")).toBeTruthy();
     expect(screen.getByText("matches")).toBeTruthy();

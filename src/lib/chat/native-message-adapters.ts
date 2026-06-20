@@ -60,7 +60,8 @@ export function parseNativeAttachmentsFromContent(
 }
 
 function isTaskTool(toolName?: string): boolean {
-  return toolName?.toLowerCase() === "task";
+  const normalized = toolName?.toLowerCase();
+  return normalized === "task" || normalized === "agent";
 }
 
 function isToolActivity(part: NativeMessagePart): boolean {

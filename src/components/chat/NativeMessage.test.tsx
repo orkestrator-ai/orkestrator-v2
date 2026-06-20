@@ -256,6 +256,58 @@ describe("NativeMessage task list rendering", () => {
     ).toContain("my-0");
   });
 
+  test("renders Claude Agent task groups as compact agent activity rows", () => {
+    const message = makeMessage([
+      {
+        type: "task-group",
+        content: "Run presentation reviewer",
+        task: {
+          type: "tool-invocation",
+          content: "Run presentation reviewer",
+          toolName: "Agent",
+          toolTitle: "Agent",
+          toolState: "pending",
+          toolArgs: {
+            description: "Review presentation polish",
+            prompt: "Inspect the SwiftUI views for layout and navigation issues.",
+            subagent_type: "explorer",
+          },
+        },
+        childTools: [
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+            toolTitle: "Read",
+            toolState: "success",
+            toolArgs: { file_path: "/workspace/Sources/App.swift" },
+          },
+        ],
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("Agent")).toBeTruthy();
+    expect(
+      screen.getByText("Review presentation polish (explorer)"),
+    ).toBeTruthy();
+    expect(screen.getByText("Running")).toBeTruthy();
+    expect(screen.getByText("1 tool")).toBeTruthy();
+    expect(screen.getByText("1 update")).toBeTruthy();
+    expect(container.textContent).not.toContain('"description"');
+    expect(container.textContent).not.toContain("Inspect the SwiftUI views");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /review presentation polish/i }),
+    );
+
+    expect(
+      screen.getByText("Inspect the SwiftUI views for layout and navigation issues."),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Read App\.swift success/i })).toBeTruthy();
+  });
+
   test("shows an error toast when copying text fails", async () => {
     const consoleError = console.error;
     console.error = mock(() => {}) as typeof console.error;

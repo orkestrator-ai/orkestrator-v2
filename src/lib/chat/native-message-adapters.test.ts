@@ -158,6 +158,48 @@ describe("native message adapters", () => {
     }
   });
 
+  test("normalizes Claude Agent tools into native task groups", () => {
+    const message: ClaudeMessage = {
+      id: "claude-agent-assistant",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-18T12:02:30.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          toolName: "Agent",
+          content: "Run presentation reviewer",
+          toolUseId: "agent-1",
+          toolArgs: {
+            description: "Review presentation polish",
+            prompt: "Inspect the SwiftUI views.",
+            subagent_type: "explorer",
+          },
+        },
+        {
+          type: "tool-invocation",
+          toolName: "Read",
+          content: "Read",
+          parentTaskUseId: "agent-1",
+        },
+      ],
+    };
+
+    const normalized = normalizeClaudeMessage(message);
+
+    expect(normalized.parts).toHaveLength(1);
+    expect(normalized.parts[0]?.type).toBe("tool-group");
+    if (normalized.parts[0]?.type === "tool-group") {
+      expect(normalized.parts[0].parts[0]?.type).toBe("task-group");
+      const taskGroup = normalized.parts[0].parts[0];
+      if (taskGroup?.type === "task-group") {
+        expect(taskGroup.task.toolName).toBe("Agent");
+        expect(taskGroup.task.toolArgs?.description).toBe("Review presentation polish");
+        expect(taskGroup.childTools.map((part) => part.toolName)).toEqual(["Read"]);
+      }
+    }
+  });
+
   test("Codex adapter uses the same grouped native shape", () => {
     const message: NativeMessage = {
       id: "codex-1",

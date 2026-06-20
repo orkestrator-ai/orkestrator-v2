@@ -962,14 +962,30 @@ function getSubagentPreview(part: NativeMessagePart): string {
   return latestAction.toolTitle || getToolDisplayName(latestAction.toolName, latestAction.content);
 }
 
+function stringToolArg(
+  args: Record<string, unknown> | undefined,
+  ...keys: string[]
+): string | undefined {
+  if (!args) return undefined;
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function buildAgentDisplayLabel(name: string, role?: string): string {
+  return role ? `${name} (${role})` : name;
+}
+
 function SubagentPart({ part }: { part: NativeMessagePart }) {
   const [isOpen, setIsOpen] = useState(false);
   const subagentActions = part.subagentActions ?? [];
   const toolCount = part.subagentActionCount ?? 0;
   const displayName = part.subagentName || part.subagentRole || part.content || "subagent";
-  const displayLabel = part.subagentRole
-    ? `${displayName} (${part.subagentRole})`
-    : displayName;
+  const displayLabel = buildAgentDisplayLabel(displayName, part.subagentRole);
   const statusLabel = getSubagentStatusLabel(part.toolState);
   const preview = useMemo(() => getSubagentPreview(part), [part]);
 
@@ -991,9 +1007,14 @@ function SubagentPart({ part }: { part: NativeMessagePart }) {
               <span className="shrink-0 font-medium uppercase tracking-wide text-muted-foreground/80">
                 Agent
               </span>
-              <span className="truncate text-sm font-medium text-foreground">
+              <span className="min-w-0 truncate text-sm font-medium text-foreground">
                 {displayLabel}
               </span>
+              {part.subagentDescription ? (
+                <span className="min-w-0 truncate text-sm text-muted-foreground/75">
+                  {part.subagentDescription}
+                </span>
+              ) : null}
               <span
                 className={cn(
                   "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium",
@@ -1077,37 +1098,122 @@ function TaskGroupPart({
   containerId?: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const taskName = part.task.toolTitle || getToolDisplayName(part.task.toolName, "Task");
+  const toolLabel = part.task.toolTitle || getToolDisplayName(part.task.toolName, "Agent");
+  const description = stringToolArg(part.task.toolArgs, "description");
+  const prompt = stringToolArg(part.task.toolArgs, "prompt");
+  const role = stringToolArg(
+    part.task.toolArgs,
+    "subagent_type",
+    "subagentType",
+    "role",
+  );
+  const explicitName = stringToolArg(
+    part.task.toolArgs,
+    "agent_name",
+    "agentName",
+    "name",
+  );
+  const genericToolLabel = /^(agent|task)$/i.test(toolLabel);
+  const displayName =
+    explicitName ?? description ?? (genericToolLabel ? "Subagent" : toolLabel);
+  const headerDescription = explicitName ? description : undefined;
+  const displayLabel = buildAgentDisplayLabel(displayName, role);
+  const statusLabel = getSubagentStatusLabel(part.task.toolState);
   const childCount = part.childTools.length;
+  const preview = useMemo(() => {
+    const latestChild = part.childTools.at(-1);
+    if (!latestChild) {
+      return description ?? (
+        part.task.toolState === "pending"
+          ? "Waiting for activity."
+          : "No activity captured."
+      );
+    }
+
+    const command =
+      typeof latestChild.toolArgs?.command === "string"
+        ? latestChild.toolArgs.command
+        : null;
+    if (command) return command;
+
+    return (
+      latestChild.toolTitle ||
+      getToolDisplayName(latestChild.toolName, latestChild.content)
+    );
+  }, [description, part.childTools, part.task.toolState]);
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
-      <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:text-foreground">
-        <ChevronRight
-          className={cn(
-            "h-3 w-3 shrink-0 transition-transform",
-            isOpen && "rotate-90",
-          )}
-        />
-        <Layers className="h-3.5 w-3.5 shrink-0" />
-        <span className="font-medium">{taskName}</span>
-        <span className="truncate text-muted-foreground/70">
-          {childCount === 0 ? "No child tools" : `${childCount} child tool${childCount === 1 ? "" : "s"}`}
-        </span>
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="mt-1 space-y-1 border-l border-border/40 pl-3">
-          <MessagePart
-            part={part.task}
-            containerId={containerId}
+      <CollapsibleTrigger className="w-full rounded-md px-2 py-2 text-left transition-colors hover:text-foreground cursor-pointer">
+        <div className="flex items-start gap-3">
+          <ChevronRight
+            className={cn(
+              "mt-0.5 h-3.5 w-3.5 shrink-0 transition-transform",
+              isOpen && "rotate-90",
+            )}
           />
-          {part.childTools.map((child, index) => (
-            <MessagePart
-              key={`task-child-${index}-${child.toolUseId ?? child.toolName ?? child.type}`}
-              part={child}
-              containerId={containerId}
-            />
-          ))}
+          <Layers className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="shrink-0 font-medium uppercase tracking-wide text-muted-foreground/80">
+                Agent
+              </span>
+              <span className="min-w-0 truncate text-sm font-medium text-foreground">
+                {displayLabel}
+              </span>
+              {headerDescription ? (
+                <span className="min-w-0 truncate text-sm text-muted-foreground/75">
+                  {headerDescription}
+                </span>
+              ) : null}
+              <span
+                className={cn(
+                  "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                  getSubagentStatusClasses(part.task.toolState),
+                )}
+              >
+                {statusLabel}
+              </span>
+            </div>
+            <div className="mt-1 truncate text-xs text-muted-foreground/80">
+              {preview}
+            </div>
+          </div>
+          <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">
+            <div>{childCount} {childCount === 1 ? "tool" : "tools"}</div>
+            <div>{childCount} {childCount === 1 ? "update" : "updates"}</div>
+          </div>
+        </div>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-1">
+        <div className="border-l border-border/40 pl-3">
+          {prompt ? (
+            <div className="mb-3 border-l border-border/30 pl-3">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                Task
+              </div>
+              <MessageMarkdown
+                content={prompt}
+                components={markdownComponents}
+                className="text-xs text-muted-foreground/90 prose-invert prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-pre:my-1 prose-pre:p-2"
+                enableBreaks={false}
+              />
+            </div>
+          ) : null}
+          <div className="space-y-1">
+            {part.childTools.map((child, index) => (
+              <MessagePart
+                key={`task-child-${index}-${child.toolUseId ?? child.toolName ?? child.type}`}
+                part={child}
+                containerId={containerId}
+              />
+            ))}
+            {part.childTools.length === 0 ? (
+              <div className="px-3 py-2 text-xs text-muted-foreground/70">
+                No child actions yet.
+              </div>
+            ) : null}
+          </div>
         </div>
       </CollapsibleContent>
     </Collapsible>

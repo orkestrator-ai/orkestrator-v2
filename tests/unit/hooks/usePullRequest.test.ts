@@ -3,12 +3,12 @@ import { renderHook, act } from "@testing-library/react";
 import { useEnvironmentStore } from "../../../src/stores/environmentStore";
 import { createMockEnvironment } from "../utils/testFactories";
 
-// Mock tauri module BEFORE importing the hook
+// Mock backend module BEFORE importing the hook
 const mockGetEnvironmentPrUrl = mock<(environmentId: string) => Promise<string | null>>(() => Promise.resolve(null));
 const mockClearEnvironmentPr = mock<(environmentId: string) => Promise<void>>(() => Promise.resolve());
 const mockOpenInBrowser = mock<(url: string) => Promise<void>>(() => Promise.resolve());
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   getEnvironmentPrUrl: mockGetEnvironmentPrUrl,
   clearEnvironmentPr: mockClearEnvironmentPr,
   openInBrowser: mockOpenInBrowser,

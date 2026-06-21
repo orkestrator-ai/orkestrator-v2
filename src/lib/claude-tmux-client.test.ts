@@ -1,4 +1,4 @@
-// Verifies that claude-tmux-client wrappers forward the right Tauri command
+// Verifies that claude-tmux-client wrappers forward the right backend command
 // names and argument shapes. We re-mock `@/lib/native/backend` *for this file
 // only* (tests/setup.ts installs a no-op mock; we replace it with one whose
 // implementation captures calls). The replacement is restored in afterAll so

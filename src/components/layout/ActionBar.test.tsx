@@ -10,7 +10,7 @@ import * as realDockerComponents from "@/components/docker";
 import * as realStores from "@/stores";
 import * as realHooks from "@/hooks";
 import * as realContexts from "@/contexts";
-import * as realTauri from "@/lib/tauri";
+import * as realBackend from "@/lib/backend";
 import * as realSonner from "sonner";
 import type { Environment, Project } from "@/types";
 
@@ -23,7 +23,7 @@ const realDockerComponentsSnapshot = { ...realDockerComponents };
 const realStoresSnapshot = { ...realStores };
 const realHooksSnapshot = { ...realHooks };
 const realContextsSnapshot = { ...realContexts };
-const realTauriSnapshot = { ...realTauri };
+const realBackendSnapshot = { ...realBackend };
 const realSonnerSnapshot = { ...realSonner };
 
 const deleteEnvironmentMock = mock(async (_environmentId: string) => {});
@@ -296,7 +296,7 @@ mock.module("@/contexts", () => ({
   }),
 }));
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   mergePr: mergePrMock,
   mergePrLocal: mergePrLocalMock,
   openInEditor: async () => {},
@@ -326,7 +326,7 @@ afterAll(() => {
   mock.module("@/stores", () => realStoresSnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/contexts", () => realContextsSnapshot);
-  mock.module("@/lib/tauri", () => realTauriSnapshot);
+  mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("sonner", () => realSonnerSnapshot);
 });
 

@@ -28,7 +28,7 @@ import * as realButton from "@/components/ui/button";
 import * as realPrMonitorService from "@/hooks/usePrMonitorService";
 import * as realGlobalActivityMonitor from "@/hooks/useGlobalActivityMonitor";
 import * as realHooks from "@/hooks";
-import * as realTauri from "@/lib/tauri";
+import * as realBackend from "@/lib/backend";
 import * as realSonner from "sonner";
 import * as realLucideReact from "lucide-react";
 import * as realProcess from "@/lib/native/process";
@@ -45,7 +45,7 @@ const realButtonSnapshot = { ...realButton };
 const realPrMonitorServiceSnapshot = { ...realPrMonitorService };
 const realGlobalActivityMonitorSnapshot = { ...realGlobalActivityMonitor };
 const realHooksSnapshot = { ...realHooks };
-const realTauriSnapshot = { ...realTauri };
+const realBackendSnapshot = { ...realBackend };
 const realSonnerSnapshot = { ...realSonner };
 const realLucideReactSnapshot = { ...realLucideReact };
 const realProcessSnapshot = { ...realProcess };
@@ -194,7 +194,7 @@ const mockCheckGithubCli = mock(async () => true);
 const mockGetAvailableAiCli = mock<() => Promise<string | null>>(async () => "claude");
 const mockGetConfig = mock(async () => mockConfig);
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   checkDocker: mockCheckDocker,
   checkClaudeCli: mockCheckClaudeCli,
   checkClaudeConfig: mockCheckClaudeConfig,
@@ -367,7 +367,7 @@ afterAll(() => {
   mock.module("@/hooks/usePrMonitorService", () => realPrMonitorServiceSnapshot);
   mock.module("@/hooks/useGlobalActivityMonitor", () => realGlobalActivityMonitorSnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
-  mock.module("@/lib/tauri", () => realTauriSnapshot);
+  mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("sonner", () => realSonnerSnapshot);
   mock.module("lucide-react", () => realLucideReactSnapshot);
   mock.module("@/lib/native/process", () => realProcessSnapshot);

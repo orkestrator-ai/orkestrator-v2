@@ -59,7 +59,7 @@ import {
   renameEnvironmentFromPrompt,
   type OpenCodeModelRef,
   type OpenCodeModelPreferences,
-} from "@/lib/tauri";
+} from "@/lib/backend";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { normalizeOpenCodeNativeMessage } from "@/lib/chat/native-message-adapters";
 import { OpenCodeComposeBar } from "./OpenCodeComposeBar";

@@ -2,14 +2,14 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import * as realXterm from "@xterm/xterm";
 import * as realFitAddon from "@xterm/addon-fit";
-import * as realTauriEvent from "@/lib/native/events";
+import * as realBackendEvent from "@/lib/native/events";
 import * as realTmuxClient from "@/lib/claude-tmux-client";
 import * as realTerminalPaste from "@/lib/terminal-paste";
 import * as realClipboardImagePaste from "@/hooks/useClipboardImagePaste";
 
 const realXtermSnapshot = { ...realXterm };
 const realFitAddonSnapshot = { ...realFitAddon };
-const realTauriEventSnapshot = { ...realTauriEvent };
+const realBackendEventSnapshot = { ...realBackendEvent };
 const realTmuxClientSnapshot = { ...realTmuxClient };
 const realTerminalPasteSnapshot = { ...realTerminalPaste };
 const realClipboardImagePasteSnapshot = { ...realClipboardImagePaste };
@@ -108,7 +108,7 @@ mock.module("@xterm/addon-fit", () => ({
 }));
 
 mock.module("@/lib/native/events", () => ({
-  ...realTauriEventSnapshot,
+  ...realBackendEventSnapshot,
   listen: listenMock,
 }));
 
@@ -148,7 +148,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   afterAll(() => {
     mock.module("@xterm/xterm", () => realXtermSnapshot);
     mock.module("@xterm/addon-fit", () => realFitAddonSnapshot);
-    mock.module("@/lib/native/events", () => realTauriEventSnapshot);
+    mock.module("@/lib/native/events", () => realBackendEventSnapshot);
     mock.module("@/lib/claude-tmux-client", () => realTmuxClientSnapshot);
     mock.module("@/lib/terminal-paste", () => realTerminalPasteSnapshot);
     mock.module("@/hooks/useClipboardImagePaste", () => realClipboardImagePasteSnapshot);

@@ -40,7 +40,7 @@ import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { extractContextUsage } from "@/lib/context-usage";
 import { cn } from "@/lib/utils";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 
 interface OpenCodeBuildChatTabProps {
   data: BuildTabData;
@@ -238,9 +238,9 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
 
     let port: number | null = null;
     if (isLocal) {
-      let status = await tauri.getLocalOpencodeServerStatus(environmentId);
+      let status = await backend.getLocalOpencodeServerStatus(environmentId);
       if (!status.running) {
-        const result = await tauri.startLocalOpencodeServer(environmentId);
+        const result = await backend.startLocalOpencodeServer(environmentId);
         status = { running: true, port: result.port, pid: result.pid };
       }
       port = status.port ?? null;
@@ -251,9 +251,9 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
         throw new Error("Container ID is required for containerized OpenCode environments");
       }
 
-      let status = await tauri.getOpenCodeServerStatus(containerId);
+      let status = await backend.getOpenCodeServerStatus(containerId);
       if (!status.running) {
-        const result = await tauri.startOpenCodeServer(containerId);
+        const result = await backend.startOpenCodeServer(containerId);
         status = { running: true, hostPort: result.hostPort };
       }
       port = status.hostPort ?? null;
@@ -541,7 +541,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
 
       let projectNotes = "";
       try {
-        const notes = await tauri.getProjectNotes(currentPipeline.projectId);
+        const notes = await backend.getProjectNotes(currentPipeline.projectId);
         projectNotes = notes.content;
       } catch (error) {
         console.debug("[OpenCodeBuildChatTab] Failed to load project notes for review:", error);
@@ -576,7 +576,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
 
       let projectNotes = "";
       try {
-        const notes = await tauri.getProjectNotes(currentPipeline.projectId);
+        const notes = await backend.getProjectNotes(currentPipeline.projectId);
         projectNotes = notes.content;
       } catch (error) {
         console.debug("[OpenCodeBuildChatTab] Failed to load project notes for verification:", error);
@@ -611,7 +611,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
 
       let projectNotes = "";
       try {
-        const notes = await tauri.getProjectNotes(currentPipeline.projectId);
+        const notes = await backend.getProjectNotes(currentPipeline.projectId);
         projectNotes = notes.content;
       } catch (error) {
         console.debug("[OpenCodeBuildChatTab] Failed to load project notes for fix:", error);
@@ -662,14 +662,14 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     if (!environment) return false;
 
     if (environment.environmentType === "local") {
-      const result = await tauri.detectPrLocal(environmentId, environment.branch);
+      const result = await backend.detectPrLocal(environmentId, environment.branch);
       if (!result) return false;
       useEnvironmentStore.getState().setEnvironmentPR(environmentId, result.url, result.state, result.hasMergeConflicts);
       return result.hasMergeConflicts;
     }
 
     if (!environment.containerId) return false;
-    const result = await tauri.detectPr(environment.containerId, environment.branch);
+    const result = await backend.detectPr(environment.containerId, environment.branch);
     if (!result) return false;
     useEnvironmentStore.getState().setEnvironmentPR(environmentId, result.url, result.state, result.hasMergeConflicts);
     return result.hasMergeConflicts;
@@ -917,7 +917,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     buildStartTriggeredRef.current = true;
 
     const task = pipeline.taskSnapshot;
-    tauri.getProjectNotes(pipeline.projectId)
+    backend.getProjectNotes(pipeline.projectId)
       .then((notes) => {
         const envStore = useEnvironmentStore.getState();
         if (isSetupPending({

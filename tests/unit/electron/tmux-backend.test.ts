@@ -187,7 +187,7 @@ describe("Electron tmux backend command registration", () => {
     }
   });
 
-  test("keeps missing-session behavior compatible with the Tauri tmux commands", async () => {
+  test("keeps missing-session behavior compatible with the backend tmux commands", async () => {
     const handlers = createHandlers();
     const args = { tabId: "tab-missing", environmentId: "env-missing" };
 

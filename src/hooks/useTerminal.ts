@@ -19,6 +19,10 @@ interface UseTerminalOptions {
   persistSession?: boolean;
   /** User to run the terminal session as (e.g., "orkroot" for root access) */
   user?: string;
+  /** Replay the backend's bounded output buffer when attaching to an existing PTY */
+  replayOutputBuffer?: boolean;
+  /** Attach only to an existing backend-owned PTY; never create a replacement session. */
+  attachExistingOnly?: boolean;
 }
 
 interface UseTerminalReturn {
@@ -42,6 +46,8 @@ export function useTerminal({
   existingSessionId,
   persistSession = false,
   user,
+  replayOutputBuffer = false,
+  attachExistingOnly = false,
 }: UseTerminalOptions): UseTerminalReturn {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -53,11 +59,19 @@ export function useTerminal({
   const isConnectedRef = useRef(false);
   const isConnectingRef = useRef(false);
   const connectGenerationRef = useRef(0);
+  const isMountedRef = useRef(false);
 
   // Keep onData ref up to date
   useEffect(() => {
     onDataRef.current = onData;
   }, [onData]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const cleanupEventListener = useCallback(() => {
     const unlisten = unlistenRef.current;
@@ -143,7 +157,18 @@ export function useTerminal({
   }, [cleanupEventListener]);
 
   const connect = useCallback(async () => {
-    console.log("[useTerminal] connect called, containerId:", containerId, "environmentId:", environmentId, "isLocal:", isLocal, "existingSessionId:", existingSessionId);
+    console.log("[useTerminal] connect called, containerId:", containerId, "environmentId:", environmentId, "isLocal:", isLocal, "existingSessionId:", existingSessionId, "attachExistingOnly:", attachExistingOnly);
+
+    if (attachExistingOnly && !existingSessionId) {
+      console.info("[setup-terminal] waiting for backend-owned session id before attaching", {
+        environmentId: environmentId ?? null,
+        containerId,
+        isLocal,
+      });
+      console.log("[useTerminal] Waiting for existing backend terminal session before connecting");
+      setError(null);
+      return;
+    }
 
     // Validate inputs based on environment type
     if (isLocal) {
@@ -172,6 +197,7 @@ export function useTerminal({
 
     let targetSessionId: string | null = null;
     let shouldStartSession = true;
+    let existingSessionRunning: boolean | null = null;
 
     try {
 
@@ -184,7 +210,21 @@ export function useTerminal({
         });
         if (!isCurrentConnect()) return;
 
-        if (existingStatus?.running) {
+        existingSessionRunning = existingStatus?.running ?? false;
+        if (attachExistingOnly || existingSessionId.endsWith(":setup")) {
+          console.info("[setup-terminal] existing terminal session status", {
+            environmentId: environmentId ?? null,
+            sessionId: existingSessionId,
+            running: existingSessionRunning,
+            attachExistingOnly,
+            replayOutputBuffer,
+          });
+        }
+
+        if (existingSessionRunning) {
+          targetSessionId = existingSessionId;
+          shouldStartSession = false;
+        } else if (attachExistingOnly) {
           targetSessionId = existingSessionId;
           shouldStartSession = false;
         } else if (isLocal && environmentId) {
@@ -236,6 +276,16 @@ export function useTerminal({
       // Listen for terminal output events
       const eventName = `terminal-output-${targetSessionId}`;
       console.log("[useTerminal] Listening for events on:", eventName);
+      if (attachExistingOnly || targetSessionId.endsWith(":setup")) {
+        console.info("[setup-terminal] listening for backend terminal output", {
+          environmentId: environmentId ?? null,
+          sessionId: targetSessionId,
+          eventName,
+          shouldStartSession,
+          replayOutputBuffer,
+          attachExistingOnly,
+        });
+      }
       const unlisten = await listen<number[]>(eventName, (event) => {
         const data = new Uint8Array(event.payload);
         if (onDataRef.current) {
@@ -255,6 +305,44 @@ export function useTerminal({
       }
 
       unlistenRef.current = unlisten;
+
+      if (replayOutputBuffer) {
+        const bufferedOutput = await backend.getTerminalOutputBuffer(targetSessionId).catch((err) => {
+          console.warn("[useTerminal] Failed to replay terminal output buffer:", err);
+          return "";
+        });
+        if (attachExistingOnly || targetSessionId.endsWith(":setup")) {
+          console.info("[setup-terminal] replay buffer fetched", {
+            environmentId: environmentId ?? null,
+            sessionId: targetSessionId,
+            bufferChars: bufferedOutput.length,
+          });
+        }
+        if (!isCurrentConnect()) {
+          cleanupEventListener();
+          if (shouldStartSession) {
+            if (isLocal) {
+              await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
+            } else {
+              await backend.detachTerminal(targetSessionId).catch(() => {});
+            }
+          }
+          return;
+        }
+        if (bufferedOutput && onDataRef.current) {
+          onDataRef.current(new TextEncoder().encode(bufferedOutput));
+        }
+      }
+
+      if (attachExistingOnly && targetSessionId && existingSessionRunning === false) {
+        console.info("[setup-terminal] backend-owned session is not running after attach", {
+          environmentId: environmentId ?? null,
+          sessionId: targetSessionId,
+          replayOutputBuffer,
+        });
+        setError("Backend terminal session is not running");
+        return;
+      }
 
       // Only start session if it's new (existing sessions are already running)
       if (shouldStartSession) {
@@ -301,10 +389,19 @@ export function useTerminal({
       console.error("[useTerminal] Connection error:", err);
       const message = err instanceof Error ? err.message : "Failed to connect to terminal";
 
+      if (attachExistingOnly) {
+        setError(message);
+        sessionIdRef.current = null;
+        isConnectedRef.current = false;
+        setSessionId(null);
+        toast.error("Terminal connection failed", { description: message });
+        return;
+      }
+
       // If we were trying to reconnect to an existing session and it failed,
       // the session may have been cleaned up on the backend. Fall back to
       // creating a new session.
-      if (existingSessionId) {
+      if (existingSessionId && !attachExistingOnly) {
         console.log("[useTerminal] Reconnect failed, falling back to new session");
         sessionIdRef.current = null;
         isConnectedRef.current = false;
@@ -351,6 +448,25 @@ export function useTerminal({
             return;
           }
           unlistenRef.current = unlisten;
+
+          if (replayOutputBuffer) {
+            const bufferedOutput = await backend.getTerminalOutputBuffer(newSessionId).catch((err) => {
+              console.warn("[useTerminal] Failed to replay fallback terminal output buffer:", err);
+              return "";
+            });
+            if (!isCurrentConnect()) {
+              cleanupEventListener();
+              if (isLocal) {
+                await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
+              } else {
+                await backend.detachTerminal(newSessionId).catch(() => {});
+              }
+              return;
+            }
+            if (bufferedOutput && onDataRef.current) {
+              onDataRef.current(new TextEncoder().encode(bufferedOutput));
+            }
+          }
 
           if (isLocal) {
             await backend.startLocalTerminalSession(newSessionId);
@@ -412,12 +528,20 @@ export function useTerminal({
         setSessionId(null);
       }
     } finally {
-      if (isCurrentConnect()) {
-        isConnectingRef.current = false;
+      isConnectingRef.current = false;
+      if (!isCurrentConnect() && (attachExistingOnly || existingSessionId?.endsWith(":setup") || targetSessionId?.endsWith(":setup"))) {
+        console.info("[setup-terminal] stale connect cleared connecting state", {
+          environmentId: environmentId ?? null,
+          existingSessionId: existingSessionId ?? null,
+          targetSessionId,
+          mounted: isMountedRef.current,
+        });
+      }
+      if (isCurrentConnect() || isMountedRef.current) {
         setIsConnecting(false);
       }
     }
-  }, [containerId, environmentId, isLocal, cols, rows, existingSessionId, user, cleanupEventListener]);
+  }, [containerId, environmentId, isLocal, cols, rows, existingSessionId, user, replayOutputBuffer, attachExistingOnly, cleanupEventListener]);
 
   const disconnect = useCallback(async () => {
     if (!sessionId) return;

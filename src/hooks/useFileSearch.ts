@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { getFileTree, getLocalFileTree, type FileNode } from "@/lib/tauri";
+import { getFileTree, getLocalFileTree, type FileNode } from "@/lib/backend";
 import type { FileCandidate } from "@/types";
 
 /**

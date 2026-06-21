@@ -14,6 +14,14 @@ const createTerminalMock = mock(() => {});
 const disposeTerminalMock = mock(() => {});
 const clearTerminalsForEnvironmentMock = mock(() => {});
 const paneHost = document.createElement("div");
+let terminalStoreHasTerminal = true;
+let terminalStoreTerminals: Map<string, {
+  environmentId: string;
+  tabId: string;
+  portalElement: HTMLDivElement;
+  containerElement: HTMLDivElement;
+  isOpened: boolean;
+}> = new Map();
 
 let terminalBehavior:
   | ((props: {
@@ -51,22 +59,11 @@ mock.module("./PersistentTerminal", () => ({
 }));
 
 const terminalPortalStoreState = () => ({
-  terminals: new Map([
-    [
-      "env-1::default",
-      {
-        environmentId: "env-1",
-        tabId: "default",
-        portalElement: document.createElement("div"),
-        containerElement: document.createElement("div"),
-        isOpened: true,
-      },
-    ],
-  ]),
+  terminals: terminalStoreTerminals,
   createTerminal: createTerminalMock,
   disposeTerminal: disposeTerminalMock,
   clearTerminalsForEnvironment: clearTerminalsForEnvironmentMock,
-  hasTerminal: () => true,
+  hasTerminal: () => terminalStoreHasTerminal,
   getPaneHost: () => paneHost,
 });
 
@@ -110,6 +107,19 @@ describe("TerminalPortalHost", () => {
     createTerminalMock.mockClear();
     disposeTerminalMock.mockClear();
     clearTerminalsForEnvironmentMock.mockClear();
+    terminalStoreHasTerminal = true;
+    terminalStoreTerminals = new Map([
+      [
+        "env-1::default",
+        {
+          environmentId: "env-1",
+          tabId: "default",
+          portalElement: document.createElement("div"),
+          containerElement: document.createElement("div"),
+          isOpened: true,
+        },
+      ],
+    ]);
 
     useConfigStore.setState({
       config: {
@@ -203,6 +213,27 @@ describe("TerminalPortalHost", () => {
 
     expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-1")).toBe(false);
     expect(markSetupScriptsCompleteMock).toHaveBeenCalledWith("env-1");
+  });
+
+  test("creates terminals even before the pane-layout active environment is set", async () => {
+    terminalStoreHasTerminal = false;
+    terminalStoreTerminals = new Map();
+    usePaneLayoutStore.setState((state) => ({
+      ...state,
+      activeEnvironmentId: null,
+    }));
+
+    render(<TerminalPortalHost environmentId="env-1" containerId="container-1" />);
+
+    await waitFor(() => {
+      expect(createTerminalMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environmentId: "env-1",
+          tabId: "default",
+          containerId: "container-1",
+        }),
+      );
+    });
   });
 
   test("does not persist completion when a local terminal only becomes shell-ready", async () => {

@@ -1,12 +1,12 @@
 import { describe, test, expect, beforeEach, mock } from "bun:test";
 import { renderHook, waitFor } from "@testing-library/react";
-import type { FileNode } from "@/lib/tauri";
+import type { FileNode } from "@/lib/backend";
 
-// Mock tauri module BEFORE importing the hook
+// Mock backend module BEFORE importing the hook
 const mockGetFileTree = mock<(containerId: string) => Promise<FileNode[]>>(() => Promise.resolve([]));
 const mockGetLocalFileTree = mock<(worktreePath: string) => Promise<FileNode[]>>(() => Promise.resolve([]));
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   getFileTree: mockGetFileTree,
   getLocalFileTree: mockGetLocalFileTree,
 }));

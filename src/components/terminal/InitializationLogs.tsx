@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@/lib/native/events";
-import { getContainerLogs, streamContainerLogs } from "@/lib/tauri";
+import { getContainerLogs, streamContainerLogs } from "@/lib/backend";
 import { Loader2, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 

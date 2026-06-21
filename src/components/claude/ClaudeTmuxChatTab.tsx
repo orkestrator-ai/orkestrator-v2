@@ -101,7 +101,7 @@ import { useClaudeStore } from "@/stores/claudeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
-import { renameEnvironmentFromPrompt, updateGlobalConfig } from "@/lib/tauri";
+import { renameEnvironmentFromPrompt, updateGlobalConfig } from "@/lib/backend";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import type { ClaudeTmuxData } from "@/types/paneLayout";
 import type { FileCandidate, FileMention } from "@/types";
@@ -482,7 +482,7 @@ export function ClaudeTmuxChatTab({
   );
 
   // 0. Reconnect to any already-running backend session and replay the full
-  // transcript. Tauri events are only delivered to mounted listeners, so a
+  // transcript. backend events are only delivered to mounted listeners, so a
   // tmux tab hidden behind another environment can miss transcript updates.
   useEffect(() => {
     let cancelled = false;

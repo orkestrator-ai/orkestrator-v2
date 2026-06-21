@@ -39,7 +39,7 @@ import {
   startLocalClaudeServer,
   getLocalClaudeServerStatus,
   renameEnvironmentFromPrompt,
-} from "@/lib/tauri";
+} from "@/lib/backend";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { ClaudeComposeBar } from "./ClaudeComposeBar";
 import { ClaudeQuestionCard } from "./ClaudeQuestionCard";

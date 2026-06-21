@@ -144,6 +144,13 @@ describe("HierarchicalSidebar", () => {
       ...state,
       config: {
         ...state.config,
+        global: {
+          ...state.config.global,
+          defaultAgent: "claude",
+          claudeMode: "terminal",
+          opencodeMode: "terminal",
+          codexMode: "native",
+        },
         repositories: {},
       },
       isLoading: false,

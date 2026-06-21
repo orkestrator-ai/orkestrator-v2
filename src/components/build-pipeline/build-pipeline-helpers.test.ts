@@ -769,7 +769,7 @@ describe("waitForSetupInitiation", () => {
   });
 
   test("waits when setup commands not yet resolved", async () => {
-    // Simulate startEnvironment hasn't completed yet (awaiting tauri)
+    // Simulate startEnvironment hasn't completed yet (awaiting backend)
     useEnvironmentStore.getState().setPendingSetupCommands(envId, []);
 
     // After a delay, resolve with no commands

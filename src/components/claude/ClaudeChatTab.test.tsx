@@ -65,7 +65,7 @@ mock.module("@/lib/claude-client", () => ({
   SessionNotFoundError: class SessionNotFoundError extends Error {},
 }));
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   startClaudeServer: mock(async () => ({ hostPort: 9999 })),
   getClaudeServerStatus: mock(async () => ({ running: true, hostPort: 9999 })),
   getClaudeServerLog: mock(async () => ""),

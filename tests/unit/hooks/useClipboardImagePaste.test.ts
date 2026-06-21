@@ -15,7 +15,7 @@ const mockWriteLocalFile = mock<
   (worktreePath: string, filePath: string, base64Data: string) => Promise<string>
 >(() => Promise.resolve("/tmp/worktrees/env/.orkestrator/clipboard/test.png"));
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   writeContainerFile: mockWriteContainerFile,
   writeLocalFile: mockWriteLocalFile,
 }));

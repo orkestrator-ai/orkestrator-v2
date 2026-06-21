@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { GitFileChange, FileNode } from "@/lib/tauri";
+import type { GitFileChange, FileNode } from "@/lib/backend";
 
 export type FilesPanelTab = "changes" | "all-files";
 

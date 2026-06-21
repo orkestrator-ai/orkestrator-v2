@@ -47,7 +47,7 @@ mock.module("@/lib/context-usage", () => ({
   extractContextUsage: () => null,
 }));
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   detectPr: mock(async () => null),
   detectPrLocal: mock(async () => null),
   getLocalOpencodeServerStatus: mock(async () => ({ running: true, port: 9999, pid: 1234 })),

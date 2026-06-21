@@ -10,7 +10,7 @@ import { useAgentActivityStore } from "@/stores/agentActivityStore";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useTerminalPortalStore, createTerminalKey, type PersistentTerminalData } from "@/stores/terminalPortalStore";
 import { cn } from "@/lib/utils";
-import { setSessionHasLaunchedCommand } from "@/lib/tauri";
+import { setSessionHasLaunchedCommand } from "@/lib/backend";
 import type { TabType } from "@/contexts";
 import {
   DEFAULT_TERMINAL_APPEARANCE,
@@ -152,6 +152,12 @@ export function PersistentTerminal({
   const serializedBuffer = existingSession?.serializedBuffer;
   const existingHasLaunchedCommand = existingSession?.hasLaunchedCommand ?? false;
   const isReconnecting = !!existingSessionId;
+  const isBackendManagedSetupTab = !!isSetupTab && (!initialCommands || initialCommands.length === 0);
+  // Backend-managed setup tabs must use the backend transcript as authority.
+  // A frontend serialized xterm buffer can be blank if the tab mounted before
+  // the backend setup PTY was bound.
+  const shouldReplayBackendOutputBuffer =
+    isBackendManagedSetupTab || (!!isSetupTab && !existingSession?.serializedBuffer);
 
   // Track if there was an existing session when component mounted (genuine reconnection)
   // This distinguishes between:
@@ -178,6 +184,35 @@ export function PersistentTerminal({
   const isLocalEnvironment = useEnvironmentStore(
     (state) => state.getEnvironmentById(environmentId)?.environmentType === "local"
   );
+
+  useEffect(() => {
+    if (!isSetupTab) return;
+    console.info("[setup-terminal] PersistentTerminal setup attach state", {
+      environmentId,
+      tabId,
+      sessionKey,
+      existingSessionId: existingSessionId ?? null,
+      isBackendManagedSetupTab,
+      shouldReplayBackendOutputBuffer,
+      attachExistingOnly: isBackendManagedSetupTab,
+      isLocalEnvironment,
+      containerId,
+      initialCommandCount: initialCommands?.length ?? 0,
+      serializedBufferChars: serializedBuffer?.length ?? 0,
+    });
+  }, [
+    containerId,
+    environmentId,
+    existingSessionId,
+    initialCommands?.length,
+    isBackendManagedSetupTab,
+    isLocalEnvironment,
+    isSetupTab,
+    serializedBuffer?.length,
+    sessionKey,
+    shouldReplayBackendOutputBuffer,
+    tabId,
+  ]);
 
   // Get worktree path for local environments (needed for image paste)
   const worktreePath = useEnvironmentStore(
@@ -426,6 +461,8 @@ export function PersistentTerminal({
       existingSessionId,
       persistSession: true,
       user: terminalUser,
+      replayOutputBuffer: shouldReplayBackendOutputBuffer,
+      attachExistingOnly: isBackendManagedSetupTab,
     });
 
   // Keep connect ref up to date to avoid stale closures in effects

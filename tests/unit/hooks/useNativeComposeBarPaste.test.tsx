@@ -7,7 +7,7 @@ const mockWriteContainerFile = mock(async () => {});
 const mockWriteLocalFile = mock(async () => "/tmp/worktrees/env/.orkestrator/clipboard/test.png");
 const toastError = mock(() => {});
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   writeContainerFile: mockWriteContainerFile,
   writeLocalFile: mockWriteLocalFile,
 }));

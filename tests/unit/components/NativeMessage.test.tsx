@@ -13,7 +13,7 @@ const mockOpenInBrowser = mock(async () => {});
 const mockReadFileBase64 = mock(async () => "image-base64");
 const mockReadContainerFileBase64 = mock(async () => "container-image-base64");
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   openInBrowser: mockOpenInBrowser,
   readContainerFileBase64: mockReadContainerFileBase64,
   readFileBase64: mockReadFileBase64,

@@ -18,7 +18,7 @@ import { useClaudeStore, createClaudeSessionKey } from "./claudeStore";
 import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "./claudeTmuxStore";
 import { useCodexStore, createCodexSessionKey } from "./codexStore";
 import { useOpenCodeStore, createOpenCodeSessionKey } from "./openCodeStore";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 import { deleteSession as deleteClaudeSession } from "@/lib/claude-client";
 import { stopSession as stopClaudeTmuxSession } from "@/lib/claude-tmux-client";
 import { deleteSession as deleteCodexSession } from "@/lib/codex-client";
@@ -214,8 +214,8 @@ function cleanupTerminalTab(envId: string, containerId: string | null, tabId: st
   if (sessionData.sessionId) {
     const isLocalSession = containerId === null;
     const close = isLocalSession
-      ? tauri.closeLocalTerminalSession(sessionData.sessionId)
-      : tauri.detachTerminal(sessionData.sessionId);
+      ? backend.closeLocalTerminalSession(sessionData.sessionId)
+      : backend.detachTerminal(sessionData.sessionId);
 
     close.catch((err) => {
       console.debug("[PaneLayout] Error closing terminal session:", err);

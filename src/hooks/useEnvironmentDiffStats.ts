@@ -1,7 +1,7 @@
 import { useEffect, useRef, useMemo } from "react";
 import { useEnvironmentStore, useConfigStore } from "@/stores";
 import { useEnvironmentDiffStore } from "@/stores/environmentDiffStore";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 import type { Environment } from "@/types";
 
 /** Polling interval for diff stats (15 seconds - less frequent than files panel) */
@@ -80,11 +80,11 @@ export function useEnvironmentDiffStats() {
 
       loadingRef.current.add(env.id);
       try {
-        let changes: tauri.GitFileChange[];
+        let changes: backend.GitFileChange[];
         if (isLocal && env.worktreePath) {
-          changes = await tauri.getLocalGitStatus(env.worktreePath, comparisonRef);
+          changes = await backend.getLocalGitStatus(env.worktreePath, comparisonRef);
         } else if (env.containerId) {
-          changes = await tauri.getGitStatus(env.containerId, comparisonRef);
+          changes = await backend.getGitStatus(env.containerId, comparisonRef);
         } else {
           return;
         }

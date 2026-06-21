@@ -21,7 +21,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useClaudeStore, createClaudeSessionKey, type ClaudeAttachment, type QueuedMessage, type ClaudeEffortLevel } from "@/stores/claudeStore";
 import { useConfigStore } from "@/stores/configStore";
 import { ContextUsageWheel } from "@/components/chat/ContextUsageWheel";
-import { updateGlobalConfig as persistGlobalConfig } from "@/lib/tauri";
+import { updateGlobalConfig as persistGlobalConfig } from "@/lib/backend";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import type { ClaudeModel } from "@/lib/claude-client";
 import { SlashCommandMenu, parseSlashCommands } from "./SlashCommandMenu";

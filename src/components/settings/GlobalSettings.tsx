@@ -13,7 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useConfigStore } from "@/stores";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 import { Loader2, Eye, EyeOff, Key, Github, CheckCircle2, XCircle, AlertCircle, Code2, Check, Terminal, Bot, FolderOpen } from "lucide-react";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { Textarea } from "@/components/ui/textarea";
@@ -143,7 +143,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
   // Fetch log directory path once on mount
   useEffect(() => {
-    tauri.getLogDirectory().then(setLogDirectory).catch(() => {});
+    backend.getLogDirectory().then(setLogDirectory).catch(() => {});
   }, []);
 
   // Check for changes
@@ -221,7 +221,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setIsTesting(true);
     setTestResults(null);
     try {
-      const results = await tauri.testDomainResolution(domains);
+      const results = await backend.testDomainResolution(domains);
       setTestResults(results);
     } catch (err) {
       console.error("[settings] Failed to test domains:", err);
@@ -294,7 +294,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       if (anthropicApiKey) newGlobal.anthropicApiKey = anthropicApiKey;
       if (githubToken) newGlobal.githubToken = githubToken;
 
-      const newConfig = await tauri.updateGlobalConfig(newGlobal);
+      const newConfig = await backend.updateGlobalConfig(newGlobal);
       setConfig(newConfig);
 
       // Propagate GitHub token to running containers if it changed
@@ -302,7 +302,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       const newTokenValue = githubToken || "";
       if (oldToken !== newTokenValue) {
         try {
-          const propagateResult = await tauri.propagateGithubTokenToContainers(
+          const propagateResult = await backend.propagateGithubTokenToContainers(
             newTokenValue === "" ? null : newTokenValue
           );
           if (propagateResult.updated.length > 0) {
@@ -962,7 +962,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
           <p className="text-xs text-muted-foreground">Logs will be saved to:</p>
           <button
             type="button"
-            onClick={() => { if (logDirectory) tauri.revealInFileManager(logDirectory).catch(() => {}); }}
+            onClick={() => { if (logDirectory) backend.revealInFileManager(logDirectory).catch(() => {}); }}
             className="flex items-center gap-1.5 text-xs text-primary hover:underline font-mono truncate max-w-full"
             title={logDirectory}
           >
@@ -1022,7 +1022,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
           <p className="text-xs text-muted-foreground">Local environment logs will be saved under:</p>
           <button
             type="button"
-            onClick={() => { if (logDirectory) tauri.revealInFileManager(logDirectory).catch(() => {}); }}
+            onClick={() => { if (logDirectory) backend.revealInFileManager(logDirectory).catch(() => {}); }}
             className="flex items-center gap-1.5 text-xs text-primary hover:underline font-mono truncate max-w-full"
             title={`${logDirectory}/codex-raw`}
           >

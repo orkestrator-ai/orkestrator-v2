@@ -69,6 +69,8 @@ mock.module("node-pty", () => ({ spawn: ptySpawn }));
 const { createCommandRegistry } = await import("../../../electron/backend/commands");
 
 const tempDirs: string[] = [];
+const SETUP_DONE_OSC = "\u001b]9999;setup_done\u0007";
+const SETUP_FAILED_OSC = "\u001b]9999;setup_failed\u0007";
 
 async function createTempDir(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -422,6 +424,15 @@ function expectedLocalShellPath(): string {
   return ["/bin/zsh", "/bin/bash", "/bin/sh"].find((candidate) => existsSync(candidate)) ?? configuredShell ?? "zsh";
 }
 
+async function waitForPtyProcessCount(count: number): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < 1_000) {
+    if (ptyProcesses.length >= count) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${count} PTY process(es), saw ${ptyProcesses.length}`);
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
   showOpenDialog.mockClear();
@@ -436,7 +447,7 @@ afterAll(async () => {
 
 describe("Electron backend command registry", () => {
   test("registers every command exposed by the typed frontend wrapper", async () => {
-    const source = await fs.readFile(path.join(process.cwd(), "src", "lib", "tauri.ts"), "utf8");
+    const source = await fs.readFile(path.join(process.cwd(), "src", "lib", "backend.ts"), "utf8");
     const exposedCommands = Array.from(source.matchAll(/invoke(?:<[^>]+>)?\("([^"]+)"/g), (match) => match[1]);
     const commands = createCommandRegistry();
 
@@ -959,16 +970,44 @@ if [ "$1" = "exec" ]; then
 fi
 exit 0
 `, async (logs) => {
-      const updated = await commands.get("run_environment_setup")?.({ environmentId: environment.id }, context) as Environment;
+      const setupPromise = commands.get("run_environment_setup")?.({ environmentId: environment.id }, context) as Promise<Environment>;
+      await waitForPtyProcessCount(1);
+      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+      const updated = await setupPromise;
 
       expect(updated.setupScriptsComplete).toBe(true);
       expect(updated.createdFromCommit).toBe("1111111111111111111111111111111111111111");
       expect(environment.setupScriptsComplete).toBe(true);
       expect(environment.createdFromCommit).toBe("1111111111111111111111111111111111111111");
       const execLog = await fs.readFile(logs.exec, "utf8");
-      expect(execLog).toContain("/usr/local/bin/workspace-setup.sh");
       expect(execLog).toContain("git -C /workspace rev-parse HEAD");
-      expect(execLog).toContain("flock");
+      expect(ptySpawn).toHaveBeenCalledWith(
+        "docker",
+        expect.arrayContaining([
+          "exec",
+          "-it",
+          "container-1",
+          "zsh",
+          "-lc",
+          expect.stringContaining("/usr/local/bin/workspace-setup.sh"),
+        ]),
+        expect.any(Object),
+      );
+      expect(ptySpawn.mock.calls[0]?.[1].at(-1)).toContain("flock");
+      const setupOutput = emitted
+        .filter((entry) => entry.event === `terminal-output-${environment.id}:setup`)
+        .map((entry) => Buffer.from(entry.payload as number[]).toString("utf8"))
+        .join("");
+      expect(setupOutput).toContain("[orkestrator] Starting environment setup");
+      expect(setupOutput).toContain("/usr/local/bin/workspace-setup.sh");
+      expect(emitted).toContainEqual({
+        event: "environment-setup-started",
+        payload: {
+          environment_id: environment.id,
+          session_id: `${environment.id}:setup`,
+          environment,
+        },
+      });
       expect(emitted).toContainEqual({
         event: "environment-setup-complete",
         payload: {
@@ -1003,6 +1042,45 @@ exit 1
     });
   });
 
+  test("ensures no-op local setup without spawning a terminal", async () => {
+    const worktreePath = await createTempDir("ork-electron-local-noop-setup-");
+    const environment = createEnvironment({
+      id: "env-local-noop-setup",
+      environmentType: "local",
+      setupScriptsComplete: false,
+      worktreePath,
+      containerId: null,
+      status: "running",
+    });
+    const { context, emitted } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const result = await commands.get("ensure_environment_setup")?.({ environmentId: environment.id }, context);
+
+    expect(result).toEqual(expect.objectContaining({
+      setupCommands: [],
+      setupManagedByBackend: true,
+      setupStarted: false,
+      environment: expect.objectContaining({
+        id: environment.id,
+        setupScriptsComplete: true,
+      }),
+    }));
+    expect(environment.setupScriptsComplete).toBe(true);
+    expect(ptySpawn).not.toHaveBeenCalled();
+    expect(emitted).toContainEqual({
+      event: "environment-setup-complete",
+      payload: {
+        environment_id: environment.id,
+        success: true,
+        environment: expect.objectContaining({
+          id: environment.id,
+          setupScriptsComplete: true,
+        }),
+      },
+    });
+  });
+
   test("emits a failure event when inactive container setup fails", async () => {
     const environment = createEnvironment({
       id: "env-container-setup-fails",
@@ -1027,10 +1105,13 @@ if [ "$1" = "exec" ]; then
 fi
 exit 0
 `, async () => {
-      await expect(commands.get("run_environment_setup")?.(
+      const setupPromise = commands.get("run_environment_setup")?.(
         { environmentId: environment.id },
         context,
-      )).rejects.toThrow("setup exploded");
+      ) as Promise<Environment>;
+      await waitForPtyProcessCount(1);
+      ptyProcesses[0]?.emitData(SETUP_FAILED_OSC);
+      await expect(setupPromise).rejects.toThrow("Setup script failed");
 
       expect(environment.setupScriptsComplete).toBe(false);
       expect(emitted).toContainEqual({
@@ -1038,7 +1119,7 @@ exit 0
         payload: {
           environment_id: environment.id,
           success: false,
-          error: "setup exploded",
+          error: "Setup script failed",
         },
       });
     });
@@ -1132,6 +1213,14 @@ printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   create) printf 'container-created\\n'; exit 0 ;;
   start) exit 0 ;;
+  inspect) printf 'running\\n'; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *rev-parse*) printf '3333333333333333333333333333333333333333\\n' ;;
+    esac
+    exit 0
+    ;;
 esac
 exit 0
 `, async (logs) => {
@@ -1143,9 +1232,15 @@ exit 0
           const ghCalls = await fs.readFile(ghLog, "utf8").catch(() => "");
           throw new Error(`${error instanceof Error ? error.message : String(error)}\nDocker calls:\n${dockerCalls}\nGH calls:\n${ghCalls}`);
         }
-        const setupCommands = (result as { setupCommands: string[] }).setupCommands;
-        expect(setupCommands).toHaveLength(1);
-        expect(setupCommands[0]).toContain("/usr/local/bin/workspace-setup.sh");
+        expect(result).toEqual(expect.objectContaining({
+          setupCommands: [],
+          setupManagedByBackend: true,
+          setupStarted: true,
+          setupSessionId: `${environment.id}:setup`,
+        }));
+        await waitForPtyProcessCount(1);
+        expect(ptySpawn.mock.calls[0]?.[1].at(-1)).toContain("/usr/local/bin/workspace-setup.sh");
+        ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
 
         const ghCalls = await fs.readFile(ghLog, "utf8").catch(() => "");
         expect(ghCalls).toBe("");
@@ -1189,7 +1284,11 @@ exit 0
     const commands = createCommandRegistry();
 
     try {
-      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual({ setupCommands: [] });
+      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual(expect.objectContaining({
+        setupCommands: [],
+        setupManagedByBackend: true,
+        setupStarted: false,
+      }));
 
       expect(environment.worktreePath).toBeDefined();
       expect(environment.branch).toBe("feature-remote-base");
@@ -1235,7 +1334,11 @@ exit 0
     const commands = createCommandRegistry();
 
     try {
-      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual({ setupCommands: [] });
+      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual(expect.objectContaining({
+        setupCommands: [],
+        setupManagedByBackend: true,
+        setupStarted: false,
+      }));
 
       expect(environment.worktreePath).toBeDefined();
       expect(environment.branch).toBe("review-oauth-callback-1");
@@ -1274,7 +1377,11 @@ exit 0
     const commands = createCommandRegistry();
 
     try {
-      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual({ setupCommands: [] });
+      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual(expect.objectContaining({
+        setupCommands: [],
+        setupManagedByBackend: true,
+        setupStarted: false,
+      }));
 
       expect(environment.worktreePath).toBeDefined();
       expect(environment.branch).toBe("feature-custom-base");

@@ -144,9 +144,6 @@ export const TerminalPortalHost = memo(function TerminalPortalHost({
 
   // Create terminals for new tabs, dispose terminals for removed tabs
   useLayoutEffect(() => {
-    // Skip if no active environment
-    if (!activeEnvironmentId) return;
-
     // Create terminals for new tabs
     for (const [tabId] of terminalTabsMap) {
       if (!hasTerminal(environmentId, tabId)) {

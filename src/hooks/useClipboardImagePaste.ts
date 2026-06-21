@@ -1,6 +1,6 @@
 import { useEffect, useCallback, useRef } from "react";
 import { readImage, readText } from "@/lib/native/clipboard";
-import { writeContainerFile, writeLocalFile } from "@/lib/tauri";
+import { writeContainerFile, writeLocalFile } from "@/lib/backend";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
 
 type AsyncPasteCallback<T> = (value: T) => void | Promise<void>;
@@ -27,7 +27,7 @@ function generateImageFilename(): string {
     .replace(/[:.]/g, "-")
     .slice(0, 19);
   const random = Math.random().toString(36).substring(2, 8);
-  // Tauri clipboard returns PNG images
+  // Native clipboard returns PNG images
   return `clipboard-${timestamp}-${random}.png`;
 }
 

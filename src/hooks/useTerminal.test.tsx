@@ -10,6 +10,7 @@ const startLocalTerminalSessionMock = mock(async (_sessionId: string) => undefin
 const closeLocalTerminalSessionMock = mock(async (_sessionId: string) => undefined);
 const createTerminalSessionMock = mock(async (_containerId: string, _cols: number, _rows: number, _user?: string) => "session-new-container");
 const startTerminalSessionMock = mock(async (_sessionId: string) => undefined);
+const getTerminalOutputBufferMock = mock(async (_sessionId: string) => "");
 const detachTerminalMock = mock(async (_sessionId: string) => undefined);
 const resizeLocalTerminalMock = mock(async (_sessionId: string, _cols: number, _rows: number) => undefined);
 const resizeTerminalMock = mock(async (_sessionId: string, _cols: number, _rows: number) => undefined);
@@ -26,6 +27,7 @@ mock.module("@/lib/backend", () => ({
   closeLocalTerminalSession: closeLocalTerminalSessionMock,
   createTerminalSession: createTerminalSessionMock,
   startTerminalSession: startTerminalSessionMock,
+  getTerminalOutputBuffer: getTerminalOutputBufferMock,
   detachTerminal: detachTerminalMock,
   resizeLocalTerminal: resizeLocalTerminalMock,
   resizeTerminal: resizeTerminalMock,
@@ -58,6 +60,7 @@ describe("useTerminal reconnect behavior", () => {
     closeLocalTerminalSessionMock.mockClear();
     createTerminalSessionMock.mockClear();
     startTerminalSessionMock.mockClear();
+    getTerminalOutputBufferMock.mockClear();
     detachTerminalMock.mockClear();
     resizeLocalTerminalMock.mockClear();
     resizeTerminalMock.mockClear();
@@ -73,6 +76,7 @@ describe("useTerminal reconnect behavior", () => {
     closeLocalTerminalSessionMock.mockImplementation(async () => undefined);
     createTerminalSessionMock.mockImplementation(async () => "session-new-container");
     startTerminalSessionMock.mockImplementation(async () => undefined);
+    getTerminalOutputBufferMock.mockImplementation(async () => "");
     detachTerminalMock.mockImplementation(async () => undefined);
     resizeLocalTerminalMock.mockImplementation(async () => undefined);
     resizeTerminalMock.mockImplementation(async () => undefined);
@@ -103,6 +107,43 @@ describe("useTerminal reconnect behavior", () => {
     expect(createLocalTerminalSessionMock).not.toHaveBeenCalled();
     expect(startLocalTerminalSessionMock).not.toHaveBeenCalled();
     expect(listenMock).toHaveBeenCalledWith("terminal-output-session-old", expect.any(Function));
+  });
+
+  it("waits for a backend-owned setup session instead of creating a blank replacement terminal", async () => {
+    const { result, rerender } = renderHook(
+      ({ existingSessionId }: { existingSessionId?: string }) =>
+        useTerminal({
+          containerId: "container-1",
+          isLocal: false,
+          existingSessionId,
+          persistSession: true,
+          attachExistingOnly: true,
+          replayOutputBuffer: true,
+        }),
+      { initialProps: { existingSessionId: undefined as string | undefined } },
+    );
+
+    await act(async () => {
+      await result.current.connect();
+    });
+
+    expect(createTerminalSessionMock).not.toHaveBeenCalled();
+    expect(startTerminalSessionMock).not.toHaveBeenCalled();
+    expect(listenMock).not.toHaveBeenCalled();
+
+    getTerminalSessionMock.mockResolvedValue({ id: "env-1:setup", running: true });
+    getTerminalOutputBufferMock.mockResolvedValue("[orkestrator] Starting environment setup\r\n");
+
+    rerender({ existingSessionId: "env-1:setup" });
+    await act(async () => {
+      await result.current.connect();
+    });
+
+    await waitFor(() => expect(result.current.sessionId).toBe("env-1:setup"));
+    expect(createTerminalSessionMock).not.toHaveBeenCalled();
+    expect(startTerminalSessionMock).not.toHaveBeenCalled();
+    expect(listenMock).toHaveBeenCalledWith("terminal-output-env-1:setup", expect.any(Function));
+    expect(getTerminalOutputBufferMock).toHaveBeenCalledWith("env-1:setup");
   });
 
   it("replaces a stale existing local terminal session and starts the replacement", async () => {

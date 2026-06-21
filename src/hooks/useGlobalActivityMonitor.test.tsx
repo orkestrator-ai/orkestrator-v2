@@ -76,7 +76,7 @@ function resetStores() {
   });
 }
 
-function resetTauriMocks() {
+function resetBackendMocks() {
   eventCallbacks = new Map();
   mockUnlisten.mockClear();
   mockListen.mockClear();
@@ -127,7 +127,7 @@ describe("useGlobalActivityMonitor tmux activity", () => {
   beforeEach(() => {
     cleanup();
     resetStores();
-    resetTauriMocks();
+    resetBackendMocks();
   });
 
   test("maps a busy Claude tmux tab to working activity for the environment", async () => {
@@ -279,7 +279,7 @@ describe("useGlobalActivityMonitor terminal activity", () => {
   beforeEach(() => {
     cleanup();
     resetStores();
-    resetTauriMocks();
+    resetBackendMocks();
   });
 
   test("starts polling running containers, applies events, and stops on environment removal", async () => {
@@ -330,7 +330,7 @@ describe("useGlobalActivityMonitor native agent activity", () => {
   beforeEach(() => {
     cleanup();
     resetStores();
-    resetTauriMocks();
+    resetBackendMocks();
   });
 
   test("derives Claude native working, waiting, and disconnected states", async () => {

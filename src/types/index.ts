@@ -118,8 +118,29 @@ export interface DomainTestResult {
 
 /** Result from starting an environment */
 export interface StartEnvironmentResult {
-  /** Setup commands to run in a terminal (for local environments with orkestrator-ai.json) */
+  /** Legacy setup command plan. New Electron starts run setup in backend-owned terminal sessions. */
   setupCommands?: string[];
+  /** True when Electron owns setup execution instead of handing commands to React. */
+  setupManagedByBackend?: boolean;
+  /** True when setup is currently running in a backend-owned terminal session. */
+  setupStarted?: boolean;
+  /** Backend PTY session id for the setup terminal, when setup started. */
+  setupSessionId?: string;
+}
+
+export interface EnsureEnvironmentSetupResult extends StartEnvironmentResult {
+  environment: Environment;
+}
+
+export interface EnvironmentSetupSession {
+  environmentId: string;
+  sessionId: string;
+  running: boolean;
+  startedAt: string;
+  completedAt?: string;
+  success?: boolean;
+  error?: string;
+  terminalRunning: boolean;
 }
 
 // Session types - Terminal session tracking for environments

@@ -5,7 +5,7 @@ import { useEnvironmentStore } from "../../../src/stores/environmentStore";
 import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping } from "../../../src/types";
 import { createMockEnvironment } from "../utils/testFactories";
 
-// Mock tauri module BEFORE importing the hook
+// Mock backend module BEFORE importing the hook
 const mockGetEnvironments = mock<(projectId: string) => Promise<Environment[]>>(() => Promise.resolve([]));
 const mockGetEnvironment = mock<(environmentId: string) => Promise<Environment | null>>(() => Promise.resolve(null));
 const mockCreateEnvironment = mock<(
@@ -27,7 +27,7 @@ const mockSyncEnvironmentStatus = mock<(environmentId: string) => Promise<Enviro
 );
 const mockClearEnvironmentPr = mock<(environmentId: string) => Promise<void>>(() => Promise.resolve());
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   getEnvironments: mockGetEnvironments,
   getEnvironment: mockGetEnvironment,
   createEnvironment: mockCreateEnvironment,
@@ -553,8 +553,10 @@ describe("useEnvironments", () => {
 
     // Capture the listener callback when listen is called
     let capturedCallback: ((event: unknown) => void) | null = null;
-    mockListen.mockImplementation((_eventName: string, cb: (event: unknown) => void) => {
-      capturedCallback = cb;
+    mockListen.mockImplementation((eventName: string, cb: (event: unknown) => void) => {
+      if (eventName === "environment-renamed") {
+        capturedCallback = cb;
+      }
       return Promise.resolve(() => {});
     });
 
@@ -603,8 +605,10 @@ describe("useEnvironments", () => {
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
 
     let capturedCallback: ((event: unknown) => void) | null = null;
-    mockListen.mockImplementation((_eventName: string, cb: (event: unknown) => void) => {
-      capturedCallback = cb;
+    mockListen.mockImplementation((eventName: string, cb: (event: unknown) => void) => {
+      if (eventName === "environment-renamed") {
+        capturedCallback = cb;
+      }
       return Promise.resolve(() => {});
     });
 
@@ -655,8 +659,10 @@ describe("useEnvironments", () => {
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
 
     let capturedCallback: ((event: unknown) => void) | null = null;
-    mockListen.mockImplementation((_eventName: string, cb: (event: unknown) => void) => {
-      capturedCallback = cb;
+    mockListen.mockImplementation((eventName: string, cb: (event: unknown) => void) => {
+      if (eventName === "environment-renamed") {
+        capturedCallback = cb;
+      }
       return Promise.resolve(() => {});
     });
 
@@ -705,8 +711,10 @@ describe("useEnvironments", () => {
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
 
     let capturedCallback: ((event: unknown) => void) | null = null;
-    mockListen.mockImplementation((_eventName: string, cb: (event: unknown) => void) => {
-      capturedCallback = cb;
+    mockListen.mockImplementation((eventName: string, cb: (event: unknown) => void) => {
+      if (eventName === "environment-renamed") {
+        capturedCallback = cb;
+      }
       return Promise.resolve(() => {});
     });
 

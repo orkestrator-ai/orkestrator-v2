@@ -1,4 +1,4 @@
-import { writeContainerFile, writeLocalFile } from "@/lib/tauri";
+import { writeContainerFile, writeLocalFile } from "@/lib/backend";
 
 export interface InitialPromptImageAttachment {
   id: string;

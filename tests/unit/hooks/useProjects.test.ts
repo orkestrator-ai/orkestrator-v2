@@ -4,7 +4,7 @@ import { useProjectStore } from "../../../src/stores/projectStore";
 import type { Project } from "../../../src/types";
 import { createMockProject } from "../utils/testFactories";
 
-// Mock tauri module BEFORE importing the hook
+// Mock backend module BEFORE importing the hook
 const mockGetProjects = mock<() => Promise<Project[]>>(() => Promise.resolve([]));
 const mockAddProject = mock<(gitUrl: string, localPath?: string) => Promise<Project>>((gitUrl) =>
   Promise.resolve(createMockProject({ id: "new-project-id", name: "test-repo", gitUrl }))
@@ -12,7 +12,7 @@ const mockAddProject = mock<(gitUrl: string, localPath?: string) => Promise<Proj
 const mockRemoveProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
 const mockValidateGitUrl = mock<(url: string) => Promise<boolean>>(() => Promise.resolve(true));
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   getProjects: mockGetProjects,
   addProject: mockAddProject,
   removeProject: mockRemoveProject,

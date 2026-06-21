@@ -23,10 +23,10 @@ const mockUpdateEnvironmentAgentSettings = mock(async (
 }));
 const mockToastSuccess = mock(() => {});
 const mockToastError = mock(() => {});
-const actualTauri = await import("../../../src/lib/tauri");
+const actualBackend = await import("../../../src/lib/backend");
 
-mock.module("@/lib/tauri", () => ({
-  ...actualTauri,
+mock.module("@/lib/backend", () => ({
+  ...actualBackend,
   updateEnvironmentAgentSettings: mockUpdateEnvironmentAgentSettings,
   renameEnvironment: mock(async (_id: string, name: string) => ({ ...makeEnvironment(), name })),
   updateEnvironmentAllowedDomains: mock(async () => makeEnvironment()),

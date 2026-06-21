@@ -286,6 +286,40 @@ export function useTerminal({
           attachExistingOnly,
         });
       }
+      // Replay the backend's bounded output buffer BEFORE attaching the live
+      // listener. The backend appends to its buffer before emitting live, so
+      // attaching first would deliver already-buffered bytes twice (once live,
+      // once via replay) and out of order. Output produced in the small window
+      // between the snapshot and listener registration is rare for setup
+      // sessions and self-corrects as the stream continues.
+      if (replayOutputBuffer) {
+        const bufferedOutput = await backend.getTerminalOutputBuffer(targetSessionId).catch((err) => {
+          console.warn("[useTerminal] Failed to replay terminal output buffer:", err);
+          return "";
+        });
+        if (attachExistingOnly || targetSessionId.endsWith(":setup")) {
+          console.info("[setup-terminal] replay buffer fetched", {
+            environmentId: environmentId ?? null,
+            sessionId: targetSessionId,
+            bufferChars: bufferedOutput.length,
+          });
+        }
+        if (!isCurrentConnect()) {
+          // No live listener registered yet; only tear down a session we created.
+          if (shouldStartSession) {
+            if (isLocal) {
+              await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
+            } else {
+              await backend.detachTerminal(targetSessionId).catch(() => {});
+            }
+          }
+          return;
+        }
+        if (bufferedOutput && onDataRef.current) {
+          onDataRef.current(new TextEncoder().encode(bufferedOutput));
+        }
+      }
+
       const unlisten = await listen<number[]>(eventName, (event) => {
         const data = new Uint8Array(event.payload);
         if (onDataRef.current) {
@@ -305,34 +339,6 @@ export function useTerminal({
       }
 
       unlistenRef.current = unlisten;
-
-      if (replayOutputBuffer) {
-        const bufferedOutput = await backend.getTerminalOutputBuffer(targetSessionId).catch((err) => {
-          console.warn("[useTerminal] Failed to replay terminal output buffer:", err);
-          return "";
-        });
-        if (attachExistingOnly || targetSessionId.endsWith(":setup")) {
-          console.info("[setup-terminal] replay buffer fetched", {
-            environmentId: environmentId ?? null,
-            sessionId: targetSessionId,
-            bufferChars: bufferedOutput.length,
-          });
-        }
-        if (!isCurrentConnect()) {
-          cleanupEventListener();
-          if (shouldStartSession) {
-            if (isLocal) {
-              await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
-            } else {
-              await backend.detachTerminal(targetSessionId).catch(() => {});
-            }
-          }
-          return;
-        }
-        if (bufferedOutput && onDataRef.current) {
-          onDataRef.current(new TextEncoder().encode(bufferedOutput));
-        }
-      }
 
       if (attachExistingOnly && targetSessionId && existingSessionRunning === false) {
         console.info("[setup-terminal] backend-owned session is not running after attach", {
@@ -432,6 +438,28 @@ export function useTerminal({
           cleanupEventListener();
 
           const eventName = `terminal-output-${newSessionId}`;
+
+          // Replay any buffered output before attaching the live listener so
+          // already-buffered bytes are not delivered twice (see the primary
+          // attach path above for the rationale).
+          if (replayOutputBuffer) {
+            const bufferedOutput = await backend.getTerminalOutputBuffer(newSessionId).catch((err) => {
+              console.warn("[useTerminal] Failed to replay fallback terminal output buffer:", err);
+              return "";
+            });
+            if (!isCurrentConnect()) {
+              if (isLocal) {
+                await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
+              } else {
+                await backend.detachTerminal(newSessionId).catch(() => {});
+              }
+              return;
+            }
+            if (bufferedOutput && onDataRef.current) {
+              onDataRef.current(new TextEncoder().encode(bufferedOutput));
+            }
+          }
+
           const unlisten = await listen<number[]>(eventName, (event) => {
             const data = new Uint8Array(event.payload);
             if (onDataRef.current) {
@@ -448,25 +476,6 @@ export function useTerminal({
             return;
           }
           unlistenRef.current = unlisten;
-
-          if (replayOutputBuffer) {
-            const bufferedOutput = await backend.getTerminalOutputBuffer(newSessionId).catch((err) => {
-              console.warn("[useTerminal] Failed to replay fallback terminal output buffer:", err);
-              return "";
-            });
-            if (!isCurrentConnect()) {
-              cleanupEventListener();
-              if (isLocal) {
-                await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
-              } else {
-                await backend.detachTerminal(newSessionId).catch(() => {});
-              }
-              return;
-            }
-            if (bufferedOutput && onDataRef.current) {
-              onDataRef.current(new TextEncoder().encode(bufferedOutput));
-            }
-          }
 
           if (isLocal) {
             await backend.startLocalTerminalSession(newSessionId);

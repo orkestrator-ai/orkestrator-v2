@@ -25,19 +25,21 @@ type MockPtyProcess = {
   resize: ReturnType<typeof mock>;
   kill: ReturnType<typeof mock>;
   emitData: (data: string) => void;
-  emitExit: () => void;
+  emitExit: (event?: { exitCode: number; signal?: number }) => void;
 };
+
+type PtyExitEvent = { exitCode: number; signal?: number };
 
 const ptyProcesses: MockPtyProcess[] = [];
 const ptySpawn = mock((command: string, args: string[], options: Record<string, unknown>) => {
   const dataCallbacks: Array<(data: string) => void> = [];
-  const exitCallbacks: Array<() => void> = [];
+  const exitCallbacks: Array<(event: PtyExitEvent) => void> = [];
   const process: MockPtyProcess = {
     write: mock(() => undefined),
     resize: mock(() => undefined),
     kill: mock(() => undefined),
     emitData: (data: string) => dataCallbacks.forEach((callback) => callback(data)),
-    emitExit: () => exitCallbacks.forEach((callback) => callback()),
+    emitExit: (event = { exitCode: 0 }) => exitCallbacks.forEach((callback) => callback(event)),
   };
   const ptyProcess = {
     pid: ptyProcesses.length + 1,
@@ -207,6 +209,11 @@ function createContext(
         Object.assign(environment, update);
         return environment;
       }),
+      removeEnvironment: mock(async (environmentId: string) => {
+        const index = environments.findIndex((candidate) => candidate.id === environmentId);
+        if (index >= 0) environments.splice(index, 1);
+      }),
+      removeSessionsByEnvironment: mock(async () => undefined),
       getProject: mock(async (projectId: string) => {
         if (options.project) return options.project.id === projectId ? options.project : null;
         return {
@@ -432,6 +439,26 @@ async function waitForPtyProcessCount(count: number): Promise<void> {
   }
   throw new Error(`Timed out waiting for ${count} PTY process(es), saw ${ptyProcesses.length}`);
 }
+
+// Fake `docker` that reports the container as running and succeeds on exec,
+// returning a deterministic HEAD commit for `git rev-parse`.
+const RUNNING_CONTAINER_DOCKER_SCRIPT = `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "inspect" ]; then
+  printf 'running\\n'
+  exit 0
+fi
+if [ "$1" = "exec" ]; then
+  printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+  case "$*" in
+    *rev-parse*)
+      printf '1111111111111111111111111111111111111111\\n'
+      ;;
+  esac
+  exit 0
+fi
+exit 0
+`;
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
@@ -1123,6 +1150,258 @@ exit 0
         },
       });
     });
+  });
+
+  test("completes setup when the done marker is split across PTY chunks", async () => {
+    const environment = createEnvironment({
+      id: "env-container-split-marker",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
+      const setupPromise = commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<Environment>;
+      await waitForPtyProcessCount(1);
+      // Deliver the completion marker split across two reads, mimicking how a
+      // PTY can chunk output at an arbitrary boundary.
+      const splitAt = Math.floor(SETUP_DONE_OSC.length / 2);
+      ptyProcesses[0]?.emitData(SETUP_DONE_OSC.slice(0, splitAt));
+      ptyProcesses[0]?.emitData(SETUP_DONE_OSC.slice(splitAt));
+      const updated = await setupPromise;
+
+      expect(updated.setupScriptsComplete).toBe(true);
+      expect(environment.setupScriptsComplete).toBe(true);
+    });
+  });
+
+  test("fails setup when the PTY exits before reporting completion", async () => {
+    const environment = createEnvironment({
+      id: "env-container-early-exit",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context, emitted } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
+      const setupPromise = commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<Environment>;
+      await waitForPtyProcessCount(1);
+      ptyProcesses[0]?.emitExit({ exitCode: 1 });
+      await expect(setupPromise).rejects.toThrow("Setup terminal exited before reporting completion");
+
+      expect(environment.setupScriptsComplete).toBe(false);
+      expect(emitted).toContainEqual({
+        event: "environment-setup-complete",
+        payload: {
+          environment_id: environment.id,
+          success: false,
+          error: "Setup terminal exited before reporting completion",
+        },
+      });
+    });
+  });
+
+  test("retains the setup output buffer after the setup PTY exits", async () => {
+    const environment = createEnvironment({
+      id: "env-container-setup-buffer",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const setupSessionId = `${environment.id}:setup`;
+
+    await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
+      const setupPromise = commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<Environment>;
+      await waitForPtyProcessCount(1);
+      ptyProcesses[0]?.emitData("configuring workspace...\r\n");
+      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+      await setupPromise;
+
+      const buffer = await commands.get("get_terminal_output_buffer")?.(
+        { sessionId: setupSessionId },
+        context,
+      ) as string;
+      expect(buffer).toContain("[orkestrator] Starting environment setup");
+      expect(buffer).toContain("configuring workspace...");
+
+      // Setup buffers are intentionally retained after the PTY exits so the
+      // renderer can still replay them when it reattaches.
+      ptyProcesses[0]?.emitExit({ exitCode: 0 });
+      const afterExit = await commands.get("get_terminal_output_buffer")?.(
+        { sessionId: setupSessionId },
+        context,
+      ) as string;
+      expect(afterExit).toContain("configuring workspace...");
+    });
+  });
+
+  test("reports backend setup session state via get_environment_setup_session", async () => {
+    const environment = createEnvironment({
+      id: "env-container-setup-session",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    expect(
+      await commands.get("get_environment_setup_session")?.({ environmentId: environment.id }, context),
+    ).toBeNull();
+
+    await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
+      const setupPromise = commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<Environment>;
+      await waitForPtyProcessCount(1);
+
+      const runningSession = await commands.get("get_environment_setup_session")?.(
+        { environmentId: environment.id },
+        context,
+      );
+      expect(runningSession).toEqual(expect.objectContaining({
+        environmentId: environment.id,
+        sessionId: `${environment.id}:setup`,
+        running: true,
+        terminalRunning: true,
+      }));
+
+      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+      await setupPromise;
+
+      const completedSession = await commands.get("get_environment_setup_session")?.(
+        { environmentId: environment.id },
+        context,
+      );
+      // Setup is marked complete via the OSC marker while the PTY stays alive as
+      // the interactive shell, so the session reports done but still running.
+      expect(completedSession).toEqual(expect.objectContaining({
+        running: false,
+        success: true,
+        terminalRunning: true,
+      }));
+    });
+  });
+
+  test("clears retained setup state when the environment is deleted", async () => {
+    const environment = createEnvironment({
+      id: "env-container-setup-delete",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const setupSessionId = `${environment.id}:setup`;
+
+    await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
+      const setupPromise = commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<Environment>;
+      await waitForPtyProcessCount(1);
+      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+      await setupPromise;
+
+      expect(
+        await commands.get("get_environment_setup_session")?.({ environmentId: environment.id }, context),
+      ).not.toBeNull();
+
+      await commands.get("delete_environment")?.({ environmentId: environment.id }, context);
+
+      expect(
+        await commands.get("get_environment_setup_session")?.({ environmentId: environment.id }, context),
+      ).toBeNull();
+      const buffer = await commands.get("get_terminal_output_buffer")?.(
+        { sessionId: setupSessionId },
+        context,
+      ) as string;
+      expect(buffer).toBe("");
+    });
+  });
+
+  test("frees a non-setup terminal output buffer when the session exits", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-buffer-");
+    const environment = createEnvironment({
+      id: "env-local-terminal-buffer",
+      environmentType: "local",
+      worktreePath,
+      containerId: null,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const sessionId = await commands.get("create_local_terminal_session")?.(
+      { environmentId: environment.id, cols: 80, rows: 24 },
+      context,
+    ) as string;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+    await waitForPtyProcessCount(1);
+
+    ptyProcesses[0]?.emitData("hello from shell\r\n");
+    const buffer = await commands.get("get_terminal_output_buffer")?.({ sessionId }, context) as string;
+    expect(buffer).toContain("hello from shell");
+
+    // One-shot terminal buffers must be freed on exit so they do not leak for
+    // the lifetime of the main process.
+    ptyProcesses[0]?.emitExit({ exitCode: 0 });
+    const afterExit = await commands.get("get_terminal_output_buffer")?.({ sessionId }, context) as string;
+    expect(afterExit).toBe("");
+  });
+
+  test("caps the terminal output buffer at the maximum size", async () => {
+    const worktreePath = await createTempDir("ork-electron-terminal-cap-");
+    const environment = createEnvironment({
+      id: "env-local-terminal-cap",
+      environmentType: "local",
+      worktreePath,
+      containerId: null,
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const maxChars = 500 * 1024;
+
+    const sessionId = await commands.get("create_local_terminal_session")?.(
+      { environmentId: environment.id, cols: 80, rows: 24 },
+      context,
+    ) as string;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+    await waitForPtyProcessCount(1);
+
+    ptyProcesses[0]?.emitData("A".repeat(maxChars));
+    ptyProcesses[0]?.emitData("B".repeat(1024));
+    const buffer = await commands.get("get_terminal_output_buffer")?.({ sessionId }, context) as string;
+    expect(buffer.length).toBe(maxChars);
+    expect(buffer.endsWith("B".repeat(1024))).toBe(true);
+    expect(buffer.startsWith("A")).toBe(true);
   });
 
   test("captures container HEAD commit when frontend marks setup complete", async () => {

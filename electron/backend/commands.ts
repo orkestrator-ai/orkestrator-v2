@@ -649,6 +649,14 @@ function rememberTerminalSession(id: string, config: TerminalSessionConfig): str
 function cleanupTerminalSession(id: string): void {
   terminalProcesses.delete(id);
   terminalSessionConfigs.delete(id);
+  // Setup-session buffers are retained intentionally so the renderer can replay
+  // setup output after the PTY exits / on reattach (cleared when the setup
+  // session is superseded or the environment is removed). Every other session
+  // is keyed by a one-shot UUID, so its buffer would otherwise leak for the
+  // lifetime of the main process.
+  if (!isSetupTerminalSessionId(id)) {
+    terminalOutputBuffers.delete(id);
+  }
 }
 
 function spawnTerminalProcess(
@@ -823,6 +831,15 @@ function isSetupTerminalSessionId(sessionId: string): boolean {
   return sessionId.endsWith(":setup");
 }
 
+// Setup-session buffers are intentionally retained after the PTY exits so the
+// renderer can replay them on reattach. Free them (and the tracked session /
+// task state) when the owning environment is removed.
+function cleanupEnvironmentSetupState(environmentId: string): void {
+  terminalOutputBuffers.delete(setupTerminalSessionId(environmentId));
+  environmentSetupSessions.delete(environmentId);
+  environmentSetupTasks.delete(environmentId);
+}
+
 function buildSetupTerminalCommand(commands: string[], finalShellCommand: string): string {
   const combinedCommand = commands.join(" && ");
   return `(${combinedCommand}) && ${SETUP_DONE_PRINTF_CMD} || ${SETUP_FAILED_PRINTF_CMD}; exec ${finalShellCommand}`;
@@ -863,14 +880,23 @@ function createSetupCompletionTracker(): {
     resolveCompletion(success);
   };
 
+  // PTY reads are not guaranteed to align to write boundaries, so the OSC
+  // completion marker can arrive split across two `onData` chunks. Keep a small
+  // rolling tail of the previous chunk (one byte short of the longest marker)
+  // and prepend it before matching so a split marker is still detected.
+  const markerTailLength = Math.max(SETUP_DONE_OSC_SEQUENCE.length, SETUP_FAILED_OSC_SEQUENCE.length) - 1;
+  let pending = "";
+
   return {
     completion,
     onData: (data) => {
-      if (data.includes(SETUP_DONE_OSC_SEQUENCE)) {
+      const combined = `${pending}${data}`;
+      if (combined.includes(SETUP_DONE_OSC_SEQUENCE)) {
         finish(true);
-      } else if (data.includes(SETUP_FAILED_OSC_SEQUENCE)) {
+      } else if (combined.includes(SETUP_FAILED_OSC_SEQUENCE)) {
         finish(false);
       }
+      pending = markerTailLength > 0 ? combined.slice(-markerTailLength) : "";
     },
     onExit: () => {
       if (settled) return;
@@ -1703,6 +1729,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     if (environment?.worktreePath) await removeLocalWorktree(environment.worktreePath).catch(() => undefined);
     await storage.removeSessionsByEnvironment(asString(environmentId, "environmentId")).catch(() => undefined);
     await storage.removeEnvironment(asString(environmentId, "environmentId"));
+    cleanupEnvironmentSetupState(asString(environmentId, "environmentId"));
   });
   register("rename_environment", ({ environmentId, name }, { storage }) => {
     const newName = sanitizeEnvironmentName(asString(name, "name"));

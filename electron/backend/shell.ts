@@ -22,12 +22,18 @@ export async function runCommand(
   options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
 ): Promise<ExecResult> {
   try {
-    const { stdout, stderr } = await execFileAsync(command, args, {
+    const execPromise = execFileAsync(command, args, {
       cwd: options.cwd,
       env: options.env,
       timeout: options.timeoutMs ?? 60_000,
       maxBuffer: 50 * 1024 * 1024,
     });
+    // execFile leaves the child's stdin pipe open without ever writing to it.
+    // CLIs that read piped (non-TTY) stdin — e.g. `codex exec` — block waiting
+    // for an EOF that never arrives and hang until the timeout. We never feed
+    // stdin here, so close it immediately to signal EOF.
+    execPromise.child.stdin?.end();
+    const { stdout, stderr } = await execPromise;
     return { stdout: stdout.toString(), stderr: stderr.toString() };
   } catch (error) {
     if (error && typeof error === "object" && "stdout" in error && "stderr" in error) {

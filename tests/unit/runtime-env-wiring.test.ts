@@ -104,8 +104,14 @@ describe("container runtime environment wiring", () => {
     for (const command of commands) {
       const start = backend.indexOf(`register("${command}"`);
       expect(start).toBeGreaterThan(0);
-      const end = backend.indexOf("\n  register(", start + 1);
-      const block = backend.slice(start, end === -1 ? undefined : end);
+      // Bound the block at the next register(...) call, regardless of its
+      // indentation, so these assertions can only be satisfied by THIS
+      // command's block and never leak into a neighbouring one.
+      const nextRegister = backend.slice(start + 1).search(/\n\s*register\(/);
+      const block =
+        nextRegister === -1
+          ? backend.slice(start)
+          : backend.slice(start, start + 1 + nextRegister);
       expect(block).toContain("source /usr/local/bin/orkestrator-runtime-env.sh");
       expect(block).toContain("orkestrator_source_runtime_env");
     }

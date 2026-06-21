@@ -94,15 +94,26 @@ describe("container runtime environment wiring", () => {
   });
 
   test("container native launch paths source the captured runtime environment", () => {
-    const files = [
-      "src-tauri/src/commands/claude.rs",
-      "src-tauri/src/commands/codex.rs",
-      "src-tauri/src/commands/opencode.rs",
-      "src-tauri/src/pty/mod.rs",
+    const backend = read("electron/backend/commands.ts");
+    const commands = [
+      "start_opencode_server",
+      "start_claude_server",
+      "start_codex_server",
     ];
 
-    for (const file of files) {
-      expect(read(file)).toContain("orkestrator_source_runtime_env");
+    for (const command of commands) {
+      const start = backend.indexOf(`register("${command}"`);
+      expect(start).toBeGreaterThan(0);
+      // Bound the block at the next register(...) call, regardless of its
+      // indentation, so these assertions can only be satisfied by THIS
+      // command's block and never leak into a neighbouring one.
+      const nextRegister = backend.slice(start + 1).search(/\n\s*register\(/);
+      const block =
+        nextRegister === -1
+          ? backend.slice(start)
+          : backend.slice(start, start + 1 + nextRegister);
+      expect(block).toContain("source /usr/local/bin/orkestrator-runtime-env.sh");
+      expect(block).toContain("orkestrator_source_runtime_env");
     }
   });
 

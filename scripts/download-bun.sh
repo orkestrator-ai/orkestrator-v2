@@ -54,7 +54,7 @@ rm -rf "$TEMP_DIR"
 
 # Re-sign the binary with an ad-hoc signature.
 # The official bun binary is signed by the bun team (Developer ID) with the
-# hardened runtime flag. When it is embedded inside a Tauri app bundle that
+# hardened runtime flag. When it is embedded inside an Electron app bundle that
 # uses a *different* signing identity (ad-hoc or another Developer ID),
 # macOS kills the process with SIGKILL (exit 137) because the team
 # identifiers don't match. Stripping the original signature and applying a

@@ -1,6 +1,6 @@
 # Orkestrator AI
 
-A desktop application for managing isolated Docker-based development environments for Claude Code. Create multiple sandboxed environments per repository, each with its own terminal session, Git branch, and PR workflow.
+A desktop application for managing isolated Docker-based development environments for Claude Code, Codex, and OpenCode. Create multiple sandboxed environments per repository, each with its own terminal session, Git branch, and PR workflow.
 
 ## Features
 
@@ -31,7 +31,6 @@ A desktop application for managing isolated Docker-based development environment
 ## Prerequisites
 
 - [Bun](https://bun.sh) - JavaScript runtime and package manager
-- [Rust](https://rustup.rs) - Required for Tauri backend
 - [Docker](https://docker.com) - Container runtime
 
 ## Quick Start
@@ -45,10 +44,10 @@ cd orkestrator-ai
 bun install
 
 # Build the Docker base image (required for container functionality)
-docker build -t orkestrator-ai:latest -f docker/Dockerfile .
+docker build -t orkestrator-v2:latest -f docker/Dockerfile .
 
 # Run the application
-bun run tauri dev
+bun run dev
 ```
 
 ## Usage
@@ -102,41 +101,37 @@ When debug mode is enabled, the container entrypoint will output:
 - `.claude.json` processing details (file sizes, keys)
 - Credential injection status
 
-To enable debug mode, use the `set_environment_debug_mode` Tauri command before starting the environment. Note: Debug mode only takes effect when the container is created - changing it on a running environment requires recreating the container.
+Debug mode only takes effect when the container is created. Changing it on a running environment requires recreating the container.
 
 ## Development
 
 ```bash
 # Run with hot reload
-bun run tauri dev
-
-# Run frontend only (without Tauri)
 bun run dev
 
 # Run tests
 bun test
-cd src-tauri && cargo test
 
 # Build for production
-bun run tauri build
+bun run build
 ```
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    Tauri Application                     │
+│                   Electron Application                   │
 ├─────────────────────────┬───────────────────────────────┤
-│      React Frontend     │        Rust Backend           │
+│      React Frontend     │     Electron TS Backend       │
 │  ┌───────────────────┐  │  ┌─────────────────────────┐  │
-│  │ shadcn/ui + xterm │  │  │ Bollard Docker Client   │  │
+│  │ shadcn/ui + xterm │  │  │ Docker CLI Integration  │  │
 │  │ Zustand stores    │◄─┼──┤ PTY Terminal Sessions   │  │
-│  │ Tauri IPC         │  │  │ JSON File Storage       │  │
+│  │ Electron IPC      │  │  │ JSON File Storage       │  │
 │  └───────────────────┘  │  └─────────────────────────┘  │
 ├─────────────────────────┴───────────────────────────────┤
 │                    Docker Containers                     │
 │  ┌────────────────────────────────────────────────────┐ │
-│  │ orkestrator-ai:latest                              │ │
+│  │ orkestrator-v2:latest                              │ │
 │  │ - Node.js 20 + Claude Code CLI                     │ │
 │  │ - Git + GitHub CLI                                 │ │
 │  │ - Network firewall (GitHub, npm, Anthropic only)   │ │
@@ -166,7 +161,7 @@ Application data is stored in:
 ## Tech Stack
 
 - **Frontend**: React 19, TypeScript, Tailwind CSS v4, shadcn/ui, Zustand, xterm.js
-- **Backend**: Rust, Tauri v2, Bollard
+- **Backend**: Electron, Node.js, TypeScript
 - **Container**: Docker with custom base image
 
 ## License

@@ -34,7 +34,7 @@ import { useProjects } from "@/hooks/useProjects";
 import { useEnvironments } from "@/hooks/useEnvironments";
 import { useUIStore, useClaudeOptionsStore, useConfigStore } from "@/stores";
 import { RepositorySettings } from "@/components/settings/RepositorySettings";
-import { renameEnvironmentFromPrompt, updateEnvironmentAgentSettings } from "@/lib/tauri";
+import { renameEnvironmentFromPrompt, updateEnvironmentAgentSettings } from "@/lib/backend";
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import type { Environment, Project } from "@/types";
 
@@ -306,23 +306,26 @@ export function HierarchicalSidebar() {
 
       // Auto-start after the environment is visible. Local startup creates the
       // worktree and may fetch from the remote, so it should not keep the modal
-      // open or hide the newly-created environment.
+      // open or hide the newly-created environment. Naming runs only after
+      // start has been initiated so a slow LLM rename never leaves the user on
+      // the stopped-environment overlay.
       const initialPromptForNaming = options.initialPrompt.trim();
       const shouldRenameFromInitialPrompt = !options.environmentName.trim() && initialPromptForNaming.length > 0;
       void (async () => {
+        try {
+          await startEnvironment(configuredEnvironment.id, options.initialPrompt);
+        } catch (startErr) {
+          console.error("Failed to auto-start environment:", startErr);
+          // Environment was created successfully, user can manually start it.
+          return;
+        }
+
         if (shouldRenameFromInitialPrompt) {
           try {
             await renameEnvironmentFromPrompt(configuredEnvironment.id, initialPromptForNaming);
           } catch (renameErr) {
             console.error("Failed to rename environment from initial prompt:", renameErr);
           }
-        }
-
-        try {
-          await startEnvironment(configuredEnvironment.id, options.initialPrompt);
-        } catch (startErr) {
-          console.error("Failed to auto-start environment:", startErr);
-          // Environment was created successfully, user can manually start it.
         }
       })();
     } finally {

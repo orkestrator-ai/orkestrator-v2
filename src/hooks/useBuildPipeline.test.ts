@@ -76,7 +76,7 @@ const mockUpdateEnvironmentAgentSettings = mock<(
 }));
 const mockToastSuccess = mock(() => {});
 const mockToastError = mock(() => {});
-const actualTauri = await import("../lib/tauri");
+const actualBackend = await import("../lib/backend");
 
 mock.module("sonner", () => ({
   toast: {
@@ -85,8 +85,8 @@ mock.module("sonner", () => ({
   },
 }));
 
-mock.module("@/lib/tauri", () => ({
-  ...actualTauri,
+mock.module("@/lib/backend", () => ({
+  ...actualBackend,
   createEnvironment: mockCreateEnvironment,
   startEnvironment: mockStartEnvironment,
   getEnvironments: mock(async () => []),
@@ -327,10 +327,12 @@ describe("useBuildPipeline", () => {
       "containerized",
       undefined,
     );
-    expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
-      "env-build",
-      "Build task\n\nShip the feature\n\nAll checks green",
-    );
+    await waitFor(() => {
+      expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
+        "env-build",
+        "Build task\n\nShip the feature\n\nAll checks green",
+      );
+    });
     expect(useClaudeOptionsStore.getState().options["env-build"]).toBeUndefined();
   });
 
@@ -479,16 +481,18 @@ describe("useBuildPipeline", () => {
         }, "containerized");
       });
 
-      expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
-        "env-build",
-        "Build task\n\nShip the feature\n\nAll checks green",
-      );
-      expect(consoleWarnMock).toHaveBeenCalledWith(
-        "[useBuildPipeline] Failed to rename environment from task prompt:",
-        expect.any(Error),
-      );
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-build");
       expect(mockToastSuccess).toHaveBeenCalledWith("Build pipeline started");
+      await waitFor(() => {
+        expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
+          "env-build",
+          "Build task\n\nShip the feature\n\nAll checks green",
+        );
+        expect(consoleWarnMock).toHaveBeenCalledWith(
+          "[useBuildPipeline] Failed to rename environment from task prompt:",
+          expect.any(Error),
+        );
+      });
     } finally {
       console.warn = originalConsoleWarn;
     }
@@ -530,13 +534,15 @@ describe("useBuildPipeline", () => {
       }, "containerized");
     });
 
-    expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
-      "env-build",
-      "Build task\n\nShip the feature\n\nAll checks green",
-    );
-    expect(mockGetEnvironment).toHaveBeenCalledWith("env-build");
-    expect(mockGetEnvironment).toHaveBeenCalledTimes(2);
     expect(mockStartEnvironment).toHaveBeenCalledWith("env-build");
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-build")?.name).toBe("build-task");
+    await waitFor(() => {
+      expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
+        "env-build",
+        "Build task\n\nShip the feature\n\nAll checks green",
+      );
+      expect(mockGetEnvironment).toHaveBeenCalledWith("env-build");
+      expect(mockGetEnvironment).toHaveBeenCalledTimes(2);
+      expect(useEnvironmentStore.getState().getEnvironmentById("env-build")?.name).toBe("build-task");
+    });
   });
 });

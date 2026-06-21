@@ -4,15 +4,11 @@ This file provides specific guidance for AI agents working on this codebase.
 
 ## Project Overview
 
-Orkestrator AI was a Tauri desktop application for managing isolated Docker-based and local-worktree development environments for Claude Code, Codex, and OpenCode.
-It is now being migrated to an Electron app. Please do not make changes to the Tauri app. Going forward, we will only use electron and eventually remove the tauri code.
-The Tauri code is only there for reference while we make these changes.
-
-
+Orkestrator AI is an Electron desktop application for managing isolated Docker-based and local-worktree development environments for Claude Code, Codex, and OpenCode.
 
 ## Background Environment Reliability
 
-Environments can keep doing work while another environment is active in the UI. Do not assume the active React tree is mounted, subscribed to events, or able to receive every Tauri/SSE/tmux update.
+Environments can keep doing work while another environment is active in the UI. Do not assume the active React tree is mounted, subscribed to events, or able to receive every Electron IPC/SSE/tmux update.
 
 When adding or changing background behavior (agent sessions, tmux sessions, terminals, local servers, Docker operations, file watchers, PR monitoring, build pipelines, etc.):
 
@@ -27,6 +23,7 @@ When adding or changing background behavior (agent sessions, tmux sessions, term
 | Layer    | Technology                                                |
 | -------- | --------------------------------------------------------- |
 | Frontend | React 19, TypeScript, Tailwind CSS v4, shadcn/ui, Zustand |
+| Backend  | Electron, Node.js, TypeScript                             |
 | Terminal | xterm.js                                                  |
 | Docker   |                                                           |
 | OpenCode | `@opencode-ai/sdk` v2                                     |
@@ -43,16 +40,14 @@ src/                        # React frontend
 ├── stores/                 # Zustand state stores
 ├── contexts/               # React contexts
 ├── hooks/                  # Custom React hooks
-├── lib/                    # Utilities and Tauri wrappers
+├── lib/                    # Utilities and native IPC wrappers
 └── types/                  # TypeScript type definitions
 
-src-tauri/src/              # Rust backend
-├── commands/               # Tauri IPC commands
-├── docker/                 # Bollard Docker client
-├── local/                  # Local environment management (worktrees, local servers)
-├── pty/                    # Terminal session management
-├── storage/                # JSON file persistence
-└── models/                 # Data models
+electron/                   # Electron main process and backend
+├── backend/                # Command registry, Docker/local env management, storage
+├── ipc.ts                  # Main-process IPC handlers
+├── preload.ts              # Preload entrypoint
+└── preload-api.ts          # Renderer-facing native API
 
 bridges/                    # Native-mode bridge servers
 ├── claude-bridge/          # Claude Native Mode bridge server
@@ -138,48 +133,12 @@ The OpenCode server sends these event types:
 - `question.replied` - Question was answered
 - `question.rejected` - Question was dismissed
 
-## Rust Backend
+## Electron Backend
 
-### Logging
-
-Use `tracing` crate macros. **Never use `println!` for logging.**
-
-```rust
-use tracing::{debug, info, warn, error};
-
-// Structured logging with named fields (preferred)
-debug!(container_id = %id, status = %status, "Container status updated");
-warn!(environment_id = %env_id, error = %e, "Failed to rename git branch");
-info!(container_id = %id, "Removed orphaned container");
-
-// Simple messages (acceptable for straightforward cases)
-debug!("Starting background naming task");
-```
-
-### Log Levels
-
-| Level    | Use Case                                               |
-| -------- | ------------------------------------------------------ |
-| `error!` | Critical failures that need immediate attention        |
-| `warn!`  | Unexpected conditions that don't prevent operation     |
-| `info!`  | Important operational events (container started, etc.) |
-| `debug!` | Detailed information useful for debugging              |
-| `trace!` | Very detailed information (loop iterations)            |
-
-### Import Convention
-
-```rust
-use tracing::{debug, warn};  // Good - only what's needed
-use tracing::*;              // Avoid - imports everything
-```
-
-### Logging Guidelines
-
-1. Use structured fields for IDs, errors, and key values
-2. Keep messages concise - structured fields provide context
-3. Don't log sensitive data (API keys, tokens, credentials)
-4. Use `%` for Display trait and `?` for Debug trait
-5. Prefer `debug!` over `trace!` for most development logging
+- Register backend commands in `electron/backend/commands.ts` through `createCommandRegistry()`.
+- Keep long-running process state in the Electron backend, bridge process, persistent store, or external process; renderer state should rehydrate from backend snapshots.
+- Use the existing `CommandContext` and `StorageService` patterns instead of adding renderer-only state for Docker, tmux, terminal, or local server lifecycles.
+- Do not log secrets such as API keys, tokens, SSH keys, or credential file contents.
 
 ## Key Files Reference
 
@@ -194,18 +153,17 @@ use tracing::*;              // Avoid - imports everything
 | `src/lib/opencode-client.ts`                    | OpenCode SDK v2 wrapper     |
 | `src/stores/codexStore.ts`                      | Codex state management      |
 | `src/stores/openCodeStore.ts`                   | OpenCode state management   |
-| `src/lib/tauri.ts`                              | Tauri IPC wrappers          |
+| `src/lib/native/backend.ts`                     | Native IPC command wrapper  |
 
 ### Backend
 
-| File                                     | Purpose                                      |
-| ---------------------------------------- | -------------------------------------------- |
-| `src-tauri/src/commands/codex.rs`        | Codex bridge commands                        |
-| `src-tauri/src/docker/client.rs`         | Core Docker API client                       |
-| `src-tauri/src/docker/container.rs`      | Container provisioning                       |
-| `src-tauri/src/commands/environments.rs` | Environment CRUD commands                    |
-| `src-tauri/src/local/servers.rs`         | Local Claude/Codex/OpenCode server lifecycle |
-| `src-tauri/src/commands/opencode.rs`     | OpenCode server management                   |
+| File                           | Purpose                                      |
+| ------------------------------ | -------------------------------------------- |
+| `electron/backend/commands.ts` | Backend command registry and Docker/local env management |
+| `electron/backend/tmux.ts`     | Claude tmux mode backend                     |
+| `electron/backend/storage.ts`  | JSON file persistence                        |
+| `electron/ipc.ts`              | Main-process IPC handlers                    |
+| `electron/preload-api.ts`      | Renderer-facing native API                   |
 
 ### Docker
 
@@ -247,9 +205,9 @@ Files:
 ## Testing
 
 ```bash
-bun test                      # Frontend tests
-cd src-tauri && cargo test    # Rust tests
-bunx tsc --noEmit             # TypeScript type checking
+bun test                      # Test suite
+bunx tsc --noEmit             # Renderer TypeScript type checking
+bunx tsc -p tsconfig.electron.json # Electron TypeScript type checking
 ```
 
 ### Bun `mock.module()` Rules
@@ -259,7 +217,7 @@ Bun's module mocking is **global at the module-cache level**. In this repo, top-
 Use this stable pattern:
 
 1. Put truly shared mocks in `tests/setup.ts`.
-   - Example: `@tauri-apps/api/*` and `@tauri-apps/plugin-clipboard-manager` are registered once there so files do not fight over competing global mocks.
+   - Example: native wrapper mocks from `@/lib/native/*` are registered once there so files do not fight over competing global mocks.
 2. If some tests need a mocked module but other tests need the real module, keep the module real in `tests/setup.ts` and put **shared mock functions** in `tests/mocks/*`.
    - Example: `tests/mocks/clipboard-paste.ts` exports reusable mock functions, and `terminal-paste.test.ts` wires them up per-file with `mock.module(...)`.
 3. Prefer mocking narrow dependencies, not broad app modules or shared UI components.
@@ -302,17 +260,14 @@ Use this only as a last resort — prefer not mocking sibling components at all 
 # Install dependencies
 bun install
 
-# Run the full Tauri application
-bun run tauri dev
-
-# Run just the frontend (UI development)
+# Run the Electron application
 bun run dev
 
 # Build for production
-bun run tauri build
+bun run build
 
 # Build Docker base image
-docker build -t orkestrator-ai:latest -f docker/Dockerfile .
+docker build -t orkestrator-v2:latest -f docker/Dockerfile .
 ```
 
 ## UI Components

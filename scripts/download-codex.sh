@@ -58,7 +58,7 @@ cp "$TEMP_DIR/${CODEX_FILENAME}" "$BINARIES_DIR/codex"
 chmod +x "$BINARIES_DIR/codex"
 
 # Re-sign with an ad-hoc signature so the embedded binary isn't killed when
-# the enclosing Tauri app uses a different signing identity. Same rationale
+# the enclosing Electron app uses a different signing identity. Same rationale
 # as bun/opencode.
 if [[ "$OS" == "Darwin" ]]; then
     echo "Re-signing codex binary with ad-hoc signature for macOS app bundling..."

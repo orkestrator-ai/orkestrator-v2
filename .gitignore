@@ -15,9 +15,6 @@ build/
 # Downloaded binaries (downloaded during build)
 binaries/
 
-# Legacy Rust/Tauri build output
-src-tauri/target/
-
 # Package outputs
 *.dmg
 *.exe

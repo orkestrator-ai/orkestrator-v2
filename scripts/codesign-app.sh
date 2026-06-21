@@ -21,8 +21,8 @@ fi
 echo "Signing $APP_PATH (identity: $IDENTITY)"
 
 # Strip any existing signatures first to start clean.
-# This avoids "sealed resource is missing or invalid" errors from
-# Tauri's initial signature conflicting with our re-signing.
+# This avoids "sealed resource is missing or invalid" errors from a prior
+# app signature conflicting with our re-signing.
 echo "  Stripping existing signatures..."
 codesign --remove-signature "$APP_PATH" 2>/dev/null || true
 

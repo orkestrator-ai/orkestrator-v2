@@ -69,7 +69,7 @@ cp "$TEMP_DIR/opencode" "$BINARIES_DIR/opencode"
 chmod +x "$BINARIES_DIR/opencode"
 
 # Re-sign the binary with an ad-hoc signature.
-# Same reasoning as bun: when embedded inside a Tauri app bundle that uses a
+# Same reasoning as bun: when embedded inside an Electron app bundle that uses a
 # different signing identity, macOS kills the process with SIGKILL (exit 137)
 # because the team identifiers don't match.
 if [[ "$PLATFORM" == "darwin" ]]; then

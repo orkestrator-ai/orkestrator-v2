@@ -32,7 +32,7 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      ignored: ["**/src-tauri/**", "**/dist-electron/**"],
+      ignored: ["**/dist-electron/**"],
     },
   },
 }));

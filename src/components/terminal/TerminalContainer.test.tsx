@@ -1194,6 +1194,121 @@ describe("TerminalContainer", () => {
     expect(markSetupScriptsCompleteMock).not.toHaveBeenCalled();
   });
 
+  test("clears applied launch options without an initial prompt via the fallback timer", async () => {
+    // Local terminal-mode agent launch with NO initialPrompt and no setup
+    // commands: the agent tab is created directly, so no pending native launch
+    // exists and the immediate native-launch cleanup never runs. Before the
+    // cleanup guard was broadened to fire for any applied options (not only
+    // those with an initialPrompt), these options were never cleared.
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((env) =>
+        env.id === "env-hidden"
+          ? {
+              ...env,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: "/tmp/env-hidden-worktree",
+            }
+          : env
+      ),
+      setupCommandsResolved: new Set(["env-hidden"]),
+    }));
+
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "claude",
+          initialPrompt: "",
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      if (!envHidden || envHidden.root.kind !== "leaf") {
+        throw new Error("env-hidden root should be a leaf");
+      }
+      expect(envHidden.root.tabs[0]?.type).toBe("claude");
+      expect(
+        useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
+      ).toBeUndefined();
+    });
+
+    // The fallback timer (3s) clears the now-applied options.
+    await waitFor(
+      () => {
+        expect(
+          useClaudeOptionsStore.getState().getOptions("env-hidden")
+        ).toBeUndefined();
+      },
+      { timeout: 6000 }
+    );
+  }, 12000);
+
+  test("keeps launch options while a pending native launch is still outstanding", async () => {
+    // Containerized native launch rendered active: startInactiveBackendSetup
+    // bails out for active environments, so the workspace never becomes ready
+    // and the pending native launch is never consumed. The fallback cleanup
+    // timer must NOT clear options while that launch is still outstanding.
+    useEnvironmentStore.getState().setSetupCommandsResolved("env-hidden", true);
+
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "codex",
+          initialPrompt: "",
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      expect(
+        useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
+      ).toMatchObject({
+        agentType: "codex",
+        launchMode: "native",
+      });
+    });
+
+    // Wait past the fallback timer window; the launch is still outstanding.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 3500));
+    });
+
+    expect(
+      useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
+    ).toBeDefined();
+    expect(
+      useClaudeOptionsStore.getState().getOptions("env-hidden")
+    ).toMatchObject({ launchAgent: true, agentType: "codex" });
+  }, 12000);
+
   test("start overlay ignores modifier clicks, starts normally, and creates scripts from the context menu", async () => {
     const onStartContainer = mock(() => {});
     const onCreateScript = mock((_prompt: string) => {});

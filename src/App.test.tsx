@@ -1054,6 +1054,107 @@ describe("App terminal overlay actions", () => {
     });
   });
 
+  test("rehydration keeps an existing agentType over the environment default", async () => {
+    resetStores({
+      environments: [
+        {
+          ...makeEnvironment("env-visible", "project-1"),
+          defaultAgent: "codex",
+          initialPrompt: "Resume the prior task",
+        },
+      ],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+    // Existing options carry an agentType but no initialPrompt, so the stored
+    // prompt is rehydrated while the prior agentType wins over defaultAgent.
+    useClaudeOptionsStore.getState().setOptions("env-visible", {
+      launchAgent: false,
+      agentType: "opencode",
+      initialPrompt: "",
+    });
+
+    render(<App />);
+
+    act(() => {
+      screen.getByTestId("start-env-visible").click();
+    });
+
+    await waitFor(() => {
+      expect(mockStartEnvironment).toHaveBeenCalledWith(
+        "env-visible",
+        "Resume the prior task",
+      );
+      expect(useClaudeOptionsStore.getState().getOptions("env-visible"))
+        .toMatchObject({
+          launchAgent: true,
+          agentType: "opencode",
+          initialPrompt: "Resume the prior task",
+        });
+    });
+  });
+
+  test("rehydration falls back to the global default agent when none is set", async () => {
+    resetStores({
+      environments: [
+        {
+          ...makeEnvironment("env-visible", "project-1"),
+          initialPrompt: "Boot the default agent",
+        },
+      ],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    render(<App />);
+
+    act(() => {
+      screen.getByTestId("start-env-visible").click();
+    });
+
+    await waitFor(() => {
+      expect(mockStartEnvironment).toHaveBeenCalledWith(
+        "env-visible",
+        "Boot the default agent",
+      );
+      // No existing options and no environment defaultAgent, so the agentType
+      // falls back to config.global.defaultAgent ("claude").
+      expect(useClaudeOptionsStore.getState().getOptions("env-visible"))
+        .toMatchObject({
+          launchAgent: true,
+          agentType: "claude",
+          initialPrompt: "Boot the default agent",
+        });
+    });
+  });
+
+  test("normal overlay start does not rehydrate once setup scripts are complete", async () => {
+    resetStores({
+      environments: [
+        {
+          ...makeEnvironment("env-visible", "project-1"),
+          defaultAgent: "codex",
+          initialPrompt: "Should not be rehydrated",
+          setupScriptsComplete: true,
+        },
+      ],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    render(<App />);
+
+    act(() => {
+      screen.getByTestId("start-env-visible").click();
+    });
+
+    await waitFor(() => {
+      expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", undefined);
+    });
+    expect(useClaudeOptionsStore.getState().getOptions("env-visible"))
+      .toBeUndefined();
+  });
+
   test("normal overlay starts clear stale Claude options before starting", async () => {
     resetStores({
       environments: [makeEnvironment("env-visible", "project-1")],

@@ -8,8 +8,8 @@ const deleteClaudeSession = mock(async (_client: unknown, _sessionId: string) =>
 const deleteCodexSession = mock(async (_client: unknown, _sessionId: string) => true);
 const deleteOpenCodeSession = mock(async (_client: unknown, _sessionId: string) => true);
 
-const realTauri = await import("@/lib/tauri");
-const realTauriSnapshot = { ...realTauri };
+const realBackend = await import("@/lib/backend");
+const realBackendSnapshot = { ...realBackend };
 const realClaudeTmuxClient = await import("@/lib/claude-tmux-client");
 const realClaudeTmuxClientSnapshot = { ...realClaudeTmuxClient };
 const realClaudeClient = await import("@/lib/claude-client");
@@ -19,8 +19,8 @@ const realCodexClientSnapshot = { ...realCodexClient };
 const realOpenCodeClient = await import("@/lib/opencode-client");
 const realOpenCodeClientSnapshot = { ...realOpenCodeClient };
 
-mock.module("@/lib/tauri", () => ({
-  ...realTauriSnapshot,
+mock.module("@/lib/backend", () => ({
+  ...realBackendSnapshot,
   closeLocalTerminalSession,
   detachTerminal,
   createSession: mock(async () => ({})),
@@ -59,7 +59,7 @@ mock.module("@/lib/opencode-client", () => ({
 }));
 
 afterAll(() => {
-  mock.module("@/lib/tauri", () => realTauriSnapshot);
+  mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@/lib/claude-tmux-client", () => realClaudeTmuxClientSnapshot);
   mock.module("@/lib/claude-client", () => realClaudeClientSnapshot);
   mock.module("@/lib/codex-client", () => realCodexClientSnapshot);

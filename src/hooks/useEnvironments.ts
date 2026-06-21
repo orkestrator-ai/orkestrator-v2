@@ -2,10 +2,10 @@
 import { useCallback, useEffect } from "react";
 import { listen, type UnlistenFn } from "@/lib/native/events";
 import { toast } from "sonner";
-import { useConfigStore, useEnvironmentStore, useErrorDialogStore } from "@/stores";
+import { createSessionKey, useConfigStore, useEnvironmentStore, useErrorDialogStore, useTerminalSessionStore } from "@/stores";
 import { useSessionStore } from "@/stores/sessionStore";
 import * as backend from "@/lib/backend";
-import type { EnvironmentType, NetworkAccessMode, PortMapping, PrState } from "@/types";
+import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, PrState } from "@/types";
 
 /**
  * Extract error message from various error types.
@@ -39,8 +39,42 @@ interface EnvironmentRenamedPayload {
   new_branch: string;
 }
 
+interface EnvironmentSetupStartedPayload {
+  environment_id: string;
+  session_id: string;
+  environment?: Environment;
+}
+
+interface EnvironmentSetupCompletePayload {
+  environment_id: string;
+  success: boolean;
+  environment?: Environment;
+  error?: string;
+}
+
 interface UseEnvironmentsOptions {
   listenForRenameEvents?: boolean;
+}
+
+function bindSetupTerminalSession(environment: Environment, sessionId: string): void {
+  const key = createSessionKey(environment.containerId ?? null, "default", environment.id);
+  const store = useTerminalSessionStore.getState();
+  const existing = store.sessions.get(key);
+  console.info("[setup-terminal] binding setup session from environment hook", {
+    environmentId: environment.id,
+    environmentName: environment.name,
+    environmentType: environment.environmentType,
+    containerId: environment.containerId ?? null,
+    key,
+    previousSessionId: existing?.sessionId ?? null,
+    nextSessionId: sessionId,
+    hadSerializedBuffer: !!existing?.serializedBuffer,
+    serializedBufferChars: existing?.serializedBuffer?.length ?? 0,
+  });
+  store.setSession(key, {
+    ...existing,
+    sessionId,
+  });
 }
 
 export function useEnvironments(
@@ -65,8 +99,10 @@ export function useEnvironments(
     getEnvironmentsByProjectId,
     setDeleting,
     setPendingSetupCommands,
+    consumePendingSetupCommands,
     setSetupCommandsResolved,
     setWorkspaceReady,
+    setSetupScriptsRunning,
   } = useEnvironmentStore();
 
   const {
@@ -126,6 +162,68 @@ export function useEnvironments(
       }
     };
   }, [listenForRenameEvents, updateEnvironmentInStore, setPRInStore]);
+
+  // Listen for backend-owned setup lifecycle events. Setup can run while the
+  // terminal UI is unmounted, so these events are only incremental updates; the
+  // persisted environment remains the source of truth on reload.
+  useEffect(() => {
+    let unlistenStarted: UnlistenFn | null = null;
+    let unlistenComplete: UnlistenFn | null = null;
+
+    const setupListeners = async () => {
+      unlistenStarted = await listen<EnvironmentSetupStartedPayload>("environment-setup-started", (event) => {
+        const { environment_id, session_id, environment } = event.payload;
+        console.info("[setup-terminal] received environment-setup-started", {
+          environmentId: environment_id,
+          sessionId: session_id,
+          hasEnvironment: !!environment,
+          environmentType: environment?.environmentType ?? null,
+          containerId: environment?.containerId ?? null,
+        });
+        if (environment) {
+          updateEnvironmentInStore(environment_id, environment);
+          bindSetupTerminalSession(environment, session_id);
+        }
+        consumePendingSetupCommands(environment_id);
+        setSetupCommandsResolved(environment_id, true);
+        setSetupScriptsRunning(environment_id, true);
+        setWorkspaceReady(environment_id, false);
+      });
+
+      unlistenComplete = await listen<EnvironmentSetupCompletePayload>("environment-setup-complete", (event) => {
+        const { environment_id, success, environment } = event.payload;
+        console.info("[setup-terminal] received environment-setup-complete", {
+          environmentId: environment_id,
+          success,
+          hasEnvironment: !!environment,
+          setupScriptsComplete: environment?.setupScriptsComplete ?? null,
+          error: event.payload.error ?? null,
+        });
+        if (environment) {
+          updateEnvironmentInStore(environment_id, environment);
+        }
+        consumePendingSetupCommands(environment_id);
+        setSetupCommandsResolved(environment_id, true);
+        setSetupScriptsRunning(environment_id, false);
+        if (success) {
+          setWorkspaceReady(environment_id, true);
+        }
+      });
+    };
+
+    setupListeners();
+
+    return () => {
+      unlistenStarted?.();
+      unlistenComplete?.();
+    };
+  }, [
+    consumePendingSetupCommands,
+    setSetupCommandsResolved,
+    setSetupScriptsRunning,
+    setWorkspaceReady,
+    updateEnvironmentInStore,
+  ]);
 
   const loadEnvironments = useCallback(
     async (pid: string) => {
@@ -238,12 +336,19 @@ export function useEnvironments(
         updateStatusInStore(environmentId, "creating");
         console.log("[useEnvironments] Calling backend.startEnvironment...");
         const result = await backend.startEnvironment(environmentId);
-        console.log("[useEnvironments] backend.startEnvironment completed, refreshing environment...", { setupCommands: result.setupCommands });
+        console.log("[useEnvironments] backend.startEnvironment completed, refreshing environment...", {
+          setupCommands: result.setupCommands,
+          setupManagedByBackend: result.setupManagedByBackend,
+          setupStarted: result.setupStarted,
+          setupSessionId: result.setupSessionId,
+        });
 
-        // Store real setup commands BEFORE updating the environment store
-        // (which sets worktreePath and triggers isLocalEnvironmentReady).
-        if (result.setupCommands && result.setupCommands.length > 0) {
+        if (result.setupManagedByBackend) {
+          consumePendingSetupCommands(environmentId);
+        } else if (result.setupCommands && result.setupCommands.length > 0) {
           setPendingSetupCommands(environmentId, result.setupCommands);
+        } else {
+          consumePendingSetupCommands(environmentId);
         }
 
         // Refresh the full environment data (including containerId / worktreePath)
@@ -258,10 +363,16 @@ export function useEnvironments(
             });
           }
           updateEnvironmentInStore(environmentId, updatedEnv);
+          if (result.setupSessionId) {
+            bindSetupTerminalSession(updatedEnv, result.setupSessionId);
+          }
         }
 
-        // Allow TerminalContainer init to proceed now that backend setup command
-        // planning and environment storage are complete.
+        if (result.setupManagedByBackend) {
+          setSetupScriptsRunning(environmentId, !!result.setupStarted);
+          setWorkspaceReady(environmentId, !result.setupStarted);
+        }
+
         setSetupCommandsResolved(environmentId, true);
 
         if (!options?.silent) {
@@ -285,7 +396,7 @@ export function useEnvironments(
         throw new Error(message);
       }
     },
-    [updateStatusInStore, updateEnvironmentInStore, setError, showError, setPendingSetupCommands, setSetupCommandsResolved, setWorkspaceReady]
+    [updateStatusInStore, updateEnvironmentInStore, setError, showError, setPendingSetupCommands, consumePendingSetupCommands, setSetupCommandsResolved, setWorkspaceReady, setSetupScriptsRunning]
   );
 
   const stopEnvironment = useCallback(

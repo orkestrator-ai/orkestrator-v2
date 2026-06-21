@@ -15,7 +15,7 @@ import { useConfigStore } from "@/stores";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useCodexStore } from "@/stores/codexStore";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import type { ClaudeModel, ClaudeEffortLevel } from "@/lib/claude-client";
 import type { OpenCodeModel } from "@/lib/opencode-client";
@@ -346,7 +346,7 @@ export function RepositorySettings({
       };
 
       // Update backend
-      const newConfig = await tauri.updateRepositoryConfig(project.id, repoConfig);
+      const newConfig = await backend.updateRepositoryConfig(project.id, repoConfig);
       setConfig(newConfig);
 
       // Also update local store

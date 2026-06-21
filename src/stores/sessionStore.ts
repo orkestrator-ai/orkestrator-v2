@@ -13,7 +13,7 @@ import {
   syncSessionsWithContainer as apiSyncSessionsWithContainer,
   renameSession as apiRenameSession,
   reorderSessions as apiReorderSessions,
-} from "@/lib/tauri";
+} from "@/lib/backend";
 
 /** Sort sessions by order field (lower = first) */
 const sortByOrder = (sessions: Session[]): Session[] =>

@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 import { FileIcon } from "./FileIcon";
-import type { GitFileChange } from "@/lib/tauri";
+import type { GitFileChange } from "@/lib/backend";
 
 interface ChangedFileItemProps {
   change: GitFileChange;

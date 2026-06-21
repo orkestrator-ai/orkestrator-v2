@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { type Components } from "react-markdown";
 import { cn } from "@/lib/utils";
-import { openInBrowser, readContainerFileBase64, readFileBase64 } from "@/lib/tauri";
+import { openInBrowser, readContainerFileBase64, readFileBase64 } from "@/lib/backend";
 import {
   Collapsible,
   CollapsibleContent,

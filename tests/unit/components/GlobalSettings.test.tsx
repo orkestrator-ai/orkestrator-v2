@@ -11,10 +11,10 @@ const mockGetLogDirectory = mock(async () => null);
 const mockPropagateGithubTokenToContainers = mock(async () => ({ updated: [] }));
 const mockToastSuccess = mock(() => {});
 const mockToastError = mock(() => {});
-const actualTauri = await import("../../../src/lib/tauri");
+const actualBackend = await import("../../../src/lib/backend");
 
-mock.module("@/lib/tauri", () => ({
-  ...actualTauri,
+mock.module("@/lib/backend", () => ({
+  ...actualBackend,
   updateGlobalConfig: mockUpdateGlobalConfig,
   getLogDirectory: mockGetLogDirectory,
   propagateGithubTokenToContainers: mockPropagateGithubTokenToContainers,

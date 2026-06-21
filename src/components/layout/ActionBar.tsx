@@ -44,7 +44,7 @@ import {
 import { RepositorySettings, SettingsPage } from "@/components/settings";
 import { EnvironmentSettingsDialog } from "@/components/environments/EnvironmentSettingsDialog";
 import { DockerStatsDialog } from "@/components/docker";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
 import { getEnvironmentPortAddress } from "@/lib/environment-address";
 
@@ -236,9 +236,9 @@ export function ActionBar() {
     try {
       const editor = config.global.preferredEditor || "vscode";
       if (isLocalEnvironment && worktreePath) {
-        await tauri.openLocalInEditor(worktreePath, editor);
+        await backend.openLocalInEditor(worktreePath, editor);
       } else if (containerId) {
-        await tauri.openInEditor(containerId, editor);
+        await backend.openInEditor(containerId, editor);
       }
     } catch (err) {
       console.error("[ActionBar] Failed to open editor:", err);
@@ -297,9 +297,9 @@ export function ActionBar() {
     setIsLoadingRunCommands(true);
 
     const readConfigPromise = isLocalEnvironment && worktreePath
-      ? tauri.readLocalFile(worktreePath, "orkestrator-ai.json")
+      ? backend.readLocalFile(worktreePath, "orkestrator-ai.json")
       : containerId
-        ? tauri.readContainerFile(containerId, "orkestrator-ai.json")
+        ? backend.readContainerFile(containerId, "orkestrator-ai.json")
         : null;
 
     if (!readConfigPromise) {
@@ -623,9 +623,9 @@ export function ActionBar() {
       // Use appropriate merge method based on environment type
       console.log("[ActionBar] Starting PR merge...");
       if (isLocalEnvironment) {
-        await tauri.mergePrLocal(selectedEnvironmentId, "squash", true);
+        await backend.mergePrLocal(selectedEnvironmentId, "squash", true);
       } else {
-        await tauri.mergePr(selectedEnvironment!.containerId!, "squash", true);
+        await backend.mergePr(selectedEnvironment!.containerId!, "squash", true);
       }
       console.log("[ActionBar] Merge command completed successfully");
 
@@ -637,7 +637,7 @@ export function ActionBar() {
       // cleanup button appears regardless of what the monitor detects afterward.
       console.log("[ActionBar] Saving merged state immediately...");
       try {
-        await tauri.setEnvironmentPr(selectedEnvironmentId, prUrl, "merged", false);
+        await backend.setEnvironmentPr(selectedEnvironmentId, prUrl, "merged", false);
         setEnvironmentPR(selectedEnvironmentId, prUrl, "merged", false);
         console.log("[ActionBar] Merged state saved");
       } catch (saveErr) {
@@ -663,7 +663,7 @@ export function ActionBar() {
 
     } catch (err) {
       console.error("[ActionBar] Failed to merge PR:", err);
-      // Tauri invoke errors come as strings, not Error objects
+      // backend invoke errors come as strings, not Error objects
       const message = err instanceof Error ? err.message : typeof err === "string" ? err : "An unexpected error occurred";
       setMergeError(message);
       setMergeDialogOpen(true); // Re-open dialog to show error
@@ -1285,7 +1285,7 @@ export function ActionBar() {
           onOpenChange={setEnvSettingsOpen}
           environment={selectedEnvironment}
           onUpdate={(updated) => updateEnvironment(updated.id, updated)}
-          onRestart={tauri.recreateEnvironment}
+          onRestart={backend.recreateEnvironment}
         />
       )}
 

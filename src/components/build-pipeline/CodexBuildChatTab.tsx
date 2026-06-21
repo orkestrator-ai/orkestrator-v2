@@ -38,7 +38,7 @@ import { isSetupPending } from "@/lib/setup-commands";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { cn } from "@/lib/utils";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 
 interface CodexBuildChatTabProps {
   data: BuildTabData;
@@ -468,9 +468,9 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
 
     let port: number | null = null;
     if (isLocal) {
-      let status = await tauri.getLocalCodexServerStatus(environmentId);
+      let status = await backend.getLocalCodexServerStatus(environmentId);
       if (!status.running) {
-        const result = await tauri.startLocalCodexServer(environmentId);
+        const result = await backend.startLocalCodexServer(environmentId);
         status = { running: true, port: result.port, pid: result.pid };
       }
       port = status.port ?? null;
@@ -481,9 +481,9 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         throw new Error("Container ID is required for containerized Codex environments");
       }
 
-      let status = await tauri.getCodexServerStatus(containerId);
+      let status = await backend.getCodexServerStatus(containerId);
       if (!status.running) {
-        const result = await tauri.startCodexServer(containerId);
+        const result = await backend.startCodexServer(containerId);
         status = { running: true, hostPort: result.hostPort };
       }
       port = status.hostPort ?? null;
@@ -641,7 +641,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       const task = currentPipeline.taskSnapshot;
       let projectNotes = "";
       try {
-        const notes = await tauri.getProjectNotes(currentPipeline.projectId);
+        const notes = await backend.getProjectNotes(currentPipeline.projectId);
         projectNotes = notes.content;
       } catch (error) {
         console.debug("[CodexBuildChatTab] Failed to load project notes for review:", error);
@@ -681,7 +681,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       const task = currentPipeline.taskSnapshot;
       let projectNotes = "";
       try {
-        const notes = await tauri.getProjectNotes(currentPipeline.projectId);
+        const notes = await backend.getProjectNotes(currentPipeline.projectId);
         projectNotes = notes.content;
       } catch (error) {
         console.debug("[CodexBuildChatTab] Failed to load project notes for verification:", error);
@@ -721,7 +721,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       const task = currentPipeline.taskSnapshot;
       let projectNotes = "";
       try {
-        const notes = await tauri.getProjectNotes(currentPipeline.projectId);
+        const notes = await backend.getProjectNotes(currentPipeline.projectId);
         projectNotes = notes.content;
       } catch (error) {
         console.debug("[CodexBuildChatTab] Failed to load project notes for fix:", error);
@@ -781,14 +781,14 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     if (!environment) return false;
 
     if (environment.environmentType === "local") {
-      const result = await tauri.detectPrLocal(environmentId, environment.branch);
+      const result = await backend.detectPrLocal(environmentId, environment.branch);
       if (!result) return false;
       useEnvironmentStore.getState().setEnvironmentPR(environmentId, result.url, result.state, result.hasMergeConflicts);
       return result.hasMergeConflicts;
     }
 
     if (!environment.containerId) return false;
-    const result = await tauri.detectPr(environment.containerId, environment.branch);
+    const result = await backend.detectPr(environment.containerId, environment.branch);
     if (!result) return false;
     useEnvironmentStore.getState().setEnvironmentPR(environmentId, result.url, result.state, result.hasMergeConflicts);
     return result.hasMergeConflicts;
@@ -1228,7 +1228,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     buildStartTriggeredRef.current = true;
 
     const task = pipeline.taskSnapshot;
-    tauri.getProjectNotes(pipeline.projectId)
+    backend.getProjectNotes(pipeline.projectId)
       .then((notes) => {
         const envStore = useEnvironmentStore.getState();
         if (isSetupPending({

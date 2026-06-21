@@ -444,22 +444,37 @@ function App() {
 
   const handleStartEnvironmentFromOverlay = useCallback(
     async (environmentId: string, initialPrompt?: string): Promise<boolean> => {
-      // Clear any stale queued agent launch for normal starts.
-      if (!initialPrompt) {
+      const environment = getEnvironmentById(environmentId);
+      const explicitPrompt = initialPrompt?.trim();
+      const storedPrompt =
+        !explicitPrompt && !environment?.setupScriptsComplete
+          ? environment?.initialPrompt?.trim()
+          : undefined;
+      const launchPrompt = explicitPrompt || storedPrompt || undefined;
+      const existingOptions = useClaudeOptionsStore.getState().getOptions(environmentId);
+
+      if (launchPrompt) {
+        setClaudeOptions(environmentId, {
+          launchAgent: true,
+          agentType: existingOptions?.agentType ?? environment?.defaultAgent ?? config.global.defaultAgent ?? "claude",
+          initialPrompt: launchPrompt,
+          initialPromptAttachments: existingOptions?.initialPromptAttachments,
+        });
+      } else if (existingOptions?.initialPrompt?.trim()) {
         clearClaudeOptions(environmentId);
       }
 
       try {
         // Setup command handling (blocking, placeholder, resolve) is centralized
         // in useEnvironments.startEnvironment() for all code paths.
-        await startEnvironment(environmentId, initialPrompt);
+        await startEnvironment(environmentId, launchPrompt);
         return true;
       } catch (error) {
         console.error("[App] Failed to start environment from terminal overlay:", error);
         return false;
       }
     },
-    [clearClaudeOptions, startEnvironment]
+    [clearClaudeOptions, config.global.defaultAgent, getEnvironmentById, setClaudeOptions, startEnvironment]
   );
 
   // Stable no-op callbacks for background pipeline environments (avoids new references each render)

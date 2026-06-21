@@ -19,7 +19,7 @@ import {
   XCircle,
   AlertCircle,
 } from "lucide-react";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
 import type { Environment, DomainTestResult } from "@/types";
 
@@ -113,7 +113,7 @@ export function NetworkWhitelistDialog({
     setIsTesting(true);
     setTestResults(null);
     try {
-      const results = await tauri.testDomainResolution(domains);
+      const results = await backend.testDomainResolution(domains);
       setTestResults(results);
     } catch (err) {
       console.error("[NetworkWhitelistDialog] Failed to test domains:", err);
@@ -136,7 +136,7 @@ export function NetworkWhitelistDialog({
       // If using global defaults, pass empty array to clear custom domains
       // Otherwise pass the custom domains
       const domainsToSave = useGlobalDefaults ? [] : (domains || []);
-      const updated = await tauri.updateEnvironmentAllowedDomains(
+      const updated = await backend.updateEnvironmentAllowedDomains(
         environment.id,
         domainsToSave
       );

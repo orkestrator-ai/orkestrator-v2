@@ -2,7 +2,7 @@ import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { TerminalProvider } from "../../../src/contexts/TerminalContext";
 import { useFilesPanelStore } from "../../../src/stores/filesPanelStore";
-import type { GitFileChange } from "../../../src/lib/tauri";
+import type { GitFileChange } from "../../../src/lib/backend";
 import * as realHooks from "@/hooks";
 
 const realHooksSnapshot = { ...realHooks };

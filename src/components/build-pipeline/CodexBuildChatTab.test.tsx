@@ -45,7 +45,7 @@ mock.module("@/components/ui/separator", () => ({
   Separator: () => <hr />,
 }));
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   addKanbanComment: mockAddKanbanComment,
   detectPr: mockDetectPr,
   detectPrLocal: mockDetectPrLocal,

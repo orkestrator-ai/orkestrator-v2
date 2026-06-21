@@ -7,9 +7,9 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useUIStore } from "@/stores/uiStore";
-import type { Environment } from "@/types";
+import type { ClaudeMode, CodexMode, DefaultAgent, Environment, OpenCodeMode } from "@/types";
 
-const mockCreateEnvironment = mock(async () => ({
+const mockCreateEnvironment = mock<() => Promise<Environment>>(async () => ({
   id: "env-build",
   projectId: "project-1",
   name: "Build task",
@@ -41,20 +41,27 @@ const mockGetEnvironment = mock(async (): Promise<Environment | null> => ({
   order: 0,
   environmentType: "containerized" as const,
 }));
-const mockUpdateEnvironmentAgentSettings = mock(async (
+const mockUpdateEnvironmentAgentSettings = mock<(
   environmentId: string,
-  defaultAgent: string | null,
-  claudeMode: string | null,
+  defaultAgent: DefaultAgent | null,
+  claudeMode: ClaudeMode | null,
   _claudeNativeBackend: string | null,
-  opencodeMode: string | null,
-  codexMode: string | null,
+  opencodeMode: OpenCodeMode | null,
+  codexMode: CodexMode | null,
+) => Promise<Environment>>(async (
+  environmentId: string,
+  defaultAgent: DefaultAgent | null,
+  claudeMode: ClaudeMode | null,
+  _claudeNativeBackend: string | null,
+  opencodeMode: OpenCodeMode | null,
+  codexMode: CodexMode | null,
 ) => ({
   id: environmentId,
   projectId: "project-1",
   name: "Build task",
   branch: "main",
   containerId: "container-build",
-  status: "running",
+  status: "running" as const,
   prUrl: null,
   prState: null,
   hasMergeConflicts: null,
@@ -69,7 +76,7 @@ const mockUpdateEnvironmentAgentSettings = mock(async (
 }));
 const mockToastSuccess = mock(() => {});
 const mockToastError = mock(() => {});
-const actualTauri = await import("../lib/tauri");
+const actualBackend = await import("../lib/backend");
 
 mock.module("sonner", () => ({
   toast: {
@@ -78,8 +85,8 @@ mock.module("sonner", () => ({
   },
 }));
 
-mock.module("@/lib/tauri", () => ({
-  ...actualTauri,
+mock.module("@/lib/backend", () => ({
+  ...actualBackend,
   createEnvironment: mockCreateEnvironment,
   startEnvironment: mockStartEnvironment,
   getEnvironments: mock(async () => []),
@@ -320,11 +327,116 @@ describe("useBuildPipeline", () => {
       "containerized",
       undefined,
     );
-    expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
-      "env-build",
-      "Build task\n\nShip the feature\n\nAll checks green",
-    );
+    await waitFor(() => {
+      expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
+        "env-build",
+        "Build task\n\nShip the feature\n\nAll checks green",
+      );
+    });
     expect(useClaudeOptionsStore.getState().options["env-build"]).toBeUndefined();
+  });
+
+  test("startBuild starts local environments and adds the build tab when there are no setup commands", async () => {
+    const localCreatedEnvironment: Environment = {
+      id: "env-build",
+      projectId: "project-1",
+      name: "Build task",
+      branch: "main",
+      containerId: null,
+      status: "stopped",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      networkAccessMode: "full",
+      order: 0,
+      environmentType: "local",
+    };
+    const localStartedEnvironment: Environment = {
+      ...localCreatedEnvironment,
+      status: "running",
+      name: "build-task",
+      branch: "build-task",
+      worktreePath: "/tmp/env-build-worktree",
+      defaultAgent: "codex",
+      codexMode: "native",
+    };
+    const localRenamedEnvironment: Environment = {
+      ...localStartedEnvironment,
+      status: "stopped",
+      worktreePath: undefined,
+    };
+
+    mockCreateEnvironment.mockImplementationOnce(async () => localCreatedEnvironment);
+    mockUpdateEnvironmentAgentSettings.mockImplementationOnce(async () => ({
+      ...localCreatedEnvironment,
+      defaultAgent: "codex",
+      codexMode: "native",
+    }));
+    mockStartEnvironment.mockImplementationOnce(async () => ({ setupCommands: undefined }));
+    mockGetEnvironment
+      .mockImplementationOnce(async () => localRenamedEnvironment)
+      .mockImplementationOnce(async () => localStartedEnvironment);
+
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        ["env-build", {
+          root: {
+            kind: "leaf",
+            id: "pane-build",
+            tabs: [],
+            activeTabId: null,
+          },
+          activePaneId: "pane-build",
+          containerId: null,
+        }],
+      ]),
+      activeEnvironmentId: "env-visible",
+    });
+
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuild({
+        id: "task-local",
+        projectId: "project-1",
+        title: "Build local task",
+        description: "",
+        acceptanceCriteria: "",
+        status: "backlog",
+        comments: [],
+        images: [],
+        environmentId: undefined,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        order: 0,
+      }, "local");
+    });
+
+    expect(mockCreateEnvironment).toHaveBeenCalledWith(
+      "project-1",
+      undefined,
+      "full",
+      undefined,
+      undefined,
+      "local",
+      undefined,
+    );
+    expect(mockStartEnvironment).toHaveBeenCalledWith("env-build");
+
+    const envState = usePaneLayoutStore.getState().environments.get("env-build");
+    expect(envState?.root.kind).toBe("leaf");
+    if (!envState || envState.root.kind !== "leaf") {
+      throw new Error("env-build root should be a leaf");
+    }
+
+    const buildTab = envState.root.tabs.find((tab) => tab.type === "claude-build");
+    expect(buildTab?.buildTabData).toMatchObject({
+      environmentId: "env-build",
+      taskId: "task-local",
+      isLocal: true,
+    });
+    expect(useEnvironmentStore.getState().pendingSetupCommands.has("env-build")).toBe(false);
+    expect(mockToastSuccess).toHaveBeenCalledWith("Build pipeline started");
   });
 
   test("startBuild continues when prompt rename fails", async () => {
@@ -369,16 +481,18 @@ describe("useBuildPipeline", () => {
         }, "containerized");
       });
 
-      expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
-        "env-build",
-        "Build task\n\nShip the feature\n\nAll checks green",
-      );
-      expect(consoleWarnMock).toHaveBeenCalledWith(
-        "[useBuildPipeline] Failed to rename environment from task prompt:",
-        expect.any(Error),
-      );
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-build");
       expect(mockToastSuccess).toHaveBeenCalledWith("Build pipeline started");
+      await waitFor(() => {
+        expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
+          "env-build",
+          "Build task\n\nShip the feature\n\nAll checks green",
+        );
+        expect(consoleWarnMock).toHaveBeenCalledWith(
+          "[useBuildPipeline] Failed to rename environment from task prompt:",
+          expect.any(Error),
+        );
+      });
     } finally {
       console.warn = originalConsoleWarn;
     }
@@ -420,13 +534,15 @@ describe("useBuildPipeline", () => {
       }, "containerized");
     });
 
-    expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
-      "env-build",
-      "Build task\n\nShip the feature\n\nAll checks green",
-    );
-    expect(mockGetEnvironment).toHaveBeenCalledWith("env-build");
-    expect(mockGetEnvironment).toHaveBeenCalledTimes(2);
     expect(mockStartEnvironment).toHaveBeenCalledWith("env-build");
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-build")?.name).toBe("build-task");
+    await waitFor(() => {
+      expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
+        "env-build",
+        "Build task\n\nShip the feature\n\nAll checks green",
+      );
+      expect(mockGetEnvironment).toHaveBeenCalledWith("env-build");
+      expect(mockGetEnvironment).toHaveBeenCalledTimes(2);
+      expect(useEnvironmentStore.getState().getEnvironmentById("env-build")?.name).toBe("build-task");
+    });
   });
 });

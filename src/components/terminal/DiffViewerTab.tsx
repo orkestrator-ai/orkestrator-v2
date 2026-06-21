@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { DiffEditor, type BeforeMount } from "@monaco-editor/react";
 import type * as monaco from "monaco-editor";
 import { cn } from "@/lib/utils";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 import {
   Loader2,
   AlertCircle,
@@ -115,11 +115,11 @@ export function DiffViewerTab({
         // Fetch current (modified) file content
         let modified: string | null = null;
         if (!isDeletedFile) {
-          let modifiedResult: tauri.FileContent;
+          let modifiedResult: backend.FileContent;
           if (isLocalEnvironment && worktreePath) {
-            modifiedResult = await tauri.readLocalFile(worktreePath, filePath);
+            modifiedResult = await backend.readLocalFile(worktreePath, filePath);
           } else if (containerId) {
-            modifiedResult = await tauri.readContainerFile(containerId, filePath);
+            modifiedResult = await backend.readContainerFile(containerId, filePath);
           } else {
             throw new Error("No container ID or worktree path available");
           }
@@ -132,11 +132,11 @@ export function DiffViewerTab({
         // Fetch original file content from base branch
         let original: string | null = null;
         if (!isNewFile) {
-          let originalResult: tauri.FileContent | null;
+          let originalResult: backend.FileContent | null;
           if (isLocalEnvironment && worktreePath) {
-            originalResult = await tauri.readLocalFileAtBranch(worktreePath, filePath, baseBranch);
+            originalResult = await backend.readLocalFileAtBranch(worktreePath, filePath, baseBranch);
           } else if (containerId) {
-            originalResult = await tauri.readFileAtBranch(containerId, filePath, baseBranch);
+            originalResult = await backend.readFileAtBranch(containerId, filePath, baseBranch);
           } else {
             throw new Error("No container ID or worktree path available");
           }

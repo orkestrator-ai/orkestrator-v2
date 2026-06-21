@@ -6,17 +6,34 @@ import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { createSessionKey, useTerminalSessionStore } from "@/stores/terminalSessionStore";
 import type { PaneLeaf } from "@/types/paneLayout";
-import * as realTauri from "@/lib/tauri";
+import type { EnsureEnvironmentSetupResult, EnvironmentSetupSession } from "@/types";
+import * as realBackend from "@/lib/backend";
+import * as realSetupCommands from "@/lib/setup-commands";
 
-const realTauriSnapshot = { ...realTauri };
+const realBackendSnapshot = { ...realBackend };
+const realSetupCommandsSnapshot = { ...realSetupCommands };
 
 const markSetupScriptsCompleteMock = mock(() => {});
 const getSetupCommandsMock = mock(async (): Promise<string[] | null> => null);
+const ensureEnvironmentSetupMock = mock(async (environmentId: string): Promise<EnsureEnvironmentSetupResult> => {
+  const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId)!;
+  return {
+    setupCommands: [],
+    setupManagedByBackend: true,
+    setupStarted: false,
+    environment: {
+      ...environment,
+      setupScriptsComplete: true,
+    },
+  };
+});
 const runEnvironmentSetupMock = mock(async (environmentId: string) => ({
   ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
   setupScriptsComplete: true,
 }));
+const getEnvironmentSetupSessionMock = mock(async (_environmentId: string): Promise<EnvironmentSetupSession | null> => null);
 const writeContainerFileMock = mock(async (_containerId: string, filePath: string) => `/workspace/${filePath}`);
 const writeLocalFileMock = mock(async (worktreePath: string, filePath: string) => `${worktreePath}/${filePath}`);
 const TEST_CONTAINER_SETUP_COMMAND = "/backend-provided/workspace-setup.sh";
@@ -29,6 +46,7 @@ const seedContainerSetupCommands = (environmentId = "env-hidden") => {
 };
 
 mock.module("@/lib/setup-commands", () => ({
+  ...realSetupCommandsSnapshot,
   shouldAutoResolveSetupCommands: ({
     isLocalEnvironment,
     isLocalEnvironmentReady,
@@ -47,10 +65,12 @@ mock.module("@/lib/setup-commands", () => ({
   markSetupScriptsComplete: markSetupScriptsCompleteMock,
 }));
 
-mock.module("@/lib/tauri", () => ({
-  ...realTauriSnapshot,
+mock.module("@/lib/backend", () => ({
+  ...realBackendSnapshot,
   getSetupCommands: getSetupCommandsMock,
+  ensureEnvironmentSetup: ensureEnvironmentSetupMock,
   runEnvironmentSetup: runEnvironmentSetupMock,
+  getEnvironmentSetupSession: getEnvironmentSetupSessionMock,
   writeContainerFile: writeContainerFileMock,
   writeLocalFile: writeLocalFileMock,
 }));
@@ -90,7 +110,8 @@ const { TerminalContainer, getTerminalTabDragEndAction } = await import("./Termi
 
 describe("TerminalContainer", () => {
   afterAll(() => {
-    mock.module("@/lib/tauri", () => realTauriSnapshot);
+    mock.module("@/lib/setup-commands", () => realSetupCommandsSnapshot);
+    mock.module("@/lib/backend", () => realBackendSnapshot);
   });
 
   beforeEach(() => {
@@ -154,15 +175,35 @@ describe("TerminalContainer", () => {
       setupScriptsRunning: new Set(),
       sessionActivated: new Set(),
     });
+    useTerminalSessionStore.setState({
+      sessions: new Map(),
+      composeDraftText: new Map(),
+      composeDraftImages: new Map(),
+    });
 
     markSetupScriptsCompleteMock.mockClear();
     getSetupCommandsMock.mockReset();
     getSetupCommandsMock.mockResolvedValue(null);
+    ensureEnvironmentSetupMock.mockReset();
+    ensureEnvironmentSetupMock.mockImplementation(async (environmentId: string) => {
+      const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId)!;
+      return {
+        setupCommands: [],
+        setupManagedByBackend: true,
+        setupStarted: false,
+        environment: {
+          ...environment,
+          setupScriptsComplete: true,
+        },
+      };
+    });
     runEnvironmentSetupMock.mockReset();
     runEnvironmentSetupMock.mockImplementation(async (environmentId: string) => ({
       ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
       setupScriptsComplete: true,
     }));
+    getEnvironmentSetupSessionMock.mockReset();
+    getEnvironmentSetupSessionMock.mockResolvedValue(null);
     writeContainerFileMock.mockReset();
     writeLocalFileMock.mockReset();
     writeContainerFileMock.mockImplementation(async (_containerId: string, filePath: string) => `/workspace/${filePath}`);
@@ -340,6 +381,14 @@ describe("TerminalContainer", () => {
         ".orkestrator/initial-prompt/screen-shot.png",
         "QUJD",
       );
+    });
+
+    await waitFor(() => {
+      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeDefined();
+    });
+
+    await act(async () => {
+      useEnvironmentStore.getState().setWorkspaceReady("env-hidden", true);
     });
 
     await waitFor(() => {
@@ -939,6 +988,23 @@ describe("TerminalContainer", () => {
       },
       pendingNativeLaunches: {},
     });
+    ensureEnvironmentSetupMock.mockImplementationOnce(async (environmentId: string) => {
+      const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId)!;
+      return {
+        setupCommands: [],
+        setupManagedByBackend: true,
+        setupStarted: true,
+        setupSessionId: `${environmentId}:setup`,
+        environment,
+      };
+    });
+    getEnvironmentSetupSessionMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      running: true,
+      startedAt: "2024-01-01T00:00:00.000Z",
+      terminalRunning: true,
+    });
 
     const { rerender } = render(
       <TerminalProvider>
@@ -1014,7 +1080,6 @@ describe("TerminalContainer", () => {
   });
 
   test("runs inactive container setup through the backend and opens readiness gates", async () => {
-    seedContainerSetupCommands();
     useClaudeOptionsStore.setState({
       options: {},
       pendingNativeLaunches: {},
@@ -1032,15 +1097,14 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      expect(runEnvironmentSetupMock).toHaveBeenCalledWith("env-hidden");
+      expect(ensureEnvironmentSetupMock).toHaveBeenCalledWith("env-hidden");
       expect(useEnvironmentStore.getState().isWorkspaceReady("env-hidden")).toBe(true);
       expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-hidden")).toBe(false);
     });
   });
 
   test("clears setup-running state when inactive backend setup fails", async () => {
-    seedContainerSetupCommands();
-    runEnvironmentSetupMock.mockRejectedValueOnce(new Error("setup exploded"));
+    ensureEnvironmentSetupMock.mockRejectedValueOnce(new Error("setup exploded"));
     useClaudeOptionsStore.setState({
       options: {},
       pendingNativeLaunches: {},
@@ -1058,14 +1122,25 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      expect(runEnvironmentSetupMock).toHaveBeenCalledWith("env-hidden");
+      expect(ensureEnvironmentSetupMock).toHaveBeenCalledWith("env-hidden");
       expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-hidden")).toBe(false);
     });
     expect(useEnvironmentStore.getState().isWorkspaceReady("env-hidden")).toBe(false);
   });
 
-  test("fetches backend setup plan before initializing a rehydrated running container", async () => {
-    getSetupCommandsMock.mockResolvedValue([TEST_CONTAINER_SETUP_COMMAND]);
+  test("attaches a setup tab to a backend-owned setup session", async () => {
+    getEnvironmentSetupSessionMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      running: true,
+      startedAt: "2024-01-01T00:00:00.000Z",
+      terminalRunning: true,
+    });
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      setupCommandsResolved: new Set(["env-hidden"]),
+      setupScriptsRunning: new Set(["env-hidden"]),
+    }));
 
     useClaudeOptionsStore.setState({
       options: {},
@@ -1084,7 +1159,7 @@ describe("TerminalContainer", () => {
     );
 
     await waitFor(() => {
-      expect(getSetupCommandsMock).toHaveBeenCalledWith("env-hidden");
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
     });
 
     await waitFor(() => {
@@ -1096,13 +1171,34 @@ describe("TerminalContainer", () => {
 
       expect(envHidden.root.tabs).toHaveLength(1);
       expect(envHidden.root.tabs[0]?.type).toBe("plain");
-      expect(envHidden.root.tabs[0]?.initialCommands).toEqual([TEST_CONTAINER_SETUP_COMMAND]);
       expect(envHidden.root.tabs[0]?.isSetupTab).toBe(true);
+      expect(envHidden.root.tabs[0]?.initialCommands).toBeUndefined();
+      expect(
+        useTerminalSessionStore.getState().sessions.get(
+          createSessionKey("container-hidden", "default", "env-hidden"),
+        )?.sessionId,
+      ).toBe("env-hidden:setup");
     });
   });
 
-  test("re-runs setup commands for previously incomplete local environments", async () => {
-    getSetupCommandsMock.mockResolvedValue(["bun install"]);
+  test("requests backend setup for previously incomplete local environments", async () => {
+    ensureEnvironmentSetupMock.mockImplementationOnce(async (environmentId: string) => {
+      const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId)!;
+      return {
+        setupCommands: [],
+        setupManagedByBackend: true,
+        setupStarted: true,
+        setupSessionId: `${environmentId}:setup`,
+        environment,
+      };
+    });
+    getEnvironmentSetupSessionMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      running: true,
+      startedAt: "2024-01-01T00:00:00.000Z",
+      terminalRunning: true,
+    });
 
     useEnvironmentStore.setState((state) => ({
       ...state,
@@ -1138,17 +1234,149 @@ describe("TerminalContainer", () => {
 
       expect(envHidden.root.tabs).toHaveLength(1);
       expect(envHidden.root.tabs[0]?.isSetupTab).toBe(true);
-      expect(envHidden.root.tabs[0]?.initialCommands).toEqual(["bun install"]);
+      expect(envHidden.root.tabs[0]?.initialCommands).toBeUndefined();
     });
 
-    expect(getSetupCommandsMock).toHaveBeenCalledWith("env-hidden");
+    expect(ensureEnvironmentSetupMock).toHaveBeenCalledWith("env-hidden");
+    expect(getSetupCommandsMock).not.toHaveBeenCalled();
+    expect(
+      useTerminalSessionStore.getState().sessions.get(
+        createSessionKey(null, "default", "env-hidden"),
+      )?.sessionId,
+    ).toBe("env-hidden:setup");
     expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-hidden")).toBe(
       true
     );
   });
 
-  test("does not persist completion when rerun setup command fetch fails", async () => {
-    getSetupCommandsMock.mockRejectedValue(new Error("unavailable"));
+  test("does not create a blank setup tab when backend setup is a no-op", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          codexMode: "native",
+        },
+        repositories: {},
+      },
+    }));
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((env) =>
+        env.id === "env-hidden"
+          ? {
+              ...env,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: "/tmp/env-hidden-worktree",
+              setupScriptsComplete: false,
+            }
+          : env
+      ),
+    }));
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "codex",
+          initialPrompt: "Review this build",
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      expect(ensureEnvironmentSetupMock).toHaveBeenCalledWith("env-hidden");
+      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(envHidden?.root.kind).toBe("leaf");
+      if (!envHidden || envHidden.root.kind !== "leaf") {
+        throw new Error("env-hidden root should be a leaf");
+      }
+
+      expect(envHidden.root.tabs).toHaveLength(1);
+      expect(envHidden.root.tabs[0]?.type).toBe("codex-native");
+      expect(envHidden.root.tabs[0]?.isSetupTab).toBeUndefined();
+      expect(envHidden.root.tabs[0]?.initialPrompt).toBe("Review this build");
+      expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-hidden")).toBe(false);
+      expect(useEnvironmentStore.getState().isWorkspaceReady("env-hidden")).toBe(true);
+    });
+  });
+
+  test("removes a stale blank setup placeholder after setup has completed", async () => {
+    usePaneLayoutStore.setState((state) => {
+      const environments = new Map(state.environments);
+      environments.set("env-hidden", {
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "default", type: "plain", isSetupTab: true },
+            {
+              id: "codex",
+              type: "codex-native",
+              codexNativeData: { environmentId: "env-hidden", isLocal: true },
+            },
+          ],
+          activeTabId: "default",
+        },
+        activePaneId: "default",
+        containerId: null,
+      });
+      return { ...state, environments };
+    });
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((env) =>
+        env.id === "env-hidden"
+          ? {
+              ...env,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: "/tmp/env-hidden-worktree",
+              setupScriptsComplete: true,
+            }
+          : env
+      ),
+      setupCommandsResolved: new Set(["env-hidden"]),
+    }));
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(envHidden?.root.kind).toBe("leaf");
+      if (!envHidden || envHidden.root.kind !== "leaf") {
+        throw new Error("env-hidden root should be a leaf");
+      }
+
+      expect(envHidden.root.tabs).toHaveLength(1);
+      expect(envHidden.root.tabs[0]?.type).toBe("codex-native");
+      expect(envHidden.root.tabs[0]?.isSetupTab).toBeUndefined();
+    });
+    expect(ensureEnvironmentSetupMock).not.toHaveBeenCalled();
+  });
+
+  test("does not persist completion when backend setup re-run fails", async () => {
+    ensureEnvironmentSetupMock.mockRejectedValue(new Error("unavailable"));
 
     useEnvironmentStore.setState((state) => ({
       ...state,
@@ -1189,6 +1417,121 @@ describe("TerminalContainer", () => {
 
     expect(markSetupScriptsCompleteMock).not.toHaveBeenCalled();
   });
+
+  test("clears applied launch options without an initial prompt via the fallback timer", async () => {
+    // Local terminal-mode agent launch with NO initialPrompt and no setup
+    // commands: the agent tab is created directly, so no pending native launch
+    // exists and the immediate native-launch cleanup never runs. Before the
+    // cleanup guard was broadened to fire for any applied options (not only
+    // those with an initialPrompt), these options were never cleared.
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((env) =>
+        env.id === "env-hidden"
+          ? {
+              ...env,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: "/tmp/env-hidden-worktree",
+            }
+          : env
+      ),
+      setupCommandsResolved: new Set(["env-hidden"]),
+    }));
+
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "claude",
+          initialPrompt: "",
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      if (!envHidden || envHidden.root.kind !== "leaf") {
+        throw new Error("env-hidden root should be a leaf");
+      }
+      expect(envHidden.root.tabs[0]?.type).toBe("claude");
+      expect(
+        useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
+      ).toBeUndefined();
+    });
+
+    // The fallback timer (3s) clears the now-applied options.
+    await waitFor(
+      () => {
+        expect(
+          useClaudeOptionsStore.getState().getOptions("env-hidden")
+        ).toBeUndefined();
+      },
+      { timeout: 6000 }
+    );
+  }, 12000);
+
+  test("keeps launch options while a pending native launch is still outstanding", async () => {
+    // Containerized native launch rendered active: startInactiveBackendSetup
+    // bails out for active environments, so the workspace never becomes ready
+    // and the pending native launch is never consumed. The fallback cleanup
+    // timer must NOT clear options while that launch is still outstanding.
+    useEnvironmentStore.getState().setSetupCommandsResolved("env-hidden", true);
+
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "codex",
+          initialPrompt: "",
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      expect(
+        useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
+      ).toMatchObject({
+        agentType: "codex",
+        launchMode: "native",
+      });
+    });
+
+    // Wait past the fallback timer window; the launch is still outstanding.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 3500));
+    });
+
+    expect(
+      useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
+    ).toBeDefined();
+    expect(
+      useClaudeOptionsStore.getState().getOptions("env-hidden")
+    ).toMatchObject({ launchAgent: true, agentType: "codex" });
+  }, 12000);
 
   test("start overlay ignores modifier clicks, starts normally, and creates scripts from the context menu", async () => {
     const onStartContainer = mock(() => {});

@@ -1,14 +1,14 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
-import * as realTauri from "@/lib/tauri";
+import * as realBackend from "@/lib/backend";
 import { useConfigStore } from "../../../src/stores/configStore";
 import { useEnvironmentDiffStore } from "../../../src/stores/environmentDiffStore";
 import { useEnvironmentStore } from "../../../src/stores/environmentStore";
-import type { GitFileChange } from "../../../src/lib/tauri";
+import type { GitFileChange } from "../../../src/lib/backend";
 import type { Environment, RepositoryConfig } from "../../../src/types";
 import { createMockEnvironment } from "../utils/testFactories";
 
-const realTauriSnapshot = { ...realTauri };
+const realBackendSnapshot = { ...realBackend };
 
 const mockGetGitStatus = mock<(containerId: string, targetBranch?: string) => Promise<GitFileChange[]>>(
   () => Promise.resolve([]),
@@ -17,8 +17,8 @@ const mockGetLocalGitStatus = mock<(worktreePath: string, targetBranch?: string)
   () => Promise.resolve([]),
 );
 
-mock.module("@/lib/tauri", () => ({
-  ...realTauriSnapshot,
+mock.module("@/lib/backend", () => ({
+  ...realBackendSnapshot,
   getGitStatus: mockGetGitStatus,
   getLocalGitStatus: mockGetLocalGitStatus,
 }));
@@ -90,7 +90,7 @@ describe("useEnvironmentDiffStats", () => {
   });
 
   afterAll(() => {
-    mock.module("@/lib/tauri", () => realTauriSnapshot);
+    mock.module("@/lib/backend", () => realBackendSnapshot);
   });
 
   test("polls available local and container environments and stores aggregate diff stats", async () => {

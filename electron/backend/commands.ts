@@ -69,8 +69,35 @@ type TerminalSessionConfig =
 
 const terminalProcesses = new Map<string, IPty>();
 const terminalSessionConfigs = new Map<string, TerminalSessionConfig>();
+const terminalOutputBuffers = new Map<string, string>();
 const localServerProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const CONTAINER_WORKSPACE_SETUP_COMMAND = "if command -v flock >/dev/null 2>&1; then flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh'; else /usr/local/bin/workspace-setup.sh; fi";
+const SETUP_DONE_OSC_SEQUENCE = "\u001b]9999;setup_done\u0007";
+const SETUP_FAILED_OSC_SEQUENCE = "\u001b]9999;setup_failed\u0007";
+const SETUP_DONE_PRINTF_CMD = "printf '\\033]9999;setup_done\\007'";
+const SETUP_FAILED_PRINTF_CMD = "printf '\\033]9999;setup_failed\\007'";
+const MAX_TERMINAL_OUTPUT_BUFFER_CHARS = 500 * 1024;
+
+type EnvironmentSetupSession = {
+  environmentId: string;
+  sessionId: string;
+  running: boolean;
+  startedAt: string;
+  completedAt?: string;
+  success?: boolean;
+  error?: string;
+};
+
+type EnvironmentSetupStartResult = {
+  setupCommands: string[];
+  setupManagedByBackend: true;
+  setupStarted: boolean;
+  setupSessionId?: string;
+  environment: Environment;
+};
+
+const environmentSetupSessions = new Map<string, EnvironmentSetupSession>();
+const environmentSetupTasks = new Map<string, Promise<Environment>>();
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string") throw new Error(`Expected ${name} to be a string`);
@@ -539,6 +566,26 @@ function bytesPayload(data: string | Buffer): number[] {
   return Array.from(Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8"));
 }
 
+function appendTerminalOutputBuffer(sessionId: string, data: string | Buffer): void {
+  const text = Buffer.isBuffer(data) ? data.toString("utf8") : data;
+  const combined = `${terminalOutputBuffers.get(sessionId) ?? ""}${text}`;
+  terminalOutputBuffers.set(
+    sessionId,
+    combined.length > MAX_TERMINAL_OUTPUT_BUFFER_CHARS
+      ? combined.slice(combined.length - MAX_TERMINAL_OUTPUT_BUFFER_CHARS)
+      : combined,
+  );
+}
+
+function emitTerminalOutput(sessionId: string, data: string | Buffer, emit: BackendEmit): void {
+  appendTerminalOutputBuffer(sessionId, data);
+  emit(`terminal-output-${sessionId}`, bytesPayload(data));
+}
+
+function logSetupTerminal(message: string, details: Record<string, unknown> = {}): void {
+  console.info(`[setup-terminal] ${message}`, details);
+}
+
 function terminalEnv(): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -602,6 +649,14 @@ function rememberTerminalSession(id: string, config: TerminalSessionConfig): str
 function cleanupTerminalSession(id: string): void {
   terminalProcesses.delete(id);
   terminalSessionConfigs.delete(id);
+  // Setup-session buffers are retained intentionally so the renderer can replay
+  // setup output after the PTY exits / on reattach (cleared when the setup
+  // session is superseded or the environment is removed). Every other session
+  // is keyed by a one-shot UUID, so its buffer would otherwise leak for the
+  // lifetime of the main process.
+  if (!isSetupTerminalSessionId(id)) {
+    terminalOutputBuffers.delete(id);
+  }
 }
 
 function spawnTerminalProcess(
@@ -610,11 +665,30 @@ function spawnTerminalProcess(
   args: string[],
   options: { cwd?: string; cols: number; rows: number },
   emit: BackendEmit,
+  hooks: { onData?: (data: string) => void; onExit?: () => void } = {},
 ): IPty {
   const existing = terminalProcesses.get(id);
-  if (existing) return existing;
+  if (existing) {
+    if (isSetupTerminalSessionId(id)) {
+      logSetupTerminal("reusing existing PTY", {
+        sessionId: id,
+        pid: existing.pid,
+      });
+    }
+    return existing;
+  }
 
   ensureNodePtySpawnHelperExecutable();
+  if (isSetupTerminalSessionId(id)) {
+    logSetupTerminal("spawning PTY", {
+      sessionId: id,
+      command,
+      args,
+      cwd: options.cwd ?? null,
+      cols: options.cols,
+      rows: options.rows,
+    });
+  }
 
   const terminalProcess = pty.spawn(command, args, {
     name: "xterm-256color",
@@ -625,8 +699,28 @@ function spawnTerminalProcess(
   });
 
   terminalProcesses.set(id, terminalProcess);
-  terminalProcess.onData((data) => emit(`terminal-output-${id}`, bytesPayload(data)));
-  terminalProcess.onExit(() => cleanupTerminalSession(id));
+  if (isSetupTerminalSessionId(id)) {
+    logSetupTerminal("PTY spawned", {
+      sessionId: id,
+      pid: terminalProcess.pid,
+    });
+  }
+  terminalProcess.onData((data) => {
+    emitTerminalOutput(id, data, emit);
+    hooks.onData?.(data);
+  });
+  terminalProcess.onExit(({ exitCode, signal }) => {
+    if (isSetupTerminalSessionId(id)) {
+      logSetupTerminal("PTY exited", {
+        sessionId: id,
+        exitCode,
+        signal,
+        bufferChars: terminalOutputBuffers.get(id)?.length ?? 0,
+      });
+    }
+    hooks.onExit?.();
+    cleanupTerminalSession(id);
+  });
   return terminalProcess;
 }
 
@@ -727,6 +821,313 @@ async function readEnvironmentSetupCommands(environment: Environment): Promise<s
     return environment.worktreePath ? readSetupLocalCommands(environment.worktreePath) : [];
   }
   return [CONTAINER_WORKSPACE_SETUP_COMMAND];
+}
+
+function setupTerminalSessionId(environmentId: string): string {
+  return `${environmentId}:setup`;
+}
+
+function isSetupTerminalSessionId(sessionId: string): boolean {
+  return sessionId.endsWith(":setup");
+}
+
+// Setup-session buffers are intentionally retained after the PTY exits so the
+// renderer can replay them on reattach. Free them (and the tracked session /
+// task state) when the owning environment is removed.
+function cleanupEnvironmentSetupState(environmentId: string): void {
+  terminalOutputBuffers.delete(setupTerminalSessionId(environmentId));
+  environmentSetupSessions.delete(environmentId);
+  environmentSetupTasks.delete(environmentId);
+}
+
+function buildSetupTerminalCommand(commands: string[], finalShellCommand: string): string {
+  const combinedCommand = commands.join(" && ");
+  return `(${combinedCommand}) && ${SETUP_DONE_PRINTF_CMD} || ${SETUP_FAILED_PRINTF_CMD}; exec ${finalShellCommand}`;
+}
+
+function formatSetupTerminalIntro(environment: Environment, commands: string[]): string {
+  const target = environment.environmentType === "local"
+    ? environment.worktreePath ?? environment.id
+    : environment.containerId ?? environment.id;
+  const lines = [
+    "\r\n",
+    "[orkestrator] Starting environment setup",
+    `[orkestrator] Environment: ${environment.name} (${environment.id})`,
+    `[orkestrator] Target: ${target}`,
+    "[orkestrator] Command:",
+    ...commands.map((command) => `  ${command}`),
+    "",
+  ];
+  return lines.join("\r\n");
+}
+
+function createSetupCompletionTracker(): {
+  completion: Promise<boolean>;
+  onData: (data: string) => void;
+  onExit: () => void;
+} {
+  let settled = false;
+  let resolveCompletion!: (success: boolean) => void;
+  let rejectCompletion!: (error: Error) => void;
+  const completion = new Promise<boolean>((resolve, reject) => {
+    resolveCompletion = resolve;
+    rejectCompletion = reject;
+  });
+
+  const finish = (success: boolean) => {
+    if (settled) return;
+    settled = true;
+    resolveCompletion(success);
+  };
+
+  // PTY reads are not guaranteed to align to write boundaries, so the OSC
+  // completion marker can arrive split across two `onData` chunks. Keep a small
+  // rolling tail of the previous chunk (one byte short of the longest marker)
+  // and prepend it before matching so a split marker is still detected.
+  const markerTailLength = Math.max(SETUP_DONE_OSC_SEQUENCE.length, SETUP_FAILED_OSC_SEQUENCE.length) - 1;
+  let pending = "";
+
+  return {
+    completion,
+    onData: (data) => {
+      const combined = `${pending}${data}`;
+      if (combined.includes(SETUP_DONE_OSC_SEQUENCE)) {
+        finish(true);
+      } else if (combined.includes(SETUP_FAILED_OSC_SEQUENCE)) {
+        finish(false);
+      }
+      pending = markerTailLength > 0 ? combined.slice(-markerTailLength) : "";
+    },
+    onExit: () => {
+      if (settled) return;
+      settled = true;
+      rejectCompletion(new Error("Setup terminal exited before reporting completion"));
+    },
+  };
+}
+
+async function spawnSetupTerminal(
+  environment: Environment,
+  commands: string[],
+  context: CommandContext,
+): Promise<{ sessionId: string; completion: Promise<boolean> }> {
+  const sessionId = setupTerminalSessionId(environment.id);
+  const tracker = createSetupCompletionTracker();
+  logSetupTerminal("creating setup session", {
+    environmentId: environment.id,
+    environmentName: environment.name,
+    environmentType: environment.environmentType,
+    sessionId,
+    commandCount: commands.length,
+    worktreePath: environment.worktreePath ?? null,
+    containerId: environment.containerId ?? null,
+  });
+
+  terminalOutputBuffers.set(sessionId, "");
+  environmentSetupSessions.set(environment.id, {
+    environmentId: environment.id,
+    sessionId,
+    running: true,
+    startedAt: new Date().toISOString(),
+  });
+
+  if (environment.environmentType === "local") {
+    if (!environment.worktreePath) throw new Error(`Local environment worktree is not available: ${environment.id}`);
+    if (!await pathExists(environment.worktreePath)) {
+      throw new Error(`Local environment worktree does not exist: ${environment.worktreePath}`);
+    }
+    const shellPath = resolveLocalShellPath();
+    const setupCommand = buildSetupTerminalCommand(commands, `${quoteShell(shellPath)} -l`);
+    spawnTerminalProcess(
+      sessionId,
+      shellPath,
+      ["-lc", setupCommand],
+      { cwd: environment.worktreePath, cols: 80, rows: 24 },
+      context.emit,
+      { onData: tracker.onData, onExit: tracker.onExit },
+    );
+  } else {
+    if (!environment.containerId) throw new Error(`Environment has no container: ${environment.id}`);
+    if (!await isContainerRunning(environment.containerId)) {
+      throw new Error(`Container is not running: ${environment.containerId}`);
+    }
+    const setupCommand = buildSetupTerminalCommand(commands, "zsh -l");
+    spawnTerminalProcess(
+      sessionId,
+      "docker",
+      ["exec", "-it", environment.containerId, "zsh", "-lc", setupCommand],
+      { cols: 80, rows: 24 },
+      context.emit,
+      { onData: tracker.onData, onExit: tracker.onExit },
+    );
+  }
+
+  emitTerminalOutput(sessionId, formatSetupTerminalIntro(environment, commands), context.emit);
+  logSetupTerminal("emitted setup intro", {
+    environmentId: environment.id,
+    sessionId,
+    bufferChars: terminalOutputBuffers.get(sessionId)?.length ?? 0,
+  });
+
+  context.emit("environment-setup-started", {
+    environment_id: environment.id,
+    session_id: sessionId,
+    environment,
+  });
+
+  return { sessionId, completion: tracker.completion };
+}
+
+async function completeEnvironmentSetup(
+  environment: Environment,
+  context: CommandContext,
+): Promise<Environment> {
+  const completed = await context.storage.updateEnvironment(environment.id, { setupScriptsComplete: true });
+  const updated = await captureCreatedFromCommit(completed, context.storage);
+  const session = environmentSetupSessions.get(environment.id);
+  logSetupTerminal("setup completed", {
+    environmentId: environment.id,
+    sessionId: session?.sessionId ?? null,
+    bufferChars: session?.sessionId ? terminalOutputBuffers.get(session.sessionId)?.length ?? 0 : 0,
+  });
+  if (session) {
+    environmentSetupSessions.set(environment.id, {
+      ...session,
+      running: false,
+      completedAt: new Date().toISOString(),
+      success: true,
+    });
+  }
+  context.emit("environment-setup-complete", {
+    environment_id: environment.id,
+    success: true,
+    environment: updated,
+  });
+  return updated;
+}
+
+function failEnvironmentSetup(environmentId: string, error: unknown, context: CommandContext): void {
+  const message = error instanceof Error ? error.message : String(error);
+  const session = environmentSetupSessions.get(environmentId);
+  logSetupTerminal("setup failed", {
+    environmentId,
+    sessionId: session?.sessionId ?? null,
+    error: message,
+    bufferChars: session?.sessionId ? terminalOutputBuffers.get(session.sessionId)?.length ?? 0 : 0,
+  });
+  if (session) {
+    environmentSetupSessions.set(environmentId, {
+      ...session,
+      running: false,
+      completedAt: new Date().toISOString(),
+      success: false,
+      error: message,
+    });
+  }
+  context.emit("environment-setup-complete", {
+    environment_id: environmentId,
+    success: false,
+    error: message,
+  });
+}
+
+async function startEnvironmentSetup(
+  environment: Environment,
+  context: CommandContext,
+): Promise<EnvironmentSetupStartResult> {
+  const current = await context.storage.getEnvironment(environment.id) ?? environment;
+  if (current.setupScriptsComplete) {
+    logSetupTerminal("setup already complete", {
+      environmentId: current.id,
+      environmentName: current.name,
+      environmentType: current.environmentType,
+    });
+    return {
+      setupCommands: [],
+      setupManagedByBackend: true,
+      setupStarted: false,
+      environment: current,
+    };
+  }
+
+  const commands = await readEnvironmentSetupCommands(current);
+  if (commands.length === 0) {
+    logSetupTerminal("no setup commands found", {
+      environmentId: current.id,
+      environmentName: current.name,
+      environmentType: current.environmentType,
+      worktreePath: current.worktreePath ?? null,
+      containerId: current.containerId ?? null,
+    });
+    const updated = await completeEnvironmentSetup(current, context);
+    return {
+      setupCommands: [],
+      setupManagedByBackend: true,
+      setupStarted: false,
+      environment: updated,
+    };
+  }
+
+  const existingTask = environmentSetupTasks.get(current.id);
+  const existingSession = environmentSetupSessions.get(current.id);
+  if (existingTask && existingSession) {
+    logSetupTerminal("setup already running", {
+      environmentId: current.id,
+      sessionId: existingSession.sessionId,
+      terminalRunning: terminalProcesses.has(existingSession.sessionId),
+      bufferChars: terminalOutputBuffers.get(existingSession.sessionId)?.length ?? 0,
+    });
+    return {
+      setupCommands: [],
+      setupManagedByBackend: true,
+      setupStarted: true,
+      setupSessionId: existingSession.sessionId,
+      environment: current,
+    };
+  }
+
+  const { sessionId, completion } = await spawnSetupTerminal(current, commands, context);
+  const task = completion
+    .then(async (success) => {
+      if (!success) {
+        throw new Error("Setup script failed");
+      }
+      return completeEnvironmentSetup(current, context);
+    })
+    .catch((error) => {
+      failEnvironmentSetup(current.id, error, context);
+      throw error;
+    })
+    .finally(() => {
+      environmentSetupTasks.delete(current.id);
+    });
+
+  environmentSetupTasks.set(current.id, task);
+  void task.catch(() => undefined);
+
+  return {
+    setupCommands: [],
+    setupManagedByBackend: true,
+    setupStarted: true,
+    setupSessionId: sessionId,
+    environment: current,
+  };
+}
+
+async function runEnvironmentSetupNow(environmentId: string, context: CommandContext): Promise<Environment> {
+  const environment = await context.storage.getEnvironment(environmentId);
+  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  if (environment.setupScriptsComplete) return environment;
+
+  const existingTask = environmentSetupTasks.get(environmentId);
+  if (existingTask) return existingTask;
+
+  const result = await startEnvironmentSetup(environment, context);
+  if (!result.setupStarted) return result.environment;
+
+  const task = environmentSetupTasks.get(environmentId);
+  if (!task) throw new Error(`Setup task was not started: ${environmentId}`);
+  return task;
 }
 
 async function createLocalWorktree(
@@ -1328,6 +1729,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     if (environment?.worktreePath) await removeLocalWorktree(environment.worktreePath).catch(() => undefined);
     await storage.removeSessionsByEnvironment(asString(environmentId, "environmentId")).catch(() => undefined);
     await storage.removeEnvironment(asString(environmentId, "environmentId"));
+    cleanupEnvironmentSetupState(asString(environmentId, "environmentId"));
   });
   register("rename_environment", ({ environmentId, name }, { storage }) => {
     const newName = sanitizeEnvironmentName(asString(name, "name"));
@@ -1385,7 +1787,8 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     }
     return cleared;
   });
-  register("start_environment", async ({ environmentId }, { storage }) => {
+  register("start_environment", async ({ environmentId }, context) => {
+    const { storage } = context;
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     await storage.updateEnvironment(environment.id, { status: "creating" });
@@ -1393,8 +1796,8 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     try {
       if (environment.environmentType === "local") {
         if (environment.worktreePath && await pathExists(environment.worktreePath)) {
-          await storage.updateEnvironment(environment.id, { status: "running" });
-          return { setupCommands: await readEnvironmentSetupCommands(environment) };
+          const running = await storage.updateEnvironment(environment.id, { status: "running" });
+          return startEnvironmentSetup(running, context);
         }
         const project = await storage.getProject(environment.projectId);
         if (!project?.localPath) throw new Error("Project has no local path - cannot create a local worktree");
@@ -1406,7 +1809,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
           createdFromCommit: worktree.createdFromCommit,
           status: "running",
         });
-        return { setupCommands: await readEnvironmentSetupCommands(updated) };
+        return startEnvironmentSetup(updated, context);
       }
 
       let containerId = environment.containerId;
@@ -1421,7 +1824,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
         entryPort: environment.entryPort ?? null,
         hostEntryPort,
       });
-      return { setupCommands: await readEnvironmentSetupCommands(updated) };
+      return startEnvironmentSetup(updated, context);
     } catch (error) {
       await storage.updateEnvironment(environment.id, { status: "error" }).catch(() => undefined);
       throw error;
@@ -1452,39 +1855,41 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     return asBoolean(complete) ? captureCreatedFromCommit(updated, storage) : updated;
   });
   register("run_environment_setup", async ({ environmentId }, context) => {
+    return runEnvironmentSetupNow(asString(environmentId, "environmentId"), context);
+  });
+  register("ensure_environment_setup", async ({ environmentId }, context) => {
     const environment = await context.storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-    if (environment.setupScriptsComplete) {
-      return environment;
-    }
-    if (environment.environmentType !== "containerized") {
-      throw new Error("Backend setup runner is only supported for containerized environments");
-    }
-    if (!environment.containerId) {
-      throw new Error(`Environment has no container: ${environment.id}`);
-    }
-    if (!await isContainerRunning(environment.containerId)) {
-      throw new Error(`Container is not running: ${environment.containerId}`);
-    }
-
-    try {
-      await dockerExec(environment.containerId, CONTAINER_WORKSPACE_SETUP_COMMAND, 30 * 60_000);
-      const completed = await context.storage.updateEnvironment(environment.id, { setupScriptsComplete: true });
-      const updated = await captureCreatedFromCommit(completed, context.storage);
-      context.emit("environment-setup-complete", {
-        environment_id: environment.id,
-        success: true,
-        environment: updated,
+    logSetupTerminal("renderer ensured setup", {
+      environmentId: environment.id,
+      environmentName: environment.name,
+      setupScriptsComplete: environment.setupScriptsComplete ?? false,
+      status: environment.status,
+    });
+    return startEnvironmentSetup(environment, context);
+  });
+  register("get_environment_setup_session", ({ environmentId }) => {
+    const id = asString(environmentId, "environmentId");
+    const session = environmentSetupSessions.get(id);
+    if (!session) {
+      logSetupTerminal("renderer requested setup session: none", {
+        environmentId: id,
       });
-      return updated;
-    } catch (error) {
-      context.emit("environment-setup-complete", {
-        environment_id: environment.id,
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
+      return null;
     }
+    const payload = {
+      ...session,
+      terminalRunning: terminalProcesses.has(session.sessionId),
+    };
+    logSetupTerminal("renderer requested setup session", {
+      environmentId: id,
+      sessionId: session.sessionId,
+      running: session.running,
+      terminalRunning: payload.terminalRunning,
+      success: session.success ?? null,
+      bufferChars: terminalOutputBuffers.get(session.sessionId)?.length ?? 0,
+    });
+    return payload;
   });
   register("get_setup_commands", async ({ environmentId }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
@@ -1762,7 +2167,30 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     cleanupTerminalSession(asString(sessionId, "sessionId"));
   });
   register("list_terminal_sessions", () => Array.from(terminalProcesses.keys()));
-  register("get_terminal_session", ({ sessionId }) => ({ id: asString(sessionId, "sessionId"), running: terminalProcesses.has(asString(sessionId, "sessionId")) }));
+  register("get_terminal_session", ({ sessionId }) => {
+    const id = asString(sessionId, "sessionId");
+    const running = terminalProcesses.has(id);
+    if (isSetupTerminalSessionId(id)) {
+      logSetupTerminal("renderer checked terminal session", {
+        sessionId: id,
+        running,
+        bufferChars: terminalOutputBuffers.get(id)?.length ?? 0,
+      });
+    }
+    return { id, running };
+  });
+  register("get_terminal_output_buffer", ({ sessionId }) => {
+    const id = asString(sessionId, "sessionId");
+    const buffer = terminalOutputBuffers.get(id) ?? "";
+    if (isSetupTerminalSessionId(id)) {
+      logSetupTerminal("renderer requested output buffer", {
+        sessionId: id,
+        bufferChars: buffer.length,
+        running: terminalProcesses.has(id),
+      });
+    }
+    return buffer;
+  });
 
   register("create_local_terminal_session", ({ environmentId, cols, rows }) => {
     const id = `${asString(environmentId, "environmentId")}:${randomUUID()}`;

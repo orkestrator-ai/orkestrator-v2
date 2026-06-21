@@ -24,7 +24,7 @@ import type { Environment } from "@/types";
 import { useAgentActivityStore, useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore } from "@/stores";
 import { EnvironmentSettingsDialog } from "./EnvironmentSettingsDialog";
 import { cn } from "@/lib/utils";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 import { getEnvironmentPortAddress } from "@/lib/environment-address";
 
 interface EnvironmentItemProps {
@@ -393,7 +393,7 @@ export function EnvironmentItem({
         onOpenChange={setShowSettingsDialog}
         environment={environment}
         onUpdate={handleEnvironmentUpdate}
-        onRestart={tauri.recreateEnvironment}
+        onRestart={backend.recreateEnvironment}
       />
     </>
   );

@@ -23,9 +23,9 @@ import {
   X,
   Link2,
 } from "lucide-react";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "@/components/settings/FullscreenSettingsLayout";
-import type { DockerSystemStats, ContainerInfo, SystemPruneResult } from "@/lib/tauri";
+import type { DockerSystemStats, ContainerInfo, SystemPruneResult } from "@/lib/backend";
 import { useProjectStore, useEnvironmentStore } from "@/stores";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -106,8 +106,8 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
 
     try {
       const [statsData, containersData] = await Promise.all([
-        tauri.getDockerSystemStats(),
-        tauri.getOrkestratorContainers(),
+        backend.getDockerSystemStats(),
+        backend.getOrkestratorContainers(),
       ]);
       setStats(statsData);
       setContainers(containersData);
@@ -137,10 +137,10 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
   const handleCleanup = async () => {
     setIsCleaningUp(true);
     try {
-      const removed = await tauri.cleanupOrphanedContainers();
+      const removed = await backend.cleanupOrphanedContainers();
       setCleanupResult(removed);
       // Refresh the containers list
-      const containersData = await tauri.getOrkestratorContainers();
+      const containersData = await backend.getOrkestratorContainers();
       setContainers(containersData);
     } catch (err) {
       console.error("[DockerStatsDialog] Cleanup failed:", err);
@@ -155,9 +155,9 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
     setStoppingContainerId(containerId);
     setError(null);
     try {
-      await tauri.dockerStopContainer(containerId);
+      await backend.dockerStopContainer(containerId);
       // Refresh the containers list
-      const containersData = await tauri.getOrkestratorContainers();
+      const containersData = await backend.getOrkestratorContainers();
       setContainers(containersData);
     } catch (err) {
       console.error("[DockerStatsDialog] Stop container failed:", err);
@@ -171,9 +171,9 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
     setDeletingContainerId(containerId);
     setError(null);
     try {
-      await tauri.dockerRemoveContainer(containerId);
+      await backend.dockerRemoveContainer(containerId);
       // Refresh the containers list
-      const containersData = await tauri.getOrkestratorContainers();
+      const containersData = await backend.getOrkestratorContainers();
       setContainers(containersData);
     } catch (err) {
       console.error("[DockerStatsDialog] Delete container failed:", err);
@@ -187,13 +187,13 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
     setIsPruning(true);
     setError(null);
     try {
-      const result = await tauri.dockerSystemPrune(pruneVolumes);
+      const result = await backend.dockerSystemPrune(pruneVolumes);
       setPruneResult(result);
       // Refresh stats after prune
-      const statsData = await tauri.getDockerSystemStats();
+      const statsData = await backend.getDockerSystemStats();
       setStats(statsData);
       // Also refresh containers list
-      const containersData = await tauri.getOrkestratorContainers();
+      const containersData = await backend.getOrkestratorContainers();
       setContainers(containersData);
     } catch (err) {
       console.error("[DockerStatsDialog] System prune failed:", err);
@@ -218,7 +218,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
     setError(null);
 
     try {
-      const newEnvironment = await tauri.reattachContainer(
+      const newEnvironment = await backend.reattachContainer(
         selectedProjectId,
         reattachingContainer.id,
         reattachName || undefined
@@ -226,7 +226,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
       // Add the new environment to the store so sidebar updates immediately
       addEnvironment(newEnvironment);
       // Refresh the containers list
-      const containersData = await tauri.getOrkestratorContainers();
+      const containersData = await backend.getOrkestratorContainers();
       setContainers(containersData);
       // Close dialog
       setShowReattachDialog(false);

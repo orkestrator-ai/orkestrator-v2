@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useRef } from "react";
 import { useFilesPanelStore, useConfigStore } from "@/stores";
 import { useUIStore, useEnvironmentStore } from "@/stores";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 
 // Auto-refresh interval in milliseconds (5 seconds)
 const AUTO_REFRESH_INTERVAL = 5000;
@@ -74,13 +74,13 @@ export function useFilesPanel() {
     }
     try {
       // Compare against the environment creation commit when available.
-      let changes: tauri.GitFileChange[] = [];
+      let changes: backend.GitFileChange[] = [];
       if (isLocalEnvironment && worktreePath) {
         // Local environment - use local git status command
-        changes = await tauri.getLocalGitStatus(worktreePath, comparisonRef);
+        changes = await backend.getLocalGitStatus(worktreePath, comparisonRef);
       } else if (containerId) {
         // Container environment - use container git status command
-        changes = await tauri.getGitStatus(containerId, comparisonRef);
+        changes = await backend.getGitStatus(containerId, comparisonRef);
       }
       setChanges(changes);
     } catch (err) {
@@ -112,13 +112,13 @@ export function useFilesPanel() {
       setLoadingTree(true);
     }
     try {
-      let tree: tauri.FileNode[] = [];
+      let tree: backend.FileNode[] = [];
       if (isLocalEnvironment && worktreePath) {
         // Local environment - use local file tree command
-        tree = await tauri.getLocalFileTree(worktreePath);
+        tree = await backend.getLocalFileTree(worktreePath);
       } else if (containerId) {
         // Container environment - use container file tree command
-        tree = await tauri.getFileTree(containerId);
+        tree = await backend.getFileTree(containerId);
       }
       setFileTree(tree);
     } catch (err) {

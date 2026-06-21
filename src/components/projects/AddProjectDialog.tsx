@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FolderOpen, Loader2 } from "lucide-react";
 import { open as openDialog } from "@/lib/native/dialog";
-import { getGitRemoteUrl } from "@/lib/tauri";
+import { getGitRemoteUrl } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
 interface AddProjectDialogProps {

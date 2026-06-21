@@ -11,7 +11,7 @@
  */
 import { useEffect, useRef } from "react";
 import { listen, type UnlistenFn } from "@/lib/native/events";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores";
 import {
   useAgentActivityStore,
@@ -150,7 +150,7 @@ export function useGlobalActivityMonitor(): void {
       })
         .then((unlisten) => {
           activeListeners.current.set(cid, unlisten);
-          tauri.startClaudeStatePolling(cid).catch((e) => {
+          backend.startClaudeStatePolling(cid).catch((e) => {
             console.warn(
               "[GlobalActivityMonitor] Failed to start polling for",
               cid,
@@ -177,7 +177,7 @@ export function useGlobalActivityMonitor(): void {
           unlisten();
           activeListeners.current.delete(cid);
         }
-        tauri.stopClaudeStatePolling(cid).catch((e) => {
+        backend.stopClaudeStatePolling(cid).catch((e) => {
           console.warn(
             "[GlobalActivityMonitor] Failed to stop polling for",
             cid,
@@ -193,7 +193,7 @@ export function useGlobalActivityMonitor(): void {
     return () => {
       for (const [cid, unlisten] of activeListeners.current) {
         unlisten();
-        tauri.stopClaudeStatePolling(cid).catch(() => {});
+        backend.stopClaudeStatePolling(cid).catch(() => {});
       }
       activePollers.current.clear();
       activeListeners.current.clear();

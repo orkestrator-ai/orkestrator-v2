@@ -36,7 +36,7 @@ import type {
 import type {
   OpenCodeModelRef,
   OpenCodeModelPreferences,
-} from "@/lib/tauri";
+} from "@/lib/backend";
 
 const mockGetModelsWithDefaults = mock<() => Promise<OpenCodeModelsResponse>>(
   async () => ({ models: [] as OpenCodeModel[], defaults: {} as OpenCodeModelDefaults }),
@@ -65,7 +65,7 @@ mock.module("@/lib/opencode-client", () => ({
   SYSTEM_MESSAGE_PREFIX: "system-",
 }));
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   startOpenCodeServer: mock(async () => ({ hostPort: 9999 })),
   getOpenCodeServerStatus: mock(async () => ({ running: true, hostPort: 9999 })),
   getOpenCodeServerLog: mock(async () => ""),

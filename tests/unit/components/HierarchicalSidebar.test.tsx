@@ -7,12 +7,12 @@ import type { Environment, Project } from "@/types";
 import * as realUseProjects from "@/hooks/useProjects";
 import * as realUseEnvironments from "@/hooks/useEnvironments";
 import * as realUseEnvironmentDiffStats from "@/hooks/useEnvironmentDiffStats";
-import * as realTauri from "@/lib/tauri";
+import * as realBackend from "@/lib/backend";
 
 const realUseProjectsSnapshot = { ...realUseProjects };
 const realUseEnvironmentsSnapshot = { ...realUseEnvironments };
 const realUseEnvironmentDiffStatsSnapshot = { ...realUseEnvironmentDiffStats };
-const realTauriSnapshot = { ...realTauri };
+const realBackendSnapshot = { ...realBackend };
 
 const project: Project = {
   id: "project-1",
@@ -76,8 +76,8 @@ mock.module("@/hooks/useEnvironmentDiffStats", () => ({
   useEnvironmentDiffStats: mock(() => {}),
 }));
 
-mock.module("@/lib/tauri", () => ({
-  ...realTauriSnapshot,
+mock.module("@/lib/backend", () => ({
+  ...realBackendSnapshot,
   renameEnvironmentFromPrompt: renameEnvironmentFromPromptMock,
   updateEnvironmentAgentSettings: updateEnvironmentAgentSettingsMock,
 }));
@@ -88,7 +88,7 @@ afterAll(() => {
   mock.module("@/hooks/useProjects", () => realUseProjectsSnapshot);
   mock.module("@/hooks/useEnvironments", () => realUseEnvironmentsSnapshot);
   mock.module("@/hooks/useEnvironmentDiffStats", () => realUseEnvironmentDiffStatsSnapshot);
-  mock.module("@/lib/tauri", () => realTauriSnapshot);
+  mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
 if (typeof globalThis.ImageData === "undefined") {
@@ -144,6 +144,13 @@ describe("HierarchicalSidebar", () => {
       ...state,
       config: {
         ...state.config,
+        global: {
+          ...state.config.global,
+          defaultAgent: "claude",
+          claudeMode: "terminal",
+          opencodeMode: "terminal",
+          codexMode: "native",
+        },
         repositories: {},
       },
       isLoading: false,
@@ -231,7 +238,7 @@ describe("HierarchicalSidebar", () => {
     resolveStart?.();
   });
 
-  test("closes the create dialog while initial-prompt rename runs before auto-start", async () => {
+  test("auto-starts while initial-prompt rename is still running", async () => {
     let resolveRename: (() => void) | undefined;
     renameEnvironmentFromPromptMock.mockImplementationOnce(
       () =>
@@ -248,16 +255,12 @@ describe("HierarchicalSidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => {
+      expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "Implement billing exports");
       expect(renameEnvironmentFromPromptMock).toHaveBeenCalledWith("env-created", "Implement billing exports");
       expect(screen.queryByText("Create Ork (Environment)")).toBeNull();
     });
-    expect(startEnvironmentMock).not.toHaveBeenCalled();
 
     resolveRename?.();
-
-    await waitFor(() => {
-      expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "Implement billing exports");
-    });
   });
 
   test("starts the environment when initial-prompt rename fails", async () => {

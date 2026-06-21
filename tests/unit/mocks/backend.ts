@@ -1,4 +1,4 @@
-// Mock implementations for Tauri commands
+// Mock implementations for backend commands
 import type { Project, Environment, AppConfig, EnvironmentStatus } from "../../../src/types";
 import { mock, type Mock } from "bun:test";
 import { createMockProject, createMockEnvironment } from "../utils/testFactories";
@@ -74,7 +74,7 @@ export function resetAllMocks() {
   allMocks.forEach((m) => m.mockClear());
 }
 
-// Default export object matching the tauri module interface
+// Default export object matching the backend module interface
 export default {
   getProjects: mockGetProjects,
   addProject: mockAddProject,

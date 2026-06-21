@@ -50,7 +50,7 @@ const mockCreateSession = mock(async () => ({ sessionId: "session-1", title: "Te
 // module cache and breaks useScrollLock.test.ts. The real hook returns
 // safe defaults (isAtBottom: true) when no viewport is found in happy-dom.
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   getCodexServerLog: mock(async () => ""),
   getCodexServerStatus: mock(async () => ({ running: true, hostPort: 9999 })),
   getLocalCodexServerStatus: mock(async () => ({ running: true, port: 9999, pid: 1234 })),

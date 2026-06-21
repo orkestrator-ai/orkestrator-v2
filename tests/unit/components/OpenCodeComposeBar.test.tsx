@@ -32,7 +32,7 @@ afterAll(() => {
 
 // --- Module mocks (must be before component import) ---
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   writeContainerFile: mockWriteContainerFile,
   writeLocalFile: mockWriteLocalFile,
   getFileTree: async () => [],

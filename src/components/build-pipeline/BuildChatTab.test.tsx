@@ -5,7 +5,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 // Mocks — must be declared BEFORE importing the component under test
 // ---------------------------------------------------------------------------
 
-// Tauri commands
+// backend commands
 const mockStartClaudeServer = mock(() =>
   Promise.resolve({ hostPort: 9999 })
 );
@@ -22,7 +22,7 @@ const mockGetProjectNotes = mock(() =>
   Promise.resolve({ projectId: "project-1", notes: "" })
 );
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   startClaudeServer: mockStartClaudeServer,
   getClaudeServerStatus: mockGetClaudeServerStatus,
   startLocalClaudeServer: mockStartLocalClaudeServer,

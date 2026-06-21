@@ -1,15 +1,15 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import * as realTauri from "@/lib/tauri";
+import * as realBackend from "@/lib/backend";
 import { useConfigStore } from "../../../src/stores/configStore";
 import { useEnvironmentStore } from "../../../src/stores/environmentStore";
 import { useFilesPanelStore } from "../../../src/stores/filesPanelStore";
 import { useUIStore } from "../../../src/stores/uiStore";
-import type { FileNode, GitFileChange } from "../../../src/lib/tauri";
+import type { FileNode, GitFileChange } from "../../../src/lib/backend";
 import type { Environment, RepositoryConfig } from "../../../src/types";
 import { createMockEnvironment } from "../utils/testFactories";
 
-const realTauriSnapshot = { ...realTauri };
+const realBackendSnapshot = { ...realBackend };
 const realConsoleError = console.error;
 
 const mockGetGitStatus = mock<(containerId: string, targetBranch?: string) => Promise<GitFileChange[]>>(
@@ -21,8 +21,8 @@ const mockGetLocalGitStatus = mock<(worktreePath: string, targetBranch?: string)
 const mockGetFileTree = mock<(containerId: string) => Promise<FileNode[]>>(() => Promise.resolve([]));
 const mockGetLocalFileTree = mock<(worktreePath: string) => Promise<FileNode[]>>(() => Promise.resolve([]));
 
-mock.module("@/lib/tauri", () => ({
-  ...realTauriSnapshot,
+mock.module("@/lib/backend", () => ({
+  ...realBackendSnapshot,
   getGitStatus: mockGetGitStatus,
   getLocalGitStatus: mockGetLocalGitStatus,
   getFileTree: mockGetFileTree,
@@ -136,7 +136,7 @@ describe("useFilesPanel", () => {
   });
 
   afterAll(() => {
-    mock.module("@/lib/tauri", () => realTauriSnapshot);
+    mock.module("@/lib/backend", () => realBackendSnapshot);
   });
 
   test("loads local changes against the repository PR base branch when the panel opens", async () => {

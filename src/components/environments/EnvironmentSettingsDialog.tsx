@@ -43,7 +43,7 @@ import {
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { cn } from "@/lib/utils";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "@/components/settings/FullscreenSettingsLayout";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
 import { useClaudeStore } from "@/stores/claudeStore";
 import {
@@ -353,7 +353,7 @@ export function EnvironmentSettingsDialog({
     setIsTesting(true);
     setTestResults(null);
     try {
-      const results = await tauri.testDomainResolution(domains);
+      const results = await backend.testDomainResolution(domains);
       setTestResults(results);
     } catch (err) {
       console.error("[EnvironmentSettingsDialog] Failed to test domains:", err);
@@ -399,7 +399,7 @@ export function EnvironmentSettingsDialog({
     setIsRestarting(true);
     try {
       // First save the port mappings
-      await tauri.updatePortMappings(environment.id, portMappings);
+      await backend.updatePortMappings(environment.id, portMappings);
 
       // Optimistically update status to "creating" so the UI shows a spinner immediately
       onUpdate({ ...environment, status: "creating" });
@@ -412,7 +412,7 @@ export function EnvironmentSettingsDialog({
       await onRestart(environment.id);
 
       // Sync the environment to get the updated container_id and status
-      const synced = await tauri.syncEnvironmentStatus(environment.id);
+      const synced = await backend.syncEnvironmentStatus(environment.id);
       onUpdate(synced);
 
       toast.success("Environment recreated with new port mappings");
@@ -423,7 +423,7 @@ export function EnvironmentSettingsDialog({
 
       // Try to sync even on error to get the correct state
       try {
-        const synced = await tauri.syncEnvironmentStatus(environment.id);
+        const synced = await backend.syncEnvironmentStatus(environment.id);
         onUpdate(synced);
       } catch {
         // Ignore sync errors
@@ -460,14 +460,14 @@ export function EnvironmentSettingsDialog({
       // Update name if changed
       const trimmedName = name.trim();
       if (trimmedName !== environment.name) {
-        updated = await tauri.renameEnvironment(environment.id, trimmedName);
+        updated = await backend.renameEnvironment(environment.id, trimmedName);
       }
 
       // Update domains if not in full access mode
       const isFullAccess = (environment.networkAccessMode ?? "restricted") === "full";
       if (!isFullAccess) {
         const domainsToSave = useGlobalDefaults ? [] : (domains || []);
-        updated = await tauri.updateEnvironmentAllowedDomains(
+        updated = await backend.updateEnvironmentAllowedDomains(
           environment.id,
           domainsToSave
         );
@@ -475,12 +475,12 @@ export function EnvironmentSettingsDialog({
 
       // Update port mappings if changed (only effective after restart for running containers)
       if (portMappingsChanged) {
-        updated = await tauri.updatePortMappings(environment.id, portMappings);
+        updated = await backend.updatePortMappings(environment.id, portMappings);
       }
 
       // Update agent settings if changed
       if (agentSettingsChanged) {
-        updated = await tauri.updateEnvironmentAgentSettings(
+        updated = await backend.updateEnvironmentAgentSettings(
           environment.id,
           envDefaultAgent === "global" ? null : envDefaultAgent as DefaultAgent,
           envClaudeMode === "global" ? null : envClaudeMode as ClaudeMode,

@@ -4,11 +4,11 @@ import * as realSessionStore from "@/stores/sessionStore";
 import * as realClipboardImagePaste from "@/hooks/useClipboardImagePaste";
 import { mockReadText, mockWriteText } from "../../../tests/mocks/clipboard";
 
-// Mock modules that require a real Tauri runtime or have side effects.
-// IMPORTANT: Do NOT mock @/stores (barrel) or @/lib/tauri here — doing so
+// Mock modules that require a real backend runtime or have side effects.
+// IMPORTANT: Do NOT mock @/stores (barrel) or @/lib/backend here — doing so
 // pollutes the Bun module cache and breaks other test files that share
 // those modules.  Instead we use the real stores with controlled state and
-// let @/lib/tauri fall through to the global @/lib/native/backend mock
+// let @/lib/backend fall through to the global @/lib/native/backend mock
 // registered in tests/setup.ts.
 
 // @/lib/native/clipboard is centrally mocked in tests/setup.ts.
@@ -20,12 +20,21 @@ let terminalOnData: ((data: Uint8Array) => void) | undefined;
 let terminalOscHandler: ((data: string) => boolean) | undefined;
 let terminalInputDisposables: Array<{ dispose: ReturnType<typeof mock> }> = [];
 let terminalKeyHandler: ((event: KeyboardEvent) => boolean) | undefined;
-let lastUseTerminalOptions: { onData?: (data: Uint8Array) => void; user?: string } | undefined;
+type MockUseTerminalOptions = {
+  onData?: (data: Uint8Array) => void;
+  user?: string;
+  existingSessionId?: string | null;
+  replayOutputBuffer?: boolean;
+  attachExistingOnly?: boolean;
+};
+let lastUseTerminalOptions: MockUseTerminalOptions | undefined;
+let useTerminalOptionsHistory: MockUseTerminalOptions[] = [];
 let clipboardImagePasteOptions: { onImageSaved: (filePath: string) => Promise<void> } | undefined;
 
 mock.module("@/hooks/useTerminal", () => ({
-  useTerminal: (options: { onData?: (data: Uint8Array) => void; user?: string }) => {
+  useTerminal: (options: MockUseTerminalOptions) => {
     lastUseTerminalOptions = options;
+    useTerminalOptionsHistory.push(options);
     terminalOnData = options.onData;
     return {
       sessionId: "session-1",
@@ -152,7 +161,7 @@ mock.module("@/components/terminal/ComposeBar", () => ({
 }));
 
 // --- Real stores: import directly and control via setState in beforeEach ---
-import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
+import { createSessionKey, useTerminalSessionStore } from "@/stores/terminalSessionStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -257,6 +266,7 @@ describe("PersistentTerminal", () => {
     terminalInputDisposables = [];
     terminalKeyHandler = undefined;
     lastUseTerminalOptions = undefined;
+    useTerminalOptionsHistory = [];
     clipboardImagePasteOptions = undefined;
     mockReadText.mockReset();
     mockReadText.mockImplementation(() => Promise.resolve(""));
@@ -518,6 +528,53 @@ describe("PersistentTerminal", () => {
 
     await waitFor(() => {
       expect(lastUseTerminalOptions?.user).toBe(ROOT_TERMINAL_USER);
+    });
+  });
+
+  it("replays backend setup output even when a setup tab has a serialized xterm buffer", async () => {
+    const setupSessionKey = createSessionKey(null, "tab-1", "env-1");
+    useTerminalSessionStore.getState().setSession(setupSessionKey, {
+      sessionId: "env-1:setup",
+      serializedBuffer: "\u001b[?25h",
+    });
+    useEnvironmentStore.setState((state) => ({
+      environments: state.environments.map((environment) =>
+        environment.id === "env-1"
+          ? {
+              ...environment,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: "/tmp/worktree",
+            }
+          : environment,
+      ),
+    }));
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId={null}
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={true}
+        isSetupTab
+        paneId="pane-1"
+      />
+    );
+
+    await waitFor(() => {
+      expect(
+        useTerminalOptionsHistory.some(
+          (options) =>
+            options.existingSessionId === "env-1:setup" &&
+            options.attachExistingOnly === true &&
+            options.replayOutputBuffer === true,
+        ),
+      ).toBe(true);
     });
   });
 

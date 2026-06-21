@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useConfigStore } from "@/stores";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 import {
   Loader2,
   Settings2,
@@ -41,7 +41,7 @@ export function SettingsPage({ open, onOpenChange }: SettingsPageProps) {
       const loadConfig = async () => {
         setLoading(true);
         try {
-          const config = await tauri.getConfig();
+          const config = await backend.getConfig();
           setConfig(config);
           setInitialLoadDone(true);
         } catch (err) {

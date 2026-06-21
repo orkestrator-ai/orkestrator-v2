@@ -81,7 +81,7 @@ mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
   },
 }));
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   getEnvironments: async () => [],
   getEnvironment: async () => null,
   startEnvironment: async () => ({}),

@@ -12,13 +12,14 @@ afterAll(() => {
   }));
 });
 
-const wrapperModulePath = "./tauri.ts?wrapper-test";
+const wrapperModulePath = "./backend.ts?wrapper-test";
 const {
   createEnvironment,
+  ensureEnvironmentSetup,
   getSetupCommands,
   runEnvironmentSetup,
   setEnvironmentSetupComplete,
-} = await import(wrapperModulePath) as typeof import("./tauri");
+} = await import(wrapperModulePath) as typeof import("./backend");
 
 describe("backend setup wrappers", () => {
   beforeEach(() => {
@@ -50,6 +51,14 @@ describe("backend setup wrappers", () => {
 
     expect(invokeMock.mock.calls).toEqual([
       ["run_environment_setup", { environmentId: "env-1" }],
+    ]);
+  });
+
+  test("calls the ensure-environment-setup Electron command with the environment id", async () => {
+    await ensureEnvironmentSetup("env-1");
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["ensure_environment_setup", { environmentId: "env-1" }],
     ]);
   });
 

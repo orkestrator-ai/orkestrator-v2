@@ -15,7 +15,7 @@ import {
   type KanbanComment,
   type KanbanImage,
   type ProjectNotes,
-} from "@/lib/tauri";
+} from "@/lib/backend";
 
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 

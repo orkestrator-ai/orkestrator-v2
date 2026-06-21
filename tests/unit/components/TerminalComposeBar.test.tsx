@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 const mockWriteContainerFile = mock(async () => {});
 const mockWriteLocalFile = mock(async () => "/tmp/file.png");
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   writeContainerFile: mockWriteContainerFile,
   writeLocalFile: mockWriteLocalFile,
 }));

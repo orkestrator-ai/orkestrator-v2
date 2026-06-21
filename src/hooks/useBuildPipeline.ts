@@ -7,10 +7,10 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useEnvironments } from "@/hooks/useEnvironments";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 import { getBuildEnvironmentAgentSettings, resolveBuildPipelineAgent } from "@/lib/build-pipeline-agent";
 import type { EnvironmentType } from "@/types";
-import type { KanbanTask } from "@/lib/tauri";
+import type { KanbanTask } from "@/lib/backend";
 import type { PaneNode } from "@/types/paneLayout";
 
 /**
@@ -54,6 +54,18 @@ export async function waitForSetupInitiation(
   console.warn("[useBuildPipeline] Timed out waiting for setup initiation, proceeding anyway");
 }
 
+async function renameBuildEnvironmentFromPrompt(environmentId: string, prompt: string): Promise<void> {
+  try {
+    await backend.renameEnvironmentFromPrompt(environmentId, prompt);
+    const renamedEnvironment = await backend.getEnvironment(environmentId);
+    if (renamedEnvironment) {
+      useEnvironmentStore.getState().updateEnvironment(environmentId, renamedEnvironment);
+    }
+  } catch (renameErr) {
+    console.warn("[useBuildPipeline] Failed to rename environment from task prompt:", renameErr);
+  }
+}
+
 export function useBuildPipeline() {
   const { createEnvironment, startEnvironment } = useEnvironments(null, { listenForRenameEvents: false });
   const { createPipeline, setPipelineEnvironment, setPhase, setPipelineError } = useBuildPipelineStore();
@@ -72,7 +84,7 @@ export function useBuildPipeline() {
         const snapshotImages = await Promise.all(
           (task.images ?? []).map(async (img) => {
             try {
-              const data = await tauri.getKanbanImageData(img.id);
+              const data = await backend.getKanbanImageData(img.id);
               return { filename: img.filename, data };
             } catch {
               return null;
@@ -115,7 +127,7 @@ export function useBuildPipeline() {
         setPipelineEnvironment(pipelineId, environment.id);
 
         // 4. Configure environment for the selected pipeline agent.
-        const configuredEnvironment = await tauri.updateEnvironmentAgentSettings(
+        const configuredEnvironment = await backend.updateEnvironmentAgentSettings(
           environment.id,
           agentSettings.defaultAgent,
           agentSettings.claudeMode,
@@ -147,19 +159,10 @@ export function useBuildPipeline() {
         selectProjectAndEnvironment(task.projectId, configuredEnvironment.id);
 
         const environmentNamingPrompt = (buildNamingPrompt || task.title).trim();
-        if (environmentNamingPrompt) {
-          try {
-            await tauri.renameEnvironmentFromPrompt(configuredEnvironment.id, environmentNamingPrompt);
-            const renamedEnvironment = await tauri.getEnvironment(configuredEnvironment.id);
-            if (renamedEnvironment) {
-              useEnvironmentStore.getState().updateEnvironment(configuredEnvironment.id, renamedEnvironment);
-            }
-          } catch (renameErr) {
-            console.warn("[useBuildPipeline] Failed to rename environment from task prompt:", renameErr);
-          }
-        }
 
-        // 7. Start the environment
+        // 7. Start the environment. Naming must not gate startup: the user
+        // should immediately see the worktree/container setup begin under the
+        // timestamp name, while the LLM-generated name arrives in the background.
         setPhase(pipelineId, "starting-environment");
         try {
           await startEnvironment(configuredEnvironment.id);
@@ -167,6 +170,10 @@ export function useBuildPipeline() {
           console.error("[useBuildPipeline] Failed to start environment:", startErr);
           setPipelineError(pipelineId, `Failed to start environment: ${startErr instanceof Error ? startErr.message : String(startErr)}`);
           return;
+        }
+
+        if (environmentNamingPrompt) {
+          void renameBuildEnvironmentFromPrompt(configuredEnvironment.id, environmentNamingPrompt);
         }
 
         // 8. Wait for setup scripts to be initiated (TerminalContainer consumes them)

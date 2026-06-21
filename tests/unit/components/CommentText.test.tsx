@@ -1,10 +1,10 @@
 import { describe, test, expect, mock, beforeEach } from "bun:test";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 
-// Mock tauri's openInBrowser
+// Mock backend's openInBrowser
 const mockOpenInBrowser = mock(() => Promise.resolve());
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   openInBrowser: mockOpenInBrowser,
   getKanbanImageData: mock(() => Promise.resolve("")),
   detectPr: mock(() => Promise.resolve(null)),

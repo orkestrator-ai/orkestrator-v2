@@ -47,7 +47,7 @@ mock.module("./DropZoneOverlay", () => ({
 }));
 
 // Stub the chat tabs so PaneLeafContainer rendering doesn't pull in real
-// stores or Tauri invoke. These are *for this file only* — see CLAUDE.md
+// stores or backend invoke. These are *for this file only* — see CLAUDE.md
 // guidance on local mock.module usage.
 mock.module("@/components/claude/ClaudeChatTab", () => ({
   ClaudeChatTab: ({

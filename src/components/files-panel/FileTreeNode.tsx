@@ -8,7 +8,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import type { FileNode } from "@/lib/tauri";
+import type { FileNode } from "@/lib/backend";
 
 interface FileTreeNodeProps {
   item: FileNode;

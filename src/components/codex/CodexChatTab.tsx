@@ -39,7 +39,7 @@ import {
   startCodexServer,
   startLocalCodexServer,
   updateGlobalConfig,
-} from "@/lib/tauri";
+} from "@/lib/backend";
 import { SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";

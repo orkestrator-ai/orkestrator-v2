@@ -28,7 +28,7 @@ const mockOpenDialog = mock(async () => {
 const mockToastSuccess = mock(() => {});
 const mockToastError = mock(() => {});
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   updateRepositoryConfig: mockUpdateRepositoryConfig,
   updateProject: mockUpdateProject,
 }));

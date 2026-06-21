@@ -8,7 +8,7 @@
  * This hook no longer manages its own polling intervals.
  */
 import { useCallback, useState } from "react";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import type { PrState } from "@/types";
@@ -57,9 +57,9 @@ export function usePullRequest({
       // Fallback: try to get the PR URL from the backend
       if (environmentId) {
         try {
-          const url = await tauri.getEnvironmentPrUrl(environmentId);
+          const url = await backend.getEnvironmentPrUrl(environmentId);
           if (url) {
-            await tauri.openInBrowser(url);
+            await backend.openInBrowser(url);
             return;
           }
         } catch (err) {
@@ -73,7 +73,7 @@ export function usePullRequest({
     }
 
     try {
-      await tauri.openInBrowser(prUrl);
+      await backend.openInBrowser(prUrl);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to open browser";
       setError(message);
@@ -85,7 +85,7 @@ export function usePullRequest({
     if (!environmentId) return;
 
     try {
-      await tauri.clearEnvironmentPr(environmentId);
+      await backend.clearEnvironmentPr(environmentId);
       setEnvironmentPR(environmentId, null, null, null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to reset PR";

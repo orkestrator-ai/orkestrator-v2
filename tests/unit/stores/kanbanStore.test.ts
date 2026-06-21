@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, mock } from "bun:test";
 
-// Mock tauri before importing the store
+// Mock backend before importing the store
 const mockUpdateKanbanTask = mock(() => Promise.resolve({
   id: "task-1",
   projectId: "proj-1",
@@ -40,7 +40,7 @@ const mockAddKanbanComment = mock(() => Promise.resolve({
   order: 0,
 }));
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   getKanbanTasks: mockGetKanbanTasks,
   addKanbanTask: mockAddKanbanTask,
   updateKanbanTask: mockUpdateKanbanTask,
@@ -55,7 +55,7 @@ mock.module("@/lib/tauri", () => ({
 
 import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
-import type { KanbanTask } from "@/lib/tauri";
+import type { KanbanTask } from "@/lib/backend";
 
 function createTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
   return {

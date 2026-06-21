@@ -1,5 +1,5 @@
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 
 const setupCompletionPersistenceInFlight = new Set<string>();
 
@@ -42,7 +42,7 @@ export function markSetupScriptsComplete(environmentId: string): void {
   }
 
   setupCompletionPersistenceInFlight.add(environmentId);
-  tauri
+  backend
     .setEnvironmentSetupComplete(environmentId, true)
     .then((updatedEnvironment) => {
       store.updateEnvironment(environmentId, updatedEnvironment);

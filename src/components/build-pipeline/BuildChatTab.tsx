@@ -27,7 +27,7 @@ import {
   startClaudeServer,
   getClaudeServerStatus,
   getProjectNotes,
-} from "@/lib/tauri";
+} from "@/lib/backend";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import type { BuildTabData } from "@/types/paneLayout";
 import { extractContextUsage } from "@/lib/context-usage";
@@ -46,7 +46,7 @@ import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { resolveActiveBuildPipelineAgent } from "@/lib/build-pipeline-agent";
 import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
-import * as tauri from "@/lib/tauri";
+import * as backend from "@/lib/backend";
 
 // Reference to kanban store for non-reactive reads
 const kanbanStoreRef = useKanbanStore;
@@ -1027,8 +1027,8 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       }
 
       const result = isLocal
-        ? await tauri.detectPrLocal(environmentId, environment.branch)
-        : await tauri.detectPr(containerId!, environment.branch);
+        ? await backend.detectPrLocal(environmentId, environment.branch)
+        : await backend.detectPr(containerId!, environment.branch);
 
       if (result) {
         // Update environment store with latest PR state

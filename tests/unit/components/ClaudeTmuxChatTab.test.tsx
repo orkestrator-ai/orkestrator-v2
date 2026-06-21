@@ -12,7 +12,7 @@ import { useClaudeStore } from "@/stores/claudeStore";
 import { useUIStore } from "@/stores/uiStore";
 import { clearPersistedVirtuosoState } from "@/hooks/useVirtuosoScrollState";
 import * as realTmuxClient from "@/lib/claude-tmux-client";
-import * as realTauri from "@/lib/tauri";
+import * as realBackend from "@/lib/backend";
 import type {
   ClaudeMessage as ClaudeMessageType,
   ClaudeModel,
@@ -25,7 +25,7 @@ import { mockReadImage } from "../../mocks/clipboard";
 import type { Environment, FileCandidate } from "@/types";
 
 const realTmuxClientSnapshot = { ...realTmuxClient };
-const realTauriSnapshot = { ...realTauri };
+const realBackendSnapshot = { ...realBackend };
 const realInteractiveTerminalSnapshot = { ...realInteractiveTerminal };
 const realFileMentionMenuSnapshot = { ...realFileMentionMenu };
 const realReactVirtuosoSnapshot = { ...realReactVirtuoso };
@@ -150,7 +150,7 @@ mock.module("@/components/claude/ClaudeTmuxInteractiveTerminal", () => ({
   ClaudeTmuxInteractiveTerminal: interactiveTerminalRenderMock,
 }));
 
-mock.module("@/lib/tauri", () => ({
+mock.module("@/lib/backend", () => ({
   getFileTree: getFileTreeMock,
   getLocalFileTree: getLocalFileTreeMock,
   writeContainerFile: writeContainerFileMock,
@@ -317,7 +317,7 @@ function seedEnvironment(overrides: Partial<Environment> = {}) {
 describe("ClaudeTmuxChatTab", () => {
   afterAll(() => {
     mock.module("@/lib/claude-tmux-client", () => realTmuxClientSnapshot);
-    mock.module("@/lib/tauri", () => realTauriSnapshot);
+    mock.module("@/lib/backend", () => realBackendSnapshot);
     mock.module("@/components/claude/ClaudeTmuxInteractiveTerminal", () => realInteractiveTerminalSnapshot);
     mock.module("@/components/chat/FileMentionMenu", () => realFileMentionMenuSnapshot);
     mock.module("react-virtuoso", () => realReactVirtuosoSnapshot);

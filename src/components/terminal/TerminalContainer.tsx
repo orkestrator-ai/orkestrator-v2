@@ -1144,10 +1144,11 @@ export function TerminalContainer({
     }
   }, [activePaneId, environmentId, getActivePane, removeTab]);
 
-  // Clear claude options after they've been applied to first tab
+  // Clear launch options after they've been applied to the first tab.
   useEffect(() => {
-    if (hasAppliedClaudeOptionsRef.current && claudeOptions?.initialPrompt) {
-      // Give time for the container to start and the command to be sent
+    if (hasAppliedClaudeOptionsRef.current && claudeOptions) {
+      // Give pending native launches time to be converted into tabs. Once the
+      // tab exists, its initialPrompt lives in pane state until dispatched.
       const timer = setTimeout(() => {
         const pending = useClaudeOptionsStore
           .getState()

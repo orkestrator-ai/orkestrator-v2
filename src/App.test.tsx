@@ -1021,6 +1021,39 @@ describe("App terminal overlay actions", () => {
     mock.restore();
   });
 
+  test("normal overlay start rehydrates a saved initial prompt before starting", async () => {
+    resetStores({
+      environments: [
+        {
+          ...makeEnvironment("env-visible", "project-1"),
+          defaultAgent: "codex",
+          initialPrompt: "Stand up the Codex session",
+        },
+      ],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    render(<App />);
+
+    act(() => {
+      screen.getByTestId("start-env-visible").click();
+    });
+
+    await waitFor(() => {
+      expect(mockStartEnvironment).toHaveBeenCalledWith(
+        "env-visible",
+        "Stand up the Codex session",
+      );
+      expect(useClaudeOptionsStore.getState().getOptions("env-visible"))
+        .toMatchObject({
+          launchAgent: true,
+          agentType: "codex",
+          initialPrompt: "Stand up the Codex session",
+        });
+    });
+  });
+
   test("normal overlay starts clear stale Claude options before starting", async () => {
     resetStores({
       environments: [makeEnvironment("env-visible", "project-1")],

@@ -65,6 +65,7 @@ export function useEnvironments(
     getEnvironmentsByProjectId,
     setDeleting,
     setPendingSetupCommands,
+    consumePendingSetupCommands,
     setSetupCommandsResolved,
     setWorkspaceReady,
   } = useEnvironmentStore();
@@ -244,6 +245,8 @@ export function useEnvironments(
         // (which sets worktreePath and triggers isLocalEnvironmentReady).
         if (result.setupCommands && result.setupCommands.length > 0) {
           setPendingSetupCommands(environmentId, result.setupCommands);
+        } else {
+          consumePendingSetupCommands(environmentId);
         }
 
         // Refresh the full environment data (including containerId / worktreePath)
@@ -285,7 +288,7 @@ export function useEnvironments(
         throw new Error(message);
       }
     },
-    [updateStatusInStore, updateEnvironmentInStore, setError, showError, setPendingSetupCommands, setSetupCommandsResolved, setWorkspaceReady]
+    [updateStatusInStore, updateEnvironmentInStore, setError, showError, setPendingSetupCommands, consumePendingSetupCommands, setSetupCommandsResolved, setWorkspaceReady]
   );
 
   const stopEnvironment = useCallback(

@@ -8,8 +8,10 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { PaneLeaf } from "@/types/paneLayout";
 import * as realTauri from "@/lib/tauri";
+import * as realSetupCommands from "@/lib/setup-commands";
 
 const realTauriSnapshot = { ...realTauri };
+const realSetupCommandsSnapshot = { ...realSetupCommands };
 
 const markSetupScriptsCompleteMock = mock(() => {});
 const getSetupCommandsMock = mock(async (): Promise<string[] | null> => null);
@@ -29,6 +31,7 @@ const seedContainerSetupCommands = (environmentId = "env-hidden") => {
 };
 
 mock.module("@/lib/setup-commands", () => ({
+  ...realSetupCommandsSnapshot,
   shouldAutoResolveSetupCommands: ({
     isLocalEnvironment,
     isLocalEnvironmentReady,
@@ -90,6 +93,7 @@ const { TerminalContainer, getTerminalTabDragEndAction } = await import("./Termi
 
 describe("TerminalContainer", () => {
   afterAll(() => {
+    mock.module("@/lib/setup-commands", () => realSetupCommandsSnapshot);
     mock.module("@/lib/tauri", () => realTauriSnapshot);
   });
 

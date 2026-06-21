@@ -290,6 +290,51 @@ describe("useEnvironments", () => {
     expect(mockGetEnvironment).toHaveBeenCalledWith("env-1");
   });
 
+  test("startEnvironment clears the setup placeholder when there are no setup commands", async () => {
+    const existingEnv = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "local-env",
+      containerId: null,
+      status: "stopped",
+      environmentType: "local",
+      worktreePath: undefined,
+    });
+    const startedEnv = createMockEnvironment({
+      ...existingEnv,
+      status: "running",
+      worktreePath: "/tmp/local-env",
+    });
+
+    useEnvironmentStore.setState({
+      environments: [existingEnv],
+      isLoading: false,
+      error: null,
+      pendingSetupCommands: new Map(),
+      setupCommandsResolved: new Set(),
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(),
+    });
+
+    mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
+    mockStartEnvironment.mockImplementation(() => Promise.resolve({ setupCommands: undefined }));
+    mockGetEnvironment.mockImplementation(() => Promise.resolve(startedEnv));
+
+    const { result } = renderHook(() => useEnvironments("project-1"));
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.startEnvironment("env-1");
+    });
+
+    const state = useEnvironmentStore.getState();
+    expect(state.setupCommandsResolved.has("env-1")).toBe(true);
+    expect(state.pendingSetupCommands.has("env-1")).toBe(false);
+  });
+
   test("startEnvironment sets error on failure", async () => {
     const expectedError = new Error("Failed to start");
     mockStartEnvironment.mockImplementation(() => Promise.reject(expectedError));

@@ -5,7 +5,8 @@ import { OrkestratorBackend } from "./backend/index.js";
 import { APP_SLUG, PRODUCT_NAME } from "./backend/constants.js";
 import { fixPath } from "./backend/fix-path.js";
 import { registerMainIpc } from "./ipc.js";
-import { resolveRendererIndexPath, resolveRuntimeRoots } from "./paths.js";
+import { resolveRuntimeRoots } from "./paths.js";
+import { createMainWindow } from "./window.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -67,27 +68,14 @@ function createMenu(): void {
 }
 
 async function createWindow(): Promise<void> {
-  mainWindow = new BrowserWindow({
-    title: PRODUCT_NAME,
-    width: 1400,
-    height: 900,
-    minWidth: 800,
-    minHeight: 600,
-    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
-    webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
+  mainWindow = await createMainWindow({
+    BrowserWindowCtor: BrowserWindow,
+    menu: Menu,
+    dirname: __dirname,
+    isDev,
+    appPath: app.getAppPath(),
+    devServerUrl: process.env.VITE_DEV_SERVER_URL,
   });
-
-  if (isDev) {
-    await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:1420");
-    mainWindow.webContents.openDevTools({ mode: "detach" });
-  } else {
-    await mainWindow.loadFile(resolveRendererIndexPath(app.getAppPath()));
-  }
 }
 
 function registerIpc(): void {

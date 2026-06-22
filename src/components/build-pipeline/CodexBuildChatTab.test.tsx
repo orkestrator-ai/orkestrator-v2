@@ -617,6 +617,51 @@ describe("CodexBuildChatTab", () => {
     expect(await screen.findByText("Reconnect now")).toBeTruthy();
   });
 
+  test("reconnect action retries codex initialization after a connection failure", async () => {
+    seedStartingPipeline();
+    useEnvironmentStore.setState({
+      environments: [{
+        id: ENV_ID,
+        projectId: "project-1",
+        name: "test-env",
+        branch: "feature/test",
+        containerId: null,
+        status: "running",
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        createdAt: "2026-04-15T00:00:00.000Z",
+        networkAccessMode: "restricted",
+        order: 0,
+        environmentType: "containerized",
+      }],
+      isLoading: false,
+      error: null,
+      workspaceReadyEnvironments: new Set([ENV_ID]),
+      deletingEnvironments: new Set(),
+      pendingSetupCommands: new Map(),
+      setupCommandsResolved: new Set(),
+      setupScriptsRunning: new Set(),
+    });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    const reconnectButton = await screen.findByText("Reconnect now");
+    useEnvironmentStore.setState({
+      environments: [{
+        ...useEnvironmentStore.getState().environments[0]!,
+        containerId: "container-1",
+      }],
+    });
+    mockCreateClient.mockClear();
+
+    fireEvent.click(reconnectButton);
+
+    await waitFor(() => {
+      expect(mockCreateClient).toHaveBeenCalledWith("http://127.0.0.1:9999");
+    });
+  });
+
   test("does not advance past a new review session before the review prompt is accepted", async () => {
     seedPipeline("building", "running");
     seedCodexStore(false);

@@ -9,6 +9,7 @@ const mockAbortSession = mock(async () => true);
 const mockSubscribeToEvents = mock(async () => (async function* () {})());
 const mockReplyToPermission = mock(async () => true);
 const mockRejectQuestion = mock(async () => true);
+const originalFetch = globalThis.fetch;
 
 mock.module("@/lib/opencode-client", () => ({
   ERROR_MESSAGE_PREFIX: "error-",
@@ -297,11 +298,13 @@ describe("OpenCodeBuildChatTab", () => {
   afterAll(() => {
     mock.module("@/components/ui/scroll-area", () => realScrollAreaSnapshot);
     mock.module("@/components/ui/separator", () => realSeparatorSnapshot);
+    globalThis.fetch = originalFetch;
     mock.restore();
   });
 
   beforeEach(() => {
     cleanup();
+    globalThis.fetch = originalFetch;
     resetStores();
     seedConfigStore();
     seedEnvironmentStore();
@@ -435,6 +438,34 @@ describe("OpenCodeBuildChatTab", () => {
 
     expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase).toBe("building");
     expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions).toHaveLength(1);
+  });
+
+  test("reconnect action retries opencode initialization after a connection failure", async () => {
+    seedPendingPipeline();
+    useEnvironmentStore.setState({
+      environments: [{
+        ...useEnvironmentStore.getState().environments[0]!,
+        containerId: null,
+      }],
+    });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    const reconnectButton = await screen.findByText("Reconnect now");
+    useEnvironmentStore.setState({
+      environments: [{
+        ...useEnvironmentStore.getState().environments[0]!,
+        containerId: "container-1",
+      }],
+    });
+    mockCreateClient.mockClear();
+    globalThis.fetch = mock(async () => new Response(null, { status: 200 })) as unknown as typeof fetch;
+
+    fireEvent.click(reconnectButton);
+
+    await waitFor(() => {
+      expect(mockCreateClient).toHaveBeenCalledWith("http://127.0.0.1:9999");
+    });
   });
 
   test("auto-approves permissions with always and rejects questions for unattended runs", async () => {

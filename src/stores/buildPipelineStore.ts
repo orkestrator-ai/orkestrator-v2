@@ -157,10 +157,15 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
       const pipeline = state.pipelines.get(pipelineId);
       if (!pipeline) return state;
       const newMap = new Map(state.pipelines);
+      const pausedFromPhase = phase === "paused"
+        ? isResumableBuildPhase(pipeline.phase)
+          ? pipeline.phase
+          : pipeline.pausedFromPhase
+        : undefined;
       newMap.set(pipelineId, {
         ...pipeline,
         phase,
-        pausedFromPhase: phase === "paused" ? pipeline.pausedFromPhase : undefined,
+        pausedFromPhase,
       });
       return { pipelines: newMap };
     }),

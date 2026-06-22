@@ -157,6 +157,41 @@ describe("buildPipelineStore", () => {
       expect(useBuildPipelineStore.getState().pipelines.get(id)!.phase).toBe("reviewing");
     });
 
+    test("captures the current phase when setting a pipeline to paused", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().setPhase(id, "reviewing");
+
+      useBuildPipelineStore.getState().setPhase(id, "paused");
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.phase).toBe("paused");
+      expect(pipeline.pausedFromPhase).toBe("reviewing");
+    });
+
+    test("preserves the captured phase when setting an already paused pipeline to paused", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().setPhase(id, "verifying");
+      useBuildPipelineStore.getState().setPhase(id, "paused");
+
+      useBuildPipelineStore.getState().setPhase(id, "paused");
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.phase).toBe("paused");
+      expect(pipeline.pausedFromPhase).toBe("verifying");
+    });
+
+    test("clears pausedFromPhase when leaving paused state", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().setPhase(id, "building");
+      useBuildPipelineStore.getState().setPhase(id, "paused");
+
+      useBuildPipelineStore.getState().setPhase(id, "building");
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.phase).toBe("building");
+      expect(pipeline.pausedFromPhase).toBeUndefined();
+    });
+
     test("no-ops for unknown pipeline ID", () => {
       useBuildPipelineStore.getState().setPhase("nonexistent", "building");
       expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);

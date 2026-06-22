@@ -111,6 +111,30 @@ describe("KanbanTaskDialog accessibility descriptions", () => {
     expect(description.className).toContain("sr-only");
   });
 
+  test("edit mode keeps long ticket details inside a scrollable body", () => {
+    const longTask = makeTask({
+      description: Array.from({ length: 40 }, (_, i) => `Description line ${i + 1}`).join("\n"),
+      acceptanceCriteria: Array.from({ length: 40 }, (_, i) => `Acceptance line ${i + 1}`).join("\n"),
+    });
+
+    render(
+      <KanbanTaskDialog task={longTask} open onOpenChange={() => {}} />,
+    );
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.className).toContain("max-h-[85vh]");
+    expect(dialog.className).toContain("overflow-hidden");
+
+    const scrollAreas = Array.from(dialog.querySelectorAll<HTMLElement>("[data-slot='scroll-area']"));
+    const taskBody = scrollAreas.find((node) =>
+      node.className.includes("min-h-0") && node.className.includes("flex-1")
+    );
+
+    expect(taskBody).toBeTruthy();
+    expect(taskBody?.style.overflow).toBe("auto");
+    expect(taskBody?.textContent).toContain("Acceptance line 40");
+  });
+
   test("renders nothing when closed in edit mode with no task", () => {
     const { container } = render(
       <KanbanTaskDialog task={null} open={false} onOpenChange={() => {}} />,

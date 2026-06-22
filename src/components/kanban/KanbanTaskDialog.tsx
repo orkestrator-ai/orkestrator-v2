@@ -100,6 +100,11 @@ interface KanbanTaskDialogProps {
   createForProjectId?: string;
 }
 
+const TASK_DIALOG_CONTENT_CLASS = "sm:max-w-[560px] max-h-[85vh] overflow-hidden flex flex-col gap-0 p-0";
+const TASK_DIALOG_BODY_CLASS = "min-h-0 flex-1";
+const TASK_DIALOG_BODY_INNER_CLASS = "space-y-4 p-6";
+const TASK_DIALOG_FOOTER_CLASS = "border-t border-border p-4 sm:p-6";
+
 export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId }: KanbanTaskDialogProps) {
   const updateTask = useKanbanStore((s) => s.updateTask);
   const deleteTask = useKanbanStore((s) => s.deleteTask);
@@ -601,60 +606,64 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
         <Dialog open={open} onOpenChange={handleOpenChange}>
           <DialogContent
             ref={dialogContentRef}
-            className="sm:max-w-[560px] max-h-[85vh] flex flex-col"
+            className={TASK_DIALOG_CONTENT_CLASS}
             onInteractOutside={(e) => e.preventDefault()}
           >
-            <DialogHeader>
-              <DialogDescription className="sr-only">
-                Create a Kanban task with optional acceptance criteria and images.
-              </DialogDescription>
-              <div className="flex items-center gap-2">
-                <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">
-                  Backlog
-                </span>
-              </div>
-              <div className="space-y-2 pt-1">
-                <DialogTitle className="sr-only">New Task</DialogTitle>
-                <Input
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  onKeyDown={handleCreateKeyDown}
-                  placeholder="Task title..."
-                  className="text-lg font-semibold"
-                  autoFocus
-                />
-                <Textarea
-                  value={editDescription}
-                  onChange={(e) => setEditDescription(e.target.value)}
-                  placeholder="Description..."
-                  rows={3}
-                  className="max-h-[calc(10lh+1rem)] overflow-y-auto"
-                />
-              </div>
-            </DialogHeader>
+            <ScrollArea className={TASK_DIALOG_BODY_CLASS}>
+              <div className={TASK_DIALOG_BODY_INNER_CLASS}>
+                <DialogHeader>
+                  <DialogDescription className="sr-only">
+                    Create a Kanban task with optional acceptance criteria and images.
+                  </DialogDescription>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">
+                      Backlog
+                    </span>
+                  </div>
+                  <div className="space-y-2 pt-1">
+                    <DialogTitle className="sr-only">New Task</DialogTitle>
+                    <Input
+                      value={editTitle}
+                      onChange={(e) => setEditTitle(e.target.value)}
+                      onKeyDown={handleCreateKeyDown}
+                      placeholder="Task title..."
+                      className="text-lg font-semibold"
+                      autoFocus
+                    />
+                    <Textarea
+                      value={editDescription}
+                      onChange={(e) => setEditDescription(e.target.value)}
+                      placeholder="Description..."
+                      rows={3}
+                      className="max-h-[calc(10lh+1rem)] overflow-y-auto"
+                    />
+                  </div>
+                </DialogHeader>
 
-            <Separator />
+                <Separator />
 
-            {/* Acceptance Criteria */}
-            <div>
-              <div className="flex items-center gap-1.5 mb-2">
-                <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
-                <h4 className="text-sm font-medium">Acceptance Criteria</h4>
+                {/* Acceptance Criteria */}
+                <div>
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
+                    <h4 className="text-sm font-medium">Acceptance Criteria</h4>
+                  </div>
+                  <Textarea
+                    value={editAC}
+                    onChange={(e) => setEditAC(e.target.value)}
+                    placeholder="Define what 'done' looks like..."
+                    rows={4}
+                    className="max-h-[calc(10lh+1rem)] overflow-y-auto"
+                  />
+                </div>
+
+                {/* Images */}
+                {renderImageSection()}
               </div>
-              <Textarea
-                value={editAC}
-                onChange={(e) => setEditAC(e.target.value)}
-                placeholder="Define what 'done' looks like..."
-                rows={4}
-                className="max-h-[calc(10lh+1rem)] overflow-y-auto"
-              />
-            </div>
-
-            {/* Images */}
-            {renderImageSection()}
+            </ScrollArea>
 
             {/* Create Actions */}
-            <div className="flex gap-2 pt-2">
+            <div className={`flex flex-wrap gap-2 ${TASK_DIALOG_FOOTER_CLASS}`}>
               <Button size="sm" onClick={handleCreate} disabled={!editTitle.trim() || isBuildStarting}>
                 Create Task
               </Button>
@@ -702,222 +711,226 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
   return (
     <>
       {fileInput}
-      <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent
-          ref={dialogContentRef}
-          className="sm:max-w-[560px] max-h-[85vh] flex flex-col"
-          onInteractOutside={(e) => e.preventDefault()}
-        >
-          <DialogHeader>
-            <DialogDescription className="sr-only">
-              View and edit task details, build actions, images, and comments.
-            </DialogDescription>
-            <div className="flex items-center justify-between pr-6">
-              <div className="flex items-center gap-2">
-                <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">
-                  {STATUS_LABELS[task.status]}
-                </span>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                onClick={handleDelete}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            </div>
-            {isEditing ? (
-              <div className="space-y-2 pt-1">
-                <Input
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  className="text-lg font-semibold"
-                  autoFocus
-                />
-                <Textarea
-                  value={editDescription}
-                  onChange={(e) => setEditDescription(e.target.value)}
-                  placeholder="Description..."
-                  rows={3}
-                  className="max-h-[calc(10lh+1rem)] overflow-y-auto"
-                />
-                <div className="flex gap-2">
-                  <Button size="sm" onClick={handleSaveEdit}>Save</Button>
-                  <Button size="sm" variant="ghost" onClick={handleCancelEdit}>Cancel</Button>
-                </div>
-              </div>
-            ) : (
-              <div className="cursor-pointer" onClick={handleStartEdit}>
-                <DialogTitle className="text-lg">{task.title}</DialogTitle>
-                {task.description ? (
-                  <p className="mt-1 text-sm text-muted-foreground whitespace-pre-wrap">
-                    {task.description}
-                  </p>
-                ) : (
-                  <p className="mt-1 text-sm text-muted-foreground/50 italic">
-                    Click to add a description...
-                  </p>
-                )}
-              </div>
-            )}
-          </DialogHeader>
-
-          <Separator />
-
-          {/* Acceptance Criteria */}
-          <div>
-            <div className="flex items-center gap-1.5 mb-2">
-              <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
-              <h4 className="text-sm font-medium">Acceptance Criteria</h4>
-            </div>
-            {isEditingAC ? (
-              <div className="space-y-2">
-                <Textarea
-                  value={editAC}
-                  onChange={(e) => setEditAC(e.target.value)}
-                  placeholder="Define what 'done' looks like..."
-                  rows={4}
-                  className="max-h-[calc(10lh+1rem)] overflow-y-auto"
-                  autoFocus
-                />
-                <div className="flex gap-2">
-                  <Button size="sm" onClick={handleSaveAC}>Save</Button>
-                  <Button size="sm" variant="ghost" onClick={handleCancelAC}>Cancel</Button>
-                </div>
-              </div>
-            ) : (
-              <div
-                className="cursor-pointer rounded-md border border-border/50 p-2.5 hover:border-border transition-colors min-h-[40px]"
-                onClick={handleStartEditAC}
-              >
-                {task.acceptanceCriteria ? (
-                  <p className="text-sm text-foreground whitespace-pre-wrap">
-                    {task.acceptanceCriteria}
-                  </p>
-                ) : (
-                  <p className="text-sm text-muted-foreground/50 italic">
-                    Click to add acceptance criteria...
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Images */}
-          {renderImageSection()}
-
-          <Separator />
-
-          {/* Build Actions */}
-          {(() => {
-            const existingPipeline = getPipelineByTaskId(task.id);
-            const hasActiveBuild = existingPipeline && !["complete", "failed"].includes(existingPipeline.phase);
-
-            return (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="gap-1.5 flex-1"
-                    disabled={isBuildStarting || !!hasActiveBuild}
-                    onClick={() => {
-                      if (task.environmentId) {
-                        setConfirmBuildType("containerized");
-                      } else {
-                        void handleStartBuild("containerized");
-                      }
-                    }}
-                  >
-                    {isBuildStarting ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Container className="h-3.5 w-3.5" />
-                    )}
-                    Build Container
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="gap-1.5 flex-1"
-                    disabled={isBuildStarting || !!hasActiveBuild}
-                    onClick={() => {
-                      if (task.environmentId) {
-                        setConfirmBuildType("local");
-                      } else {
-                        void handleStartBuild("local");
-                      }
-                    }}
-                  >
-                    {isBuildStarting ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <FolderGit2 className="h-3.5 w-3.5" />
-                    )}
-                    Build Local
-                  </Button>
-                  {task.environmentId && (
+        <Dialog open={open} onOpenChange={handleOpenChange}>
+          <DialogContent
+            ref={dialogContentRef}
+            className={TASK_DIALOG_CONTENT_CLASS}
+            onInteractOutside={(e) => e.preventDefault()}
+          >
+            <ScrollArea className={TASK_DIALOG_BODY_CLASS}>
+              <div className={TASK_DIALOG_BODY_INNER_CLASS}>
+                <DialogHeader>
+                  <DialogDescription className="sr-only">
+                    View and edit task details, build actions, images, and comments.
+                  </DialogDescription>
+                  <div className="flex items-center justify-between pr-6">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">
+                        {STATUS_LABELS[task.status]}
+                      </span>
+                    </div>
                     <Button
-                      size="sm"
-                      variant="outline"
-                      className="gap-1.5"
-                      onClick={() => {
-                        navigateToBuild(task);
-                        handleOpenChange(false);
-                      }}
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                      onClick={handleDelete}
                     >
-                      <ExternalLink className="h-3.5 w-3.5" />
-                      View Build
-                      {existingPipeline && (
-                        <span className="text-xs text-muted-foreground ml-1">
-                          ({existingPipeline.phase})
-                        </span>
-                      )}
+                      <Trash2 className="h-4 w-4" />
                     </Button>
+                  </div>
+                  {isEditing ? (
+                    <div className="space-y-2 pt-1">
+                      <Input
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        className="text-lg font-semibold"
+                        autoFocus
+                      />
+                      <Textarea
+                        value={editDescription}
+                        onChange={(e) => setEditDescription(e.target.value)}
+                        placeholder="Description..."
+                        rows={3}
+                        className="max-h-[calc(10lh+1rem)] overflow-y-auto"
+                      />
+                      <div className="flex gap-2">
+                        <Button size="sm" onClick={handleSaveEdit}>Save</Button>
+                        <Button size="sm" variant="ghost" onClick={handleCancelEdit}>Cancel</Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="cursor-pointer" onClick={handleStartEdit}>
+                      <DialogTitle className="text-lg">{task.title}</DialogTitle>
+                      {task.description ? (
+                        <p className="mt-1 text-sm text-muted-foreground whitespace-pre-wrap">
+                          {task.description}
+                        </p>
+                      ) : (
+                        <p className="mt-1 text-sm text-muted-foreground/50 italic">
+                          Click to add a description...
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </DialogHeader>
+
+                <Separator />
+
+                {/* Acceptance Criteria */}
+                <div>
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
+                    <h4 className="text-sm font-medium">Acceptance Criteria</h4>
+                  </div>
+                  {isEditingAC ? (
+                    <div className="space-y-2">
+                      <Textarea
+                        value={editAC}
+                        onChange={(e) => setEditAC(e.target.value)}
+                        placeholder="Define what 'done' looks like..."
+                        rows={4}
+                        className="max-h-[calc(10lh+1rem)] overflow-y-auto"
+                        autoFocus
+                      />
+                      <div className="flex gap-2">
+                        <Button size="sm" onClick={handleSaveAC}>Save</Button>
+                        <Button size="sm" variant="ghost" onClick={handleCancelAC}>Cancel</Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      className="cursor-pointer rounded-md border border-border/50 p-2.5 hover:border-border transition-colors min-h-[40px]"
+                      onClick={handleStartEditAC}
+                    >
+                      {task.acceptanceCriteria ? (
+                        <p className="text-sm text-foreground whitespace-pre-wrap">
+                          {task.acceptanceCriteria}
+                        </p>
+                      ) : (
+                        <p className="text-sm text-muted-foreground/50 italic">
+                          Click to add acceptance criteria...
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
-              </div>
-            );
-          })()}
 
-          <Separator />
+                {/* Images */}
+                {renderImageSection()}
 
-          {/* Comments */}
-          <div className="flex-1 min-h-0">
-            <h4 className="text-sm font-medium mb-2">Comments ({task.comments.length})</h4>
-            <ScrollArea className="max-h-[200px]">
-              <div className="space-y-3 pr-3">
-                {task.comments.length === 0 && (
-                  <p className="text-xs text-muted-foreground italic">No comments yet</p>
-                )}
-                {task.comments.map((comment) => (
-                  <div
-                    key={comment.id}
-                    className="group/comment rounded-md bg-muted/50 p-2.5 text-sm"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="whitespace-pre-wrap text-foreground flex-1"><CommentText text={comment.text} /></p>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-5 w-5 shrink-0 opacity-0 group-hover/comment:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
-                        onClick={() => void deleteComment(task.id, comment.id)}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
+                <Separator />
+
+                {/* Build Actions */}
+                {(() => {
+                  const existingPipeline = getPipelineByTaskId(task.id);
+                  const hasActiveBuild = existingPipeline && !["complete", "failed"].includes(existingPipeline.phase);
+
+                  return (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="gap-1.5 flex-1"
+                          disabled={isBuildStarting || !!hasActiveBuild}
+                          onClick={() => {
+                            if (task.environmentId) {
+                              setConfirmBuildType("containerized");
+                            } else {
+                              void handleStartBuild("containerized");
+                            }
+                          }}
+                        >
+                          {isBuildStarting ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Container className="h-3.5 w-3.5" />
+                          )}
+                          Build Container
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="gap-1.5 flex-1"
+                          disabled={isBuildStarting || !!hasActiveBuild}
+                          onClick={() => {
+                            if (task.environmentId) {
+                              setConfirmBuildType("local");
+                            } else {
+                              void handleStartBuild("local");
+                            }
+                          }}
+                        >
+                          {isBuildStarting ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <FolderGit2 className="h-3.5 w-3.5" />
+                          )}
+                          Build Local
+                        </Button>
+                        {task.environmentId && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5"
+                            onClick={() => {
+                              navigateToBuild(task);
+                              handleOpenChange(false);
+                            }}
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            View Build
+                            {existingPipeline && (
+                              <span className="text-xs text-muted-foreground ml-1">
+                                ({existingPipeline.phase})
+                              </span>
+                            )}
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                    <span className="text-[10px] text-muted-foreground mt-1 block">
-                      {new Date(comment.createdAt).toLocaleString()}
-                    </span>
-                  </div>
-                ))}
+                  );
+                })()}
+
+                <Separator />
+
+                {/* Comments */}
+                <div className="flex-1 min-h-0">
+                  <h4 className="text-sm font-medium mb-2">Comments ({task.comments.length})</h4>
+                  <ScrollArea className="max-h-[200px]">
+                    <div className="space-y-3 pr-3">
+                      {task.comments.length === 0 && (
+                        <p className="text-xs text-muted-foreground italic">No comments yet</p>
+                      )}
+                      {task.comments.map((comment) => (
+                        <div
+                          key={comment.id}
+                          className="group/comment rounded-md bg-muted/50 p-2.5 text-sm"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="whitespace-pre-wrap text-foreground flex-1"><CommentText text={comment.text} /></p>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-5 w-5 shrink-0 opacity-0 group-hover/comment:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                              onClick={() => void deleteComment(task.id, comment.id)}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
+                          <span className="text-[10px] text-muted-foreground mt-1 block">
+                            {new Date(comment.createdAt).toLocaleString()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                </div>
               </div>
             </ScrollArea>
-          </div>
 
           {/* Add Comment */}
-          <div className="flex items-center gap-2 pt-2">
+          <div className={`flex items-center gap-2 ${TASK_DIALOG_FOOTER_CLASS}`}>
             <Input
               value={commentText}
               onChange={(e) => setCommentText(e.target.value)}

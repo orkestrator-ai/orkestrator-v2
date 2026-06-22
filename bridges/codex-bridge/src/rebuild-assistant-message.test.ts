@@ -59,4 +59,30 @@ describe("rebuildAssistantMessage", () => {
     expect(result?.content).toBe("Hello from Codex");
     expect(result?.parts).toEqual([{ type: "text", content: "Hello from Codex" }]);
   });
+
+  test("updates the assistant timestamp only when a stream receipt time is provided", async () => {
+    const message = {
+      id: "assistant-1",
+      role: "assistant",
+      content: "",
+      parts: [],
+      createdAt: "2026-04-15T10:00:00.000Z",
+    };
+    const session = createSession({
+      currentAssistantMessageId: "assistant-1",
+      messages: [message],
+      currentItemOrder: ["item-1"],
+      currentItems: new Map([
+        ["item-1", { id: "item-1", type: "agent_message", text: "Still working" }],
+      ]),
+    });
+
+    await rebuildAssistantMessage(session);
+    expect(message.createdAt).toBe("2026-04-15T10:00:00.000Z");
+
+    await rebuildAssistantMessage(session, {
+      receivedAt: "2026-04-15T10:03:00.000Z",
+    });
+    expect(message.createdAt).toBe("2026-04-15T10:03:00.000Z");
+  });
 });

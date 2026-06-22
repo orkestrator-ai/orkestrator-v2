@@ -295,6 +295,54 @@ describe("codex bridge abort handling", () => {
     expect(session.status).toBe("idle");
   });
 
+  test("runPrompt updates the assistant timestamp as stream item events arrive", async () => {
+    const streams: ReturnType<typeof createStreamController>[] = [];
+    const session = createSession({
+      thread: {
+        runStreamed: async () => {
+          const stream = createStreamController();
+          streams.push(stream);
+          return { events: stream.events() };
+        },
+      },
+    });
+
+    const promptRun = __testing.runPrompt(session, "stream a response");
+    await waitUntil(() => streams.length === 1);
+
+    const assistantMessage = session.messages.find(
+      (message: { role: string }) => message.role === "assistant",
+    );
+    expect(assistantMessage).toBeDefined();
+    const initialTimestamp = assistantMessage!.createdAt;
+    await waitUntil(() => Date.now() > new Date(initialTimestamp).getTime());
+
+    streams[0]!.push({
+      type: "item.updated",
+      item: { id: "answer", type: "agent_message", text: "First chunk" },
+    });
+    await waitUntil(() => assistantMessage!.content === "First chunk");
+
+    const firstStreamTimestamp = assistantMessage!.createdAt;
+    expect(new Date(firstStreamTimestamp).getTime()).toBeGreaterThan(
+      new Date(initialTimestamp).getTime(),
+    );
+    await waitUntil(() => Date.now() > new Date(firstStreamTimestamp).getTime());
+
+    streams[0]!.push({
+      type: "item.completed",
+      item: { id: "answer", type: "agent_message", text: "Final chunk" },
+    });
+    streams[0]!.close();
+    await promptRun;
+
+    expect(assistantMessage!.content).toBe("Final chunk");
+    expect(new Date(assistantMessage!.createdAt).getTime()).toBeGreaterThan(
+      new Date(firstStreamTimestamp).getTime(),
+    );
+    expect(session.status).toBe("idle");
+  });
+
   test("runPrompt clears file-change cache between turns while preserving baselines", async () => {
     await withBridgeEnv(async ({ cwd }) => {
       execFileSync("git", ["init"], { cwd, stdio: "ignore" });

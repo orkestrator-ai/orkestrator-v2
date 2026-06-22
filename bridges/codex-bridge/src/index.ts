@@ -1650,7 +1650,10 @@ async function buildTranscriptSubagentParts(
   }));
 }
 
-async function rebuildAssistantMessage(session: SessionState): Promise<NormalizedMessage | null> {
+async function rebuildAssistantMessage(
+  session: SessionState,
+  options: { receivedAt?: string } = {},
+): Promise<NormalizedMessage | null> {
   const messageId = session.currentAssistantMessageId;
   if (!messageId) return null;
   const message = session.messages.find((entry) => entry.id === messageId);
@@ -1674,6 +1677,9 @@ async function rebuildAssistantMessage(session: SessionState): Promise<Normalize
 
   message.parts = mergeSubagentPartsIntoMessageParts(parts, subagentParts);
   message.content = finalResponse || parts.find((part) => part.type === "text")?.content || "";
+  if (options.receivedAt) {
+    message.createdAt = options.receivedAt;
+  }
   return message;
 }
 
@@ -1873,11 +1879,12 @@ async function processCodexStream(
       if (!isCurrentTurn()) {
         return;
       }
+      const receivedAt = new Date().toISOString();
       if (!session.currentItems.has(event.item.id)) {
         session.currentItemOrder.push(event.item.id);
       }
       session.currentItems.set(event.item.id, event.item);
-      const message = await rebuildAssistantMessage(session);
+      const message = await rebuildAssistantMessage(session, { receivedAt });
       emit(message
         ? { type: "message.updated", sessionId: session.id, data: { message } }
         : { type: "message.updated", sessionId: session.id });
@@ -2088,7 +2095,10 @@ export const __testing = {
   cleanupIdleSessions,
   EXPIRED_SESSION_RETENTION_MS,
   expiredSessions: expiredSessions as Map<string, any>,
-  rebuildAssistantMessage: rebuildAssistantMessage as (session: any) => Promise<any>,
+  rebuildAssistantMessage: rebuildAssistantMessage as (
+    session: any,
+    options?: { receivedAt?: string },
+  ) => Promise<any>,
   refreshRuntimeEnvironment,
   runInlinePromptCommand,
   runPrompt: runPrompt as (session: any, prompt: string) => Promise<void>,

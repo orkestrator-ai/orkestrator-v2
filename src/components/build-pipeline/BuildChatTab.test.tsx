@@ -485,7 +485,7 @@ describe("BuildChatTab", () => {
       expect(screen.queryByText("Waiting for setup scripts to complete...")).toBeNull();
     });
 
-    test("shows 'Review and continue' button when paused", async () => {
+    test("shows Resume button when paused", async () => {
       seedPipeline("paused");
       seedEnvironment({ isLocal: false, workspaceReady: true });
 
@@ -498,7 +498,7 @@ describe("BuildChatTab", () => {
       render(<BuildChatTab data={createContainerBuildData()} isActive />);
 
       await waitFor(() => {
-        expect(screen.getByText("Review and continue")).toBeTruthy();
+        expect(screen.getByText("Resume")).toBeTruthy();
       });
     });
 

@@ -511,6 +511,7 @@ describe("CodexBuildChatTab", () => {
 
     expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.error).toBeUndefined();
     expect(mockAbortSession).toHaveBeenCalledWith({ baseUrl: "http://127.0.0.1:9999" }, SESSION_ID);
+    expect(await screen.findByText("Resume")).toBeTruthy();
   });
 
   test("polls a loading codex build session without immediately restarting the poll loop", async () => {
@@ -543,7 +544,7 @@ describe("CodexBuildChatTab", () => {
 
     render(<CodexBuildChatTab data={createData()} isActive />);
 
-    expect(await screen.findByText("Review and continue")).toBeTruthy();
+    expect(await screen.findByText("Resume")).toBeTruthy();
 
     const textarea = await screen.findByPlaceholderText("Send a message to the agent...");
     fireEvent.change(textarea, { target: { value: "Please also update the tests." } });
@@ -558,6 +559,30 @@ describe("CodexBuildChatTab", () => {
     });
 
     expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages.at(-1)?.content).toBe("Please also update the tests.");
+  });
+
+  test("resuming a paused pipeline continues the stopped stage", async () => {
+    seedPipeline("paused", "idle");
+    seedCodexStore(false);
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    const resumeButton = await screen.findByText("Resume");
+    fireEvent.click(resumeButton);
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        { baseUrl: "http://127.0.0.1:9999" },
+        SESSION_ID,
+        expect.stringContaining("Resume the build pipeline from where you left off"),
+        undefined,
+      );
+    });
+
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+    expect(pipeline?.phase).toBe("building");
+    expect(pipeline?.sessions[0]?.status).toBe("running");
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
   });
 
   test("shows a retry action when codex initialization fails", async () => {
@@ -589,7 +614,7 @@ describe("CodexBuildChatTab", () => {
 
     render(<CodexBuildChatTab data={createData()} isActive />);
 
-    expect(await screen.findByText("Retry")).toBeTruthy();
+    expect(await screen.findByText("Reconnect now")).toBeTruthy();
   });
 
   test("does not advance past a new review session before the review prompt is accepted", async () => {

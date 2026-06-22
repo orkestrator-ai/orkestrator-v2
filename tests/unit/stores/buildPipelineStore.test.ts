@@ -261,6 +261,7 @@ describe("buildPipelineStore", () => {
 
       const pipeline = useBuildPipelineStore.getState().pipelines.get(id2)!;
       expect(pipeline.phase).toBe("paused");
+      expect(pipeline.pausedFromPhase).toBe("building");
       expect(pipeline.error).toBeUndefined();
     });
 
@@ -278,12 +279,64 @@ describe("buildPipelineStore", () => {
 
       const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
       expect(pipeline.phase).toBe("paused");
+      expect(pipeline.pausedFromPhase).toBe("building");
       expect(pipeline.error).toBeUndefined();
+    });
+
+    test("preserves the original phase when pausing an already paused pipeline", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().setPhase(id, "verifying");
+      useBuildPipelineStore.getState().pausePipeline(id);
+      useBuildPipelineStore.getState().pausePipeline(id);
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.phase).toBe("paused");
+      expect(pipeline.pausedFromPhase).toBe("verifying");
     });
 
     test("no-ops for unknown pipeline ID", () => {
       useBuildPipelineStore.getState().pausePipeline("nonexistent");
       expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+    });
+  });
+
+  describe("resumePipeline", () => {
+    test("restores the phase captured by pausePipeline", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().setPhase(id, "fixing");
+      useBuildPipelineStore.getState().pausePipeline(id);
+
+      const resumedPhase = useBuildPipelineStore.getState().resumePipeline(id);
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(resumedPhase).toBe("fixing");
+      expect(pipeline.phase).toBe("fixing");
+      expect(pipeline.pausedFromPhase).toBeUndefined();
+    });
+
+    test("uses a fallback phase when no pause snapshot exists", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.setState((state) => {
+        const newMap = new Map(state.pipelines);
+        const pipeline = newMap.get(id)!;
+        newMap.set(id, { ...pipeline, phase: "paused", pausedFromPhase: undefined });
+        return { pipelines: newMap };
+      });
+
+      const resumedPhase = useBuildPipelineStore.getState().resumePipeline(id, "building");
+
+      expect(resumedPhase).toBe("building");
+      expect(useBuildPipelineStore.getState().pipelines.get(id)!.phase).toBe("building");
+    });
+
+    test("no-ops for pipelines that are not paused", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().setPhase(id, "building");
+
+      const resumedPhase = useBuildPipelineStore.getState().resumePipeline(id);
+
+      expect(resumedPhase).toBeUndefined();
+      expect(useBuildPipelineStore.getState().pipelines.get(id)!.phase).toBe("building");
     });
   });
 

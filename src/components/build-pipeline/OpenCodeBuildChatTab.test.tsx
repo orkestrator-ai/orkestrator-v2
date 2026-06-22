@@ -334,6 +334,7 @@ describe("OpenCodeBuildChatTab", () => {
 
     expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.error).toBeUndefined();
     expect(mockAbortSession).toHaveBeenCalled();
+    expect(await screen.findByText("Resume")).toBeTruthy();
   });
 
   test("paused pipelines expose jump-in controls and send messages to the active opencode session", async () => {
@@ -342,7 +343,7 @@ describe("OpenCodeBuildChatTab", () => {
 
     render(<OpenCodeBuildChatTab data={createData()} isActive />);
 
-    expect(await screen.findByText("Review and continue")).toBeTruthy();
+    expect(await screen.findByText("Resume")).toBeTruthy();
 
     const textarea = await screen.findByPlaceholderText("Send a message to the agent...");
     fireEvent.change(textarea, { target: { value: "Please tighten the verification pass." } });
@@ -362,6 +363,34 @@ describe("OpenCodeBuildChatTab", () => {
     });
 
     expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions[0]?.status).toBe("running");
+    expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+  });
+
+  test("resuming a paused pipeline continues the stopped stage", async () => {
+    seedPipeline("paused", "idle");
+    seedOpenCodeStore(false);
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    const resumeButton = await screen.findByText("Resume");
+    fireEvent.click(resumeButton);
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        expect.anything(),
+        SESSION_ID,
+        expect.stringContaining("Resume the build pipeline from where you left off"),
+        {
+          model: "openai/gpt-5",
+          variant: undefined,
+          mode: "build",
+        },
+      );
+    });
+
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+    expect(pipeline?.phase).toBe("building");
+    expect(pipeline?.sessions[0]?.status).toBe("running");
     expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
   });
 

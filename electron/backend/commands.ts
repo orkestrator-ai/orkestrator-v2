@@ -1225,22 +1225,28 @@ async function createLocalWorktree(
 
   const args = ["-C", projectPath, "worktree", "add", "-b", finalBranch, worktreePath, startPoint];
   await runCommand("git", args, { timeoutMs: 120_000 });
-  const createdFromCommit = await readLocalHeadCommit(worktreePath);
 
-  await fs.mkdir(path.join(worktreePath, ".orkestrator"), { recursive: true });
-  await fs.appendFile(path.join(worktreePath, ".git", "info", "exclude"), "\n.orkestrator/\n").catch(() => undefined);
+  try {
+    const createdFromCommit = await readLocalHeadCommit(worktreePath);
 
-  for (const envFile of [".env", ".env.local"]) {
-    const source = path.join(projectPath, envFile);
-    const destination = path.join(worktreePath, envFile);
-    if (await pathExists(source) && !await pathExists(destination)) {
-      await fs.copyFile(source, destination);
+    await fs.mkdir(path.join(worktreePath, ".orkestrator"), { recursive: true });
+    await fs.appendFile(path.join(worktreePath, ".git", "info", "exclude"), "\n.orkestrator/\n").catch(() => undefined);
+
+    for (const envFile of [".env", ".env.local"]) {
+      const source = path.join(projectPath, envFile);
+      const destination = path.join(worktreePath, envFile);
+      if (await pathExists(source) && !await pathExists(destination)) {
+        await fs.copyFile(source, destination);
+      }
     }
+
+    await copyConfiguredProjectFilesToDirectory(projectPath, worktreePath, filesToCopy);
+
+    return { path: worktreePath, branch: finalBranch, createdFromCommit };
+  } catch (error) {
+    await cleanupFailedLocalWorktree(projectPath, worktreePath, finalBranch);
+    throw error;
   }
-
-  await copyConfiguredProjectFilesToDirectory(projectPath, worktreePath, filesToCopy);
-
-  return { path: worktreePath, branch: finalBranch, createdFromCommit };
 }
 
 async function gitBranchExists(projectPath: string, branch: string): Promise<boolean> {
@@ -1264,6 +1270,16 @@ async function removeLocalWorktree(worktreePath: string): Promise<void> {
   await runCommand("git", ["-C", worktreePath, "worktree", "remove", "--force", worktreePath], { timeoutMs: 120_000 }).catch(async () => {
     await fs.rm(worktreePath, { recursive: true, force: true });
   });
+}
+
+async function cleanupFailedLocalWorktree(projectPath: string, worktreePath: string, branch: string): Promise<void> {
+  await runCommand("git", ["-C", projectPath, "worktree", "remove", "--force", worktreePath], { timeoutMs: 120_000 }).catch(async () => {
+    await fs.rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
+    await runCommand("git", ["-C", projectPath, "worktree", "prune"], { timeoutMs: 30_000 }).catch(() => undefined);
+  });
+
+  const refName = validateGitRefName(branch, "environment branch");
+  await runCommand("git", ["-C", projectPath, "branch", "-D", refName], { timeoutMs: 30_000 }).catch(() => undefined);
 }
 
 async function dockerExec(containerId: string, command: string, timeoutMs = 120_000): Promise<string> {

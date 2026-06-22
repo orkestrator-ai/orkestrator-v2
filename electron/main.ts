@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { OrkestratorBackend } from "./backend/index.js";
 import { APP_SLUG, PRODUCT_NAME } from "./backend/constants.js";
+import { installDefaultContextMenu } from "./context-menu.js";
 import { fixPath } from "./backend/fix-path.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRendererIndexPath, resolveRuntimeRoots } from "./paths.js";
@@ -81,6 +82,8 @@ async function createWindow(): Promise<void> {
       sandbox: false,
     },
   });
+
+  installDefaultContextMenu(mainWindow, Menu);
 
   if (isDev) {
     await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:1420");

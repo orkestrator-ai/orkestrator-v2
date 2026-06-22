@@ -46,6 +46,7 @@ import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { resolveActiveBuildPipelineAgent } from "@/lib/build-pipeline-agent";
 import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
+import { createPipelineResumePrompt, getPipelineResumePhase } from "@/lib/build-pipeline-resume";
 import * as backend from "@/lib/backend";
 
 // Reference to kanban store for non-reactive reads
@@ -187,6 +188,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
   const pipelineAdvancingRef = useRef(false);
   const buildStartTriggeredRef = useRef(false);
   const [advanceTick, setAdvanceTick] = useState(0);
+  const [connectAttempt, setConnectAttempt] = useState(0);
   const handledErrorIdsRef = useRef(new Set<string>());
   const [jumpInText, setJumpInText] = useState("");
   const jumpInTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -202,6 +204,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     incrementIteration,
     setPipelineError,
     pausePipeline,
+    resumePipeline,
   } = useBuildPipelineStore();
 
   const {
@@ -378,7 +381,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     initialize();
     return () => { mounted = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [environmentId, pipeline?.id, isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady]);
+  }, [environmentId, pipeline?.id, isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady, connectAttempt]);
 
   // SSE subscription - reuses same pattern as ClaudeChatTab
   const startSharedEventSubscription = useCallback(
@@ -1108,6 +1111,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     isInitializedRef.current = false;
     setClient(environmentId, null);
     setServerStatus(environmentId, { running: false, hostPort: null });
+    setConnectAttempt((attempt) => attempt + 1);
   }, [environmentId, setClient, setServerStatus]);
 
   // Send a user message to the current session while pipeline is paused
@@ -1148,11 +1152,66 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     }
   }, [client, pipeline, pipelineId, markSessionRunning, markSessionIdle, setSessionLoading, addMessage]);
 
-  // Resume pipeline from paused state by starting a review session
-  const handleReviewAndContinue = useCallback(async () => {
+  const handleResume = useCallback(async () => {
     if (!pipeline || pipeline.phase !== "paused") return;
-    await startReviewSession(pipeline);
-  }, [pipeline, startReviewSession]);
+    const resumePhase = getPipelineResumePhase(pipeline);
+    if (!resumePhase) return;
+
+    const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
+    const resumedPhase = resumePipeline(pipelineId, resumePhase);
+    if (!resumedPhase) return;
+
+    const prompt = createPipelineResumePrompt(resumedPhase);
+    if (!prompt || !currentSession) {
+      setAdvanceTick((value) => value + 1);
+      return;
+    }
+
+    if (!client) {
+      pausePipeline(pipelineId);
+      return;
+    }
+
+    markSessionRunning(pipelineId, currentSession.sdkSessionId);
+    setSessionLoading(currentSession.sessionKey, true);
+
+    const userMessage: ClaudeMessageType = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: prompt,
+      parts: [{ type: "text", content: prompt }],
+      timestamp: new Date().toISOString(),
+    };
+    addMessage(currentSession.sessionKey, userMessage);
+
+    const success = await sendPrompt(client, currentSession.sdkSessionId, prompt, {
+      permissionMode: "bypassPermissions",
+    });
+
+    if (!success) {
+      setSessionLoading(currentSession.sessionKey, false);
+      markSessionIdle(pipelineId, currentSession.sdkSessionId);
+      const errMessage: ClaudeMessageType = {
+        id: `${ERROR_MESSAGE_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        role: "assistant",
+        content: "Failed to resume build pipeline",
+        parts: [{ type: "text", content: "Failed to resume build pipeline" }],
+        timestamp: new Date().toISOString(),
+      };
+      addMessage(currentSession.sessionKey, errMessage);
+      pausePipeline(pipelineId);
+    }
+  }, [
+    addMessage,
+    client,
+    markSessionIdle,
+    markSessionRunning,
+    pausePipeline,
+    pipeline,
+    pipelineId,
+    resumePipeline,
+    setSessionLoading,
+  ]);
 
   // When the bridge server is connected and environment is starting, transition to
   // waiting-for-setup. Both local and container environments must complete their setup
@@ -1317,6 +1376,10 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
         <Loader2 className="w-8 h-8 animate-spin" />
         <p className="text-sm">Connecting to Claude bridge server...</p>
+        <Button variant="outline" size="sm" onClick={handleRetry} className="gap-2">
+          <RefreshCw className="w-4 h-4" />
+          Reconnect now
+        </Button>
       </div>
     );
   }
@@ -1331,7 +1394,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         </div>
         <Button variant="outline" size="sm" onClick={handleRetry} className="gap-2">
           <RefreshCw className="w-4 h-4" />
-          Retry
+          Reconnect now
         </Button>
       </div>
     );
@@ -1365,12 +1428,12 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
               <Button
                 variant="default"
                 size="sm"
-                onClick={handleReviewAndContinue}
+                onClick={handleResume}
                 disabled={isJumpInLoading}
                 className="h-6 px-3 gap-1.5 text-xs"
               >
                 <PlayCircle className="w-3 h-3" />
-                Review and continue
+                Resume
               </Button>
             )}
             {pipeline.phase === "complete" && (

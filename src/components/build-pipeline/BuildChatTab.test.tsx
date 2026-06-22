@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test, mock } from "bun:test";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
 // Mocks — must be declared BEFORE importing the component under test
@@ -35,6 +35,8 @@ const mockCreateClient = mock(() => ({ baseUrl: "http://127.0.0.1:9999" }));
 const mockCheckHealth = mock(() => Promise.resolve(true));
 const mockGetModels = mock(() => Promise.resolve([]));
 const mockSubscribeToEvents = mock(() => (async function* () {})());
+const mockSendPrompt = mock(() => Promise.resolve(true));
+const mockAbortSession = mock(() => Promise.resolve(true));
 
 mock.module("@/lib/claude-client", () => ({
   createClient: mockCreateClient,
@@ -42,8 +44,8 @@ mock.module("@/lib/claude-client", () => ({
   getModels: mockGetModels,
   createSession: mock(() => Promise.resolve({ sessionId: "session-1" })),
   getSessionMessages: mock(() => Promise.resolve([])),
-  sendPrompt: mock(() => Promise.resolve()),
-  abortSession: mock(() => Promise.resolve()),
+  sendPrompt: mockSendPrompt,
+  abortSession: mockAbortSession,
   subscribeToEvents: mockSubscribeToEvents,
   ERROR_MESSAGE_PREFIX: "[ERROR]",
   SYSTEM_MESSAGE_PREFIX: "[SYSTEM]",
@@ -84,7 +86,7 @@ mock.module("@/components/ui/separator", () => ({
 // Imports (after mocks)
 // ---------------------------------------------------------------------------
 
-import { useClaudeStore } from "@/stores/claudeStore";
+import { createClaudeSessionKey, useClaudeStore } from "@/stores/claudeStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -101,6 +103,8 @@ const ENV_ID = "env-1";
 const PIPELINE_ID = "pipeline-1";
 const TASK_ID = "task-1";
 const CONTAINER_ID = "container-123";
+const SESSION_ID = "session-1";
+const SESSION_KEY = createClaudeSessionKey(ENV_ID, "build-tab");
 
 function createContainerBuildData(overrides: Partial<BuildTabData> = {}): BuildTabData {
   return {
@@ -152,6 +156,66 @@ function seedPipeline(phase = "waiting-for-setup" as string) {
       ],
     ]),
     buildEnvironmentIds: new Set([ENV_ID]),
+  });
+}
+
+function seedPipelineWithBuildSession(phase: "building" | "paused", sessionStatus: "running" | "idle") {
+  useBuildPipelineStore.setState({
+    pipelines: new Map([
+      [
+        PIPELINE_ID,
+        {
+          id: PIPELINE_ID,
+          taskId: TASK_ID,
+          projectId: "project-1",
+          environmentId: ENV_ID,
+          environmentType: "containerized" as const,
+          agentType: "claude" as const,
+          phase,
+          sessions: [
+            {
+              phase: "build" as const,
+              iteration: 0,
+              sessionKey: SESSION_KEY,
+              sdkSessionId: SESSION_ID,
+              status: sessionStatus,
+              startedAt: "2026-06-22T00:00:00.000Z",
+              label: "Build Session",
+            },
+          ],
+          currentSessionIndex: 0,
+          iteration: 0,
+          maxIterations: 3,
+          createdAt: "2026-06-22T00:00:00.000Z",
+          taskTitle: "Test task",
+          taskSnapshot: {
+            title: "Test task",
+            description: "desc",
+            acceptanceCriteria: "ac",
+            comments: [],
+            images: [],
+          },
+        },
+      ],
+    ]),
+    buildEnvironmentIds: new Set([ENV_ID]),
+  });
+}
+
+function seedClaudeSession(isLoading: boolean) {
+  useClaudeStore.setState({
+    clients: new Map([[ENV_ID, { baseUrl: "http://127.0.0.1:9999" } as any]]),
+    serverStatus: new Map([[ENV_ID, { running: true, hostPort: 9999 }]]),
+    sessions: new Map([
+      [
+        SESSION_KEY,
+        {
+          sessionId: SESSION_ID,
+          messages: [],
+          isLoading,
+        },
+      ],
+    ]),
   });
 }
 
@@ -283,6 +347,8 @@ describe("BuildChatTab", () => {
     mockCheckHealth.mockClear();
     mockGetModels.mockClear();
     mockSubscribeToEvents.mockClear();
+    mockSendPrompt.mockClear();
+    mockAbortSession.mockClear();
 
     // Reset default implementations
     mockGetClaudeServerStatus.mockImplementation(() =>
@@ -299,6 +365,8 @@ describe("BuildChatTab", () => {
     );
     mockCheckHealth.mockImplementation(() => Promise.resolve(true));
     mockGetModels.mockImplementation(() => Promise.resolve([]));
+    mockSendPrompt.mockImplementation(() => Promise.resolve(true));
+    mockAbortSession.mockImplementation(() => Promise.resolve(true));
   });
 
   afterEach(() => {
@@ -428,6 +496,43 @@ describe("BuildChatTab", () => {
         expect(screen.getByText("Connection Failed")).toBeTruthy();
       });
     });
+
+    test("reconnect action retries initialization after a connection failure", async () => {
+      seedPipeline("waiting-for-setup");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      useEnvironmentStore.setState({
+        environments: [
+          {
+            ...useEnvironmentStore.getState().environments[0]!,
+            containerId: null,
+          },
+        ],
+      });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      expect(await screen.findByText("Connection Failed")).toBeTruthy();
+
+      useEnvironmentStore.setState({
+        environments: [
+          {
+            ...useEnvironmentStore.getState().environments[0]!,
+            containerId: CONTAINER_ID,
+          },
+        ],
+      });
+      mockGetClaudeServerStatus.mockClear();
+      mockStartClaudeServer.mockClear();
+      mockCreateClient.mockClear();
+
+      fireEvent.click(screen.getByText("Reconnect now"));
+
+      await waitFor(() => {
+        expect(mockGetClaudeServerStatus).toHaveBeenCalledWith(CONTAINER_ID);
+      });
+      expect(mockStartClaudeServer).toHaveBeenCalledWith(CONTAINER_ID);
+      expect(mockCreateClient).toHaveBeenCalled();
+    });
   });
 
   // -----------------------------------------------------------------------
@@ -485,7 +590,7 @@ describe("BuildChatTab", () => {
       expect(screen.queryByText("Waiting for setup scripts to complete...")).toBeNull();
     });
 
-    test("shows 'Review and continue' button when paused", async () => {
+    test("shows Resume button when paused", async () => {
       seedPipeline("paused");
       seedEnvironment({ isLocal: false, workspaceReady: true });
 
@@ -498,8 +603,55 @@ describe("BuildChatTab", () => {
       render(<BuildChatTab data={createContainerBuildData()} isActive />);
 
       await waitFor(() => {
-        expect(screen.getByText("Review and continue")).toBeTruthy();
+        expect(screen.getByText("Resume")).toBeTruthy();
       });
+    });
+
+    test("resuming a paused pipeline continues the stopped Claude stage", async () => {
+      seedPipelineWithBuildSession("paused", "idle");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(false);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      fireEvent.click(await screen.findByText("Resume"));
+
+      await waitFor(() => {
+        expect(mockSendPrompt).toHaveBeenCalledWith(
+          { baseUrl: "http://127.0.0.1:9999" },
+          SESSION_ID,
+          expect.stringContaining("Resume the build pipeline from where you left off"),
+          {
+            permissionMode: "bypassPermissions",
+          },
+        );
+      });
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("building");
+      expect(pipeline?.sessions[0]?.status).toBe("running");
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+    });
+
+    test("failed Claude resume returns the pipeline to paused", async () => {
+      seedPipelineWithBuildSession("paused", "idle");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(false);
+      mockSendPrompt.mockImplementationOnce(() => Promise.resolve(false));
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      fireEvent.click(await screen.findByText("Resume"));
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("paused");
+        expect(pipeline?.sessions[0]?.status).toBe("idle");
+      });
+
+      const session = useClaudeStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.isLoading).toBe(false);
+      expect(session?.messages.at(-1)?.content).toBe("Failed to resume build pipeline");
     });
 
     test("shows jump-in compose bar when paused", async () => {

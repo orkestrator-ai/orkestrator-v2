@@ -40,6 +40,7 @@ import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { extractContextUsage } from "@/lib/context-usage";
 import { cn } from "@/lib/utils";
+import { createPipelineResumePrompt, getPipelineResumePhase } from "@/lib/build-pipeline-resume";
 import * as backend from "@/lib/backend";
 
 interface OpenCodeBuildChatTabProps {
@@ -164,6 +165,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
   const pipelineAdvancingRef = useRef(false);
   const buildStartTriggeredRef = useRef(false);
   const [advanceTick, setAdvanceTick] = useState(0);
+  const [connectAttempt, setConnectAttempt] = useState(0);
   const [jumpInText, setJumpInText] = useState("");
   const jumpInTextareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -178,6 +180,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     incrementIteration,
     setPipelineError,
     pausePipeline,
+    resumePipeline,
   } = useBuildPipelineStore();
   const {
     setServerStatus,
@@ -443,6 +446,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     setupCommandsResolved,
     setupScriptsRunning,
     startSharedEventSubscription,
+    connectAttempt,
     workspaceReady,
   ]);
 
@@ -988,6 +992,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     isInitializedRef.current = false;
     setClient(environmentId, null);
     setServerStatus(environmentId, { running: false, hostPort: null });
+    setConnectAttempt((attempt) => attempt + 1);
   }, [environmentId, setClient, setServerStatus]);
 
   const handleJumpInSend = useCallback(async (text: string) => {
@@ -1014,10 +1019,55 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     }
   }, [addMessage, client, markSessionIdle, markSessionRunning, pipeline, pipelineId, resolveOpenCodePreferences, setSessionLoading]);
 
-  const handleReviewAndContinue = useCallback(async () => {
+  const handleResume = useCallback(async () => {
     if (!pipeline || pipeline.phase !== "paused") return;
-    await startReviewSession(pipeline);
-  }, [pipeline, startReviewSession]);
+    const resumePhase = getPipelineResumePhase(pipeline);
+    if (!resumePhase) return;
+
+    const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
+    const resumedPhase = resumePipeline(pipelineId, resumePhase);
+    if (!resumedPhase) return;
+
+    const prompt = createPipelineResumePrompt(resumedPhase);
+    if (!prompt || !currentSession) {
+      setAdvanceTick((value) => value + 1);
+      return;
+    }
+
+    if (!client) {
+      pausePipeline(pipelineId);
+      return;
+    }
+
+    markSessionRunning(pipelineId, currentSession.sdkSessionId);
+    setSessionLoading(currentSession.sessionKey, true);
+    addMessage(currentSession.sessionKey, buildUserMessage(prompt));
+
+    const { model, variant } = resolveOpenCodePreferences(pipeline.projectId);
+    const result = await sendPrompt(client, currentSession.sdkSessionId, prompt, {
+      model,
+      variant,
+      mode: "build",
+    });
+
+    if (!result.success) {
+      addMessage(currentSession.sessionKey, buildErrorMessage(result.error || "Failed to resume build pipeline"));
+      setSessionLoading(currentSession.sessionKey, false);
+      markSessionIdle(pipelineId, currentSession.sdkSessionId);
+      pausePipeline(pipelineId);
+    }
+  }, [
+    addMessage,
+    client,
+    markSessionIdle,
+    markSessionRunning,
+    pausePipeline,
+    pipeline,
+    pipelineId,
+    resolveOpenCodePreferences,
+    resumePipeline,
+    setSessionLoading,
+  ]);
 
   const setupPending = isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady });
 
@@ -1075,6 +1125,10 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
       <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
         <Loader2 className="h-8 w-8 animate-spin" />
         <p className="text-sm">Connecting to OpenCode server...</p>
+        <Button variant="outline" size="sm" onClick={handleRetry} className="gap-2">
+          <RefreshCw className="h-4 w-4" />
+          Reconnect now
+        </Button>
       </div>
     );
   }
@@ -1089,7 +1143,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
         </div>
         <Button variant="outline" size="sm" onClick={handleRetry} className="gap-2">
           <RefreshCw className="h-4 w-4" />
-          Retry
+          Reconnect now
         </Button>
       </div>
     );
@@ -1123,13 +1177,13 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
                 variant="default"
                 size="sm"
                 onClick={() => {
-                  void handleReviewAndContinue();
+                  void handleResume();
                 }}
                 disabled={isJumpInLoading}
                 className="h-6 gap-1.5 px-3 text-xs"
               >
                 <PlayCircle className="h-3 w-3" />
-                Review and continue
+                Resume
               </Button>
             )}
             {pipeline.phase === "complete" && (

@@ -17,6 +17,8 @@ export type BuildPhase =
   | "complete"
   | "failed";
 
+export type ResumableBuildPhase = Exclude<BuildPhase, "paused" | "complete" | "failed">;
+
 export type PipelineSessionPhase = "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts";
 
 export interface PipelineSession {
@@ -43,6 +45,7 @@ export interface BuildPipeline {
   maxIterations: number;
   verificationResult?: "pass" | "fail";
   verificationFeedback?: string;
+  pausedFromPhase?: ResumableBuildPhase;
   error?: string;
   createdAt: string;
   taskTitle: string;
@@ -72,6 +75,7 @@ interface BuildPipelineState {
   incrementIteration: (pipelineId: string) => void;
   setPipelineError: (pipelineId: string, error: string) => void;
   pausePipeline: (pipelineId: string) => void;
+  resumePipeline: (pipelineId: string, fallbackPhase?: ResumableBuildPhase) => ResumableBuildPhase | undefined;
   markSessionRunning: (pipelineId: string, sdkSessionId: string) => void;
 
   // Selectors
@@ -81,6 +85,10 @@ interface BuildPipelineState {
   isBuildEnvironment: (environmentId: string) => boolean;
   /** Rebuild the buildEnvironmentIds set from current pipelines */
   _rebuildBuildEnvironmentIds: () => Set<string>;
+}
+
+function isResumableBuildPhase(phase: BuildPhase): phase is ResumableBuildPhase {
+  return phase !== "paused" && phase !== "complete" && phase !== "failed";
 }
 
 export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => ({
@@ -149,7 +157,16 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
       const pipeline = state.pipelines.get(pipelineId);
       if (!pipeline) return state;
       const newMap = new Map(state.pipelines);
-      newMap.set(pipelineId, { ...pipeline, phase });
+      const pausedFromPhase = phase === "paused"
+        ? isResumableBuildPhase(pipeline.phase)
+          ? pipeline.phase
+          : pipeline.pausedFromPhase
+        : undefined;
+      newMap.set(pipelineId, {
+        ...pipeline,
+        phase,
+        pausedFromPhase,
+      });
       return { pipelines: newMap };
     }),
 
@@ -200,7 +217,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
       // re-render in a loop (prevents "Maximum update depth exceeded").
       if (pipeline.phase === "failed" && pipeline.error === error) return state;
       const newMap = new Map(state.pipelines);
-      newMap.set(pipelineId, { ...pipeline, phase: "failed", error });
+      newMap.set(pipelineId, { ...pipeline, phase: "failed", error, pausedFromPhase: undefined });
       return { pipelines: newMap };
     }),
 
@@ -209,13 +226,40 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
       const pipeline = state.pipelines.get(pipelineId);
       if (!pipeline) return state;
       const newMap = new Map(state.pipelines);
+      const pausedFromPhase = isResumableBuildPhase(pipeline.phase)
+        ? pipeline.phase
+        : pipeline.pausedFromPhase;
       newMap.set(pipelineId, {
         ...pipeline,
         phase: "paused",
+        pausedFromPhase,
         error: undefined,
       });
       return { pipelines: newMap };
     }),
+
+  resumePipeline: (pipelineId, fallbackPhase) => {
+    const pipeline = get().pipelines.get(pipelineId);
+    if (!pipeline || pipeline.phase !== "paused") return undefined;
+
+    const resumePhase = pipeline.pausedFromPhase ?? fallbackPhase;
+    if (!resumePhase) return undefined;
+
+    set((state) => {
+      const latest = state.pipelines.get(pipelineId);
+      if (!latest || latest.phase !== "paused") return state;
+      const newMap = new Map(state.pipelines);
+      newMap.set(pipelineId, {
+        ...latest,
+        phase: resumePhase,
+        pausedFromPhase: undefined,
+        error: undefined,
+      });
+      return { pipelines: newMap };
+    });
+
+    return resumePhase;
+  },
 
   markSessionRunning: (pipelineId, sdkSessionId) =>
     set((state) => {

@@ -38,6 +38,7 @@ import { isSetupPending } from "@/lib/setup-commands";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { cn } from "@/lib/utils";
+import { createPipelineResumePrompt, getPipelineResumePhase } from "@/lib/build-pipeline-resume";
 import * as backend from "@/lib/backend";
 
 interface CodexBuildChatTabProps {
@@ -297,6 +298,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
   const pipelineAdvancingRef = useRef(false);
   const buildStartTriggeredRef = useRef(false);
   const [advanceTick, setAdvanceTick] = useState(0);
+  const [connectAttempt, setConnectAttempt] = useState(0);
   const pollingSessionIdRef = useRef<string | null>(null);
   const pendingPromptDispatchesRef = useRef<Set<string>>(new Set());
   const [jumpInText, setJumpInText] = useState("");
@@ -313,6 +315,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     incrementIteration,
     setPipelineError,
     pausePipeline,
+    resumePipeline,
   } = useBuildPipelineStore();
   const {
     setServerStatus,
@@ -535,6 +538,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     pipeline,
     setupCommandsResolved,
     setupScriptsRunning,
+    connectAttempt,
     workspaceReady,
   ]);
 
@@ -1291,6 +1295,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     isInitializedRef.current = false;
     setClient(environmentId, null);
     setServerStatus(environmentId, { running: false, hostPort: null });
+    setConnectAttempt((attempt) => attempt + 1);
   }, [environmentId, setClient, setServerStatus]);
 
   const handleJumpInSend = useCallback(async (text: string) => {
@@ -1312,10 +1317,49 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     }
   }, [client, markSessionIdle, markSessionRunning, pipeline, pipelineId, setSessionLoading]);
 
-  const handleReviewAndContinue = useCallback(async () => {
+  const handleResume = useCallback(async () => {
     if (!pipeline || pipeline.phase !== "paused") return;
-    await startReviewSession(pipeline);
-  }, [pipeline, startReviewSession]);
+    const resumePhase = getPipelineResumePhase(pipeline);
+    if (!resumePhase) return;
+
+    const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
+    const resumedPhase = resumePipeline(pipelineId, resumePhase);
+    if (!resumedPhase) return;
+
+    const prompt = createPipelineResumePrompt(resumedPhase);
+    if (!prompt || !currentSession) {
+      setAdvanceTick((value) => value + 1);
+      return;
+    }
+
+    if (!client) {
+      pausePipeline(pipelineId);
+      return;
+    }
+
+    markSessionRunning(pipelineId, currentSession.sdkSessionId);
+    setSessionLoading(currentSession.sessionKey, true);
+    appendCodexMessage(currentSession.sessionKey, buildUserMessage(prompt));
+
+    const success = await sendPromptWithDispatchGuard(client, currentSession.sdkSessionId, prompt);
+    if (!success) {
+      const message = "Failed to resume build pipeline";
+      appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
+      setSessionLoading(currentSession.sessionKey, false);
+      markSessionIdle(pipelineId, currentSession.sdkSessionId);
+      pausePipeline(pipelineId);
+    }
+  }, [
+    client,
+    markSessionIdle,
+    markSessionRunning,
+    pausePipeline,
+    pipeline,
+    pipelineId,
+    resumePipeline,
+    sendPromptWithDispatchGuard,
+    setSessionLoading,
+  ]);
 
   const setupPending = isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady });
 
@@ -1373,6 +1417,10 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
         <Loader2 className="h-8 w-8 animate-spin" />
         <p className="text-sm">Connecting to Codex bridge server...</p>
+        <Button variant="outline" size="sm" onClick={handleRetry} className="gap-2">
+          <RefreshCw className="h-4 w-4" />
+          Reconnect now
+        </Button>
       </div>
     );
   }
@@ -1387,7 +1435,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         </div>
         <Button variant="outline" size="sm" onClick={handleRetry} className="gap-2">
           <RefreshCw className="h-4 w-4" />
-          Retry
+          Reconnect now
         </Button>
       </div>
     );
@@ -1421,13 +1469,13 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
                 variant="default"
                 size="sm"
                 onClick={() => {
-                  void handleReviewAndContinue();
+                  void handleResume();
                 }}
                 disabled={isJumpInLoading}
                 className="h-6 gap-1.5 px-3 text-xs"
               >
                 <PlayCircle className="h-3 w-3" />
-                Review and continue
+                Resume
               </Button>
             )}
             {pipeline.phase === "complete" && (

@@ -805,6 +805,79 @@ function getWorktreeBaseDir(): string {
   return path.join(os.homedir(), APP_SLUG, "workspaces");
 }
 
+function normalizeConfiguredProjectFiles(filesToCopy: string[] | undefined): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+
+  for (const filePath of filesToCopy ?? []) {
+    const trimmed = filePath.trim();
+    if (!trimmed) continue;
+    const safePath = validateRelativeFilePath(trimmed, "file to copy");
+    const key = safePath.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(safePath);
+  }
+
+  return normalized;
+}
+
+function isPathInsideRoot(filePath: string, rootPath: string): boolean {
+  const relative = path.relative(rootPath, filePath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function copyConfiguredProjectFilesToDirectory(
+  projectPath: string,
+  destinationRoot: string,
+  filesToCopy: string[] | undefined,
+): Promise<void> {
+  const configuredFiles = normalizeConfiguredProjectFiles(filesToCopy);
+  if (configuredFiles.length === 0) return;
+
+  const projectRoot = await fs.realpath(projectPath);
+
+  for (const relativePath of configuredFiles) {
+    const sourcePath = path.join(projectRoot, relativePath);
+    let realSourcePath: string;
+    try {
+      realSourcePath = await fs.realpath(sourcePath);
+    } catch {
+      throw new Error(`Configured file to copy not found: ${relativePath}`);
+    }
+
+    if (!isPathInsideRoot(realSourcePath, projectRoot)) {
+      throw new Error(`Configured file to copy must stay inside the project: ${relativePath}`);
+    }
+
+    const stats = await fs.stat(realSourcePath);
+    if (!stats.isFile()) {
+      throw new Error(`Configured path to copy is not a file: ${relativePath}`);
+    }
+
+    const destinationPath = path.join(destinationRoot, relativePath);
+    await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+    await fs.copyFile(realSourcePath, destinationPath);
+  }
+}
+
+async function stageConfiguredProjectFilesForContainer(
+  containerId: string,
+  projectPath: string,
+  filesToCopy: string[] | undefined,
+): Promise<void> {
+  const configuredFiles = normalizeConfiguredProjectFiles(filesToCopy);
+  if (configuredFiles.length === 0) return;
+
+  const stagingDir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestrator-project-files-"));
+  try {
+    await copyConfiguredProjectFilesToDirectory(projectPath, stagingDir, configuredFiles);
+    await runCommand("docker", ["cp", `${stagingDir}${path.sep}.`, `${containerId}:/project-files`], { timeoutMs: 120_000 });
+  } finally {
+    await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
 async function readSetupLocalCommands(worktreePath: string): Promise<string[]> {
   const configPath = path.join(worktreePath, ORKESTRATOR_PROJECT_CONFIG);
   if (!await pathExists(configPath)) return [];
@@ -1135,6 +1208,7 @@ async function createLocalWorktree(
   projectName: string,
   branch: string,
   baseBranch?: string,
+  filesToCopy?: string[],
 ): Promise<{ path: string; branch: string; createdFromCommit: string }> {
   await fs.mkdir(getWorktreeBaseDir(), { recursive: true });
   const baseSlug = sanitizeBranchName(branch);
@@ -1151,20 +1225,28 @@ async function createLocalWorktree(
 
   const args = ["-C", projectPath, "worktree", "add", "-b", finalBranch, worktreePath, startPoint];
   await runCommand("git", args, { timeoutMs: 120_000 });
-  const createdFromCommit = await readLocalHeadCommit(worktreePath);
 
-  await fs.mkdir(path.join(worktreePath, ".orkestrator"), { recursive: true });
-  await fs.appendFile(path.join(worktreePath, ".git", "info", "exclude"), "\n.orkestrator/\n").catch(() => undefined);
+  try {
+    const createdFromCommit = await readLocalHeadCommit(worktreePath);
 
-  for (const envFile of [".env", ".env.local"]) {
-    const source = path.join(projectPath, envFile);
-    const destination = path.join(worktreePath, envFile);
-    if (await pathExists(source) && !await pathExists(destination)) {
-      await fs.copyFile(source, destination);
+    await fs.mkdir(path.join(worktreePath, ".orkestrator"), { recursive: true });
+    await fs.appendFile(path.join(worktreePath, ".git", "info", "exclude"), "\n.orkestrator/\n").catch(() => undefined);
+
+    for (const envFile of [".env", ".env.local"]) {
+      const source = path.join(projectPath, envFile);
+      const destination = path.join(worktreePath, envFile);
+      if (await pathExists(source) && !await pathExists(destination)) {
+        await fs.copyFile(source, destination);
+      }
     }
-  }
 
-  return { path: worktreePath, branch: finalBranch, createdFromCommit };
+    await copyConfiguredProjectFilesToDirectory(projectPath, worktreePath, filesToCopy);
+
+    return { path: worktreePath, branch: finalBranch, createdFromCommit };
+  } catch (error) {
+    await cleanupFailedLocalWorktree(projectPath, worktreePath, finalBranch);
+    throw error;
+  }
 }
 
 async function gitBranchExists(projectPath: string, branch: string): Promise<boolean> {
@@ -1188,6 +1270,16 @@ async function removeLocalWorktree(worktreePath: string): Promise<void> {
   await runCommand("git", ["-C", worktreePath, "worktree", "remove", "--force", worktreePath], { timeoutMs: 120_000 }).catch(async () => {
     await fs.rm(worktreePath, { recursive: true, force: true });
   });
+}
+
+async function cleanupFailedLocalWorktree(projectPath: string, worktreePath: string, branch: string): Promise<void> {
+  await runCommand("git", ["-C", projectPath, "worktree", "remove", "--force", worktreePath], { timeoutMs: 120_000 }).catch(async () => {
+    await fs.rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
+    await runCommand("git", ["-C", projectPath, "worktree", "prune"], { timeoutMs: 30_000 }).catch(() => undefined);
+  });
+
+  const refName = validateGitRefName(branch, "environment branch");
+  await runCommand("git", ["-C", projectPath, "branch", "-D", refName], { timeoutMs: 30_000 }).catch(() => undefined);
 }
 
 async function dockerExec(containerId: string, command: string, timeoutMs = 120_000): Promise<string> {
@@ -1576,6 +1668,10 @@ async function createDockerContainer(environment: Environment, context: CommandC
   if (!project) throw new Error(`Project not found: ${environment.projectId}`);
   const config = await context.storage.loadConfig();
   const repoConfig = config.repositories[project.id] ?? defaultRepositoryConfig();
+  const configuredFilesToCopy = normalizeConfiguredProjectFiles(repoConfig.filesToCopy);
+  if (configuredFilesToCopy.length > 0 && !project.localPath) {
+    throw new Error("Project has files configured to copy, but no local path is set");
+  }
   const args = [
     "create",
     "--name",
@@ -1641,7 +1737,16 @@ async function createDockerContainer(environment: Environment, context: CommandC
   args.push(DOCKER_IMAGE);
 
   const { stdout } = await runCommand("docker", args, { timeoutMs: 120_000 });
-  return stdout.trim();
+  const containerId = stdout.trim();
+  try {
+    if (project.localPath) {
+      await stageConfiguredProjectFilesForContainer(containerId, project.localPath, configuredFilesToCopy);
+    }
+  } catch (error) {
+    await runCommand("docker", ["rm", "-f", containerId], { timeoutMs: 60_000 }).catch(() => undefined);
+    throw error;
+  }
+  return containerId;
 }
 
 async function startContainerServer(containerId: string, port: number, processName: "opencode" | "claude" | "codex", command: string): Promise<{ hostPort: number; wasRunning: boolean }> {
@@ -1802,7 +1907,13 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
         const project = await storage.getProject(environment.projectId);
         if (!project?.localPath) throw new Error("Project has no local path - cannot create a local worktree");
         const repoConfig = await storage.getRepositoryConfig(project.id);
-        const worktree = await createLocalWorktree(project.localPath, project.name, environment.branch, repoConfig.defaultBranch);
+        const worktree = await createLocalWorktree(
+          project.localPath,
+          project.name,
+          environment.branch,
+          repoConfig.defaultBranch,
+          repoConfig.filesToCopy,
+        );
         const updated = await storage.updateEnvironment(environment.id, {
           worktreePath: worktree.path,
           branch: worktree.branch,

@@ -6,8 +6,9 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { Environment } from "../../../electron/backend/models";
+import type { Environment, RepositoryConfig } from "../../../electron/backend/models";
 import type { CommandContext } from "../../../electron/backend/commands";
+import { APP_SLUG } from "../../../electron/backend/constants";
 
 const execFileAsync = promisify(execFile);
 
@@ -152,7 +153,7 @@ function createContext(
   environmentOrEnvironments: Environment | Environment[],
   options: {
     project?: { id: string; name: string; gitUrl: string; localPath: string | null; addedAt: string; order: number };
-    repositoryConfig?: { defaultBranch: string; prBaseBranch: string };
+    repositoryConfig?: RepositoryConfig;
   } = {},
 ): {
   context: CommandContext;
@@ -168,14 +169,15 @@ function createContext(
     addedAt: new Date(0).toISOString(),
     order: 0,
   }];
+  const repositoryConfig = options.repositoryConfig ?? {
+    defaultBranch: "main",
+    prBaseBranch: "main",
+  };
   const config = {
     version: "1.0.0",
     global: {},
     repositories: {
-      "project-1": {
-        defaultBranch: "main",
-        prBaseBranch: "main",
-      },
+      "project-1": repositoryConfig,
     },
   };
   const updates: Array<Record<string, unknown>> = [];
@@ -225,7 +227,7 @@ function createContext(
           order: 0,
         };
       }),
-      getRepositoryConfig: mock(async () => options.repositoryConfig ?? { defaultBranch: "main", prBaseBranch: "main" }),
+      getRepositoryConfig: mock(async () => repositoryConfig),
     },
   } as unknown as CommandContext;
 
@@ -325,6 +327,20 @@ async function currentGitBranch(repo: string): Promise<string> {
 async function currentGitCommit(repo: string): Promise<string> {
   const { stdout } = await execFileAsync("git", ["-C", repo, "rev-parse", "HEAD"]);
   return stdout.trim();
+}
+
+function expectedManagedWorktreePath(projectName: string, branch: string): string {
+  return path.join(os.homedir(), APP_SLUG, "workspaces", `${projectName}-${branch}`);
+}
+
+async function expectLocalWorktreeRolledBack(projectPath: string, worktreePath: string, branch: string): Promise<void> {
+  expect(existsSync(worktreePath)).toBe(false);
+
+  const { stdout: branches } = await execFileAsync("git", ["-C", projectPath, "branch", "--list", branch]);
+  expect(branches.trim()).toBe("");
+
+  const { stdout: worktrees } = await execFileAsync("git", ["-C", projectPath, "worktree", "list", "--porcelain"]);
+  expect(worktrees).not.toContain(worktreePath);
 }
 
 // Stub `codex` that writes the requested slug JSON to the --output-last-message path.
@@ -1532,6 +1548,217 @@ exit 0
     });
   });
 
+  test("stages configured gitignored files into new container environments", async () => {
+    const projectPath = await createTempDir("ork-electron-container-copy-source-");
+    await runGit(projectPath, ["init"]);
+    await runGit(projectPath, ["checkout", "-b", "main"]);
+    await fs.writeFile(path.join(projectPath, ".gitignore"), "environments.json\nnested/secret.json\n");
+    await runGit(projectPath, ["add", ".gitignore"]);
+    await runGit(projectPath, ["commit", "-m", "ignore copied files"]);
+    await fs.mkdir(path.join(projectPath, "nested"), { recursive: true });
+    await fs.writeFile(path.join(projectPath, "environments.json"), "{\"copied\":true}\n");
+    await fs.writeFile(path.join(projectPath, "nested", "secret.json"), "{\"nested\":true}\n");
+    await runGit(projectPath, ["check-ignore", "environments.json"]);
+
+    const environment = createEnvironment({
+      id: "env-container-copy",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: null,
+      status: "stopped",
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: "Copy Source",
+        gitUrl: "https://github.com/acme/copy-source.git",
+        localPath: projectPath,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        filesToCopy: ["environments.json", "nested/secret.json"],
+      },
+    });
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  create)
+    printf 'container-copy-created\\n'
+    exit 0
+    ;;
+  cp)
+    src="$2"
+    cat "$src/environments.json" > "$FAKE_DOCKER_LOG.container-copy-root"
+    cat "$src/nested/secret.json" > "$FAKE_DOCKER_LOG.container-copy-nested"
+    printf '%s\\n' "$3" > "$FAKE_DOCKER_LOG.container-copy-dest"
+    exit 0
+    ;;
+  start)
+    exit 0
+    ;;
+  inspect)
+    printf 'running\\n'
+    exit 0
+    ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *rev-parse*) printf '4444444444444444444444444444444444444444\\n' ;;
+    esac
+    exit 0
+    ;;
+esac
+exit 0
+`, async (logs) => {
+      let result: unknown;
+      try {
+        result = await commands.get("start_environment")?.({ environmentId: environment.id }, context);
+      } catch (error) {
+        const dockerCalls = await fs.readFile(logs.all, "utf8").catch(() => "");
+        const copiedRoot = await fs.readFile(`${logs.all}.container-copy-root`, "utf8").catch(() => "");
+        throw new Error(`${error instanceof Error ? error.message : String(error)}\nDocker calls:\n${dockerCalls}\nCopied root:\n${copiedRoot}`);
+      }
+      expect(result).toEqual(expect.objectContaining({
+        setupCommands: [],
+        setupManagedByBackend: true,
+        setupStarted: true,
+      }));
+      await waitForPtyProcessCount(1);
+      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+
+      await expect(fs.readFile(`${logs.all}.container-copy-root`, "utf8")).resolves.toBe("{\"copied\":true}\n");
+      await expect(fs.readFile(`${logs.all}.container-copy-nested`, "utf8")).resolves.toBe("{\"nested\":true}\n");
+      await expect(fs.readFile(`${logs.all}.container-copy-dest`, "utf8")).resolves.toBe("container-copy-created:/project-files\n");
+      expect(environment.containerId).toBe("container-copy-created");
+    });
+  });
+
+  test("removes a newly created container when configured file docker copy fails", async () => {
+    const projectPath = await createTempDir("ork-electron-container-copy-fail-source-");
+    await fs.writeFile(path.join(projectPath, "settings.json"), "{\"copied\":true}\n");
+
+    const environment = createEnvironment({
+      id: "env-container-copy-fail",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: null,
+      status: "stopped",
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: "Copy Failure",
+        gitUrl: "https://github.com/acme/copy-failure.git",
+        localPath: projectPath,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        filesToCopy: ["settings.json"],
+      },
+    });
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  create)
+    printf 'container-copy-fail\\n'
+    exit 0
+    ;;
+  cp)
+    exit 42
+    ;;
+  rm)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_RM_LOG"
+    exit 0
+    ;;
+esac
+exit 0
+`, async (logs) => {
+      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).rejects.toThrow();
+
+      const dockerCalls = (await fs.readFile(logs.all, "utf8")).split("\n").filter(Boolean);
+      expect(dockerCalls.some((line) => line.startsWith("create "))).toBe(true);
+      expect(dockerCalls.some((line) => line.startsWith("cp "))).toBe(true);
+      expect(dockerCalls.some((line) => line.startsWith("start "))).toBe(false);
+      await expect(fs.readFile(logs.rm, "utf8")).resolves.toBe("rm -f container-copy-fail\n");
+      expect(environment.status).toBe("error");
+      expect(environment.containerId).toBeNull();
+    });
+  });
+
+  test("rejects configured container file symlinks that escape the project and removes the container", async () => {
+    const projectPath = await createTempDir("ork-electron-container-copy-symlink-source-");
+    const outsidePath = path.join(await createTempDir("ork-electron-container-copy-outside-"), "secret.json");
+    await fs.writeFile(outsidePath, "{\"outside\":true}\n");
+    await fs.symlink(outsidePath, path.join(projectPath, "secret-link.json"));
+
+    const environment = createEnvironment({
+      id: "env-container-copy-symlink",
+      environmentType: "containerized",
+      setupScriptsComplete: false,
+      worktreePath: undefined,
+      containerId: null,
+      status: "stopped",
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: "Copy Symlink",
+        gitUrl: "https://github.com/acme/copy-symlink.git",
+        localPath: projectPath,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        filesToCopy: ["secret-link.json"],
+      },
+    });
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  create)
+    printf 'container-symlink-fail\\n'
+    exit 0
+    ;;
+  rm)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_RM_LOG"
+    exit 0
+    ;;
+esac
+exit 0
+`, async (logs) => {
+      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).rejects.toThrow(
+        "Configured file to copy must stay inside the project: secret-link.json",
+      );
+
+      const dockerCalls = (await fs.readFile(logs.all, "utf8")).split("\n").filter(Boolean);
+      expect(dockerCalls.some((line) => line.startsWith("create "))).toBe(true);
+      expect(dockerCalls.some((line) => line.startsWith("cp "))).toBe(false);
+      expect(dockerCalls.some((line) => line.startsWith("start "))).toBe(false);
+      await expect(fs.readFile(logs.rm, "utf8")).resolves.toBe("rm -f container-symlink-fail\n");
+      expect(environment.status).toBe("error");
+      expect(environment.containerId).toBeNull();
+    });
+  });
+
   test("creates local worktrees from the fetched remote base branch", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();
     const updater = await createTempDir("ork-electron-remote-updater-");
@@ -1576,6 +1803,148 @@ exit 0
       await expect(currentGitCommit(environment.worktreePath!)).resolves.toBe(environment.createdFromCommit);
     } finally {
       if (environment.worktreePath) await fs.rm(environment.worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("copies configured gitignored files into new local worktrees", async () => {
+    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    await fs.writeFile(path.join(worktree, ".gitignore"), "environments.json\nnested/secret.json\n");
+    await runGit(worktree, ["add", ".gitignore"]);
+    await runGit(worktree, ["commit", "-m", "ignore copied files"]);
+    await runGit(worktree, ["push", "origin", "main"]);
+    await fs.mkdir(path.join(worktree, "nested"), { recursive: true });
+    await fs.writeFile(path.join(worktree, "environments.json"), "{\"local\":true}\n");
+    await fs.writeFile(path.join(worktree, "nested", "secret.json"), "{\"nested\":true}\n");
+    await runGit(worktree, ["check-ignore", "environments.json"]);
+
+    const environment = createEnvironment({
+      status: "stopped",
+      worktreePath: undefined,
+      branch: "feature/copy-files",
+      environmentType: "local",
+    });
+    const { context } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: `Copy Files ${randomUUID().slice(0, 8)}`,
+        gitUrl: remote,
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        filesToCopy: ["environments.json", "nested/secret.json"],
+      },
+    });
+    const commands = createCommandRegistry();
+
+    try {
+      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual(expect.objectContaining({
+        setupCommands: [],
+        setupManagedByBackend: true,
+        setupStarted: false,
+      }));
+
+      expect(environment.worktreePath).toBeDefined();
+      expect(await fs.readFile(path.join(environment.worktreePath!, "environments.json"), "utf8")).toBe("{\"local\":true}\n");
+      expect(await fs.readFile(path.join(environment.worktreePath!, "nested", "secret.json"), "utf8")).toBe("{\"nested\":true}\n");
+    } finally {
+      if (environment.worktreePath) await fs.rm(environment.worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("rolls back a local worktree when a configured file is missing", async () => {
+    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    const suffix = randomUUID().slice(0, 8);
+    const projectName = `copy-missing-${suffix}`;
+    const branch = `copy-missing-${suffix}`;
+    const expectedWorktreePath = expectedManagedWorktreePath(projectName, branch);
+    await fs.rm(expectedWorktreePath, { recursive: true, force: true });
+
+    const environment = createEnvironment({
+      status: "stopped",
+      worktreePath: undefined,
+      branch,
+      environmentType: "local",
+    });
+    const { context, updates } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: projectName,
+        gitUrl: remote,
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        filesToCopy: ["missing.json"],
+      },
+    });
+    const commands = createCommandRegistry();
+
+    try {
+      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).rejects.toThrow(
+        "Configured file to copy not found: missing.json",
+      );
+
+      expect(environment.status).toBe("error");
+      expect(environment.worktreePath).toBeUndefined();
+      expect(updates.map((update) => update.status)).toEqual(["creating", "error"]);
+      await expectLocalWorktreeRolledBack(worktree, expectedWorktreePath, branch);
+    } finally {
+      await fs.rm(expectedWorktreePath, { recursive: true, force: true });
+      await runGit(worktree, ["branch", "-D", branch]).catch(() => undefined);
+    }
+  });
+
+  test("rolls back a local worktree when a configured path is a directory", async () => {
+    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    await fs.mkdir(path.join(worktree, "nested-dir"), { recursive: true });
+    const suffix = randomUUID().slice(0, 8);
+    const projectName = `copy-directory-${suffix}`;
+    const branch = `copy-directory-${suffix}`;
+    const expectedWorktreePath = expectedManagedWorktreePath(projectName, branch);
+    await fs.rm(expectedWorktreePath, { recursive: true, force: true });
+
+    const environment = createEnvironment({
+      status: "stopped",
+      worktreePath: undefined,
+      branch,
+      environmentType: "local",
+    });
+    const { context, updates } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: projectName,
+        gitUrl: remote,
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        filesToCopy: ["nested-dir"],
+      },
+    });
+    const commands = createCommandRegistry();
+
+    try {
+      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).rejects.toThrow(
+        "Configured path to copy is not a file: nested-dir",
+      );
+
+      expect(environment.status).toBe("error");
+      expect(environment.worktreePath).toBeUndefined();
+      expect(updates.map((update) => update.status)).toEqual(["creating", "error"]);
+      await expectLocalWorktreeRolledBack(worktree, expectedWorktreePath, branch);
+    } finally {
+      await fs.rm(expectedWorktreePath, { recursive: true, force: true });
+      await runGit(worktree, ["branch", "-D", branch]).catch(() => undefined);
     }
   });
 

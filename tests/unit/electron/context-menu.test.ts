@@ -105,6 +105,21 @@ describe("Electron context menu", () => {
     expect(template.find((item) => item.role === "paste")?.enabled).toBe(true);
   });
 
+  test("preserves disabled states for unavailable editable actions", () => {
+    const template = createContextMenuTemplate(createParams({
+      isEditable: true,
+      formControlType: "text-area",
+    }));
+
+    for (const item of template) {
+      if (item.type === "separator") {
+        continue;
+      }
+
+      expect(item.enabled).toBe(false);
+    }
+  });
+
   test("builds copy actions for selected non-editable text", () => {
     const template = createContextMenuTemplate(createParams({
       selectionText: "agent transcript",
@@ -121,6 +136,24 @@ describe("Electron context menu", () => {
     }));
 
     expect(roles(template)).toEqual(["copy", "selectAll"]);
+  });
+
+  test("keeps copy enabled for selected text even when edit flags do not advertise copy", () => {
+    const template = createContextMenuTemplate(createParams({
+      selectionText: "agent transcript",
+      editFlags: {
+        canUndo: false,
+        canRedo: false,
+        canCut: false,
+        canCopy: false,
+        canPaste: false,
+        canDelete: false,
+        canSelectAll: false,
+        canEditRichly: false,
+      },
+    }));
+
+    expect(template.find((item) => item.role === "copy")?.enabled).toBe(true);
   });
 
   test("does not show a native menu for empty non-editable app chrome", () => {
@@ -145,5 +178,25 @@ describe("Electron context menu", () => {
 
     expect(buildFromTemplate).toHaveBeenCalledTimes(1);
     expect(popup).toHaveBeenCalledWith({ window });
+  });
+
+  test("does not build or pop a menu when no actions are available", () => {
+    let contextMenuListener: ((event: unknown, params: ContextMenuParams) => void) | null = null;
+    const popup = mock(() => undefined);
+    const buildFromTemplate = mock((template: MenuItemConstructorOptions[]) => ({ template, popup }));
+    const window = {
+      webContents: {
+        on: mock((event: "context-menu", listener: (event: unknown, params: ContextMenuParams) => void) => {
+          expect(event).toBe("context-menu");
+          contextMenuListener = listener;
+        }),
+      },
+    };
+
+    installDefaultContextMenu(window as never, { buildFromTemplate });
+    contextMenuListener?.({}, createParams());
+
+    expect(buildFromTemplate).not.toHaveBeenCalled();
+    expect(popup).not.toHaveBeenCalled();
   });
 });

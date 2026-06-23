@@ -1,6 +1,6 @@
 {
   "name": "orkestrator-ai",
-  "version": "2.2.2",
+  "version": "2.2.4",
   "private": true,
   "type": "module",
   "main": "dist-electron/electron/main.js",

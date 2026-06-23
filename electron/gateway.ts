@@ -276,21 +276,119 @@ function cookieHeader(token: string): string {
   return `${AUTH_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/`;
 }
 
+function filterGatewayCookie(cookieHeader: string | string[] | undefined): string | undefined {
+  const rawCookie = Array.isArray(cookieHeader) ? cookieHeader.join("; ") : cookieHeader;
+  if (!rawCookie) return undefined;
+
+  const cookies = rawCookie
+    .split(";")
+    .map((cookie) => cookie.trim())
+    .filter((cookie) => {
+      const name = cookie.split("=", 1)[0] ?? "";
+      return name !== AUTH_COOKIE && name.length > 0;
+    });
+
+  return cookies.length > 0 ? cookies.join("; ") : undefined;
+}
+
 function sanitizeTargetRequestHeaders(headers: IncomingHttpHeaders, target: URL): IncomingHttpHeaders {
   const sanitized: IncomingHttpHeaders = {
     ...headers,
     host: target.host,
   };
+  const forwardedCookie = filterGatewayCookie(headers.cookie);
+  if (forwardedCookie) {
+    sanitized.cookie = forwardedCookie;
+  } else {
+    delete sanitized.cookie;
+  }
   delete sanitized.authorization;
-  delete sanitized.cookie;
   delete sanitized.connection;
   delete sanitized["proxy-authorization"];
   return sanitized;
 }
 
-function sanitizeProxyResponseHeaders(headers: IncomingHttpHeaders): OutgoingHttpHeaders {
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1" || hostname === "[::1]";
+}
+
+function proxyPath(proxyPrefix: string, targetPath: string): string {
+  const normalizedTargetPath = targetPath.startsWith("/") ? targetPath : `/${targetPath}`;
+  return `${proxyPrefix}${normalizedTargetPath}`;
+}
+
+function rewriteLocationHeader(location: string, target: URL, proxyPrefix?: string): string {
+  if (!proxyPrefix) return location;
+
+  try {
+    const rewritten = new URL(location, target);
+    if (rewritten.port === target.port && isLoopbackHostname(rewritten.hostname)) {
+      return proxyPath(proxyPrefix, `${rewritten.pathname}${rewritten.search}${rewritten.hash}`);
+    }
+  } catch {
+    return location;
+  }
+
+  return location;
+}
+
+function rewriteCookiePath(proxyPrefix: string, targetPath: string | null): string {
+  if (!targetPath || !targetPath.startsWith("/")) return `${proxyPrefix}/`;
+  return proxyPath(proxyPrefix, targetPath);
+}
+
+function rewriteSetCookieHeader(header: string, proxyPrefix?: string): string | null {
+  if (!proxyPrefix) return header;
+
+  const parts = header.split(";").map((part) => part.trim());
+  const [nameValue = "", ...attributes] = parts;
+  if (!nameValue) return null;
+  const cookieName = nameValue.split("=", 1)[0] ?? "";
+  if (cookieName === AUTH_COOKIE) return null;
+
+  let path: string | null = null;
+  const rewrittenAttributes: string[] = [];
+  for (const attribute of attributes) {
+    const [rawName, ...rawValue] = attribute.split("=");
+    const name = (rawName ?? "").toLowerCase();
+    if (name === "domain") continue;
+    if (name === "path") {
+      path = rawValue.join("=") || "/";
+      continue;
+    }
+    rewrittenAttributes.push(attribute);
+  }
+
+  return [
+    nameValue,
+    `Path=${rewriteCookiePath(proxyPrefix, path)}`,
+    ...rewrittenAttributes,
+  ].join("; ");
+}
+
+function rewriteSetCookieHeaders(headers: string | string[], proxyPrefix?: string): string | string[] | undefined {
+  const values = Array.isArray(headers) ? headers : [headers];
+  const rewritten = values
+    .map((header) => rewriteSetCookieHeader(header, proxyPrefix))
+    .filter((header): header is string => typeof header === "string" && header.length > 0);
+
+  if (rewritten.length === 0) return undefined;
+  return Array.isArray(headers) ? rewritten : rewritten[0];
+}
+
+function sanitizeProxyResponseHeaders(headers: IncomingHttpHeaders, target: URL, proxyPrefix?: string): OutgoingHttpHeaders {
   const sanitized: OutgoingHttpHeaders = { ...headers };
-  delete sanitized["set-cookie"];
+  const rewrittenSetCookie = headers["set-cookie"]
+    ? rewriteSetCookieHeaders(headers["set-cookie"], proxyPrefix)
+    : undefined;
+  if (rewrittenSetCookie) {
+    sanitized["set-cookie"] = rewrittenSetCookie;
+  } else {
+    delete sanitized["set-cookie"];
+  }
+  if (headers.location) {
+    sanitized.location = rewriteLocationHeader(headers.location, target, proxyPrefix);
+  }
   delete sanitized.connection;
   delete sanitized["transfer-encoding"];
   return sanitized;
@@ -539,10 +637,15 @@ export class OrkestratorGateway {
 
     const restPath = slashIndex >= 0 ? remaining.slice(slashIndex) : "/";
     const targetPath = `${restPath}${url.search}`;
-    await this.proxyToTarget(request, response, new URL(`http://127.0.0.1:${port}${targetPath}`));
+    await this.proxyToTarget(
+      request,
+      response,
+      new URL(`http://127.0.0.1:${port}${targetPath}`),
+      `${API_PREFIX}/proxy/loopback/${port}`,
+    );
   }
 
-  private async proxyToTarget(request: IncomingMessage, response: ServerResponse, target: URL): Promise<void> {
+  private async proxyToTarget(request: IncomingMessage, response: ServerResponse, target: URL, proxyPrefix?: string): Promise<void> {
     await new Promise<void>((resolve) => {
       const proxyRequest = http.request({
         host: target.hostname,
@@ -551,7 +654,7 @@ export class OrkestratorGateway {
         method: request.method,
         headers: sanitizeTargetRequestHeaders(request.headers, target),
       }, (proxyResponse) => {
-        response.writeHead(proxyResponse.statusCode ?? 502, sanitizeProxyResponseHeaders(proxyResponse.headers));
+        response.writeHead(proxyResponse.statusCode ?? 502, sanitizeProxyResponseHeaders(proxyResponse.headers, target, proxyPrefix));
         proxyResponse.pipe(response);
         proxyResponse.once("end", resolve);
       });

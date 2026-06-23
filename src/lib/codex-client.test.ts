@@ -32,13 +32,26 @@ function mockFetchError(error: Error) {
 
 function restoreFetch() {
   globalThis.fetch = originalFetch;
+  delete window.orkestratorGateway;
   mock.restore();
 }
+
+afterEach(() => {
+  delete window.orkestratorGateway;
+});
 
 describe("codex-client createClient", () => {
   test("returns a client with the provided base URL", () => {
     expect(createClient("http://127.0.0.1:9999")).toEqual({
       baseUrl: "http://127.0.0.1:9999",
+    });
+  });
+
+  test("rewrites loopback base URLs through the gateway when enabled", () => {
+    window.orkestratorGateway = { enabled: true };
+
+    expect(createClient("http://127.0.0.1:9999")).toEqual({
+      baseUrl: `${window.location.origin}/__orkestrator/proxy/loopback/9999`,
     });
   });
 });

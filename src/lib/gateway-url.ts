@@ -3,7 +3,7 @@ function isLoopbackHost(hostname: string): boolean {
 }
 
 export function resolveGatewayLoopbackBaseUrl(baseUrl: string): string {
-  if (!window.orkestratorGateway?.enabled) return baseUrl;
+  if (typeof window === "undefined" || !window.orkestratorGateway?.enabled) return baseUrl;
 
   try {
     const url = new URL(baseUrl);

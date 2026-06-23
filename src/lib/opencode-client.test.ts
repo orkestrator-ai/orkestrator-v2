@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   buildOpenCodeMessageFromPart,
+  createClient,
   formatOpenCodeError,
   getAvailableSlashCommands,
   getModelsWithDefaults,
@@ -13,6 +14,40 @@ import {
   type OpencodeClient,
   type OpenCodeMessage,
 } from "./opencode-client";
+
+const originalFetch = globalThis.fetch;
+
+function setTestUrl(url: string): void {
+  (window as unknown as Window & { happyDOM: { setURL(url: string): void } }).happyDOM.setURL(url);
+}
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  delete window.orkestratorGateway;
+  setTestUrl("about:blank");
+  mock.restore();
+});
+
+describe("opencode-client createClient", () => {
+  test("rewrites loopback SDK requests through the gateway when enabled", async () => {
+    const requests: string[] = [];
+    setTestUrl("http://gateway.test/");
+    window.orkestratorGateway = { enabled: true };
+    globalThis.fetch = mock(async (input) => {
+      requests.push((input as Request).url);
+      return new Response(JSON.stringify({ data: [] }), {
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const client = createClient("http://127.0.0.1:7777");
+    await client.session.list();
+
+    expect(requests).toEqual([
+      `${window.location.origin}/__orkestrator/proxy/loopback/7777/session`,
+    ]);
+  });
+});
 
 describe("opencode-client listSessions", () => {
   test("maps SDK sessions into UI session shape", async () => {

@@ -19,11 +19,21 @@ describe("resolveGatewayLoopbackBaseUrl", () => {
     expect(resolveGatewayLoopbackBaseUrl("http://localhost:5000/api")).toBe(
       `${window.location.origin}/__orkestrator/proxy/loopback/5000/api`,
     );
+    expect(resolveGatewayLoopbackBaseUrl("http://[::1]:6000/api/")).toBe(
+      `${window.location.origin}/__orkestrator/proxy/loopback/6000/api`,
+    );
   });
 
   test("does not rewrite non-loopback URLs", () => {
     window.orkestratorGateway = { enabled: true };
 
     expect(resolveGatewayLoopbackBaseUrl("http://example.com:4000")).toBe("http://example.com:4000");
+  });
+
+  test("leaves invalid URLs and loopback URLs without explicit ports unchanged", () => {
+    window.orkestratorGateway = { enabled: true };
+
+    expect(resolveGatewayLoopbackBaseUrl("not a url")).toBe("not a url");
+    expect(resolveGatewayLoopbackBaseUrl("http://127.0.0.1")).toBe("http://127.0.0.1");
   });
 });

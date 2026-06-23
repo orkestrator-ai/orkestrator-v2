@@ -64,6 +64,13 @@ describe("getEnvironmentPortAddress", () => {
     );
   });
 
+  test("returns null for host port 0 when the renderer is served remotely", () => {
+    window.orkestratorGateway = { enabled: true };
+    const environment = makeEnvironment({ entryPort: 3000, hostEntryPort: 0 });
+
+    expect(getEnvironmentPortAddress(environment)).toBeNull();
+  });
+
   test("returns null for local environments", () => {
     const environment = makeEnvironment({
       environmentType: "local",

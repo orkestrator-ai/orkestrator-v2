@@ -1,8 +1,9 @@
 const GATEWAY_PREFIX = "/__orkestrator";
 
 type EventCallback<T> = (payload: T) => void;
+type GatewayWindow = Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
 
-function createBrowserGatewayApi() {
+export function createBrowserGatewayApi() {
   const listeners = new Map<string, Set<EventCallback<unknown>>>();
   let eventSource: EventSource | null = null;
 
@@ -90,7 +91,13 @@ function createBrowserGatewayApi() {
   };
 }
 
-if (!window.orkestrator && window.location.protocol.startsWith("http")) {
-  window.orkestratorGateway = { enabled: true };
-  window.orkestrator = createBrowserGatewayApi();
+export function installBrowserGatewayApi(targetWindow: GatewayWindow = window): void {
+  if (!targetWindow.orkestrator && targetWindow.location.protocol.startsWith("http")) {
+    targetWindow.orkestratorGateway = { enabled: true };
+    targetWindow.orkestrator = createBrowserGatewayApi();
+  }
+}
+
+if (typeof window !== "undefined") {
+  installBrowserGatewayApi();
 }

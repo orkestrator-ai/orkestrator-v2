@@ -168,6 +168,9 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
     set((state) => {
       const pipeline = state.pipelines.get(pipelineId);
       if (!pipeline) return state;
+      // A paused pipeline is intentionally locked for user intervention. Normal
+      // stage detection must not move it forward until resumePipeline unlocks it.
+      if (pipeline.phase === "paused" && phase !== "paused") return state;
       const newMap = new Map(state.pipelines);
       const pausedFromPhase = phase === "paused"
         ? isResumableBuildPhase(pipeline.phase)

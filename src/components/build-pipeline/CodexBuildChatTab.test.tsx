@@ -497,8 +497,14 @@ describe("CodexBuildChatTab", () => {
   });
 
   test("stopping a running pipeline pauses it instead of failing it", async () => {
-    seedPipeline("building", "idle");
-    seedCodexStore(false);
+    let resolveAbort: ((value: boolean) => void) | undefined;
+    mockAbortSession.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => {
+        resolveAbort = resolve;
+      }),
+    );
+    seedPipeline("building", "running");
+    seedCodexStore(true);
 
     render(<CodexBuildChatTab data={createData()} isActive />);
 
@@ -511,7 +517,54 @@ describe("CodexBuildChatTab", () => {
 
     expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.error).toBeUndefined();
     expect(mockAbortSession).toHaveBeenCalledWith({ baseUrl: "http://127.0.0.1:9999" }, SESSION_ID);
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
     expect(await screen.findByText("Resume")).toBeTruthy();
+    resolveAbort?.(true);
+  });
+
+  test("resuming after stop during session creation starts the intended codex build stage", async () => {
+    let resolveCreate: ((value: { sessionId: string; title: string }) => void) | undefined;
+    mockCreateSession.mockImplementationOnce(
+      () => new Promise<{ sessionId: string; title: string }>((resolve) => {
+        resolveCreate = resolve;
+      }),
+    );
+    seedStartingPipeline();
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
+      expect(screen.getByText("Stop")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("Stop"));
+
+    await waitFor(() => {
+      expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase).toBe("paused");
+    });
+
+    await act(async () => {
+      resolveCreate?.({ sessionId: "late-session", title: "Late Session" });
+    });
+
+    await waitFor(() => {
+      expect(mockAbortSession).toHaveBeenCalledWith({ baseUrl: "http://127.0.0.1:9999" }, "late-session");
+    });
+    expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions).toHaveLength(0);
+
+    fireEvent.click(await screen.findByText("Resume"));
+
+    await waitFor(() => {
+      expect(mockCreateSession).toHaveBeenCalledTimes(2);
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        { baseUrl: "http://127.0.0.1:9999" },
+        "review-session",
+        expect.stringContaining("Test task"),
+        { attachments: undefined },
+      );
+    });
+    expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions[0]?.phase).toBe("build");
   });
 
   test("polls a loading codex build session without immediately restarting the poll loop", async () => {

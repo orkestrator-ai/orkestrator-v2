@@ -46,7 +46,7 @@ import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { resolveActiveBuildPipelineAgent } from "@/lib/build-pipeline-agent";
 import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
-import { createPipelineResumePrompt, getPipelineResumePhase } from "@/lib/build-pipeline-resume";
+import { createPipelineResumePrompt, getPipelineResumePhase, isSessionCompatibleWithResumePhase } from "@/lib/build-pipeline-resume";
 import * as backend from "@/lib/backend";
 
 // Reference to kanban store for non-reactive reads
@@ -206,6 +206,10 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     pausePipeline,
     resumePipeline,
   } = useBuildPipelineStore();
+  const isPipelinePaused = useCallback(
+    () => useBuildPipelineStore.getState().pipelines.get(pipelineId)?.phase === "paused",
+    [pipelineId],
+  );
 
   const {
     setClient,
@@ -538,7 +542,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
   // Core pipeline advancement logic
   const advancePipeline = useCallback(
     async (currentPipeline: NonNullable<typeof pipeline>, completedSession: PipelineSession) => {
-      if (!client) return;
+      if (!client || isPipelinePaused()) return;
 
       try {
         switch (completedSession.phase) {
@@ -577,6 +581,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
                 void kanbanStoreRef.getState().addComment(currentPipeline.taskId, "🔗 PR raised");
               }
               const hasConflicts = await checkPRMergeConflicts();
+              if (isPipelinePaused()) return;
               if (hasConflicts) {
                 await startResolveConflictsSession(currentPipeline);
               } else {
@@ -589,6 +594,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
             // Conflict resolution complete -> verify conflicts are actually resolved
             {
               const stillConflicting = await checkPRMergeConflicts();
+              if (isPipelinePaused()) return;
               if (stillConflicting) {
                 setPipelineError(pipelineId, "Merge conflicts could not be fully resolved automatically");
               } else {
@@ -601,6 +607,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
             // Fetch fresh messages from the bridge to ensure we have the complete response
             // (the debounced SSE message fetch may not have completed yet)
             const freshMessages = await getSessionMessages(client, completedSession.sdkSessionId);
+            if (isPipelinePaused()) return;
             if (freshMessages.length > 0) {
               setMessages(completedSession.sessionKey, freshMessages);
             }
@@ -638,6 +645,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
               setMessages(completedSession.sessionKey, updatedMessages);
             }
 
+            if (isPipelinePaused()) return;
             setVerificationResult(pipelineId, result.verdict, result.feedback);
 
             if (result.verdict === "pass") {
@@ -656,20 +664,22 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
           }
         }
       } catch (error) {
+        if (isPipelinePaused()) return;
         console.error("[BuildChatTab] Pipeline advancement error:", error);
         setPipelineError(pipelineId, error instanceof Error ? error.message : "Pipeline error");
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [client, pipelineId]
+    [client, pipelineId, isPipelinePaused]
   );
 
   // Send "address issues" as a follow-up in the review session, then start verify
   const sendAddressIssuesMessage = useCallback(
     async (currentPipeline: NonNullable<typeof pipeline>, reviewSession: PipelineSession) => {
-      if (!client) return;
+      if (!client || isPipelinePaused()) return;
 
       setPhase(pipelineId, "addressing");
+      if (isPipelinePaused()) return;
 
       // Mark the review session as running again
       const updatedSessions = currentPipeline.sessions.map((s) =>
@@ -700,6 +710,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       });
 
       if (!success) {
+        if (isPipelinePaused()) return;
         setPipelineError(pipelineId, "Failed to send address issues prompt");
         return;
       }
@@ -721,7 +732,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         return { pipelines: newMap };
       });
     },
-    [client, pipelineId, addMessage, setSessionLoading, setPhase, setPipelineError]
+    [client, pipelineId, addMessage, isPipelinePaused, setSessionLoading, setPhase, setPipelineError]
   );
 
   // Handle session idle during paused state - mark idle but don't advance
@@ -764,10 +775,18 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
   // Create a new Claude session and register it in the store
   const createPipelineSession = useCallback(
     async (phase: PipelineSession["phase"], iteration: number, label: string): Promise<{ sessionKey: string; sdkSessionId: string } | null> => {
-      if (!client) return null;
+      if (!client || isPipelinePaused()) return null;
 
       const newSession = await createSession(client);
       if (!newSession) return null;
+      if (isPipelinePaused()) {
+        try {
+          await abortSession(client, newSession.sessionId);
+        } catch {
+          // Best effort; the session was never attached to the pipeline.
+        }
+        return null;
+      }
 
       const tabIdForSession = `build-${phase}-${iteration}-${Date.now()}`;
       const sessionKey = createClaudeSessionKey(environmentId, tabIdForSession);
@@ -792,21 +811,23 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
 
       return { sessionKey, sdkSessionId: newSession.sessionId };
     },
-    [client, environmentId, pipelineId, setSession, addPipelineSession]
+    [client, environmentId, pipelineId, isPipelinePaused, setSession, addPipelineSession]
   );
 
   // Start the initial build session
   const startBuildSession = useCallback(
     async (taskDescription: string, attachments?: ClaudeAttachment[]) => {
-      if (!client) return;
+      if (!client || isPipelinePaused()) return;
 
       setPhase(pipelineId, "building");
+      if (isPipelinePaused()) return;
 
       const result = await createPipelineSession("build", 0, "Build Session");
       if (!result) {
-        setPipelineError(pipelineId, "Failed to create build session");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to create build session");
         return;
       }
+      if (isPipelinePaused()) return;
 
       const userMessage: ClaudeMessageType = {
         id: crypto.randomUUID(),
@@ -824,25 +845,27 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       });
 
       if (!success) {
-        setPipelineError(pipelineId, "Failed to send build prompt");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send build prompt");
       }
     },
-    [client, pipelineId, createPipelineSession, addMessage, setSessionLoading, setPhase, setPipelineError]
+    [client, pipelineId, createPipelineSession, addMessage, isPipelinePaused, setSessionLoading, setPhase, setPipelineError]
   );
 
   // Start a review session (with ticket context and comprehensive review)
   const startReviewSession = useCallback(
     async (currentPipeline: NonNullable<typeof pipeline>) => {
-      if (!client) return;
+      if (!client || isPipelinePaused()) return;
 
       setPhase(pipelineId, "reviewing");
+      if (isPipelinePaused()) return;
 
       const iteration = currentPipeline.iteration;
       const result = await createPipelineSession("review", iteration, `Review Session${iteration > 0 ? ` (Iteration ${iteration + 1})` : ""}`);
       if (!result) {
-        setPipelineError(pipelineId, "Failed to create review session");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to create review session");
         return;
       }
+      if (isPipelinePaused()) return;
 
       // Use task snapshot stored on pipeline (kanban store may have been reloaded for a different project)
       const task = currentPipeline.taskSnapshot;
@@ -851,6 +874,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         const notes = await getProjectNotes(currentPipeline.projectId);
         projectNotes = notes.content;
       } catch (e) { console.debug("Failed to load project notes for review:", e); }
+      if (isPipelinePaused()) return;
 
       const repoConfig = config.repositories[currentPipeline.projectId];
       const targetBranch = repoConfig?.prBaseBranch || "main";
@@ -872,25 +896,27 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       });
 
       if (!success) {
-        setPipelineError(pipelineId, "Failed to send review prompt");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send review prompt");
       }
     },
-    [client, pipelineId, config.repositories, createPipelineSession, addMessage, setSessionLoading, setPhase, setPipelineError]
+    [client, pipelineId, config.repositories, createPipelineSession, addMessage, isPipelinePaused, setSessionLoading, setPhase, setPipelineError]
   );
 
   // Start verification session (with ticket context)
   const startVerifySession = useCallback(
     async (currentPipeline: NonNullable<typeof pipeline>) => {
-      if (!client) return;
+      if (!client || isPipelinePaused()) return;
 
       setPhase(pipelineId, "verifying");
+      if (isPipelinePaused()) return;
 
       const iteration = currentPipeline.iteration;
       const result = await createPipelineSession("verify", iteration, `Verification${iteration > 0 ? ` (Iteration ${iteration + 1})` : ""}`);
       if (!result) {
-        setPipelineError(pipelineId, "Failed to create verification session");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to create verification session");
         return;
       }
+      if (isPipelinePaused()) return;
 
       // Use task snapshot stored on pipeline (kanban store may have been reloaded for a different project)
       const task = currentPipeline.taskSnapshot;
@@ -899,6 +925,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         const notes = await getProjectNotes(currentPipeline.projectId);
         projectNotes = notes.content;
       } catch (e) { console.debug("Failed to load project notes for verification:", e); }
+      if (isPipelinePaused()) return;
 
       const repoConfig = config.repositories[currentPipeline.projectId];
       const targetBranch = repoConfig?.prBaseBranch || "main";
@@ -920,25 +947,27 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       });
 
       if (!success) {
-        setPipelineError(pipelineId, "Failed to send verification prompt");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send verification prompt");
       }
     },
-    [client, pipelineId, config.repositories, createPipelineSession, addMessage, setSessionLoading, setPhase, setPipelineError]
+    [client, pipelineId, config.repositories, createPipelineSession, addMessage, isPipelinePaused, setSessionLoading, setPhase, setPipelineError]
   );
 
   // Start fix session (with ticket context + what to fix)
   const startFixSession = useCallback(
     async (currentPipeline: NonNullable<typeof pipeline>, feedback: string) => {
-      if (!client) return;
+      if (!client || isPipelinePaused()) return;
 
       setPhase(pipelineId, "fixing");
+      if (isPipelinePaused()) return;
 
       const iteration = currentPipeline.iteration + 1;
       const result = await createPipelineSession("fix", iteration, `Fix Session (Iteration ${iteration + 1})`);
       if (!result) {
-        setPipelineError(pipelineId, "Failed to create fix session");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to create fix session");
         return;
       }
+      if (isPipelinePaused()) return;
 
       const task = currentPipeline.taskSnapshot;
       let projectNotes = "";
@@ -946,6 +975,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         const notes = await getProjectNotes(currentPipeline.projectId);
         projectNotes = notes.content;
       } catch (e) { console.debug("Failed to load project notes for fix:", e); }
+      if (isPipelinePaused()) return;
 
       const fixPrompt = createFixPrompt(task, projectNotes, feedback);
 
@@ -965,18 +995,19 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       });
 
       if (!success) {
-        setPipelineError(pipelineId, "Failed to send fix prompt");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send fix prompt");
       }
     },
-    [client, pipelineId, createPipelineSession, addMessage, setSessionLoading, setPhase, setPipelineError]
+    [client, pipelineId, createPipelineSession, addMessage, isPipelinePaused, setSessionLoading, setPhase, setPipelineError]
   );
 
   // Start PR creation session (auto-launched after verification passes)
   const startPRSession = useCallback(
     async (currentPipeline: NonNullable<typeof pipeline>) => {
-      if (!client) return;
+      if (!client || isPipelinePaused()) return;
 
       setPhase(pipelineId, "creating-pr");
+      if (isPipelinePaused()) return;
 
       // Activate PR monitoring for faster detection
       const { setMonitoringMode, monitoredEnvironments } = usePrMonitorStore.getState();
@@ -986,9 +1017,10 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
 
       const result = await createPipelineSession("pr", currentPipeline.iteration, "PR Creation Session");
       if (!result) {
-        setPipelineError(pipelineId, "Failed to create PR session");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to create PR session");
         return;
       }
+      if (isPipelinePaused()) return;
 
       const repoConfig = config.repositories[currentPipeline.projectId];
       const targetBranch = repoConfig?.prBaseBranch || "main";
@@ -1009,10 +1041,10 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       });
 
       if (!success) {
-        setPipelineError(pipelineId, "Failed to send PR creation prompt");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send PR creation prompt");
       }
     },
-    [client, pipelineId, environmentId, config.repositories, createPipelineSession, addMessage, setPhase, setPipelineError]
+    [client, pipelineId, environmentId, config.repositories, createPipelineSession, addMessage, isPipelinePaused, setPhase, setPipelineError]
   );
 
   // Check if the PR has merge conflicts after creation
@@ -1052,15 +1084,17 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
   // Start merge conflict resolution session (auto-launched after PR creation detects conflicts)
   const startResolveConflictsSession = useCallback(
     async (currentPipeline: NonNullable<typeof pipeline>) => {
-      if (!client) return;
+      if (!client || isPipelinePaused()) return;
 
       setPhase(pipelineId, "resolving-conflicts");
+      if (isPipelinePaused()) return;
 
       const result = await createPipelineSession("resolve-conflicts", currentPipeline.iteration, "Conflict Resolution Session");
       if (!result) {
-        setPipelineError(pipelineId, "Failed to create conflict resolution session");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to create conflict resolution session");
         return;
       }
+      if (isPipelinePaused()) return;
 
       const repoConfig = config.repositories[currentPipeline.projectId];
       const targetBranch = repoConfig?.prBaseBranch || "main";
@@ -1081,27 +1115,25 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       });
 
       if (!success) {
-        setPipelineError(pipelineId, "Failed to send conflict resolution prompt");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send conflict resolution prompt");
       }
     },
-    [client, pipelineId, config.repositories, createPipelineSession, addMessage, setPhase, setPipelineError]
+    [client, pipelineId, config.repositories, createPipelineSession, addMessage, isPipelinePaused, setPhase, setPipelineError]
   );
 
   // Stop the pipeline - abort running sessions and pause for user intervention
   const handleStop = useCallback(async () => {
-    if (!client || !pipeline) return;
-
-    const abortPromises = pipeline.sessions.map(async (session) => {
-      try {
-        await abortSession(client, session.sdkSessionId);
-        setSessionLoading(session.sessionKey, false);
-      } catch {
-        // Best effort - continue aborting remaining sessions
-      }
-    });
-    await Promise.all(abortPromises);
-
+    if (!pipeline) return;
+    const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
     pausePipeline(pipelineId);
+    if (!client || !currentSession) return;
+
+    setSessionLoading(currentSession.sessionKey, false);
+    try {
+      await abortSession(client, currentSession.sdkSessionId);
+    } catch {
+      // Best effort - the pause lock is already active.
+    }
   }, [client, pipeline, pipelineId, setSessionLoading, pausePipeline]);
 
   // Retry
@@ -1162,7 +1194,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     if (!resumedPhase) return;
 
     const prompt = createPipelineResumePrompt(resumedPhase);
-    if (!prompt || !currentSession) {
+    if (!prompt) {
       setAdvanceTick((value) => value + 1);
       return;
     }
@@ -1171,6 +1203,45 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       pausePipeline(pipelineId);
       return;
     }
+
+    if (!isSessionCompatibleWithResumePhase(currentSession, resumedPhase)) {
+      switch (resumedPhase) {
+        case "building": {
+          const task = pipeline.taskSnapshot;
+          try {
+            const notes = await getProjectNotes(pipeline.projectId);
+            await startBuildSession(createBuildPrompt(task, notes.content), taskImagesToAttachments(task.images));
+          } catch {
+            await startBuildSession(createBuildPrompt(task, ""), taskImagesToAttachments(task.images));
+          }
+          break;
+        }
+        case "reviewing":
+        case "addressing":
+          await startReviewSession(pipeline);
+          break;
+        case "verifying":
+          await startVerifySession(pipeline);
+          break;
+        case "fixing":
+          await startFixSession(pipeline, pipeline.verificationFeedback ?? "Resume fixing the latest verification failures.");
+          break;
+        case "creating-pr":
+          await startPRSession(pipeline);
+          break;
+        case "resolving-conflicts":
+          await startResolveConflictsSession(pipeline);
+          break;
+        case "creating-environment":
+        case "starting-environment":
+        case "waiting-for-setup":
+          setAdvanceTick((value) => value + 1);
+          break;
+      }
+      return;
+    }
+
+    if (!currentSession) return;
 
     markSessionRunning(pipelineId, currentSession.sdkSessionId);
     setSessionLoading(currentSession.sessionKey, true);
@@ -1210,6 +1281,12 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     pipeline,
     pipelineId,
     resumePipeline,
+    startBuildSession,
+    startFixSession,
+    startPRSession,
+    startResolveConflictsSession,
+    startReviewSession,
+    startVerifySession,
     setSessionLoading,
   ]);
 

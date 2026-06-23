@@ -236,16 +236,16 @@ describe("buildPipelineStore", () => {
       expect(pipeline.pausedFromPhase).toBe("verifying");
     });
 
-    test("clears pausedFromPhase when leaving paused state", () => {
+    test("does not leave paused state through ordinary phase transitions", () => {
       const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
       useBuildPipelineStore.getState().setPhase(id, "building");
       useBuildPipelineStore.getState().setPhase(id, "paused");
 
-      useBuildPipelineStore.getState().setPhase(id, "building");
+      useBuildPipelineStore.getState().setPhase(id, "reviewing");
 
       const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
-      expect(pipeline.phase).toBe("building");
-      expect(pipeline.pausedFromPhase).toBeUndefined();
+      expect(pipeline.phase).toBe("paused");
+      expect(pipeline.pausedFromPhase).toBe("building");
     });
 
     test("no-ops for unknown pipeline ID", () => {

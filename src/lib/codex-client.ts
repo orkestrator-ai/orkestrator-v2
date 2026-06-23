@@ -1,4 +1,5 @@
 import type { NativeMessage, NativeMessagePart } from "./chat/native-message-types";
+import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
 
 export interface CodexReasoningOption {
   effort: CodexReasoningEffort;
@@ -146,7 +147,7 @@ async function fetchWithTimeout(
 }
 
 export function createClient(baseUrl: string): CodexClient {
-  return { baseUrl };
+  return { baseUrl: resolveGatewayLoopbackBaseUrl(baseUrl) };
 }
 
 export async function checkHealth(client: CodexClient): Promise<boolean> {

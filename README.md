@@ -8,6 +8,7 @@ A desktop application for managing isolated Docker-based development environment
 - **Isolated Environments**: Each environment runs in its own Docker container with network isolation
 - **Embedded Terminal**: Full xterm.js terminal with ANSI color support
 - **GitHub Integration**: Create and view pull requests directly from the UI
+- **Remote Web Gateway**: Access the app from another browser on your Tailscale network
 - **Configuration**: Global and per-repository settings for SSH keys, resource limits, and branches
 - **Security**: Network firewall restricts outbound traffic to approved domains only
 
@@ -32,6 +33,7 @@ A desktop application for managing isolated Docker-based development environment
 
 - [Bun](https://bun.sh) - JavaScript runtime and package manager
 - [Docker](https://docker.com) - Container runtime
+- [Tailscale](https://tailscale.com) - Optional, required for remote browser access through the gateway
 
 ## Quick Start
 
@@ -74,6 +76,19 @@ bun run dev
 - The terminal connects to the running container
 - Use "Create PR" to run `gh pr create` interactively
 - After PR creation, the button becomes "View PR"
+
+### Remote Gateway Access
+
+When Tailscale is available, Orkestrator starts an authenticated HTTP gateway on the host's Tailscale address. The gateway serves the React app to remote browsers, forwards backend commands and events, and proxies loopback services exposed by environments.
+
+By default the gateway listens on port `34121`. Look for a startup log like:
+
+```text
+[RemoteGateway] Listening on http://100.x.y.z:34121/
+[RemoteGateway] Auth token stored at /path/to/gateway-auth.json
+```
+
+Open the logged URL from another device or browser on the same tailnet, then enter the gateway token from the host machine. See [Remote Gateway](docs/remote-gateway.md) for setup, environment variables, security notes, and troubleshooting.
 
 ### Configuration
 
@@ -151,6 +166,8 @@ Containers have restricted network access via iptables firewall:
 - Sentry.io (error reporting)
 
 All other outbound traffic is blocked.
+
+The remote gateway binds only to Tailscale addresses by default and requires a gateway token before serving the app, backend API, event stream, or loopback proxy routes.
 
 ## Configuration Storage
 

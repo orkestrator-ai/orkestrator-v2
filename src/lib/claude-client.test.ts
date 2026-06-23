@@ -50,6 +50,7 @@ describe("claude-client", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    delete window.orkestratorGateway;
     mock.restore();
   });
 
@@ -57,6 +58,14 @@ describe("claude-client", () => {
     test("returns a client with the given base URL", () => {
       const c = createClient("http://localhost:5000");
       expect(c.baseUrl).toBe("http://localhost:5000");
+    });
+
+    test("rewrites loopback base URLs through the gateway when enabled", () => {
+      window.orkestratorGateway = { enabled: true };
+
+      const c = createClient("http://localhost:5000");
+
+      expect(c.baseUrl).toBe(`${window.location.origin}/__orkestrator/proxy/loopback/5000`);
     });
   });
 

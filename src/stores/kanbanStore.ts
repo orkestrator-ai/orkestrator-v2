@@ -47,6 +47,7 @@ interface KanbanState {
   loadTasks: (projectId: string) => Promise<void>;
   addTask: (projectId: string, title: string, description: string) => Promise<string | undefined>;
   updateTask: (taskId: string, updates: Partial<Pick<KanbanTask, "title" | "description" | "acceptanceCriteria" | "status" | "environmentId" | "buildPipelineId" | "prUrl" | "prState" | "prMergeCommented">>) => Promise<void>;
+  clearTaskBuildStatus: (taskId: string) => Promise<void>;
   deleteTask: (taskId: string) => Promise<void>;
   moveTask: (taskId: string, newStatus: KanbanStatus) => Promise<void>;
   addComment: (taskId: string, text: string) => Promise<void>;
@@ -113,6 +114,26 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
       }));
     } catch (error) {
       console.error("[KanbanStore] Failed to update task:", error);
+    }
+  },
+
+  clearTaskBuildStatus: async (taskId) => {
+    try {
+      const updated = await updateKanbanTask(
+        taskId,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "",
+        "",
+      );
+      useBuildPipelineStore.getState().removePipelinesForTask(taskId);
+      set((state) => ({
+        tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
+      }));
+    } catch (error) {
+      console.error("[KanbanStore] Failed to clear task build status:", error);
     }
   },
 

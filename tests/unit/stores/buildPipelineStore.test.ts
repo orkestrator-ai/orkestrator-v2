@@ -116,6 +116,62 @@ describe("buildPipelineStore", () => {
     });
   });
 
+  describe("removePipeline", () => {
+    test("removes a pipeline and rebuilds buildEnvironmentIds", () => {
+      const id1 = useBuildPipelineStore.getState().createPipeline(createPipelineParams({ taskId: "task-1" }));
+      const id2 = useBuildPipelineStore.getState().createPipeline(createPipelineParams({ taskId: "task-2" }));
+      useBuildPipelineStore.getState().setPipelineEnvironment(id1, "env-1");
+      useBuildPipelineStore.getState().setPipelineEnvironment(id2, "env-2");
+
+      useBuildPipelineStore.getState().removePipeline(id1);
+
+      const state = useBuildPipelineStore.getState();
+      expect(state.pipelines.has(id1)).toBe(false);
+      expect(state.pipelines.has(id2)).toBe(true);
+      expect(state.buildEnvironmentIds.has("env-1")).toBe(false);
+      expect(state.buildEnvironmentIds.has("env-2")).toBe(true);
+    });
+
+    test("no-ops for unknown pipeline ID", () => {
+      useBuildPipelineStore.getState().removePipeline("missing");
+      expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+    });
+  });
+
+  describe("removePipelinesForTask", () => {
+    test("removes all pipelines for a task and keeps unrelated pipelines", () => {
+      const id1 = useBuildPipelineStore.getState().createPipeline(createPipelineParams({ taskId: "task-1" }));
+      const id2 = useBuildPipelineStore.getState().createPipeline(createPipelineParams({ taskId: "task-1" }));
+      const id3 = useBuildPipelineStore.getState().createPipeline(createPipelineParams({ taskId: "task-2" }));
+      useBuildPipelineStore.getState().setPipelineEnvironment(id1, "env-1");
+      useBuildPipelineStore.getState().setPipelineEnvironment(id2, "env-2");
+      useBuildPipelineStore.getState().setPipelineEnvironment(id3, "env-3");
+
+      useBuildPipelineStore.getState().removePipelinesForTask("task-1");
+
+      const state = useBuildPipelineStore.getState();
+      expect(state.pipelines.has(id1)).toBe(false);
+      expect(state.pipelines.has(id2)).toBe(false);
+      expect(state.pipelines.has(id3)).toBe(true);
+      expect(state.buildEnvironmentIds.has("env-1")).toBe(false);
+      expect(state.buildEnvironmentIds.has("env-2")).toBe(false);
+      expect(state.buildEnvironmentIds.has("env-3")).toBe(true);
+    });
+
+    test("no-ops when no pipeline matches the task ID", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams({ taskId: "task-1" }));
+      useBuildPipelineStore.getState().setPipelineEnvironment(id, "env-1");
+      const before = useBuildPipelineStore.getState().pipelines;
+
+      useBuildPipelineStore.getState().removePipelinesForTask("task-unknown");
+
+      const state = useBuildPipelineStore.getState();
+      expect(state.pipelines).toBe(before);
+      expect(state.pipelines.has(id)).toBe(true);
+      expect(state.buildEnvironmentIds.has("env-1")).toBe(true);
+    });
+  });
+
   describe("addSession", () => {
     test("appends a session and updates currentSessionIndex", () => {
       const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { OrkestratorBackend } from "./backend/index.js";
 import { APP_SLUG, PRODUCT_NAME } from "./backend/constants.js";
 import { fixPath } from "./backend/fix-path.js";
+import { OrkestratorGateway } from "./gateway.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
 import { createMainWindow } from "./window.js";
@@ -21,11 +22,13 @@ app.setPath("userData", path.join(app.getPath("appData"), APP_SLUG));
 
 let mainWindow: BrowserWindow | null = null;
 let backend: OrkestratorBackend | null = null;
+let gateway: OrkestratorGateway | null = null;
 
 function emitToRenderers(event: string, payload: unknown): void {
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send("orkestrator:event", event, payload);
   }
+  gateway?.emit(event, payload);
 }
 
 function createMenu(): void {
@@ -105,6 +108,17 @@ app.whenReady().then(async () => {
   });
   await backend.init();
 
+  gateway = new OrkestratorGateway({
+    backend,
+    dataDir: app.getPath("userData"),
+    rendererRoot: path.join(appRoot, "dist"),
+    rendererDevServerUrl: isDev ? process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:1420" : undefined,
+  });
+  await gateway.start().catch((error: unknown) => {
+    console.error("[RemoteGateway] Failed to start:", error);
+    gateway = null;
+  });
+
   createMenu();
   registerIpc();
   await createWindow();
@@ -116,4 +130,8 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  void gateway?.stop();
 });

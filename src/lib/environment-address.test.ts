@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import type { Environment } from "@/types";
 import { getEnvironmentPortAddress } from "./environment-address";
 
@@ -20,6 +20,10 @@ function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
     ...overrides,
   };
 }
+
+afterEach(() => {
+  delete window.orkestratorGateway;
+});
 
 describe("getEnvironmentPortAddress", () => {
   test("returns the host localhost address for a mapped container port", () => {
@@ -49,6 +53,15 @@ describe("getEnvironmentPortAddress", () => {
     const environment = makeEnvironment({ entryPort: 3000, hostEntryPort: 0 });
 
     expect(getEnvironmentPortAddress(environment)).toBe("localhost:0");
+  });
+
+  test("returns a gateway proxy URL when the renderer is served remotely", () => {
+    window.orkestratorGateway = { enabled: true };
+    const environment = makeEnvironment({ entryPort: 3000, hostEntryPort: 49152 });
+
+    expect(getEnvironmentPortAddress(environment)).toBe(
+      `${window.location.origin}/__orkestrator/proxy/loopback/49152/`,
+    );
   });
 
   test("returns null for local environments", () => {

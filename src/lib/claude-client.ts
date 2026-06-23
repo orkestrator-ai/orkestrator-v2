@@ -1,6 +1,7 @@
 // Claude Bridge Server client wrapper
 // Provides typed functions for interacting with the Claude bridge server
 
+import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
 
 /**
  * Session key used as the Map key in the Zustand store.
@@ -230,7 +231,7 @@ async function fetchWithTimeout(
  * Create a Claude bridge client
  */
 export function createClient(baseUrl: string): ClaudeClient {
-  return { baseUrl };
+  return { baseUrl: resolveGatewayLoopbackBaseUrl(baseUrl) };
 }
 
 /**

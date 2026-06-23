@@ -1,6 +1,9 @@
 /// <reference types="vite/client" />
 
 interface Window {
+  orkestratorGateway?: {
+    enabled: boolean;
+  };
   orkestrator?: {
     invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T>;
     listen<T = unknown>(event: string, callback: (payload: T) => void): () => void;

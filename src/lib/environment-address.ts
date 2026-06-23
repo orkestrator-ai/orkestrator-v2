@@ -11,5 +11,9 @@ export function getEnvironmentPortAddress(environment: Environment | null | unde
     return null;
   }
 
+  if (typeof window !== "undefined" && window.orkestratorGateway?.enabled) {
+    return `${window.location.origin}/__orkestrator/proxy/loopback/${environment.hostEntryPort}/`;
+  }
+
   return `localhost:${environment.hostEntryPort}`;
 }

@@ -36,12 +36,14 @@ function DroppableColumn({
   tasks,
   onClickTask,
   onAddTask,
+  onClearTaskStatus,
   buildPhaseByTaskId,
 }: {
   column: (typeof COLUMNS)[number];
   tasks: KanbanTask[];
   onClickTask: (task: KanbanTask) => void;
   onAddTask?: () => void;
+  onClearTaskStatus: (task: KanbanTask) => void;
   buildPhaseByTaskId: Map<string, BuildPhase>;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: column.id });
@@ -77,14 +79,19 @@ function DroppableColumn({
         }`}
       >
         <div className="space-y-2">
-          {tasks.map((task) => (
-            <KanbanCard
-              key={task.id}
-              task={task}
-              onClick={() => onClickTask(task)}
-              buildPhase={buildPhaseByTaskId.get(task.id)}
-            />
-          ))}
+          {tasks.map((task) => {
+            const buildPhase = buildPhaseByTaskId.get(task.id);
+            return (
+              <KanbanCard
+                key={task.id}
+                task={task}
+                onClick={() => onClickTask(task)}
+                buildPhase={buildPhase}
+                canClearStatus={!!(task.environmentId || task.buildPipelineId || buildPhase)}
+                onClearStatus={onClearTaskStatus}
+              />
+            );
+          })}
         </div>
         {tasks.length === 0 && (
           <div className="flex items-center justify-center h-20 text-xs text-muted-foreground">
@@ -100,6 +107,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
   const tasks = useKanbanStore((s) => s.tasks);
   const loadTasks = useKanbanStore((s) => s.loadTasks);
   const moveTask = useKanbanStore((s) => s.moveTask);
+  const clearTaskBuildStatus = useKanbanStore((s) => s.clearTaskBuildStatus);
   const getProjectById = useProjectStore((s) => s.getProjectById);
 
   const buildPhaseRecord = useBuildPipelineStore(
@@ -196,6 +204,13 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
     setDialogOpen(true);
   }, []);
 
+  const handleClearTaskStatus = useCallback(
+    (task: KanbanTask) => {
+      void clearTaskBuildStatus(task.id);
+    },
+    [clearTaskBuildStatus]
+  );
+
   if (showNotes) {
     return <ProjectNotesView projectId={projectId} onBack={() => setShowNotes(false)} />;
   }
@@ -243,6 +258,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
                     ? () => setCreateDialogOpen(true)
                     : undefined
                 }
+                onClearTaskStatus={handleClearTaskStatus}
                 buildPhaseByTaskId={buildPhaseByTaskId}
               />
             ))}

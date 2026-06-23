@@ -77,6 +77,8 @@ interface BuildPipelineState {
   pausePipeline: (pipelineId: string) => void;
   resumePipeline: (pipelineId: string, fallbackPhase?: ResumableBuildPhase) => ResumableBuildPhase | undefined;
   markSessionRunning: (pipelineId: string, sdkSessionId: string) => void;
+  removePipeline: (pipelineId: string) => void;
+  removePipelinesForTask: (taskId: string) => void;
 
   // Selectors
   getPipelineByTaskId: (taskId: string) => BuildPipeline | undefined;
@@ -271,6 +273,41 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
       );
       newMap.set(pipelineId, { ...pipeline, sessions });
       return { pipelines: newMap };
+    }),
+
+  removePipeline: (pipelineId) =>
+    set((state) => {
+      if (!state.pipelines.has(pipelineId)) return state;
+      const newMap = new Map(state.pipelines);
+      newMap.delete(pipelineId);
+      const ids = new Set<string>();
+      for (const pipeline of newMap.values()) {
+        if (pipeline.environmentId) {
+          ids.add(pipeline.environmentId);
+        }
+      }
+      return { pipelines: newMap, buildEnvironmentIds: ids };
+    }),
+
+  removePipelinesForTask: (taskId) =>
+    set((state) => {
+      const newMap = new Map(state.pipelines);
+      let removed = false;
+      for (const [pipelineId, pipeline] of newMap.entries()) {
+        if (pipeline.taskId === taskId) {
+          newMap.delete(pipelineId);
+          removed = true;
+        }
+      }
+      if (!removed) return state;
+
+      const ids = new Set<string>();
+      for (const pipeline of newMap.values()) {
+        if (pipeline.environmentId) {
+          ids.add(pipeline.environmentId);
+        }
+      }
+      return { pipelines: newMap, buildEnvironmentIds: ids };
     }),
 
   getPipelineByTaskId: (taskId) => {

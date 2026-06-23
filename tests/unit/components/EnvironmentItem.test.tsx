@@ -28,15 +28,20 @@ mock.module("@/components/ui/context-menu", () => ({
     children,
     disabled,
     onClick,
+    onSelect,
   }: {
     children: React.ReactNode;
     disabled?: boolean;
     onClick?: () => void;
+    onSelect?: () => void;
   }) => (
     <div
       role="menuitem"
       aria-disabled={disabled ? "true" : undefined}
-      onClick={disabled ? undefined : onClick}
+      onClick={disabled ? undefined : () => {
+        onClick?.();
+        onSelect?.();
+      }}
     >
       {children}
     </div>

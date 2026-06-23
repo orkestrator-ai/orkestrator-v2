@@ -305,6 +305,7 @@ describe("OpenCodeBuildChatTab", () => {
   beforeEach(() => {
     cleanup();
     globalThis.fetch = originalFetch;
+    delete window.orkestratorGateway;
     resetStores();
     seedConfigStore();
     seedEnvironmentStore();
@@ -320,6 +321,7 @@ describe("OpenCodeBuildChatTab", () => {
 
   afterEach(() => {
     cleanup();
+    delete window.orkestratorGateway;
   });
 
   test("stopping a running pipeline pauses it instead of failing it", async () => {
@@ -438,6 +440,20 @@ describe("OpenCodeBuildChatTab", () => {
 
     expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase).toBe("building");
     expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions).toHaveLength(1);
+  });
+
+  test("routes startup health checks through the remote gateway proxy when enabled", async () => {
+    seedPendingPipeline();
+    window.orkestratorGateway = { enabled: true };
+    globalThis.fetch = mock(async () => new Response(null, { status: 200 })) as unknown as typeof fetch;
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        `${window.location.origin}/__orkestrator/proxy/loopback/9999/global/health`,
+      );
+    });
   });
 
   test("reconnect action retries opencode initialization after a connection failure", async () => {

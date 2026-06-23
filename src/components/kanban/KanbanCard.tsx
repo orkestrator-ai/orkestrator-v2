@@ -1,8 +1,14 @@
 import { useRef, useEffect } from "react";
 import { useDraggable } from "@dnd-kit/core";
-import { MessageSquare } from "lucide-react";
+import { MessageSquare, RotateCcw } from "lucide-react";
 import type { KanbanTask } from "@/stores/kanbanStore";
-import type { BuildPhase } from "@/stores/buildPipelineStore";
+import { isActiveBuildPhase, type BuildPhase } from "@/stores/buildPipelineStore";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 
 function getBuildPhaseDisplay(phase: BuildPhase): { label: string; className: string } {
@@ -41,9 +47,18 @@ interface KanbanCardProps {
   onClick: () => void;
   isDragOverlay?: boolean;
   buildPhase?: BuildPhase;
+  canClearStatus?: boolean;
+  onClearStatus?: (task: KanbanTask) => void;
 }
 
-export function KanbanCard({ task, onClick, isDragOverlay, buildPhase }: KanbanCardProps) {
+export function KanbanCard({
+  task,
+  onClick,
+  isDragOverlay,
+  buildPhase,
+  canClearStatus,
+  onClearStatus,
+}: KanbanCardProps) {
   const {
     attributes,
     listeners,
@@ -83,9 +98,9 @@ export function KanbanCard({ task, onClick, isDragOverlay, buildPhase }: KanbanC
     : undefined;
 
   const phaseDisplay = buildPhase ? getBuildPhaseDisplay(buildPhase) : null;
-  const isActivelyBuilding = buildPhase && !["complete", "failed", "paused"].includes(buildPhase);
+  const isActivelyBuilding = buildPhase ? isActiveBuildPhase(buildPhase) : false;
 
-  return (
+  const card = (
     <div
       ref={setNodeRef}
       style={style}
@@ -128,5 +143,21 @@ export function KanbanCard({ task, onClick, isDragOverlay, buildPhase }: KanbanC
         )}
       </div>
     </div>
+  );
+
+  if (isDragOverlay || !canClearStatus) {
+    return card;
+  }
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{card}</ContextMenuTrigger>
+      <ContextMenuContent className="w-44">
+        <ContextMenuItem onSelect={() => onClearStatus?.(task)}>
+          <RotateCcw className="h-4 w-4" />
+          Clear status
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

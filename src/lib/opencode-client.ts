@@ -2,6 +2,7 @@
 // Provides typed functions for interacting with the OpenCode server
 
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
+import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
 import { isEditTool } from "./tool-names";
 import type {
   NativeMessage,
@@ -655,7 +656,7 @@ export function buildOpenCodeMessageFromPart(
  */
 export function createClient(baseUrl: string, directory?: string): OpencodeClient {
   return createOpencodeClient({
-    baseUrl,
+    baseUrl: resolveGatewayLoopbackBaseUrl(baseUrl),
     directory,
   });
 }

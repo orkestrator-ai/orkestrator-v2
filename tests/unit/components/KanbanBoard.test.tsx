@@ -1,0 +1,58 @@
+import { describe, expect, test } from "bun:test";
+import { canClearTaskBuildStatus } from "@/components/kanban/KanbanBoard";
+import type { KanbanTask } from "@/stores/kanbanStore";
+import type { BuildPhase } from "@/stores/buildPipelineStore";
+
+function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
+  return {
+    id: "task-1",
+    projectId: "project-1",
+    title: "Task",
+    description: "",
+    acceptanceCriteria: "",
+    status: "backlog",
+    comments: [],
+    images: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    order: 0,
+    ...overrides,
+  };
+}
+
+describe("canClearTaskBuildStatus", () => {
+  test("is false for a plain task with no links or build phase", () => {
+    expect(canClearTaskBuildStatus(makeTask(), undefined)).toBe(false);
+  });
+
+  test("is true when the task has a leftover environment link and no build phase", () => {
+    expect(canClearTaskBuildStatus(makeTask({ environmentId: "env-1" }), undefined)).toBe(true);
+  });
+
+  test("is true when the task has a leftover pipeline link and no build phase", () => {
+    expect(canClearTaskBuildStatus(makeTask({ buildPipelineId: "pipeline-1" }), undefined)).toBe(true);
+  });
+
+  test.each<BuildPhase>(["complete", "failed", "paused"])(
+    "is true for the terminal/paused phase %s",
+    (phase) => {
+      expect(canClearTaskBuildStatus(makeTask({ environmentId: "env-1" }), phase)).toBe(true);
+    },
+  );
+
+  test.each<BuildPhase>([
+    "creating-environment",
+    "starting-environment",
+    "waiting-for-setup",
+    "building",
+    "reviewing",
+    "addressing",
+    "verifying",
+    "fixing",
+    "creating-pr",
+    "resolving-conflicts",
+  ])("is false while actively building (phase %s) even with links", (phase) => {
+    expect(canClearTaskBuildStatus(makeTask({ environmentId: "env-1", buildPipelineId: "p-1" }), phase)).toBe(
+      false,
+    );
+  });
+});

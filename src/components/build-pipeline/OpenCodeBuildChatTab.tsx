@@ -22,6 +22,7 @@ import {
   type OpenCodeMessage,
   type PromptAttachment,
 } from "@/lib/opencode-client";
+import { resolveGatewayLoopbackBaseUrl } from "@/lib/gateway-url";
 import { createOpenCodeSessionKey } from "@/stores/openCodeStore";
 import type { BuildTabData } from "@/types/paneLayout";
 import type { TaskSnapshotImage } from "@/prompts";
@@ -149,7 +150,7 @@ function extractEventSessionId(event: OpenCodeEvent): string | undefined {
 
 async function checkOpenCodeHealth(baseUrl: string): Promise<boolean> {
   try {
-    const response = await fetch(`${baseUrl}/global/health`);
+    const response = await fetch(`${resolveGatewayLoopbackBaseUrl(baseUrl)}/global/health`);
     return response.ok;
   } catch {
     return false;

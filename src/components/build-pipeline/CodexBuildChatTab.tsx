@@ -317,6 +317,10 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     pausePipeline,
     resumePipeline,
   } = useBuildPipelineStore();
+  const isPipelinePaused = useCallback(
+    () => useBuildPipelineStore.getState().pipelines.get(pipelineId)?.phase === "paused",
+    [pipelineId],
+  );
   const {
     setServerStatus,
     setClient,
@@ -549,7 +553,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       label: string,
     ): Promise<{ sessionKey: string; sdkSessionId: string } | null> => {
       const activeClient = client ?? await initializeClient();
-      if (!pipeline) return null;
+      if (!pipeline || isPipelinePaused()) return null;
 
       const { model, effort } = resolveCodexPreferences(pipeline.projectId);
       const newSession = await createSession(activeClient, {
@@ -557,6 +561,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         modelReasoningEffort: effort,
         mode: "build",
       });
+      if (isPipelinePaused()) return null;
 
       const tabIdForSession = `build-${phase}-${iteration}-${Date.now()}`;
       const sessionKey = createCodexSessionKey(environmentId, tabIdForSession);
@@ -581,7 +586,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
 
       return { sessionKey, sdkSessionId: newSession.sessionId };
     },
-    [addPipelineSession, client, environmentId, initializeClient, pipeline, pipelineId, resolveCodexPreferences, setSession],
+    [addPipelineSession, client, environmentId, initializeClient, isPipelinePaused, pipeline, pipelineId, resolveCodexPreferences, setSession],
   );
 
   const sendPromptWithDispatchGuard = useCallback(
@@ -603,15 +608,18 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
 
   const startBuildSession = useCallback(
     async (taskDescription: string, attachments?: CodexPromptAttachment[]) => {
+      if (isPipelinePaused()) return;
       const activeClient = client ?? await initializeClient();
 
       setPhase(pipelineId, "building");
+      if (isPipelinePaused()) return;
 
       const result = await createPipelineSession("build", 0, "Build Session");
       if (!result) {
-        setPipelineError(pipelineId, "Failed to create build session");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to create build session");
         return;
       }
+      if (isPipelinePaused()) return;
 
       appendCodexMessage(result.sessionKey, buildUserMessage(taskDescription));
 
@@ -620,27 +628,31 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       });
 
       if (!success) {
+        if (isPipelinePaused()) return;
         const message = "Failed to send build prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
         setSessionLoading(result.sessionKey, false);
         setPipelineError(pipelineId, message);
       }
     },
-    [client, createPipelineSession, initializeClient, pipelineId, sendPromptWithDispatchGuard, setPhase, setPipelineError, setSessionLoading],
+    [client, createPipelineSession, initializeClient, isPipelinePaused, pipelineId, sendPromptWithDispatchGuard, setPhase, setPipelineError, setSessionLoading],
   );
 
   const startReviewSession = useCallback(
     async (currentPipeline: NonNullable<typeof pipeline>) => {
+      if (isPipelinePaused()) return;
       const activeClient = client ?? await initializeClient();
 
       setPhase(pipelineId, "reviewing");
+      if (isPipelinePaused()) return;
 
       const iteration = currentPipeline.iteration;
       const result = await createPipelineSession("review", iteration, `Review Session${iteration > 0 ? ` (Iteration ${iteration + 1})` : ""}`);
       if (!result) {
-        setPipelineError(pipelineId, "Failed to create review session");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to create review session");
         return;
       }
+      if (isPipelinePaused()) return;
 
       const task = currentPipeline.taskSnapshot;
       let projectNotes = "";
@@ -660,27 +672,31 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       });
 
       if (!success) {
+        if (isPipelinePaused()) return;
         const message = "Failed to send review prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
         setSessionLoading(result.sessionKey, false);
         setPipelineError(pipelineId, message);
       }
     },
-    [client, config.repositories, createPipelineSession, initializeClient, pipelineId, sendPromptWithDispatchGuard, setPhase, setPipelineError, setSessionLoading],
+    [client, config.repositories, createPipelineSession, initializeClient, isPipelinePaused, pipelineId, sendPromptWithDispatchGuard, setPhase, setPipelineError, setSessionLoading],
   );
 
   const startVerifySession = useCallback(
     async (currentPipeline: NonNullable<typeof pipeline>) => {
+      if (isPipelinePaused()) return;
       const activeClient = client ?? await initializeClient();
 
       setPhase(pipelineId, "verifying");
+      if (isPipelinePaused()) return;
 
       const iteration = currentPipeline.iteration;
       const result = await createPipelineSession("verify", iteration, `Verification${iteration > 0 ? ` (Iteration ${iteration + 1})` : ""}`);
       if (!result) {
-        setPipelineError(pipelineId, "Failed to create verification session");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to create verification session");
         return;
       }
+      if (isPipelinePaused()) return;
 
       const task = currentPipeline.taskSnapshot;
       let projectNotes = "";
@@ -700,27 +716,31 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       });
 
       if (!success) {
+        if (isPipelinePaused()) return;
         const message = "Failed to send verification prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
         setSessionLoading(result.sessionKey, false);
         setPipelineError(pipelineId, message);
       }
     },
-    [client, config.repositories, createPipelineSession, initializeClient, pipelineId, sendPromptWithDispatchGuard, setPhase, setPipelineError, setSessionLoading],
+    [client, config.repositories, createPipelineSession, initializeClient, isPipelinePaused, pipelineId, sendPromptWithDispatchGuard, setPhase, setPipelineError, setSessionLoading],
   );
 
   const startFixSession = useCallback(
     async (currentPipeline: NonNullable<typeof pipeline>, feedback: string) => {
+      if (isPipelinePaused()) return;
       const activeClient = client ?? await initializeClient();
 
       setPhase(pipelineId, "fixing");
+      if (isPipelinePaused()) return;
 
       const iteration = currentPipeline.iteration + 1;
       const result = await createPipelineSession("fix", iteration, `Fix Session (Iteration ${iteration + 1})`);
       if (!result) {
-        setPipelineError(pipelineId, "Failed to create fix session");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to create fix session");
         return;
       }
+      if (isPipelinePaused()) return;
 
       const task = currentPipeline.taskSnapshot;
       let projectNotes = "";
@@ -739,20 +759,23 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       });
 
       if (!success) {
+        if (isPipelinePaused()) return;
         const message = "Failed to send fix prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
         setSessionLoading(result.sessionKey, false);
         setPipelineError(pipelineId, message);
       }
     },
-    [client, createPipelineSession, initializeClient, pipelineId, sendPromptWithDispatchGuard, setPhase, setPipelineError, setSessionLoading],
+    [client, createPipelineSession, initializeClient, isPipelinePaused, pipelineId, sendPromptWithDispatchGuard, setPhase, setPipelineError, setSessionLoading],
   );
 
   const startPRSession = useCallback(
     async (currentPipeline: NonNullable<typeof pipeline>) => {
+      if (isPipelinePaused()) return;
       const activeClient = client ?? await initializeClient();
 
       setPhase(pipelineId, "creating-pr");
+      if (isPipelinePaused()) return;
 
       const { setMonitoringMode, monitoredEnvironments } = usePrMonitorStore.getState();
       if (monitoredEnvironments[environmentId]) {
@@ -761,9 +784,10 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
 
       const result = await createPipelineSession("pr", currentPipeline.iteration, "PR Creation Session");
       if (!result) {
-        setPipelineError(pipelineId, "Failed to create PR session");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to create PR session");
         return;
       }
+      if (isPipelinePaused()) return;
 
       const targetBranch = config.repositories[currentPipeline.projectId]?.prBaseBranch || "main";
       const prompt = createPRPrompt(targetBranch);
@@ -771,13 +795,14 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
 
       const success = await sendPromptWithDispatchGuard(activeClient, result.sdkSessionId, prompt);
       if (!success) {
+        if (isPipelinePaused()) return;
         const message = "Failed to send PR creation prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
         setSessionLoading(result.sessionKey, false);
         setPipelineError(pipelineId, message);
       }
     },
-    [client, config.repositories, createPipelineSession, environmentId, initializeClient, pipelineId, sendPromptWithDispatchGuard, setPhase, setPipelineError, setSessionLoading],
+    [client, config.repositories, createPipelineSession, environmentId, initializeClient, isPipelinePaused, pipelineId, sendPromptWithDispatchGuard, setPhase, setPipelineError, setSessionLoading],
   );
 
   const checkPRMergeConflicts = useCallback(async (): Promise<boolean> => {
@@ -800,15 +825,18 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
 
   const startResolveConflictsSession = useCallback(
     async (currentPipeline: NonNullable<typeof pipeline>) => {
+      if (isPipelinePaused()) return;
       const activeClient = client ?? await initializeClient();
 
       setPhase(pipelineId, "resolving-conflicts");
+      if (isPipelinePaused()) return;
 
       const result = await createPipelineSession("resolve-conflicts", currentPipeline.iteration, "Conflict Resolution Session");
       if (!result) {
-        setPipelineError(pipelineId, "Failed to create conflict resolution session");
+        if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to create conflict resolution session");
         return;
       }
+      if (isPipelinePaused()) return;
 
       const targetBranch = config.repositories[currentPipeline.projectId]?.prBaseBranch || "main";
       const prompt = createResolveConflictsPrompt(targetBranch);
@@ -816,21 +844,27 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
 
       const success = await sendPromptWithDispatchGuard(activeClient, result.sdkSessionId, prompt);
       if (!success) {
+        if (isPipelinePaused()) return;
         const message = "Failed to send conflict resolution prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
         setSessionLoading(result.sessionKey, false);
         setPipelineError(pipelineId, message);
       }
     },
-    [client, config.repositories, createPipelineSession, initializeClient, pipelineId, sendPromptWithDispatchGuard, setPhase, setPipelineError, setSessionLoading],
+    [client, config.repositories, createPipelineSession, initializeClient, isPipelinePaused, pipelineId, sendPromptWithDispatchGuard, setPhase, setPipelineError, setSessionLoading],
   );
 
   const sendAddressIssuesMessage = useCallback(
     async (currentPipeline: NonNullable<typeof pipeline>, reviewSession: PipelineSession) => {
+      if (isPipelinePaused()) return;
       const activeClient = client ?? await initializeClient();
       pendingPromptDispatchesRef.current.add(reviewSession.sdkSessionId);
 
       setPhase(pipelineId, "addressing");
+      if (isPipelinePaused()) {
+        pendingPromptDispatchesRef.current.delete(reviewSession.sdkSessionId);
+        return;
+      }
 
       const updatedSessions = currentPipeline.sessions.map((session) =>
         session.sdkSessionId === reviewSession.sdkSessionId
@@ -851,17 +885,19 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
 
       const success = await sendPromptWithDispatchGuard(activeClient, reviewSession.sdkSessionId, prompt);
       if (!success) {
+        if (isPipelinePaused()) return;
         const message = "Failed to send address issues prompt";
         appendCodexMessage(reviewSession.sessionKey, buildErrorMessage(message));
         setSessionLoading(reviewSession.sessionKey, false);
         setPipelineError(pipelineId, message);
       }
     },
-    [client, initializeClient, pipelineId, sendPromptWithDispatchGuard, setPhase, setPipelineError, setSessionLoading],
+    [client, initializeClient, isPipelinePaused, pipelineId, sendPromptWithDispatchGuard, setPhase, setPipelineError, setSessionLoading],
   );
 
   const advancePipeline = useCallback(
     async (currentPipeline: NonNullable<typeof pipeline>, completedSession: PipelineSession) => {
+      if (isPipelinePaused()) return;
       try {
         switch (completedSession.phase) {
           case "build":
@@ -884,6 +920,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
             }
 
             const hasConflicts = await checkPRMergeConflicts();
+            if (isPipelinePaused()) return;
             if (hasConflicts) {
               await startResolveConflictsSession(currentPipeline);
             } else {
@@ -893,6 +930,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
           }
           case "resolve-conflicts": {
             const stillConflicting = await checkPRMergeConflicts();
+            if (isPipelinePaused()) return;
             if (stillConflicting) {
               setPipelineError(pipelineId, "Merge conflicts could not be fully resolved automatically");
             } else {
@@ -902,6 +940,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
           }
           case "verify": {
             const freshMessages = await getSessionMessages(client ?? await initializeClient(), completedSession.sdkSessionId);
+            if (isPipelinePaused()) return;
             if (freshMessages.length > 0) {
               setMessages(completedSession.sessionKey, freshMessages);
             }
@@ -933,6 +972,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
               setMessages(completedSession.sessionKey, updatedMessages);
             }
 
+            if (isPipelinePaused()) return;
             setVerificationResult(pipelineId, result.verdict, result.feedback);
             if (result.verdict === "pass") {
               void useKanbanStore.getState().addComment(currentPipeline.taskId, "✅ Validation complete");
@@ -947,6 +987,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
           }
         }
       } catch (error) {
+        if (isPipelinePaused()) return;
         console.error("[CodexBuildChatTab] Pipeline advancement error:", error);
         setPipelineError(pipelineId, error instanceof Error ? error.message : "Pipeline error");
       }
@@ -957,6 +998,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       environmentId,
       incrementIteration,
       initializeClient,
+      isPipelinePaused,
       pipelineId,
       setMessages,
       setPhase,
@@ -1275,18 +1317,17 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
   ]);
 
   const handleStop = useCallback(async () => {
-    if (!client || !pipeline) return;
-
-    await Promise.all(pipeline.sessions.map(async (session) => {
-      try {
-        await abortSession(client, session.sdkSessionId);
-        setSessionLoading(session.sessionKey, false);
-      } catch {
-        // Best effort only.
-      }
-    }));
-
+    if (!pipeline) return;
+    const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
     pausePipeline(pipelineId);
+    if (!client || !currentSession) return;
+
+    setSessionLoading(currentSession.sessionKey, false);
+    try {
+      await abortSession(client, currentSession.sdkSessionId);
+    } catch {
+      // Best effort only; the pause lock is already active.
+    }
   }, [client, pausePipeline, pipeline, pipelineId, setSessionLoading]);
 
   const handleRetry = useCallback(() => {

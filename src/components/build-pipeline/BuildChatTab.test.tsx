@@ -607,6 +607,32 @@ describe("BuildChatTab", () => {
       });
     });
 
+    test("stopping a running Claude pipeline pauses before abort finishes", async () => {
+      let resolveAbort: ((value: boolean) => void) | undefined;
+      mockAbortSession.mockImplementationOnce(
+        () => new Promise<boolean>((resolve) => {
+          resolveAbort = resolve;
+        }),
+      );
+      seedPipelineWithBuildSession("building", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      fireEvent.click(await screen.findByText("Stop"));
+
+      await waitFor(() => {
+        expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase).toBe("paused");
+      });
+
+      expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.error).toBeUndefined();
+      expect(mockAbortSession).toHaveBeenCalledWith({ baseUrl: "http://127.0.0.1:9999" }, SESSION_ID);
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+      expect(await screen.findByText("Resume")).toBeTruthy();
+      resolveAbort?.(true);
+    });
+
     test("resuming a paused pipeline continues the stopped Claude stage", async () => {
       seedPipelineWithBuildSession("paused", "idle");
       seedEnvironment({ isLocal: false, workspaceReady: true });

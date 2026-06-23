@@ -497,8 +497,14 @@ describe("CodexBuildChatTab", () => {
   });
 
   test("stopping a running pipeline pauses it instead of failing it", async () => {
-    seedPipeline("building", "idle");
-    seedCodexStore(false);
+    let resolveAbort: ((value: boolean) => void) | undefined;
+    mockAbortSession.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => {
+        resolveAbort = resolve;
+      }),
+    );
+    seedPipeline("building", "running");
+    seedCodexStore(true);
 
     render(<CodexBuildChatTab data={createData()} isActive />);
 
@@ -511,7 +517,9 @@ describe("CodexBuildChatTab", () => {
 
     expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.error).toBeUndefined();
     expect(mockAbortSession).toHaveBeenCalledWith({ baseUrl: "http://127.0.0.1:9999" }, SESSION_ID);
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
     expect(await screen.findByText("Resume")).toBeTruthy();
+    resolveAbort?.(true);
   });
 
   test("polls a loading codex build session without immediately restarting the poll loop", async () => {

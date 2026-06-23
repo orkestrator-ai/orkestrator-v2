@@ -325,6 +325,12 @@ describe("OpenCodeBuildChatTab", () => {
   });
 
   test("stopping a running pipeline pauses it instead of failing it", async () => {
+    let resolveAbort: ((value: boolean) => void) | undefined;
+    mockAbortSession.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => {
+        resolveAbort = resolve;
+      }),
+    );
     seedPipeline("building", "running");
     seedOpenCodeStore(true);
 
@@ -339,7 +345,9 @@ describe("OpenCodeBuildChatTab", () => {
 
     expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.error).toBeUndefined();
     expect(mockAbortSession).toHaveBeenCalled();
+    expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
     expect(await screen.findByText("Resume")).toBeTruthy();
+    resolveAbort?.(true);
   });
 
   test("paused pipelines expose jump-in controls and send messages to the active opencode session", async () => {

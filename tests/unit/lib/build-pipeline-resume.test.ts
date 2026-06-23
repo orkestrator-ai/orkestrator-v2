@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   createPipelineResumePrompt,
   getPipelineResumePhase,
+  isSessionCompatibleWithResumePhase,
 } from "../../../src/lib/build-pipeline-resume";
 import type {
   BuildPipeline,
@@ -74,5 +75,24 @@ describe("build-pipeline-resume", () => {
     expect(createPipelineResumePrompt("creating-environment")).toBeNull();
     expect(createPipelineResumePrompt("starting-environment")).toBeNull();
     expect(createPipelineResumePrompt("waiting-for-setup")).toBeNull();
+  });
+
+  test.each([
+    ["build", "building", true],
+    ["review", "reviewing", true],
+    ["review", "addressing", true],
+    ["verify", "verifying", true],
+    ["fix", "fixing", true],
+    ["pr", "creating-pr", true],
+    ["resolve-conflicts", "resolving-conflicts", true],
+    ["build", "reviewing", false],
+    ["review", "verifying", false],
+    ["build", "waiting-for-setup", false],
+  ] as const)("checks whether %s can resume %s", (sessionPhase, resumePhase, expected) => {
+    expect(isSessionCompatibleWithResumePhase(createSession(sessionPhase), resumePhase)).toBe(expected);
+  });
+
+  test("does not treat a missing session as compatible with an agent-backed phase", () => {
+    expect(isSessionCompatibleWithResumePhase(undefined, "building")).toBe(false);
   });
 });

@@ -1,5 +1,6 @@
 import type {
   BuildPipeline,
+  PipelineSession,
   PipelineSessionPhase,
   ResumableBuildPhase,
 } from "@/stores/buildPipelineStore";
@@ -11,6 +12,16 @@ const RESUME_PHASE_BY_SESSION_PHASE: Record<PipelineSessionPhase, ResumableBuild
   fix: "fixing",
   pr: "creating-pr",
   "resolve-conflicts": "resolving-conflicts",
+};
+
+const SESSION_PHASE_BY_RESUME_PHASE: Partial<Record<ResumableBuildPhase, PipelineSessionPhase>> = {
+  building: "build",
+  reviewing: "review",
+  addressing: "review",
+  verifying: "verify",
+  fixing: "fix",
+  "creating-pr": "pr",
+  "resolving-conflicts": "resolve-conflicts",
 };
 
 export function getPipelineResumePhase(
@@ -49,4 +60,12 @@ export function createPipelineResumePrompt(phase: ResumableBuildPhase): string |
     case "waiting-for-setup":
       return null;
   }
+}
+
+export function isSessionCompatibleWithResumePhase(
+  session: Pick<PipelineSession, "phase"> | undefined,
+  phase: ResumableBuildPhase,
+): boolean {
+  const expectedSessionPhase = SESSION_PHASE_BY_RESUME_PHASE[phase];
+  return !!expectedSessionPhase && session?.phase === expectedSessionPhase;
 }

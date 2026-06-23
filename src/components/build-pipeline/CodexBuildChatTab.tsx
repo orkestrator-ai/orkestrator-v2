@@ -38,7 +38,7 @@ import { isSetupPending } from "@/lib/setup-commands";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { cn } from "@/lib/utils";
-import { createPipelineResumePrompt, getPipelineResumePhase } from "@/lib/build-pipeline-resume";
+import { createPipelineResumePrompt, getPipelineResumePhase, isSessionCompatibleWithResumePhase } from "@/lib/build-pipeline-resume";
 import * as backend from "@/lib/backend";
 
 interface CodexBuildChatTabProps {
@@ -561,7 +561,14 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         modelReasoningEffort: effort,
         mode: "build",
       });
-      if (isPipelinePaused()) return null;
+      if (isPipelinePaused()) {
+        try {
+          await abortSession(activeClient, newSession.sessionId);
+        } catch {
+          // Best effort; the session was never attached to the pipeline.
+        }
+        return null;
+      }
 
       const tabIdForSession = `build-${phase}-${iteration}-${Date.now()}`;
       const sessionKey = createCodexSessionKey(environmentId, tabIdForSession);
@@ -610,6 +617,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     async (taskDescription: string, attachments?: CodexPromptAttachment[]) => {
       if (isPipelinePaused()) return;
       const activeClient = client ?? await initializeClient();
+      if (isPipelinePaused()) return;
 
       setPhase(pipelineId, "building");
       if (isPipelinePaused()) return;
@@ -642,6 +650,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     async (currentPipeline: NonNullable<typeof pipeline>) => {
       if (isPipelinePaused()) return;
       const activeClient = client ?? await initializeClient();
+      if (isPipelinePaused()) return;
 
       setPhase(pipelineId, "reviewing");
       if (isPipelinePaused()) return;
@@ -662,6 +671,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       } catch (error) {
         console.debug("[CodexBuildChatTab] Failed to load project notes for review:", error);
       }
+      if (isPipelinePaused()) return;
 
       const targetBranch = config.repositories[currentPipeline.projectId]?.prBaseBranch || "main";
       const prompt = createBuildReviewPrompt(task, projectNotes, targetBranch);
@@ -686,6 +696,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     async (currentPipeline: NonNullable<typeof pipeline>) => {
       if (isPipelinePaused()) return;
       const activeClient = client ?? await initializeClient();
+      if (isPipelinePaused()) return;
 
       setPhase(pipelineId, "verifying");
       if (isPipelinePaused()) return;
@@ -706,6 +717,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       } catch (error) {
         console.debug("[CodexBuildChatTab] Failed to load project notes for verification:", error);
       }
+      if (isPipelinePaused()) return;
 
       const targetBranch = config.repositories[currentPipeline.projectId]?.prBaseBranch || "main";
       const prompt = createVerificationPrompt(task, projectNotes, targetBranch);
@@ -730,6 +742,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     async (currentPipeline: NonNullable<typeof pipeline>, feedback: string) => {
       if (isPipelinePaused()) return;
       const activeClient = client ?? await initializeClient();
+      if (isPipelinePaused()) return;
 
       setPhase(pipelineId, "fixing");
       if (isPipelinePaused()) return;
@@ -750,6 +763,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       } catch (error) {
         console.debug("[CodexBuildChatTab] Failed to load project notes for fix:", error);
       }
+      if (isPipelinePaused()) return;
 
       const prompt = createFixPrompt(task, projectNotes, feedback);
       appendCodexMessage(result.sessionKey, buildUserMessage(prompt));
@@ -773,6 +787,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     async (currentPipeline: NonNullable<typeof pipeline>) => {
       if (isPipelinePaused()) return;
       const activeClient = client ?? await initializeClient();
+      if (isPipelinePaused()) return;
 
       setPhase(pipelineId, "creating-pr");
       if (isPipelinePaused()) return;
@@ -827,6 +842,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     async (currentPipeline: NonNullable<typeof pipeline>) => {
       if (isPipelinePaused()) return;
       const activeClient = client ?? await initializeClient();
+      if (isPipelinePaused()) return;
 
       setPhase(pipelineId, "resolving-conflicts");
       if (isPipelinePaused()) return;
@@ -858,6 +874,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     async (currentPipeline: NonNullable<typeof pipeline>, reviewSession: PipelineSession) => {
       if (isPipelinePaused()) return;
       const activeClient = client ?? await initializeClient();
+      if (isPipelinePaused()) return;
       pendingPromptDispatchesRef.current.add(reviewSession.sdkSessionId);
 
       setPhase(pipelineId, "addressing");
@@ -1368,10 +1385,49 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     if (!resumedPhase) return;
 
     const prompt = createPipelineResumePrompt(resumedPhase);
-    if (!prompt || !currentSession) {
+    if (!prompt) {
       setAdvanceTick((value) => value + 1);
       return;
     }
+
+    if (!isSessionCompatibleWithResumePhase(currentSession, resumedPhase)) {
+      switch (resumedPhase) {
+        case "building": {
+          const task = pipeline.taskSnapshot;
+          try {
+            const notes = await backend.getProjectNotes(pipeline.projectId);
+            await startBuildSession(createBuildPrompt(task, notes.content), taskImagesToAttachments(task.images));
+          } catch {
+            await startBuildSession(createBuildPrompt(task, ""), taskImagesToAttachments(task.images));
+          }
+          break;
+        }
+        case "reviewing":
+        case "addressing":
+          await startReviewSession(pipeline);
+          break;
+        case "verifying":
+          await startVerifySession(pipeline);
+          break;
+        case "fixing":
+          await startFixSession(pipeline, pipeline.verificationFeedback ?? "Resume fixing the latest verification failures.");
+          break;
+        case "creating-pr":
+          await startPRSession(pipeline);
+          break;
+        case "resolving-conflicts":
+          await startResolveConflictsSession(pipeline);
+          break;
+        case "creating-environment":
+        case "starting-environment":
+        case "waiting-for-setup":
+          setAdvanceTick((value) => value + 1);
+          break;
+      }
+      return;
+    }
+
+    if (!currentSession) return;
 
     if (!client) {
       pausePipeline(pipelineId);
@@ -1399,6 +1455,12 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     pipelineId,
     resumePipeline,
     sendPromptWithDispatchGuard,
+    startBuildSession,
+    startFixSession,
+    startPRSession,
+    startResolveConflictsSession,
+    startReviewSession,
+    startVerifySession,
     setSessionLoading,
   ]);
 

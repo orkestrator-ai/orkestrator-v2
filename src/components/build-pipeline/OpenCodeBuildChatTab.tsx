@@ -41,7 +41,7 @@ import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { extractContextUsage } from "@/lib/context-usage";
 import { cn } from "@/lib/utils";
-import { createPipelineResumePrompt, getPipelineResumePhase } from "@/lib/build-pipeline-resume";
+import { createPipelineResumePrompt, getPipelineResumePhase, isSessionCompatibleWithResumePhase } from "@/lib/build-pipeline-resume";
 import * as backend from "@/lib/backend";
 
 interface OpenCodeBuildChatTabProps {
@@ -463,9 +463,17 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     ): Promise<{ sessionKey: string; sdkSessionId: string } | null> => {
       if (isPipelinePaused()) return null;
       const activeClient = client ?? await initializeClient();
+      if (isPipelinePaused()) return null;
 
       const newSession = await createSession(activeClient);
-      if (isPipelinePaused()) return null;
+      if (isPipelinePaused()) {
+        try {
+          await abortSession(activeClient, newSession.id);
+        } catch {
+          // Best effort; the session was never attached to the pipeline.
+        }
+        return null;
+      }
       const tabIdForSession = `build-${phase}-${iteration}-${Date.now()}`;
       const sessionKey = createOpenCodeSessionKey(environmentId, tabIdForSession);
 
@@ -500,6 +508,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     ): Promise<boolean> => {
       if (isPipelinePaused()) return false;
       const activeClient = client ?? await initializeClient();
+      if (isPipelinePaused()) return false;
       const { model, variant } = resolveOpenCodePreferences(projectId);
 
       addMessage(sessionKey, buildUserMessage(text));
@@ -564,6 +573,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
       } catch (error) {
         console.debug("[OpenCodeBuildChatTab] Failed to load project notes for review:", error);
       }
+      if (isPipelinePaused()) return;
 
       const targetBranch = config.repositories[currentPipeline.projectId]?.prBaseBranch || "main";
       const prompt = createBuildReviewPrompt(currentPipeline.taskSnapshot, projectNotes, targetBranch);
@@ -602,6 +612,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
       } catch (error) {
         console.debug("[OpenCodeBuildChatTab] Failed to load project notes for verification:", error);
       }
+      if (isPipelinePaused()) return;
 
       const targetBranch = config.repositories[currentPipeline.projectId]?.prBaseBranch || "main";
       const prompt = createVerificationPrompt(currentPipeline.taskSnapshot, projectNotes, targetBranch);
@@ -640,6 +651,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
       } catch (error) {
         console.debug("[OpenCodeBuildChatTab] Failed to load project notes for fix:", error);
       }
+      if (isPipelinePaused()) return;
 
       const prompt = createFixPrompt(currentPipeline.taskSnapshot, projectNotes, feedback);
       const success = await sendPipelinePrompt(
@@ -1063,10 +1075,49 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     if (!resumedPhase) return;
 
     const prompt = createPipelineResumePrompt(resumedPhase);
-    if (!prompt || !currentSession) {
+    if (!prompt) {
       setAdvanceTick((value) => value + 1);
       return;
     }
+
+    if (!isSessionCompatibleWithResumePhase(currentSession, resumedPhase)) {
+      switch (resumedPhase) {
+        case "building": {
+          const task = pipeline.taskSnapshot;
+          try {
+            const notes = await backend.getProjectNotes(pipeline.projectId);
+            await startBuildSession(createBuildPrompt(task, notes.content), pipeline.projectId, taskImagesToAttachments(task.images));
+          } catch {
+            await startBuildSession(createBuildPrompt(task, ""), pipeline.projectId, taskImagesToAttachments(task.images));
+          }
+          break;
+        }
+        case "reviewing":
+        case "addressing":
+          await startReviewSession(pipeline);
+          break;
+        case "verifying":
+          await startVerifySession(pipeline);
+          break;
+        case "fixing":
+          await startFixSession(pipeline, pipeline.verificationFeedback ?? "Resume fixing the latest verification failures.");
+          break;
+        case "creating-pr":
+          await startPRSession(pipeline);
+          break;
+        case "resolving-conflicts":
+          await startResolveConflictsSession(pipeline);
+          break;
+        case "creating-environment":
+        case "starting-environment":
+        case "waiting-for-setup":
+          setAdvanceTick((value) => value + 1);
+          break;
+      }
+      return;
+    }
+
+    if (!currentSession) return;
 
     if (!client) {
       pausePipeline(pipelineId);
@@ -1100,6 +1151,12 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     pipelineId,
     resolveOpenCodePreferences,
     resumePipeline,
+    startBuildSession,
+    startFixSession,
+    startPRSession,
+    startResolveConflictsSession,
+    startReviewSession,
+    startVerifySession,
     setSessionLoading,
   ]);
 

@@ -46,7 +46,7 @@ import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { resolveActiveBuildPipelineAgent } from "@/lib/build-pipeline-agent";
 import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
-import { createPipelineResumePrompt, getPipelineResumePhase } from "@/lib/build-pipeline-resume";
+import { createPipelineResumePrompt, getPipelineResumePhase, isSessionCompatibleWithResumePhase } from "@/lib/build-pipeline-resume";
 import * as backend from "@/lib/backend";
 
 // Reference to kanban store for non-reactive reads
@@ -778,7 +778,15 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       if (!client || isPipelinePaused()) return null;
 
       const newSession = await createSession(client);
-      if (!newSession || isPipelinePaused()) return null;
+      if (!newSession) return null;
+      if (isPipelinePaused()) {
+        try {
+          await abortSession(client, newSession.sessionId);
+        } catch {
+          // Best effort; the session was never attached to the pipeline.
+        }
+        return null;
+      }
 
       const tabIdForSession = `build-${phase}-${iteration}-${Date.now()}`;
       const sessionKey = createClaudeSessionKey(environmentId, tabIdForSession);
@@ -866,6 +874,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         const notes = await getProjectNotes(currentPipeline.projectId);
         projectNotes = notes.content;
       } catch (e) { console.debug("Failed to load project notes for review:", e); }
+      if (isPipelinePaused()) return;
 
       const repoConfig = config.repositories[currentPipeline.projectId];
       const targetBranch = repoConfig?.prBaseBranch || "main";
@@ -916,6 +925,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         const notes = await getProjectNotes(currentPipeline.projectId);
         projectNotes = notes.content;
       } catch (e) { console.debug("Failed to load project notes for verification:", e); }
+      if (isPipelinePaused()) return;
 
       const repoConfig = config.repositories[currentPipeline.projectId];
       const targetBranch = repoConfig?.prBaseBranch || "main";
@@ -965,6 +975,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         const notes = await getProjectNotes(currentPipeline.projectId);
         projectNotes = notes.content;
       } catch (e) { console.debug("Failed to load project notes for fix:", e); }
+      if (isPipelinePaused()) return;
 
       const fixPrompt = createFixPrompt(task, projectNotes, feedback);
 
@@ -1183,7 +1194,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     if (!resumedPhase) return;
 
     const prompt = createPipelineResumePrompt(resumedPhase);
-    if (!prompt || !currentSession) {
+    if (!prompt) {
       setAdvanceTick((value) => value + 1);
       return;
     }
@@ -1192,6 +1203,45 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       pausePipeline(pipelineId);
       return;
     }
+
+    if (!isSessionCompatibleWithResumePhase(currentSession, resumedPhase)) {
+      switch (resumedPhase) {
+        case "building": {
+          const task = pipeline.taskSnapshot;
+          try {
+            const notes = await getProjectNotes(pipeline.projectId);
+            await startBuildSession(createBuildPrompt(task, notes.content), taskImagesToAttachments(task.images));
+          } catch {
+            await startBuildSession(createBuildPrompt(task, ""), taskImagesToAttachments(task.images));
+          }
+          break;
+        }
+        case "reviewing":
+        case "addressing":
+          await startReviewSession(pipeline);
+          break;
+        case "verifying":
+          await startVerifySession(pipeline);
+          break;
+        case "fixing":
+          await startFixSession(pipeline, pipeline.verificationFeedback ?? "Resume fixing the latest verification failures.");
+          break;
+        case "creating-pr":
+          await startPRSession(pipeline);
+          break;
+        case "resolving-conflicts":
+          await startResolveConflictsSession(pipeline);
+          break;
+        case "creating-environment":
+        case "starting-environment":
+        case "waiting-for-setup":
+          setAdvanceTick((value) => value + 1);
+          break;
+      }
+      return;
+    }
+
+    if (!currentSession) return;
 
     markSessionRunning(pipelineId, currentSession.sdkSessionId);
     setSessionLoading(currentSession.sessionKey, true);
@@ -1231,6 +1281,12 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     pipeline,
     pipelineId,
     resumePipeline,
+    startBuildSession,
+    startFixSession,
+    startPRSession,
+    startResolveConflictsSession,
+    startReviewSession,
+    startVerifySession,
     setSessionLoading,
   ]);
 

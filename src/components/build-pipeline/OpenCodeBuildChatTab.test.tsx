@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const mockCreateClient = mock(() => ({ session: {}, event: {} }));
 const mockCreateSession = mock(async () => ({ id: "review-session", createdAt: "2026-04-15T00:00:00.000Z" }));
@@ -348,6 +348,75 @@ describe("OpenCodeBuildChatTab", () => {
     expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
     expect(await screen.findByText("Resume")).toBeTruthy();
     resolveAbort?.(true);
+  });
+
+  test("resuming after stop during session creation starts the intended opencode build stage", async () => {
+    let resolveCreate: ((value: { id: string; createdAt: string }) => void) | undefined;
+    mockCreateSession.mockImplementationOnce(
+      () => new Promise<{ id: string; createdAt: string }>((resolve) => {
+        resolveCreate = resolve;
+      }),
+    );
+    seedPendingPipeline();
+    useOpenCodeStore.setState({
+      serverStatus: new Map([[ENV_ID, { running: true, hostPort: 9999 }]]),
+      sessions: new Map(),
+      clients: new Map([[ENV_ID, mockCreateClient() as any]]),
+      models: new Map(),
+      slashCommands: new Map(),
+      selectedModel: new Map(),
+      selectedVariant: new Map(),
+      selectedMode: new Map(),
+      attachments: new Map(),
+      draftText: new Map(),
+      draftMentions: new Map(),
+      messageQueue: new Map(),
+      isComposing: new Map(),
+      pendingQuestions: new Map(),
+      pendingPermissions: new Map(),
+      eventSubscriptions: new Map(),
+      contextUsage: new Map(),
+    });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
+      expect(screen.getByText("Stop")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("Stop"));
+
+    await waitFor(() => {
+      expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase).toBe("paused");
+    });
+
+    await act(async () => {
+      resolveCreate?.({ id: "late-session", createdAt: "2026-04-15T00:00:00.000Z" });
+    });
+
+    await waitFor(() => {
+      expect(mockAbortSession).toHaveBeenCalledWith(expect.anything(), "late-session");
+    });
+    expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions).toHaveLength(0);
+
+    fireEvent.click(await screen.findByText("Resume"));
+
+    await waitFor(() => {
+      expect(mockCreateSession).toHaveBeenCalledTimes(2);
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        expect.anything(),
+        "review-session",
+        expect.stringContaining("Test task"),
+        {
+          model: "openai/gpt-5",
+          variant: undefined,
+          mode: "build",
+          attachments: undefined,
+        },
+      );
+    });
+    expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions[0]?.phase).toBe("build");
   });
 
   test("paused pipelines expose jump-in controls and send messages to the active opencode session", async () => {

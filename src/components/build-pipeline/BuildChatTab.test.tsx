@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test, mock } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
 // Mocks — must be declared BEFORE importing the component under test
@@ -35,6 +35,7 @@ const mockCreateClient = mock(() => ({ baseUrl: "http://127.0.0.1:9999" }));
 const mockCheckHealth = mock(() => Promise.resolve(true));
 const mockGetModels = mock(() => Promise.resolve([]));
 const mockSubscribeToEvents = mock(() => (async function* () {})());
+const mockCreateSession = mock(() => Promise.resolve({ sessionId: "session-1" }));
 const mockSendPrompt = mock(() => Promise.resolve(true));
 const mockAbortSession = mock(() => Promise.resolve(true));
 
@@ -42,7 +43,7 @@ mock.module("@/lib/claude-client", () => ({
   createClient: mockCreateClient,
   checkHealth: mockCheckHealth,
   getModels: mockGetModels,
-  createSession: mock(() => Promise.resolve({ sessionId: "session-1" })),
+  createSession: mockCreateSession,
   getSessionMessages: mock(() => Promise.resolve([])),
   sendPrompt: mockSendPrompt,
   abortSession: mockAbortSession,
@@ -347,6 +348,7 @@ describe("BuildChatTab", () => {
     mockCheckHealth.mockClear();
     mockGetModels.mockClear();
     mockSubscribeToEvents.mockClear();
+    mockCreateSession.mockClear();
     mockSendPrompt.mockClear();
     mockAbortSession.mockClear();
 
@@ -631,6 +633,58 @@ describe("BuildChatTab", () => {
       expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
       expect(await screen.findByText("Resume")).toBeTruthy();
       resolveAbort?.(true);
+    });
+
+    test("resuming after stop during Claude session creation starts the intended build stage", async () => {
+      let resolveCreate: ((value: { sessionId: string }) => void) | undefined;
+      mockCreateSession.mockImplementationOnce(
+        () => new Promise<{ sessionId: string }>((resolve) => {
+          resolveCreate = resolve;
+        }),
+      );
+      mockGetClaudeServerStatus.mockImplementation(() =>
+        Promise.resolve({ running: true, hostPort: 9999 } as any)
+      );
+      seedPipeline("waiting-for-setup");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(mockCreateSession).toHaveBeenCalledTimes(1);
+        expect(screen.getByText("Stop")).toBeTruthy();
+      });
+
+      fireEvent.click(screen.getByText("Stop"));
+
+      await waitFor(() => {
+        expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase).toBe("paused");
+      });
+
+      await act(async () => {
+        resolveCreate?.({ sessionId: "late-session" });
+      });
+
+      await waitFor(() => {
+        expect(mockAbortSession).toHaveBeenCalledWith({ baseUrl: "http://127.0.0.1:9999" }, "late-session");
+      });
+      expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions).toHaveLength(0);
+
+      fireEvent.click(await screen.findByText("Resume"));
+
+      await waitFor(() => {
+        expect(mockCreateSession).toHaveBeenCalledTimes(2);
+        expect(mockSendPrompt).toHaveBeenCalledWith(
+          { baseUrl: "http://127.0.0.1:9999" },
+          SESSION_ID,
+          expect.stringContaining("Test task"),
+          {
+            permissionMode: "bypassPermissions",
+            attachments: undefined,
+          },
+        );
+      });
+      expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions[0]?.phase).toBe("build");
     });
 
     test("resuming a paused pipeline continues the stopped Claude stage", async () => {

@@ -237,6 +237,75 @@ describe("kanbanStore", () => {
       expect(useBuildPipelineStore.getState().buildEnvironmentIds.has("env-1")).toBe(false);
       expect(useBuildPipelineStore.getState().buildEnvironmentIds.has("env-2")).toBe(true);
     });
+
+    test("does not touch PR fields when clearing build status", async () => {
+      const task = createTask({
+        environmentId: "env-1",
+        buildPipelineId: "pipeline-1",
+        prUrl: "https://github.com/org/repo/pull/1",
+        prState: "open",
+      });
+      useKanbanStore.setState({ tasks: [task] });
+
+      mockUpdateKanbanTask.mockResolvedValueOnce({
+        ...task,
+        environmentId: undefined,
+        buildPipelineId: undefined,
+      });
+
+      await useKanbanStore.getState().clearTaskBuildStatus("task-1");
+
+      // prUrl/prState are passed as undefined (positions 8/9) so they are left intact.
+      const [, , , , , envArg, pipelineArg, prUrlArg, prStateArg] =
+        mockUpdateKanbanTask.mock.calls[0];
+      expect(envArg).toBe("");
+      expect(pipelineArg).toBe("");
+      expect(prUrlArg).toBeUndefined();
+      expect(prStateArg).toBeUndefined();
+    });
+
+    test("leaves tasks and pipelines untouched when the backend update fails", async () => {
+      const task = createTask({ environmentId: "env-1", buildPipelineId: "pipeline-1" });
+      useKanbanStore.setState({ tasks: [task] });
+      useBuildPipelineStore.setState({
+        pipelines: new Map([
+          ["pipeline-1", {
+            id: "pipeline-1",
+            taskId: "task-1",
+            projectId: "proj-1",
+            environmentId: "env-1",
+            environmentType: "local" as const,
+            agentType: "claude" as const,
+            phase: "building" as never,
+            sessions: [],
+            currentSessionIndex: -1,
+            iteration: 0,
+            maxIterations: 3,
+            createdAt: new Date().toISOString(),
+            taskTitle: "Task",
+            taskSnapshot: {
+              title: "Task",
+              description: "",
+              acceptanceCriteria: "",
+              comments: [],
+              images: [],
+            },
+          }],
+        ]),
+        buildEnvironmentIds: new Set(["env-1"]),
+      });
+
+      mockUpdateKanbanTask.mockRejectedValueOnce(new Error("disk full"));
+
+      await useKanbanStore.getState().clearTaskBuildStatus("task-1");
+
+      // The error is swallowed (logged); nothing is mutated so the user can retry.
+      const unchanged = useKanbanStore.getState().tasks.find((t) => t.id === "task-1");
+      expect(unchanged?.environmentId).toBe("env-1");
+      expect(unchanged?.buildPipelineId).toBe("pipeline-1");
+      expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(true);
+      expect(useBuildPipelineStore.getState().buildEnvironmentIds.has("env-1")).toBe(true);
+    });
   });
 
   describe("addComment", () => {

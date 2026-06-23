@@ -1,9 +1,50 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { DndContext } from "@dnd-kit/core";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { KanbanCard } from "@/components/kanban/KanbanCard";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { ComponentProps } from "react";
+
+// The real context menu is Radix-portal + pointer driven, which behaves
+// inconsistently across the shared Bun test process (act configuration and the
+// global mock installed by EnvironmentItem.test.tsx both leak in). Mock it
+// locally with the same shape EnvironmentItem uses so this suite is
+// deterministic regardless of file execution order.
+mock.module("@/components/ui/context-menu", () => ({
+  ContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="context-menu-content">{children}</div>
+  ),
+  ContextMenuItem: ({
+    children,
+    disabled,
+    onClick,
+    onSelect,
+  }: {
+    children: React.ReactNode;
+    disabled?: boolean;
+    onClick?: () => void;
+    onSelect?: () => void;
+  }) => (
+    <div
+      role="menuitem"
+      aria-disabled={disabled ? "true" : undefined}
+      onClick={
+        disabled
+          ? undefined
+          : () => {
+              onClick?.();
+              onSelect?.();
+            }
+      }
+    >
+      {children}
+    </div>
+  ),
+  ContextMenuSeparator: () => <hr />,
+}));
+
+import { KanbanCard } from "@/components/kanban/KanbanCard";
 
 function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
   return {
@@ -41,7 +82,7 @@ describe("KanbanCard", () => {
     renderCard(task, {
       canClearStatus: true,
       onClearStatus,
-      buildPhase: "building",
+      buildPhase: "paused",
     });
 
     fireEvent.contextMenu(screen.getByText("Stuck build task"));
@@ -57,6 +98,17 @@ describe("KanbanCard", () => {
 
   test("does not render clear status menu item for unlinked cards", () => {
     renderCard(makeTask(), { canClearStatus: false });
+
+    expect(screen.queryByText("Clear status")).toBeNull();
+  });
+
+  test("does not render clear status menu item while a build is active", () => {
+    // canClearStatus is computed by KanbanBoard; an actively-building card is
+    // passed canClearStatus={false} so the action is never offered mid-build.
+    renderCard(makeTask({ environmentId: "env-1" }), {
+      canClearStatus: false,
+      buildPhase: "building",
+    });
 
     expect(screen.queryByText("Clear status")).toBeNull();
   });

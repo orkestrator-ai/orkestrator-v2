@@ -2,7 +2,7 @@ import { useRef, useEffect } from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { MessageSquare, RotateCcw } from "lucide-react";
 import type { KanbanTask } from "@/stores/kanbanStore";
-import type { BuildPhase } from "@/stores/buildPipelineStore";
+import { isActiveBuildPhase, type BuildPhase } from "@/stores/buildPipelineStore";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -98,7 +98,7 @@ export function KanbanCard({
     : undefined;
 
   const phaseDisplay = buildPhase ? getBuildPhaseDisplay(buildPhase) : null;
-  const isActivelyBuilding = buildPhase && !["complete", "failed", "paused"].includes(buildPhase);
+  const isActivelyBuilding = buildPhase ? isActiveBuildPhase(buildPhase) : false;
 
   const card = (
     <div

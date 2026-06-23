@@ -157,6 +157,19 @@ describe("buildPipelineStore", () => {
       expect(state.buildEnvironmentIds.has("env-2")).toBe(false);
       expect(state.buildEnvironmentIds.has("env-3")).toBe(true);
     });
+
+    test("no-ops when no pipeline matches the task ID", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams({ taskId: "task-1" }));
+      useBuildPipelineStore.getState().setPipelineEnvironment(id, "env-1");
+      const before = useBuildPipelineStore.getState().pipelines;
+
+      useBuildPipelineStore.getState().removePipelinesForTask("task-unknown");
+
+      const state = useBuildPipelineStore.getState();
+      expect(state.pipelines).toBe(before);
+      expect(state.pipelines.has(id)).toBe(true);
+      expect(state.buildEnvironmentIds.has("env-1")).toBe(true);
+    });
   });
 
   describe("addSession", () => {

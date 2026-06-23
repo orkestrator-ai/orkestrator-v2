@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Plus, StickyNote } from "lucide-react";
 import { useKanbanStore, type KanbanStatus, type KanbanTask } from "@/stores/kanbanStore";
 import { useProjectStore } from "@/stores";
-import { useBuildPipelineStore, type BuildPhase } from "@/stores/buildPipelineStore";
+import { useBuildPipelineStore, isActiveBuildPhase, type BuildPhase } from "@/stores/buildPipelineStore";
 import { useShallow } from "zustand/react/shallow";
 import { KanbanCard } from "./KanbanCard";
 import { KanbanTaskDialog } from "./KanbanTaskDialog";
@@ -29,6 +29,17 @@ const COLUMNS: { id: KanbanStatus; label: string; color: string }[] = [
 
 interface KanbanBoardProps {
   projectId: string;
+}
+
+/**
+ * Whether the "Clear status" action should be offered for a task. It requires a
+ * clearable link (environment, pipeline, or any build phase) AND that the build
+ * is not actively running — an active build owns a live agent session that must
+ * be stopped (which aborts the session) before its status can be cleared.
+ */
+export function canClearTaskBuildStatus(task: KanbanTask, buildPhase: BuildPhase | undefined): boolean {
+  const hasClearableStatus = !!(task.environmentId || task.buildPipelineId || buildPhase);
+  return hasClearableStatus && !(buildPhase ? isActiveBuildPhase(buildPhase) : false);
 }
 
 function DroppableColumn({
@@ -87,7 +98,7 @@ function DroppableColumn({
                 task={task}
                 onClick={() => onClickTask(task)}
                 buildPhase={buildPhase}
-                canClearStatus={!!(task.environmentId || task.buildPipelineId || buildPhase)}
+                canClearStatus={canClearTaskBuildStatus(task, buildPhase)}
                 onClearStatus={onClearTaskStatus}
               />
             );

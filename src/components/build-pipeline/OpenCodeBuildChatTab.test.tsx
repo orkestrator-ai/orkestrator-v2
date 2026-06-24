@@ -544,7 +544,12 @@ describe("OpenCodeBuildChatTab", () => {
 
     render(<OpenCodeBuildChatTab data={createData()} isActive />);
 
-    const reconnectButton = await screen.findByText("Reconnect now");
+    expect(await screen.findByText("Connection Failed")).toBeTruthy();
+    const reconnectButton = screen.getByRole("button", { name: "Reconnect now" });
+    // The error screen overlays a Stop control (pipeline still running) but no
+    // duplicate top-right Reconnect — the centered "Reconnect now" covers that.
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
     useEnvironmentStore.setState({
       environments: [{
         ...useEnvironmentStore.getState().environments[0]!,
@@ -559,6 +564,38 @@ describe("OpenCodeBuildChatTab", () => {
     await waitFor(() => {
       expect(mockCreateClient).toHaveBeenCalledWith("http://127.0.0.1:9999");
     });
+  });
+
+  test("surfaces the error screen when the opencode event stream disconnects mid-run", async () => {
+    // Connection is healthy at init (cached client) but the event subscription
+    // fails, simulating the bridge dropping the stream while the pipeline runs.
+    mockSubscribeToEvents.mockImplementationOnce(async () => {
+      throw new Error("event stream disconnected");
+    });
+    seedPipeline("building", "running");
+    seedOpenCodeStore(true);
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    expect(await screen.findByText("Connection Failed")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reconnect now" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
+  });
+
+  test("shows an inline reconnect button when the opencode event stream ends while running", async () => {
+    // The default subscribeToEvents mock resolves to an immediately-completed
+    // stream, so the shared subscription ends and hasActiveEventSubscription()
+    // flips to false while the pipeline is still running.
+    seedPipeline("building", "running");
+    seedOpenCodeStore(true);
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    // Inline header Reconnect appears, distinct from the full-screen "Reconnect now".
+    expect(await screen.findByRole("button", { name: "Reconnect" })).toBeTruthy();
+    // Still the connected chat view, not the error screen.
+    expect(screen.queryByText("Connection Failed")).toBeNull();
   });
 
   test("auto-approves permissions with always and rejects questions for unattended runs", async () => {

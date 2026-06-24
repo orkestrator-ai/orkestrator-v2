@@ -410,6 +410,9 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
       } catch (error) {
         if (!abortController.signal.aborted) {
           console.error("[OpenCodeBuildChatTab] Event subscription error:", error);
+          isInitializedRef.current = false;
+          setConnectionState("error");
+          setErrorMessage(error instanceof Error ? error.message : "Connection to OpenCode server was lost");
         }
       } finally {
         setEventStream(environmentId, null);
@@ -1164,6 +1167,10 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
 
   const isRunning = pipeline && !["complete", "failed", "paused"].includes(pipeline.phase);
   const isPaused = pipeline?.phase === "paused";
+  const isEventStreamDisconnected =
+    connectionState === "connected" &&
+    Boolean(isRunning) &&
+    !hasActiveEventSubscription(environmentId);
 
   useEffect(() => {
     if (isPaused) {
@@ -1201,6 +1208,18 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     }
   }, [client, pipeline, setSessionLoading]);
 
+  // Stop control overlaid on the Connection Failed screen so a user can halt a
+  // still-running backend pipeline. Reconnect is intentionally omitted here —
+  // the centered "Reconnect now" button already covers it.
+  const disconnectedActions = isRunning ? (
+    <div className="absolute right-4 top-2 z-10 flex items-center gap-2">
+      <Button variant="ghost" size="sm" onClick={handleStop} className="h-6 gap-1 px-2 text-xs">
+        <StopCircle className="h-3 w-3" />
+        Stop
+      </Button>
+    </div>
+  ) : null;
+
   if (setupPending && pipeline && !["complete", "failed", "paused"].includes(pipeline.phase)) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -1218,7 +1237,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
         <p className="text-sm">Connecting to OpenCode server...</p>
         <Button variant="outline" size="sm" onClick={handleRetry} className="gap-2">
           <RefreshCw className="h-4 w-4" />
-          Reconnect now
+          <span>Reconnect now</span>
         </Button>
       </div>
     );
@@ -1226,7 +1245,8 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
 
   if (connectionState === "error") {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 p-4 text-muted-foreground">
+      <div className="relative flex h-full flex-col items-center justify-center gap-4 p-4 text-muted-foreground">
+        {disconnectedActions}
         <AlertCircle className="h-10 w-10 text-destructive" />
         <div className="text-center">
           <p className="text-sm font-medium text-foreground">Connection Failed</p>
@@ -1234,7 +1254,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
         </div>
         <Button variant="outline" size="sm" onClick={handleRetry} className="gap-2">
           <RefreshCw className="h-4 w-4" />
-          Reconnect now
+          <span>Reconnect now</span>
         </Button>
       </div>
     );
@@ -1257,6 +1277,12 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
             )}
           </div>
           <div className="flex items-center gap-2">
+            {isEventStreamDisconnected && (
+              <Button variant="outline" size="sm" onClick={handleRetry} className="h-6 gap-1 px-2 text-xs">
+                <RefreshCw className="h-3 w-3" />
+                Reconnect
+              </Button>
+            )}
             {isRunning && (
               <Button variant="ghost" size="sm" onClick={handleStop} className="h-6 gap-1 px-2 text-xs">
                 <StopCircle className="h-3 w-3" />

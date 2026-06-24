@@ -813,4 +813,64 @@ describe("BuildChatTab", () => {
       expect(screen.queryByText("Waiting for setup scripts to complete...")).toBeNull();
     });
   });
+
+  // -----------------------------------------------------------------------
+  // Event stream disconnection
+  // -----------------------------------------------------------------------
+
+  describe("event stream disconnection", () => {
+    test("event subscription failure surfaces the error screen with reconnect controls", async () => {
+      // Init succeeds (cached client + healthy), then the SSE subscription
+      // throws, simulating the bridge dropping the stream mid-run.
+      mockSubscribeToEvents.mockImplementationOnce(() =>
+        (async function* () {
+          throw new Error("bridge connection lost");
+        })()
+      );
+      seedPipelineWithBuildSession("building", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      expect(await screen.findByText("Connection Failed")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Reconnect now" })).toBeTruthy();
+      // Running pipeline → Stop overlay is available on the error screen, but the
+      // redundant top-right Reconnect is not (the centered one covers it).
+      expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
+    });
+
+    test("does not show the error screen when the subscription is aborted intentionally", async () => {
+      // A normal teardown aborts the subscription; the catch is abort-gated, so
+      // no false "Connection Failed" should appear.
+      seedPipelineWithBuildSession("building", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      // Wait for the connected view to settle, then confirm no error UI.
+      await waitFor(() => {
+        expect(mockSubscribeToEvents).toHaveBeenCalled();
+      });
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+    });
+
+    test("shows an inline reconnect button when the event stream ends while running", async () => {
+      // The default subscribeToEvents mock returns an immediately-completed
+      // stream, so the shared subscription ends and hasActiveEventSubscription()
+      // flips false while the pipeline is still running.
+      seedPipelineWithBuildSession("building", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      // Inline header Reconnect (distinct from the full-screen "Reconnect now").
+      expect(await screen.findByRole("button", { name: "Reconnect" })).toBeTruthy();
+      // Still in the connected chat view, not the error screen.
+      expect(screen.queryByText("Connection Failed")).toBeNull();
+    });
+  });
 });

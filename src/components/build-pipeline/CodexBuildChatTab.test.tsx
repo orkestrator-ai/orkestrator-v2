@@ -669,8 +669,10 @@ describe("CodexBuildChatTab", () => {
 
     expect(await screen.findByText("Connection Failed")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Reconnect now" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy();
+    // The error screen overlays a Stop control (pipeline still running) but no
+    // duplicate top-right Reconnect — the centered "Reconnect now" covers that.
     expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
   });
 
   test("reconnect action retries codex initialization after a connection failure", async () => {
@@ -717,6 +719,43 @@ describe("CodexBuildChatTab", () => {
     await waitFor(() => {
       expect(mockCreateClient).toHaveBeenCalledWith("http://127.0.0.1:9999");
     });
+  });
+
+  test("surfaces the error screen when codex polling disconnects mid-run", async () => {
+    seedPipeline("building", "running");
+    seedCodexStore(true);
+    // Connection is healthy at init, then the poll loop loses the bridge.
+    mockGetSessionStatus.mockImplementation(async () => {
+      throw new Error("socket hang up");
+    });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    expect(await screen.findByText("Connection Failed")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reconnect now" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    expect(mockGetSessionStatus).toHaveBeenCalled();
+  });
+
+  test("stops polling after a codex polling disconnect", async () => {
+    seedPipeline("building", "running");
+    seedCodexStore(true);
+    mockGetSessionStatus.mockImplementation(async () => {
+      throw new Error("socket hang up");
+    });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await screen.findByText("Connection Failed");
+    const callsAtDisconnect = mockGetSessionStatus.mock.calls.length;
+
+    // Wait past one 1000ms poll interval; the interval must have been torn down
+    // when connectionState flipped to "error", so no further polls fire.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    });
+
+    expect(mockGetSessionStatus.mock.calls.length).toBe(callsAtDisconnect);
   });
 
   test("does not advance past a new review session before the review prompt is accepted", async () => {

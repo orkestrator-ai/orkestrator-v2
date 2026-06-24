@@ -1208,20 +1208,17 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     }
   }, [client, pipeline, setSessionLoading]);
 
-  const disconnectedActions = (
+  // Stop control overlaid on the Connection Failed screen so a user can halt a
+  // still-running backend pipeline. Reconnect is intentionally omitted here —
+  // the centered "Reconnect now" button already covers it.
+  const disconnectedActions = isRunning ? (
     <div className="absolute right-4 top-2 z-10 flex items-center gap-2">
-      {isRunning && (
-        <Button variant="ghost" size="sm" onClick={handleStop} className="h-6 gap-1 px-2 text-xs">
-          <StopCircle className="h-3 w-3" />
-          Stop
-        </Button>
-      )}
-      <Button variant="outline" size="sm" onClick={handleRetry} className="h-6 gap-1 px-2 text-xs">
-        <RefreshCw className="h-3 w-3" />
-        Reconnect
+      <Button variant="ghost" size="sm" onClick={handleStop} className="h-6 gap-1 px-2 text-xs">
+        <StopCircle className="h-3 w-3" />
+        Stop
       </Button>
     </div>
-  );
+  ) : null;
 
   if (setupPending && pipeline && !["complete", "failed", "paused"].includes(pipeline.phase)) {
     return (

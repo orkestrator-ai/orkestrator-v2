@@ -1424,20 +1424,17 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     }
   }, [client, pipeline, setSessionLoading]);
 
-  const disconnectedActions = (
+  // Stop control overlaid on the Connection Failed screen so a user can halt a
+  // still-running backend pipeline. Reconnect is intentionally omitted here —
+  // the centered "Reconnect now" button already covers it.
+  const disconnectedActions = isRunning ? (
     <div className="absolute right-4 top-2 z-10 flex items-center gap-2">
-      {isRunning && (
-        <Button variant="ghost" size="sm" onClick={handleStop} className="h-6 px-2 gap-1 text-xs">
-          <StopCircle className="w-3 h-3" />
-          Stop
-        </Button>
-      )}
-      <Button variant="outline" size="sm" onClick={handleRetry} className="h-6 px-2 gap-1 text-xs">
-        <RefreshCw className="w-3 h-3" />
-        Reconnect
+      <Button variant="ghost" size="sm" onClick={handleStop} className="h-6 px-2 gap-1 text-xs">
+        <StopCircle className="w-3 h-3" />
+        Stop
       </Button>
     </div>
-  );
+  ) : null;
 
   // Show setup waiting UI when setup is pending (before connection is even attempted).
   // Covers all active phases defensively — if setup is somehow pending during "building"

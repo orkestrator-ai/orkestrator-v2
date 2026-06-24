@@ -667,7 +667,10 @@ describe("CodexBuildChatTab", () => {
 
     render(<CodexBuildChatTab data={createData()} isActive />);
 
-    expect(await screen.findByText("Reconnect now")).toBeTruthy();
+    expect(await screen.findByText("Connection Failed")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reconnect now" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
   });
 
   test("reconnect action retries codex initialization after a connection failure", async () => {
@@ -699,7 +702,8 @@ describe("CodexBuildChatTab", () => {
 
     render(<CodexBuildChatTab data={createData()} isActive />);
 
-    const reconnectButton = await screen.findByText("Reconnect now");
+    expect(await screen.findByText("Connection Failed")).toBeTruthy();
+    const reconnectButton = screen.getByRole("button", { name: "Reconnect now" });
     useEnvironmentStore.setState({
       environments: [{
         ...useEnvironmentStore.getState().environments[0]!,

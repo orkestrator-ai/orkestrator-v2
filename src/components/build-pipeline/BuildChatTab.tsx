@@ -484,6 +484,9 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       } catch (error) {
         if (!abortController.signal.aborted) {
           console.error("[BuildChatTab] Event subscription error:", error);
+          isInitializedRef.current = false;
+          setConnectionState("error");
+          setErrorMessage(error instanceof Error ? error.message : "Connection to Claude bridge server was lost");
         }
       } finally {
         setEventStream(environmentId, null);
@@ -1377,6 +1380,10 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
 
   const isRunning = pipeline && !["complete", "failed", "paused"].includes(pipeline.phase);
   const isPaused = pipeline?.phase === "paused";
+  const isEventStreamDisconnected =
+    connectionState === "connected" &&
+    Boolean(isRunning) &&
+    !hasActiveEventSubscription(environmentId);
 
   // Auto-focus the jump-in textarea when entering paused state
   useEffect(() => {
@@ -1417,6 +1424,21 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     }
   }, [client, pipeline, setSessionLoading]);
 
+  const disconnectedActions = (
+    <div className="absolute right-4 top-2 z-10 flex items-center gap-2">
+      {isRunning && (
+        <Button variant="ghost" size="sm" onClick={handleStop} className="h-6 px-2 gap-1 text-xs">
+          <StopCircle className="w-3 h-3" />
+          Stop
+        </Button>
+      )}
+      <Button variant="outline" size="sm" onClick={handleRetry} className="h-6 px-2 gap-1 text-xs">
+        <RefreshCw className="w-3 h-3" />
+        Reconnect
+      </Button>
+    </div>
+  );
+
   // Show setup waiting UI when setup is pending (before connection is even attempted).
   // Covers all active phases defensively — if setup is somehow pending during "building"
   // or later phases, we still block until setup completes.
@@ -1455,7 +1477,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         <p className="text-sm">Connecting to Claude bridge server...</p>
         <Button variant="outline" size="sm" onClick={handleRetry} className="gap-2">
           <RefreshCw className="w-4 h-4" />
-          Reconnect now
+          <span>Reconnect now</span>
         </Button>
       </div>
     );
@@ -1463,7 +1485,8 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
 
   if (connectionState === "error") {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground p-4">
+      <div className="relative flex flex-col items-center justify-center h-full gap-4 text-muted-foreground p-4">
+        {disconnectedActions}
         <AlertCircle className="w-10 h-10 text-destructive" />
         <div className="text-center">
           <p className="text-sm font-medium text-foreground">Connection Failed</p>
@@ -1471,7 +1494,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
         </div>
         <Button variant="outline" size="sm" onClick={handleRetry} className="gap-2">
           <RefreshCw className="w-4 h-4" />
-          Reconnect now
+          <span>Reconnect now</span>
         </Button>
       </div>
     );
@@ -1495,6 +1518,12 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
             )}
           </div>
           <div className="flex items-center gap-2">
+            {isEventStreamDisconnected && (
+              <Button variant="outline" size="sm" onClick={handleRetry} className="h-6 px-2 gap-1 text-xs">
+                <RefreshCw className="w-3 h-3" />
+                Reconnect
+              </Button>
+            )}
             {isRunning && (
               <Button variant="ghost" size="sm" onClick={handleStop} className="h-6 px-2 gap-1 text-xs">
                 <StopCircle className="w-3 h-3" />

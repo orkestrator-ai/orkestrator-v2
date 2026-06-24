@@ -1040,8 +1040,20 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     const poll = async () => {
       if (cancelled) return;
 
-      const status = await getSessionStatus(client, currentSdkSessionId);
-      const messages = await getSessionMessages(client, currentSdkSessionId);
+      let status: Awaited<ReturnType<typeof getSessionStatus>>;
+      let messages: CodexMessage[];
+      try {
+        status = await getSessionStatus(client, currentSdkSessionId);
+        messages = await getSessionMessages(client, currentSdkSessionId);
+      } catch (error) {
+        if (cancelled) return;
+        console.error("[CodexBuildChatTab] Polling disconnected:", error);
+        isInitializedRef.current = false;
+        setConnectionState("error");
+        setErrorMessage(error instanceof Error ? error.message : "Connection to Codex bridge server was lost");
+        return;
+      }
+
       if (cancelled) return;
 
       debugCodexBuild("poll result", () => ({
@@ -1505,6 +1517,21 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     }
   }, [client, pipeline, setSessionLoading]);
 
+  const disconnectedActions = (
+    <div className="absolute right-4 top-2 z-10 flex items-center gap-2">
+      {isRunning && (
+        <Button variant="ghost" size="sm" onClick={handleStop} className="h-6 gap-1 px-2 text-xs">
+          <StopCircle className="h-3 w-3" />
+          Stop
+        </Button>
+      )}
+      <Button variant="outline" size="sm" onClick={handleRetry} className="h-6 gap-1 px-2 text-xs">
+        <RefreshCw className="h-3 w-3" />
+        Reconnect
+      </Button>
+    </div>
+  );
+
   if (setupPending && pipeline && !["complete", "failed", "paused"].includes(pipeline.phase)) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -1522,7 +1549,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         <p className="text-sm">Connecting to Codex bridge server...</p>
         <Button variant="outline" size="sm" onClick={handleRetry} className="gap-2">
           <RefreshCw className="h-4 w-4" />
-          Reconnect now
+          <span>Reconnect now</span>
         </Button>
       </div>
     );
@@ -1530,7 +1557,8 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
 
   if (connectionState === "error") {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 p-4 text-muted-foreground">
+      <div className="relative flex h-full flex-col items-center justify-center gap-4 p-4 text-muted-foreground">
+        {disconnectedActions}
         <AlertCircle className="h-10 w-10 text-destructive" />
         <div className="text-center">
           <p className="text-sm font-medium text-foreground">Connection Failed</p>
@@ -1538,7 +1566,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         </div>
         <Button variant="outline" size="sm" onClick={handleRetry} className="gap-2">
           <RefreshCw className="h-4 w-4" />
-          Reconnect now
+          <span>Reconnect now</span>
         </Button>
       </div>
     );

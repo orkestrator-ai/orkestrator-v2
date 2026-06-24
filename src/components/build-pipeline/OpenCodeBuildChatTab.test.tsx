@@ -544,7 +544,10 @@ describe("OpenCodeBuildChatTab", () => {
 
     render(<OpenCodeBuildChatTab data={createData()} isActive />);
 
-    const reconnectButton = await screen.findByText("Reconnect now");
+    expect(await screen.findByText("Connection Failed")).toBeTruthy();
+    const reconnectButton = screen.getByRole("button", { name: "Reconnect now" });
+    expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
     useEnvironmentStore.setState({
       environments: [{
         ...useEnvironmentStore.getState().environments[0]!,

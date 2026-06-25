@@ -419,6 +419,80 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.getByText("No child actions yet.")).toBeTruthy();
   });
 
+  test("uses external tmux usage counts for agent task rows when available", () => {
+    const message = makeMessage([
+      {
+        type: "task-group",
+        content: "Agent",
+        task: {
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolTitle: "Agent",
+          toolState: "pending",
+          toolUseCount: 8,
+          tokenCount: 20_400,
+          tokenCountText: "20.4k tokens",
+          toolArgs: {
+            description: "Review API-client source modules group 1",
+            subagent_type: "Explore",
+          },
+        },
+        childTools: [],
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("8 tool uses")).toBeTruthy();
+    expect(screen.getByText("20.4k tokens")).toBeTruthy();
+    expect(screen.queryByText("0 updates")).toBeNull();
+  });
+
+  test("uses external tmux usage counts for standalone subagent rows when available", () => {
+    const message = makeMessage([
+      {
+        type: "subagent",
+        content: "Lovelace",
+        subagentName: "Lovelace",
+        subagentRole: "Explore",
+        toolState: "pending",
+        subagentActions: [],
+        subagentActionCount: 0,
+        toolUseCount: 8,
+        tokenCount: 20_400,
+        tokenCountText: "20.4k tokens",
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("8 tool uses")).toBeTruthy();
+    expect(screen.getByText("20.4k tokens")).toBeTruthy();
+    expect(screen.queryByText("0 updates")).toBeNull();
+  });
+
+  test("uses singular tool-use wording for a single external tool use", () => {
+    const message = makeMessage([
+      {
+        type: "subagent",
+        content: "Lovelace",
+        subagentName: "Lovelace",
+        toolState: "pending",
+        subagentActions: [],
+        subagentActionCount: 0,
+        toolUseCount: 1,
+        tokenCount: 980,
+        tokenCountText: "980 tokens",
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("1 tool use")).toBeTruthy();
+    expect(screen.getByText("980 tokens")).toBeTruthy();
+  });
+
   test("shows a no-activity preview when a finished agent captured no child tools", () => {
     const message = makeMessage([
       {

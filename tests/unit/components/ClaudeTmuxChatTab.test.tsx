@@ -608,6 +608,48 @@ describe("ClaudeTmuxChatTab", () => {
     expect(screen.getByRole("button", { name: /terminal/i })).toBeTruthy();
   });
 
+  test("surfaces Claude tmux agent tool-use and token counts in native rows", async () => {
+    mockRunningTmuxStatus();
+    getTranscriptMock.mockImplementation(async () => [
+      {
+        type: "assistant",
+        uuid: "assistant-agent-1",
+        timestamp: "2026-06-25T18:20:00.000Z",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "agent-1",
+              name: "Agent",
+              input: {
+                description: "Review API-client source modules group 1",
+                subagent_type: "Explore",
+                prompt: "Read the API client modules and report issues.",
+              },
+            },
+          ],
+        },
+      },
+    ]);
+    capturePaneMock.mockImplementation(async () => `
+Running 1 Explore agent...
+└ Review API-client source modules group 1 · 8 tool uses · 20.4k tokens
+`);
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByText("8 tool uses")).toBeTruthy();
+    expect(screen.getByText("20.4k tokens")).toBeTruthy();
+    expect(screen.queryByText("0 updates")).toBeNull();
+  });
+
   test("forwards the worktree path to the interactive terminal for local environments", async () => {
     getStatusMock.mockImplementation(async () => ({
       tab_id: "tab-1",

@@ -29,6 +29,9 @@ export interface NativeBasePart {
   toolOutput?: string;
   toolError?: string;
   toolDiff?: NativeToolDiffMetadata;
+  toolUseCount?: number;
+  tokenCount?: number;
+  tokenCountText?: string;
   toolUseId?: string;
   parentTaskUseId?: string;
   isMcpTool?: boolean;

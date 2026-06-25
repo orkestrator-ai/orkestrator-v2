@@ -171,6 +171,10 @@ function areMentionsEqual(a: FileMention[], b: FileMention[]): boolean {
   return a.every((mention, index) => mention.id === b[index]?.id);
 }
 
+function focusEditableElement(element: HTMLElement): void {
+  element.focus({ preventScroll: true });
+}
+
 export const MentionableInput = forwardRef<MentionableInputRef, MentionableInputProps>(
   function MentionableInput(
     {
@@ -192,11 +196,16 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
     const lastMentionsRef = useRef(mentions);
     const isComposingRef = useRef(false);
     const pendingCursorRef = useRef<number | null>(null);
+    const pendingFocusRef = useRef(false);
     const initializedRef = useRef(false);
     const lastCursorPositionRef = useRef(value.length);
 
     useImperativeHandle(ref, () => ({
-      focus: () => inputRef.current?.focus(),
+      focus: () => {
+        if (inputRef.current) {
+          focusEditableElement(inputRef.current);
+        }
+      },
       blur: () => inputRef.current?.blur(),
       getCursorPosition: () => (inputRef.current ? getCursorOffset(inputRef.current) : 0),
       insertMention: (mention: FileMention) => {
@@ -221,15 +230,22 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
             trailingText;
           const newMentions = [...mentions, mention];
 
-          pendingCursorRef.current = tokenRange.start + mention.filename.length + 2;
+          // Place the caret immediately after the inserted "@filename" plus any
+          // separator we added. When `separator` is "" we reused the existing
+          // trailing whitespace, so the caret must stop before it.
+          pendingCursorRef.current =
+            tokenRange.start + 1 + mention.filename.length + separator.length;
           lastCursorPositionRef.current = pendingCursorRef.current;
+          pendingFocusRef.current = true;
+          focusEditableElement(inputRef.current);
           onChange(newText, newMentions);
         }
       },
     }));
 
-    useEffect(() => {
-      if (!inputRef.current) return;
+    useLayoutEffect(() => {
+      const input = inputRef.current;
+      if (!input) return;
 
       // On first render, always sync the DOM with the store value (restores draft text)
       const isFirstRender = !initializedRef.current;
@@ -237,25 +253,35 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
         initializedRef.current = true;
       }
 
-      if (!isFirstRender && value === lastValueRef.current && areMentionsEqual(mentions, lastMentionsRef.current)) {
+      const hasContentChange =
+        isFirstRender ||
+        value !== lastValueRef.current ||
+        !areMentionsEqual(mentions, lastMentionsRef.current);
+      const pendingCursor = pendingCursorRef.current;
+      const shouldRestoreFocus = pendingFocusRef.current;
+
+      if (!hasContentChange && pendingCursor === null && !shouldRestoreFocus) {
         return;
       }
 
       lastValueRef.current = value;
       lastMentionsRef.current = mentions;
 
-      const cursorPos = isFirstRender ? value.length : getCursorOffset(inputRef.current);
+      const cursorPos = pendingCursor ?? (isFirstRender ? value.length : getCursorOffset(input));
       lastCursorPositionRef.current = cursorPos;
-      inputRef.current.innerHTML = renderContent(value, mentions);
-      setCursorOffset(inputRef.current, cursorPos);
-    }, [value, mentions]);
 
-    useLayoutEffect(() => {
-      if (pendingCursorRef.current !== null && inputRef.current) {
-        setCursorOffset(inputRef.current, pendingCursorRef.current);
-        lastCursorPositionRef.current = pendingCursorRef.current;
-        pendingCursorRef.current = null;
+      // Only rewrite the DOM when the content actually changed; rewriting on a
+      // pure focus/cursor restore would needlessly clobber the live selection.
+      if (hasContentChange) {
+        input.innerHTML = renderContent(value, mentions);
       }
+      if (shouldRestoreFocus) {
+        focusEditableElement(input);
+      }
+      setCursorOffset(input, cursorPos);
+
+      pendingCursorRef.current = null;
+      pendingFocusRef.current = false;
     }, [value, mentions]);
 
     const handleInput = useCallback(() => {

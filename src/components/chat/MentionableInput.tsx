@@ -230,7 +230,11 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
             trailingText;
           const newMentions = [...mentions, mention];
 
-          pendingCursorRef.current = tokenRange.start + mention.filename.length + 2;
+          // Place the caret immediately after the inserted "@filename" plus any
+          // separator we added. When `separator` is "" we reused the existing
+          // trailing whitespace, so the caret must stop before it.
+          pendingCursorRef.current =
+            tokenRange.start + 1 + mention.filename.length + separator.length;
           lastCursorPositionRef.current = pendingCursorRef.current;
           pendingFocusRef.current = true;
           focusEditableElement(inputRef.current);
@@ -260,30 +264,23 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
         return;
       }
 
+      lastValueRef.current = value;
+      lastMentionsRef.current = mentions;
+
+      const cursorPos = pendingCursor ?? (isFirstRender ? value.length : getCursorOffset(input));
+      lastCursorPositionRef.current = cursorPos;
+
+      // Only rewrite the DOM when the content actually changed; rewriting on a
+      // pure focus/cursor restore would needlessly clobber the live selection.
       if (hasContentChange) {
-        lastValueRef.current = value;
-        lastMentionsRef.current = mentions;
-
-        const cursorPos = pendingCursor ?? (isFirstRender ? value.length : getCursorOffset(input));
-        lastCursorPositionRef.current = cursorPos;
         input.innerHTML = renderContent(value, mentions);
-        if (shouldRestoreFocus) {
-          focusEditableElement(input);
-        }
-        setCursorOffset(input, cursorPos);
-      } else {
-        if (shouldRestoreFocus) {
-          focusEditableElement(input);
-        }
-        if (pendingCursor !== null) {
-          setCursorOffset(input, pendingCursor);
-          lastCursorPositionRef.current = pendingCursor;
-        }
       }
+      if (shouldRestoreFocus) {
+        focusEditableElement(input);
+      }
+      setCursorOffset(input, cursorPos);
 
-      if (pendingCursor !== null) {
-        pendingCursorRef.current = null;
-      }
+      pendingCursorRef.current = null;
       pendingFocusRef.current = false;
     }, [value, mentions]);
 

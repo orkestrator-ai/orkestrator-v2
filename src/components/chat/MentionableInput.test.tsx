@@ -248,6 +248,50 @@ describe("MentionableInput", () => {
     expect(inputRef.current!.getCursorPosition()).toBe("Review @utils.ts ".length);
   });
 
+  test("places the cursor before reused whitespace after an inserted mention", () => {
+    const inputRef = createRef<MentionableInputRef>();
+
+    function Harness() {
+      const [draftText, setDraftText] = useState("Review @ut please");
+      const [draftMentions, setDraftMentions] = useState<FileMention[]>([]);
+
+      return (
+        <MentionableInput
+          ref={inputRef}
+          value={draftText}
+          mentions={draftMentions}
+          onChange={(newText, newMentions) => {
+            setDraftText(newText);
+            setDraftMentions(newMentions);
+          }}
+        />
+      );
+    }
+
+    const { container } = render(<Harness />);
+    const input = container.querySelector("[contenteditable]") as HTMLElement;
+
+    const selection = window.getSelection()!;
+    const range = document.createRange();
+    range.setStart(input.firstChild!, "Review @u".length);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    act(() => {
+      inputRef.current!.insertMention({
+        id: "mention-1",
+        filename: "utils.ts",
+        relativePath: "src/utils.ts",
+      });
+    });
+
+    // The existing space after "@ut" is reused, so the caret must land directly
+    // after "@utils.ts" and before that space, not one character into it.
+    expect(input.textContent).toBe("Review @utils.ts please");
+    expect(inputRef.current!.getCursorPosition()).toBe("Review @utils.ts".length);
+  });
+
   test("does not insert a mention when no active token exists", () => {
     const onChange = mock(() => {});
     const inputRef = createRef<MentionableInputRef>();

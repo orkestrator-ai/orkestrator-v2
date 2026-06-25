@@ -856,6 +856,77 @@ describe("TerminalContainer", () => {
     });
   });
 
+  test("launches a pending native tab when persisted setup is complete but workspaceReady is stale", async () => {
+    usePaneLayoutStore.setState((state) => {
+      const environments = new Map(state.environments);
+      environments.set("env-hidden", {
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [{ id: "default", type: "plain", isSetupTab: true }],
+          activeTabId: "default",
+        },
+        activePaneId: "default",
+        containerId: "container-hidden",
+      });
+      return { ...state, environments };
+    });
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((env) =>
+        env.id === "env-hidden"
+          ? {
+              ...env,
+              setupScriptsComplete: true,
+            }
+          : env
+      ),
+      setupCommandsResolved: new Set(["env-hidden"]),
+      setupScriptsRunning: new Set(["env-hidden"]),
+      workspaceReadyEnvironments: new Set(),
+    }));
+    useClaudeOptionsStore.setState({
+      options: {},
+      pendingNativeLaunches: {
+        "env-hidden": {
+          containerId: "container-hidden",
+          environmentId: "env-hidden",
+          initialPrompt: "Recover from stale setup state",
+          targetPaneId: "default",
+          agentType: "codex",
+          launchMode: "native",
+        },
+      },
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+
+    await waitFor(() => {
+      const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(envHidden?.root.kind).toBe("leaf");
+      if (!envHidden || envHidden.root.kind !== "leaf") {
+        throw new Error("env-hidden root should be a leaf");
+      }
+
+      const nativeTab = envHidden.root.tabs.find((tab) => tab.type === "codex-native");
+      expect(nativeTab?.initialPrompt).toBe("Recover from stale setup state");
+      expect(
+        useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")
+      ).toBeUndefined();
+      expect(useEnvironmentStore.getState().isWorkspaceReady("env-hidden")).toBe(true);
+      expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-hidden")).toBe(false);
+    });
+  });
+
   test("launches Claude tmux after container setup when Claude native backend is tmux", async () => {
     seedContainerSetupCommands();
     useConfigStore.setState((state) => ({

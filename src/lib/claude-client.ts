@@ -38,6 +38,12 @@ export interface ClaudeMessagePart {
   toolOutput?: string;
   toolError?: string;
   toolDiff?: ToolDiffMetadata;
+  /** Count surfaced by provider UI/transcript metadata when child tool records are unavailable. */
+  toolUseCount?: number;
+  /** Numeric token count surfaced by provider UI/transcript metadata. */
+  tokenCount?: number;
+  /** Display text for compact provider token counts, e.g. "20.4k tokens". */
+  tokenCountText?: string;
   /** Tool use ID for this tool invocation */
   toolUseId?: string;
   /** Parent Task tool use ID - used to group child tools under their parent Task */

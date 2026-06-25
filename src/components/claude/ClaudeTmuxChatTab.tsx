@@ -96,6 +96,10 @@ import {
 } from "@/stores/claudeTmuxStore";
 import { collapseTaskToolUpdates } from "@/lib/task-tool-snapshots";
 import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
+import {
+  applyTmuxAgentUsageSummaries,
+  parseTmuxAgentUsageSummaries,
+} from "@/lib/claude-tmux-usage";
 import type { ClaudeEffortLevel, ClaudeModel } from "@/lib/claude-client";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -385,9 +389,17 @@ export function ClaudeTmuxChatTab({
       pendingElicitations.length >
     0;
   const visibleSelectionPrompt = hasPendingHookCards ? null : selectionPrompt;
+  const agentUsageSummaries = useMemo(
+    () => parseTmuxAgentUsageSummaries(tuiSnapshot),
+    [tuiSnapshot],
+  );
   const displayMessages = useMemo(
-    () => collapseTaskToolUpdates(compactConsecutiveAssistantMessages(messages)),
-    [messages],
+    () =>
+      applyTmuxAgentUsageSummaries(
+        collapseTaskToolUpdates(compactConsecutiveAssistantMessages(messages)),
+        agentUsageSummaries,
+      ),
+    [messages, agentUsageSummaries],
   );
   const hasMessageHistory = displayMessages.length > 0;
   const centerCompose =

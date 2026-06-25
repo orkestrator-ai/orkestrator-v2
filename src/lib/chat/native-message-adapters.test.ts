@@ -200,6 +200,39 @@ describe("native message adapters", () => {
     }
   });
 
+  test("carries external tmux usage counts onto the normalized task part", () => {
+    const message: ClaudeMessage = {
+      id: "claude-agent-usage",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-18T12:02:30.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          toolName: "Agent",
+          content: "Run reviewer",
+          toolUseId: "agent-usage",
+          toolUseCount: 8,
+          tokenCount: 20_400,
+          tokenCountText: "20.4k tokens",
+        },
+      ],
+    };
+
+    const normalized = normalizeClaudeMessage(message);
+
+    expect(normalized.parts[0]?.type).toBe("tool-group");
+    if (normalized.parts[0]?.type === "tool-group") {
+      const taskGroup = normalized.parts[0].parts[0];
+      expect(taskGroup?.type).toBe("task-group");
+      if (taskGroup?.type === "task-group") {
+        expect(taskGroup.task.toolUseCount).toBe(8);
+        expect(taskGroup.task.tokenCount).toBe(20_400);
+        expect(taskGroup.task.tokenCountText).toBe("20.4k tokens");
+      }
+    }
+  });
+
   test("matches the agent task tool case-insensitively", () => {
     const message: ClaudeMessage = {
       id: "claude-agent-upper",

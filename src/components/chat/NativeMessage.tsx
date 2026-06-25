@@ -983,11 +983,15 @@ function buildAgentDisplayLabel(name: string, role?: string): string {
 function SubagentPart({ part }: { part: NativeMessagePart }) {
   const [isOpen, setIsOpen] = useState(false);
   const subagentActions = part.subagentActions ?? [];
-  const toolCount = part.subagentActionCount ?? 0;
+  const hasExternalUsage = typeof part.toolUseCount === "number";
+  const toolCount = part.toolUseCount ?? part.subagentActionCount ?? 0;
   const displayName = part.subagentName || part.subagentRole || part.content || "subagent";
   const displayLabel = buildAgentDisplayLabel(displayName, part.subagentRole);
   const statusLabel = getSubagentStatusLabel(part.toolState);
   const preview = useMemo(() => getSubagentPreview(part), [part]);
+  const toolCountLabel = hasExternalUsage
+    ? `${toolCount} ${toolCount === 1 ? "tool use" : "tool uses"}`
+    : `${toolCount} ${toolCount === 1 ? "tool" : "tools"}`;
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
@@ -1024,8 +1028,11 @@ function SubagentPart({ part }: { part: NativeMessagePart }) {
             </div>
           </div>
           <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">
-            <div>{toolCount} {toolCount === 1 ? "tool" : "tools"}</div>
-            <div>{subagentActions.length} {subagentActions.length === 1 ? "update" : "updates"}</div>
+            <div>{toolCountLabel}</div>
+            <div>
+              {part.tokenCountText ??
+                `${subagentActions.length} ${subagentActions.length === 1 ? "update" : "updates"}`}
+            </div>
           </div>
         </div>
       </CollapsibleTrigger>
@@ -1108,6 +1115,7 @@ function TaskGroupPart({
     "agentName",
     "name",
   );
+  const hasExternalUsage = typeof part.task.toolUseCount === "number";
   const genericToolLabel = /^(agent|task)$/i.test(toolLabel);
   const displayName =
     explicitName ?? description ?? (genericToolLabel ? "Subagent" : toolLabel);
@@ -1115,6 +1123,10 @@ function TaskGroupPart({
   const displayLabel = buildAgentDisplayLabel(displayName, role);
   const statusLabel = getSubagentStatusLabel(part.task.toolState);
   const childCount = part.childTools.length;
+  const toolCount = part.task.toolUseCount ?? childCount;
+  const toolCountLabel = hasExternalUsage
+    ? `${toolCount} ${toolCount === 1 ? "tool use" : "tool uses"}`
+    : `${toolCount} ${toolCount === 1 ? "tool" : "tools"}`;
   const preview = useMemo(() => {
     const latestChild = part.childTools.at(-1);
     if (!latestChild) {
@@ -1175,8 +1187,11 @@ function TaskGroupPart({
             </div>
           </div>
           <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">
-            <div>{childCount} {childCount === 1 ? "tool" : "tools"}</div>
-            <div>{childCount} {childCount === 1 ? "update" : "updates"}</div>
+            <div>{toolCountLabel}</div>
+            <div>
+              {part.task.tokenCountText ??
+                `${childCount} ${childCount === 1 ? "update" : "updates"}`}
+            </div>
           </div>
         </div>
       </CollapsibleTrigger>

@@ -2867,6 +2867,86 @@ exit 0
     });
   });
 
+  test("removes the environment even when remote branch deletion fails for a non-404 reason", async () => {
+    const worktreePath = await createTempDir("ork-electron-cleanup-delete-error-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+      prState: "merged",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+printf '%s\\n' 'HTTP 500: Internal Server Error' >&2
+exit 1
+`, async (logPath) => {
+      await expect(commands.get("delete_environment")?.({ environmentId: environment.id }, context)).resolves.toBeUndefined();
+
+      const ghLog = await fs.readFile(logPath, "utf8");
+      expect(ghLog).toContain("api repos/acme/repo/pulls/42");
+      await expect(commands.get("get_environment")?.({ environmentId: environment.id }, context)).resolves.toBeNull();
+    });
+  });
+
+  test("does not delete remote branches when a merged environment has no PR url", async () => {
+    const worktreePath = await createTempDir("ork-electron-cleanup-no-prurl-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: null,
+      prState: "merged",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+printf 'gh should not be called\\n' >&2
+exit 1
+`, async (logPath) => {
+      await expect(commands.get("delete_environment")?.({ environmentId: environment.id }, context)).resolves.toBeUndefined();
+
+      expect(existsSync(logPath)).toBe(false);
+      await expect(commands.get("get_environment")?.({ environmentId: environment.id }, context)).resolves.toBeNull();
+    });
+  });
+
+  test("does not delete remote branches when a merged container environment is not running", async () => {
+    const environment = createEnvironment({
+      id: "env-container-stopped",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      containerId: "container-stopped",
+      status: "stopped",
+      prUrl: "https://github.com/acme/repo/pull/42",
+      prState: "merged",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "exec" ]; then
+  printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+  printf 'docker exec should not be called for a stopped container\\n' >&2
+  exit 1
+fi
+if [ "$1" = "rm" ]; then
+  printf '%s\\n' "$3" >> "$FAKE_DOCKER_RM_LOG"
+  exit 0
+fi
+exit 0
+`, async (logs) => {
+      await expect(commands.get("delete_environment")?.({ environmentId: environment.id }, context)).resolves.toBeUndefined();
+
+      expect(existsSync(logs.exec)).toBe(false);
+      const rmLog = await fs.readFile(logs.rm, "utf8");
+      expect(rmLog).toContain("container-stopped");
+      await expect(commands.get("get_environment")?.({ environmentId: environment.id }, context)).resolves.toBeNull();
+    });
+  });
+
   test("waits for a local bridge server to pass health before persisting pid and port", async () => {
     const appRoot = await createTempDir("ork-electron-app-");
     const worktreePath = await createTempDir("ork-electron-worktree-");

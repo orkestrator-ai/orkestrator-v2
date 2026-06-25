@@ -1885,7 +1885,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   });
   register("delete_environment", async ({ environmentId }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
-    if (environment) await deleteMergedEnvironmentRemoteBranch(environment);
+    if (environment) await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
     if (environment?.containerId) await runCommand("docker", ["rm", "-f", environment.containerId], { timeoutMs: 60_000 }).catch(() => undefined);
     if (environment?.worktreePath) await removeLocalWorktree(environment.worktreePath).catch(() => undefined);
     await storage.removeSessionsByEnvironment(asString(environmentId, "environmentId")).catch(() => undefined);

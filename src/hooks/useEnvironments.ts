@@ -396,8 +396,14 @@ export function useEnvironments(
             setSetupScriptsRunning(environmentId, true);
             setWorkspaceReady(environmentId, false);
           } else {
+            // Reached when either no setup ran (!setupStarted) or a completion
+            // event was already handled while we awaited
+            // (completionEventAlreadyHandled). Both mean setup is effectively
+            // done, so mark the workspace ready. Forcing readiness to false here
+            // (the old `!result.setupStarted`) stranded a just-completed env in a
+            // "not running, not ready" state.
             setSetupScriptsRunning(environmentId, false);
-            setWorkspaceReady(environmentId, !result.setupStarted);
+            setWorkspaceReady(environmentId, true);
           }
         }
 

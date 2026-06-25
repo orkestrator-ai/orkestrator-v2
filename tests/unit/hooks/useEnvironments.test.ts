@@ -394,6 +394,71 @@ describe("useEnvironments", () => {
     expect(state.isWorkspaceReady("env-1")).toBe(true);
   });
 
+  test("startEnvironment marks workspace ready when a completion event was already handled mid-flight", async () => {
+    const existingEnv = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "local-env",
+      containerId: null,
+      status: "stopped",
+      environmentType: "local",
+      worktreePath: undefined,
+      setupScriptsComplete: false,
+    });
+    // The refreshed snapshot still reports setupScriptsComplete=false (the
+    // completion is reflected only in the runtime readiness sets, not the
+    // persisted flag yet).
+    const refreshedEnv = createMockEnvironment({
+      ...existingEnv,
+      status: "running",
+      worktreePath: "/tmp/local-env",
+      setupScriptsComplete: false,
+    });
+
+    useEnvironmentStore.setState({
+      environments: [existingEnv],
+      isLoading: false,
+      error: null,
+      pendingSetupCommands: new Map(),
+      setupCommandsResolved: new Set(),
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(),
+    });
+
+    mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
+    mockStartEnvironment.mockImplementation(() => Promise.resolve({
+      setupCommands: [],
+      setupManagedByBackend: true,
+      setupStarted: true,
+      setupSessionId: "env-1:setup",
+    }));
+    // Simulate a setup-completion event landing while startEnvironment awaited:
+    // commands resolved and scripts no longer running, but workspaceReady was
+    // never flipped true (the inconsistent intermediate this guards against).
+    mockGetEnvironment.mockImplementation(() => {
+      const store = useEnvironmentStore.getState();
+      store.setSetupCommandsResolved("env-1", true);
+      store.setSetupScriptsRunning("env-1", false);
+      return Promise.resolve(refreshedEnv);
+    });
+
+    const { result } = renderHook(() => useEnvironments("project-1"));
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.startEnvironment("env-1");
+    });
+
+    const state = useEnvironmentStore.getState();
+    // The env must not be stranded "not running, not ready": setup finished, so
+    // it should be ready and no longer flagged as running.
+    expect(state.isSetupScriptsRunning("env-1")).toBe(false);
+    expect(state.isWorkspaceReady("env-1")).toBe(true);
+  });
+
   test("startEnvironment sets error on failure", async () => {
     const expectedError = new Error("Failed to start");
     mockStartEnvironment.mockImplementation(() => Promise.reject(expectedError));

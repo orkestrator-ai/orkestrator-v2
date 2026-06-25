@@ -430,8 +430,14 @@ export function TerminalContainer({
           latestStore.setSetupScriptsRunning(environmentId, true);
           latestStore.setWorkspaceReady(environmentId, false);
         } else {
+          // Reached when either no setup ran (!setupStarted) or a completion
+          // event was already handled while we awaited
+          // (completionEventAlreadyHandled). Both mean setup is effectively
+          // done, so mark the workspace ready. Forcing readiness to false here
+          // (the old `!result.setupStarted`) stranded a just-completed env in a
+          // "not running, not ready" state.
           latestStore.setSetupScriptsRunning(environmentId, false);
-          latestStore.setWorkspaceReady(environmentId, !result.setupStarted);
+          latestStore.setWorkspaceReady(environmentId, true);
         }
         latestStore.setSetupCommandsResolved(environmentId, true);
       })

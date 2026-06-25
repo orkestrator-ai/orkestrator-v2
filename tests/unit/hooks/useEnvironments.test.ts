@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, mock } from "bun:test";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useConfigStore } from "../../../src/stores/configStore";
 import { useEnvironmentStore } from "../../../src/stores/environmentStore";
-import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping } from "../../../src/types";
+import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, StartEnvironmentResult } from "../../../src/types";
 import { createMockEnvironment } from "../utils/testFactories";
 
 // Mock backend module BEFORE importing the hook
@@ -20,7 +20,7 @@ const mockCreateEnvironment = mock<(
   Promise.resolve(createMockEnvironment({ id: "new-env-id", projectId, name: "test-env" }))
 );
 const mockDeleteEnvironment = mock<(environmentId: string) => Promise<void>>(() => Promise.resolve());
-const mockStartEnvironment = mock<(environmentId: string) => Promise<{ setupCommands?: string[] }>>(() => Promise.resolve({ setupCommands: undefined }));
+const mockStartEnvironment = mock<(environmentId: string) => Promise<StartEnvironmentResult>>(() => Promise.resolve({ setupCommands: undefined }));
 const mockStopEnvironment = mock<(environmentId: string) => Promise<void>>(() => Promise.resolve());
 const mockSyncEnvironmentStatus = mock<(environmentId: string) => Promise<Environment>>((environmentId) =>
   Promise.resolve(createMockEnvironment({ id: environmentId, containerId: "container-123", status: "running" }))
@@ -52,6 +52,12 @@ describe("useEnvironments", () => {
       environments: [],
       isLoading: false,
       error: null,
+      workspaceReadyEnvironments: new Set(),
+      deletingEnvironments: new Set(),
+      pendingSetupCommands: new Map(),
+      setupCommandsResolved: new Set(),
+      setupScriptsRunning: new Set(),
+      sessionActivated: new Set(),
     });
     useConfigStore.setState({
       config: {
@@ -333,6 +339,59 @@ describe("useEnvironments", () => {
     const state = useEnvironmentStore.getState();
     expect(state.setupCommandsResolved.has("env-1")).toBe(true);
     expect(state.pendingSetupCommands.has("env-1")).toBe(false);
+  });
+
+  test("startEnvironment does not clobber completed backend setup with a stale started result", async () => {
+    const existingEnv = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "local-env",
+      containerId: null,
+      status: "stopped",
+      environmentType: "local",
+      worktreePath: undefined,
+      setupScriptsComplete: false,
+    });
+    const completedEnv = createMockEnvironment({
+      ...existingEnv,
+      status: "running",
+      worktreePath: "/tmp/local-env",
+      setupScriptsComplete: true,
+    });
+
+    useEnvironmentStore.setState({
+      environments: [existingEnv],
+      isLoading: false,
+      error: null,
+      pendingSetupCommands: new Map(),
+      setupCommandsResolved: new Set(),
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(),
+    });
+
+    mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
+    mockStartEnvironment.mockImplementation(() => Promise.resolve({
+      setupCommands: [],
+      setupManagedByBackend: true,
+      setupStarted: true,
+      setupSessionId: "env-1:setup",
+    }));
+    mockGetEnvironment.mockImplementation(() => Promise.resolve(completedEnv));
+
+    const { result } = renderHook(() => useEnvironments("project-1"));
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.startEnvironment("env-1");
+    });
+
+    const state = useEnvironmentStore.getState();
+    expect(state.getEnvironmentById("env-1")?.setupScriptsComplete).toBe(true);
+    expect(state.isSetupScriptsRunning("env-1")).toBe(false);
+    expect(state.isWorkspaceReady("env-1")).toBe(true);
   });
 
   test("startEnvironment sets error on failure", async () => {

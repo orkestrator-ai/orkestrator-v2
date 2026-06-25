@@ -77,6 +77,14 @@ function bindSetupTerminalSession(environment: Environment, sessionId: string): 
   });
 }
 
+function preserveCompletedSetupState(environmentId: string, environment: Environment): Environment {
+  const current = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+  if (current?.setupScriptsComplete && environment.setupScriptsComplete === false) {
+    return { ...environment, setupScriptsComplete: true };
+  }
+  return environment;
+}
+
 export function useEnvironments(
   projectId: string | null,
   options: UseEnvironmentsOptions = {}
@@ -353,24 +361,44 @@ export function useEnvironments(
 
         // Refresh the full environment data (including containerId / worktreePath)
         const updatedEnv = await backend.getEnvironment(environmentId);
+        let refreshedEnv: Environment | null = null;
         if (updatedEnv) {
-          console.log("[useEnvironments] Got updated environment:", updatedEnv);
-          if (updatedEnv.environmentType === "local" && !updatedEnv.worktreePath) {
+          const safeUpdatedEnv = preserveCompletedSetupState(environmentId, updatedEnv);
+          refreshedEnv = safeUpdatedEnv;
+          console.log("[useEnvironments] Got updated environment:", safeUpdatedEnv);
+          if (safeUpdatedEnv.environmentType === "local" && !safeUpdatedEnv.worktreePath) {
             console.warn("[useEnvironments] Local environment started without worktreePath:", {
               environmentId,
-              status: updatedEnv.status,
-              branch: updatedEnv.branch,
+              status: safeUpdatedEnv.status,
+              branch: safeUpdatedEnv.branch,
             });
           }
-          updateEnvironmentInStore(environmentId, updatedEnv);
+          updateEnvironmentInStore(environmentId, safeUpdatedEnv);
           if (result.setupSessionId) {
-            bindSetupTerminalSession(updatedEnv, result.setupSessionId);
+            bindSetupTerminalSession(safeUpdatedEnv, result.setupSessionId);
           }
         }
 
         if (result.setupManagedByBackend) {
-          setSetupScriptsRunning(environmentId, !!result.setupStarted);
-          setWorkspaceReady(environmentId, !result.setupStarted);
+          const store = useEnvironmentStore.getState();
+          const setupComplete =
+            refreshedEnv?.setupScriptsComplete === true ||
+            store.getEnvironmentById(environmentId)?.setupScriptsComplete === true;
+          const completionEventAlreadyHandled =
+            !!result.setupStarted &&
+            store.isSetupCommandsResolved(environmentId) &&
+            !store.isSetupScriptsRunning(environmentId);
+
+          if (setupComplete || store.isWorkspaceReady(environmentId)) {
+            setSetupScriptsRunning(environmentId, false);
+            setWorkspaceReady(environmentId, true);
+          } else if (result.setupStarted && !completionEventAlreadyHandled) {
+            setSetupScriptsRunning(environmentId, true);
+            setWorkspaceReady(environmentId, false);
+          } else {
+            setSetupScriptsRunning(environmentId, false);
+            setWorkspaceReady(environmentId, !result.setupStarted);
+          }
         }
 
         setSetupCommandsResolved(environmentId, true);

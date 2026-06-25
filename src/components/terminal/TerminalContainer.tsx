@@ -393,10 +393,14 @@ export function TerminalContainer({
           containerId: result.environment.containerId ?? null,
         });
         const store = useEnvironmentStore.getState();
-        store.updateEnvironment(environmentId, result.environment);
-        store.setSetupCommandsResolved(environmentId, true);
+        const currentEnvironment = store.getEnvironmentById(environmentId);
+        const safeEnvironment =
+          currentEnvironment?.setupScriptsComplete && result.environment.setupScriptsComplete === false
+            ? { ...result.environment, setupScriptsComplete: true }
+            : result.environment;
+        store.updateEnvironment(environmentId, safeEnvironment);
         if (result.setupSessionId) {
-          const key = createSessionKey(result.environment.containerId ?? null, "default", environmentId);
+          const key = createSessionKey(safeEnvironment.containerId ?? null, "default", environmentId);
           const terminalStore = useTerminalSessionStore.getState();
           const existing = terminalStore.sessions.get(key);
           console.info("[setup-terminal] binding setup session from ensure result", {
@@ -411,13 +415,25 @@ export function TerminalContainer({
           });
           setSetupSessionBindNonce((value) => value + 1);
         }
-        if (result.setupStarted) {
-          store.setSetupScriptsRunning(environmentId, true);
-          store.setWorkspaceReady(environmentId, false);
+        const latestStore = useEnvironmentStore.getState();
+        const setupComplete =
+          safeEnvironment.setupScriptsComplete === true ||
+          latestStore.getEnvironmentById(environmentId)?.setupScriptsComplete === true;
+        const completionEventAlreadyHandled =
+          result.setupStarted &&
+          latestStore.isSetupCommandsResolved(environmentId) &&
+          !latestStore.isSetupScriptsRunning(environmentId);
+        if (setupComplete || latestStore.isWorkspaceReady(environmentId)) {
+          latestStore.setSetupScriptsRunning(environmentId, false);
+          latestStore.setWorkspaceReady(environmentId, true);
+        } else if (result.setupStarted && !completionEventAlreadyHandled) {
+          latestStore.setSetupScriptsRunning(environmentId, true);
+          latestStore.setWorkspaceReady(environmentId, false);
         } else {
-          store.setSetupScriptsRunning(environmentId, false);
-          store.setWorkspaceReady(environmentId, true);
+          latestStore.setSetupScriptsRunning(environmentId, false);
+          latestStore.setWorkspaceReady(environmentId, !result.setupStarted);
         }
+        latestStore.setSetupCommandsResolved(environmentId, true);
       })
       .catch((error) => {
         console.error("[TerminalContainer] Backend setup failed:", error);
@@ -1082,11 +1098,13 @@ export function TerminalContainer({
 
   // Launch native tab after workspace setup completes
   useEffect(() => {
-    console.log("[TerminalContainer] Native tab effect check - workspaceReady:", workspaceReady, "hasPending:", !!pendingNativeLaunch, "containerId:", !!containerId, "isLocalEnvironmentReady:", isLocalEnvironmentReady);
+    const setupComplete = environment?.setupScriptsComplete === true;
+    const canLaunchPendingNative = (workspaceReady || setupComplete) && pendingNativeLaunch && (containerId || isLocalEnvironmentReady);
+    console.log("[TerminalContainer] Native tab effect check - workspaceReady:", workspaceReady, "setupComplete:", setupComplete, "hasPending:", !!pendingNativeLaunch, "containerId:", !!containerId, "isLocalEnvironmentReady:", isLocalEnvironmentReady);
 
     // Simple logic: when workspace is ready and we have a pending launch, create the tab
     // For local environments, containerId is null so we check isLocalEnvironmentReady (worktreePath exists)
-    if (workspaceReady && pendingNativeLaunch && (containerId || isLocalEnvironmentReady)) {
+    if (canLaunchPendingNative) {
       const pending = pendingNativeLaunch;
 
       // Only launch if this is for the current container/environment
@@ -1096,6 +1114,9 @@ export function TerminalContainer({
         : (pending.containerId === containerId && pending.environmentId === environmentId);
 
       if (containerMatch) {
+        if (setupComplete && !workspaceReady) {
+          setWorkspaceReady(environmentId, true);
+        }
         const isClaudeNative = pending.agentType === "claude";
         const isCodexNative = pending.agentType === "codex";
         const launchMode = pending.launchMode ?? "native";
@@ -1167,12 +1188,14 @@ export function TerminalContainer({
     pendingNativeLaunch,
     containerId,
     environmentId,
+    environment?.setupScriptsComplete,
     isLocalEnvironment,
     isLocalEnvironmentReady,
     addTab,
     clearPendingNativeLaunch,
     clearOptions,
     setSetupScriptsRunning,
+    setWorkspaceReady,
     claudeNativeBackend,
   ]);
 

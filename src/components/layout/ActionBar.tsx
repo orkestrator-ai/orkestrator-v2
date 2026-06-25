@@ -1322,6 +1322,7 @@ export function ActionBar() {
             <AlertDialogDescription>
               This will permanently delete the environment "{selectedEnvironment?.name}".
               The PR has been {isPRMerged ? "merged" : "closed"}, so this environment is no longer needed.
+              {isPRMerged ? " The PR's remote branch will also be deleted if it still exists." : ""}
               This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>

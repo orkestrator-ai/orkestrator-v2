@@ -367,6 +367,8 @@ type GitHubPullRequestHead = {
   } | null;
 };
 
+type GhCliRunner = (args: string[], timeoutMs?: number) => Promise<string>;
+
 function parseGitHubPullRequestUrl(url: string): GitHubPullRequestRef {
   let parsed: URL;
   try {
@@ -405,6 +407,63 @@ function encodeGitRefPath(ref: string): string {
   return ref.split("/").map(encodeGitHubPathSegment).join("/");
 }
 
+function isRemoteBranchAlreadyDeletedError(message: string): boolean {
+  const lowered = message.toLowerCase();
+  return (
+    lowered.includes("http 404") ||
+    lowered.includes("not found") ||
+    lowered.includes("reference does not exist")
+  );
+}
+
+function createLocalGhRunner(cwd: string): GhCliRunner {
+  return async (args, timeoutMs = 60_000) => {
+    const { stdout } = await runCommand("gh", args, { cwd, timeoutMs });
+    return stdout;
+  };
+}
+
+function createContainerGhRunner(containerId: string): GhCliRunner {
+  return (args, timeoutMs = 60_000) =>
+    dockerExec(containerId, ["gh", ...args].map(quoteShell).join(" "), timeoutMs);
+}
+
+async function loadPullRequestHead(pullEndpoint: string, runGh: GhCliRunner): Promise<GitHubPullRequestHead> {
+  const stdout = await runGh(["api", pullEndpoint], 30_000);
+  return JSON.parse(stdout) as GitHubPullRequestHead;
+}
+
+async function deleteRemoteBranchForPullRequestHead(
+  head: GitHubPullRequestHead | null,
+  runGh: GhCliRunner,
+): Promise<void> {
+  const headRefName = typeof head?.head?.ref === "string" ? head.head.ref : "";
+  const headRepositoryNameWithOwner = typeof head?.head?.repo?.full_name === "string" ? head.head.repo.full_name : "";
+  const [headOwner, headRepo] = headRepositoryNameWithOwner.split("/");
+  if (!headRefName || !headOwner || !headRepo) return;
+
+  try {
+    await runGh([
+      "api",
+      `repos/${encodeGitHubPathSegment(headOwner)}/${encodeGitHubPathSegment(headRepo)}/git/refs/heads/${encodeGitRefPath(headRefName)}`,
+      "--method",
+      "DELETE",
+    ], 30_000);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!isRemoteBranchAlreadyDeletedError(message)) {
+      throw error;
+    }
+  }
+}
+
+async function deletePullRequestHeadBranchViaGitHubApi(prUrl: string, runGh: GhCliRunner): Promise<void> {
+  const pr = parseGitHubPullRequestUrl(prUrl);
+  const pullEndpoint = `repos/${encodeGitHubPathSegment(pr.owner)}/${encodeGitHubPathSegment(pr.repo)}/pulls/${pr.number}`;
+  const head = await loadPullRequestHead(pullEndpoint, runGh);
+  await deleteRemoteBranchForPullRequestHead(head, runGh);
+}
+
 async function mergePullRequestViaGitHubApi(
   prUrl: string,
   method: "squash" | "merge" | "rebase",
@@ -414,42 +473,24 @@ async function mergePullRequestViaGitHubApi(
   const pr = parseGitHubPullRequestUrl(prUrl);
   const pullEndpoint = `repos/${encodeGitHubPathSegment(pr.owner)}/${encodeGitHubPathSegment(pr.repo)}/pulls/${pr.number}`;
   const mergeEndpoint = `${pullEndpoint}/merge`;
+  const runGh = createLocalGhRunner(cwd);
 
   let head: GitHubPullRequestHead | null = null;
   if (deleteBranch) {
-    const { stdout } = await runCommand("gh", ["api", pullEndpoint], { cwd, timeoutMs: 30_000 });
-    head = JSON.parse(stdout) as GitHubPullRequestHead;
+    head = await loadPullRequestHead(pullEndpoint, runGh);
   }
 
-  await runCommand("gh", [
+  await runGh([
     "api",
     mergeEndpoint,
     "--method",
     "PUT",
     "-f",
     `merge_method=${method}`,
-  ], { cwd, timeoutMs: 120_000 });
+  ], 120_000);
 
   if (!deleteBranch) return;
-
-  const headRefName = typeof head?.head?.ref === "string" ? head.head.ref : "";
-  const headRepositoryNameWithOwner = typeof head?.head?.repo?.full_name === "string" ? head.head.repo.full_name : "";
-  const [headOwner, headRepo] = headRepositoryNameWithOwner.split("/");
-  if (!headRefName || !headOwner || !headRepo) return;
-
-  try {
-    await runCommand("gh", [
-      "api",
-      `repos/${encodeGitHubPathSegment(headOwner)}/${encodeGitHubPathSegment(headRepo)}/git/refs/heads/${encodeGitRefPath(headRefName)}`,
-      "--method",
-      "DELETE",
-    ], { cwd, timeoutMs: 30_000 });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!message.includes("HTTP 404") && !message.toLowerCase().includes("not found")) {
-      throw error;
-    }
-  }
+  await deleteRemoteBranchForPullRequestHead(head, runGh);
 }
 
 function isExpectedPrAbsenceOutput(text: string): boolean {
@@ -1272,6 +1313,20 @@ async function removeLocalWorktree(worktreePath: string): Promise<void> {
   });
 }
 
+async function deleteMergedEnvironmentRemoteBranch(environment: Environment): Promise<void> {
+  if (environment.prState !== "merged" || !environment.prUrl) return;
+
+  if (environment.environmentType === "local") {
+    if (!environment.worktreePath) return;
+    await deletePullRequestHeadBranchViaGitHubApi(environment.prUrl, createLocalGhRunner(environment.worktreePath));
+    return;
+  }
+
+  if (environment.containerId && environment.status === "running") {
+    await deletePullRequestHeadBranchViaGitHubApi(environment.prUrl, createContainerGhRunner(environment.containerId));
+  }
+}
+
 async function cleanupFailedLocalWorktree(projectPath: string, worktreePath: string, branch: string): Promise<void> {
   await runCommand("git", ["-C", projectPath, "worktree", "remove", "--force", worktreePath], { timeoutMs: 120_000 }).catch(async () => {
     await fs.rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
@@ -1830,6 +1885,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   });
   register("delete_environment", async ({ environmentId }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
+    if (environment) await deleteMergedEnvironmentRemoteBranch(environment);
     if (environment?.containerId) await runCommand("docker", ["rm", "-f", environment.containerId], { timeoutMs: 60_000 }).catch(() => undefined);
     if (environment?.worktreePath) await removeLocalWorktree(environment.worktreePath).catch(() => undefined);
     await storage.removeSessionsByEnvironment(asString(environmentId, "environmentId")).catch(() => undefined);

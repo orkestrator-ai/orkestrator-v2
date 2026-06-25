@@ -2736,6 +2736,137 @@ exit 1
     });
   });
 
+  test("deletes the remote head branch during merged local environment cleanup", async () => {
+    const worktreePath = await createTempDir("ork-electron-cleanup-delete-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+      prState: "merged",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ]; then
+  printf '%s\\n' '{"head":{"ref":"feature/cleanup","repo":{"full_name":"acme/repo"}}}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/cleanup" ] && [ "$3" = "--method" ] && [ "$4" = "DELETE" ]; then
+  exit 0
+fi
+printf 'unexpected gh args: %s\\n' "$*" >&2
+exit 1
+`, async (logPath) => {
+      await expect(commands.get("delete_environment")?.({ environmentId: environment.id }, context)).resolves.toBeUndefined();
+
+      const ghLog = await fs.readFile(logPath, "utf8");
+      expect(ghLog).toContain("api repos/acme/repo/pulls/42");
+      expect(ghLog).toContain("api repos/acme/repo/git/refs/heads/feature/cleanup --method DELETE");
+      await expect(commands.get("get_environment")?.({ environmentId: environment.id }, context)).resolves.toBeNull();
+    });
+  });
+
+  test("continues merged environment cleanup when the remote head branch is already deleted", async () => {
+    const worktreePath = await createTempDir("ork-electron-cleanup-delete-404-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+      prState: "merged",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ]; then
+  printf '%s\\n' '{"head":{"ref":"feature/already-cleaned","repo":{"full_name":"acme/repo"}}}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/already-cleaned" ] && [ "$3" = "--method" ] && [ "$4" = "DELETE" ]; then
+  printf '%s\\n' 'HTTP 422: Reference does not exist' >&2
+  exit 1
+fi
+printf 'unexpected gh args: %s\\n' "$*" >&2
+exit 1
+`, async (logPath) => {
+      await expect(commands.get("delete_environment")?.({ environmentId: environment.id }, context)).resolves.toBeUndefined();
+
+      const ghLog = await fs.readFile(logPath, "utf8");
+      expect(ghLog).toContain("api repos/acme/repo/git/refs/heads/feature/already-cleaned --method DELETE");
+      await expect(commands.get("get_environment")?.({ environmentId: environment.id }, context)).resolves.toBeNull();
+    });
+  });
+
+  test("does not delete remote branches during closed environment cleanup", async () => {
+    const worktreePath = await createTempDir("ork-electron-cleanup-closed-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+      prState: "closed",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+printf 'gh should not be called\\n' >&2
+exit 1
+`, async (logPath) => {
+      await expect(commands.get("delete_environment")?.({ environmentId: environment.id }, context)).resolves.toBeUndefined();
+
+      expect(existsSync(logPath)).toBe(false);
+      await expect(commands.get("get_environment")?.({ environmentId: environment.id }, context)).resolves.toBeNull();
+    });
+  });
+
+  test("deletes the remote head branch during merged running container cleanup", async () => {
+    const environment = createEnvironment({
+      id: "env-container-cleanup",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      containerId: "container-1",
+      status: "running",
+      prUrl: "https://github.com/acme/repo/pull/42",
+      prState: "merged",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "exec" ]; then
+  printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+  case "$*" in
+    *pulls/42*)
+      printf '%s\\n' '{"head":{"ref":"feature/container-cleanup","repo":{"full_name":"acme/repo"}}}'
+      exit 0
+      ;;
+    *refs/heads/feature/container-cleanup*)
+      exit 0
+      ;;
+  esac
+  printf 'unexpected docker exec args: %s\\n' "$*" >&2
+  exit 1
+fi
+if [ "$1" = "rm" ]; then
+  printf '%s\\n' "$3" >> "$FAKE_DOCKER_RM_LOG"
+  exit 0
+fi
+exit 0
+`, async (logs) => {
+      await expect(commands.get("delete_environment")?.({ environmentId: environment.id }, context)).resolves.toBeUndefined();
+
+      const execLog = await fs.readFile(logs.exec, "utf8");
+      expect(execLog).toContain("pulls/42");
+      expect(execLog).toContain("refs/heads/feature/container-cleanup");
+      expect(execLog).toContain("DELETE");
+      const rmLog = await fs.readFile(logs.rm, "utf8");
+      expect(rmLog).toContain("container-1");
+      await expect(commands.get("get_environment")?.({ environmentId: environment.id }, context)).resolves.toBeNull();
+    });
+  });
+
   test("waits for a local bridge server to pass health before persisting pid and port", async () => {
     const appRoot = await createTempDir("ork-electron-app-");
     const worktreePath = await createTempDir("ork-electron-worktree-");

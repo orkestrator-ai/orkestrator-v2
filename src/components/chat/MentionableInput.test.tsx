@@ -1,7 +1,8 @@
-import { createRef } from "react";
+import { createRef, useState } from "react";
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { MentionableInput, type MentionableInputRef } from "./MentionableInput";
+import type { FileMention } from "@/types";
 
 describe("MentionableInput", () => {
   afterEach(() => {
@@ -200,6 +201,51 @@ describe("MentionableInput", () => {
       "Review @utils.ts ",
       [{ id: "mention-1", filename: "utils.ts", relativePath: "src/utils.ts" }],
     );
+  });
+
+  test("refocuses and places the cursor after an inserted mention", () => {
+    const inputRef = createRef<MentionableInputRef>();
+
+    function Harness() {
+      const [draftText, setDraftText] = useState("Review @ut");
+      const [draftMentions, setDraftMentions] = useState<FileMention[]>([]);
+
+      return (
+        <>
+          <button type="button" data-testid="outside-focus-target">
+            Outside
+          </button>
+          <MentionableInput
+            ref={inputRef}
+            value={draftText}
+            mentions={draftMentions}
+            onChange={(newText, newMentions) => {
+              setDraftText(newText);
+              setDraftMentions(newMentions);
+            }}
+          />
+        </>
+      );
+    }
+
+    const { container, getByTestId } = render(<Harness />);
+    const input = container.querySelector("[contenteditable]") as HTMLElement;
+    const outsideFocusTarget = getByTestId("outside-focus-target");
+
+    outsideFocusTarget.focus();
+    expect(document.activeElement).toBe(outsideFocusTarget);
+
+    act(() => {
+      inputRef.current!.insertMention({
+        id: "mention-1",
+        filename: "utils.ts",
+        relativePath: "src/utils.ts",
+      });
+    });
+
+    expect(input.textContent).toBe("Review @utils.ts ");
+    expect(document.activeElement).toBe(input);
+    expect(inputRef.current!.getCursorPosition()).toBe("Review @utils.ts ".length);
   });
 
   test("does not insert a mention when no active token exists", () => {

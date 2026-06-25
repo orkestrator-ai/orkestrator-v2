@@ -171,6 +171,10 @@ function areMentionsEqual(a: FileMention[], b: FileMention[]): boolean {
   return a.every((mention, index) => mention.id === b[index]?.id);
 }
 
+function focusEditableElement(element: HTMLElement): void {
+  element.focus({ preventScroll: true });
+}
+
 export const MentionableInput = forwardRef<MentionableInputRef, MentionableInputProps>(
   function MentionableInput(
     {
@@ -192,11 +196,16 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
     const lastMentionsRef = useRef(mentions);
     const isComposingRef = useRef(false);
     const pendingCursorRef = useRef<number | null>(null);
+    const pendingFocusRef = useRef(false);
     const initializedRef = useRef(false);
     const lastCursorPositionRef = useRef(value.length);
 
     useImperativeHandle(ref, () => ({
-      focus: () => inputRef.current?.focus(),
+      focus: () => {
+        if (inputRef.current) {
+          focusEditableElement(inputRef.current);
+        }
+      },
       blur: () => inputRef.current?.blur(),
       getCursorPosition: () => (inputRef.current ? getCursorOffset(inputRef.current) : 0),
       insertMention: (mention: FileMention) => {
@@ -223,13 +232,16 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
 
           pendingCursorRef.current = tokenRange.start + mention.filename.length + 2;
           lastCursorPositionRef.current = pendingCursorRef.current;
+          pendingFocusRef.current = true;
+          focusEditableElement(inputRef.current);
           onChange(newText, newMentions);
         }
       },
     }));
 
-    useEffect(() => {
-      if (!inputRef.current) return;
+    useLayoutEffect(() => {
+      const input = inputRef.current;
+      if (!input) return;
 
       // On first render, always sync the DOM with the store value (restores draft text)
       const isFirstRender = !initializedRef.current;
@@ -237,25 +249,42 @@ export const MentionableInput = forwardRef<MentionableInputRef, MentionableInput
         initializedRef.current = true;
       }
 
-      if (!isFirstRender && value === lastValueRef.current && areMentionsEqual(mentions, lastMentionsRef.current)) {
+      const hasContentChange =
+        isFirstRender ||
+        value !== lastValueRef.current ||
+        !areMentionsEqual(mentions, lastMentionsRef.current);
+      const pendingCursor = pendingCursorRef.current;
+      const shouldRestoreFocus = pendingFocusRef.current;
+
+      if (!hasContentChange && pendingCursor === null && !shouldRestoreFocus) {
         return;
       }
 
-      lastValueRef.current = value;
-      lastMentionsRef.current = mentions;
+      if (hasContentChange) {
+        lastValueRef.current = value;
+        lastMentionsRef.current = mentions;
 
-      const cursorPos = isFirstRender ? value.length : getCursorOffset(inputRef.current);
-      lastCursorPositionRef.current = cursorPos;
-      inputRef.current.innerHTML = renderContent(value, mentions);
-      setCursorOffset(inputRef.current, cursorPos);
-    }, [value, mentions]);
+        const cursorPos = pendingCursor ?? (isFirstRender ? value.length : getCursorOffset(input));
+        lastCursorPositionRef.current = cursorPos;
+        input.innerHTML = renderContent(value, mentions);
+        if (shouldRestoreFocus) {
+          focusEditableElement(input);
+        }
+        setCursorOffset(input, cursorPos);
+      } else {
+        if (shouldRestoreFocus) {
+          focusEditableElement(input);
+        }
+        if (pendingCursor !== null) {
+          setCursorOffset(input, pendingCursor);
+          lastCursorPositionRef.current = pendingCursor;
+        }
+      }
 
-    useLayoutEffect(() => {
-      if (pendingCursorRef.current !== null && inputRef.current) {
-        setCursorOffset(inputRef.current, pendingCursorRef.current);
-        lastCursorPositionRef.current = pendingCursorRef.current;
+      if (pendingCursor !== null) {
         pendingCursorRef.current = null;
       }
+      pendingFocusRef.current = false;
     }, [value, mentions]);
 
     const handleInput = useCallback(() => {

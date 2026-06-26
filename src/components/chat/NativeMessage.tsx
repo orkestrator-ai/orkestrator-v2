@@ -34,7 +34,11 @@ import {
   SYSTEM_MESSAGE_PREFIX,
   type ToolDiffMetadata,
 } from "@/lib/opencode-client";
-import { getToolDisplayName, isEditTool } from "@/lib/tool-names";
+import {
+  getToolDisplayName,
+  getToolTitleDisplayName,
+  isEditTool,
+} from "@/lib/tool-names";
 import { isTodoTool } from "@/lib/todo-tool";
 import { TodoToolPart } from "@/components/todo/TodoToolPart";
 import { MessageErrorAlert, MessageShell } from "@/components/chat/MessageShell";
@@ -165,6 +169,7 @@ function ToolPart({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const displayToolName = getToolDisplayName(toolName);
+  const displayToolTitle = getToolTitleDisplayName(toolTitle, toolName);
 
   const stateColors = {
     success: "text-green-600",
@@ -225,6 +230,10 @@ function ToolPart({
   };
 
   const displayInfo = getDisplayInfo();
+  const shouldShowToolTitle =
+    Boolean(displayToolTitle) &&
+    !displayInfo &&
+    displayToolTitle !== displayToolName;
 
   // Format the command input for shell-like display
   const formatInput = () => {
@@ -263,9 +272,9 @@ function ToolPart({
             {displayInfo}
           </span>
         )}
-        {toolTitle && !displayInfo && (
+        {shouldShowToolTitle && (
           <span className="text-muted-foreground/70 truncate flex-1 text-left">
-            {toolTitle}
+            {displayToolTitle}
           </span>
         )}
         {toolState && (
@@ -437,7 +446,8 @@ function EditToolPart({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const { createFileTab } = useTerminalContext();
-  const displayToolName = getToolDisplayName(toolName, "edit");
+  const displayToolName = getToolDisplayName(toolName, "Edit");
+  const displayToolTitle = getToolTitleDisplayName(toolTitle, toolName);
 
   const stateColors = {
     success: "text-green-600",
@@ -448,6 +458,10 @@ function EditToolPart({
   // Get file path from diff metadata
   const filePath = toolDiff?.filePath;
   const fileName = filePath ? filePath.split("/").pop() : null;
+  const shouldShowToolTitle =
+    Boolean(displayToolTitle) &&
+    !fileName &&
+    displayToolTitle !== displayToolName;
 
   // Calculate diff stats
   const { additions, deletions } = useMemo(
@@ -529,9 +543,9 @@ function EditToolPart({
             {fileName}
           </span>
         )}
-        {toolTitle && !fileName && (
+        {shouldShowToolTitle && (
           <span className="text-muted-foreground/70 truncate flex-1 text-left">
-            {toolTitle}
+            {displayToolTitle}
           </span>
         )}
         {/* Line count stats - shown after filename */}
@@ -959,7 +973,13 @@ function getSubagentPreview(part: NativeMessagePart): string {
     return command;
   }
 
-  return latestAction.toolTitle || getToolDisplayName(latestAction.toolName, latestAction.content);
+  return (
+    getToolTitleDisplayName(
+      latestAction.toolTitle,
+      latestAction.toolName,
+      latestAction.content,
+    ) || getToolDisplayName(latestAction.toolName, latestAction.content)
+  );
 }
 
 function stringToolArg(
@@ -1100,7 +1120,12 @@ function TaskGroupPart({
   containerId?: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const toolLabel = part.task.toolTitle || getToolDisplayName(part.task.toolName, "Agent");
+  const toolLabel =
+    getToolTitleDisplayName(
+      part.task.toolTitle,
+      part.task.toolName,
+      part.task.content,
+    ) || getToolDisplayName(part.task.toolName, "Agent");
   const description = stringToolArg(part.task.toolArgs, "description");
   const prompt = stringToolArg(part.task.toolArgs, "prompt");
   const role = stringToolArg(
@@ -1144,7 +1169,11 @@ function TaskGroupPart({
     if (command) return command;
 
     return (
-      latestChild.toolTitle ||
+      getToolTitleDisplayName(
+        latestChild.toolTitle,
+        latestChild.toolName,
+        latestChild.content,
+      ) ||
       getToolDisplayName(latestChild.toolName, latestChild.content)
     );
   }, [description, part.childTools, part.task.toolState]);

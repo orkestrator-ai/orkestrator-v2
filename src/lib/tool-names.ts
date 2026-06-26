@@ -51,3 +51,36 @@ export function getToolDisplayName(toolName?: string, fallback = "Unknown tool")
     TOOL_DISPLAY_NAMES.get(toolName.toLowerCase()) ?? toolName,
   );
 }
+
+/** Normalize a tool label to a comparison key, or null when empty. */
+export function normalizeToolLabelKey(value?: string): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  return trimmed.toLowerCase();
+}
+
+/**
+ * Humanize a tool title only when it is a redundant copy of the raw tool name
+ * or content (e.g. "bash" -> "Run Command"). Genuinely descriptive titles, and
+ * any title containing whitespace (such as a command line), are returned
+ * verbatim so they are never mangled by title-casing.
+ */
+export function getToolTitleDisplayName(
+  toolTitle?: string,
+  toolName?: string,
+  content?: string,
+): string | undefined {
+  if (!toolTitle) return undefined;
+
+  const titleKey = normalizeToolLabelKey(toolTitle);
+  const isIdentifierLike = titleKey !== null && !/\s/.test(titleKey);
+  if (
+    isIdentifierLike &&
+    (titleKey === normalizeToolLabelKey(toolName) ||
+      titleKey === normalizeToolLabelKey(content))
+  ) {
+    return getToolDisplayName(toolTitle);
+  }
+
+  return toolTitle;
+}

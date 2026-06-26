@@ -34,7 +34,11 @@ import {
   SYSTEM_MESSAGE_PREFIX,
   type ToolDiffMetadata,
 } from "@/lib/opencode-client";
-import { getToolDisplayName, isEditTool } from "@/lib/tool-names";
+import {
+  getToolDisplayName,
+  getToolTitleDisplayName,
+  isEditTool,
+} from "@/lib/tool-names";
 import { isTodoTool } from "@/lib/todo-tool";
 import { TodoToolPart } from "@/components/todo/TodoToolPart";
 import { MessageErrorAlert, MessageShell } from "@/components/chat/MessageShell";
@@ -86,31 +90,6 @@ const markdownComponents: Components = {
 
 const TASK_LIST_SYNTAX_PATTERN = /(^|\n)\s*(?:[-*+]|\d+\.)\s+\[(?: |x|X)\]\s+/m;
 const USER_PROMPT_COLLAPSED_LINE_COUNT = 12;
-
-function normalizeToolLabelKey(value?: string): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) return null;
-  return trimmed.toLowerCase();
-}
-
-function getToolTitleDisplayName(
-  toolTitle?: string,
-  toolName?: string,
-  content?: string,
-): string | undefined {
-  if (!toolTitle) return undefined;
-
-  const titleKey = normalizeToolLabelKey(toolTitle);
-  if (
-    titleKey &&
-    (titleKey === normalizeToolLabelKey(toolName) ||
-      titleKey === normalizeToolLabelKey(content))
-  ) {
-    return getToolDisplayName(toolTitle);
-  }
-
-  return toolTitle;
-}
 
 interface NativeMessageProps {
   message: NativeMessageType;

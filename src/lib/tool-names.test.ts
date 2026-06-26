@@ -12,8 +12,12 @@ describe("tool name helpers", () => {
   });
 
   test("maps display-only tool names case-insensitively", () => {
-    expect(getToolDisplayName("bash")).toBe("run_command");
-    expect(getToolDisplayName("Bash")).toBe("run_command");
+    expect(getToolDisplayName("bash")).toBe("Run Command");
+    expect(getToolDisplayName("Bash")).toBe("Run Command");
+    expect(getToolDisplayName("apply_patch")).toBe("Apply Patch");
+    expect(getToolDisplayName("exec_command")).toBe("Exec Command");
+    expect(getToolDisplayName("web_search")).toBe("Web Search");
+    expect(getToolDisplayName("edit")).toBe("Edit");
     expect(getToolDisplayName("Read")).toBe("Read");
   });
 

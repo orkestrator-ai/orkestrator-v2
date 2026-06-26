@@ -149,7 +149,7 @@ describe("NativeMessage task list rendering", () => {
 
     render(<NativeMessage message={message} />);
 
-    const toolButton = screen.getByRole("button", { name: /run_command/i });
+    const toolButton = screen.getByRole("button", { name: /Run Command/i });
     expect(toolButton.parentElement?.className).toContain("my-0");
 
     const text = screen.getByText("Text after tool");
@@ -166,7 +166,7 @@ describe("NativeMessage task list rendering", () => {
     expect(markdownWrapper?.parentElement?.className).not.toContain("pt-2");
   });
 
-  test("displays bash tool invocations as run_command", () => {
+  test("displays bash tool invocations as Run Command", () => {
     const message = makeMessage([
       {
         type: "tool-invocation",
@@ -179,7 +179,7 @@ describe("NativeMessage task list rendering", () => {
 
     render(<NativeMessage message={message} />);
 
-    expect(screen.getByRole("button", { name: /run_command/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Run Command/i })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /\bbash\b/i })).toBeNull();
   });
 

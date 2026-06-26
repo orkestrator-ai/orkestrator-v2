@@ -854,7 +854,7 @@ describe("NativeMessage", () => {
     render(<NativeMessage message={message} />);
 
     const trigger = screen.getByRole("button", {
-      name: /run_command pwd && rg --files \| head -200 success/i,
+      name: /Run Command pwd && rg --files \| head -200 success/i,
     });
     expect(trigger).toBeTruthy();
     expect(screen.queryByText("Bash")).toBeNull();
@@ -1010,8 +1010,8 @@ describe("NativeMessage", () => {
     fireEvent.click(screen.getByRole("button", { name: /lovelace/i }));
 
     expect(screen.getByText("Inspect the Codex integration")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /exec_command rg -n "codex" src success/i })).toBeTruthy();
-    fireEvent.click(screen.getAllByText("exec_command")[0]!);
+    expect(screen.getByRole("button", { name: /Exec Command rg -n "codex" src success/i })).toBeTruthy();
+    fireEvent.click(screen.getAllByText("Exec Command")[0]!);
     expect(screen.getByText("$ rg -n \"codex\" src")).toBeTruthy();
     expect(screen.getByText("matches")).toBeTruthy();
   });
@@ -1156,7 +1156,7 @@ describe("NativeMessage", () => {
 
     render(<NativeMessage message={message} />);
 
-    expect(screen.getByText("run_command")).toBeTruthy();
+    expect(screen.getByText("Run Command")).toBeTruthy();
     expect(screen.queryByText("bash")).toBeNull();
   });
 
@@ -1183,7 +1183,7 @@ describe("NativeMessage", () => {
 
     render(<NativeMessage message={message} />);
 
-    expect(screen.getByRole("button", { name: /run_command/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Run Command/i })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /\bbash\b/i })).toBeNull();
   });
 });

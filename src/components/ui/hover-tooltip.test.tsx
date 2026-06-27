@@ -10,7 +10,15 @@ import {
 } from "./context-menu";
 import { HoverTooltipContent, useHoverTooltip } from "./hover-tooltip";
 
-function ContextMenuButtonWithHoverTooltip({ openDelay = 0 }: { openDelay?: number }) {
+function ContextMenuButtonWithHoverTooltip({
+  openDelay = 0,
+  side = "bottom",
+  align = "center",
+}: {
+  openDelay?: number;
+  side?: "bottom" | "right";
+  align?: "center" | "start";
+}) {
   const anchorRef = useRef<HTMLButtonElement>(null);
   const tooltip = useHoverTooltip(openDelay);
 
@@ -29,6 +37,8 @@ function ContextMenuButtonWithHoverTooltip({ openDelay = 0 }: { openDelay?: numb
       <HoverTooltipContent
         anchorRef={anchorRef}
         open={tooltip.open}
+        side={side}
+        align={align}
         onMouseEnter={tooltip.show}
         onMouseLeave={tooltip.hide}
       >
@@ -79,5 +89,36 @@ describe("HoverTooltipContent", () => {
     await new Promise((resolve) => setTimeout(resolve, 250));
 
     expect(screen.queryByText("Run command")).toBeNull();
+  });
+
+  test("centers the arrow for center-aligned bottom tooltips", async () => {
+    render(<ContextMenuButtonWithHoverTooltip />);
+
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Run" }));
+
+    const arrow = await waitFor(() => {
+      const element = document.body.querySelector('[data-slot="hover-tooltip-arrow"]');
+      expect(element).toBeTruthy();
+      return element;
+    });
+
+    expect(arrow?.className).toContain("left-1/2");
+    expect(arrow?.className).toContain("-translate-x-1/2");
+    expect(arrow?.className).not.toContain("left-4");
+  });
+
+  test("keeps leading arrow placement for start-aligned bottom tooltips", async () => {
+    render(<ContextMenuButtonWithHoverTooltip align="start" />);
+
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Run" }));
+
+    const arrow = await waitFor(() => {
+      const element = document.body.querySelector('[data-slot="hover-tooltip-arrow"]');
+      expect(element).toBeTruthy();
+      return element;
+    });
+
+    expect(arrow?.className).toContain("left-4");
+    expect(arrow?.className).not.toContain("left-1/2");
   });
 });

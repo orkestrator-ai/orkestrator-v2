@@ -51,6 +51,7 @@ import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import type { ClaudeAttachment } from "@/stores/claudeStore";
 import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
+import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 
 interface ClaudeChatTabProps {
   tabId: string;
@@ -192,6 +193,10 @@ export function ClaudeChatTab({
   // Memoize messages separately to provide stable reference for child components
   // This prevents unnecessary recalculations when other session properties change
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
+  const displayMessages = useMemo(
+    () => pinActiveNativeAgentParts(sessionMessages.map(normalizeClaudeMessage)),
+    [sessionMessages],
+  );
   const hasMessageHistory = sessionMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
 
@@ -1376,12 +1381,12 @@ export function ClaudeChatTab({
       >
         {/* Virtualized messages area */}
         <VirtualizedMessageList
-          messages={sessionMessages}
+          messages={displayMessages}
           computeItemKey={(_index, msg) => msg.id}
           renderMessage={(_index, message, prev) => (
             <NativeMessage
-              message={normalizeClaudeMessage(message)}
-              previousMessage={prev ? normalizeClaudeMessage(prev) : null}
+              message={message}
+              previousMessage={prev}
               assistantLabel="Claude"
               containerId={containerId}
             />

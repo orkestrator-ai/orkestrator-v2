@@ -2,7 +2,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createOpenCodeSessionKey, useOpenCodeStore } from "@/stores/openCodeStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realHooks from "@/hooks";
+import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 
 // Snapshot the real sibling modules before we install stubs so we can restore
 // them when this file finishes. Without this, Bun's global mock.module cache
@@ -22,8 +24,10 @@ const realOpenCodeResumeSessionDialogSnapshot = { ...realOpenCodeResumeSessionDi
 const realSlashCommandDirectorySnapshot = { ...realSlashCommandDirectory };
 const realSlashCommandRegistrySnapshot = { ...realSlashCommandRegistry };
 const realHooksSnapshot = { ...realHooks };
+const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 const mockScrollToBottom = mock(() => {});
 let mockIsAtBottom = true;
+let lastVirtualizedMessages: any[] = [];
 
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
 const mockSendPrompt = mock(async () => ({ success: true }));
@@ -176,6 +180,24 @@ mock.module("@/hooks", () => ({
   })),
 }));
 
+mock.module("@/components/chat/VirtualizedMessageList", () => ({
+  VirtualizedMessageList: ({ messages, renderMessage, emptyState, footer }: any) => {
+    lastVirtualizedMessages = messages;
+    return (
+      <div>
+        {messages.length > 0
+          ? messages.map((message: any, index: number) => (
+            <div key={message.id}>
+              {renderMessage(index, message, index > 0 ? messages[index - 1] : null)}
+            </div>
+          ))
+          : emptyState}
+        {footer}
+      </div>
+    );
+  },
+}));
+
 import { OpenCodeChatTab } from "./OpenCodeChatTab";
 import type { OpenCodeNativeData } from "@/types/paneLayout";
 
@@ -268,6 +290,7 @@ afterAll(() => {
   mock.module("./slash-command-directory", () => realSlashCommandDirectorySnapshot);
   mock.module("./slash-command-registry", () => realSlashCommandRegistrySnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
+  mock.module("@/components/chat/VirtualizedMessageList", () => realVirtualizedMessageListSnapshot);
 });
 
 describe("OpenCodeChatTab", () => {
@@ -294,6 +317,7 @@ describe("OpenCodeChatTab", () => {
     }));
     mockScrollToBottom.mockClear();
     mockIsAtBottom = true;
+    lastVirtualizedMessages = [];
     resetStores();
   });
 
@@ -335,7 +359,7 @@ describe("OpenCodeChatTab", () => {
             id: "message-1",
             role: "assistant",
             content: "Existing response",
-            parts: [{ type: "text", text: "Existing response" }],
+            parts: [{ type: "text", content: "Existing response" }],
             createdAt: "2026-04-15T10:00:00.000Z",
           } as any,
         ],
@@ -358,6 +382,91 @@ describe("OpenCodeChatTab", () => {
     fireEvent.click(scrollButton);
 
     expect(mockScrollToBottom).toHaveBeenCalledTimes(1);
+  });
+
+  test("pins active subagents to the rendered bottom and releases them on success", async () => {
+    const activeMessage: NativeMessage = {
+      id: "assistant-agent",
+      role: "assistant",
+      content: "",
+      parts: [
+        { type: "text", content: "Parent started" },
+        {
+          type: "subagent",
+          content: "Worker agent",
+          subagentId: "agent-1",
+          subagentName: "Worker agent",
+          toolState: "pending",
+          subagentActions: [],
+        },
+        { type: "text", content: "Parent continued" },
+      ],
+      createdAt: "2026-04-15T10:00:00.000Z",
+    };
+    const laterMessage: NativeMessage = {
+      id: "assistant-later",
+      role: "assistant",
+      content: "Later response",
+      parts: [{ type: "text", content: "Later response" }],
+      createdAt: "2026-04-15T10:00:30.000Z",
+    };
+
+    useOpenCodeStore.setState((state) => {
+      const sessions = new Map(state.sessions);
+      sessions.set(SESSION_KEY, {
+        sessionId: "session-1",
+        messages: [activeMessage, laterMessage],
+        isLoading: false,
+      });
+      return { sessions };
+    });
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
+      "assistant-agent",
+      "assistant-later",
+      "assistant-agent:active-agent:agent-1",
+    ]);
+
+    const completedMessage: NativeMessage = {
+      ...activeMessage,
+      parts: activeMessage.parts.map((part) =>
+        part.type === "subagent"
+          ? { ...part, toolState: "success" as const }
+          : part
+      ),
+    };
+
+    act(() => {
+      useOpenCodeStore.setState((state) => {
+        const sessions = new Map(state.sessions);
+        sessions.set(SESSION_KEY, {
+          sessionId: "session-1",
+          messages: [completedMessage, laterMessage],
+          isLoading: false,
+        });
+        return { sessions };
+      });
+    });
+
+    await waitFor(() => {
+      expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
+        "assistant-agent",
+        "assistant-later",
+      ]);
+      expect(lastVirtualizedMessages[0]?.parts.map((part: any) => part.type)).toEqual([
+        "text",
+        "subagent",
+        "text",
+      ]);
+    });
   });
 
   test("shows the first prompt and naming feedback before the rename completes", async () => {
@@ -433,7 +542,7 @@ describe("OpenCodeChatTab", () => {
             id: "message-1",
             role: "assistant",
             content: "Review complete",
-            parts: [{ type: "text", text: "Review complete" }],
+            parts: [{ type: "text", content: "Review complete" }],
             createdAt: "2026-04-15T10:00:00.000Z",
           } as any,
         ],

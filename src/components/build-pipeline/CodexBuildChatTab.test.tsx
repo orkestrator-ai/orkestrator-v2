@@ -34,8 +34,11 @@ mock.module("@/lib/codex-client", () => ({
 // ScrollArea viewport.
 import * as realScrollAreaModule from "@/components/ui/scroll-area";
 import * as realSeparatorModule from "@/components/ui/separator";
+import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 const realScrollAreaSnapshot = { ...realScrollAreaModule };
 const realSeparatorSnapshot = { ...realSeparatorModule };
+const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
+let lastVirtualizedRows: any[] = [];
 
 mock.module("@/components/ui/scroll-area", () => ({
   ScrollArea: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -43,6 +46,24 @@ mock.module("@/components/ui/scroll-area", () => ({
 
 mock.module("@/components/ui/separator", () => ({
   Separator: () => <hr />,
+}));
+
+mock.module("@/components/chat/VirtualizedMessageList", () => ({
+  VirtualizedMessageList: ({ messages, renderMessage, emptyState, footer }: any) => {
+    lastVirtualizedRows = messages;
+    return (
+      <div>
+        {messages.length > 0
+          ? messages.map((message: any, index: number) => (
+            <div key={message.key ?? message.id ?? index}>
+              {renderMessage(index, message, index > 0 ? messages[index - 1] : null)}
+            </div>
+          ))
+          : emptyState}
+        {footer}
+      </div>
+    );
+  },
 }));
 
 mock.module("@/lib/backend", () => ({
@@ -65,6 +86,7 @@ import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { CodexBuildChatTab } from "./CodexBuildChatTab";
 import type { BuildTabData } from "@/types/paneLayout";
+import type { NativeMessage } from "@/lib/chat/native-message-types";
 
 const ENV_ID = "env-1";
 const PIPELINE_ID = "pipeline-1";
@@ -459,6 +481,7 @@ describe("CodexBuildChatTab", () => {
   afterAll(() => {
     mock.module("@/components/ui/scroll-area", () => realScrollAreaSnapshot);
     mock.module("@/components/ui/separator", () => realSeparatorSnapshot);
+    mock.module("@/components/chat/VirtualizedMessageList", () => realVirtualizedMessageListSnapshot);
     mock.restore();
   });
 
@@ -479,6 +502,7 @@ describe("CodexBuildChatTab", () => {
     mockGetProjectNotes.mockClear();
     mockAddKanbanComment.mockClear();
     mockUpdateKanbanTask.mockClear();
+    lastVirtualizedRows = [];
 
     mockCreateSession.mockImplementation(async () => ({ sessionId: "review-session", title: "Review Session" }));
     mockGetSessionMessages.mockImplementation(async () => []);
@@ -520,6 +544,97 @@ describe("CodexBuildChatTab", () => {
     expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
     expect(await screen.findByText("Resume")).toBeTruthy();
     resolveAbort?.(true);
+  });
+
+  test("pins active Codex build subagents to the rendered bottom and releases them on success", async () => {
+    seedPipeline("building", "running");
+    seedCodexStore(false);
+
+    const activeMessage: NativeMessage = {
+      id: "assistant-agent",
+      role: "assistant",
+      content: "",
+      parts: [
+        { type: "text", content: "Parent started" },
+        {
+          type: "subagent",
+          content: "Build worker",
+          subagentId: "agent-1",
+          subagentName: "Build worker",
+          toolState: "pending",
+          subagentActions: [],
+        },
+        { type: "text", content: "Parent continued" },
+      ],
+      createdAt: "2026-04-15T00:00:00.000Z",
+    };
+    const laterMessage: NativeMessage = {
+      id: "assistant-later",
+      role: "assistant",
+      content: "Later response",
+      parts: [{ type: "text", content: "Later response" }],
+      createdAt: "2026-04-15T00:00:30.000Z",
+    };
+
+    useCodexStore.setState((state) => ({
+      sessions: new Map(state.sessions).set(SESSION_KEY, {
+        sessionId: SESSION_ID,
+        messages: [activeMessage, laterMessage],
+        isLoading: false,
+        title: "Build Session",
+      }),
+    }));
+    mockGetSessionMessages.mockImplementation(async () => [activeMessage, laterMessage]);
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(
+        lastVirtualizedRows
+          .filter((row) => row.kind === "message")
+          .map((row) => row.message.id),
+      ).toEqual([
+        "assistant-agent",
+        "assistant-later",
+        "assistant-agent:active-agent:agent-1",
+      ]);
+    });
+
+    const completedMessage: NativeMessage = {
+      ...activeMessage,
+      parts: activeMessage.parts.map((part) =>
+        part.type === "subagent"
+          ? { ...part, toolState: "success" as const }
+          : part
+      ),
+    };
+
+    act(() => {
+      useCodexStore.setState((state) => ({
+        sessions: new Map(state.sessions).set(SESSION_KEY, {
+          sessionId: SESSION_ID,
+          messages: [completedMessage, laterMessage],
+          isLoading: false,
+          title: "Build Session",
+        }),
+      }));
+    });
+
+    await waitFor(() => {
+      expect(
+        lastVirtualizedRows
+          .filter((row) => row.kind === "message")
+          .map((row) => row.message.id),
+      ).toEqual([
+        "assistant-agent",
+        "assistant-later",
+      ]);
+      expect(lastVirtualizedRows.find((row) => row.kind === "message")?.message.parts.map((part: any) => part.type)).toEqual([
+        "text",
+        "subagent",
+        "text",
+      ]);
+    });
   });
 
   test("resuming after stop during session creation starts the intended codex build stage", async () => {

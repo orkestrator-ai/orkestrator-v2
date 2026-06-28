@@ -67,10 +67,12 @@ function isTaskTool(toolName?: string): boolean {
 function isToolActivity(part: NativeMessagePart): boolean {
   return (
     part.type === "thinking" ||
-    part.type === "tool-invocation" ||
-    part.type === "subagent" ||
-    part.type === "task-group"
+    part.type === "tool-invocation"
   );
+}
+
+function isAgentActivity(part: NativeMessagePart): boolean {
+  return part.type === "subagent" || part.type === "task-group";
 }
 
 function toNativeToolInvocationPart(
@@ -241,6 +243,12 @@ export function groupNativeToolActivity(parts: NativeMessagePart[]): NativeMessa
   };
 
   for (const part of parts) {
+    if (isAgentActivity(part)) {
+      flushToolGroup();
+      rendered.push(part);
+      continue;
+    }
+
     if (isToolActivity(part)) {
       toolGroup.push(part);
       continue;

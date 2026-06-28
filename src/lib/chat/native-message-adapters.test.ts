@@ -147,14 +147,10 @@ describe("native message adapters", () => {
     const normalized = normalizeClaudeMessage(message);
 
     expect(normalized.parts).toHaveLength(1);
-    expect(normalized.parts[0]?.type).toBe("tool-group");
-    if (normalized.parts[0]?.type === "tool-group") {
-      expect(normalized.parts[0].parts[0]?.type).toBe("task-group");
-      const taskGroup = normalized.parts[0].parts[0];
-      if (taskGroup?.type === "task-group") {
-        expect(taskGroup.task.toolName).toBe("Task");
-        expect(taskGroup.childTools.map((part) => part.toolName)).toEqual(["Read"]);
-      }
+    expect(normalized.parts[0]?.type).toBe("task-group");
+    if (normalized.parts[0]?.type === "task-group") {
+      expect(normalized.parts[0].task.toolName).toBe("Task");
+      expect(normalized.parts[0].childTools.map((part) => part.toolName)).toEqual(["Read"]);
     }
   });
 
@@ -188,15 +184,11 @@ describe("native message adapters", () => {
     const normalized = normalizeClaudeMessage(message);
 
     expect(normalized.parts).toHaveLength(1);
-    expect(normalized.parts[0]?.type).toBe("tool-group");
-    if (normalized.parts[0]?.type === "tool-group") {
-      expect(normalized.parts[0].parts[0]?.type).toBe("task-group");
-      const taskGroup = normalized.parts[0].parts[0];
-      if (taskGroup?.type === "task-group") {
-        expect(taskGroup.task.toolName).toBe("Agent");
-        expect(taskGroup.task.toolArgs?.description).toBe("Review presentation polish");
-        expect(taskGroup.childTools.map((part) => part.toolName)).toEqual(["Read"]);
-      }
+    expect(normalized.parts[0]?.type).toBe("task-group");
+    if (normalized.parts[0]?.type === "task-group") {
+      expect(normalized.parts[0].task.toolName).toBe("Agent");
+      expect(normalized.parts[0].task.toolArgs?.description).toBe("Review presentation polish");
+      expect(normalized.parts[0].childTools.map((part) => part.toolName)).toEqual(["Read"]);
     }
   });
 
@@ -221,15 +213,11 @@ describe("native message adapters", () => {
 
     const normalized = normalizeClaudeMessage(message);
 
-    expect(normalized.parts[0]?.type).toBe("tool-group");
-    if (normalized.parts[0]?.type === "tool-group") {
-      const taskGroup = normalized.parts[0].parts[0];
-      expect(taskGroup?.type).toBe("task-group");
-      if (taskGroup?.type === "task-group") {
-        expect(taskGroup.task.toolUseCount).toBe(8);
-        expect(taskGroup.task.tokenCount).toBe(20_400);
-        expect(taskGroup.task.tokenCountText).toBe("20.4k tokens");
-      }
+    expect(normalized.parts[0]?.type).toBe("task-group");
+    if (normalized.parts[0]?.type === "task-group") {
+      expect(normalized.parts[0].task.toolUseCount).toBe(8);
+      expect(normalized.parts[0].task.tokenCount).toBe(20_400);
+      expect(normalized.parts[0].task.tokenCountText).toBe("20.4k tokens");
     }
   });
 
@@ -257,14 +245,10 @@ describe("native message adapters", () => {
 
     const normalized = normalizeClaudeMessage(message);
 
-    expect(normalized.parts[0]?.type).toBe("tool-group");
-    if (normalized.parts[0]?.type === "tool-group") {
-      expect(normalized.parts[0].parts[0]?.type).toBe("task-group");
-      const taskGroup = normalized.parts[0].parts[0];
-      if (taskGroup?.type === "task-group") {
-        expect(taskGroup.task.toolName).toBe("AGENT");
-        expect(taskGroup.childTools.map((part) => part.toolName)).toEqual(["Read"]);
-      }
+    expect(normalized.parts[0]?.type).toBe("task-group");
+    if (normalized.parts[0]?.type === "task-group") {
+      expect(normalized.parts[0].task.toolName).toBe("AGENT");
+      expect(normalized.parts[0].childTools.map((part) => part.toolName)).toEqual(["Read"]);
     }
   });
 
@@ -301,7 +285,7 @@ describe("native message adapters", () => {
     expect(taskGroupTypes).not.toContain("task-group");
   });
 
-  test("Codex adapter uses the same grouped native shape", () => {
+  test("keeps agent parts in their own block outside grouped tool activity", () => {
     const message: NativeMessage = {
       id: "codex-1",
       role: "assistant",
@@ -315,7 +299,14 @@ describe("native message adapters", () => {
 
     const normalized = normalizeCodexNativeMessage(message);
 
-    expect(normalized.parts).toHaveLength(1);
-    expect(normalized.parts[0]?.type).toBe("tool-group");
+    expect(normalized.parts.map((part) => part.type)).toEqual([
+      "subagent",
+      "tool-group",
+    ]);
+    expect(normalized.parts[0]?.type).toBe("subagent");
+    expect(normalized.parts[1]?.type).toBe("tool-group");
+    if (normalized.parts[1]?.type === "tool-group") {
+      expect(normalized.parts[1].parts.map((part) => part.toolName)).toEqual(["Read"]);
+    }
   });
 });

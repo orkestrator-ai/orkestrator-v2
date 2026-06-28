@@ -37,13 +37,12 @@ import {
   type CodexReasoningEffort,
 } from "@/lib/codex-client";
 import {
-  createFeaturePlannerInitialPrompt,
-  createFeaturePlannerResumePrompt,
   createStoryCardsFromParsedState,
   createStoryRefinementPrompt,
   formatFeatureStoriesForBuild,
   parseFeaturePlannerState,
   parseStoryRefinement,
+  selectFeaturePlannerPrompt,
   stripFeaturePlannerStateBlocks,
   stripStoryRefinementStateBlocks,
 } from "@/lib/feature-planner";
@@ -350,12 +349,12 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         const latestFeature = withUserMessage ?? feature;
         const previousSessionId = latestFeature.codexSessionId;
         const { client, sessionId } = await ensureCodexSession(latestFeature);
-        const isContinuingSameSession = !!previousSessionId && previousSessionId === sessionId;
-        const prompt = isContinuingSameSession
-          ? trimmed
-          : latestFeature.messages.filter((message) => message.role === "user").length <= 1
-            ? createFeaturePlannerInitialPrompt(trimmed)
-            : createFeaturePlannerResumePrompt(latestFeature, trimmed);
+        const prompt = selectFeaturePlannerPrompt({
+          feature: latestFeature,
+          userMessage: trimmed,
+          previousSessionId,
+          sessionId,
+        });
 
         const sent = await sendPrompt(client, sessionId, prompt);
         if (!sent) throw new Error("Failed to send feature planning prompt");

@@ -8,6 +8,7 @@ export interface ParsedFeaturePlannerState {
   title?: string;
   summary?: string;
   stories?: Array<{
+    id?: string;
     title: string;
     description: string;
     acceptanceCriteria: string[];
@@ -31,6 +32,7 @@ Rules:
 - When you have enough information, describe the feature exactly as the user has described it and ask for confirmation before generating user stories.
 - When the user confirms, generate user story cards with a title, one-paragraph description, and acceptance criteria.
 - Do not write code in this planning chat.
+- When you regenerate or revise stories that already appeared in an earlier state block, reuse that story's exact "id" value. Only omit "id" for brand-new stories you are introducing for the first time.
 - Every assistant response must end with exactly one machine-readable state block.
 
 State block format:
@@ -43,9 +45,9 @@ When asking for confirmation, use:
 {"phase":"confirming","title":"short feature name","summary":"confirmed feature summary"}
 </feature_planner_state>
 
-When generating cards, use:
+When generating cards, use (include "id" only when reusing a story from a previous state block):
 <feature_planner_state>
-{"phase":"stories","title":"short feature name","summary":"confirmed feature summary","stories":[{"title":"story title","description":"one paragraph","acceptanceCriteria":["criterion"]}]}
+{"phase":"stories","title":"short feature name","summary":"confirmed feature summary","stories":[{"id":"existing-story-id-if-any","title":"story title","description":"one paragraph","acceptanceCriteria":["criterion"]}]}
 </feature_planner_state>`;
 
 export function createFeaturePlannerInitialPrompt(userMessage: string): string {
@@ -62,15 +64,41 @@ export function createFeaturePlannerResumePrompt(feature: FeaturePlan, userMessa
     .map((message) => `${message.role.toUpperCase()}: ${stripFeaturePlannerStateBlocks(message.content)}`)
     .join("\n\n");
 
+  const existingStories = feature.stories.length
+    ? `\n\nExisting stories (reuse the exact id when you regenerate or revise any of these):\n${feature.stories
+        .map((story) => `- id: ${story.id} | title: ${story.title}`)
+        .join("\n")}`
+    : "";
+
   return `${FEATURE_PLANNER_SYSTEM_PROMPT}
 
-This is a resumed planning session. Use the persisted transcript below as the full source of conversation history, then respond to the latest user message.
+This is a resumed planning session. Use the persisted transcript below as the full source of conversation history, then respond to the latest user message.${existingStories}
 
 Persisted transcript:
 ${transcript}
 
 Latest user message:
 ${userMessage}`;
+}
+
+// Decides which planner prompt to send. When the Codex session is the same one
+// already in use we rely on its retained context and send only the raw message.
+// Otherwise we either bootstrap (first user message) or rebuild the conversation
+// from the persisted transcript (resumed/recreated session).
+export function selectFeaturePlannerPrompt(params: {
+  feature: FeaturePlan;
+  userMessage: string;
+  previousSessionId: string | null | undefined;
+  sessionId: string;
+}): string {
+  const { feature, userMessage, previousSessionId, sessionId } = params;
+  const isContinuingSameSession = !!previousSessionId && previousSessionId === sessionId;
+  if (isContinuingSameSession) return userMessage;
+
+  const userMessageCount = feature.messages.filter((message) => message.role === "user").length;
+  return userMessageCount <= 1
+    ? createFeaturePlannerInitialPrompt(userMessage)
+    : createFeaturePlannerResumePrompt(feature, userMessage);
 }
 
 export function createStoryRefinementPrompt(story: FeatureStoryCard, userMessage: string): string {
@@ -134,12 +162,17 @@ export function createStoryCardsFromParsedState(
   existingStories: FeatureStoryCard[] = [],
 ): FeatureStoryCard[] {
   const now = new Date().toISOString();
+  const existingById = new Map(existingStories.map((story) => [story.id, story]));
   const existingByTitle = new Map(existingStories.map((story) => [story.title.toLowerCase(), story]));
 
   return (parsed.stories ?? []).map((story) => {
-    const existing = existingByTitle.get(story.title.toLowerCase());
+    // Prefer matching by the round-tripped id so a renamed story keeps its
+    // refinement history; fall back to title for stories the model emits
+    // without an id (e.g. brand-new cards or models that drop the id).
+    const existing = (story.id ? existingById.get(story.id) : undefined)
+      ?? existingByTitle.get(story.title.toLowerCase());
     return {
-      id: existing?.id ?? crypto.randomUUID(),
+      id: existing?.id ?? story.id ?? crypto.randomUUID(),
       title: story.title,
       description: story.description,
       acceptanceCriteria: Array.isArray(story.acceptanceCriteria) ? story.acceptanceCriteria : [],

@@ -324,6 +324,7 @@ async function exists(filePath: string): Promise<boolean> {
 export class StorageService {
   private readonly dataDir: string;
   private writeQueue = Promise.resolve();
+  private featurePlanMutation: Promise<unknown> = Promise.resolve();
 
   constructor(dataDir: string) {
     this.dataDir = dataDir;
@@ -868,79 +869,95 @@ export class StorageService {
       .sort((a, b) => a.order - b.order);
   }
 
+  // Serializes the entire load -> mutate -> save cycle for feature plans so that
+  // concurrent flows (e.g. a feature-chat poll and a story refinement happening at
+  // the same time) cannot clobber each other via stale read-modify-write races.
+  // The mutator runs against the freshly loaded array; if it throws, nothing is
+  // saved and the next queued mutation still proceeds.
+  private mutateFeaturePlans<T>(mutator: (plans: FeaturePlan[]) => T): Promise<T> {
+    const run = this.featurePlanMutation.then(async () => {
+      const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
+      const result = mutator(plans);
+      await this.saveJson(this.featurePlansFile(), plans);
+      return result;
+    });
+    this.featurePlanMutation = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
   async createFeaturePlan(projectId: string): Promise<FeaturePlan> {
-    const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
-    const now = nowIso();
-    const plan: FeaturePlan = {
-      id: randomUUID(),
-      projectId,
-      title: "new feature",
-      status: "collecting",
-      summary: "",
-      messages: [{
+    return this.mutateFeaturePlans((plans) => {
+      const now = nowIso();
+      const plan: FeaturePlan = {
         id: randomUUID(),
-        role: "assistant",
-        content: "Tell me about the new feature",
+        projectId,
+        title: "new feature",
+        status: "collecting",
+        summary: "",
+        messages: [{
+          id: randomUUID(),
+          role: "assistant",
+          content: "Tell me about the new feature",
+          createdAt: now,
+        }],
+        stories: [],
         createdAt: now,
-      }],
-      stories: [],
-      createdAt: now,
-      updatedAt: now,
-      order: Math.max(-1, ...plans.filter((candidate) => candidate.projectId === projectId).map((candidate) => candidate.order)) + 1,
-    };
-    plans.push(plan);
-    await this.saveJson(this.featurePlansFile(), plans);
-    return plan;
+        updatedAt: now,
+        order: Math.max(-1, ...plans.filter((candidate) => candidate.projectId === projectId).map((candidate) => candidate.order)) + 1,
+      };
+      plans.push(plan);
+      return plan;
+    });
   }
 
   async updateFeaturePlan(featureId: string, updates: Partial<FeaturePlan>): Promise<FeaturePlan> {
-    const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
-    const plan = plans.find((candidate) => candidate.id === featureId);
-    if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+    return this.mutateFeaturePlans((plans) => {
+      const plan = plans.find((candidate) => candidate.id === featureId);
+      if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
 
-    const originalId = plan.id;
-    const originalProjectId = plan.projectId;
-    Object.assign(plan, updates);
-    plan.id = originalId;
-    plan.projectId = originalProjectId;
-    plan.updatedAt = nowIso();
-    await this.saveJson(this.featurePlansFile(), plans);
-    return plan;
+      const originalId = plan.id;
+      const originalProjectId = plan.projectId;
+      Object.assign(plan, updates);
+      plan.id = originalId;
+      plan.projectId = originalProjectId;
+      plan.updatedAt = nowIso();
+      return plan;
+    });
   }
 
   async appendFeaturePlanMessage(featureId: string, role: FeaturePlanMessage["role"], content: string): Promise<FeaturePlan> {
-    const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
-    const plan = plans.find((candidate) => candidate.id === featureId);
-    if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+    return this.mutateFeaturePlans((plans) => {
+      const plan = plans.find((candidate) => candidate.id === featureId);
+      if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
 
-    plan.messages.push({
-      id: randomUUID(),
-      role,
-      content,
-      createdAt: nowIso(),
+      plan.messages.push({
+        id: randomUUID(),
+        role,
+        content,
+        createdAt: nowIso(),
+      });
+      plan.updatedAt = nowIso();
+      return plan;
     });
-    plan.updatedAt = nowIso();
-    await this.saveJson(this.featurePlansFile(), plans);
-    return plan;
   }
 
   async appendFeatureStoryMessage(featureId: string, storyId: string, role: FeaturePlanMessage["role"], content: string): Promise<FeaturePlan> {
-    const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
-    const plan = plans.find((candidate) => candidate.id === featureId);
-    if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
-    const story = plan.stories.find((candidate) => candidate.id === storyId);
-    if (!story) throw new Error(`Feature story not found: ${storyId}`);
+    return this.mutateFeaturePlans((plans) => {
+      const plan = plans.find((candidate) => candidate.id === featureId);
+      if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+      const story = plan.stories.find((candidate) => candidate.id === storyId);
+      if (!story) throw new Error(`Feature story not found: ${storyId}`);
 
-    story.messages.push({
-      id: randomUUID(),
-      role,
-      content,
-      createdAt: nowIso(),
+      story.messages.push({
+        id: randomUUID(),
+        role,
+        content,
+        createdAt: nowIso(),
+      });
+      story.updatedAt = nowIso();
+      plan.updatedAt = nowIso();
+      return plan;
     });
-    story.updatedAt = nowIso();
-    plan.updatedAt = nowIso();
-    await this.saveJson(this.featurePlansFile(), plans);
-    return plan;
   }
 
   async setAllEnvironmentStatusesForContainer(containerId: string, status: EnvironmentStatus): Promise<void> {

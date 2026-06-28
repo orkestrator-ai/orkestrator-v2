@@ -199,6 +199,64 @@ describe("Electron StorageService", () => {
     ]);
   });
 
+  test("preserves feature plan identity and rejects unknown feature/story ids", async () => {
+    const dataDir = await createTempDir("ork-storage-features-errors-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    const feature = await storage.createFeaturePlan("project-1");
+
+    // id and projectId must not be overwritable through updates.
+    const updated = await storage.updateFeaturePlan(feature.id, {
+      title: "renamed",
+      id: "hacked-id",
+      projectId: "other-project",
+    } as never);
+    expect(updated.id).toBe(feature.id);
+    expect(updated.projectId).toBe("project-1");
+    expect(updated.title).toBe("renamed");
+
+    await expect(storage.updateFeaturePlan("missing", { title: "x" })).rejects.toThrow(/not found/i);
+    await expect(storage.appendFeaturePlanMessage("missing", "user", "hi")).rejects.toThrow(/not found/i);
+    await expect(storage.appendFeatureStoryMessage(feature.id, "missing-story", "user", "hi")).rejects.toThrow(/not found/i);
+
+    // A failed mutation must not corrupt the persisted plan.
+    await expect(storage.getFeaturePlans("project-1")).resolves.toEqual([
+      expect.objectContaining({ id: feature.id, projectId: "project-1", title: "renamed" }),
+    ]);
+  });
+
+  test("serializes concurrent feature plan mutations without losing writes", async () => {
+    const dataDir = await createTempDir("ork-storage-features-concurrency-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    const feature = await storage.createFeaturePlan("project-1");
+    await storage.updateFeaturePlan(feature.id, {
+      stories: [{
+        id: "story-1",
+        title: "Story one",
+        description: "desc",
+        acceptanceCriteria: [],
+        messages: [],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }],
+    });
+
+    // Fire a feature-chat append and a story append concurrently. With a stale
+    // read-modify-write both would clobber each other; the mutation queue must
+    // preserve both.
+    await Promise.all([
+      storage.appendFeaturePlanMessage(feature.id, "user", "feature note"),
+      storage.appendFeatureStoryMessage(feature.id, "story-1", "user", "story note"),
+    ]);
+
+    const [reloaded] = await storage.getFeaturePlans("project-1");
+    expect(reloaded?.messages.some((message) => message.content === "feature note")).toBe(true);
+    expect(reloaded?.stories[0]?.messages.some((message) => message.content === "story note")).toBe(true);
+  });
+
   test("persists kanban images as retrievable files and removes them when deleted", async () => {
     const dataDir = await createTempDir("ork-storage-kanban-");
     const storage = new StorageService(dataDir);

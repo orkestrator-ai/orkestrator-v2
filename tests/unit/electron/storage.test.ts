@@ -152,6 +152,13 @@ describe("Electron StorageService", () => {
     });
     expect((await fs.stat(path.join(dataDir, "linear-auth.json"))).mode & 0o777).toBe(0o600);
 
+    await storage.saveLinearAuth("lin_api_reconnected", {
+      id: "viewer-2",
+      name: "Grace",
+    });
+    expect((await fs.stat(path.join(dataDir, "linear-auth.json"))).mode & 0o777).toBe(0o600);
+    expect(await fs.readdir(dataDir)).not.toContain("linear-auth.json.bak.1");
+
     const posted = await storage.saveLinearCompletionComment({
       pipelineId: "pipeline-1",
       issueId: "issue-1",
@@ -179,6 +186,19 @@ describe("Electron StorageService", () => {
 
     await storage.clearLinearAuth();
     await expect(storage.getLinearAuth()).resolves.toBeNull();
+  });
+
+  test("removes temporary Linear auth files when a secret write fails", async () => {
+    const dataDir = await createTempDir("ork-storage-linear-failed-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    await fs.mkdir(path.join(dataDir, "linear-auth.json"));
+
+    await expect(storage.saveLinearAuth("lin_api_secret")).rejects.toThrow();
+
+    const files = await fs.readdir(dataDir);
+    expect(files.filter((file) => file.startsWith(".linear-auth.json.") && file.endsWith(".tmp"))).toEqual([]);
   });
 
   test("persists kanban images as retrievable files and removes them when deleted", async () => {

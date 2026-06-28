@@ -23,6 +23,7 @@ import * as realKanban from "@/components/kanban";
 import * as realContexts from "@/contexts";
 import * as realSonnerUi from "@/components/ui/sonner";
 import * as realErrors from "@/components/errors";
+import * as realLinear from "@/components/linear";
 import * as realAlertDialog from "@/components/ui/alert-dialog";
 import * as realButton from "@/components/ui/button";
 import * as realPrMonitorService from "@/hooks/usePrMonitorService";
@@ -40,6 +41,7 @@ const realKanbanSnapshot = { ...realKanban };
 const realContextsSnapshot = { ...realContexts };
 const realSonnerUiSnapshot = { ...realSonnerUi };
 const realErrorsSnapshot = { ...realErrors };
+const realLinearSnapshot = { ...realLinear };
 const realAlertDialogSnapshot = { ...realAlertDialog };
 const realButtonSnapshot = { ...realButton };
 const realPrMonitorServiceSnapshot = { ...realPrMonitorService };
@@ -52,6 +54,7 @@ const realProcessSnapshot = { ...realProcess };
 
 const mockStartEnvironment = mock(async () => {});
 const mockExit = mock(async () => {});
+const mockLinearMonitorRender = mock(() => undefined);
 const mockListen = listen as ReturnType<typeof mock>;
 type AppEventCallback = (event: { payload: any }) => void;
 let appEventCallbacks = new Map<string, AppEventCallback>();
@@ -149,6 +152,14 @@ mock.module("@/components/ui/sonner", () => ({
 
 mock.module("@/components/errors", () => ({
   ErrorDetailsDialog: () => null,
+}));
+
+mock.module("@/components/linear", () => ({
+  ...realLinearSnapshot,
+  LinearPipelineCompletionMonitor: () => {
+    mockLinearMonitorRender();
+    return <div data-testid="linear-completion-monitor" />;
+  },
 }));
 
 mock.module("@/components/ui/alert-dialog", () => ({
@@ -344,6 +355,7 @@ function resetAppMocks() {
   mockGetConfig.mockClear();
   mockGetConfig.mockImplementation(async () => mockConfig);
   mockToastError.mockClear();
+  mockLinearMonitorRender.mockClear();
   mockAppUnlisten.mockClear();
   appEventCallbacks = new Map();
   mockListen.mockClear();
@@ -362,6 +374,7 @@ afterAll(() => {
   mock.module("@/contexts", () => realContextsSnapshot);
   mock.module("@/components/ui/sonner", () => realSonnerUiSnapshot);
   mock.module("@/components/errors", () => realErrorsSnapshot);
+  mock.module("@/components/linear", () => realLinearSnapshot);
   mock.module("@/components/ui/alert-dialog", () => realAlertDialogSnapshot);
   mock.module("@/components/ui/button", () => realButtonSnapshot);
   mock.module("@/hooks/usePrMonitorService", () => realPrMonitorServiceSnapshot);
@@ -407,6 +420,19 @@ describe("App background processing mounts", () => {
     ).not.toContain("hidden");
     expect(screen.getByTestId("terminal-env-visible").getAttribute("data-active")).toBe("true");
     expect(screen.getByTestId("terminal-env-background").getAttribute("data-active")).toBe("false");
+  });
+
+  test("mounts the Linear completion monitor globally", async () => {
+    resetStores({
+      environments: [],
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+    });
+
+    render(<App />);
+
+    expect(await screen.findByTestId("linear-completion-monitor")).toBeTruthy();
+    expect(mockLinearMonitorRender).toHaveBeenCalled();
   });
 
   test("keeps off-screen environments with pending setup commands mounted before setup starts", async () => {

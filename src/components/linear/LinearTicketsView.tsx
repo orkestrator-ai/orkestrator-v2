@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
@@ -67,10 +67,15 @@ function formatUpdatedDate(value: string): string {
 }
 
 function getIssuePipeline(pipelines: Map<string, BuildPipeline>, issueId: string): BuildPipeline | undefined {
-  for (const pipeline of pipelines.values()) {
-    if (pipeline.source?.type === "linear" && pipeline.source.issueId === issueId) return pipeline;
-  }
-  return undefined;
+  const matches = Array.from(pipelines.values()).filter(
+    (pipeline) => pipeline.source?.type === "linear" && pipeline.source.issueId === issueId,
+  );
+  matches.sort((a, b) => {
+    const activeDelta = Number(isActivePipeline(b)) - Number(isActivePipeline(a));
+    if (activeDelta !== 0) return activeDelta;
+    return b.createdAt.localeCompare(a.createdAt);
+  });
+  return matches[0];
 }
 
 function isActivePipeline(pipeline: BuildPipeline | undefined): boolean {
@@ -184,19 +189,26 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   const [detailError, setDetailError] = useState<string | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const [startingType, setStartingType] = useState<EnvironmentType | null>(null);
+  const connectionRequestRef = useRef(0);
+  const issuesRequestRef = useRef(0);
+  const detailRequestRef = useRef(0);
 
   const pipelines = useBuildPipelineStore((state) => state.pipelines);
   const clearCompletionCommentStatus = useBuildPipelineStore((state) => state.clearCompletionCommentStatus);
   const { startBuildFromLinearIssue, navigateToPipeline } = buildPipeline;
 
   const loadConnection = useCallback(async () => {
+    const requestId = connectionRequestRef.current + 1;
+    connectionRequestRef.current = requestId;
     setConnectionState("loading");
     try {
       const status = await getLinearConnection();
+      if (connectionRequestRef.current !== requestId) return null;
       setConnection(status);
       setConnectionState("loaded");
       return status;
     } catch (error) {
+      if (connectionRequestRef.current !== requestId) return null;
       setConnection({
         connected: false,
         hasToken: false,
@@ -208,19 +220,24 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   }, []);
 
   const loadIssues = useCallback(async () => {
+    const requestId = issuesRequestRef.current + 1;
+    issuesRequestRef.current = requestId;
     setIssuesState("loading");
     setIssuesError(null);
     try {
       const status = await loadConnection();
+      if (issuesRequestRef.current !== requestId) return;
       if (!status?.connected) {
         setIssues([]);
         setIssuesState("loaded");
         return;
       }
       const nextIssues = await getLinearIssues();
+      if (issuesRequestRef.current !== requestId) return;
       setIssues(nextIssues);
       setIssuesState("loaded");
     } catch (error) {
+      if (issuesRequestRef.current !== requestId) return;
       setIssuesError(error instanceof Error ? error.message : "Failed to load Linear tickets");
       setIssuesState("error");
     }
@@ -257,13 +274,17 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   const selectedIssueSummary = selectedIssueId ? issues.find((issue) => issue.id === selectedIssueId) : undefined;
 
   const loadDetail = useCallback(async (issueId: string) => {
+    const requestId = detailRequestRef.current + 1;
+    detailRequestRef.current = requestId;
     setDetailState("loading");
     setDetailError(null);
     try {
       const nextDetail = await getLinearIssue(issueId);
+      if (detailRequestRef.current !== requestId) return;
       setDetail(nextDetail);
       setDetailState("loaded");
     } catch (error) {
+      if (detailRequestRef.current !== requestId) return;
       setDetail(null);
       setDetailError(error instanceof Error ? error.message : "Failed to load Linear ticket");
       setDetailState("error");
@@ -272,7 +293,18 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
 
   const handleSelectIssue = (issueId: string) => {
     setSelectedIssueId(issueId);
+    setDetail(null);
+    setDetailError(null);
     void loadDetail(issueId);
+  };
+
+  const handleBackToList = () => {
+    detailRequestRef.current += 1;
+    setSelectedIssueId(null);
+    setDetail(null);
+    setDetailError(null);
+    setDetailState("idle");
+    setStartingType(null);
   };
 
   const handleToggleStatus = (status: string) => {
@@ -299,7 +331,13 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
     return (
       <div className="flex h-full flex-col bg-background">
         <div className="flex items-center gap-3 border-b border-border px-6 py-4">
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSelectedIssueId(null)}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            aria-label="Back to Linear tickets"
+            onClick={handleBackToList}
+          >
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="min-w-0">
@@ -341,7 +379,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
                     <RefreshCw className="h-3.5 w-3.5" />
                     Retry
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setSelectedIssueId(null)}>
+                  <Button size="sm" variant="ghost" onClick={handleBackToList}>
                     Back
                   </Button>
                 </div>
@@ -639,8 +677,15 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
         open={connectOpen}
         onOpenChange={setConnectOpen}
         onConnected={(status) => {
+          connectionRequestRef.current += 1;
           setConnection(status);
-          if (status.connected) void loadIssues();
+          setConnectionState("loaded");
+          if (status.connected) {
+            void loadIssues();
+          } else {
+            setIssues([]);
+            setIssuesState("loaded");
+          }
         }}
       />
     </div>

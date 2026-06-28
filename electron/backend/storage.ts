@@ -377,16 +377,22 @@ export class StorageService {
     await fs.mkdir(this.dataDir, { recursive: true });
   }
 
-  private async writeAtomic(filePath: string, contents: string, makeBackup = true): Promise<void> {
+  private async writeAtomic(filePath: string, contents: string, makeBackup = true, mode?: number): Promise<void> {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${randomUUID()}.tmp`);
 
     await this.enqueueWrite(async () => {
-      await fs.writeFile(tempPath, contents);
+      await fs.writeFile(tempPath, contents, mode === undefined ? undefined : { mode });
+      if (mode !== undefined) {
+        await fs.chmod(tempPath, mode);
+      }
       if (makeBackup && await exists(filePath)) {
         await this.rotateBackups(filePath);
       }
       await fs.rename(tempPath, filePath);
+      if (mode !== undefined) {
+        await fs.chmod(filePath, mode);
+      }
     }).catch(async (error) => {
       if (await exists(tempPath)) {
         await fs.rm(tempPath, { force: true });
@@ -860,8 +866,7 @@ export class StorageService {
       connectedAt: nowIso(),
       viewer,
     };
-    await this.writeAtomic(this.linearAuthFile(), `${JSON.stringify(auth, null, 2)}\n`, false);
-    await fs.chmod(this.linearAuthFile(), 0o600).catch(() => undefined);
+    await this.writeAtomic(this.linearAuthFile(), `${JSON.stringify(auth, null, 2)}\n`, false, 0o600);
     return auth;
   }
 

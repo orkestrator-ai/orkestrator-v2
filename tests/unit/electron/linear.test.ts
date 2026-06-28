@@ -51,6 +51,12 @@ describe("Linear backend API", () => {
     });
   });
 
+  test("reports non-JSON Linear responses without exposing request secrets", async () => {
+    globalThis.fetch = mock(async () => new Response("not-json lin_api_secret", { status: 502 })) as unknown as typeof fetch;
+
+    await expect(verifyLinearConnection("lin_api_secret")).rejects.toThrow("Linear returned HTTP 502");
+  });
+
   test("loads every Linear issue page until Linear reports completion", async () => {
     const pageCount = 26;
     const fetchMock = mock(async (_url: string | URL | Request, init?: RequestInit) => {
@@ -87,6 +93,38 @@ describe("Linear backend API", () => {
     expect(issues).toHaveLength(pageCount);
     expect(issues[0]).toMatchObject({ identifier: "ENG-25", status: "Done", teamKey: "ENG" });
     expect(issues.at(-1)).toMatchObject({ identifier: "ENG-0", status: "Todo" });
+  });
+
+  test("fails issue pagination when Linear reports another page without a cursor", async () => {
+    globalThis.fetch = mock(async () => jsonResponse({
+      data: {
+        issues: {
+          nodes: [],
+          pageInfo: { hasNextPage: true, endCursor: null },
+        },
+      },
+    })) as unknown as typeof fetch;
+
+    await expect(listLinearIssues("lin_api_secret")).rejects.toThrow(
+      "Linear issues pagination did not return a cursor",
+    );
+  });
+
+  test("fails issue pagination when Linear repeats a cursor", async () => {
+    const fetchMock = mock(async () => jsonResponse({
+      data: {
+        issues: {
+          nodes: [],
+          pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+        },
+      },
+    }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(listLinearIssues("lin_api_secret")).rejects.toThrow(
+      "Linear issues pagination cursor repeated",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   test("maps Linear issue details and labels", async () => {
@@ -196,5 +234,24 @@ describe("Linear backend API", () => {
       postedAt: "2026-06-28T12:05:00.000Z",
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("fails completion-comment pagination when Linear omits the next cursor", async () => {
+    globalThis.fetch = mock(async () => jsonResponse({
+      data: {
+        issue: {
+          comments: {
+            nodes: [],
+            pageInfo: { hasNextPage: true, endCursor: null },
+          },
+        },
+      },
+    })) as unknown as typeof fetch;
+
+    await expect(postLinearCompletionComment("lin_api_secret", {
+      pipelineId: "pipeline-1",
+      issueId: "issue-1",
+      body: "Build complete",
+    })).rejects.toThrow("Linear comments pagination did not return a cursor");
   });
 });

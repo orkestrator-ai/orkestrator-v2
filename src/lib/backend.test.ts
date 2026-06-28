@@ -14,9 +14,12 @@ afterAll(() => {
 
 const wrapperModulePath = "./backend.ts?wrapper-test";
 const {
+  connectLinear,
   createEnvironment,
   ensureEnvironmentSetup,
+  getLinearIssue,
   getSetupCommands,
+  postLinearCompletionComment,
   runEnvironmentSetup,
   setEnvironmentSetupComplete,
 } = await import(wrapperModulePath) as typeof import("./backend");
@@ -82,6 +85,22 @@ describe("backend setup wrappers", () => {
         portMappings: [{ hostPort: 5173, containerPort: 5173, protocol: "tcp" }],
         environmentType: "containerized",
         namingPrompt: "Build task\n\nShip the feature",
+      }],
+    ]);
+  });
+
+  test("calls Linear Electron commands with expected payloads", async () => {
+    await connectLinear("lin_api_secret");
+    await getLinearIssue("ENG-123");
+    await postLinearCompletionComment("pipeline-1", "issue-1", "Done");
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["connect_linear", { apiKey: "lin_api_secret" }],
+      ["get_linear_issue", { issueId: "ENG-123" }],
+      ["post_linear_completion_comment", {
+        pipelineId: "pipeline-1",
+        issueId: "issue-1",
+        body: "Done",
       }],
     ]);
   });

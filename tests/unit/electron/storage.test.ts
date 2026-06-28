@@ -130,6 +130,44 @@ describe("Electron StorageService", () => {
     await expect(storage.getProjectNotes("project-1")).resolves.toMatchObject({ content: "updated notes" });
   });
 
+  test("stores Linear auth separately and tracks completion comments by pipeline", async () => {
+    const dataDir = await createTempDir("ork-storage-linear-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    await expect(storage.getLinearAuth()).resolves.toBeNull();
+
+    const auth = await storage.saveLinearAuth("lin_api_secret", {
+      id: "viewer-1",
+      name: "Ada",
+      email: "ada@example.com",
+    });
+    expect(auth).toMatchObject({
+      apiKey: "lin_api_secret",
+      viewer: { id: "viewer-1", name: "Ada" },
+    });
+    await expect(storage.getLinearAuth()).resolves.toMatchObject({
+      apiKey: "lin_api_secret",
+      viewer: { email: "ada@example.com" },
+    });
+
+    const posted = await storage.saveLinearCompletionComment({
+      pipelineId: "pipeline-1",
+      issueId: "issue-1",
+      status: "posted",
+      commentId: "comment-1",
+      postedAt: "2026-06-28T12:00:00.000Z",
+    });
+    expect(posted).toMatchObject({ pipelineId: "pipeline-1", status: "posted", commentId: "comment-1" });
+    await expect(storage.getLinearCompletionComment("pipeline-1")).resolves.toMatchObject({
+      issueId: "issue-1",
+      commentId: "comment-1",
+    });
+
+    await storage.clearLinearAuth();
+    await expect(storage.getLinearAuth()).resolves.toBeNull();
+  });
+
   test("persists kanban images as retrievable files and removes them when deleted", async () => {
     const dataDir = await createTempDir("ork-storage-kanban-");
     const storage = new StorageService(dataDir);

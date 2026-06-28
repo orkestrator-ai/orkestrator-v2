@@ -70,6 +70,33 @@ describe("buildPipelineStore", () => {
       expect(pipeline!.maxIterations).toBe(3);
       expect(pipeline!.taskTitle).toBe("Test task");
       expect(pipeline!.taskSnapshot).toEqual(defaultTaskSnapshot);
+      expect(pipeline!.source).toEqual({ type: "kanban", taskId: "task-1" });
+    });
+
+    test("stores Linear source metadata when provided", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams({
+        taskId: "issue-1",
+        source: {
+          type: "linear",
+          issueId: "issue-1",
+          issueIdentifier: "ENG-123",
+          issueUrl: "https://linear.app/acme/issue/ENG-123",
+          status: "Todo",
+          teamKey: "ENG",
+          updatedAt: "2026-06-28T12:00:00.000Z",
+        },
+      }));
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id);
+      expect(pipeline!.source).toEqual({
+        type: "linear",
+        issueId: "issue-1",
+        issueIdentifier: "ENG-123",
+        issueUrl: "https://linear.app/acme/issue/ENG-123",
+        status: "Todo",
+        teamKey: "ENG",
+        updatedAt: "2026-06-28T12:00:00.000Z",
+      });
     });
 
     test("returns a unique ID for each pipeline", () => {
@@ -79,6 +106,32 @@ describe("buildPipelineStore", () => {
 
       expect(id1).not.toBe(id2);
       expect(useBuildPipelineStore.getState().pipelines.size).toBe(2);
+    });
+  });
+
+  describe("setCompletionCommentStatus", () => {
+    test("tracks posted and failed completion comment state without changing phase", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().setPhase(id, "complete");
+
+      useBuildPipelineStore.getState().setCompletionCommentStatus(id, "posted", {
+        commentId: "comment-1",
+        postedAt: "2026-06-28T12:00:00.000Z",
+      });
+
+      let pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.phase).toBe("complete");
+      expect(pipeline.completionCommentStatus).toBe("posted");
+      expect(pipeline.completionCommentId).toBe("comment-1");
+
+      useBuildPipelineStore.getState().setCompletionCommentStatus(id, "failed", {
+        error: "Linear API unavailable",
+      });
+
+      pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.phase).toBe("complete");
+      expect(pipeline.completionCommentStatus).toBe("failed");
+      expect(pipeline.completionCommentError).toBe("Linear API unavailable");
     });
   });
 

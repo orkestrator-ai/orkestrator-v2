@@ -54,6 +54,26 @@ type ProjectNotes = {
   updatedAt: string;
 };
 
+type LinearAuth = {
+  apiKey: string;
+  connectedAt: string;
+  viewer?: {
+    id: string;
+    name: string;
+    email?: string;
+  };
+};
+
+type LinearCompletionComment = {
+  pipelineId: string;
+  issueId: string;
+  status: "posted" | "failed";
+  commentId?: string;
+  postedAt?: string;
+  error?: string;
+  updatedAt: string;
+};
+
 async function resizeKanbanImage(rawBytes: Buffer): Promise<Buffer> {
   const { default: sharp } = await import("sharp");
   return sharp(rawBytes).resize({ width: 2000, height: 2000, fit: "inside", withoutEnlargement: true }).webp().toBuffer();
@@ -327,6 +347,14 @@ export class StorageService {
 
   private projectNotesFile(): string {
     return this.file("project-notes.json");
+  }
+
+  private linearAuthFile(): string {
+    return this.file("linear-auth.json");
+  }
+
+  private linearCompletionCommentsFile(): string {
+    return this.file("linear-completion-comments.json");
   }
 
   private buffersDir(): string {
@@ -819,6 +847,46 @@ export class StorageService {
     }
     await this.saveJson(this.projectNotesFile(), notes);
     return note;
+  }
+
+  async getLinearAuth(): Promise<LinearAuth | null> {
+    const auth = await this.loadJson<LinearAuth | null>(this.linearAuthFile(), () => null);
+    return auth?.apiKey ? auth : null;
+  }
+
+  async saveLinearAuth(apiKey: string, viewer?: LinearAuth["viewer"]): Promise<LinearAuth> {
+    const auth: LinearAuth = {
+      apiKey,
+      connectedAt: nowIso(),
+      viewer,
+    };
+    await this.writeAtomic(this.linearAuthFile(), `${JSON.stringify(auth, null, 2)}\n`, false);
+    await fs.chmod(this.linearAuthFile(), 0o600).catch(() => undefined);
+    return auth;
+  }
+
+  async clearLinearAuth(): Promise<void> {
+    await fs.rm(this.linearAuthFile(), { force: true });
+  }
+
+  async getLinearCompletionComment(pipelineId: string): Promise<LinearCompletionComment | null> {
+    const comments = await this.loadJson<LinearCompletionComment[]>(this.linearCompletionCommentsFile(), () => []);
+    return comments.find((comment) => comment.pipelineId === pipelineId) ?? null;
+  }
+
+  async saveLinearCompletionComment(
+    record: Omit<LinearCompletionComment, "updatedAt"> & { updatedAt?: string },
+  ): Promise<LinearCompletionComment> {
+    const comments = await this.loadJson<LinearCompletionComment[]>(this.linearCompletionCommentsFile(), () => []);
+    const nextRecord: LinearCompletionComment = {
+      ...record,
+      updatedAt: record.updatedAt ?? nowIso(),
+    };
+    const index = comments.findIndex((comment) => comment.pipelineId === record.pipelineId);
+    if (index >= 0) comments[index] = nextRecord;
+    else comments.push(nextRecord);
+    await this.saveJson(this.linearCompletionCommentsFile(), comments);
+    return nextRecord;
   }
 
   async setAllEnvironmentStatusesForContainer(containerId: string, status: EnvironmentStatus): Promise<void> {

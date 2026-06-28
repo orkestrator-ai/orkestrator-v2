@@ -24,6 +24,12 @@ import type {
   OpenCodeMode,
   EnvironmentSetupSession,
 } from "@/types";
+import type {
+  LinearCompletionCommentResult,
+  LinearConnectionStatus,
+  LinearIssueDetail,
+  LinearIssueListItem,
+} from "@/types/linear";
 
 /** PR detection result containing URL, state, and merge conflict status */
 export interface PrDetectionResult {
@@ -231,6 +237,36 @@ export async function updateRepositoryConfig(
 
 export async function getLogDirectory(): Promise<string> {
   return invoke<string>("get_log_directory");
+}
+
+// --- Linear Commands ---
+
+export async function getLinearConnection(): Promise<LinearConnectionStatus> {
+  return invoke<LinearConnectionStatus>("get_linear_connection");
+}
+
+export async function connectLinear(apiKey: string): Promise<LinearConnectionStatus> {
+  return invoke<LinearConnectionStatus>("connect_linear", { apiKey });
+}
+
+export async function disconnectLinear(): Promise<LinearConnectionStatus> {
+  return invoke<LinearConnectionStatus>("disconnect_linear");
+}
+
+export async function getLinearIssues(): Promise<LinearIssueListItem[]> {
+  return invoke<LinearIssueListItem[]>("get_linear_issues");
+}
+
+export async function getLinearIssue(issueId: string): Promise<LinearIssueDetail> {
+  return invoke<LinearIssueDetail>("get_linear_issue", { issueId });
+}
+
+export async function postLinearCompletionComment(
+  pipelineId: string,
+  issueId: string,
+  body: string,
+): Promise<LinearCompletionCommentResult> {
+  return invoke<LinearCompletionCommentResult>("post_linear_completion_comment", { pipelineId, issueId, body });
 }
 
 // --- GitHub Commands ---

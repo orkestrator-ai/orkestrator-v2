@@ -31,6 +31,20 @@ export interface PipelineSession {
   label: string;
 }
 
+export type BuildPipelineSource =
+  | { type: "kanban"; taskId: string }
+  | {
+      type: "linear";
+      issueId: string;
+      issueIdentifier: string;
+      issueUrl?: string;
+      status?: string;
+      teamKey?: string;
+      updatedAt?: string;
+    };
+
+export type CompletionCommentStatus = "posting" | "posted" | "failed";
+
 export interface BuildPipeline {
   id: string;
   taskId: string;
@@ -50,6 +64,11 @@ export interface BuildPipeline {
   createdAt: string;
   taskTitle: string;
   taskSnapshot: TaskSnapshot;
+  source?: BuildPipelineSource;
+  completionCommentStatus?: CompletionCommentStatus;
+  completionCommentError?: string;
+  completionCommentId?: string;
+  completionCommentPostedAt?: string;
 }
 
 interface BuildPipelineState {
@@ -65,6 +84,7 @@ interface BuildPipelineState {
     agentType: DefaultAgent;
     taskTitle: string;
     taskSnapshot: TaskSnapshot;
+    source?: BuildPipelineSource;
   }) => string;
   setPipelineEnvironment: (pipelineId: string, environmentId: string) => void;
   addSession: (pipelineId: string, session: PipelineSession) => void;
@@ -77,6 +97,11 @@ interface BuildPipelineState {
   pausePipeline: (pipelineId: string) => void;
   resumePipeline: (pipelineId: string, fallbackPhase?: ResumableBuildPhase) => ResumableBuildPhase | undefined;
   markSessionRunning: (pipelineId: string, sdkSessionId: string) => void;
+  setCompletionCommentStatus: (
+    pipelineId: string,
+    status: CompletionCommentStatus,
+    details?: { commentId?: string; postedAt?: string; error?: string },
+  ) => void;
   removePipeline: (pipelineId: string) => void;
   removePipelinesForTask: (taskId: string) => void;
 
@@ -107,7 +132,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
   pipelines: new Map(),
   buildEnvironmentIds: new Set<string>(),
 
-  createPipeline: ({ taskId, projectId, environmentType, agentType, taskTitle, taskSnapshot }) => {
+  createPipeline: ({ taskId, projectId, environmentType, agentType, taskTitle, taskSnapshot, source }) => {
     const id = crypto.randomUUID();
     const pipeline: BuildPipeline = {
       id,
@@ -124,6 +149,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
       createdAt: new Date().toISOString(),
       taskTitle,
       taskSnapshot,
+      source: source ?? { type: "kanban", taskId },
     };
 
     set((state) => {
@@ -285,6 +311,21 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
         s.sdkSessionId === sdkSessionId ? { ...s, status: "running" as const } : s
       );
       newMap.set(pipelineId, { ...pipeline, sessions });
+      return { pipelines: newMap };
+    }),
+
+  setCompletionCommentStatus: (pipelineId, status, details) =>
+    set((state) => {
+      const pipeline = state.pipelines.get(pipelineId);
+      if (!pipeline) return state;
+      const newMap = new Map(state.pipelines);
+      newMap.set(pipelineId, {
+        ...pipeline,
+        completionCommentStatus: status,
+        completionCommentId: details?.commentId ?? pipeline.completionCommentId,
+        completionCommentPostedAt: details?.postedAt ?? pipeline.completionCommentPostedAt,
+        completionCommentError: status === "failed" ? details?.error : undefined,
+      });
       return { pipelines: newMap };
     }),
 

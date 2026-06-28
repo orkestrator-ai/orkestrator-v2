@@ -1,0 +1,378 @@
+type LinearGraphQLError = {
+  message?: string;
+};
+
+type LinearGraphQLResponse<T> = {
+  data?: T;
+  errors?: LinearGraphQLError[];
+};
+
+export type LinearViewer = {
+  id: string;
+  name: string;
+  email?: string;
+};
+
+export type LinearConnectionStatus = {
+  connected: boolean;
+  hasToken: boolean;
+  viewer?: LinearViewer;
+  error?: string;
+};
+
+export type LinearIssueListItem = {
+  id: string;
+  identifier: string;
+  title: string;
+  status: string;
+  statusType?: string;
+  updatedAt: string;
+  createdAt?: string;
+  url?: string;
+  teamKey?: string;
+  teamName?: string;
+  assigneeName?: string;
+  priorityLabel?: string;
+};
+
+export type LinearIssueDetail = LinearIssueListItem & {
+  description: string;
+  creatorName?: string;
+  projectName?: string;
+  cycleName?: string;
+  labels: string[];
+};
+
+export type LinearCompletionCommentResult = {
+  status: "posted" | "already-posted";
+  commentId: string;
+  postedAt?: string;
+};
+
+type LinearIssuesResponse = {
+  issues?: {
+    nodes?: unknown[];
+    pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+  };
+};
+
+type LinearCommentsResponse = {
+  issue?: {
+    comments?: {
+      nodes?: unknown[];
+      pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+    };
+  } | null;
+};
+
+const LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql";
+const MAX_ISSUE_PAGES = 25;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+export function sanitizeLinearError(error: unknown, secret?: string): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  let sanitized = raw
+    .replace(/lin_api_[A-Za-z0-9_-]+/g, "[redacted]")
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]");
+
+  const trimmedSecret = secret?.trim();
+  if (trimmedSecret) {
+    sanitized = sanitized.split(trimmedSecret).join("[redacted]");
+  }
+
+  return sanitized || "Linear request failed";
+}
+
+async function linearGraphql<T>(
+  apiKey: string,
+  query: string,
+  variables: Record<string, unknown> = {},
+): Promise<T> {
+  const token = apiKey.trim();
+  if (!token) throw new Error("Linear API key is not configured");
+
+  let response: Response;
+  try {
+    response = await fetch(LINEAR_GRAPHQL_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: token,
+      },
+      body: JSON.stringify({ query, variables }),
+    });
+  } catch (error) {
+    throw new Error(sanitizeLinearError(error, token));
+  }
+
+  let payload: LinearGraphQLResponse<T>;
+  try {
+    payload = await response.json() as LinearGraphQLResponse<T>;
+  } catch {
+    throw new Error(`Linear returned HTTP ${response.status}`);
+  }
+
+  if (!response.ok) {
+    const message = payload.errors?.map((item) => item.message).filter(Boolean).join("; ");
+    throw new Error(message || `Linear returned HTTP ${response.status}`);
+  }
+
+  if (payload.errors?.length) {
+    throw new Error(payload.errors.map((item) => item.message || "GraphQL error").join("; "));
+  }
+
+  if (!payload.data) throw new Error("Linear returned an empty response");
+  return payload.data;
+}
+
+function readViewer(value: unknown): LinearViewer | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = asString(value.id);
+  const name = asString(value.name);
+  if (!id || !name) return undefined;
+  return { id, name, email: optionalString(value.email) };
+}
+
+function issueFromNode(value: unknown): LinearIssueListItem | null {
+  if (!isRecord(value)) return null;
+
+  const state = isRecord(value.state) ? value.state : {};
+  const team = isRecord(value.team) ? value.team : {};
+  const assignee = isRecord(value.assignee) ? value.assignee : {};
+
+  const id = asString(value.id);
+  const identifier = asString(value.identifier);
+  const title = asString(value.title);
+  const updatedAt = asString(value.updatedAt);
+  if (!id || !identifier || !title || !updatedAt) return null;
+
+  return {
+    id,
+    identifier,
+    title,
+    status: asString(state.name, "No status"),
+    statusType: optionalString(state.type),
+    updatedAt,
+    createdAt: optionalString(value.createdAt),
+    url: optionalString(value.url),
+    teamKey: optionalString(team.key),
+    teamName: optionalString(team.name),
+    assigneeName: optionalString(assignee.name),
+    priorityLabel: optionalString(value.priorityLabel),
+  };
+}
+
+function detailFromNode(value: unknown): LinearIssueDetail | null {
+  const listItem = issueFromNode(value);
+  if (!listItem || !isRecord(value)) return null;
+
+  const creator = isRecord(value.creator) ? value.creator : {};
+  const project = isRecord(value.project) ? value.project : {};
+  const cycle = isRecord(value.cycle) ? value.cycle : {};
+  const labelsConnection = isRecord(value.labels) ? value.labels : {};
+  const labelNodes = Array.isArray(labelsConnection.nodes) ? labelsConnection.nodes : [];
+  const labels = labelNodes
+    .map((node) => isRecord(node) ? optionalString(node.name) : undefined)
+    .filter((label): label is string => !!label);
+
+  return {
+    ...listItem,
+    description: asString(value.description),
+    creatorName: optionalString(creator.name),
+    projectName: optionalString(project.name),
+    cycleName: optionalString(cycle.name),
+    labels,
+  };
+}
+
+export async function verifyLinearConnection(apiKey: string): Promise<LinearViewer> {
+  const data = await linearGraphql<{ viewer: unknown }>(
+    apiKey,
+    `query OrkestratorLinearViewer {
+      viewer {
+        id
+        name
+        email
+      }
+    }`,
+  );
+  const viewer = readViewer(data.viewer);
+  if (!viewer) throw new Error("Linear viewer response was incomplete");
+  return viewer;
+}
+
+export async function listLinearIssues(apiKey: string): Promise<LinearIssueListItem[]> {
+  const issues: LinearIssueListItem[] = [];
+  let cursor: string | null = null;
+
+  for (let page = 0; page < MAX_ISSUE_PAGES; page += 1) {
+    const data: LinearIssuesResponse = await linearGraphql<LinearIssuesResponse>(
+      apiKey,
+      `query OrkestratorLinearIssues($after: String) {
+        issues(first: 100, after: $after) {
+          nodes {
+            id
+            identifier
+            title
+            updatedAt
+            createdAt
+            url
+            priorityLabel
+            state { name type }
+            team { key name }
+            assignee { name }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }`,
+      { after: cursor },
+    );
+
+    const nodes = Array.isArray(data.issues?.nodes) ? data.issues.nodes : [];
+    for (const node of nodes) {
+      const issue = issueFromNode(node);
+      if (issue) issues.push(issue);
+    }
+
+    if (!data.issues?.pageInfo?.hasNextPage || !data.issues.pageInfo.endCursor) break;
+    cursor = data.issues.pageInfo.endCursor;
+  }
+
+  return issues.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export async function getLinearIssue(apiKey: string, issueId: string): Promise<LinearIssueDetail> {
+  const data = await linearGraphql<{ issue: unknown }>(
+    apiKey,
+    `query OrkestratorLinearIssue($id: String!) {
+      issue(id: $id) {
+        id
+        identifier
+        title
+        description
+        updatedAt
+        createdAt
+        url
+        priorityLabel
+        state { name type }
+        team { key name }
+        assignee { name }
+        creator { name }
+        project { name }
+        cycle { name }
+        labels(first: 25) {
+          nodes { name }
+        }
+      }
+    }`,
+    { id: issueId },
+  );
+
+  const issue = detailFromNode(data.issue);
+  if (!issue) throw new Error(`Linear issue not found: ${issueId}`);
+  return issue;
+}
+
+async function findExistingCompletionComment(
+  apiKey: string,
+  issueId: string,
+  marker: string,
+): Promise<{ id: string; createdAt?: string } | null> {
+  let cursor: string | null = null;
+
+  for (let page = 0; page < MAX_ISSUE_PAGES; page += 1) {
+    const data: LinearCommentsResponse = await linearGraphql<LinearCommentsResponse>(
+      apiKey,
+      `query OrkestratorLinearCompletionComments($id: String!, $after: String) {
+        issue(id: $id) {
+          comments(first: 100, after: $after) {
+            nodes {
+              id
+              body
+              createdAt
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+          }
+        }
+      }`,
+      { id: issueId, after: cursor },
+    );
+
+    const nodes = Array.isArray(data.issue?.comments?.nodes) ? data.issue.comments.nodes : [];
+    for (const node of nodes) {
+      if (!isRecord(node)) continue;
+      if (asString(node.body).includes(marker)) {
+        const id = asString(node.id);
+        if (id) return { id, createdAt: optionalString(node.createdAt) };
+      }
+    }
+
+    if (!data.issue?.comments?.pageInfo?.hasNextPage || !data.issue.comments.pageInfo.endCursor) break;
+    cursor = data.issue.comments.pageInfo.endCursor;
+  }
+
+  return null;
+}
+
+export async function postLinearCompletionComment(
+  apiKey: string,
+  params: {
+    pipelineId: string;
+    issueId: string;
+    body: string;
+  },
+): Promise<LinearCompletionCommentResult> {
+  const marker = `<!-- orkestrator-linear-run:${params.pipelineId} -->`;
+  const existing = await findExistingCompletionComment(apiKey, params.issueId, marker);
+  if (existing) {
+    return { status: "already-posted", commentId: existing.id, postedAt: existing.createdAt };
+  }
+
+  const body = `${params.body.trim()}\n\n${marker}`;
+  const data = await linearGraphql<{
+    commentCreate?: {
+      success?: boolean;
+      comment?: { id?: string; createdAt?: string };
+    };
+  }>(
+    apiKey,
+    `mutation OrkestratorLinearCompletionComment($issueId: String!, $body: String!) {
+      commentCreate(input: { issueId: $issueId, body: $body }) {
+        success
+        comment {
+          id
+          createdAt
+        }
+      }
+    }`,
+    { issueId: params.issueId, body },
+  );
+
+  const commentId = data.commentCreate?.comment?.id;
+  if (!data.commentCreate?.success || !commentId) {
+    throw new Error("Linear did not confirm comment creation");
+  }
+
+  return {
+    status: "posted",
+    commentId,
+    postedAt: data.commentCreate.comment?.createdAt,
+  };
+}

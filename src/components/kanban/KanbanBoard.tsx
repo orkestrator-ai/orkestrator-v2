@@ -12,6 +12,7 @@ import {
 } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";
 import { Plus, StickyNote } from "lucide-react";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useKanbanStore, type KanbanStatus, type KanbanTask } from "@/stores/kanbanStore";
 import { useProjectStore } from "@/stores";
 import { useBuildPipelineStore, isActiveBuildPhase, type BuildPhase } from "@/stores/buildPipelineStore";
@@ -19,6 +20,7 @@ import { useShallow } from "zustand/react/shallow";
 import { KanbanCard } from "./KanbanCard";
 import { KanbanTaskDialog } from "./KanbanTaskDialog";
 import { ProjectNotesView } from "./ProjectNotesView";
+import { LinearTicketsView } from "@/components/linear";
 
 const COLUMNS: { id: KanbanStatus; label: string; color: string }[] = [
   { id: "backlog", label: "Backlog", color: "bg-zinc-500" },
@@ -150,6 +152,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [showNotes, setShowNotes] = useState(false);
+  const [ticketSource, setTicketSource] = useState<"kanban" | "linear">("kanban");
 
   const projectTasks = useMemo(
     () => tasks.filter((t) => t.projectId === projectId),
@@ -233,10 +236,18 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
         <h2 className="text-lg font-semibold text-foreground">
           {project?.name ?? "Project"} Board
         </h2>
-        <span className="text-sm text-muted-foreground">
-          {projectTasks.length} task{projectTasks.length !== 1 && "s"}
-        </span>
-        <div className="ml-auto">
+        {ticketSource === "kanban" && (
+          <span className="text-sm text-muted-foreground">
+            {projectTasks.length} task{projectTasks.length !== 1 && "s"}
+          </span>
+        )}
+        <Tabs value={ticketSource} onValueChange={(value) => setTicketSource(value as "kanban" | "linear")} className="ml-auto">
+          <TabsList>
+            <TabsTrigger value="kanban">Kanban</TabsTrigger>
+            <TabsTrigger value="linear">Linear</TabsTrigger>
+          </TabsList>
+        </Tabs>
+        <div>
           <Button
             variant="outline"
             size="sm"
@@ -249,59 +260,67 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
         </div>
       </div>
 
-      {/* Columns */}
-      <div className="flex-1 overflow-x-auto p-6">
-        <DndContext
-          sensors={sensors}
-          collisionDetection={pointerWithin}
-          onDragStart={handleDragStart}
-          onDragEnd={handleDragEnd}
-        >
-          <div className="flex gap-4 h-full">
-            {COLUMNS.map((column) => (
-              <DroppableColumn
-                key={column.id}
-                column={column}
-                tasks={tasksByColumn[column.id]}
-                onClickTask={handleClickTask}
-                onAddTask={
-                  column.id === "backlog"
-                    ? () => setCreateDialogOpen(true)
-                    : undefined
-                }
-                onClearTaskStatus={handleClearTaskStatus}
-                buildPhaseByTaskId={buildPhaseByTaskId}
-              />
-            ))}
+      {ticketSource === "linear" ? (
+        <div className="min-h-0 flex-1">
+          <LinearTicketsView projectId={projectId} />
+        </div>
+      ) : (
+        <>
+          {/* Columns */}
+          <div className="flex-1 overflow-x-auto p-6">
+            <DndContext
+              sensors={sensors}
+              collisionDetection={pointerWithin}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+            >
+              <div className="flex gap-4 h-full">
+                {COLUMNS.map((column) => (
+                  <DroppableColumn
+                    key={column.id}
+                    column={column}
+                    tasks={tasksByColumn[column.id]}
+                    onClickTask={handleClickTask}
+                    onAddTask={
+                      column.id === "backlog"
+                        ? () => setCreateDialogOpen(true)
+                        : undefined
+                    }
+                    onClearTaskStatus={handleClearTaskStatus}
+                    buildPhaseByTaskId={buildPhaseByTaskId}
+                  />
+                ))}
+              </div>
+
+              <DragOverlay>
+                {activeTask && (
+                  <KanbanCard
+                    task={activeTask}
+                    onClick={() => {}}
+                    isDragOverlay
+                    buildPhase={buildPhaseByTaskId.get(activeTask.id)}
+                  />
+                )}
+              </DragOverlay>
+            </DndContext>
           </div>
 
-          <DragOverlay>
-            {activeTask && (
-              <KanbanCard
-                task={activeTask}
-                onClick={() => {}}
-                isDragOverlay
-                buildPhase={buildPhaseByTaskId.get(activeTask.id)}
-              />
-            )}
-          </DragOverlay>
-        </DndContext>
-      </div>
+          {/* Task Detail Dialog */}
+          <KanbanTaskDialog
+            task={currentSelectedTask}
+            open={dialogOpen}
+            onOpenChange={setDialogOpen}
+          />
 
-      {/* Task Detail Dialog */}
-      <KanbanTaskDialog
-        task={currentSelectedTask}
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-      />
-
-      {/* Create Task Dialog */}
-      <KanbanTaskDialog
-        task={null}
-        open={createDialogOpen}
-        onOpenChange={setCreateDialogOpen}
-        createForProjectId={projectId}
-      />
+          {/* Create Task Dialog */}
+          <KanbanTaskDialog
+            task={null}
+            open={createDialogOpen}
+            onOpenChange={setCreateDialogOpen}
+            createForProjectId={projectId}
+          />
+        </>
+      )}
     </div>
   );
 }

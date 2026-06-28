@@ -49,6 +49,13 @@ import {
   workspaceFilePath,
 } from "./path-safety.js";
 import { registerTmuxBackendCommands } from "./tmux.js";
+import {
+  getLinearIssue,
+  listLinearIssues,
+  postLinearCompletionComment,
+  sanitizeLinearError,
+  verifyLinearConnection,
+} from "./linear.js";
 
 export type BackendEmit = (event: string, payload: unknown) => void;
 
@@ -102,6 +109,12 @@ const environmentSetupTasks = new Map<string, Promise<Environment>>();
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string") throw new Error(`Expected ${name} to be a string`);
   return value;
+}
+
+async function requireLinearApiKey(context: CommandContext): Promise<string> {
+  const auth = await context.storage.getLinearAuth();
+  if (!auth?.apiKey) throw new Error("Linear is not connected");
+  return auth.apiKey;
 }
 
 function asOptionalString(value: unknown): string | undefined {
@@ -1847,6 +1860,88 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("update_global_config", ({ global }, { storage }) => storage.updateGlobalConfig(global as never));
   register("get_repository_config", ({ projectId }, { storage }) => storage.getRepositoryConfig(asString(projectId, "projectId")));
   register("update_repository_config", ({ projectId, repoConfig }, { storage }) => storage.updateRepositoryConfig(asString(projectId, "projectId"), repoConfig as never));
+  register("get_linear_connection", async (_args, context) => {
+    const auth = await context.storage.getLinearAuth();
+    if (!auth?.apiKey) return { connected: false, hasToken: false };
+    try {
+      const viewer = await verifyLinearConnection(auth.apiKey);
+      await context.storage.saveLinearAuth(auth.apiKey, viewer);
+      return { connected: true, hasToken: true, viewer };
+    } catch (error) {
+      return {
+        connected: false,
+        hasToken: true,
+        viewer: auth.viewer,
+        error: sanitizeLinearError(error, auth.apiKey),
+      };
+    }
+  });
+  register("connect_linear", async ({ apiKey }, context) => {
+    const token = asString(apiKey, "apiKey").trim();
+    if (!token) throw new Error("Linear API key is required");
+    try {
+      const viewer = await verifyLinearConnection(token);
+      await context.storage.saveLinearAuth(token, viewer);
+      return { connected: true, hasToken: true, viewer };
+    } catch (error) {
+      throw new Error(sanitizeLinearError(error, token));
+    }
+  });
+  register("disconnect_linear", async (_args, { storage }) => {
+    await storage.clearLinearAuth();
+    return { connected: false, hasToken: false };
+  });
+  register("get_linear_issues", async (_args, context) => {
+    const apiKey = await requireLinearApiKey(context);
+    try {
+      return await listLinearIssues(apiKey);
+    } catch (error) {
+      throw new Error(sanitizeLinearError(error, apiKey));
+    }
+  });
+  register("get_linear_issue", async ({ issueId }, context) => {
+    const apiKey = await requireLinearApiKey(context);
+    try {
+      return await getLinearIssue(apiKey, asString(issueId, "issueId"));
+    } catch (error) {
+      throw new Error(sanitizeLinearError(error, apiKey));
+    }
+  });
+  register("post_linear_completion_comment", async ({ pipelineId, issueId, body }, context) => {
+    const runId = asString(pipelineId, "pipelineId");
+    const targetIssueId = asString(issueId, "issueId");
+    const commentBody = asString(body, "body");
+    const existing = await context.storage.getLinearCompletionComment(runId);
+    if (existing?.status === "posted" && existing.commentId) {
+      return { status: "already-posted", commentId: existing.commentId, postedAt: existing.postedAt };
+    }
+
+    const apiKey = await requireLinearApiKey(context);
+    try {
+      const result = await postLinearCompletionComment(apiKey, {
+        pipelineId: runId,
+        issueId: targetIssueId,
+        body: commentBody,
+      });
+      await context.storage.saveLinearCompletionComment({
+        pipelineId: runId,
+        issueId: targetIssueId,
+        status: "posted",
+        commentId: result.commentId,
+        postedAt: result.postedAt ?? new Date().toISOString(),
+      });
+      return result;
+    } catch (error) {
+      const message = sanitizeLinearError(error, apiKey);
+      await context.storage.saveLinearCompletionComment({
+        pipelineId: runId,
+        issueId: targetIssueId,
+        status: "failed",
+        error: message,
+      });
+      throw new Error(message);
+    }
+  });
   register("get_log_directory", (_args, { storage }) => storage.getLogDirectory());
 
   register("get_environments", async ({ projectId }, { storage }) => {

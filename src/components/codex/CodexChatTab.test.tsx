@@ -4,7 +4,9 @@ import { createCodexSessionKey, useCodexStore } from "@/stores/codexStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realHooks from "@/hooks";
+import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 
 // Snapshot the real sibling modules before we install stubs so we can restore
 // them when this file finishes. Without this, Bun's global mock.module cache
@@ -17,8 +19,10 @@ const realCodexComposeBarSnapshot = { ...realCodexComposeBar };
 const realCodexPlanModeCardSnapshot = { ...realCodexPlanModeCard };
 const realCodexResumeSessionDialogSnapshot = { ...realCodexResumeSessionDialog };
 const realHooksSnapshot = { ...realHooks };
+const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 const mockScrollToBottom = mock(() => {});
 let mockIsAtBottom = true;
+let lastVirtualizedMessages: any[] = [];
 
 const MOCK_MODELS = [
   {
@@ -29,12 +33,8 @@ const MOCK_MODELS = [
   },
 ];
 
-type TestCodexMessage = {
-  id: string;
+type TestCodexMessage = NativeMessage & {
   role: "assistant";
-  content: string;
-  parts: Array<{ type: "text"; content: string }>;
-  createdAt: string;
   planReview?: boolean;
 };
 
@@ -224,6 +224,24 @@ mock.module("@/hooks", () => ({
   })),
 }));
 
+mock.module("@/components/chat/VirtualizedMessageList", () => ({
+  VirtualizedMessageList: ({ messages, renderMessage, emptyState, footer }: any) => {
+    lastVirtualizedMessages = messages;
+    return (
+      <div>
+        {messages.length > 0
+          ? messages.map((message: any, index: number) => (
+            <div key={message.id}>
+              {renderMessage(index, message, index > 0 ? messages[index - 1] : null)}
+            </div>
+          ))
+          : emptyState}
+        {footer}
+      </div>
+    );
+  },
+}));
+
 import { CodexChatTab } from "./CodexChatTab";
 import type { CodexNativeData } from "@/types/paneLayout";
 
@@ -397,6 +415,7 @@ afterAll(() => {
   mock.module("./CodexPlanModeCard", () => realCodexPlanModeCardSnapshot);
   mock.module("./CodexResumeSessionDialog", () => realCodexResumeSessionDialogSnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
+  mock.module("@/components/chat/VirtualizedMessageList", () => realVirtualizedMessageListSnapshot);
 });
 
 describe("CodexChatTab", () => {
@@ -420,6 +439,7 @@ describe("CodexChatTab", () => {
     mockCreateSession.mockClear();
     mockCreateSession.mockImplementation(async () => ({ sessionId: "session-1", title: "Test session" }));
     mockIsAtBottom = true;
+    lastVirtualizedMessages = [];
     restoreTimerHarness();
 
     resetStores();
@@ -495,6 +515,69 @@ describe("CodexChatTab", () => {
     fireEvent.click(scrollButton);
 
     expect(mockScrollToBottom).toHaveBeenCalledTimes(1);
+  });
+
+  test("pins active subagents to the rendered bottom and releases them on success", async () => {
+    const activeMessage: TestCodexMessage = {
+      id: "assistant-agent",
+      role: "assistant",
+      content: "",
+      parts: [
+        { type: "text", content: "Parent started" },
+        {
+          type: "subagent",
+          content: "Worker agent",
+          subagentId: "agent-1",
+          subagentName: "Worker agent",
+          toolState: "pending",
+          subagentActions: [],
+        },
+        { type: "text", content: "Parent continued" },
+      ],
+      createdAt: "2026-04-15T00:00:00.000Z",
+    };
+    const laterMessage = createMessage("assistant-later", "Later response");
+
+    seedCodexStore([activeMessage, laterMessage]);
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
+      "assistant-agent",
+      "assistant-later",
+      "assistant-agent:active-agent:agent-1",
+    ]);
+
+    const completedMessage: TestCodexMessage = {
+      ...activeMessage,
+      parts: activeMessage.parts.map((part) =>
+        part.type === "subagent"
+          ? { ...part, toolState: "success" as const }
+          : part
+      ),
+    };
+
+    act(() => {
+      seedCodexStore([completedMessage, laterMessage]);
+    });
+
+    await waitFor(() => {
+      expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
+        "assistant-agent",
+        "assistant-later",
+      ]);
+      expect(lastVirtualizedMessages[0]?.parts.map((part: any) => part.type)).toEqual([
+        "text",
+        "subagent",
+        "text",
+      ]);
+    });
   });
 
   test("enables the review follow-up action after a review session has messages", () => {

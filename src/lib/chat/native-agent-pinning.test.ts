@@ -75,6 +75,37 @@ describe("pinActiveNativeAgentParts", () => {
     ]);
   });
 
+  test("leaves successful task groups in their source message", () => {
+    const messages: NativeMessage[] = [
+      assistantMessage("assistant-1", [
+        { type: "text", content: "Starting work" },
+        {
+          type: "task-group",
+          content: "Agent",
+          task: {
+            type: "tool-invocation",
+            content: "Agent",
+            toolName: "Agent",
+            toolUseId: "task-1",
+            toolState: "success",
+          },
+          childTools: [],
+        },
+        { type: "text", content: "Done" },
+      ]),
+    ];
+
+    const pinned = pinActiveNativeAgentParts(messages);
+
+    expect(pinned).toHaveLength(1);
+    expect(pinned[0]?.id).toBe("assistant-1");
+    expect(pinned[0]?.parts.map((part) => part.type)).toEqual([
+      "text",
+      "task-group",
+      "text",
+    ]);
+  });
+
   test("extracts active task groups from legacy tool groups", () => {
     const messages: NativeMessage[] = [
       assistantMessage("assistant-1", [
@@ -132,5 +163,31 @@ describe("pinActiveNativeAgentParts", () => {
     expect(pinned).toHaveLength(1);
     expect(pinned[0]?.id).toBe("assistant-1:active-agent:agent-1");
     expect(pinned[0]?.parts[0]?.type).toBe("subagent");
+  });
+
+  test("generates unique fallback row ids for multiple active agents without stable ids", () => {
+    const messages: NativeMessage[] = [
+      assistantMessage("assistant-1", [
+        {
+          type: "subagent",
+          content: "worker",
+          subagentName: "worker",
+          toolState: "pending",
+        },
+        {
+          type: "subagent",
+          content: "worker",
+          subagentName: "worker",
+          toolState: "pending",
+        },
+      ]),
+    ];
+
+    const pinned = pinActiveNativeAgentParts(messages);
+
+    expect(pinned.map((message) => message.id)).toEqual([
+      "assistant-1:active-agent:worker:0",
+      "assistant-1:active-agent:worker:1",
+    ]);
   });
 });

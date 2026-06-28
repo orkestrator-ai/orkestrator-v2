@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 
 const mockCreateClient = mock(() => ({ session: {}, event: {} }));
 const mockCreateSession = mock(async () => ({ id: "review-session", createdAt: "2026-04-15T00:00:00.000Z" }));
-const mockGetSessionMessages = mock(async () => []);
+const mockGetSessionMessages = mock(async (): Promise<any[]> => []);
 const mockSendPrompt = mock(async () => ({ success: true }));
 const mockAbortSession = mock(async () => true);
 const mockSubscribeToEvents = mock(async () => (async function* () {})());
@@ -66,6 +66,7 @@ import { createOpenCodeSessionKey, useOpenCodeStore } from "@/stores/openCodeSto
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { OpenCodeBuildChatTab } from "./OpenCodeBuildChatTab";
 import type { BuildTabData } from "@/types/paneLayout";
+import type { NativeMessage } from "@/lib/chat/native-message-types";
 
 const ENV_ID = "env-1";
 const PIPELINE_ID = "pipeline-1";
@@ -246,6 +247,25 @@ function seedOpenCodeStore(isLoading: boolean) {
   });
 }
 
+function setOpenCodeBuildMessages(messages: NativeMessage[]) {
+  useOpenCodeStore.setState((state) => ({
+    sessions: new Map(state.sessions).set(SESSION_KEY, {
+      sessionId: SESSION_ID,
+      messages,
+      isLoading: false,
+    }),
+  }));
+}
+
+function expectTextOrder(...labels: string[]) {
+  const text = document.body.textContent ?? "";
+  const positions = labels.map((label) => text.indexOf(label));
+  expect(positions.every((position) => position >= 0)).toBe(true);
+  for (let index = 1; index < positions.length; index += 1) {
+    expect(positions[index - 1]!).toBeLessThan(positions[index]!);
+  }
+}
+
 function resetStores() {
   useBuildPipelineStore.setState({
     pipelines: new Map(),
@@ -348,6 +368,62 @@ describe("OpenCodeBuildChatTab", () => {
     expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
     expect(await screen.findByText("Resume")).toBeTruthy();
     resolveAbort?.(true);
+  });
+
+  test("pins active OpenCode build subagents below later messages and releases them on success", async () => {
+    seedPipeline("building", "running");
+    seedOpenCodeStore(false);
+
+    const activeMessage: NativeMessage = {
+      id: "assistant-agent",
+      role: "assistant",
+      content: "",
+      parts: [
+        { type: "text", content: "Parent started" },
+        {
+          type: "subagent",
+          content: "Build worker",
+          subagentId: "agent-1",
+          subagentName: "Build worker",
+          toolState: "pending",
+          subagentActions: [],
+        },
+        { type: "text", content: "Parent continued" },
+      ],
+      createdAt: "2026-04-15T00:00:00.000Z",
+    };
+    const laterMessage: NativeMessage = {
+      id: "assistant-later",
+      role: "assistant",
+      content: "Later response",
+      parts: [{ type: "text", content: "Later response" }],
+      createdAt: "2026-04-15T00:00:30.000Z",
+    };
+    setOpenCodeBuildMessages([activeMessage, laterMessage]);
+    mockGetSessionMessages.mockImplementation(async () => [activeMessage, laterMessage]);
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expectTextOrder("Parent started", "Later response", "Build worker");
+    });
+
+    const completedMessage: NativeMessage = {
+      ...activeMessage,
+      parts: activeMessage.parts.map((part) =>
+        part.type === "subagent"
+          ? { ...part, toolState: "success" as const }
+          : part
+      ),
+    };
+
+    act(() => {
+      setOpenCodeBuildMessages([completedMessage, laterMessage]);
+    });
+
+    await waitFor(() => {
+      expectTextOrder("Parent started", "Build worker", "Parent continued", "Later response");
+    });
   });
 
   test("resuming after stop during session creation starts the intended opencode build stage", async () => {

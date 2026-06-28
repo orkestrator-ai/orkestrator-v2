@@ -25,22 +25,24 @@ function isActiveAgentPart(part: NativeMessagePart): boolean {
 
 function getAgentPartKey(part: NativeMessagePart, index: number): string {
   if (part.type === "task-group") {
+    const stableId = part.task.toolUseId ?? part.task.subagentId;
+    if (stableId) return stableId;
+
     return (
-      part.task.toolUseId ??
-      part.task.subagentId ??
       part.task.toolName ??
       part.content ??
-      String(index)
-    );
+      "agent"
+    ) + `:${index}`;
   }
 
+  const stableId = part.subagentId ?? part.toolUseId;
+  if (stableId) return stableId;
+
   return (
-    part.subagentId ??
-    part.toolUseId ??
     part.subagentName ??
     part.content ??
-    String(index)
-  );
+    "agent"
+  ) + `:${index}`;
 }
 
 function hasRenderableContent(message: NativeMessage): boolean {

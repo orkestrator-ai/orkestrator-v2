@@ -3190,6 +3190,86 @@ Running 1 Explore agent...
     expect(screen.getByText("done")).toBeTruthy();
   });
 
+  test("pins active task-group agents in tmux transcript data and releases them on success", async () => {
+    const store = useClaudeTmuxStore.getState();
+    store.setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    store.applyTranscriptLine("tab-1", {
+      type: "assistant",
+      uuid: "assistant-agent",
+      timestamp: "2026-01-01T00:00:01Z",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Parent started" },
+          {
+            type: "tool_use",
+            id: "agent-1",
+            name: "Agent",
+            input: { description: "Tmux worker" },
+          },
+          { type: "text", text: "Parent continued" },
+        ],
+      },
+    });
+    store.applyTranscriptLine("tab-1", {
+      type: "assistant",
+      uuid: "assistant-later",
+      timestamp: "2026-01-01T00:00:30Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Later response" }],
+      },
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect((lastVirtuosoProps?.data ?? []).map((message: any) => message.id)).toEqual([
+      "assistant-agent",
+      "assistant-agent:active-agent:agent-1",
+    ]);
+
+    act(() => {
+      store.applyTranscriptLine("tab-1", {
+        type: "user",
+        uuid: "agent-result",
+        timestamp: "2026-01-01T00:00:31Z",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "agent-1",
+              content: "done",
+              is_error: false,
+            },
+          ],
+        },
+      });
+    });
+
+    await waitFor(() => {
+      const renderedMessages = lastVirtuosoProps?.data ?? [];
+      expect(renderedMessages.map((message: any) => message.id)).toEqual([
+        "assistant-agent",
+      ]);
+      expect(renderedMessages[0]?.parts.map((part: any) => part.type)).toEqual([
+        "text",
+        "task-group",
+        "text",
+        "text",
+      ]);
+    });
+  });
+
   test("renders repeated task tools as one current TaskList snapshot", async () => {
     const store = useClaudeTmuxStore.getState();
     store.setRunning("tab-1", true, {

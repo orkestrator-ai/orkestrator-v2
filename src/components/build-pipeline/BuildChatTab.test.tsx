@@ -36,6 +36,7 @@ const mockCheckHealth = mock(() => Promise.resolve(true));
 const mockGetModels = mock(() => Promise.resolve([]));
 const mockSubscribeToEvents = mock(() => (async function* () {})());
 const mockCreateSession = mock(() => Promise.resolve({ sessionId: "session-1" }));
+const mockGetSessionMessages = mock(() => Promise.resolve([] as ClaudeMessage[]));
 const mockSendPrompt = mock(() => Promise.resolve(true));
 const mockAbortSession = mock(() => Promise.resolve(true));
 
@@ -44,7 +45,7 @@ mock.module("@/lib/claude-client", () => ({
   checkHealth: mockCheckHealth,
   getModels: mockGetModels,
   createSession: mockCreateSession,
-  getSessionMessages: mock(() => Promise.resolve([])),
+  getSessionMessages: mockGetSessionMessages,
   sendPrompt: mockSendPrompt,
   abortSession: mockAbortSession,
   subscribeToEvents: mockSubscribeToEvents,
@@ -95,6 +96,7 @@ import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { BuildChatTab } from "./BuildChatTab";
 import type { BuildTabData } from "@/types/paneLayout";
+import type { ClaudeMessage } from "@/lib/claude-client";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -218,6 +220,25 @@ function seedClaudeSession(isLoading: boolean) {
       ],
     ]),
   });
+}
+
+function setClaudeBuildMessages(messages: ClaudeMessage[]) {
+  useClaudeStore.setState((state) => ({
+    sessions: new Map(state.sessions).set(SESSION_KEY, {
+      sessionId: SESSION_ID,
+      messages,
+      isLoading: false,
+    }),
+  }));
+}
+
+function expectTextOrder(...labels: string[]) {
+  const text = document.body.textContent ?? "";
+  const positions = labels.map((label) => text.indexOf(label));
+  expect(positions.every((position) => position >= 0)).toBe(true);
+  for (let index = 1; index < positions.length; index += 1) {
+    expect(positions[index - 1]!).toBeLessThan(positions[index]!);
+  }
 }
 
 function seedEnvironment(opts: { isLocal?: boolean; workspaceReady?: boolean } = {}) {
@@ -349,6 +370,7 @@ describe("BuildChatTab", () => {
     mockGetModels.mockClear();
     mockSubscribeToEvents.mockClear();
     mockCreateSession.mockClear();
+    mockGetSessionMessages.mockClear();
     mockSendPrompt.mockClear();
     mockAbortSession.mockClear();
 
@@ -367,6 +389,7 @@ describe("BuildChatTab", () => {
     );
     mockCheckHealth.mockImplementation(() => Promise.resolve(true));
     mockGetModels.mockImplementation(() => Promise.resolve([]));
+    mockGetSessionMessages.mockImplementation(() => Promise.resolve([]));
     mockSendPrompt.mockImplementation(() => Promise.resolve(true));
     mockAbortSession.mockImplementation(() => Promise.resolve(true));
   });
@@ -781,6 +804,63 @@ describe("BuildChatTab", () => {
       await waitFor(() => {
         expect(screen.getByText("Paused")).toBeTruthy();
       });
+    });
+  });
+
+  test("pins active Claude build agents below later messages and releases them on success", async () => {
+    seedPipelineWithBuildSession("building", "running");
+    seedEnvironment({ isLocal: false, workspaceReady: true });
+    seedClaudeSession(false);
+
+    const activeMessage: ClaudeMessage = {
+      id: "assistant-agent",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-22T00:00:01.000Z",
+      parts: [
+        { type: "text", content: "Parent started" },
+        {
+          type: "tool-invocation",
+          toolName: "Agent",
+          content: "Run worker",
+          toolUseId: "agent-1",
+          toolState: "pending",
+          toolArgs: { description: "Build worker" },
+        },
+        { type: "text", content: "Parent continued" },
+      ],
+    };
+    const laterMessage: ClaudeMessage = {
+      id: "assistant-later",
+      role: "assistant",
+      content: "Later response",
+      timestamp: "2026-06-22T00:00:30.000Z",
+      parts: [{ type: "text", content: "Later response" }],
+    };
+    setClaudeBuildMessages([activeMessage, laterMessage]);
+    mockGetSessionMessages.mockImplementation(async () => [activeMessage, laterMessage]);
+
+    render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+    await waitFor(() => {
+      expectTextOrder("Parent started", "Later response", "Build worker");
+    });
+
+    const completedMessage: ClaudeMessage = {
+      ...activeMessage,
+      parts: activeMessage.parts.map((part) =>
+        part.type === "tool-invocation"
+          ? { ...part, toolState: "success" as const }
+          : part
+      ),
+    };
+
+    act(() => {
+      setClaudeBuildMessages([completedMessage, laterMessage]);
+    });
+
+    await waitFor(() => {
+      expectTextOrder("Parent started", "Build worker", "Parent continued", "Later response");
     });
   });
 

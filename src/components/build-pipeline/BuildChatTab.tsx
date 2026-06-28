@@ -46,6 +46,7 @@ import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { resolveActiveBuildPipelineAgent } from "@/lib/build-pipeline-agent";
 import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
+import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { createPipelineResumePrompt, getPipelineResumePhase, isSessionCompatibleWithResumePhase } from "@/lib/build-pipeline-resume";
 import * as backend from "@/lib/backend";
 
@@ -121,6 +122,22 @@ const SESSION_PHASE_LABELS: Record<string, string> = {
   pr: "PR Creation Session",
   "resolve-conflicts": "Conflict Resolution Session",
 };
+
+function getDisplayClaudeBuildMessages(
+  messages: ClaudeMessageType[],
+  phase: string,
+) {
+  return pinActiveNativeAgentParts(
+    messages
+      .filter((message, messageIndex) => {
+        if ((phase === "review" || phase === "pr") && messageIndex === 0 && message.role === "user") {
+          return false;
+        }
+        return true;
+      })
+      .map(normalizeClaudeMessage),
+  );
+}
 
 function SessionDivider({ session, index }: { session: PipelineSession; index: number }) {
   const label = SESSION_PHASE_LABELS[session.phase] || session.phase;
@@ -1561,22 +1578,16 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
             allSessionMessages.map((sessionData, sessionIndex) => (
               <div key={sessionData.pipelineSession.sessionKey}>
                 <SessionDivider session={sessionData.pipelineSession} index={sessionIndex} />
-                {sessionData.messages
-                  .filter((message, messageIndex) => {
-                    // Hide the initial prompt (first user message) for review and PR sessions
-                    const phase = sessionData.pipelineSession.phase;
-                    if ((phase === "review" || phase === "pr") && messageIndex === 0 && message.role === "user") {
-                      return false;
-                    }
-                    return true;
-                  })
-                  .map((message, filteredIndex, filteredMessages) => (
+                {getDisplayClaudeBuildMessages(
+                  sessionData.messages,
+                  sessionData.pipelineSession.phase,
+                ).map((message, filteredIndex, filteredMessages) => (
                     <NativeMessage
                       key={message.id}
-                      message={normalizeClaudeMessage(message)}
+                      message={message}
                       previousMessage={
                         filteredIndex > 0
-                          ? normalizeClaudeMessage(filteredMessages[filteredIndex - 1]!)
+                          ? filteredMessages[filteredIndex - 1]!
                           : null
                       }
                       assistantLabel="Claude"

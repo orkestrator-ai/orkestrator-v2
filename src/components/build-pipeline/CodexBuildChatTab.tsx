@@ -6,6 +6,7 @@ import { Separator } from "@/components/ui/separator";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
+import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useConfigStore, useCodexStore, useEnvironmentStore } from "@/stores";
 import type { BuildPhase, PipelineSession } from "@/stores/buildPipelineStore";
@@ -410,12 +411,16 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         return true;
       });
 
-      filtered.forEach((message, index) => {
+      const displayMessages = pinActiveNativeAgentParts(
+        filtered.map(normalizeCodexNativeMessage),
+      );
+
+      displayMessages.forEach((message, index) => {
         rows.push({
           kind: "message",
           key: `${pipelineSession.sessionKey}-${message.id}`,
           message,
-          previousMessage: index > 0 ? filtered[index - 1]! : null,
+          previousMessage: index > 0 ? displayMessages[index - 1]! : null,
           sessionKey: pipelineSession.sessionKey,
           sessionPhase: pipelineSession.phase,
           messageIndex: index,

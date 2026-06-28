@@ -3175,10 +3175,16 @@ Running 1 Explore agent...
     expect(renderedMessages[1]!.id).toBe("a1");
     expect(renderedMessages[0]!.id).toBe("u1");
     expect(renderedMessages[1]!.parts.map((part: ClaudeMessageType["parts"][number]) => part.type)).toEqual([
-      "tool-invocation",
-      "tool-invocation",
+      "tool-group",
       "text",
     ]);
+    expect(renderedMessages[1]!.parts[0]?.type).toBe("tool-group");
+    if (renderedMessages[1]!.parts[0]?.type === "tool-group") {
+      expect(renderedMessages[1]!.parts[0].parts.map((part: ClaudeMessageType["parts"][number]) => part.toolName)).toEqual([
+        "Read",
+        "Grep",
+      ]);
+    }
     expect(screen.getAllByText("Read").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Grep").length).toBeGreaterThan(0);
     expect(screen.getByText("done")).toBeTruthy();
@@ -3249,17 +3255,20 @@ Running 1 Explore agent...
 
     const renderedMessages = lastVirtuosoProps?.data ?? [];
     expect(renderedMessages).toHaveLength(1);
-    expect(renderedMessages[0]!.parts.map((part: ClaudeMessageType["parts"][number]) => part.toolName)).toEqual([
-      "TaskList",
-    ]);
-    expect(renderedMessages[0]!.parts.map((part: ClaudeMessageType["parts"][number]) => part.toolArgs)).toEqual([
-      {
-        todos: [
-          { content: "Inspect renderer", status: "completed" },
-          { content: "Add UI tests", status: "pending" },
-        ],
-      },
-    ]);
+    expect(renderedMessages[0]!.parts[0]?.type).toBe("tool-group");
+    if (renderedMessages[0]!.parts[0]?.type === "tool-group") {
+      expect(renderedMessages[0]!.parts[0].parts.map((part: ClaudeMessageType["parts"][number]) => part.toolName)).toEqual([
+        "TaskList",
+      ]);
+      expect(renderedMessages[0]!.parts[0].parts.map((part: ClaudeMessageType["parts"][number]) => part.toolArgs)).toEqual([
+        {
+          todos: [
+            { content: "Inspect renderer", status: "completed" },
+            { content: "Add UI tests", status: "pending" },
+          ],
+        },
+      ]);
+    }
     expect(screen.getByText("Task List")).toBeTruthy();
   });
 

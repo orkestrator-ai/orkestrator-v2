@@ -1,0 +1,124 @@
+import type {
+  NativeMessage,
+  NativeMessagePart,
+  NativeTaskGroupPart,
+  NativeToolGroupPart,
+} from "./native-message-types";
+
+function isAgentPart(
+  part: NativeMessagePart,
+): part is NativeMessagePart & ({ type: "subagent" } | NativeTaskGroupPart) {
+  return part.type === "subagent" || part.type === "task-group";
+}
+
+function getAgentPartState(part: NativeMessagePart): string | undefined {
+  if (part.type === "task-group") {
+    return part.task.toolState;
+  }
+
+  return part.toolState;
+}
+
+function isActiveAgentPart(part: NativeMessagePart): boolean {
+  return isAgentPart(part) && getAgentPartState(part) !== "success";
+}
+
+function getAgentPartKey(part: NativeMessagePart, index: number): string {
+  if (part.type === "task-group") {
+    return (
+      part.task.toolUseId ??
+      part.task.subagentId ??
+      part.task.toolName ??
+      part.content ??
+      String(index)
+    );
+  }
+
+  return (
+    part.subagentId ??
+    part.toolUseId ??
+    part.subagentName ??
+    part.content ??
+    String(index)
+  );
+}
+
+function hasRenderableContent(message: NativeMessage): boolean {
+  return message.parts.length > 0 || message.content.trim().length > 0;
+}
+
+function extractActiveAgentParts(parts: NativeMessagePart[]): {
+  retainedParts: NativeMessagePart[];
+  pinnedParts: NativeMessagePart[];
+} {
+  const retainedParts: NativeMessagePart[] = [];
+  const pinnedParts: NativeMessagePart[] = [];
+
+  for (const part of parts) {
+    if (isActiveAgentPart(part)) {
+      pinnedParts.push(part);
+      continue;
+    }
+
+    if (part.type === "tool-group") {
+      const extracted = extractActiveAgentParts(part.parts);
+      pinnedParts.push(...extracted.pinnedParts);
+
+      if (extracted.retainedParts.length > 0) {
+        retainedParts.push({
+          ...part,
+          parts: extracted.retainedParts,
+        } satisfies NativeToolGroupPart);
+      }
+      continue;
+    }
+
+    retainedParts.push(part);
+  }
+
+  return { retainedParts, pinnedParts };
+}
+
+function createPinnedAgentMessage(
+  source: NativeMessage,
+  part: NativeMessagePart,
+  index: number,
+): NativeMessage {
+  return {
+    ...source,
+    id: `${source.id}:active-agent:${getAgentPartKey(part, index)}`,
+    content: "",
+    parts: [part],
+  };
+}
+
+export function pinActiveNativeAgentParts(
+  messages: NativeMessage[],
+): NativeMessage[] {
+  const renderedMessages: NativeMessage[] = [];
+  const pinnedMessages: NativeMessage[] = [];
+
+  for (const message of messages) {
+    const { retainedParts, pinnedParts } = extractActiveAgentParts(message.parts);
+
+    if (pinnedParts.length === 0) {
+      renderedMessages.push(message);
+      continue;
+    }
+
+    const retainedMessage = {
+      ...message,
+      parts: retainedParts,
+    };
+
+    if (hasRenderableContent(retainedMessage)) {
+      renderedMessages.push(retainedMessage);
+    }
+
+    pinnedParts.forEach((part, index) => {
+      pinnedMessages.push(createPinnedAgentMessage(message, part, index));
+    });
+  }
+
+  return [...renderedMessages, ...pinnedMessages];
+}

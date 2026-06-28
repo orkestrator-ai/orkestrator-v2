@@ -11,6 +11,7 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Plus, StickyNote } from "lucide-react";
 import { useKanbanStore, type KanbanStatus, type KanbanTask } from "@/stores/kanbanStore";
 import { useProjectStore } from "@/stores";
@@ -19,6 +20,7 @@ import { useShallow } from "zustand/react/shallow";
 import { KanbanCard } from "./KanbanCard";
 import { KanbanTaskDialog } from "./KanbanTaskDialog";
 import { ProjectNotesView } from "./ProjectNotesView";
+import { FeaturesView } from "./FeaturesView";
 
 const COLUMNS: { id: KanbanStatus; label: string; color: string }[] = [
   { id: "backlog", label: "Backlog", color: "bg-zinc-500" },
@@ -150,6 +152,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [showNotes, setShowNotes] = useState(false);
+  const [screenTab, setScreenTab] = useState<"kanban" | "features">("kanban");
 
   const projectTasks = useMemo(
     () => tasks.filter((t) => t.projectId === projectId),
@@ -228,65 +231,88 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
 
   return (
     <div className="flex flex-col h-full bg-background">
-      {/* Board Header */}
-      <div className="flex items-center gap-3 px-6 py-4 border-b border-border">
-        <h2 className="text-lg font-semibold text-foreground">
-          {project?.name ?? "Project"} Board
-        </h2>
-        <span className="text-sm text-muted-foreground">
-          {projectTasks.length} task{projectTasks.length !== 1 && "s"}
-        </span>
-        <div className="ml-auto">
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            onClick={() => setShowNotes(true)}
-          >
-            <StickyNote className="h-3.5 w-3.5" />
-            Project Notes
-          </Button>
-        </div>
-      </div>
-
-      {/* Columns */}
-      <div className="flex-1 overflow-x-auto p-6">
-        <DndContext
-          sensors={sensors}
-          collisionDetection={pointerWithin}
-          onDragStart={handleDragStart}
-          onDragEnd={handleDragEnd}
-        >
-          <div className="flex gap-4 h-full">
-            {COLUMNS.map((column) => (
-              <DroppableColumn
-                key={column.id}
-                column={column}
-                tasks={tasksByColumn[column.id]}
-                onClickTask={handleClickTask}
-                onAddTask={
-                  column.id === "backlog"
-                    ? () => setCreateDialogOpen(true)
-                    : undefined
-                }
-                onClearTaskStatus={handleClearTaskStatus}
-                buildPhaseByTaskId={buildPhaseByTaskId}
-              />
-            ))}
-          </div>
-
-          <DragOverlay>
-            {activeTask && (
-              <KanbanCard
-                task={activeTask}
-                onClick={() => {}}
-                isDragOverlay
-                buildPhase={buildPhaseByTaskId.get(activeTask.id)}
-              />
+      <Tabs
+        value={screenTab}
+        onValueChange={(value) => setScreenTab(value as "kanban" | "features")}
+        className="min-h-0 flex-1 gap-0"
+      >
+        {/* Board Header */}
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-border">
+          <h2 className="text-lg font-semibold text-foreground">
+            {project?.name ?? "Project"} Board
+          </h2>
+          {screenTab === "kanban" && (
+            <span className="text-sm text-muted-foreground">
+              {projectTasks.length} task{projectTasks.length !== 1 && "s"}
+            </span>
+          )}
+          <TabsList className="ml-3 h-8">
+            <TabsTrigger value="kanban" className="px-3 text-xs">Kanban</TabsTrigger>
+            <TabsTrigger value="features" className="px-3 text-xs">Features</TabsTrigger>
+          </TabsList>
+          <div className="ml-auto">
+            {screenTab === "kanban" && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => setShowNotes(true)}
+              >
+                <StickyNote className="h-3.5 w-3.5" />
+                Project Notes
+              </Button>
             )}
-          </DragOverlay>
-        </DndContext>
-      </div>
+          </div>
+        </div>
+
+        <TabsContent value="kanban" className="min-h-0 overflow-hidden">
+          {/* Columns */}
+          <div className="h-full overflow-x-auto p-6">
+            <DndContext
+              sensors={sensors}
+              collisionDetection={pointerWithin}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+            >
+              <div className="flex gap-4 h-full">
+                {COLUMNS.map((column) => (
+                  <DroppableColumn
+                    key={column.id}
+                    column={column}
+                    tasks={tasksByColumn[column.id]}
+                    onClickTask={handleClickTask}
+                    onAddTask={
+                      column.id === "backlog"
+                        ? () => setCreateDialogOpen(true)
+                        : undefined
+                    }
+                    onClearTaskStatus={handleClearTaskStatus}
+                    buildPhaseByTaskId={buildPhaseByTaskId}
+                  />
+                ))}
+              </div>
+
+              <DragOverlay>
+                {activeTask && (
+                  <KanbanCard
+                    task={activeTask}
+                    onClick={() => {}}
+                    isDragOverlay
+                    buildPhase={buildPhaseByTaskId.get(activeTask.id)}
+                  />
+                )}
+              </DragOverlay>
+            </DndContext>
+          </div>
+        </TabsContent>
+
+        <TabsContent
+          value="features"
+          className="h-full min-h-0 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col"
+        >
+          <FeaturesView projectId={projectId} />
+        </TabsContent>
+      </Tabs>
 
       {/* Task Detail Dialog */}
       <KanbanTaskDialog

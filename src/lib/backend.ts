@@ -1148,6 +1148,42 @@ export interface ProjectNotes {
   updatedAt: string;
 }
 
+export type FeaturePlanStatus = "collecting" | "confirming" | "stories" | "building" | "built";
+
+export interface FeaturePlanMessage {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  createdAt: string;
+}
+
+export interface FeatureStoryCard {
+  id: string;
+  title: string;
+  description: string;
+  acceptanceCriteria: string[];
+  messages: FeaturePlanMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FeaturePlan {
+  id: string;
+  projectId: string;
+  title: string;
+  status: FeaturePlanStatus;
+  summary: string;
+  messages: FeaturePlanMessage[];
+  stories: FeatureStoryCard[];
+  createdAt: string;
+  updatedAt: string;
+  order: number;
+  codexEnvironmentId?: string;
+  codexSessionId?: string;
+  buildTaskId?: string;
+  buildPipelineId?: string;
+}
+
 export async function getKanbanTasks(projectId: string): Promise<KanbanTask[]> {
   return invoke<KanbanTask[]>("get_kanban_tasks", { projectId });
 }
@@ -1206,4 +1242,46 @@ export async function getProjectNotes(projectId: string): Promise<ProjectNotes> 
 
 export async function saveProjectNotes(projectId: string, content: string): Promise<ProjectNotes> {
   return invoke<ProjectNotes>("save_project_notes", { projectId, content });
+}
+
+export async function getFeaturePlans(projectId: string): Promise<FeaturePlan[]> {
+  return invoke<FeaturePlan[]>("get_feature_plans", { projectId });
+}
+
+export async function createFeaturePlan(projectId: string): Promise<FeaturePlan> {
+  return invoke<FeaturePlan>("create_feature_plan", { projectId });
+}
+
+export async function updateFeaturePlan(
+  featureId: string,
+  updates: Partial<Pick<
+    FeaturePlan,
+    | "title"
+    | "status"
+    | "summary"
+    | "stories"
+    | "codexEnvironmentId"
+    | "codexSessionId"
+    | "buildTaskId"
+    | "buildPipelineId"
+  >>,
+): Promise<FeaturePlan> {
+  return invoke<FeaturePlan>("update_feature_plan", { featureId, updates });
+}
+
+export async function appendFeaturePlanMessage(
+  featureId: string,
+  role: FeaturePlanMessage["role"],
+  content: string,
+): Promise<FeaturePlan> {
+  return invoke<FeaturePlan>("append_feature_plan_message", { featureId, role, content });
+}
+
+export async function appendFeatureStoryMessage(
+  featureId: string,
+  storyId: string,
+  role: FeaturePlanMessage["role"],
+  content: string,
+): Promise<FeaturePlan> {
+  return invoke<FeaturePlan>("append_feature_story_message", { featureId, storyId, role, content });
 }

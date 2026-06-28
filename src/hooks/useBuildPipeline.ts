@@ -9,7 +9,7 @@ import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useEnvironments } from "@/hooks/useEnvironments";
 import * as backend from "@/lib/backend";
 import { getBuildEnvironmentAgentSettings, resolveBuildPipelineAgent } from "@/lib/build-pipeline-agent";
-import type { EnvironmentType } from "@/types";
+import type { DefaultAgent, EnvironmentType } from "@/types";
 import type { KanbanTask } from "@/lib/backend";
 import type { PaneNode } from "@/types/paneLayout";
 
@@ -75,9 +75,9 @@ export function useBuildPipeline() {
   const config = useConfigStore((state) => state.config);
 
   const startBuild = useCallback(
-    async (task: KanbanTask, environmentType: EnvironmentType) => {
+    async (task: KanbanTask, environmentType: EnvironmentType, agentOverride?: DefaultAgent) => {
       try {
-        const agentType = resolveBuildPipelineAgent(config, task.projectId);
+        const agentType = agentOverride ?? resolveBuildPipelineAgent(config, task.projectId);
         const agentSettings = getBuildEnvironmentAgentSettings(agentType);
 
         // 1. Load image data from disk for the task snapshot

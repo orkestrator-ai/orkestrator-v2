@@ -54,6 +54,42 @@ type ProjectNotes = {
   updatedAt: string;
 };
 
+type FeaturePlanStatus = "collecting" | "confirming" | "stories" | "building" | "built";
+
+type FeaturePlanMessage = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  createdAt: string;
+};
+
+type FeatureStoryCard = {
+  id: string;
+  title: string;
+  description: string;
+  acceptanceCriteria: string[];
+  messages: FeaturePlanMessage[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type FeaturePlan = {
+  id: string;
+  projectId: string;
+  title: string;
+  status: FeaturePlanStatus;
+  summary: string;
+  messages: FeaturePlanMessage[];
+  stories: FeatureStoryCard[];
+  createdAt: string;
+  updatedAt: string;
+  order: number;
+  codexEnvironmentId?: string;
+  codexSessionId?: string;
+  buildTaskId?: string;
+  buildPipelineId?: string;
+};
+
 async function resizeKanbanImage(rawBytes: Buffer): Promise<Buffer> {
   const { default: sharp } = await import("sharp");
   return sharp(rawBytes).resize({ width: 2000, height: 2000, fit: "inside", withoutEnlargement: true }).webp().toBuffer();
@@ -327,6 +363,10 @@ export class StorageService {
 
   private projectNotesFile(): string {
     return this.file("project-notes.json");
+  }
+
+  private featurePlansFile(): string {
+    return this.file("feature-plans.json");
   }
 
   private buffersDir(): string {
@@ -819,6 +859,88 @@ export class StorageService {
     }
     await this.saveJson(this.projectNotesFile(), notes);
     return note;
+  }
+
+  async getFeaturePlans(projectId: string): Promise<FeaturePlan[]> {
+    const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
+    return plans
+      .filter((plan) => plan.projectId === projectId)
+      .sort((a, b) => a.order - b.order);
+  }
+
+  async createFeaturePlan(projectId: string): Promise<FeaturePlan> {
+    const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
+    const now = nowIso();
+    const plan: FeaturePlan = {
+      id: randomUUID(),
+      projectId,
+      title: "new feature",
+      status: "collecting",
+      summary: "",
+      messages: [{
+        id: randomUUID(),
+        role: "assistant",
+        content: "Tell me about the new feature",
+        createdAt: now,
+      }],
+      stories: [],
+      createdAt: now,
+      updatedAt: now,
+      order: Math.max(-1, ...plans.filter((candidate) => candidate.projectId === projectId).map((candidate) => candidate.order)) + 1,
+    };
+    plans.push(plan);
+    await this.saveJson(this.featurePlansFile(), plans);
+    return plan;
+  }
+
+  async updateFeaturePlan(featureId: string, updates: Partial<FeaturePlan>): Promise<FeaturePlan> {
+    const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
+    const plan = plans.find((candidate) => candidate.id === featureId);
+    if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+
+    const originalId = plan.id;
+    const originalProjectId = plan.projectId;
+    Object.assign(plan, updates);
+    plan.id = originalId;
+    plan.projectId = originalProjectId;
+    plan.updatedAt = nowIso();
+    await this.saveJson(this.featurePlansFile(), plans);
+    return plan;
+  }
+
+  async appendFeaturePlanMessage(featureId: string, role: FeaturePlanMessage["role"], content: string): Promise<FeaturePlan> {
+    const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
+    const plan = plans.find((candidate) => candidate.id === featureId);
+    if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+
+    plan.messages.push({
+      id: randomUUID(),
+      role,
+      content,
+      createdAt: nowIso(),
+    });
+    plan.updatedAt = nowIso();
+    await this.saveJson(this.featurePlansFile(), plans);
+    return plan;
+  }
+
+  async appendFeatureStoryMessage(featureId: string, storyId: string, role: FeaturePlanMessage["role"], content: string): Promise<FeaturePlan> {
+    const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
+    const plan = plans.find((candidate) => candidate.id === featureId);
+    if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+    const story = plan.stories.find((candidate) => candidate.id === storyId);
+    if (!story) throw new Error(`Feature story not found: ${storyId}`);
+
+    story.messages.push({
+      id: randomUUID(),
+      role,
+      content,
+      createdAt: nowIso(),
+    });
+    story.updatedAt = nowIso();
+    plan.updatedAt = nowIso();
+    await this.saveJson(this.featurePlansFile(), plans);
+    return plan;
   }
 
   async setAllEnvironmentStatusesForContainer(containerId: string, status: EnvironmentStatus): Promise<void> {

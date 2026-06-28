@@ -130,6 +130,75 @@ describe("Electron StorageService", () => {
     await expect(storage.getProjectNotes("project-1")).resolves.toMatchObject({ content: "updated notes" });
   });
 
+  test("persists feature planning chats and story refinements", async () => {
+    const dataDir = await createTempDir("ork-storage-features-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    const feature = await storage.createFeaturePlan("project-1");
+    expect(feature).toMatchObject({
+      projectId: "project-1",
+      title: "new feature",
+      status: "collecting",
+    });
+    expect(feature.messages[0]).toMatchObject({
+      role: "assistant",
+      content: "Tell me about the new feature",
+    });
+
+    const withUserMessage = await storage.appendFeaturePlanMessage(feature.id, "user", "Users can save filters.");
+    expect(withUserMessage.messages.at(-1)).toMatchObject({
+      role: "user",
+      content: "Users can save filters.",
+    });
+
+    const storyId = "story-1";
+    await storage.updateFeaturePlan(feature.id, {
+      status: "stories",
+      summary: "Users can save and reuse filtered views.",
+      stories: [{
+        id: storyId,
+        title: "Save a filtered view",
+        description: "A user can save the current filters so they can return to that view later.",
+        acceptanceCriteria: ["Saved filters can be named", "Saved filters can be reopened"],
+        messages: [],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }],
+    });
+
+    const withStoryChat = await storage.appendFeatureStoryMessage(feature.id, storyId, "assistant", "What should change?");
+    expect(withStoryChat.stories[0]?.messages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        content: "What should change?",
+      }),
+    ]);
+
+    const reloaded = new StorageService(dataDir);
+    await reloaded.init();
+    await expect(reloaded.getFeaturePlans("project-1")).resolves.toEqual([
+      expect.objectContaining({
+        id: feature.id,
+        status: "stories",
+        summary: "Users can save and reuse filtered views.",
+        messages: expect.arrayContaining([
+          expect.objectContaining({ role: "user", content: "Users can save filters." }),
+        ]),
+        stories: [
+          expect.objectContaining({
+            id: storyId,
+            title: "Save a filtered view",
+            acceptanceCriteria: ["Saved filters can be named", "Saved filters can be reopened"],
+            messages: [
+              expect.objectContaining({ role: "assistant", content: "What should change?" }),
+            ],
+          }),
+        ],
+      }),
+    ]);
+  });
+
   test("persists kanban images as retrievable files and removes them when deleted", async () => {
     const dataDir = await createTempDir("ork-storage-kanban-");
     const storage = new StorageService(dataDir);

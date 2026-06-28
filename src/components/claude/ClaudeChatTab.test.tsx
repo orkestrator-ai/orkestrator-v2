@@ -13,6 +13,7 @@ const realHooksSnapshot = { ...realHooks };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
 const mockScrollToBottom = mock(() => {});
 let mockIsAtBottom = true;
+let lastVirtualizedMessages: any[] = [];
 const mockCreateSession = mock(async () => ({ sessionId: "session-1" }));
 const mockGetModels = mock(async () => []);
 const mockGetSessionMessages = mock(async (): Promise<ClaudeMessageType[]> => []);
@@ -35,18 +36,21 @@ mock.module("@/hooks", () => ({
 }));
 
 mock.module("@/components/chat/VirtualizedMessageList", () => ({
-  VirtualizedMessageList: ({ messages, renderMessage, emptyState, footer }: any) => (
-    <div>
-      {messages.length > 0
-        ? messages.map((message: any, index: number) => (
-          <div key={message.id}>
-            {renderMessage(index, message, index > 0 ? messages[index - 1] : null)}
-          </div>
-        ))
-        : emptyState}
-      {footer}
-    </div>
-  ),
+  VirtualizedMessageList: ({ messages, renderMessage, emptyState, footer }: any) => {
+    lastVirtualizedMessages = messages;
+    return (
+      <div>
+        {messages.length > 0
+          ? messages.map((message: any, index: number) => (
+            <div key={message.id}>
+              {renderMessage(index, message, index > 0 ? messages[index - 1] : null)}
+            </div>
+          ))
+          : emptyState}
+        {footer}
+      </div>
+    );
+  },
 }));
 
 mock.module("@/lib/claude-client", () => ({
@@ -207,6 +211,7 @@ describe("ClaudeChatTab", () => {
     mockReadContainerFileBase64.mockImplementation(async () => "chat-container-base64");
     mockReadFileBase64.mockReset();
     mockReadFileBase64.mockImplementation(async () => "chat-local-base64");
+    lastVirtualizedMessages = [];
   });
 
   afterEach(() => {
@@ -395,6 +400,85 @@ describe("ClaudeChatTab", () => {
       "/workspace/.orkestrator/clipboard/clipboard.png",
     );
     expect(mockReadFileBase64).not.toHaveBeenCalled();
+  });
+
+  test("pins active agent task groups to the rendered bottom and releases them on success", async () => {
+    const activeMessage: ClaudeMessageType = {
+      id: "assistant-agent",
+      role: "assistant" as const,
+      content: "",
+      parts: [
+        { type: "text" as const, content: "Parent started" },
+        {
+          type: "tool-invocation" as const,
+          toolName: "Agent",
+          content: "Run worker",
+          toolUseId: "agent-1",
+          toolState: "pending",
+          toolArgs: { description: "Worker agent" },
+        },
+        { type: "text" as const, content: "Parent continued" },
+      ],
+      timestamp: "2026-03-07T12:00:00.000Z",
+    };
+    const laterMessage: ClaudeMessageType = {
+      id: "assistant-later",
+      role: "assistant" as const,
+      content: "Later response",
+      parts: [{ type: "text" as const, content: "Later response" }],
+      timestamp: "2026-03-07T12:00:30.000Z",
+    };
+
+    act(() => {
+      useClaudeStore.getState().setSession(SESSION_KEY, {
+        sessionId: "session-1",
+        isLoading: false,
+        messages: [activeMessage, laterMessage],
+      });
+    });
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
+      "assistant-agent",
+      "assistant-later",
+      "assistant-agent:active-agent:agent-1",
+    ]);
+
+    const completedMessage: ClaudeMessageType = {
+      ...activeMessage,
+      parts: activeMessage.parts.map((part) =>
+        part.type === "tool-invocation"
+          ? { ...part, toolState: "success" as const }
+          : part
+      ),
+    };
+
+    act(() => {
+      useClaudeStore.getState().setSession(SESSION_KEY, {
+        sessionId: "session-1",
+        isLoading: false,
+        messages: [completedMessage, laterMessage],
+      });
+    });
+
+    await waitFor(() => {
+      expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
+        "assistant-agent",
+        "assistant-later",
+      ]);
+      expect(lastVirtualizedMessages[0]?.parts.map((part: any) => part.type)).toEqual([
+        "text",
+        "task-group",
+        "text",
+      ]);
+    });
   });
 
   test("seeds configured fast mode default when warm path creates a new session", async () => {

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { normalizeOpenCodeNativeMessage } from "@/lib/chat/native-message-adapters";
+import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useConfigStore, useEnvironmentStore } from "@/stores";
 import type { BuildPhase, PipelineSession } from "@/stores/buildPipelineStore";
@@ -36,13 +37,16 @@ import {
 } from "@/prompts";
 import { parseVerificationResult } from "@/lib/parse-verification-result";
 import { isSetupPending } from "@/lib/setup-commands";
-import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { extractContextUsage } from "@/lib/context-usage";
 import { cn } from "@/lib/utils";
 import { createPipelineResumePrompt, getPipelineResumePhase, isSessionCompatibleWithResumePhase } from "@/lib/build-pipeline-resume";
 import * as backend from "@/lib/backend";
+import {
+  addPipelineKanbanComment,
+  updatePipelineKanbanPrMetadata,
+} from "@/lib/build-pipeline-source";
 
 interface OpenCodeBuildChatTabProps {
   data: BuildTabData;
@@ -91,6 +95,22 @@ const SESSION_PHASE_LABELS: Record<string, string> = {
   pr: "PR Creation Session",
   "resolve-conflicts": "Conflict Resolution Session",
 };
+
+function getDisplayOpenCodeBuildMessages(
+  messages: OpenCodeMessage[],
+  phase: string,
+) {
+  return pinActiveNativeAgentParts(
+    messages
+      .filter((message, index) => {
+        if ((phase === "review" || phase === "pr") && index === 0 && message.role === "user") {
+          return false;
+        }
+        return true;
+      })
+      .map(normalizeOpenCodeNativeMessage),
+  );
+}
 
 function SessionDivider({ session, index }: { session: PipelineSession; index: number }) {
   const label = SESSION_PHASE_LABELS[session.phase] || session.phase;
@@ -786,10 +806,10 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
             const env = useEnvironmentStore.getState().getEnvironmentById(environmentId);
             const prUrl = env?.prUrl;
             if (prUrl) {
-              void useKanbanStore.getState().addComment(currentPipeline.taskId, `🔗 PR raised: ${prUrl}`);
-              void useKanbanStore.getState().updateTask(currentPipeline.taskId, { prUrl, prState: "open" });
+              addPipelineKanbanComment(currentPipeline, `🔗 PR raised: ${prUrl}`);
+              updatePipelineKanbanPrMetadata(currentPipeline, { prUrl, prState: "open" });
             } else {
-              void useKanbanStore.getState().addComment(currentPipeline.taskId, "🔗 PR raised");
+              addPipelineKanbanComment(currentPipeline, "🔗 PR raised");
             }
 
             const hasConflicts = await checkPRMergeConflicts();
@@ -849,7 +869,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
             if (isPipelinePaused()) return;
             setVerificationResult(pipelineId, result.verdict, result.feedback);
             if (result.verdict === "pass") {
-              void useKanbanStore.getState().addComment(currentPipeline.taskId, "✅ Validation complete");
+              addPipelineKanbanComment(currentPipeline, "✅ Validation complete");
               await startPRSession(currentPipeline);
             } else if (currentPipeline.iteration >= currentPipeline.maxIterations) {
               setPipelineError(pipelineId, `Max iterations (${currentPipeline.maxIterations}) reached. Last feedback: ${result.feedback}`);
@@ -1325,21 +1345,16 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
               <div key={sessionData.pipelineSession.sessionKey}>
                 <SessionDivider session={sessionData.pipelineSession} index={sessionIndex} />
                 <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-2 py-5 @sm:px-4">
-                  {sessionData.messages
-                    .filter((message: OpenCodeMessage, index: number) => {
-                      const phase = sessionData.pipelineSession.phase;
-                      if ((phase === "review" || phase === "pr") && index === 0 && message.role === "user") {
-                        return false;
-                      }
-                      return true;
-                    })
-                    .map((message: OpenCodeMessage, index: number, filteredMessages: OpenCodeMessage[]) => (
+                  {getDisplayOpenCodeBuildMessages(
+                    sessionData.messages,
+                    sessionData.pipelineSession.phase,
+                  ).map((message, index, filteredMessages) => (
                       <NativeMessage
                         key={message.id}
-                        message={normalizeOpenCodeNativeMessage(message)}
+                        message={message}
                         previousMessage={
                           index > 0
-                            ? normalizeOpenCodeNativeMessage(filteredMessages[index - 1]!)
+                            ? filteredMessages[index - 1]!
                             : null
                         }
                         assistantLabel="OpenCode"

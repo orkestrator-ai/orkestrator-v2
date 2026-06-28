@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { toast } from "sonner";
-import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useBuildPipelineStore, type BuildPipeline, type BuildPipelineSource } from "@/stores/buildPipelineStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useConfigStore, useEnvironmentStore } from "@/stores";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -12,6 +12,8 @@ import { getBuildEnvironmentAgentSettings, resolveBuildPipelineAgent } from "@/l
 import type { DefaultAgent, EnvironmentType } from "@/types";
 import type { KanbanTask } from "@/lib/backend";
 import type { PaneNode } from "@/types/paneLayout";
+import type { TaskSnapshot } from "@/prompts";
+import type { LinearIssueDetail } from "@/types/linear";
 
 /**
  * Wait for setup scripts to be initiated by the TerminalContainer.
@@ -66,56 +68,86 @@ async function renameBuildEnvironmentFromPrompt(environmentId: string, prompt: s
   }
 }
 
+type BuildPipelineTicketInput = {
+  id: string;
+  projectId: string;
+  title: string;
+  taskSnapshot: TaskSnapshot;
+  source: BuildPipelineSource;
+  namingPrompt: string;
+  onPipelineLinked?: (params: { pipelineId: string; environmentId: string }) => Promise<void>;
+};
+
+function linearIssueToTicketInput(issue: LinearIssueDetail, projectId: string): BuildPipelineTicketInput {
+  const metadata = [
+    `Linear issue: ${issue.identifier}`,
+    issue.url ? `URL: ${issue.url}` : "",
+    issue.status ? `Status: ${issue.status}` : "",
+    issue.teamKey ? `Team: ${issue.teamKey}${issue.teamName ? ` (${issue.teamName})` : ""}` : "",
+    issue.assigneeName ? `Assignee: ${issue.assigneeName}` : "",
+    issue.priorityLabel ? `Priority: ${issue.priorityLabel}` : "",
+    issue.labels.length > 0 ? `Labels: ${issue.labels.join(", ")}` : "",
+  ].filter(Boolean);
+
+  const comments = metadata.map((text) => ({ text }));
+  const namingPrompt = [
+    issue.identifier,
+    issue.title,
+    issue.description,
+    issue.status,
+  ].filter((part) => part.trim().length > 0).join("\n\n");
+
+  return {
+    id: issue.id,
+    projectId,
+    title: `${issue.identifier}: ${issue.title}`,
+    namingPrompt,
+    source: {
+      type: "linear",
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      issueUrl: issue.url,
+      status: issue.status,
+      teamKey: issue.teamKey,
+      updatedAt: issue.updatedAt,
+    },
+    taskSnapshot: {
+      title: `${issue.identifier}: ${issue.title}`,
+      description: issue.description,
+      acceptanceCriteria: "",
+      comments,
+      images: [],
+    },
+  };
+}
+
 export function useBuildPipeline() {
   const { createEnvironment, startEnvironment } = useEnvironments(null, { listenForRenameEvents: false });
-  const { createPipeline, setPipelineEnvironment, setPhase, setPipelineError } = useBuildPipelineStore();
+  const { createPipeline, setPipelineEnvironment, setPhase, setPipelineError, removePipeline } = useBuildPipelineStore();
   const { updateTask } = useKanbanStore();
   const { selectProjectAndEnvironment, setProjectCollapsed } = useUIStore();
   const { setOptions } = useClaudeOptionsStore();
   const config = useConfigStore((state) => state.config);
 
-  const startBuild = useCallback(
-    async (task: KanbanTask, environmentType: EnvironmentType, agentOverride?: DefaultAgent) => {
+  const startBuildFromTicket = useCallback(
+    async (ticket: BuildPipelineTicketInput, environmentType: EnvironmentType, agentOverride?: DefaultAgent) => {
+      let pipelineId: string | null = null;
       try {
-        const agentType = agentOverride ?? resolveBuildPipelineAgent(config, task.projectId);
+        const agentType = agentOverride ?? resolveBuildPipelineAgent(config, ticket.projectId);
         const agentSettings = getBuildEnvironmentAgentSettings(agentType);
 
-        // 1. Load image data from disk for the task snapshot
-        const snapshotImages = await Promise.all(
-          (task.images ?? []).map(async (img) => {
-            try {
-              const data = await backend.getKanbanImageData(img.id);
-              return { filename: img.filename, data };
-            } catch {
-              return null;
-            }
-          })
-        ).then((results) => results.filter((r): r is { filename: string; data: string } => r !== null));
-
-        // 2. Create pipeline
-        const pipelineId = createPipeline({
-          taskId: task.id,
-          projectId: task.projectId,
+        pipelineId = createPipeline({
+          taskId: ticket.id,
+          projectId: ticket.projectId,
           environmentType,
           agentType,
-          taskTitle: task.title,
-          taskSnapshot: {
-            title: task.title,
-            description: task.description,
-            acceptanceCriteria: task.acceptanceCriteria,
-            comments: task.comments.map((c) => ({ text: c.text })),
-            images: snapshotImages,
-          },
+          taskTitle: ticket.title,
+          taskSnapshot: ticket.taskSnapshot,
+          source: ticket.source,
         });
 
-        const buildNamingPrompt = [
-          task.title,
-          task.description,
-          task.acceptanceCriteria,
-        ].filter((part) => part.trim().length > 0).join("\n\n");
-
         const environment = await createEnvironment(
-          task.projectId,
+          ticket.projectId,
           undefined,
           environmentType === "containerized" ? "restricted" : "full",
           undefined, // no initial prompt - we handle it via the pipeline
@@ -148,17 +180,16 @@ export function useBuildPipeline() {
           });
         }
 
-        // 5. Update kanban task with pipeline/environment link
-        await updateTask(task.id, {
-          environmentId: environment.id,
-          buildPipelineId: pipelineId,
+        await ticket.onPipelineLinked?.({
+          environmentId: configuredEnvironment.id,
+          pipelineId,
         });
 
         // 6. Expand the project if collapsed and select the environment in the UI
-        setProjectCollapsed(task.projectId, false);
-        selectProjectAndEnvironment(task.projectId, configuredEnvironment.id);
+        setProjectCollapsed(ticket.projectId, false);
+        selectProjectAndEnvironment(ticket.projectId, configuredEnvironment.id);
 
-        const environmentNamingPrompt = (buildNamingPrompt || task.title).trim();
+        const environmentNamingPrompt = (ticket.namingPrompt || ticket.title).trim();
 
         // 7. Start the environment. Naming must not gate startup: the user
         // should immediately see the worktree/container setup begin under the
@@ -189,7 +220,7 @@ export function useBuildPipeline() {
         const buildTabData = {
           environmentId: configuredEnvironment.id,
           pipelineId,
-          taskId: task.id,
+          taskId: ticket.id,
           isLocal,
         };
 
@@ -197,13 +228,87 @@ export function useBuildPipeline() {
 
         toast.success("Build pipeline started");
       } catch (error) {
+        if (pipelineId) removePipeline(pipelineId);
         console.error("[useBuildPipeline] Failed to start build:", error);
         toast.error("Failed to start build pipeline", {
           description: error instanceof Error ? error.message : "Unknown error",
         });
       }
     },
-    [config, createPipeline, createEnvironment, setPipelineEnvironment, setPhase, setPipelineError, updateTask, selectProjectAndEnvironment, setProjectCollapsed, setOptions, startEnvironment]
+    [config, createPipeline, createEnvironment, setPipelineEnvironment, setPhase, setPipelineError, removePipeline, selectProjectAndEnvironment, setProjectCollapsed, setOptions, startEnvironment]
+  );
+
+  const startBuild = useCallback(
+    async (task: KanbanTask, environmentType: EnvironmentType, agentOverride?: DefaultAgent) => {
+      const snapshotImages = await Promise.all(
+        (task.images ?? []).map(async (img) => {
+          try {
+            const data = await backend.getKanbanImageData(img.id);
+            return { filename: img.filename, data };
+          } catch {
+            return null;
+          }
+        })
+      ).then((results) => results.filter((r): r is { filename: string; data: string } => r !== null));
+
+      const namingPrompt = [
+        task.title,
+        task.description,
+        task.acceptanceCriteria,
+      ].filter((part) => part.trim().length > 0).join("\n\n");
+
+      await startBuildFromTicket({
+        id: task.id,
+        projectId: task.projectId,
+        title: task.title,
+        namingPrompt,
+        source: { type: "kanban", taskId: task.id },
+        taskSnapshot: {
+          title: task.title,
+          description: task.description,
+          acceptanceCriteria: task.acceptanceCriteria,
+          comments: task.comments.map((c) => ({ text: c.text })),
+          images: snapshotImages,
+        },
+        onPipelineLinked: ({ environmentId, pipelineId }) =>
+          updateTask(task.id, {
+            environmentId,
+            buildPipelineId: pipelineId,
+          }),
+      }, environmentType, agentOverride);
+    },
+    [startBuildFromTicket, updateTask]
+  );
+
+  const startBuildFromLinearIssue = useCallback(
+    async (issue: LinearIssueDetail, projectId: string, environmentType: EnvironmentType) => {
+      await startBuildFromTicket(linearIssueToTicketInput(issue, projectId), environmentType);
+    },
+    [startBuildFromTicket]
+  );
+
+  const navigateToPipeline = useCallback(
+    async (pipeline: Pick<BuildPipeline, "environmentId" | "projectId" | "taskId">) => {
+      if (!pipeline.environmentId) return;
+
+      setProjectCollapsed(pipeline.projectId, false);
+      selectProjectAndEnvironment(pipeline.projectId, pipeline.environmentId);
+
+      const maxAttempts = 20;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const paneState = usePaneLayoutStore.getState();
+        const envState = paneState.environments.get(pipeline.environmentId);
+        if (envState) {
+          const result = findBuildTabInTree(envState.root, pipeline.taskId);
+          if (result) {
+            paneState.setActiveTab(result.paneId, result.tabId, pipeline.environmentId);
+            return;
+          }
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    },
+    [selectProjectAndEnvironment, setProjectCollapsed]
   );
 
   const navigateToBuild = useCallback(
@@ -231,7 +336,7 @@ export function useBuildPipeline() {
     [selectProjectAndEnvironment, setProjectCollapsed]
   );
 
-  return { startBuild, navigateToBuild };
+  return { startBuild, startBuildFromLinearIssue, navigateToBuild, navigateToPipeline };
 }
 
 /** Search pane tree for a build tab matching a task ID */

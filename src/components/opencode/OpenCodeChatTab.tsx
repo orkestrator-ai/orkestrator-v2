@@ -62,6 +62,7 @@ import {
 } from "@/lib/backend";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { normalizeOpenCodeNativeMessage } from "@/lib/chat/native-message-adapters";
+import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { OpenCodeComposeBar } from "./OpenCodeComposeBar";
 import { OpenCodePermissionCard } from "./OpenCodePermissionCard";
 import { OpenCodeQuestionCard } from "./OpenCodeQuestionCard";
@@ -252,6 +253,10 @@ export function OpenCodeChatTab({
   );
 
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
+  const displayMessages = useMemo(
+    () => pinActiveNativeAgentParts(sessionMessages.map(normalizeOpenCodeNativeMessage)),
+    [sessionMessages],
+  );
   const hasMessageHistory = sessionMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
   const showAddressAll = Boolean(
@@ -1586,12 +1591,12 @@ export function OpenCodeChatTab({
       >
         {/* Virtualized messages area */}
         <VirtualizedMessageList
-          messages={sessionMessages}
+          messages={displayMessages}
           computeItemKey={(_index, msg) => msg.id}
           renderMessage={(_index, message, prev) => (
             <NativeMessage
-              message={normalizeOpenCodeNativeMessage(message)}
-              previousMessage={prev ? normalizeOpenCodeNativeMessage(prev) : null}
+              message={message}
+              previousMessage={prev}
               assistantLabel="OpenCode"
             />
           )}

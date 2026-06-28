@@ -42,15 +42,17 @@ import {
 } from "@/prompts";
 import { parseVerificationResult } from "@/lib/parse-verification-result";
 import { isSetupPending } from "@/lib/setup-commands";
-import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { resolveActiveBuildPipelineAgent } from "@/lib/build-pipeline-agent";
 import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
+import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { createPipelineResumePrompt, getPipelineResumePhase, isSessionCompatibleWithResumePhase } from "@/lib/build-pipeline-resume";
 import * as backend from "@/lib/backend";
-
-// Reference to kanban store for non-reactive reads
-const kanbanStoreRef = useKanbanStore;
+import {
+  addPipelineKanbanComment,
+  movePipelineKanbanTask,
+  updatePipelineKanbanPrMetadata,
+} from "@/lib/build-pipeline-source";
 
 const LazyCodexBuildChatTab = lazy(async () => {
   const module = await import("./CodexBuildChatTab");
@@ -121,6 +123,22 @@ const SESSION_PHASE_LABELS: Record<string, string> = {
   pr: "PR Creation Session",
   "resolve-conflicts": "Conflict Resolution Session",
 };
+
+function getDisplayClaudeBuildMessages(
+  messages: ClaudeMessageType[],
+  phase: string,
+) {
+  return pinActiveNativeAgentParts(
+    messages
+      .filter((message, messageIndex) => {
+        if ((phase === "review" || phase === "pr") && messageIndex === 0 && message.role === "user") {
+          return false;
+        }
+        return true;
+      })
+      .map(normalizeClaudeMessage),
+  );
+}
 
 function SessionDivider({ session, index }: { session: PipelineSession; index: number }) {
   const label = SESSION_PHASE_LABELS[session.phase] || session.phase;
@@ -267,7 +285,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     persistKey: `build-${pipelineId}`,
   });
 
-  // Auto-move kanban card and add automated comments when pipeline phase changes
+  // Auto-move kanban cards and add automated kanban comments when kanban-backed pipeline phase changes.
   const prevPhaseRef = useRef<BuildPhase | null>(null);
   useEffect(() => {
     if (!pipeline) return;
@@ -278,18 +296,13 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     // Skip on first render or if phase hasn't changed
     if (prevPhase === null || prevPhase === phase) return;
 
-    const { moveTask, addComment } = kanbanStoreRef.getState();
-
     if (phase === "building") {
-      // Card sent to build → move to in-progress + comment
-      void moveTask(pipeline.taskId, "in-progress");
-      void addComment(pipeline.taskId, "🔨 Build started");
+      movePipelineKanbanTask(pipeline, "in-progress");
+      addPipelineKanbanComment(pipeline, "🔨 Build started");
     } else if (phase === "complete") {
-      // Build pipeline finished → move to review
-      void moveTask(pipeline.taskId, "review");
+      movePipelineKanbanTask(pipeline, "review");
     } else if (phase === "failed") {
-      // Build failed → move back to backlog for retry
-      void moveTask(pipeline.taskId, "backlog");
+      movePipelineKanbanTask(pipeline, "backlog");
     }
   }, [pipeline?.phase, pipeline?.taskId]);
 
@@ -571,17 +584,13 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
               const env = useEnvironmentStore.getState().getEnvironmentById(environmentId);
               const prUrl = env?.prUrl;
               if (prUrl) {
-                void kanbanStoreRef.getState().addComment(
-                  currentPipeline.taskId,
-                  `🔗 PR raised: ${prUrl}`
-                );
-                // Store PR metadata on the ticket
-                void kanbanStoreRef.getState().updateTask(currentPipeline.taskId, {
+                addPipelineKanbanComment(currentPipeline, `🔗 PR raised: ${prUrl}`);
+                updatePipelineKanbanPrMetadata(currentPipeline, {
                   prUrl,
                   prState: "open",
                 });
               } else {
-                void kanbanStoreRef.getState().addComment(currentPipeline.taskId, "🔗 PR raised");
+                addPipelineKanbanComment(currentPipeline, "🔗 PR raised");
               }
               const hasConflicts = await checkPRMergeConflicts();
               if (isPipelinePaused()) return;
@@ -652,7 +661,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
             setVerificationResult(pipelineId, result.verdict, result.feedback);
 
             if (result.verdict === "pass") {
-              void kanbanStoreRef.getState().addComment(currentPipeline.taskId, "✅ Validation complete");
+              addPipelineKanbanComment(currentPipeline, "✅ Validation complete");
               await startPRSession(currentPipeline);
             } else {
               // Check max iterations
@@ -1561,22 +1570,16 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
             allSessionMessages.map((sessionData, sessionIndex) => (
               <div key={sessionData.pipelineSession.sessionKey}>
                 <SessionDivider session={sessionData.pipelineSession} index={sessionIndex} />
-                {sessionData.messages
-                  .filter((message, messageIndex) => {
-                    // Hide the initial prompt (first user message) for review and PR sessions
-                    const phase = sessionData.pipelineSession.phase;
-                    if ((phase === "review" || phase === "pr") && messageIndex === 0 && message.role === "user") {
-                      return false;
-                    }
-                    return true;
-                  })
-                  .map((message, filteredIndex, filteredMessages) => (
+                {getDisplayClaudeBuildMessages(
+                  sessionData.messages,
+                  sessionData.pipelineSession.phase,
+                ).map((message, filteredIndex, filteredMessages) => (
                     <NativeMessage
                       key={message.id}
-                      message={normalizeClaudeMessage(message)}
+                      message={message}
                       previousMessage={
                         filteredIndex > 0
-                          ? normalizeClaudeMessage(filteredMessages[filteredIndex - 1]!)
+                          ? filteredMessages[filteredIndex - 1]!
                           : null
                       }
                       assistantLabel="Claude"

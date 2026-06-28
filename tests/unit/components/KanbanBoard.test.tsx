@@ -1,7 +1,33 @@
-import { describe, expect, test } from "bun:test";
-import { canClearTaskBuildStatus } from "@/components/kanban/KanbanBoard";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { KanbanBoard, canClearTaskBuildStatus } from "@/components/kanban/KanbanBoard";
+import { useProjectStore } from "@/stores/projectStore";
+import { useKanbanStore } from "@/stores/kanbanStore";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { BuildPhase } from "@/stores/buildPipelineStore";
+
+const loadTasksMock = mock(async () => undefined);
+
+beforeEach(() => {
+  cleanup();
+  loadTasksMock.mockClear();
+  useProjectStore.setState({
+    projects: [{
+      id: "project-1",
+      name: "Project",
+      gitUrl: "https://github.com/acme/repo.git",
+      localPath: null,
+      addedAt: "2026-01-01T00:00:00.000Z",
+      order: 0,
+    }],
+    isLoading: false,
+    error: null,
+  });
+  useKanbanStore.setState({
+    tasks: [],
+    loadTasks: loadTasksMock as unknown as ReturnType<typeof useKanbanStore.getState>["loadTasks"],
+  });
+});
 
 function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
   return {
@@ -54,5 +80,17 @@ describe("canClearTaskBuildStatus", () => {
     expect(canClearTaskBuildStatus(makeTask({ environmentId: "env-1", buildPipelineId: "p-1" }), phase)).toBe(
       false,
     );
+  });
+});
+
+describe("KanbanBoard ticket sources", () => {
+  test("renders Kanban and Linear source tabs for a project board", async () => {
+    render(<KanbanBoard projectId="project-1" />);
+
+    expect(screen.getByRole("tab", { name: "Kanban" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Linear" })).toBeTruthy();
+    await waitFor(() => {
+      expect(loadTasksMock).toHaveBeenCalledWith("project-1");
+    });
   });
 });

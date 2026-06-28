@@ -21,6 +21,7 @@ import { KanbanCard } from "./KanbanCard";
 import { KanbanTaskDialog } from "./KanbanTaskDialog";
 import { ProjectNotesView } from "./ProjectNotesView";
 import { FeaturesView } from "./FeaturesView";
+import { LinearTicketsView } from "@/components/linear";
 
 const COLUMNS: { id: KanbanStatus; label: string; color: string }[] = [
   { id: "backlog", label: "Backlog", color: "bg-zinc-500" },
@@ -152,7 +153,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [showNotes, setShowNotes] = useState(false);
-  const [screenTab, setScreenTab] = useState<"kanban" | "features">("kanban");
+  const [screenTab, setScreenTab] = useState<"kanban" | "linear" | "features">("kanban");
 
   const projectTasks = useMemo(
     () => tasks.filter((t) => t.projectId === projectId),
@@ -233,7 +234,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
     <div className="flex flex-col h-full bg-background">
       <Tabs
         value={screenTab}
-        onValueChange={(value) => setScreenTab(value as "kanban" | "features")}
+        onValueChange={(value) => setScreenTab(value as "kanban" | "linear" | "features")}
         className="min-h-0 flex-1 gap-0"
       >
         {/* Board Header */}
@@ -248,6 +249,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
           )}
           <TabsList className="ml-3 h-8">
             <TabsTrigger value="kanban" className="px-3 text-xs">Kanban</TabsTrigger>
+            <TabsTrigger value="linear" className="px-3 text-xs">Linear</TabsTrigger>
             <TabsTrigger value="features" className="px-3 text-xs">Features</TabsTrigger>
           </TabsList>
           <div className="ml-auto">
@@ -265,9 +267,12 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
           </div>
         </div>
 
-        <TabsContent value="kanban" className="min-h-0 overflow-hidden">
+        <TabsContent
+          value="kanban"
+          className="m-0 min-h-0 flex-1 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col"
+        >
           {/* Columns */}
-          <div className="h-full overflow-x-auto p-6">
+          <div className="flex-1 overflow-x-auto p-6">
             <DndContext
               sensors={sensors}
               collisionDetection={pointerWithin}
@@ -307,8 +312,15 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
         </TabsContent>
 
         <TabsContent
+          value="linear"
+          className="m-0 min-h-0 flex-1 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col"
+        >
+          <LinearTicketsView projectId={projectId} />
+        </TabsContent>
+
+        <TabsContent
           value="features"
-          className="h-full min-h-0 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col"
+          className="m-0 h-full min-h-0 flex-1 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col"
         >
           <FeaturesView projectId={projectId} />
         </TabsContent>

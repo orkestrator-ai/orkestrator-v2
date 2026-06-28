@@ -6,6 +6,7 @@ import { AppShell } from "@/components/layout";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TerminalContainer } from "@/components/terminal";
 import { KanbanBoard } from "@/components/kanban";
+import { LinearPipelineCompletionMonitor } from "@/components/linear";
 import { TerminalProvider } from "@/contexts";
 import {
   getAllLeaves,
@@ -503,6 +504,7 @@ function App() {
     <TooltipProvider>
       <TerminalProvider>
         <AppShell>
+          <LinearPipelineCompletionMonitor />
           {selectedEnvironment ? (
             <div className="relative h-full bg-background">
               <div className="absolute inset-0 z-10 bg-background">

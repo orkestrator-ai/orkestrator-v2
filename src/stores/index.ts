@@ -20,7 +20,14 @@ export { useKanbanStore, type KanbanTask, type KanbanStatus, type KanbanComment,
 export { useFeaturePlanStore, type FeaturePlan, type FeaturePlanMessage, type FeaturePlanStatus, type FeatureStoryCard } from "./featurePlanStore";
 export { usePrMonitorStore, PR_MONITOR_INTERVALS, PR_MONITOR_TIMEOUTS, PR_MONITOR_BACKOFF, getEffectiveInterval } from "./prMonitorStore";
 export { useBuildPipelineStore } from "./buildPipelineStore";
-export type { BuildPipeline, BuildPhase, PipelineSession, PipelineSessionPhase } from "./buildPipelineStore";
+export type {
+  BuildPipeline,
+  BuildPhase,
+  BuildPipelineSource,
+  CompletionCommentStatus,
+  PipelineSession,
+  PipelineSessionPhase,
+} from "./buildPipelineStore";
 export type { PrMonitoringMode, MonitoringState } from "./prMonitorStore";
 export { useEnvironmentDiffStore } from "./environmentDiffStore";
 export type { EnvironmentDiffStats } from "./environmentDiffStore";

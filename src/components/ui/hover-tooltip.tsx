@@ -145,10 +145,14 @@ export function HoverTooltipContent({
     >
       {children}
       <div
+        data-slot="hover-tooltip-arrow"
+        aria-hidden="true"
         className={cn(
           "absolute size-2.5 rotate-45 rounded-[2px] bg-foreground",
-          side === "right" && "left-0 top-1/2 -translate-x-1/2 -translate-y-1/2",
-          side === "bottom" && "left-4 top-0 -translate-y-1/2",
+          side === "right" && align === "center" && "left-0 top-1/2 -translate-x-1/2 -translate-y-1/2",
+          side === "right" && align === "start" && "left-0 top-4 -translate-x-1/2 -translate-y-1/2",
+          side === "bottom" && align === "center" && "left-1/2 top-0 -translate-x-1/2 -translate-y-1/2",
+          side === "bottom" && align === "start" && "left-4 top-0 -translate-y-1/2",
         )}
       />
     </div>,

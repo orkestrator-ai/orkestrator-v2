@@ -96,6 +96,7 @@ import {
 } from "@/stores/claudeTmuxStore";
 import { collapseTaskToolUpdates } from "@/lib/task-tool-snapshots";
 import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
+import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import {
   applyTmuxAgentUsageSummaries,
   parseTmuxAgentUsageSummaries,
@@ -393,13 +394,17 @@ export function ClaudeTmuxChatTab({
     () => parseTmuxAgentUsageSummaries(tuiSnapshot),
     [tuiSnapshot],
   );
-  const displayMessages = useMemo(
+  const transcriptMessages = useMemo(
     () =>
       applyTmuxAgentUsageSummaries(
         collapseTaskToolUpdates(compactConsecutiveAssistantMessages(messages)),
         agentUsageSummaries,
       ),
     [messages, agentUsageSummaries],
+  );
+  const displayMessages = useMemo(
+    () => pinActiveNativeAgentParts(transcriptMessages.map(normalizeClaudeMessage)),
+    [transcriptMessages],
   );
   const hasMessageHistory = displayMessages.length > 0;
   const centerCompose =
@@ -1275,8 +1280,8 @@ export function ClaudeTmuxChatTab({
               computeItemKey={(_index, message) => message.id}
               renderMessage={(_index, message, previousMessage) => (
                 <NativeMessage
-                  message={normalizeClaudeMessage(message)}
-                  previousMessage={previousMessage ? normalizeClaudeMessage(previousMessage) : null}
+                  message={message}
+                  previousMessage={previousMessage}
                   assistantLabel="Claude"
                   containerId={containerId}
                 />

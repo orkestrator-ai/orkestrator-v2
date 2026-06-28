@@ -66,7 +66,6 @@ type LinearCommentsResponse = {
 };
 
 const LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql";
-const MAX_ISSUE_PAGES = 25;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -78,6 +77,19 @@ function asString(value: unknown, fallback = ""): string {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function nextPageCursor(
+  pageInfo: { hasNextPage?: boolean; endCursor?: string | null } | undefined,
+  seenCursors: Set<string>,
+  resourceName: string,
+): string | null {
+  if (!pageInfo?.hasNextPage) return null;
+  const cursor = pageInfo.endCursor;
+  if (!cursor) throw new Error(`Linear ${resourceName} pagination did not return a cursor`);
+  if (seenCursors.has(cursor)) throw new Error(`Linear ${resourceName} pagination cursor repeated`);
+  seenCursors.add(cursor);
+  return cursor;
 }
 
 export function sanitizeLinearError(error: unknown, secret?: string): string {
@@ -215,8 +227,9 @@ export async function verifyLinearConnection(apiKey: string): Promise<LinearView
 export async function listLinearIssues(apiKey: string): Promise<LinearIssueListItem[]> {
   const issues: LinearIssueListItem[] = [];
   let cursor: string | null = null;
+  const seenCursors = new Set<string>();
 
-  for (let page = 0; page < MAX_ISSUE_PAGES; page += 1) {
+  while (true) {
     const data: LinearIssuesResponse = await linearGraphql<LinearIssuesResponse>(
       apiKey,
       `query OrkestratorLinearIssues($after: String) {
@@ -248,8 +261,9 @@ export async function listLinearIssues(apiKey: string): Promise<LinearIssueListI
       if (issue) issues.push(issue);
     }
 
-    if (!data.issues?.pageInfo?.hasNextPage || !data.issues.pageInfo.endCursor) break;
-    cursor = data.issues.pageInfo.endCursor;
+    const nextCursor = nextPageCursor(data.issues?.pageInfo, seenCursors, "issues");
+    if (!nextCursor) break;
+    cursor = nextCursor;
   }
 
   return issues.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -293,8 +307,9 @@ async function findExistingCompletionComment(
   marker: string,
 ): Promise<{ id: string; createdAt?: string } | null> {
   let cursor: string | null = null;
+  const seenCursors = new Set<string>();
 
-  for (let page = 0; page < MAX_ISSUE_PAGES; page += 1) {
+  while (true) {
     const data: LinearCommentsResponse = await linearGraphql<LinearCommentsResponse>(
       apiKey,
       `query OrkestratorLinearCompletionComments($id: String!, $after: String) {
@@ -324,8 +339,9 @@ async function findExistingCompletionComment(
       }
     }
 
-    if (!data.issue?.comments?.pageInfo?.hasNextPage || !data.issue.comments.pageInfo.endCursor) break;
-    cursor = data.issue.comments.pageInfo.endCursor;
+    const nextCursor = nextPageCursor(data.issue?.comments?.pageInfo, seenCursors, "comments");
+    if (!nextCursor) break;
+    cursor = nextCursor;
   }
 
   return null;

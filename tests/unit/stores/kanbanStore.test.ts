@@ -1,4 +1,7 @@
-import { describe, test, expect, beforeEach, mock } from "bun:test";
+import { afterAll, describe, test, expect, beforeEach, mock } from "bun:test";
+import * as realBackend from "@/lib/backend";
+
+const realBackendSnapshot = { ...realBackend };
 
 // Mock backend before importing the store
 const mockUpdateKanbanTask = mock(() => Promise.resolve({
@@ -41,6 +44,7 @@ const mockAddKanbanComment = mock(() => Promise.resolve({
 }));
 
 mock.module("@/lib/backend", () => ({
+  ...realBackendSnapshot,
   getKanbanTasks: mockGetKanbanTasks,
   addKanbanTask: mockAddKanbanTask,
   updateKanbanTask: mockUpdateKanbanTask,
@@ -53,9 +57,14 @@ mock.module("@/lib/backend", () => ({
   saveProjectNotes: mock(() => Promise.resolve()),
 }));
 
-import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
+const { useKanbanStore, findTaskForEnvironment } =
+  await import("../../../src/stores/kanbanStore.ts?kanban-store-test") as typeof import("../../../src/stores/kanbanStore");
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import type { KanbanTask } from "@/lib/backend";
+
+afterAll(() => {
+  mock.module("@/lib/backend", () => realBackendSnapshot);
+});
 
 function createTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
   return {

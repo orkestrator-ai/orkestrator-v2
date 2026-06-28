@@ -102,6 +102,7 @@ interface BuildPipelineState {
     status: CompletionCommentStatus,
     details?: { commentId?: string; postedAt?: string; error?: string },
   ) => void;
+  clearCompletionCommentStatus: (pipelineId: string) => void;
   removePipeline: (pipelineId: string) => void;
   removePipelinesForTask: (taskId: string) => void;
 
@@ -326,6 +327,20 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
         completionCommentPostedAt: details?.postedAt ?? pipeline.completionCommentPostedAt,
         completionCommentError: status === "failed" ? details?.error : undefined,
       });
+      return { pipelines: newMap };
+    }),
+
+  clearCompletionCommentStatus: (pipelineId) =>
+    set((state) => {
+      const pipeline = state.pipelines.get(pipelineId);
+      if (!pipeline) return state;
+      const newMap = new Map(state.pipelines);
+      const nextPipeline = { ...pipeline };
+      delete nextPipeline.completionCommentStatus;
+      delete nextPipeline.completionCommentError;
+      delete nextPipeline.completionCommentId;
+      delete nextPipeline.completionCommentPostedAt;
+      newMap.set(pipelineId, nextPipeline);
       return { pipelines: newMap };
     }),
 

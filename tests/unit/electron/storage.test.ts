@@ -150,6 +150,7 @@ describe("Electron StorageService", () => {
       apiKey: "lin_api_secret",
       viewer: { email: "ada@example.com" },
     });
+    expect((await fs.stat(path.join(dataDir, "linear-auth.json"))).mode & 0o777).toBe(0o600);
 
     const posted = await storage.saveLinearCompletionComment({
       pipelineId: "pipeline-1",
@@ -162,6 +163,18 @@ describe("Electron StorageService", () => {
     await expect(storage.getLinearCompletionComment("pipeline-1")).resolves.toMatchObject({
       issueId: "issue-1",
       commentId: "comment-1",
+    });
+
+    const failed = await storage.saveLinearCompletionComment({
+      pipelineId: "pipeline-1",
+      issueId: "issue-1",
+      status: "failed",
+      error: "Linear API unavailable",
+    });
+    expect(failed).toMatchObject({ pipelineId: "pipeline-1", status: "failed", error: "Linear API unavailable" });
+    await expect(storage.getLinearCompletionComment("pipeline-1")).resolves.toMatchObject({
+      status: "failed",
+      error: "Linear API unavailable",
     });
 
     await storage.clearLinearAuth();

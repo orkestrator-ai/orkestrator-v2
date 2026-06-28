@@ -8,6 +8,7 @@ import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { ClaudeMode, CodexMode, DefaultAgent, Environment, OpenCodeMode } from "@/types";
+import type { LinearIssueDetail } from "@/types/linear";
 
 const mockCreateEnvironment = mock<() => Promise<Environment>>(async () => ({
   id: "env-build",
@@ -143,6 +144,26 @@ mock.module("@/lib/backend", () => ({
 
 const { useBuildPipeline } = await import("./useBuildPipeline");
 
+const linearIssue: LinearIssueDetail = {
+  id: "issue-1",
+  identifier: "ENG-123",
+  title: "Add Linear integration",
+  status: "Todo",
+  statusType: "unstarted",
+  updatedAt: "2026-06-28T12:00:00.000Z",
+  createdAt: "2026-06-20T12:00:00.000Z",
+  url: "https://linear.app/acme/issue/ENG-123",
+  teamKey: "ENG",
+  teamName: "Engineering",
+  assigneeName: "Ada",
+  priorityLabel: "High",
+  description: "Build Linear support",
+  creatorName: "Grace",
+  projectName: "Integrations",
+  cycleName: "Cycle 1",
+  labels: ["linear", "pipeline"],
+};
+
 describe("useBuildPipeline", () => {
   beforeEach(() => {
     mockCreateEnvironment.mockClear();
@@ -268,6 +289,51 @@ describe("useBuildPipeline", () => {
       throw new Error("env-hidden root should be a leaf");
     }
 
+    expect(envHidden.root.activeTabId).toBe("build-tab");
+    expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-visible");
+  });
+
+  test("navigateToPipeline activates a Linear-backed build tab by source ticket id", async () => {
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        ["env-hidden", {
+          root: {
+            kind: "leaf",
+            id: "pane-hidden",
+            tabs: [{
+              id: "build-tab",
+              type: "claude-build",
+              buildTabData: {
+                environmentId: "env-hidden",
+                pipelineId: "pipeline-1",
+                taskId: "issue-1",
+                isLocal: true,
+              },
+            }],
+            activeTabId: null,
+          },
+          activePaneId: "pane-hidden",
+          containerId: null,
+        }],
+      ]),
+      activeEnvironmentId: "env-visible",
+    });
+
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.navigateToPipeline({
+        environmentId: "env-hidden",
+        projectId: "project-1",
+        taskId: "issue-1",
+      });
+    });
+
+    const envHidden = usePaneLayoutStore.getState().environments.get("env-hidden");
+    expect(envHidden?.root.kind).toBe("leaf");
+    if (!envHidden || envHidden.root.kind !== "leaf") {
+      throw new Error("env-hidden root should be a leaf");
+    }
     expect(envHidden.root.activeTabId).toBe("build-tab");
     expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-visible");
   });
@@ -437,6 +503,79 @@ describe("useBuildPipeline", () => {
     });
     expect(useEnvironmentStore.getState().pendingSetupCommands.has("env-build")).toBe(false);
     expect(mockToastSuccess).toHaveBeenCalledWith("Build pipeline started");
+  });
+
+  test("startBuildFromLinearIssue stores Linear source metadata and ticket content", async () => {
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        ["env-build", {
+          root: {
+            kind: "leaf",
+            id: "pane-build",
+            tabs: [],
+            activeTabId: null,
+          },
+          activePaneId: "pane-build",
+          containerId: "container-build",
+        }],
+      ]),
+      activeEnvironmentId: "env-visible",
+    });
+
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuildFromLinearIssue(linearIssue, "project-1", "containerized");
+    });
+
+    const pipeline = Array.from(useBuildPipelineStore.getState().pipelines.values())[0]!;
+    expect(pipeline.taskId).toBe("issue-1");
+    expect(pipeline.taskTitle).toBe("ENG-123: Add Linear integration");
+    expect(pipeline.source).toEqual({
+      type: "linear",
+      issueId: "issue-1",
+      issueIdentifier: "ENG-123",
+      issueUrl: "https://linear.app/acme/issue/ENG-123",
+      status: "Todo",
+      teamKey: "ENG",
+      updatedAt: "2026-06-28T12:00:00.000Z",
+    });
+    expect(pipeline.taskSnapshot).toMatchObject({
+      title: "ENG-123: Add Linear integration",
+      description: "Build Linear support",
+      acceptanceCriteria: "",
+    });
+    expect(pipeline.taskSnapshot.comments.map((comment) => comment.text)).toEqual([
+      "Linear issue: ENG-123",
+      "URL: https://linear.app/acme/issue/ENG-123",
+      "Status: Todo",
+      "Team: ENG (Engineering)",
+      "Assignee: Ada",
+      "Priority: High",
+      "Labels: linear, pipeline",
+    ]);
+    await waitFor(() => {
+      expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
+        "env-build",
+        "ENG-123\n\nAdd Linear integration\n\nBuild Linear support\n\nTodo",
+      );
+    });
+  });
+
+  test("startBuildFromLinearIssue removes the pending pipeline when environment creation fails", async () => {
+    mockCreateEnvironment.mockImplementationOnce(async () => {
+      throw new Error("environment create failed");
+    });
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuildFromLinearIssue(linearIssue, "project-1", "local");
+    });
+
+    expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+    expect(mockToastError).toHaveBeenCalledWith("Failed to start build pipeline", {
+      description: "environment create failed",
+    });
   });
 
   test("startBuild continues when prompt rename fails", async () => {

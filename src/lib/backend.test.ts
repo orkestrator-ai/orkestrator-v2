@@ -16,8 +16,11 @@ const wrapperModulePath = "./backend.ts?wrapper-test";
 const {
   connectLinear,
   createEnvironment,
+  disconnectLinear,
   ensureEnvironmentSetup,
+  getLinearConnection,
   getLinearIssue,
+  getLinearIssues,
   getSetupCommands,
   postLinearCompletionComment,
   runEnvironmentSetup,
@@ -90,18 +93,24 @@ describe("backend setup wrappers", () => {
   });
 
   test("calls Linear Electron commands with expected payloads", async () => {
+    await getLinearConnection();
     await connectLinear("lin_api_secret");
+    await getLinearIssues();
     await getLinearIssue("ENG-123");
     await postLinearCompletionComment("pipeline-1", "issue-1", "Done");
+    await disconnectLinear();
 
     expect(invokeMock.mock.calls).toEqual([
+      ["get_linear_connection"],
       ["connect_linear", { apiKey: "lin_api_secret" }],
+      ["get_linear_issues"],
       ["get_linear_issue", { issueId: "ENG-123" }],
       ["post_linear_completion_comment", {
         pipelineId: "pipeline-1",
         issueId: "issue-1",
         body: "Done",
       }],
+      ["disconnect_linear"],
     ]);
   });
 });

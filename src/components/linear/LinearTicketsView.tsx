@@ -44,6 +44,15 @@ interface LinearTicketsViewProps {
   projectId: string;
 }
 
+type LinearBuildPipelineActions = Pick<
+  ReturnType<typeof useBuildPipeline>,
+  "startBuildFromLinearIssue" | "navigateToPipeline"
+>;
+
+interface LinearTicketsViewContentProps extends LinearTicketsViewProps {
+  buildPipeline: LinearBuildPipelineActions;
+}
+
 type LoadState = "idle" | "loading" | "loaded" | "error";
 
 function formatUpdatedDate(value: string): string {
@@ -158,6 +167,11 @@ function LinearConnectDialog({
 }
 
 export function LinearTicketsView({ projectId }: LinearTicketsViewProps) {
+  const buildPipeline = useBuildPipeline();
+  return <LinearTicketsViewContent projectId={projectId} buildPipeline={buildPipeline} />;
+}
+
+export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTicketsViewContentProps) {
   const [connection, setConnection] = useState<LinearConnectionStatus | null>(null);
   const [connectionState, setConnectionState] = useState<LoadState>("idle");
   const [issues, setIssues] = useState<LinearIssueListItem[]>([]);
@@ -172,7 +186,8 @@ export function LinearTicketsView({ projectId }: LinearTicketsViewProps) {
   const [startingType, setStartingType] = useState<EnvironmentType | null>(null);
 
   const pipelines = useBuildPipelineStore((state) => state.pipelines);
-  const { startBuildFromLinearIssue, navigateToPipeline } = useBuildPipeline();
+  const clearCompletionCommentStatus = useBuildPipelineStore((state) => state.clearCompletionCommentStatus);
+  const { startBuildFromLinearIssue, navigateToPipeline } = buildPipeline;
 
   const loadConnection = useCallback(async () => {
     setConnectionState("loading");
@@ -428,9 +443,19 @@ export function LinearTicketsView({ projectId }: LinearTicketsViewProps) {
                     </Button>
                   )}
                   {selectedPipeline?.completionCommentStatus === "failed" && (
-                    <span className="text-xs text-destructive">
-                      Linear comment failed: {selectedPipeline.completionCommentError}
-                    </span>
+                    <>
+                      <span className="text-xs text-destructive">
+                        Linear comment failed: {selectedPipeline.completionCommentError}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => clearCompletionCommentStatus(selectedPipeline.id)}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        Retry comment
+                      </Button>
+                    </>
                   )}
                   {selectedPipeline?.completionCommentStatus === "posting" && (
                     <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">

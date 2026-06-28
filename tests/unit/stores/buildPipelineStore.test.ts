@@ -133,6 +133,23 @@ describe("buildPipelineStore", () => {
       expect(pipeline.completionCommentStatus).toBe("failed");
       expect(pipeline.completionCommentError).toBe("Linear API unavailable");
     });
+
+    test("clears completion comment state so a failed Linear comment can be retried", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().setCompletionCommentStatus(id, "failed", {
+        commentId: "comment-1",
+        postedAt: "2026-06-28T12:00:00.000Z",
+        error: "Linear API unavailable",
+      });
+
+      useBuildPipelineStore.getState().clearCompletionCommentStatus(id);
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.completionCommentStatus).toBeUndefined();
+      expect(pipeline.completionCommentError).toBeUndefined();
+      expect(pipeline.completionCommentId).toBeUndefined();
+      expect(pipeline.completionCommentPostedAt).toBeUndefined();
+    });
   });
 
   describe("setPipelineEnvironment", () => {

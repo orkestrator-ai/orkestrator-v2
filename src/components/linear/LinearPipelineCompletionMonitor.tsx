@@ -38,7 +38,7 @@ export function LinearPipelineCompletionMonitor() {
     for (const pipeline of pipelines.values()) {
       if (pipeline.source?.type !== "linear") continue;
       if (pipeline.phase !== "complete" && pipeline.phase !== "failed") continue;
-      if (pipeline.completionCommentStatus === "posted" || pipeline.completionCommentStatus === "posting") continue;
+      if (pipeline.completionCommentStatus) continue;
       if (inFlightRef.current.has(pipeline.id)) continue;
 
       inFlightRef.current.add(pipeline.id);

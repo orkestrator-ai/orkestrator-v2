@@ -123,7 +123,7 @@ function linearIssueToTicketInput(issue: LinearIssueDetail, projectId: string): 
 
 export function useBuildPipeline() {
   const { createEnvironment, startEnvironment } = useEnvironments(null, { listenForRenameEvents: false });
-  const { createPipeline, setPipelineEnvironment, setPhase, setPipelineError } = useBuildPipelineStore();
+  const { createPipeline, setPipelineEnvironment, setPhase, setPipelineError, removePipeline } = useBuildPipelineStore();
   const { updateTask } = useKanbanStore();
   const { selectProjectAndEnvironment, setProjectCollapsed } = useUIStore();
   const { setOptions } = useClaudeOptionsStore();
@@ -131,11 +131,12 @@ export function useBuildPipeline() {
 
   const startBuildFromTicket = useCallback(
     async (ticket: BuildPipelineTicketInput, environmentType: EnvironmentType) => {
+      let pipelineId: string | null = null;
       try {
         const agentType = resolveBuildPipelineAgent(config, ticket.projectId);
         const agentSettings = getBuildEnvironmentAgentSettings(agentType);
 
-        const pipelineId = createPipeline({
+        pipelineId = createPipeline({
           taskId: ticket.id,
           projectId: ticket.projectId,
           environmentType,
@@ -227,13 +228,14 @@ export function useBuildPipeline() {
 
         toast.success("Build pipeline started");
       } catch (error) {
+        if (pipelineId) removePipeline(pipelineId);
         console.error("[useBuildPipeline] Failed to start build:", error);
         toast.error("Failed to start build pipeline", {
           description: error instanceof Error ? error.message : "Unknown error",
         });
       }
     },
-    [config, createPipeline, createEnvironment, setPipelineEnvironment, setPhase, setPipelineError, selectProjectAndEnvironment, setProjectCollapsed, setOptions, startEnvironment]
+    [config, createPipeline, createEnvironment, setPipelineEnvironment, setPhase, setPipelineError, removePipeline, selectProjectAndEnvironment, setProjectCollapsed, setOptions, startEnvironment]
   );
 
   const startBuild = useCallback(

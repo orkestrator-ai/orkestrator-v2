@@ -117,6 +117,21 @@ async function requireLinearApiKey(context: CommandContext): Promise<string> {
   return auth.apiKey;
 }
 
+const linearCompletionCommentLocks = new Map<string, Promise<unknown>>();
+
+async function withLinearCompletionCommentLock<T>(pipelineId: string, task: () => Promise<T>): Promise<T> {
+  const previous = linearCompletionCommentLocks.get(pipelineId) ?? Promise.resolve();
+  const current = previous.then(task);
+  linearCompletionCommentLocks.set(pipelineId, current);
+  try {
+    return await current;
+  } finally {
+    if (linearCompletionCommentLocks.get(pipelineId) === current) {
+      linearCompletionCommentLocks.delete(pipelineId);
+    }
+  }
+}
+
 function asOptionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
@@ -1911,36 +1926,38 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const runId = asString(pipelineId, "pipelineId");
     const targetIssueId = asString(issueId, "issueId");
     const commentBody = asString(body, "body");
-    const existing = await context.storage.getLinearCompletionComment(runId);
-    if (existing?.status === "posted" && existing.commentId) {
-      return { status: "already-posted", commentId: existing.commentId, postedAt: existing.postedAt };
-    }
+    return withLinearCompletionCommentLock(runId, async () => {
+      const existing = await context.storage.getLinearCompletionComment(runId);
+      if (existing?.status === "posted" && existing.commentId) {
+        return { status: "already-posted", commentId: existing.commentId, postedAt: existing.postedAt };
+      }
 
-    const apiKey = await requireLinearApiKey(context);
-    try {
-      const result = await postLinearCompletionComment(apiKey, {
-        pipelineId: runId,
-        issueId: targetIssueId,
-        body: commentBody,
-      });
-      await context.storage.saveLinearCompletionComment({
-        pipelineId: runId,
-        issueId: targetIssueId,
-        status: "posted",
-        commentId: result.commentId,
-        postedAt: result.postedAt ?? new Date().toISOString(),
-      });
-      return result;
-    } catch (error) {
-      const message = sanitizeLinearError(error, apiKey);
-      await context.storage.saveLinearCompletionComment({
-        pipelineId: runId,
-        issueId: targetIssueId,
-        status: "failed",
-        error: message,
-      });
-      throw new Error(message);
-    }
+      const apiKey = await requireLinearApiKey(context);
+      try {
+        const result = await postLinearCompletionComment(apiKey, {
+          pipelineId: runId,
+          issueId: targetIssueId,
+          body: commentBody,
+        });
+        await context.storage.saveLinearCompletionComment({
+          pipelineId: runId,
+          issueId: targetIssueId,
+          status: "posted",
+          commentId: result.commentId,
+          postedAt: result.postedAt ?? new Date().toISOString(),
+        });
+        return result;
+      } catch (error) {
+        const message = sanitizeLinearError(error, apiKey);
+        await context.storage.saveLinearCompletionComment({
+          pipelineId: runId,
+          issueId: targetIssueId,
+          status: "failed",
+          error: message,
+        });
+        throw new Error(message);
+      }
+    });
   });
   register("get_log_directory", (_args, { storage }) => storage.getLogDirectory());
 

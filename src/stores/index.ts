@@ -19,7 +19,14 @@ export { useFileDirtyStore } from "./fileDirtyStore";
 export { useKanbanStore, type KanbanTask, type KanbanStatus, type KanbanComment, type ProjectNotes } from "./kanbanStore";
 export { usePrMonitorStore, PR_MONITOR_INTERVALS, PR_MONITOR_TIMEOUTS, PR_MONITOR_BACKOFF, getEffectiveInterval } from "./prMonitorStore";
 export { useBuildPipelineStore } from "./buildPipelineStore";
-export type { BuildPipeline, BuildPhase, PipelineSession, PipelineSessionPhase } from "./buildPipelineStore";
+export type {
+  BuildPipeline,
+  BuildPhase,
+  BuildPipelineSource,
+  CompletionCommentStatus,
+  PipelineSession,
+  PipelineSessionPhase,
+} from "./buildPipelineStore";
 export type { PrMonitoringMode, MonitoringState } from "./prMonitorStore";
 export { useEnvironmentDiffStore } from "./environmentDiffStore";
 export type { EnvironmentDiffStats } from "./environmentDiffStore";

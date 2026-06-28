@@ -36,11 +36,14 @@ import {
 } from "@/prompts";
 import { parseVerificationResult } from "@/lib/parse-verification-result";
 import { isSetupPending } from "@/lib/setup-commands";
-import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { cn } from "@/lib/utils";
 import { createPipelineResumePrompt, getPipelineResumePhase, isSessionCompatibleWithResumePhase } from "@/lib/build-pipeline-resume";
 import * as backend from "@/lib/backend";
+import {
+  addPipelineKanbanComment,
+  updatePipelineKanbanPrMetadata,
+} from "@/lib/build-pipeline-source";
 
 interface CodexBuildChatTabProps {
   data: BuildTabData;
@@ -935,10 +938,10 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
             const env = useEnvironmentStore.getState().getEnvironmentById(environmentId);
             const prUrl = env?.prUrl;
             if (prUrl) {
-              void useKanbanStore.getState().addComment(currentPipeline.taskId, `🔗 PR raised: ${prUrl}`);
-              void useKanbanStore.getState().updateTask(currentPipeline.taskId, { prUrl, prState: "open" });
+              addPipelineKanbanComment(currentPipeline, `🔗 PR raised: ${prUrl}`);
+              updatePipelineKanbanPrMetadata(currentPipeline, { prUrl, prState: "open" });
             } else {
-              void useKanbanStore.getState().addComment(currentPipeline.taskId, "🔗 PR raised");
+              addPipelineKanbanComment(currentPipeline, "🔗 PR raised");
             }
 
             const hasConflicts = await checkPRMergeConflicts();
@@ -997,7 +1000,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
             if (isPipelinePaused()) return;
             setVerificationResult(pipelineId, result.verdict, result.feedback);
             if (result.verdict === "pass") {
-              void useKanbanStore.getState().addComment(currentPipeline.taskId, "✅ Validation complete");
+              addPipelineKanbanComment(currentPipeline, "✅ Validation complete");
               await startPRSession(currentPipeline);
             } else if (currentPipeline.iteration >= currentPipeline.maxIterations) {
               setPipelineError(pipelineId, `Max iterations (${currentPipeline.maxIterations}) reached. Last feedback: ${result.feedback}`);

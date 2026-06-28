@@ -98,6 +98,12 @@ import { BuildChatTab } from "./BuildChatTab";
 import type { BuildTabData } from "@/types/paneLayout";
 import type { ClaudeMessage } from "@/lib/claude-client";
 
+const realKanbanActions = {
+  moveTask: useKanbanStore.getState().moveTask,
+  addComment: useKanbanStore.getState().addComment,
+  updateTask: useKanbanStore.getState().updateTask,
+};
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -335,6 +341,7 @@ function resetStores() {
     notes: "",
     notesLoading: false,
     currentNotesProjectId: null,
+    ...realKanbanActions,
   });
 
   usePrMonitorStore.setState({
@@ -401,6 +408,43 @@ describe("BuildChatTab", () => {
   // -----------------------------------------------------------------------
   // Setup gating
   // -----------------------------------------------------------------------
+
+  test("does not mutate Kanban when a Linear-backed pipeline phase changes", async () => {
+    const moveTaskMock = mock(async () => undefined);
+    const addCommentMock = mock(async () => undefined);
+
+    seedPipeline("waiting-for-setup");
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID);
+      if (!pipeline) return state;
+      const pipelines = new Map(state.pipelines);
+      pipelines.set(PIPELINE_ID, {
+        ...pipeline,
+        source: {
+          type: "linear",
+          issueId: "issue-1",
+          issueIdentifier: "ENG-123",
+        },
+      });
+      return { pipelines };
+    });
+    useKanbanStore.setState({
+      moveTask: moveTaskMock as unknown as ReturnType<typeof useKanbanStore.getState>["moveTask"],
+      addComment: addCommentMock as unknown as ReturnType<typeof useKanbanStore.getState>["addComment"],
+    });
+    seedEnvironment({ isLocal: true, workspaceReady: true });
+
+    render(<BuildChatTab data={createLocalBuildData()} isActive />);
+
+    await act(async () => {
+      useBuildPipelineStore.getState().setPhase(PIPELINE_ID, "building");
+      await Promise.resolve();
+    });
+
+    expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase).toBe("building");
+    expect(moveTaskMock).not.toHaveBeenCalled();
+    expect(addCommentMock).not.toHaveBeenCalled();
+  });
 
   describe("setup gating", () => {
     test("shows setup-pending UI when container workspace is not ready", () => {

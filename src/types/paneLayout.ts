@@ -88,7 +88,7 @@ export interface BuildTabData {
   environmentId: string;
   /** Build pipeline ID (links to buildPipelineStore) */
   pipelineId: string;
-  /** Kanban task ID */
+  /** Source ticket ID used by the build pipeline */
   taskId: string;
   /** Whether this is a local environment (no container) */
   isLocal?: boolean;

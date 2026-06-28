@@ -130,6 +130,77 @@ describe("Electron StorageService", () => {
     await expect(storage.getProjectNotes("project-1")).resolves.toMatchObject({ content: "updated notes" });
   });
 
+  test("stores Linear auth separately and tracks completion comments by pipeline", async () => {
+    const dataDir = await createTempDir("ork-storage-linear-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    await expect(storage.getLinearAuth()).resolves.toBeNull();
+
+    const auth = await storage.saveLinearAuth("lin_api_secret", {
+      id: "viewer-1",
+      name: "Ada",
+      email: "ada@example.com",
+    });
+    expect(auth).toMatchObject({
+      apiKey: "lin_api_secret",
+      viewer: { id: "viewer-1", name: "Ada" },
+    });
+    await expect(storage.getLinearAuth()).resolves.toMatchObject({
+      apiKey: "lin_api_secret",
+      viewer: { email: "ada@example.com" },
+    });
+    expect((await fs.stat(path.join(dataDir, "linear-auth.json"))).mode & 0o777).toBe(0o600);
+
+    await storage.saveLinearAuth("lin_api_reconnected", {
+      id: "viewer-2",
+      name: "Grace",
+    });
+    expect((await fs.stat(path.join(dataDir, "linear-auth.json"))).mode & 0o777).toBe(0o600);
+    expect(await fs.readdir(dataDir)).not.toContain("linear-auth.json.bak.1");
+
+    const posted = await storage.saveLinearCompletionComment({
+      pipelineId: "pipeline-1",
+      issueId: "issue-1",
+      status: "posted",
+      commentId: "comment-1",
+      postedAt: "2026-06-28T12:00:00.000Z",
+    });
+    expect(posted).toMatchObject({ pipelineId: "pipeline-1", status: "posted", commentId: "comment-1" });
+    await expect(storage.getLinearCompletionComment("pipeline-1")).resolves.toMatchObject({
+      issueId: "issue-1",
+      commentId: "comment-1",
+    });
+
+    const failed = await storage.saveLinearCompletionComment({
+      pipelineId: "pipeline-1",
+      issueId: "issue-1",
+      status: "failed",
+      error: "Linear API unavailable",
+    });
+    expect(failed).toMatchObject({ pipelineId: "pipeline-1", status: "failed", error: "Linear API unavailable" });
+    await expect(storage.getLinearCompletionComment("pipeline-1")).resolves.toMatchObject({
+      status: "failed",
+      error: "Linear API unavailable",
+    });
+
+    await storage.clearLinearAuth();
+    await expect(storage.getLinearAuth()).resolves.toBeNull();
+  });
+
+  test("removes temporary Linear auth files when a secret write fails", async () => {
+    const dataDir = await createTempDir("ork-storage-linear-failed-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    await fs.mkdir(path.join(dataDir, "linear-auth.json"));
+
+    await expect(storage.saveLinearAuth("lin_api_secret")).rejects.toThrow();
+
+    const files = await fs.readdir(dataDir);
+    expect(files.filter((file) => file.startsWith(".linear-auth.json.") && file.endsWith(".tmp"))).toEqual([]);
+  });
+
   test("persists kanban images as retrievable files and removes them when deleted", async () => {
     const dataDir = await createTempDir("ork-storage-kanban-");
     const storage = new StorageService(dataDir);

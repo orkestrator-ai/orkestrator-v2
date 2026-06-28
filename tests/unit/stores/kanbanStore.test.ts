@@ -1,4 +1,7 @@
-import { describe, test, expect, beforeEach, mock } from "bun:test";
+import { afterAll, describe, test, expect, beforeEach, mock } from "bun:test";
+import * as realBackend from "@/lib/backend";
+
+const realBackendSnapshot = { ...realBackend };
 
 // Mock backend before importing the store
 const mockUpdateKanbanTask = mock(() => Promise.resolve({
@@ -41,6 +44,7 @@ const mockAddKanbanComment = mock(() => Promise.resolve({
 }));
 
 mock.module("@/lib/backend", () => ({
+  ...realBackendSnapshot,
   getKanbanTasks: mockGetKanbanTasks,
   addKanbanTask: mockAddKanbanTask,
   updateKanbanTask: mockUpdateKanbanTask,
@@ -53,9 +57,14 @@ mock.module("@/lib/backend", () => ({
   saveProjectNotes: mock(() => Promise.resolve()),
 }));
 
-import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
+const { useKanbanStore, findTaskForEnvironment } =
+  await import("../../../src/stores/kanbanStore.ts?kanban-store-test") as typeof import("../../../src/stores/kanbanStore");
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import type { KanbanTask } from "@/lib/backend";
+
+afterAll(() => {
+  mock.module("@/lib/backend", () => realBackendSnapshot);
+});
 
 function createTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
   return {
@@ -386,6 +395,44 @@ describe("findTaskForEnvironment", () => {
     const result = findTaskForEnvironment("env-2");
     expect(result.task).toBeUndefined();
     expect(result.taskId).toBe("task-99");
+  });
+
+  test("does not treat Linear-backed pipelines as kanban tasks", () => {
+    useBuildPipelineStore.setState({
+      pipelines: new Map([
+        ["pipeline-1", {
+          id: "pipeline-1",
+          taskId: "linear-issue-id",
+          source: {
+            type: "linear",
+            issueId: "linear-issue-id",
+            issueIdentifier: "ENG-123",
+          },
+          projectId: "proj-1",
+          environmentId: "env-linear",
+          environmentType: "local" as const,
+          agentType: "claude" as const,
+          phase: "building" as any,
+          sessions: [],
+          currentSessionIndex: -1,
+          iteration: 0,
+          maxIterations: 3,
+          createdAt: new Date().toISOString(),
+          taskTitle: "Linear issue",
+          taskSnapshot: {
+            title: "Linear issue",
+            description: "",
+            acceptanceCriteria: "",
+            comments: [],
+            images: [],
+          },
+        }],
+      ]),
+    });
+
+    const result = findTaskForEnvironment("env-linear");
+    expect(result.task).toBeUndefined();
+    expect(result.taskId).toBeUndefined();
   });
 
   test("returns undefined when environment has no associated task", () => {

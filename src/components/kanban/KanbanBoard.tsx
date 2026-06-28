@@ -11,8 +11,8 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Plus, StickyNote } from "lucide-react";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useKanbanStore, type KanbanStatus, type KanbanTask } from "@/stores/kanbanStore";
 import { useProjectStore } from "@/stores";
 import { useBuildPipelineStore, isActiveBuildPhase, type BuildPhase } from "@/stores/buildPipelineStore";
@@ -20,6 +20,7 @@ import { useShallow } from "zustand/react/shallow";
 import { KanbanCard } from "./KanbanCard";
 import { KanbanTaskDialog } from "./KanbanTaskDialog";
 import { ProjectNotesView } from "./ProjectNotesView";
+import { FeaturesView } from "./FeaturesView";
 import { LinearTicketsView } from "@/components/linear";
 
 const COLUMNS: { id: KanbanStatus; label: string; color: string }[] = [
@@ -152,7 +153,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [showNotes, setShowNotes] = useState(false);
-  const [ticketSource, setTicketSource] = useState<"kanban" | "linear">("kanban");
+  const [screenTab, setScreenTab] = useState<"kanban" | "linear" | "features">("kanban");
 
   const projectTasks = useMemo(
     () => tasks.filter((t) => t.projectId === projectId),
@@ -231,41 +232,45 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
 
   return (
     <div className="flex flex-col h-full bg-background">
-      {/* Board Header */}
-      <div className="flex items-center gap-3 px-6 py-4 border-b border-border">
-        <h2 className="text-lg font-semibold text-foreground">
-          {project?.name ?? "Project"} Board
-        </h2>
-        {ticketSource === "kanban" && (
-          <span className="text-sm text-muted-foreground">
-            {projectTasks.length} task{projectTasks.length !== 1 && "s"}
-          </span>
-        )}
-        <Tabs value={ticketSource} onValueChange={(value) => setTicketSource(value as "kanban" | "linear")} className="ml-auto">
-          <TabsList>
-            <TabsTrigger value="kanban">Kanban</TabsTrigger>
-            <TabsTrigger value="linear">Linear</TabsTrigger>
+      <Tabs
+        value={screenTab}
+        onValueChange={(value) => setScreenTab(value as "kanban" | "linear" | "features")}
+        className="min-h-0 flex-1 gap-0"
+      >
+        {/* Board Header */}
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-border">
+          <h2 className="text-lg font-semibold text-foreground">
+            {project?.name ?? "Project"} Board
+          </h2>
+          {screenTab === "kanban" && (
+            <span className="text-sm text-muted-foreground">
+              {projectTasks.length} task{projectTasks.length !== 1 && "s"}
+            </span>
+          )}
+          <TabsList className="ml-3 h-8">
+            <TabsTrigger value="kanban" className="px-3 text-xs">Kanban</TabsTrigger>
+            <TabsTrigger value="linear" className="px-3 text-xs">Linear</TabsTrigger>
+            <TabsTrigger value="features" className="px-3 text-xs">Features</TabsTrigger>
           </TabsList>
-        </Tabs>
-        <div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            onClick={() => setShowNotes(true)}
-          >
-            <StickyNote className="h-3.5 w-3.5" />
-            Project Notes
-          </Button>
+          <div className="ml-auto">
+            {screenTab === "kanban" && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => setShowNotes(true)}
+              >
+                <StickyNote className="h-3.5 w-3.5" />
+                Project Notes
+              </Button>
+            )}
+          </div>
         </div>
-      </div>
 
-      {ticketSource === "linear" ? (
-        <div className="min-h-0 flex-1">
-          <LinearTicketsView projectId={projectId} />
-        </div>
-      ) : (
-        <>
+        <TabsContent
+          value="kanban"
+          className="m-0 min-h-0 flex-1 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col"
+        >
           {/* Columns */}
           <div className="flex-1 overflow-x-auto p-6">
             <DndContext
@@ -304,23 +309,37 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
               </DragOverlay>
             </DndContext>
           </div>
+        </TabsContent>
 
-          {/* Task Detail Dialog */}
-          <KanbanTaskDialog
-            task={currentSelectedTask}
-            open={dialogOpen}
-            onOpenChange={setDialogOpen}
-          />
+        <TabsContent
+          value="linear"
+          className="m-0 min-h-0 flex-1 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col"
+        >
+          <LinearTicketsView projectId={projectId} />
+        </TabsContent>
 
-          {/* Create Task Dialog */}
-          <KanbanTaskDialog
-            task={null}
-            open={createDialogOpen}
-            onOpenChange={setCreateDialogOpen}
-            createForProjectId={projectId}
-          />
-        </>
-      )}
+        <TabsContent
+          value="features"
+          className="m-0 h-full min-h-0 flex-1 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col"
+        >
+          <FeaturesView projectId={projectId} />
+        </TabsContent>
+      </Tabs>
+
+      {/* Task Detail Dialog */}
+      <KanbanTaskDialog
+        task={currentSelectedTask}
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+      />
+
+      {/* Create Task Dialog */}
+      <KanbanTaskDialog
+        task={null}
+        open={createDialogOpen}
+        onOpenChange={setCreateDialogOpen}
+        createForProjectId={projectId}
+      />
     </div>
   );
 }

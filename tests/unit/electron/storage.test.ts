@@ -130,6 +130,133 @@ describe("Electron StorageService", () => {
     await expect(storage.getProjectNotes("project-1")).resolves.toMatchObject({ content: "updated notes" });
   });
 
+  test("persists feature planning chats and story refinements", async () => {
+    const dataDir = await createTempDir("ork-storage-features-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    const feature = await storage.createFeaturePlan("project-1");
+    expect(feature).toMatchObject({
+      projectId: "project-1",
+      title: "new feature",
+      status: "collecting",
+    });
+    expect(feature.messages[0]).toMatchObject({
+      role: "assistant",
+      content: "Tell me about the new feature",
+    });
+
+    const withUserMessage = await storage.appendFeaturePlanMessage(feature.id, "user", "Users can save filters.");
+    expect(withUserMessage.messages.at(-1)).toMatchObject({
+      role: "user",
+      content: "Users can save filters.",
+    });
+
+    const storyId = "story-1";
+    await storage.updateFeaturePlan(feature.id, {
+      status: "stories",
+      summary: "Users can save and reuse filtered views.",
+      stories: [{
+        id: storyId,
+        title: "Save a filtered view",
+        description: "A user can save the current filters so they can return to that view later.",
+        acceptanceCriteria: ["Saved filters can be named", "Saved filters can be reopened"],
+        messages: [],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }],
+    });
+
+    const withStoryChat = await storage.appendFeatureStoryMessage(feature.id, storyId, "assistant", "What should change?");
+    expect(withStoryChat.stories[0]?.messages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        content: "What should change?",
+      }),
+    ]);
+
+    const reloaded = new StorageService(dataDir);
+    await reloaded.init();
+    await expect(reloaded.getFeaturePlans("project-1")).resolves.toEqual([
+      expect.objectContaining({
+        id: feature.id,
+        status: "stories",
+        summary: "Users can save and reuse filtered views.",
+        messages: expect.arrayContaining([
+          expect.objectContaining({ role: "user", content: "Users can save filters." }),
+        ]),
+        stories: [
+          expect.objectContaining({
+            id: storyId,
+            title: "Save a filtered view",
+            acceptanceCriteria: ["Saved filters can be named", "Saved filters can be reopened"],
+            messages: [
+              expect.objectContaining({ role: "assistant", content: "What should change?" }),
+            ],
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  test("preserves feature plan identity and rejects unknown feature/story ids", async () => {
+    const dataDir = await createTempDir("ork-storage-features-errors-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    const feature = await storage.createFeaturePlan("project-1");
+
+    // id and projectId must not be overwritable through updates.
+    const updated = await storage.updateFeaturePlan(feature.id, {
+      title: "renamed",
+      id: "hacked-id",
+      projectId: "other-project",
+    } as never);
+    expect(updated.id).toBe(feature.id);
+    expect(updated.projectId).toBe("project-1");
+    expect(updated.title).toBe("renamed");
+
+    await expect(storage.updateFeaturePlan("missing", { title: "x" })).rejects.toThrow(/not found/i);
+    await expect(storage.appendFeaturePlanMessage("missing", "user", "hi")).rejects.toThrow(/not found/i);
+    await expect(storage.appendFeatureStoryMessage(feature.id, "missing-story", "user", "hi")).rejects.toThrow(/not found/i);
+
+    // A failed mutation must not corrupt the persisted plan.
+    await expect(storage.getFeaturePlans("project-1")).resolves.toEqual([
+      expect.objectContaining({ id: feature.id, projectId: "project-1", title: "renamed" }),
+    ]);
+  });
+
+  test("serializes concurrent feature plan mutations without losing writes", async () => {
+    const dataDir = await createTempDir("ork-storage-features-concurrency-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    const feature = await storage.createFeaturePlan("project-1");
+    await storage.updateFeaturePlan(feature.id, {
+      stories: [{
+        id: "story-1",
+        title: "Story one",
+        description: "desc",
+        acceptanceCriteria: [],
+        messages: [],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }],
+    });
+
+    // Fire a feature-chat append and a story append concurrently. With a stale
+    // read-modify-write both would clobber each other; the mutation queue must
+    // preserve both.
+    await Promise.all([
+      storage.appendFeaturePlanMessage(feature.id, "user", "feature note"),
+      storage.appendFeatureStoryMessage(feature.id, "story-1", "user", "story note"),
+    ]);
+
+    const [reloaded] = await storage.getFeaturePlans("project-1");
+    expect(reloaded?.messages.some((message) => message.content === "feature note")).toBe(true);
+    expect(reloaded?.stories[0]?.messages.some((message) => message.content === "story note")).toBe(true);
+  });
+
   test("stores Linear auth separately and tracks completion comments by pipeline", async () => {
     const dataDir = await createTempDir("ork-storage-linear-");
     const storage = new StorageService(dataDir);

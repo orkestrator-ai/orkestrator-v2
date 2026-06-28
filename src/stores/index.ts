@@ -17,6 +17,7 @@ export { useErrorDialogStore } from "./errorDialogStore";
 export type { ErrorDetails } from "./errorDialogStore";
 export { useFileDirtyStore } from "./fileDirtyStore";
 export { useKanbanStore, type KanbanTask, type KanbanStatus, type KanbanComment, type ProjectNotes } from "./kanbanStore";
+export { useFeaturePlanStore, type FeaturePlan, type FeaturePlanMessage, type FeaturePlanStatus, type FeatureStoryCard } from "./featurePlanStore";
 export { usePrMonitorStore, PR_MONITOR_INTERVALS, PR_MONITOR_TIMEOUTS, PR_MONITOR_BACKOFF, getEffectiveInterval } from "./prMonitorStore";
 export { useBuildPipelineStore } from "./buildPipelineStore";
 export type {

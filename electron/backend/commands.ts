@@ -153,6 +153,11 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
+function asFeaturePlanRole(value: unknown): "user" | "assistant" | "system" {
+  if (value === "user" || value === "assistant" || value === "system") return value;
+  throw new Error("Expected role to be user, assistant, or system");
+}
+
 function asPortMappings(value: unknown): PortMapping[] | undefined {
   return Array.isArray(value) ? value as PortMapping[] : undefined;
 }
@@ -2644,6 +2649,15 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("get_kanban_image_data", ({ imageId }, { storage }) => storage.getKanbanImageData(asString(imageId, "imageId")));
   register("get_project_notes", ({ projectId }, { storage }) => storage.getProjectNotes(asString(projectId, "projectId")));
   register("save_project_notes", ({ projectId, content }, { storage }) => storage.saveProjectNotes(asString(projectId, "projectId"), asString(content, "content")));
+  register("get_feature_plans", ({ projectId }, { storage }) => storage.getFeaturePlans(asString(projectId, "projectId")));
+  register("create_feature_plan", ({ projectId }, { storage }) => storage.createFeaturePlan(asString(projectId, "projectId")));
+  register("update_feature_plan", ({ featureId, updates }, { storage }) => storage.updateFeaturePlan(asString(featureId, "featureId"), parseUpdateObject(updates) as never));
+  register("append_feature_plan_message", ({ featureId, role, content }, { storage }) =>
+    storage.appendFeaturePlanMessage(asString(featureId, "featureId"), asFeaturePlanRole(role), asString(content, "content")),
+  );
+  register("append_feature_story_message", ({ featureId, storyId, role, content }, { storage }) =>
+    storage.appendFeatureStoryMessage(asString(featureId, "featureId"), asString(storyId, "storyId"), asFeaturePlanRole(role), asString(content, "content")),
+  );
 
   registerTmuxBackendCommands(register);
 

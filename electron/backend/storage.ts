@@ -54,6 +54,42 @@ type ProjectNotes = {
   updatedAt: string;
 };
 
+type FeaturePlanStatus = "collecting" | "confirming" | "stories" | "building" | "built";
+
+type FeaturePlanMessage = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  createdAt: string;
+};
+
+type FeatureStoryCard = {
+  id: string;
+  title: string;
+  description: string;
+  acceptanceCriteria: string[];
+  messages: FeaturePlanMessage[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type FeaturePlan = {
+  id: string;
+  projectId: string;
+  title: string;
+  status: FeaturePlanStatus;
+  summary: string;
+  messages: FeaturePlanMessage[];
+  stories: FeatureStoryCard[];
+  createdAt: string;
+  updatedAt: string;
+  order: number;
+  codexEnvironmentId?: string;
+  codexSessionId?: string;
+  buildTaskId?: string;
+  buildPipelineId?: string;
+};
+
 type LinearAuth = {
   apiKey: string;
   connectedAt: string;
@@ -308,6 +344,7 @@ async function exists(filePath: string): Promise<boolean> {
 export class StorageService {
   private readonly dataDir: string;
   private writeQueue = Promise.resolve();
+  private featurePlanMutation: Promise<unknown> = Promise.resolve();
 
   constructor(dataDir: string) {
     this.dataDir = dataDir;
@@ -347,6 +384,10 @@ export class StorageService {
 
   private projectNotesFile(): string {
     return this.file("project-notes.json");
+  }
+
+  private featurePlansFile(): string {
+    return this.file("feature-plans.json");
   }
 
   private linearAuthFile(): string {
@@ -853,6 +894,104 @@ export class StorageService {
     }
     await this.saveJson(this.projectNotesFile(), notes);
     return note;
+  }
+
+  async getFeaturePlans(projectId: string): Promise<FeaturePlan[]> {
+    const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
+    return plans
+      .filter((plan) => plan.projectId === projectId)
+      .sort((a, b) => a.order - b.order);
+  }
+
+  // Serializes the entire load -> mutate -> save cycle for feature plans so that
+  // concurrent flows (e.g. a feature-chat poll and a story refinement happening at
+  // the same time) cannot clobber each other via stale read-modify-write races.
+  // The mutator runs against the freshly loaded array; if it throws, nothing is
+  // saved and the next queued mutation still proceeds.
+  private mutateFeaturePlans<T>(mutator: (plans: FeaturePlan[]) => T): Promise<T> {
+    const run = this.featurePlanMutation.then(async () => {
+      const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
+      const result = mutator(plans);
+      await this.saveJson(this.featurePlansFile(), plans);
+      return result;
+    });
+    this.featurePlanMutation = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  async createFeaturePlan(projectId: string): Promise<FeaturePlan> {
+    return this.mutateFeaturePlans((plans) => {
+      const now = nowIso();
+      const plan: FeaturePlan = {
+        id: randomUUID(),
+        projectId,
+        title: "new feature",
+        status: "collecting",
+        summary: "",
+        messages: [{
+          id: randomUUID(),
+          role: "assistant",
+          content: "Tell me about the new feature",
+          createdAt: now,
+        }],
+        stories: [],
+        createdAt: now,
+        updatedAt: now,
+        order: Math.max(-1, ...plans.filter((candidate) => candidate.projectId === projectId).map((candidate) => candidate.order)) + 1,
+      };
+      plans.push(plan);
+      return plan;
+    });
+  }
+
+  async updateFeaturePlan(featureId: string, updates: Partial<FeaturePlan>): Promise<FeaturePlan> {
+    return this.mutateFeaturePlans((plans) => {
+      const plan = plans.find((candidate) => candidate.id === featureId);
+      if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+
+      const originalId = plan.id;
+      const originalProjectId = plan.projectId;
+      Object.assign(plan, updates);
+      plan.id = originalId;
+      plan.projectId = originalProjectId;
+      plan.updatedAt = nowIso();
+      return plan;
+    });
+  }
+
+  async appendFeaturePlanMessage(featureId: string, role: FeaturePlanMessage["role"], content: string): Promise<FeaturePlan> {
+    return this.mutateFeaturePlans((plans) => {
+      const plan = plans.find((candidate) => candidate.id === featureId);
+      if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+
+      plan.messages.push({
+        id: randomUUID(),
+        role,
+        content,
+        createdAt: nowIso(),
+      });
+      plan.updatedAt = nowIso();
+      return plan;
+    });
+  }
+
+  async appendFeatureStoryMessage(featureId: string, storyId: string, role: FeaturePlanMessage["role"], content: string): Promise<FeaturePlan> {
+    return this.mutateFeaturePlans((plans) => {
+      const plan = plans.find((candidate) => candidate.id === featureId);
+      if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+      const story = plan.stories.find((candidate) => candidate.id === storyId);
+      if (!story) throw new Error(`Feature story not found: ${storyId}`);
+
+      story.messages.push({
+        id: randomUUID(),
+        role,
+        content,
+        createdAt: nowIso(),
+      });
+      story.updatedAt = nowIso();
+      plan.updatedAt = nowIso();
+      return plan;
+    });
   }
 
   async getLinearAuth(): Promise<LinearAuth | null> {

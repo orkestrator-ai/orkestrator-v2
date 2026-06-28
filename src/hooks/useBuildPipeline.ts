@@ -9,7 +9,7 @@ import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useEnvironments } from "@/hooks/useEnvironments";
 import * as backend from "@/lib/backend";
 import { getBuildEnvironmentAgentSettings, resolveBuildPipelineAgent } from "@/lib/build-pipeline-agent";
-import type { EnvironmentType } from "@/types";
+import type { DefaultAgent, EnvironmentType } from "@/types";
 import type { KanbanTask } from "@/lib/backend";
 import type { PaneNode } from "@/types/paneLayout";
 import type { TaskSnapshot } from "@/prompts";
@@ -130,10 +130,10 @@ export function useBuildPipeline() {
   const config = useConfigStore((state) => state.config);
 
   const startBuildFromTicket = useCallback(
-    async (ticket: BuildPipelineTicketInput, environmentType: EnvironmentType) => {
+    async (ticket: BuildPipelineTicketInput, environmentType: EnvironmentType, agentOverride?: DefaultAgent) => {
       let pipelineId: string | null = null;
       try {
-        const agentType = resolveBuildPipelineAgent(config, ticket.projectId);
+        const agentType = agentOverride ?? resolveBuildPipelineAgent(config, ticket.projectId);
         const agentSettings = getBuildEnvironmentAgentSettings(agentType);
 
         pipelineId = createPipeline({
@@ -239,7 +239,7 @@ export function useBuildPipeline() {
   );
 
   const startBuild = useCallback(
-    async (task: KanbanTask, environmentType: EnvironmentType) => {
+    async (task: KanbanTask, environmentType: EnvironmentType, agentOverride?: DefaultAgent) => {
       const snapshotImages = await Promise.all(
         (task.images ?? []).map(async (img) => {
           try {
@@ -275,7 +275,7 @@ export function useBuildPipeline() {
             environmentId,
             buildPipelineId: pipelineId,
           }),
-      }, environmentType);
+      }, environmentType, agentOverride);
     },
     [startBuildFromTicket, updateTask]
   );

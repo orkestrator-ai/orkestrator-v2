@@ -175,7 +175,6 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   const appendMessage = useFeaturePlanStore((state) => state.appendMessage);
   const appendStoryMessage = useFeaturePlanStore((state) => state.appendStoryMessage);
   const addTask = useKanbanStore((state) => state.addTask);
-  const updateTask = useKanbanStore((state) => state.updateTask);
   const { startBuild } = useBuildPipeline();
   const { createEnvironment, startEnvironment } = useEnvironments(null, { listenForRenameEvents: false });
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
@@ -489,7 +488,6 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         const taskId = await addTask(projectId, taskDetails.title, taskDetails.description);
         if (!taskId) throw new Error("Failed to create Kanban task for feature build");
 
-        await updateTask(taskId, { acceptanceCriteria: taskDetails.acceptanceCriteria });
         const task = useKanbanStore.getState().tasks.find((candidate) => candidate.id === taskId);
         if (!task) throw new Error("Created build task was not found in the Kanban store");
 
@@ -509,7 +507,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         setBuildingFeatureId(null);
       }
     },
-    [addTask, buildingFeatureId, projectId, startBuild, updateFeature, updateTask],
+    [addTask, buildingFeatureId, projectId, startBuild, updateFeature],
   );
 
   return (

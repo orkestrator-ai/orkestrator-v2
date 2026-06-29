@@ -191,7 +191,6 @@ export function createStoryCardsFromParsedState(
 export function formatFeatureStoriesForBuild(feature: FeaturePlan): {
   title: string;
   description: string;
-  acceptanceCriteria: string;
 } {
   const title = feature.title.trim() || "Feature plan";
   const storySections = feature.stories.map((story, index) => [
@@ -209,6 +208,5 @@ export function formatFeatureStoriesForBuild(feature: FeaturePlan): {
       "User stories:",
       storySections.join("\n\n"),
     ].filter(Boolean).join("\n\n"),
-    acceptanceCriteria: "",
   };
 }

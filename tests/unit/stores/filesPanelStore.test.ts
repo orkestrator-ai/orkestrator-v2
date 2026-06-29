@@ -25,7 +25,7 @@ function resetStore() {
     isOpen: false,
     panelWidth: 320,
     activeTab: "changes",
-    collapsedFolders: [],
+    expandedFolders: [],
     changes: [],
     isLoadingChanges: false,
     fileTree: [],
@@ -74,14 +74,15 @@ describe("filesPanelStore", () => {
     });
   });
 
-  test("toggles collapsed folders idempotently by path", () => {
+  test("sets expanded folders idempotently by path", () => {
     const store = useFilesPanelStore.getState();
 
-    store.toggleFolderCollapse("src");
-    store.toggleFolderCollapse("tests");
-    expect(useFilesPanelStore.getState().collapsedFolders).toEqual(["src", "tests"]);
+    store.setFolderExpanded("src", true);
+    store.setFolderExpanded("tests", true);
+    store.setFolderExpanded("src", true);
+    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["src", "tests"]);
 
-    useFilesPanelStore.getState().toggleFolderCollapse("src");
-    expect(useFilesPanelStore.getState().collapsedFolders).toEqual(["tests"]);
+    useFilesPanelStore.getState().setFolderExpanded("src", false);
+    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["tests"]);
   });
 });

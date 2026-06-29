@@ -32,6 +32,8 @@ const mergePrLocalMock = mock(async (_environmentId: string, _method: string, _d
 const createTabMock = mock((_agent: string, _options?: unknown) => {});
 const toastSuccessMock = mock(() => {});
 const toastErrorMock = mock(() => {});
+const setProjectBoardTabMock = mock((_tab: string) => {});
+const setProjectBoardNotesOpenMock = mock((_open: boolean) => {});
 const originalConsoleError = console.error;
 const originalConsoleLog = console.log;
 let writeTextMock: ReturnType<typeof mock>;
@@ -62,6 +64,8 @@ const selectedProject: Project = {
 };
 
 let currentEnvironment: Environment = selectedEnvironment;
+let currentSelectedEnvironmentId: string | null = selectedEnvironment.id;
+let currentProjectBoardTab: "kanban" | "linear" | "features" = "kanban";
 let currentChanges: unknown[] = [];
 
 function selectState<TState, TResult>(
@@ -258,13 +262,19 @@ mock.module("@/stores", () => ({
       selector,
     ),
   useUIStore: <T,>(selector?: (state: {
-    selectedEnvironmentId: string;
+    selectedEnvironmentId: string | null;
     selectedProjectId: string;
+    projectBoardTab: "kanban" | "linear" | "features";
+    setProjectBoardTab: (tab: "kanban" | "linear" | "features") => void;
+    setProjectBoardNotesOpen: (open: boolean) => void;
   }) => T) =>
     selectState(
       {
-        selectedEnvironmentId: currentEnvironment.id,
+        selectedEnvironmentId: currentSelectedEnvironmentId,
         selectedProjectId: selectedProject.id,
+        projectBoardTab: currentProjectBoardTab,
+        setProjectBoardTab: setProjectBoardTabMock,
+        setProjectBoardNotesOpen: setProjectBoardNotesOpenMock,
       },
       selector,
     ),
@@ -340,6 +350,8 @@ beforeEach(() => {
   createTabMock.mockReset();
   toastSuccessMock.mockReset();
   toastErrorMock.mockReset();
+  setProjectBoardTabMock.mockReset();
+  setProjectBoardNotesOpenMock.mockReset();
   writeTextMock = mock(async () => {});
   Object.defineProperty(navigator, "clipboard", {
     value: { writeText: writeTextMock },
@@ -347,6 +359,8 @@ beforeEach(() => {
     configurable: true,
   });
   currentEnvironment = { ...selectedEnvironment };
+  currentSelectedEnvironmentId = currentEnvironment.id;
+  currentProjectBoardTab = "kanban";
   currentChanges = [];
 });
 
@@ -510,6 +524,20 @@ describe("ActionBar copy URL", () => {
 });
 
 describe("ActionBar workflow tabs", () => {
+  test("shows project board tabs in the top bar when no environment is selected", () => {
+    currentSelectedEnvironmentId = null;
+
+    render(<ActionBar />);
+
+    expect(screen.queryByText("repo")).toBeNull();
+    expect(screen.getByRole("tab", { name: "Kanban" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Linear" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Features" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Project Notes" }));
+    expect(setProjectBoardNotesOpenMock).toHaveBeenCalledWith(true);
+  });
+
   test("agent context menu items pass one-shot launch mode overrides", () => {
     currentEnvironment = {
       ...selectedEnvironment,

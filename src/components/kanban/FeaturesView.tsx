@@ -4,7 +4,6 @@ import {
   ArrowUp,
   Bot,
   CheckCircle2,
-  ChevronLeft,
   Layers3,
   Loader2,
   MessageSquare,
@@ -60,6 +59,8 @@ const POLL_INTERVAL_MS = 1_500;
 const POLL_TIMEOUT_MS = 10 * 60 * 1000;
 const RIGHT_PANE_CONTENT_CLASS =
   "h-full min-h-0 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col";
+const COMPACT_TAB_LIST_CLASS = "h-8 bg-zinc-900/80";
+const COMPACT_TAB_TRIGGER_CLASS = "px-2 text-xs data-[state=active]:!bg-zinc-800";
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -515,7 +516,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   return (
     <div className="flex h-full min-h-0 flex-1 overflow-hidden">
       <aside className="flex w-[280px] shrink-0 flex-col border-r border-border bg-muted/15">
-        <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+        <div className="flex h-14 items-center gap-2 border-b border-border px-4">
           <h3 className="text-sm font-semibold text-foreground">Features</h3>
           <Button
             variant="ghost"
@@ -560,13 +561,17 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
             onValueChange={(value) => setRightTab(value as RightPaneTab)}
             className="h-full min-h-0 gap-0"
           >
-            <div className="flex items-center gap-3 border-b border-border px-4 py-2">
-              <TabsList className="h-8">
-                <TabsTrigger value="chat" className="gap-1.5 text-xs">
+            <div className="flex h-14 items-center gap-3 border-b border-border px-4">
+              <TabsList className={COMPACT_TAB_LIST_CLASS}>
+                <TabsTrigger value="chat" className={cn(COMPACT_TAB_TRIGGER_CLASS, "gap-1.5")}>
                   <MessageSquare className="h-3.5 w-3.5" />
                   Chat
                 </TabsTrigger>
-                <TabsTrigger value="stories" className="gap-1.5 text-xs" disabled={selectedFeature.stories.length === 0}>
+                <TabsTrigger
+                  value="stories"
+                  className={cn(COMPACT_TAB_TRIGGER_CLASS, "gap-1.5")}
+                  disabled={selectedFeature.stories.length === 0}
+                >
                   <Layers3 className="h-3.5 w-3.5" />
                   Stories
                 </TabsTrigger>
@@ -574,7 +579,11 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                   const story = selectedFeature.stories.find((candidate) => candidate.id === storyId);
                   if (!story) return null;
                   return (
-                    <TabsTrigger key={storyId} value={`story:${storyId}`} className="group gap-1.5 text-xs">
+                    <TabsTrigger
+                      key={storyId}
+                      value={`story:${storyId}`}
+                      className={cn(COMPACT_TAB_TRIGGER_CLASS, "group gap-1.5")}
+                    >
                       <Sparkles className="h-3.5 w-3.5" />
                       {formatStoryTabTitle(story)}
                       <span
@@ -593,9 +602,21 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                   );
                 })}
               </TabsList>
-              <div className="ml-auto truncate text-xs text-muted-foreground">
-                {selectedFeature.title}
-              </div>
+              {selectedFeature.stories.length > 0 && (
+                <Button
+                  size="sm"
+                  className="ml-auto gap-1.5"
+                  disabled={buildingFeatureId === selectedFeature.id}
+                  onClick={() => void handleBuildFeature(selectedFeature)}
+                >
+                  {buildingFeatureId === selectedFeature.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Wrench className="h-3.5 w-3.5" />
+                  )}
+                  Build
+                </Button>
+              )}
             </div>
 
             <TabsContent value="chat" className={RIGHT_PANE_CONTENT_CLASS}>
@@ -612,10 +633,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
             <TabsContent value="stories" className={RIGHT_PANE_CONTENT_CLASS}>
               <FeatureStoriesPanel
                 feature={selectedFeature}
-                isBuilding={buildingFeatureId === selectedFeature.id}
                 onOpenStory={openStory}
-                onBuild={() => void handleBuildFeature(selectedFeature)}
-                onBackToChat={() => setRightTab("chat")}
               />
             </TabsContent>
 
@@ -804,57 +822,35 @@ function NativeStyleChatPanel({
 
 function FeatureStoriesPanel({
   feature,
-  isBuilding,
   onOpenStory,
-  onBuild,
-  onBackToChat,
 }: {
   feature: FeaturePlan;
-  isBuilding: boolean;
   onOpenStory: (storyId: string) => void;
-  onBuild: () => void;
-  onBackToChat: () => void;
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-3 border-b border-border px-6 py-3">
-        <div>
-          <h3 className="text-sm font-semibold text-foreground">User stories</h3>
-          <p className="text-xs text-muted-foreground">{feature.stories.length} generated cards</p>
-        </div>
-        <Button variant="ghost" size="sm" className="ml-auto gap-1.5" onClick={onBackToChat}>
-          <ChevronLeft className="h-3.5 w-3.5" />
-          Chat
-        </Button>
-        <Button size="sm" className="gap-1.5" disabled={feature.stories.length === 0 || isBuilding} onClick={onBuild}>
-          {isBuilding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wrench className="h-3.5 w-3.5" />}
-          Build
-        </Button>
+    <ScrollArea className="h-full min-h-0 flex-1">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3 p-6">
+        {feature.stories.map((story) => (
+          <button
+            key={story.id}
+            type="button"
+            onClick={() => onOpenStory(story.id)}
+            className="rounded-md border border-border bg-card p-4 text-left shadow-sm transition-[border-color,box-shadow] hover:border-primary/50 hover:shadow-md"
+          >
+            <div className="flex items-start gap-2">
+              <h4 className="min-w-0 flex-1 text-sm font-semibold text-foreground">{story.title}</h4>
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+            </div>
+            <p className="mt-2 line-clamp-4 text-xs leading-relaxed text-muted-foreground">
+              {story.description}
+            </p>
+            <div className="mt-3 text-[11px] text-muted-foreground">
+              {story.acceptanceCriteria.length} acceptance criteria
+            </div>
+          </button>
+        ))}
       </div>
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-3 p-6">
-          {feature.stories.map((story) => (
-            <button
-              key={story.id}
-              type="button"
-              onClick={() => onOpenStory(story.id)}
-              className="rounded-md border border-border bg-card p-4 text-left shadow-sm transition-[border-color,box-shadow] hover:border-primary/50 hover:shadow-md"
-            >
-              <div className="flex items-start gap-2">
-                <h4 className="min-w-0 flex-1 text-sm font-semibold text-foreground">{story.title}</h4>
-                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-              </div>
-              <p className="mt-2 line-clamp-4 text-xs leading-relaxed text-muted-foreground">
-                {story.description}
-              </p>
-              <div className="mt-3 text-[11px] text-muted-foreground">
-                {story.acceptanceCriteria.length} acceptance criteria
-              </div>
-            </button>
-          ))}
-        </div>
-      </ScrollArea>
-    </div>
+    </ScrollArea>
   );
 }
 

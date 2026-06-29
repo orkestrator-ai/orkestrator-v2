@@ -3,6 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { KanbanBoard, canClearTaskBuildStatus } from "@/components/kanban/KanbanBoard";
 import { useProjectStore } from "@/stores/projectStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
+import { useUIStore } from "@/stores/uiStore";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { BuildPhase } from "@/stores/buildPipelineStore";
 
@@ -26,6 +27,10 @@ beforeEach(() => {
   useKanbanStore.setState({
     tasks: [],
     loadTasks: loadTasksMock as unknown as ReturnType<typeof useKanbanStore.getState>["loadTasks"],
+  });
+  useUIStore.setState({
+    projectBoardTab: "kanban",
+    projectBoardNotesOpen: false,
   });
 });
 
@@ -84,11 +89,11 @@ describe("canClearTaskBuildStatus", () => {
 });
 
 describe("KanbanBoard ticket sources", () => {
-  test("renders Kanban and Linear source tabs for a project board", async () => {
+  test("renders the kanban board content for a project board", async () => {
     render(<KanbanBoard projectId="project-1" />);
 
-    expect(screen.getByRole("tab", { name: "Kanban" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Linear" })).toBeTruthy();
+    expect(screen.getByText("Backlog")).toBeTruthy();
+    expect(screen.getByText("In Progress")).toBeTruthy();
     await waitFor(() => {
       expect(loadTasksMock).toHaveBeenCalledWith("project-1");
     });

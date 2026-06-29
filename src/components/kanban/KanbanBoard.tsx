@@ -11,10 +11,10 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/core";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, StickyNote } from "lucide-react";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { Plus } from "lucide-react";
 import { useKanbanStore, type KanbanStatus, type KanbanTask } from "@/stores/kanbanStore";
-import { useProjectStore } from "@/stores";
+import { useUIStore, type ProjectBoardTab } from "@/stores";
 import { useBuildPipelineStore, isActiveBuildPhase, type BuildPhase } from "@/stores/buildPipelineStore";
 import { useShallow } from "zustand/react/shallow";
 import { KanbanCard } from "./KanbanCard";
@@ -122,7 +122,10 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
   const loadTasks = useKanbanStore((s) => s.loadTasks);
   const moveTask = useKanbanStore((s) => s.moveTask);
   const clearTaskBuildStatus = useKanbanStore((s) => s.clearTaskBuildStatus);
-  const getProjectById = useProjectStore((s) => s.getProjectById);
+  const screenTab = useUIStore((s) => s.projectBoardTab);
+  const setScreenTab = useUIStore((s) => s.setProjectBoardTab);
+  const projectBoardNotesOpen = useUIStore((s) => s.projectBoardNotesOpen);
+  const setProjectBoardNotesOpen = useUIStore((s) => s.setProjectBoardNotesOpen);
 
   const buildPhaseRecord = useBuildPipelineStore(
     useShallow((s) => {
@@ -141,8 +144,6 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
     [buildPhaseRecord]
   );
 
-  const project = getProjectById(projectId);
-
   // Load tasks from backend when project changes
   useEffect(() => {
     void loadTasks(projectId);
@@ -152,8 +153,6 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
-  const [showNotes, setShowNotes] = useState(false);
-  const [screenTab, setScreenTab] = useState<"kanban" | "linear" | "features">("kanban");
 
   const projectTasks = useMemo(
     () => tasks.filter((t) => t.projectId === projectId),
@@ -226,47 +225,17 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
     [clearTaskBuildStatus]
   );
 
-  if (showNotes) {
-    return <ProjectNotesView projectId={projectId} onBack={() => setShowNotes(false)} />;
+  if (projectBoardNotesOpen) {
+    return <ProjectNotesView projectId={projectId} onBack={() => setProjectBoardNotesOpen(false)} />;
   }
 
   return (
     <div className="flex flex-col h-full bg-background">
       <Tabs
         value={screenTab}
-        onValueChange={(value) => setScreenTab(value as "kanban" | "linear" | "features")}
+        onValueChange={(value) => setScreenTab(value as ProjectBoardTab)}
         className="min-h-0 flex-1 gap-0"
       >
-        {/* Board Header */}
-        <div className="flex items-center gap-3 px-6 py-4 border-b border-border">
-          <h2 className="text-lg font-semibold text-foreground">
-            {project?.name ?? "Project"} Board
-          </h2>
-          {screenTab === "kanban" && (
-            <span className="text-sm text-muted-foreground">
-              {projectTasks.length} task{projectTasks.length !== 1 && "s"}
-            </span>
-          )}
-          <TabsList className="ml-3 h-8">
-            <TabsTrigger value="kanban" className="px-3 text-xs">Kanban</TabsTrigger>
-            <TabsTrigger value="linear" className="px-3 text-xs">Linear</TabsTrigger>
-            <TabsTrigger value="features" className="px-3 text-xs">Features</TabsTrigger>
-          </TabsList>
-          <div className="ml-auto">
-            {screenTab === "kanban" && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                onClick={() => setShowNotes(true)}
-              >
-                <StickyNote className="h-3.5 w-3.5" />
-                Project Notes
-              </Button>
-            )}
-          </div>
-        </div>
-
         <TabsContent
           value="kanban"
           className="m-0 min-h-0 flex-1 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col"

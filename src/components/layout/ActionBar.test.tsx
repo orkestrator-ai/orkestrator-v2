@@ -538,6 +538,25 @@ describe("ActionBar workflow tabs", () => {
     expect(setProjectBoardNotesOpenMock).toHaveBeenCalledWith(true);
   });
 
+  test("selecting a board tab updates the project board tab", () => {
+    currentSelectedEnvironmentId = null;
+
+    render(<ActionBar />);
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Features" }), { button: 0 });
+    expect(setProjectBoardTabMock).toHaveBeenCalledWith("features");
+  });
+
+  test("hides the Project Notes button when the active board tab is not kanban", () => {
+    currentSelectedEnvironmentId = null;
+    currentProjectBoardTab = "features";
+
+    render(<ActionBar />);
+
+    expect(screen.getByRole("tab", { name: "Features" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Project Notes" })).toBeNull();
+  });
+
   test("agent context menu items pass one-shot launch mode overrides", () => {
     currentEnvironment = {
       ...selectedEnvironment,

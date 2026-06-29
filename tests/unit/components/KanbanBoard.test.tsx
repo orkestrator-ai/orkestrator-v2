@@ -8,10 +8,14 @@ import type { KanbanTask } from "@/stores/kanbanStore";
 import type { BuildPhase } from "@/stores/buildPipelineStore";
 
 const loadTasksMock = mock(async () => undefined);
+const loadNotesMock = mock(async () => undefined);
+const saveNotesMock = mock(async () => undefined);
 
 beforeEach(() => {
   cleanup();
   loadTasksMock.mockClear();
+  loadNotesMock.mockClear();
+  saveNotesMock.mockClear();
   useProjectStore.setState({
     projects: [{
       id: "project-1",
@@ -26,7 +30,10 @@ beforeEach(() => {
   });
   useKanbanStore.setState({
     tasks: [],
+    notes: "",
     loadTasks: loadTasksMock as unknown as ReturnType<typeof useKanbanStore.getState>["loadTasks"],
+    loadNotes: loadNotesMock as unknown as ReturnType<typeof useKanbanStore.getState>["loadNotes"],
+    saveNotes: saveNotesMock as unknown as ReturnType<typeof useKanbanStore.getState>["saveNotes"],
   });
   useUIStore.setState({
     projectBoardTab: "kanban",
@@ -97,5 +104,16 @@ describe("KanbanBoard ticket sources", () => {
     await waitFor(() => {
       expect(loadTasksMock).toHaveBeenCalledWith("project-1");
     });
+  });
+
+  test("renders the project notes view instead of the board when notes are open", () => {
+    useUIStore.setState({ projectBoardTab: "kanban", projectBoardNotesOpen: true });
+
+    render(<KanbanBoard projectId="project-1" />);
+
+    // Board columns are replaced by the notes view.
+    expect(screen.queryByText("Backlog")).toBeNull();
+    expect(screen.getByText("Project Notes")).toBeTruthy();
+    expect(loadNotesMock).toHaveBeenCalledWith("project-1");
   });
 });

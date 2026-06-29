@@ -45,6 +45,7 @@ interface SortableProjectGroupProps {
   project: Project;
   environments: Environment[];
   isCollapsed: boolean;
+  isSelected: boolean;
   onToggleCollapse: () => void;
   selectedEnvironmentId: string | null;
   onSelectProject: () => void;
@@ -65,6 +66,7 @@ export function SortableProjectGroup({
   project,
   environments,
   isCollapsed,
+  isSelected,
   onToggleCollapse,
   selectedEnvironmentId,
   onSelectProject,
@@ -123,7 +125,12 @@ export function SortableProjectGroup({
         <Collapsible open={!isCollapsed} onOpenChange={onToggleCollapse}>
           {/* Project Header with Context Menu */}
           <div
-            className="relative flex items-center group/project rounded-md"
+            className={cn(
+              "relative mx-1 flex items-center group/project rounded-lg border transition-colors",
+              isSelected
+                ? "border-zinc-700/70 bg-zinc-800/85"
+                : "border-transparent hover:bg-zinc-800/55"
+            )}
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
           >
@@ -134,7 +141,7 @@ export function SortableProjectGroup({
                   {...listeners}
                   ref={projectTooltipAnchorRef}
                   type="button"
-                  className="flex min-w-0 flex-1 cursor-grab items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-zinc-800/80 active:cursor-grabbing"
+                  className="flex min-w-0 flex-1 cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-foreground active:cursor-grabbing"
                   onClick={(e) => {
                     e.stopPropagation();
                     onSelectProject();

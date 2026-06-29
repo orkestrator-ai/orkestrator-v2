@@ -65,6 +65,7 @@ export function HierarchicalSidebar() {
   } = useEnvironments(null);
 
   const {
+    selectedProjectId,
     selectedEnvironmentId,
     selectProject,
     selectProjectAndEnvironment,
@@ -601,6 +602,7 @@ export function HierarchicalSidebar() {
                     project={project}
                     environments={getProjectEnvironments(project.id)}
                     isCollapsed={collapsedProjects.includes(project.id)}
+                    isSelected={selectedProjectId === project.id && !selectedEnvironmentId}
                     onToggleCollapse={() => toggleProjectCollapse(project.id)}
                     selectedEnvironmentId={selectedEnvironmentId}
                     onSelectProject={() => selectProject(project.id)}

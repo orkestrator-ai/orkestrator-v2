@@ -43,6 +43,24 @@ const fileTree: FileNode[] = [
   },
 ];
 
+const nestedFileTree: FileNode[] = [
+  {
+    name: "src",
+    path: "src",
+    isDirectory: true,
+    children: [
+      {
+        name: "components",
+        path: "src/components",
+        isDirectory: true,
+        children: [
+          { name: "Button.tsx", path: "src/components/Button.tsx", isDirectory: false },
+        ],
+      },
+    ],
+  },
+];
+
 describe("Files panel components", () => {
   afterEach(() => {
     cleanup();
@@ -139,5 +157,54 @@ describe("Files panel components", () => {
 
     expect(screen.getByText("App.tsx")).toBeTruthy();
     expect(useFilesPanelStore.getState().expandedFolders).toEqual(["src"]);
+  });
+
+  test("clicking an expanded folder collapses it and hides its children", () => {
+    useFilesPanelStore.setState({
+      activeTab: "all-files",
+      expandedFolders: ["src"],
+      fileTree,
+    });
+
+    render(
+      <TerminalProvider>
+        <FilesPanel />
+      </TerminalProvider>,
+    );
+
+    // Starts expanded because "src" is in expandedFolders.
+    expect(screen.getByText("App.tsx")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /src/i }));
+
+    expect(screen.queryByText("App.tsx")).toBeNull();
+    expect(useFilesPanelStore.getState().expandedFolders).toEqual([]);
+  });
+
+  test("nested folders stay collapsed until their own parent row is clicked", () => {
+    useFilesPanelStore.setState({
+      activeTab: "all-files",
+      expandedFolders: ["src"],
+      fileTree: nestedFileTree,
+    });
+
+    render(
+      <TerminalProvider>
+        <FilesPanel />
+      </TerminalProvider>,
+    );
+
+    // Expanding the parent reveals the nested folder row but NOT its children,
+    // because each folder tracks its own expanded state by path.
+    expect(screen.getByText("components")).toBeTruthy();
+    expect(screen.queryByText("Button.tsx")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /components/i }));
+
+    expect(screen.getByText("Button.tsx")).toBeTruthy();
+    expect(useFilesPanelStore.getState().expandedFolders).toEqual([
+      "src",
+      "src/components",
+    ]);
   });
 });

@@ -191,11 +191,10 @@ export function createStoryCardsFromParsedState(
 export function formatFeatureStoriesForBuild(feature: FeaturePlan): {
   title: string;
   description: string;
-  acceptanceCriteria: string;
 } {
   const title = feature.title.trim() || "Feature plan";
   const storySections = feature.stories.map((story, index) => [
-    `${index + 1}. ${story.title}`,
+    `### ${index + 1}. ${story.title}`,
     story.description,
     "Acceptance criteria:",
     ...story.acceptanceCriteria.map((criterion) => `- ${criterion}`),
@@ -209,8 +208,5 @@ export function formatFeatureStoriesForBuild(feature: FeaturePlan): {
       "User stories:",
       storySections.join("\n\n"),
     ].filter(Boolean).join("\n\n"),
-    acceptanceCriteria: feature.stories
-      .flatMap((story) => story.acceptanceCriteria.map((criterion) => `- ${story.title}: ${criterion}`))
-      .join("\n"),
   };
 }

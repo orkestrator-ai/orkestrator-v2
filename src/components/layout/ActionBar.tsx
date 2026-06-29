@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
   AlertDialog,
@@ -27,10 +28,10 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { GitPullRequest, GitMerge, GitPullRequestClosed, ExternalLink, Loader2, SlidersHorizontal, Plus, Shield, Code2, FolderTree, Container, Eye, Upload, Play, Trash2, AlertTriangle, FolderGit2, FilePlus2, Copy } from "lucide-react";
+import { GitPullRequest, GitMerge, GitPullRequestClosed, ExternalLink, Loader2, SlidersHorizontal, Plus, Shield, Code2, FolderTree, Container, Eye, Upload, Play, Trash2, AlertTriangle, FolderGit2, FilePlus2, Copy, StickyNote } from "lucide-react";
 import { toast } from "sonner";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon, DockerIcon } from "@/components/icons/AgentIcons";
-import { useUIStore, useEnvironmentStore, useProjectStore, useConfigStore, useFilesPanelStore } from "@/stores";
+import { useUIStore, useEnvironmentStore, useProjectStore, useConfigStore, useFilesPanelStore, type ProjectBoardTab } from "@/stores";
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalContext, MAX_TABS, type AgentLaunchModeOverride } from "@/contexts";
 import { usePullRequest, useProjects, useEnvironments } from "@/hooks";
@@ -149,7 +150,7 @@ function ToolbarTooltipTrigger({
 }
 
 export function ActionBar() {
-  const { selectedEnvironmentId, selectedProjectId } = useUIStore();
+  const { selectedEnvironmentId, selectedProjectId, projectBoardTab, setProjectBoardTab, setProjectBoardNotesOpen } = useUIStore();
   const { getEnvironmentById, updateEnvironment, isWorkspaceReady, isSetupScriptsRunning, setEnvironmentPR } = useEnvironmentStore(
     useShallow((state) => ({
       getEnvironmentById: state.getEnvironmentById,
@@ -192,6 +193,7 @@ export function ActionBar() {
   const selectedProject = selectedProjectId
     ? getProjectById(selectedProjectId)
     : null;
+  const isProjectBoardView = !!selectedProject && !selectedEnvironment;
 
   const repoName = selectedProject?.name ?? null;
   const isLocalEnvironment = selectedEnvironment?.environmentType === "local";
@@ -679,7 +681,7 @@ export function ActionBar() {
 
   return (
     <>
-      <div className="panel-surface flex h-12 shrink-0 items-center border-b border-border">
+      <div className="flex h-12 shrink-0 items-center border-b border-border/80 bg-[#212124]">
         {/* Scrollable toolbar area */}
         <div
           ref={scrollContainerRef}
@@ -1228,9 +1230,33 @@ export function ActionBar() {
           {/* Spacer to push right side content to the end */}
           <div className="min-w-4 flex-1" />
 
-          {/* Right side: Repo name and Files toggle */}
+          {/* Right side: Board tabs, repo name, and Files toggle */}
           <div className="flex shrink-0 items-center gap-2">
-            {repoName ? (
+            {isProjectBoardView ? (
+              <>
+                <Tabs
+                  value={projectBoardTab}
+                  onValueChange={(value) => setProjectBoardTab(value as ProjectBoardTab)}
+                >
+                  <TabsList className="h-8 bg-zinc-900/80">
+                    <TabsTrigger value="kanban" className="px-2 text-xs data-[state=active]:!bg-zinc-800">Kanban</TabsTrigger>
+                    <TabsTrigger value="linear" className="px-2 text-xs data-[state=active]:!bg-zinc-800">Linear</TabsTrigger>
+                    <TabsTrigger value="features" className="px-2 text-xs data-[state=active]:!bg-zinc-800">Features</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+                {projectBoardTab === "kanban" && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={() => setProjectBoardNotesOpen(true)}
+                  >
+                    <StickyNote className="h-3.5 w-3.5" />
+                    Project Notes
+                  </Button>
+                )}
+              </>
+            ) : repoName ? (
               <span className="whitespace-nowrap text-sm font-medium text-foreground">
                 {repoName}
               </span>

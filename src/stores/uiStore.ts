@@ -7,10 +7,14 @@ const ZOOM_MAX = 200;
 const ZOOM_STEP = 10;
 const ZOOM_DEFAULT = 100;
 
+export type ProjectBoardTab = "kanban" | "linear" | "features";
+
 interface UIState {
   // Sidebar state
   selectedProjectId: string | null;
   selectedEnvironmentId: string | null;
+  projectBoardTab: ProjectBoardTab;
+  projectBoardNotesOpen: boolean;
   sidebarWidth: number;
   /** Project IDs that are collapsed in the hierarchical sidebar */
   collapsedProjects: string[];
@@ -24,6 +28,8 @@ interface UIState {
   // Actions
   selectProject: (projectId: string | null) => void;
   selectEnvironment: (environmentId: string | null) => void;
+  setProjectBoardTab: (tab: ProjectBoardTab) => void;
+  setProjectBoardNotesOpen: (open: boolean) => void;
   /** Select both project and environment at once (for hierarchical sidebar) */
   selectProjectAndEnvironment: (projectId: string, environmentId: string) => void;
   setSidebarWidth: (width: number) => void;
@@ -59,6 +65,8 @@ export const useUIStore = create<UIState>()(
       // Initial state
       selectedProjectId: null,
       selectedEnvironmentId: null,
+      projectBoardTab: "kanban",
+      projectBoardNotesOpen: false,
       sidebarWidth: 280,
       collapsedProjects: [],
       selectedEnvironmentIds: [],
@@ -75,6 +83,12 @@ export const useUIStore = create<UIState>()(
 
       selectEnvironment: (environmentId) =>
         set({ selectedEnvironmentId: environmentId }),
+
+      setProjectBoardTab: (tab) =>
+        set({ projectBoardTab: tab, projectBoardNotesOpen: false }),
+
+      setProjectBoardNotesOpen: (open) =>
+        set({ projectBoardNotesOpen: open }),
 
       selectProjectAndEnvironment: (projectId, environmentId) =>
         set({

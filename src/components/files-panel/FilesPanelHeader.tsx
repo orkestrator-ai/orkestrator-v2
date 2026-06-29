@@ -18,7 +18,7 @@ export function FilesPanelHeader() {
   const isLoading = activeTab === "changes" ? isLoadingChanges : isLoadingTree;
 
   return (
-    <div className="flex h-12 items-center justify-between border-b border-border/80 bg-zinc-800/60 px-3">
+    <div className="flex h-12 items-center justify-between border-b border-border/80 bg-[#212124] px-3">
       {/* Tab switcher */}
       <Tabs
         value={activeTab}

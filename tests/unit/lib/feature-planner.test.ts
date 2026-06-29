@@ -270,7 +270,7 @@ describe("selectFeaturePlannerPrompt", () => {
 });
 
 describe("formatFeatureStoriesForBuild", () => {
-  test("formats title, summary, stories, and aggregated acceptance criteria", () => {
+  test("formats title, summary, and stories with each story's acceptance criteria", () => {
     const feature = makeFeature({
       title: "Saved views",
       summary: "Users can save filters.",
@@ -282,10 +282,12 @@ describe("formatFeatureStoriesForBuild", () => {
     const result = formatFeatureStoriesForBuild(feature);
     expect(result.title).toBe("Saved views");
     expect(result.description).toContain("Feature summary:\nUsers can save filters.");
-    expect(result.description).toContain("1. Save view");
-    expect(result.description).toContain("2. Delete view");
-    expect(result.acceptanceCriteria).toContain("- Save view: can name");
-    expect(result.acceptanceCriteria).toContain("- Delete view: can delete");
+    expect(result.description).toContain("### 1. Save view");
+    expect(result.description).toContain("### 2. Delete view");
+    expect(result.description.indexOf("### 1. Save view")).toBeLessThan(result.description.indexOf("- can name"));
+    expect(result.description.indexOf("- can reopen")).toBeLessThan(result.description.indexOf("### 2. Delete view"));
+    expect(result.description.indexOf("### 2. Delete view")).toBeLessThan(result.description.indexOf("- can delete"));
+    expect(result.acceptanceCriteria).toBe("");
   });
 
   test("falls back to a default title and omits the summary when empty", () => {

@@ -1,8 +1,8 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { TerminalProvider } from "../../../src/contexts/TerminalContext";
 import { useFilesPanelStore } from "../../../src/stores/filesPanelStore";
-import type { GitFileChange } from "../../../src/lib/backend";
+import type { FileNode, GitFileChange } from "../../../src/lib/backend";
 import * as realHooks from "@/hooks";
 
 const realHooksSnapshot = { ...realHooks };
@@ -34,6 +34,33 @@ const change: GitFileChange = {
   status: "M",
 };
 
+const fileTree: FileNode[] = [
+  {
+    name: "src",
+    path: "src",
+    isDirectory: true,
+    children: [{ name: "App.tsx", path: "src/App.tsx", isDirectory: false }],
+  },
+];
+
+const nestedFileTree: FileNode[] = [
+  {
+    name: "src",
+    path: "src",
+    isDirectory: true,
+    children: [
+      {
+        name: "components",
+        path: "src/components",
+        isDirectory: true,
+        children: [
+          { name: "Button.tsx", path: "src/components/Button.tsx", isDirectory: false },
+        ],
+      },
+    ],
+  },
+];
+
 describe("Files panel components", () => {
   afterEach(() => {
     cleanup();
@@ -41,6 +68,7 @@ describe("Files panel components", () => {
     useFilesPanelStore.setState({
       isOpen: false,
       activeTab: "changes",
+      expandedFolders: [],
       changes: [],
       isLoadingChanges: false,
       fileTree: [],
@@ -98,12 +126,85 @@ describe("Files panel components", () => {
     expect(container.firstElementChild?.className).toContain("bg-zinc-900");
     expect(screen.getByText("No files found")).toBeTruthy();
 
-    useFilesPanelStore.setState({ activeTab: "changes" });
+    act(() => {
+      useFilesPanelStore.setState({ activeTab: "changes" });
+    });
     rerender(
       <TerminalProvider>
         <FilesPanel />
       </TerminalProvider>,
     );
     expect(screen.getByText("src/components/")).toBeTruthy();
+  });
+
+  test("All files folders are collapsed by default and expand on click", () => {
+    useFilesPanelStore.setState({
+      activeTab: "all-files",
+      expandedFolders: [],
+      fileTree,
+    });
+
+    render(
+      <TerminalProvider>
+        <FilesPanel />
+      </TerminalProvider>,
+    );
+
+    expect(screen.getByText("src")).toBeTruthy();
+    expect(screen.queryByText("App.tsx")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /src/i }));
+
+    expect(screen.getByText("App.tsx")).toBeTruthy();
+    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["src"]);
+  });
+
+  test("clicking an expanded folder collapses it and hides its children", () => {
+    useFilesPanelStore.setState({
+      activeTab: "all-files",
+      expandedFolders: ["src"],
+      fileTree,
+    });
+
+    render(
+      <TerminalProvider>
+        <FilesPanel />
+      </TerminalProvider>,
+    );
+
+    // Starts expanded because "src" is in expandedFolders.
+    expect(screen.getByText("App.tsx")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /src/i }));
+
+    expect(screen.queryByText("App.tsx")).toBeNull();
+    expect(useFilesPanelStore.getState().expandedFolders).toEqual([]);
+  });
+
+  test("nested folders stay collapsed until their own parent row is clicked", () => {
+    useFilesPanelStore.setState({
+      activeTab: "all-files",
+      expandedFolders: ["src"],
+      fileTree: nestedFileTree,
+    });
+
+    render(
+      <TerminalProvider>
+        <FilesPanel />
+      </TerminalProvider>,
+    );
+
+    // Expanding the parent reveals the nested folder row but NOT its children,
+    // because each folder tracks its own expanded state by path.
+    expect(screen.getByText("components")).toBeTruthy();
+    expect(screen.queryByText("Button.tsx")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /components/i }));
+
+    expect(screen.getByText("Button.tsx")).toBeTruthy();
+    expect(useFilesPanelStore.getState().expandedFolders).toEqual([
+      "src",
+      "src/components",
+    ]);
   });
 });

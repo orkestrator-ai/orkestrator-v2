@@ -21,8 +21,8 @@ export const FileTreeNode = memo(function FileTreeNode({
   depth,
   onFileClick,
 }: FileTreeNodeProps) {
-  const { collapsedFolders, toggleFolderCollapse } = useFilesPanelStore();
-  const isCollapsed = collapsedFolders.includes(item.path);
+  const { expandedFolders, setFolderExpanded } = useFilesPanelStore();
+  const isExpanded = expandedFolders.includes(item.path);
   const isFolder = item.isDirectory;
 
   const paddingLeft = depth * 12 + 8; // Indentation based on depth
@@ -30,8 +30,8 @@ export const FileTreeNode = memo(function FileTreeNode({
   if (isFolder) {
     return (
       <Collapsible
-        open={!isCollapsed}
-        onOpenChange={() => toggleFolderCollapse(item.path)}
+        open={isExpanded}
+        onOpenChange={(open) => setFolderExpanded(item.path, open)}
       >
         <CollapsibleTrigger asChild>
           <button
@@ -43,13 +43,13 @@ export const FileTreeNode = memo(function FileTreeNode({
             <ChevronRight
               className={cn(
                 "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-200",
-                !isCollapsed && "rotate-90"
+                isExpanded && "rotate-90"
               )}
             />
-            {isCollapsed ? (
-              <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
-            ) : (
+            {isExpanded ? (
               <FolderOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
+            ) : (
+              <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
             )}
             <span className="truncate">{item.name}</span>
           </button>

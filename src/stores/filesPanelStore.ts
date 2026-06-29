@@ -14,8 +14,8 @@ interface FilesPanelState {
   // Active tab
   activeTab: FilesPanelTab;
 
-  // Collapsed folder paths in the tree (persisted)
-  collapsedFolders: string[];
+  // Expanded folder paths in the tree (persisted). Folders are collapsed by default.
+  expandedFolders: string[];
 
   // Git changes data
   changes: GitFileChange[];
@@ -34,7 +34,7 @@ interface FilesPanelState {
   closePanel: () => void;
   setActiveTab: (tab: FilesPanelTab) => void;
   setPanelWidth: (width: number) => void;
-  toggleFolderCollapse: (path: string) => void;
+  setFolderExpanded: (path: string, expanded: boolean) => void;
   setChanges: (changes: GitFileChange[]) => void;
   setFileTree: (tree: FileNode[]) => void;
   setLoadingChanges: (loading: boolean) => void;
@@ -49,7 +49,7 @@ export const useFilesPanelStore = create<FilesPanelState>()(
       isOpen: false,
       panelWidth: 320,
       activeTab: "changes",
-      collapsedFolders: [],
+      expandedFolders: [],
       changes: [],
       isLoadingChanges: false,
       fileTree: [],
@@ -62,11 +62,13 @@ export const useFilesPanelStore = create<FilesPanelState>()(
       closePanel: () => set({ isOpen: false }),
       setActiveTab: (tab) => set({ activeTab: tab }),
       setPanelWidth: (width) => set({ panelWidth: width }),
-      toggleFolderCollapse: (path) =>
+      setFolderExpanded: (path, expanded) =>
         set((state) => ({
-          collapsedFolders: state.collapsedFolders.includes(path)
-            ? state.collapsedFolders.filter((p) => p !== path)
-            : [...state.collapsedFolders, path],
+          expandedFolders: expanded
+            ? state.expandedFolders.includes(path)
+              ? state.expandedFolders
+              : [...state.expandedFolders, path]
+            : state.expandedFolders.filter((p) => p !== path),
         })),
       setChanges: (changes) => set({ changes }),
       setFileTree: (tree) => set({ fileTree: tree }),
@@ -78,7 +80,7 @@ export const useFilesPanelStore = create<FilesPanelState>()(
       name: "files-panel-storage",
       partialize: (state) => ({
         panelWidth: state.panelWidth,
-        collapsedFolders: state.collapsedFolders,
+        expandedFolders: state.expandedFolders,
       }),
     }
   )

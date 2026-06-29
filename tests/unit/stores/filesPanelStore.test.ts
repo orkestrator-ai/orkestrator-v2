@@ -25,7 +25,7 @@ function resetStore() {
     isOpen: false,
     panelWidth: 320,
     activeTab: "changes",
-    collapsedFolders: [],
+    expandedFolders: [],
     changes: [],
     isLoadingChanges: false,
     fileTree: [],
@@ -74,14 +74,55 @@ describe("filesPanelStore", () => {
     });
   });
 
-  test("toggles collapsed folders idempotently by path", () => {
+  test("sets expanded folders idempotently by path", () => {
     const store = useFilesPanelStore.getState();
 
-    store.toggleFolderCollapse("src");
-    store.toggleFolderCollapse("tests");
-    expect(useFilesPanelStore.getState().collapsedFolders).toEqual(["src", "tests"]);
+    store.setFolderExpanded("src", true);
+    store.setFolderExpanded("tests", true);
+    store.setFolderExpanded("src", true);
+    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["src", "tests"]);
 
-    useFilesPanelStore.getState().toggleFolderCollapse("src");
-    expect(useFilesPanelStore.getState().collapsedFolders).toEqual(["tests"]);
+    useFilesPanelStore.getState().setFolderExpanded("src", false);
+    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["tests"]);
+  });
+
+  test("collapsing an already-collapsed folder is a no-op and preserves order", () => {
+    const store = useFilesPanelStore.getState();
+
+    store.setFolderExpanded("a", true);
+    store.setFolderExpanded("b", true);
+    store.setFolderExpanded("c", true);
+
+    // Removing a path that is not expanded leaves the list untouched.
+    useFilesPanelStore.getState().setFolderExpanded("missing", false);
+    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["a", "b", "c"]);
+
+    // Removing from the middle keeps the remaining order stable.
+    useFilesPanelStore.getState().setFolderExpanded("b", false);
+    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["a", "c"]);
+  });
+
+  test("ignores legacy persisted collapsedFolders so folders default to collapsed", async () => {
+    // Simulate an existing user whose persisted payload predates the
+    // expanded-by-exception model (it only recorded collapsed folders).
+    localStorage.setItem(
+      "files-panel-storage",
+      JSON.stringify({
+        state: { panelWidth: 400, collapsedFolders: ["src", "tests"] },
+        version: 0,
+      }),
+    );
+
+    try {
+      await useFilesPanelStore.persist.rehydrate();
+      const state = useFilesPanelStore.getState();
+
+      // Persisted width still restores.
+      expect(state.panelWidth).toBe(400);
+      // No expandedFolders were persisted, so everything starts collapsed.
+      expect(state.expandedFolders).toEqual([]);
+    } finally {
+      localStorage.removeItem("files-panel-storage");
+    }
   });
 });

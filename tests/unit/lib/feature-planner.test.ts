@@ -270,7 +270,7 @@ describe("selectFeaturePlannerPrompt", () => {
 });
 
 describe("formatFeatureStoriesForBuild", () => {
-  test("formats title, summary, stories, and aggregated acceptance criteria", () => {
+  test("formats title, summary, and stories with each story's acceptance criteria", () => {
     const feature = makeFeature({
       title: "Saved views",
       summary: "Users can save filters.",
@@ -282,10 +282,12 @@ describe("formatFeatureStoriesForBuild", () => {
     const result = formatFeatureStoriesForBuild(feature);
     expect(result.title).toBe("Saved views");
     expect(result.description).toContain("Feature summary:\nUsers can save filters.");
-    expect(result.description).toContain("1. Save view");
-    expect(result.description).toContain("2. Delete view");
-    expect(result.acceptanceCriteria).toContain("- Save view: can name");
-    expect(result.acceptanceCriteria).toContain("- Delete view: can delete");
+    expect(result.description).toContain("### 1. Save view");
+    expect(result.description).toContain("### 2. Delete view");
+    expect(result.description.indexOf("### 1. Save view")).toBeLessThan(result.description.indexOf("- can name"));
+    expect(result.description.indexOf("- can reopen")).toBeLessThan(result.description.indexOf("### 2. Delete view"));
+    expect(result.description.indexOf("### 2. Delete view")).toBeLessThan(result.description.indexOf("- can delete"));
+    expect(result).not.toHaveProperty("acceptanceCriteria");
   });
 
   test("falls back to a default title and omits the summary when empty", () => {
@@ -293,6 +295,23 @@ describe("formatFeatureStoriesForBuild", () => {
     const result = formatFeatureStoriesForBuild(feature);
     expect(result.title).toBe("Feature plan");
     expect(result.description).not.toContain("Feature summary:");
-    expect(result.acceptanceCriteria).toBe("");
+    expect(result).not.toHaveProperty("acceptanceCriteria");
+  });
+
+  test("renders heading and criteria when a story has an empty description", () => {
+    const feature = makeFeature({
+      title: "Saved views",
+      summary: "",
+      stories: [
+        makeStory({ id: "s1", title: "Save view", description: "", acceptanceCriteria: ["can name"] }),
+      ],
+    });
+    const result = formatFeatureStoriesForBuild(feature);
+    expect(result.description).toContain("### 1. Save view");
+    expect(result.description).toContain("Acceptance criteria:");
+    expect(result.description).toContain("- can name");
+    // The blank description must not leave a doubled blank line between the heading and the criteria label.
+    expect(result.description).not.toContain("\n\n\n");
+    expect(result.description.indexOf("### 1. Save view")).toBeLessThan(result.description.indexOf("Acceptance criteria:"));
   });
 });

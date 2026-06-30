@@ -343,6 +343,52 @@ describe("codex bridge abort handling", () => {
     expect(session.status).toBe("idle");
   });
 
+  test("runPrompt finalizes on turn.completed even if the event stream remains open", async () => {
+    const streams: ReturnType<typeof createStreamController>[] = [];
+    const session = createSession({
+      thread: {
+        runStreamed: async () => {
+          const stream = createStreamController();
+          streams.push(stream);
+          return { events: stream.events() };
+        },
+      },
+    });
+
+    const promptRun = __testing.runPrompt(session, "stream a response");
+    await waitUntil(() => streams.length === 1);
+
+    streams[0]!.push({
+      type: "item.completed",
+      item: { id: "answer", type: "agent_message", text: "Final response" },
+    });
+    streams[0]!.push({
+      type: "turn.completed",
+      usage: {
+        input_tokens: 1,
+        cached_input_tokens: 0,
+        output_tokens: 1,
+        reasoning_output_tokens: 0,
+      },
+    });
+
+    await Promise.race([
+      promptRun,
+      new Promise((_resolve, reject) =>
+        setTimeout(() => reject(new Error("runPrompt did not finish after turn.completed")), 100),
+      ),
+    ]);
+
+    expect(session.status).toBe("idle");
+    expect(session.abortController).toBeUndefined();
+    expect(
+      session.messages.some(
+        (message: { role: string; content: string }) =>
+          message.role === "assistant" && message.content === "Final response",
+      ),
+    ).toBe(true);
+  });
+
   test("runPrompt clears file-change cache between turns while preserving baselines", async () => {
     await withBridgeEnv(async ({ cwd }) => {
       execFileSync("git", ["init"], { cwd, stdio: "ignore" });

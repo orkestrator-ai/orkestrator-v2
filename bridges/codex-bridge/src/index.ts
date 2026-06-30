@@ -1843,6 +1843,19 @@ async function processCodexStream(
   abortController: AbortController,
   isCurrentTurn: () => boolean,
 ): Promise<void> {
+  const finalizeIdleTurn = async () => {
+    const message = await rebuildAssistantMessage(session);
+    session.status = "idle";
+    emit(message
+      ? { type: "message.updated", sessionId: session.id, data: { message } }
+      : { type: "message.updated", sessionId: session.id });
+    emit({
+      type: "session.idle",
+      sessionId: session.id,
+      data: { title: session.title },
+    });
+  };
+
   const streamed = await session.thread.runStreamed(executionInput, {
     signal: abortController.signal,
   });
@@ -1891,6 +1904,14 @@ async function processCodexStream(
       continue;
     }
 
+    if (event.type === "turn.completed") {
+      if (!isCurrentTurn()) {
+        return;
+      }
+      await finalizeIdleTurn();
+      return;
+    }
+
     if (event.type === "turn.failed" || event.type === "error") {
       if (!isCurrentTurn()) {
         return;
@@ -1921,16 +1942,7 @@ async function processCodexStream(
     return;
   }
 
-  const message = await rebuildAssistantMessage(session);
-  session.status = "idle";
-  emit(message
-    ? { type: "message.updated", sessionId: session.id, data: { message } }
-    : { type: "message.updated", sessionId: session.id });
-  emit({
-    type: "session.idle",
-    sessionId: session.id,
-    data: { title: session.title },
-  });
+  await finalizeIdleTurn();
 }
 
 async function runPrompt(

@@ -1234,16 +1234,6 @@ export function ActionBar() {
           <div className="flex shrink-0 items-center gap-2">
             {isProjectBoardView ? (
               <>
-                <Tabs
-                  value={projectBoardTab}
-                  onValueChange={(value) => setProjectBoardTab(value as ProjectBoardTab)}
-                >
-                  <TabsList className="h-8 bg-zinc-900/80">
-                    <TabsTrigger value="kanban" className="px-2 text-xs data-[state=active]:!bg-zinc-800">Kanban</TabsTrigger>
-                    <TabsTrigger value="linear" className="px-2 text-xs data-[state=active]:!bg-zinc-800">Linear</TabsTrigger>
-                    <TabsTrigger value="features" className="px-2 text-xs data-[state=active]:!bg-zinc-800">Features</TabsTrigger>
-                  </TabsList>
-                </Tabs>
                 {projectBoardTab === "kanban" && (
                   <Button
                     variant="outline"
@@ -1255,6 +1245,16 @@ export function ActionBar() {
                     Project Notes
                   </Button>
                 )}
+                <Tabs
+                  value={projectBoardTab}
+                  onValueChange={(value) => setProjectBoardTab(value as ProjectBoardTab)}
+                >
+                  <TabsList className="h-8 bg-zinc-900/80">
+                    <TabsTrigger value="kanban" className="px-2 text-xs data-[state=active]:!bg-zinc-800">Kanban</TabsTrigger>
+                    <TabsTrigger value="linear" className="px-2 text-xs data-[state=active]:!bg-zinc-800">Linear</TabsTrigger>
+                    <TabsTrigger value="features" className="px-2 text-xs data-[state=active]:!bg-zinc-800">Features</TabsTrigger>
+                  </TabsList>
+                </Tabs>
               </>
             ) : repoName ? (
               <span className="whitespace-nowrap text-sm font-medium text-foreground">

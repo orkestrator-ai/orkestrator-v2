@@ -530,11 +530,14 @@ describe("ActionBar workflow tabs", () => {
     render(<ActionBar />);
 
     expect(screen.queryByText("repo")).toBeNull();
-    expect(screen.getByRole("tab", { name: "Kanban" })).toBeTruthy();
+    const notesButton = screen.getByRole("button", { name: "Project Notes" });
+    const kanbanTab = screen.getByRole("tab", { name: "Kanban" });
+    expect(kanbanTab).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Linear" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Features" })).toBeTruthy();
+    expect(notesButton.compareDocumentPosition(kanbanTab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Project Notes" }));
+    fireEvent.click(notesButton);
     expect(setProjectBoardNotesOpenMock).toHaveBeenCalledWith(true);
   });
 
@@ -545,6 +548,36 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Features" }), { button: 0 });
     expect(setProjectBoardTabMock).toHaveBeenCalledWith("features");
+  });
+
+  test("selecting the Linear board tab updates the project board tab", () => {
+    currentSelectedEnvironmentId = null;
+
+    render(<ActionBar />);
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Linear" }), { button: 0 });
+    expect(setProjectBoardTabMock).toHaveBeenCalledWith("linear");
+  });
+
+  test("selecting the Kanban board tab updates the project board tab", () => {
+    currentSelectedEnvironmentId = null;
+    currentProjectBoardTab = "features";
+
+    render(<ActionBar />);
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Kanban" }), { button: 0 });
+    expect(setProjectBoardTabMock).toHaveBeenCalledWith("kanban");
+  });
+
+  test("marks the active board tab as selected based on projectBoardTab", () => {
+    currentSelectedEnvironmentId = null;
+    currentProjectBoardTab = "linear";
+
+    render(<ActionBar />);
+
+    expect(screen.getByRole("tab", { name: "Linear" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "Kanban" }).getAttribute("aria-selected")).toBe("false");
+    expect(screen.getByRole("tab", { name: "Features" }).getAttribute("aria-selected")).toBe("false");
   });
 
   test("hides the Project Notes button when the active board tab is not kanban", () => {

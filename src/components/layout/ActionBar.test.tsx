@@ -530,11 +530,14 @@ describe("ActionBar workflow tabs", () => {
     render(<ActionBar />);
 
     expect(screen.queryByText("repo")).toBeNull();
-    expect(screen.getByRole("tab", { name: "Kanban" })).toBeTruthy();
+    const notesButton = screen.getByRole("button", { name: "Project Notes" });
+    const kanbanTab = screen.getByRole("tab", { name: "Kanban" });
+    expect(kanbanTab).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Linear" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Features" })).toBeTruthy();
+    expect(notesButton.compareDocumentPosition(kanbanTab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Project Notes" }));
+    fireEvent.click(notesButton);
     expect(setProjectBoardNotesOpenMock).toHaveBeenCalledWith(true);
   });
 

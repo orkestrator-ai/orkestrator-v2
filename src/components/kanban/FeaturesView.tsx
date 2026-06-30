@@ -492,12 +492,15 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         const task = useKanbanStore.getState().tasks.find((candidate) => candidate.id === taskId);
         if (!task) throw new Error("Created build task was not found in the Kanban store");
 
-        await startBuild(task, getPreferredEnvironmentType(projectId), "codex");
+        await startBuild(task, getPreferredEnvironmentType(projectId), "codex", {
+          existingEnvironmentId: feature.codexEnvironmentId,
+        });
         const pipeline = useBuildPipelineStore.getState().getPipelineByTaskId(taskId);
         await updateFeature(feature.id, {
           status: "building",
           buildTaskId: taskId,
           buildPipelineId: pipeline?.id,
+          ...(pipeline?.environmentId ? { codexEnvironmentId: pipeline.environmentId } : {}),
         });
       } catch (error) {
         console.error("[FeaturesView] Failed to start feature build:", error);

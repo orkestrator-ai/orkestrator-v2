@@ -157,7 +157,7 @@ describe("FeaturesView build action", () => {
   });
 
   test("clicking Build creates a Kanban task and starts the build pipeline", async () => {
-    seedStores(featureWithStories());
+    seedStores(featureWithStories({ codexEnvironmentId: "env-feature" }));
 
     render(<FeaturesView projectId="project-1" />);
 
@@ -173,6 +173,12 @@ describe("FeaturesView build action", () => {
     await waitFor(() => {
       expect(startBuildMock).toHaveBeenCalledTimes(1);
     });
+    expect(startBuildMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "task-1" }),
+      "containerized",
+      "codex",
+      { existingEnvironmentId: "env-feature" },
+    );
     expect(updateFeatureMock).toHaveBeenCalledWith(
       "feature-1",
       expect.objectContaining({ status: "building", buildTaskId: "task-1" }),

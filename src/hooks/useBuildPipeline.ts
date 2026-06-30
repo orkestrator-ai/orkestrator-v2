@@ -9,7 +9,7 @@ import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useEnvironments } from "@/hooks/useEnvironments";
 import * as backend from "@/lib/backend";
 import { getBuildEnvironmentAgentSettings, resolveBuildPipelineAgent } from "@/lib/build-pipeline-agent";
-import type { DefaultAgent, EnvironmentType } from "@/types";
+import type { DefaultAgent, Environment, EnvironmentType } from "@/types";
 import type { KanbanTask } from "@/lib/backend";
 import type { PaneNode } from "@/types/paneLayout";
 import type { TaskSnapshot } from "@/prompts";
@@ -78,6 +78,26 @@ type BuildPipelineTicketInput = {
   onPipelineLinked?: (params: { pipelineId: string; environmentId: string }) => Promise<void>;
 };
 
+type StartBuildOptions = {
+  existingEnvironmentId?: string | null;
+};
+
+async function resolveReusableBuildEnvironment(
+  environmentId: string | null | undefined,
+  projectId: string,
+): Promise<Environment | null> {
+  const id = environmentId?.trim();
+  if (!id) return null;
+
+  const environment = useEnvironmentStore.getState().getEnvironmentById(id)
+    ?? await backend.getEnvironment(id);
+  if (!environment) return null;
+  if (environment.projectId !== projectId) {
+    throw new Error(`Environment ${id} does not belong to project ${projectId}`);
+  }
+  return environment;
+}
+
 function linearIssueToTicketInput(issue: LinearIssueDetail, projectId: string): BuildPipelineTicketInput {
   const metadata = [
     `Linear issue: ${issue.identifier}`,
@@ -130,36 +150,49 @@ export function useBuildPipeline() {
   const config = useConfigStore((state) => state.config);
 
   const startBuildFromTicket = useCallback(
-    async (ticket: BuildPipelineTicketInput, environmentType: EnvironmentType, agentOverride?: DefaultAgent) => {
+    async (
+      ticket: BuildPipelineTicketInput,
+      environmentType: EnvironmentType,
+      agentOverride?: DefaultAgent,
+      options: StartBuildOptions = {},
+    ) => {
       let pipelineId: string | null = null;
       try {
         const agentType = agentOverride ?? resolveBuildPipelineAgent(config, ticket.projectId);
         const agentSettings = getBuildEnvironmentAgentSettings(agentType);
+        const reusableEnvironment = await resolveReusableBuildEnvironment(
+          options.existingEnvironmentId,
+          ticket.projectId,
+        );
+        const effectiveEnvironmentType = reusableEnvironment?.environmentType ?? environmentType;
 
         pipelineId = createPipeline({
           taskId: ticket.id,
           projectId: ticket.projectId,
-          environmentType,
+          environmentType: effectiveEnvironmentType,
           agentType,
           taskTitle: ticket.title,
           taskSnapshot: ticket.taskSnapshot,
           source: ticket.source,
         });
 
-        const environment = await createEnvironment(
-          ticket.projectId,
-          undefined,
-          environmentType === "containerized" ? "restricted" : "full",
-          undefined, // no initial prompt - we handle it via the pipeline
-          undefined, // no port mappings
-          environmentType,
-        );
+        let environment = reusableEnvironment;
+        if (!environment) {
+          environment = await createEnvironment(
+            ticket.projectId,
+            undefined,
+            effectiveEnvironmentType === "containerized" ? "restricted" : "full",
+            undefined, // no initial prompt - we handle it via the pipeline
+            undefined, // no port mappings
+            effectiveEnvironmentType,
+          );
+        }
 
         // 3. Link pipeline to environment
         setPipelineEnvironment(pipelineId, environment.id);
 
         // 4. Configure environment for the selected pipeline agent.
-        const configuredEnvironment = await backend.updateEnvironmentAgentSettings(
+        let configuredEnvironment = await backend.updateEnvironmentAgentSettings(
           environment.id,
           agentSettings.defaultAgent,
           agentSettings.claudeMode,
@@ -195,12 +228,17 @@ export function useBuildPipeline() {
         // should immediately see the worktree/container setup begin under the
         // timestamp name, while the LLM-generated name arrives in the background.
         setPhase(pipelineId, "starting-environment");
-        try {
-          await startEnvironment(configuredEnvironment.id);
-        } catch (startErr) {
-          console.error("[useBuildPipeline] Failed to start environment:", startErr);
-          setPipelineError(pipelineId, `Failed to start environment: ${startErr instanceof Error ? startErr.message : String(startErr)}`);
-          return;
+        if (configuredEnvironment.status !== "running") {
+          try {
+            await startEnvironment(configuredEnvironment.id);
+            configuredEnvironment = useEnvironmentStore.getState().getEnvironmentById(configuredEnvironment.id)
+              ?? await backend.getEnvironment(configuredEnvironment.id)
+              ?? configuredEnvironment;
+          } catch (startErr) {
+            console.error("[useBuildPipeline] Failed to start environment:", startErr);
+            setPipelineError(pipelineId, `Failed to start environment: ${startErr instanceof Error ? startErr.message : String(startErr)}`);
+            return;
+          }
         }
 
         if (environmentNamingPrompt) {
@@ -211,12 +249,12 @@ export function useBuildPipeline() {
         // This must happen BEFORE the build tab is added, to prevent the build tab
         // from being added to the pane before TerminalContainer's init effect runs
         // (which would skip setup command consumption due to currentTabs.length > 0).
-        await waitForSetupInitiation(configuredEnvironment.id, environmentType);
+        await waitForSetupInitiation(configuredEnvironment.id, configuredEnvironment.environmentType);
 
         // 9. Create build tab in the pane layout
         // Wait for the environment pane to be initialized (poll with backoff)
         const buildTabId = `build-${pipelineId}`;
-        const isLocal = environmentType === "local";
+        const isLocal = configuredEnvironment.environmentType === "local";
         const buildTabData = {
           environmentId: configuredEnvironment.id,
           pipelineId,
@@ -239,7 +277,12 @@ export function useBuildPipeline() {
   );
 
   const startBuild = useCallback(
-    async (task: KanbanTask, environmentType: EnvironmentType, agentOverride?: DefaultAgent) => {
+    async (
+      task: KanbanTask,
+      environmentType: EnvironmentType,
+      agentOverride?: DefaultAgent,
+      options?: StartBuildOptions,
+    ) => {
       const snapshotImages = await Promise.all(
         (task.images ?? []).map(async (img) => {
           try {
@@ -275,7 +318,7 @@ export function useBuildPipeline() {
             environmentId,
             buildPipelineId: pipelineId,
           }),
-      }, environmentType, agentOverride);
+      }, environmentType, agentOverride, options);
     },
     [startBuildFromTicket, updateTask]
   );

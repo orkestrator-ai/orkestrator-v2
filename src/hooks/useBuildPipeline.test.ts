@@ -62,7 +62,7 @@ const mockUpdateEnvironmentAgentSettings = mock<(
   name: "Build task",
   branch: "main",
   containerId: "container-build",
-  status: "running" as const,
+  status: "stopped" as const,
   prUrl: null,
   prState: null,
   hasMergeConflicts: null,
@@ -400,6 +400,108 @@ describe("useBuildPipeline", () => {
       );
     });
     expect(useClaudeOptionsStore.getState().options["env-build"]).toBeUndefined();
+  });
+
+  test("startBuild reuses an existing feature environment when one is provided", async () => {
+    const featureEnvironment: Environment = {
+      id: "env-feature",
+      projectId: "project-1",
+      name: "feature-plan-saved-views",
+      branch: "feature-plan-saved-views",
+      containerId: "container-feature",
+      status: "running",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "containerized",
+    };
+
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: [featureEnvironment],
+    }));
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        ["env-feature", {
+          root: {
+            kind: "leaf",
+            id: "pane-feature",
+            tabs: [],
+            activeTabId: null,
+          },
+          activePaneId: "pane-feature",
+          containerId: "container-feature",
+        }],
+      ]),
+      activeEnvironmentId: "env-visible",
+    });
+    mockUpdateEnvironmentAgentSettings.mockImplementationOnce(async () => ({
+      ...featureEnvironment,
+      defaultAgent: "codex",
+      codexMode: "native",
+    }));
+    mockGetEnvironment.mockImplementationOnce(async () => ({
+      ...featureEnvironment,
+      name: "saved-views-build",
+      defaultAgent: "codex",
+      codexMode: "native",
+    }));
+
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuild({
+        id: "task-feature",
+        projectId: "project-1",
+        title: "Saved views",
+        description: "Build saved views",
+        acceptanceCriteria: "Stories are implemented",
+        status: "backlog",
+        comments: [],
+        images: [],
+        environmentId: undefined,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        order: 0,
+      }, "containerized", "codex", { existingEnvironmentId: "env-feature" });
+    });
+
+    expect(mockCreateEnvironment).not.toHaveBeenCalled();
+    expect(mockStartEnvironment).not.toHaveBeenCalled();
+    expect(mockUpdateEnvironmentAgentSettings).toHaveBeenCalledWith(
+      "env-feature",
+      "codex",
+      null,
+      null,
+      null,
+      "native",
+    );
+
+    const pipeline = useBuildPipelineStore.getState().getPipelineByTaskId("task-feature");
+    expect(pipeline?.environmentId).toBe("env-feature");
+    expect(useBuildPipelineStore.getState().buildEnvironmentIds.has("env-feature")).toBe(true);
+
+    const envState = usePaneLayoutStore.getState().environments.get("env-feature");
+    expect(envState?.root.kind).toBe("leaf");
+    if (!envState || envState.root.kind !== "leaf") {
+      throw new Error("env-feature root should be a leaf");
+    }
+
+    const buildTab = envState.root.tabs.find((tab) => tab.type === "claude-build");
+    expect(buildTab?.buildTabData).toMatchObject({
+      environmentId: "env-feature",
+      taskId: "task-feature",
+      isLocal: false,
+    });
+    await waitFor(() => {
+      expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
+        "env-feature",
+        "Saved views\n\nBuild saved views\n\nStories are implemented",
+      );
+      expect(mockGetEnvironment).toHaveBeenCalledWith("env-feature");
+    });
   });
 
   test("startBuild starts local environments and adds the build tab when there are no setup commands", async () => {

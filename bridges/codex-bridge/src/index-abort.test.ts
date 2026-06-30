@@ -389,6 +389,86 @@ describe("codex bridge abort handling", () => {
     ).toBe(true);
   });
 
+  test("runPrompt records the thread id from a thread.started event on the primary stream", async () => {
+    const session = createSession({
+      threadId: null,
+      thread: {
+        runStreamed: async () => ({
+          events: (async function* () {
+            yield { type: "thread.started", thread_id: "primary-thread" };
+            yield {
+              type: "item.completed",
+              item: { id: "answer", type: "agent_message", text: "Primary response" },
+            };
+            yield {
+              type: "turn.completed",
+              usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+            };
+          })(),
+        }),
+      },
+    });
+
+    await __testing.runPrompt(session, "start a new thread");
+
+    expect(session.threadId).toBe("primary-thread");
+    expect(session.status).toBe("idle");
+    expect(session.abortController).toBeUndefined();
+    expect(
+      session.messages.some(
+        (message: { role: string; content: string }) =>
+          message.role === "assistant" && message.content === "Primary response",
+      ),
+    ).toBe(true);
+  });
+
+  test("runPrompt marks the session errored on a non-recoverable turn.failed event", async () => {
+    const session = createSession({
+      threadId: "live-thread",
+      thread: {
+        runStreamed: async () => ({
+          events: (async function* () {
+            yield {
+              type: "turn.failed",
+              error: { message: "model refused the request" },
+            };
+          })(),
+        }),
+      },
+    });
+
+    await __testing.runPrompt(session, "do something");
+
+    expect(session.status).toBe("error");
+    expect(session.error).toBe("model refused the request");
+    // Non-rollout failures must not trigger fresh-thread recovery.
+    expect(session.threadId).toBe("live-thread");
+    expect(session.currentTurnId).toBeUndefined();
+    expect(session.currentTurnStartedAt).toBeUndefined();
+    expect(session.abortController).toBeUndefined();
+  });
+
+  test("runPrompt marks the session errored on an error event", async () => {
+    const session = createSession({
+      threadId: "live-thread",
+      thread: {
+        runStreamed: async () => ({
+          events: (async function* () {
+            yield { type: "error", message: "stream transport failure" };
+          })(),
+        }),
+      },
+    });
+
+    await __testing.runPrompt(session, "do something");
+
+    expect(session.status).toBe("error");
+    expect(session.error).toBe("stream transport failure");
+    expect(session.threadId).toBe("live-thread");
+    expect(session.currentTurnId).toBeUndefined();
+    expect(session.abortController).toBeUndefined();
+  });
+
   test("runPrompt clears file-change cache between turns while preserving baselines", async () => {
     await withBridgeEnv(async ({ cwd }) => {
       execFileSync("git", ["init"], { cwd, stdio: "ignore" });

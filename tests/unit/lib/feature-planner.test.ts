@@ -182,6 +182,8 @@ describe("prompt builders", () => {
     const prompt = createFeaturePlannerInitialPrompt("Add saved filters");
     expect(prompt).toContain(FEATURE_PLANNER_SYSTEM_PROMPT);
     expect(prompt).toContain("Add saved filters");
+    expect(prompt).toContain("Use read-only codebase inspection tools");
+    expect(prompt).toContain("Do not write code, edit files, or run mutating commands");
   });
 
   test("createFeaturePlannerResumePrompt strips state blocks and lists existing story ids", () => {
@@ -205,6 +207,7 @@ describe("prompt builders", () => {
     expect(prompt).not.toContain('{"phase":"collecting"}');
     expect(prompt).toContain("id: story-1");
     expect(prompt).toContain("more detail");
+    expect(prompt).toContain("Use read-only codebase inspection tools");
   });
 
   test("createFeaturePlannerResumePrompt omits the existing-stories section when there are none", () => {

@@ -6,6 +6,7 @@ import * as realNativeComposeDock from "@/components/chat/NativeComposeDock";
 import * as realNativeMessage from "@/components/chat/NativeMessage";
 import * as realUseBuildPipeline from "@/hooks/useBuildPipeline";
 import * as realUseEnvironments from "@/hooks/useEnvironments";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFeaturePlanStore } from "@/stores/featurePlanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useProjectStore } from "@/stores/projectStore";
@@ -130,6 +131,24 @@ function seedStores(feature: FeaturePlan) {
   });
 }
 
+function seedPipeline(
+  { taskId = "task-1", environmentId, failed = false }: { taskId?: string; environmentId?: string; failed?: boolean } = {},
+): string {
+  const store = useBuildPipelineStore.getState();
+  const id = store.createPipeline({
+    taskId,
+    projectId: "project-1",
+    environmentType: "containerized",
+    agentType: "codex",
+    taskTitle: "Task",
+    taskSnapshot: { title: "Task", description: "", acceptanceCriteria: "", comments: [], images: [] },
+    source: { type: "kanban", taskId },
+  });
+  if (environmentId) store.setPipelineEnvironment(id, environmentId);
+  if (failed) store.setPipelineError(id, "failed to start environment");
+  return id;
+}
+
 beforeEach(() => {
   cleanup();
   startBuildMock.mockClear();
@@ -137,6 +156,7 @@ beforeEach(() => {
   updateTaskMock.mockClear();
   updateFeatureMock.mockClear();
   loadFeaturesMock.mockClear();
+  useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
 });
 
 describe("FeaturesView build action", () => {
@@ -157,7 +177,8 @@ describe("FeaturesView build action", () => {
   });
 
   test("clicking Build creates a Kanban task and starts the build pipeline", async () => {
-    seedStores(featureWithStories());
+    seedStores(featureWithStories({ codexEnvironmentId: "env-feature" }));
+    const pipelineId = seedPipeline({ taskId: "task-1", environmentId: "env-feature" });
 
     render(<FeaturesView projectId="project-1" />);
 
@@ -173,9 +194,41 @@ describe("FeaturesView build action", () => {
     await waitFor(() => {
       expect(startBuildMock).toHaveBeenCalledTimes(1);
     });
-    expect(updateFeatureMock).toHaveBeenCalledWith(
+    expect(startBuildMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "task-1" }),
+      "containerized",
+      "codex",
+      { existingEnvironmentId: "env-feature" },
+    );
+    await waitFor(() => {
+      expect(updateFeatureMock).toHaveBeenCalledWith(
+        "feature-1",
+        expect.objectContaining({
+          status: "building",
+          buildTaskId: "task-1",
+          buildPipelineId: pipelineId,
+          codexEnvironmentId: "env-feature",
+        }),
+      );
+    });
+  });
+
+  test("does not mark the feature as building when the build pipeline fails to start", async () => {
+    seedStores(featureWithStories({ codexEnvironmentId: "env-feature" }));
+    seedPipeline({ taskId: "task-1", environmentId: "env-feature", failed: true });
+
+    render(<FeaturesView projectId="project-1" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Build" }));
+
+    await waitFor(() => {
+      expect(startBuildMock).toHaveBeenCalledTimes(1);
+    });
+    // The pipeline ended in a failed state, so the feature must not be flipped
+    // to "building" (startBuild already surfaced the error to the user).
+    expect(updateFeatureMock).not.toHaveBeenCalledWith(
       "feature-1",
-      expect.objectContaining({ status: "building", buildTaskId: "task-1" }),
+      expect.objectContaining({ status: "building" }),
     );
   });
 });

@@ -130,7 +130,7 @@ function LinearConnectDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle>Connect Linear</DialogTitle>
           <DialogDescription>
@@ -152,7 +152,7 @@ function LinearConnectDialog({
             </div>
           )}
         </div>
-        <DialogFooter className="gap-2 sm:gap-0">
+        <DialogFooter>
           <Button
             type="button"
             variant="outline"

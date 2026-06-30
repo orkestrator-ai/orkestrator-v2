@@ -291,4 +291,37 @@ describe("HierarchicalSidebar", () => {
       console.error = originalConsoleError;
     }
   });
+
+  test("highlights the project header when the project is selected without an environment", () => {
+    useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: null });
+
+    render(<HierarchicalSidebar />);
+
+    const header = getProjectHeader(screen.getByRole("button", { name: /Project One/i }));
+    expect(header.className).toContain("bg-zinc-800/85");
+    expect(header.className).toContain("border-zinc-700/70");
+  });
+
+  test("does not highlight the project header when an environment is selected", () => {
+    useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: "env-1" });
+
+    render(<HierarchicalSidebar />);
+
+    const header = getProjectHeader(screen.getByRole("button", { name: /Project One/i }));
+    expect(header.className).not.toContain("bg-zinc-800/85");
+    expect(header.className).toContain("border-transparent");
+  });
 });
+
+// The selectable project header is the nearest ancestor div carrying the
+// group/project marker class used for the selected/hover treatment.
+function getProjectHeader(projectButton: HTMLElement): HTMLElement {
+  let node: HTMLElement | null = projectButton.parentElement;
+  while (node && !node.className.includes("group/project")) {
+    node = node.parentElement;
+  }
+  if (!node) {
+    throw new Error("Could not locate project header element");
+  }
+  return node;
+}

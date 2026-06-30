@@ -496,11 +496,17 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
           existingEnvironmentId: feature.codexEnvironmentId,
         });
         const pipeline = useBuildPipelineStore.getState().getPipelineByTaskId(taskId);
+        if (!pipeline || pipeline.phase === "failed") {
+          // startBuild surfaces its own error toast and clears or fails the
+          // pipeline when it cannot start. Leave the feature in its prior state
+          // rather than marking it as building.
+          return;
+        }
         await updateFeature(feature.id, {
           status: "building",
           buildTaskId: taskId,
-          buildPipelineId: pipeline?.id,
-          ...(pipeline?.environmentId ? { codexEnvironmentId: pipeline.environmentId } : {}),
+          buildPipelineId: pipeline.id,
+          ...(pipeline.environmentId ? { codexEnvironmentId: pipeline.environmentId } : {}),
         });
       } catch (error) {
         console.error("[FeaturesView] Failed to start feature build:", error);

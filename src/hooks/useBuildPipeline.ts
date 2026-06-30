@@ -249,7 +249,11 @@ export function useBuildPipeline() {
         // This must happen BEFORE the build tab is added, to prevent the build tab
         // from being added to the pane before TerminalContainer's init effect runs
         // (which would skip setup command consumption due to currentTabs.length > 0).
-        await waitForSetupInitiation(configuredEnvironment.id, configuredEnvironment.environmentType);
+        // A reused environment has already completed its first-time setup, so there
+        // are no pending setup commands to wait for — skip to avoid a needless poll.
+        if (!reusableEnvironment) {
+          await waitForSetupInitiation(configuredEnvironment.id, configuredEnvironment.environmentType);
+        }
 
         // 9. Create build tab in the pane layout
         // Wait for the environment pane to be initialized (poll with backoff)

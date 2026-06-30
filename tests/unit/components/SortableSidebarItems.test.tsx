@@ -109,6 +109,7 @@ describe("sortable sidebar items", () => {
         project={project}
         environments={[environment]}
         isCollapsed={false}
+        isSelected={false}
         onToggleCollapse={() => {}}
         selectedEnvironmentId="env-1"
         onSelectProject={onSelectProject}
@@ -124,7 +125,8 @@ describe("sortable sidebar items", () => {
     );
 
     const projectButton = screen.getByRole("button", { name: /Project One/i });
-    expect(projectButton.className).toContain("hover:bg-zinc-800/80");
+    const projectHeader = getProjectHeader(projectButton);
+    expect(projectHeader.className).toContain("hover:bg-zinc-800/55");
     expect(screen.getByText("1").className).toContain("bg-zinc-800");
     expect(screen.getByTestId("sortable-context")).toBeTruthy();
 
@@ -135,12 +137,78 @@ describe("sortable sidebar items", () => {
     expect(onSelectProject).toHaveBeenCalled();
   });
 
+  test("SortableProjectGroup highlights the header only when isSelected is true", () => {
+    const { rerender } = render(
+      <SortableProjectGroup
+        project={project}
+        environments={[environment]}
+        isCollapsed={false}
+        isSelected={true}
+        onToggleCollapse={() => {}}
+        selectedEnvironmentId={null}
+        onSelectProject={() => {}}
+        onSelectEnvironment={() => {}}
+        onDeleteProject={() => {}}
+        onOpenSettings={() => {}}
+        onDeleteEnvironment={() => {}}
+        onStartEnvironment={() => {}}
+        onStopEnvironment={() => {}}
+        onRestartEnvironment={() => {}}
+        onCreateEnvironment={() => {}}
+      />,
+    );
+
+    let projectHeader = getProjectHeader(screen.getByRole("button", { name: /Project One/i }));
+    expect(projectHeader.className).toContain("bg-zinc-800/85");
+    expect(projectHeader.className).toContain("border-zinc-700/70");
+    expect(projectHeader.className).not.toContain("border-transparent");
+
+    rerender(
+      <SortableProjectGroup
+        project={project}
+        environments={[environment]}
+        isCollapsed={false}
+        isSelected={false}
+        onToggleCollapse={() => {}}
+        selectedEnvironmentId={null}
+        onSelectProject={() => {}}
+        onSelectEnvironment={() => {}}
+        onDeleteProject={() => {}}
+        onOpenSettings={() => {}}
+        onDeleteEnvironment={() => {}}
+        onStartEnvironment={() => {}}
+        onStopEnvironment={() => {}}
+        onRestartEnvironment={() => {}}
+        onCreateEnvironment={() => {}}
+      />,
+    );
+
+    projectHeader = getProjectHeader(screen.getByRole("button", { name: /Project One/i }));
+    expect(projectHeader.className).toContain("border-transparent");
+    expect(projectHeader.className).toContain("hover:bg-zinc-800/55");
+    expect(projectHeader.className).not.toContain("bg-zinc-800/85");
+  });
+
+  // The selectable project header is the nearest ancestor div carrying the
+  // group/project marker class used for the selected/hover treatment.
+  function getProjectHeader(projectButton: HTMLElement): HTMLElement {
+    let node: HTMLElement | null = projectButton.parentElement;
+    while (node && !node.className.includes("group/project")) {
+      node = node.parentElement;
+    }
+    if (!node) {
+      throw new Error("Could not locate project header element");
+    }
+    return node;
+  }
+
   function renderProjectGroup(overrides: Partial<React.ComponentProps<typeof SortableProjectGroup>> = {}) {
     return render(
       <SortableProjectGroup
         project={project}
         environments={[environment]}
         isCollapsed={false}
+        isSelected={false}
         onToggleCollapse={() => {}}
         selectedEnvironmentId="env-1"
         onSelectProject={() => {}}

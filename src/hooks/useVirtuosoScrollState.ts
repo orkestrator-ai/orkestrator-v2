@@ -20,6 +20,9 @@ const SCROLL_TO_BOTTOM_MAX_ATTEMPTS = 10;
 /** Delay between retry attempts; ~one frame, gives Virtuoso time to fire atBottomStateChange */
 const SCROLL_TO_BOTTOM_RETRY_INTERVAL_MS = 16;
 
+/** Readiness retries for activation scrolls after the scroller has mounted */
+const ACTIVATION_SCROLL_READY_MAX_ATTEMPTS = 30;
+
 /**
  * After landing at the bottom we keep watching scrollHeight for a short window
  * to catch late-rendering footer content (async-measured cards, images) and
@@ -144,6 +147,9 @@ export function useVirtuosoScrollState(
   const scrollInFlightRef = useRef(false);
   const hasBeenActiveRef = useRef(false);
   const envChangedWhileInactiveRef = useRef(false);
+  const pendingActivationScrollRef = useRef(false);
+  const activationScrollRafRef = useRef<number | null>(null);
+  const activationScrollReadyAttemptsRef = useRef(0);
 
   // While inactive, watch the globally selected environment. If it ever
   // differs from this view's environment, the user switched environments —
@@ -215,21 +221,21 @@ export function useVirtuosoScrollState(
   // activation jump (instant — animating on every env/tab switch reads as
   // jank). `behavior` only affects the final footer scroll; the scrollToIndex
   // retries are always instant since they correct virtual-height estimates.
-  const performScrollToBottom = useCallback((behavior: "smooth" | "auto") => {
+  const performScrollToBottom = useCallback((behavior: "smooth" | "auto"): boolean => {
     const handle = virtuosoRef.current;
-    if (!handle) return;
+    if (!handle) return false;
     if (
       typeof handle.scrollToIndex !== "function" ||
       typeof handle.scrollTo !== "function"
     ) {
-      return;
+      return false;
     }
     // Clicking the scroll-down button (or any programmatic call) is an
     // explicit stick signal.
     wantsStickRef.current = true;
     // Guard against overlapping invocations — a second call while the
     // retry loop is still mid-flight would fire a duplicate footer scroll.
-    if (scrollInFlightRef.current) return;
+    if (scrollInFlightRef.current) return false;
     scrollInFlightRef.current = true;
 
     let attempts = 0;
@@ -310,6 +316,7 @@ export function useVirtuosoScrollState(
     };
 
     attempt();
+    return true;
     // Deps intentionally empty: reads only refs (virtuosoRef, scrollerElRef,
     // mountedRef, scrollInFlightRef, isAtBottomRef, wantsStickRef). Adding
     // scrollerEl here would recreate the callback whenever the scroller
@@ -318,7 +325,9 @@ export function useVirtuosoScrollState(
   }, []);
 
   const scrollToBottom = useCallback(
-    () => performScrollToBottom("smooth"),
+    () => {
+      performScrollToBottom("smooth");
+    },
     [performScrollToBottom]
   );
 
@@ -441,6 +450,55 @@ export function useVirtuosoScrollState(
     };
   }, [scrollerEl, scrollToBottom]);
 
+  const cancelActivationScrollFrame = useCallback(() => {
+    if (activationScrollRafRef.current !== null) {
+      cancelAnimationFrame(activationScrollRafRef.current);
+      activationScrollRafRef.current = null;
+    }
+  }, []);
+
+  const schedulePendingActivationScroll = useCallback(() => {
+    if (activationScrollRafRef.current !== null) return;
+    activationScrollRafRef.current = requestAnimationFrame(() => {
+      activationScrollRafRef.current = null;
+      if (
+        !mountedRef.current ||
+        !isActiveRef.current ||
+        !pendingActivationScrollRef.current
+      ) {
+        return;
+      }
+
+      const started = performScrollToBottom("auto");
+      if (started) {
+        pendingActivationScrollRef.current = false;
+        activationScrollReadyAttemptsRef.current = 0;
+        return;
+      }
+
+      // If the scroller exists but the Virtuoso handle is not ready yet,
+      // retry briefly. If the scroller is absent (e.g. the native tab is
+      // still connecting), keep the pending flag and wait for scrollerRef to
+      // fire, which triggers the effect below.
+      if (scrollerElRef.current) {
+        if (
+          activationScrollReadyAttemptsRef.current <
+          ACTIVATION_SCROLL_READY_MAX_ATTEMPTS
+        ) {
+          activationScrollReadyAttemptsRef.current += 1;
+          schedulePendingActivationScroll();
+        } else {
+          // The scroller mounted but the handle never became ready within the
+          // retry budget. Give up and clear the pending flag so a later
+          // scroller remount can't re-fire this stale activation scroll and
+          // yank a user who has since scrolled up back to the bottom.
+          pendingActivationScrollRef.current = false;
+          activationScrollReadyAttemptsRef.current = 0;
+        }
+      }
+    });
+  }, [performScrollToBottom]);
+
   // Tab re-activation: jump to the new bottom on return when the user was
   // sticky when they left, when the selected environment changed while the
   // view was away, or when the caller explicitly wants every activation to
@@ -476,12 +534,35 @@ export function useVirtuosoScrollState(
     ) {
       return;
     }
-    const id = requestAnimationFrame(() => {
-      if (!mountedRef.current) return;
-      performScrollToBottom("auto");
-    });
-    return () => cancelAnimationFrame(id);
-  }, [isActive, stickToBottomOnActivation, performScrollToBottom]);
+    pendingActivationScrollRef.current = true;
+    activationScrollReadyAttemptsRef.current = 0;
+    schedulePendingActivationScroll();
+    return cancelActivationScrollFrame;
+  }, [
+    isActive,
+    stickToBottomOnActivation,
+    schedulePendingActivationScroll,
+    cancelActivationScrollFrame,
+  ]);
+
+  useEffect(() => {
+    if (!isActive) {
+      pendingActivationScrollRef.current = false;
+      activationScrollReadyAttemptsRef.current = 0;
+      cancelActivationScrollFrame();
+      return;
+    }
+
+    if (pendingActivationScrollRef.current) {
+      activationScrollReadyAttemptsRef.current = 0;
+      schedulePendingActivationScroll();
+    }
+  }, [
+    isActive,
+    scrollerEl,
+    schedulePendingActivationScroll,
+    cancelActivationScrollFrame,
+  ]);
 
   return {
     isAtBottom,

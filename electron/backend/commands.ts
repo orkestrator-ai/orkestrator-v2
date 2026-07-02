@@ -267,13 +267,49 @@ function makeUniqueEnvironmentSlug(baseSlug: string, existingEnvironments: Envir
   return candidate;
 }
 
-function resolveCodexBinary(context: CommandContext): string {
-  const candidates = [
-    path.join(context.resourceRoot, "bin", "codex"),
-    path.join(context.appRoot, "binaries", "codex"),
-    path.join(context.appRoot, "bin", "codex"),
+function packagedBinaryCandidates(context: CommandContext, name: string): string[] {
+  return [
+    path.join(context.resourceRoot, "bin", name),
+    path.join(context.appRoot, "binaries", name),
+    path.join(context.appRoot, "bin", name),
   ];
-  return candidates.find((candidate) => existsSync(candidate)) ?? "codex";
+}
+
+function resolvePackagedBinary(context: CommandContext, name: string): string | undefined {
+  return packagedBinaryCandidates(context, name).find((candidate) => existsSync(candidate));
+}
+
+function resolveCodexBinary(context: CommandContext): string {
+  return resolvePackagedBinary(context, "codex") ?? "codex";
+}
+
+function resolveOpenCodeBinary(context: CommandContext): string {
+  return resolvePackagedBinary(context, "opencode") ?? "opencode";
+}
+
+function hasPackagedOrPathBinary(context: CommandContext, name: string): Promise<boolean> {
+  return resolvePackagedBinary(context, name)
+    ? Promise.resolve(true)
+    : commandExists(name);
+}
+
+function packagedBinaryPathEntries(context: CommandContext): string[] {
+  const dirs = [
+    path.join(context.resourceRoot, "bin"),
+    path.join(context.appRoot, "binaries"),
+    path.join(context.appRoot, "bin"),
+  ];
+  return dirs.filter((dir, index) => existsSync(dir) && dirs.indexOf(dir) === index);
+}
+
+function envWithPackagedBinaries(context: CommandContext, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const entries = packagedBinaryPathEntries(context);
+  if (entries.length === 0) return { ...env };
+  const currentPath = env.PATH ?? "";
+  return {
+    ...env,
+    PATH: [...entries, currentPath].filter(Boolean).join(path.delimiter),
+  };
 }
 
 // Prefer the bun binary bundled with the app (binaries/ -> bin/ in resources)
@@ -660,12 +696,12 @@ function logSetupTerminal(message: string, details: Record<string, unknown> = {}
   console.info(`[setup-terminal] ${message}`, details);
 }
 
-function terminalEnv(): NodeJS.ProcessEnv {
+function terminalEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return {
-    ...process.env,
-    TERM: process.env.TERM || "xterm-256color",
-    COLORTERM: process.env.COLORTERM || "truecolor",
-    LANG: process.env.LANG || "en_US.UTF-8",
+    ...baseEnv,
+    TERM: baseEnv.TERM || "xterm-256color",
+    COLORTERM: baseEnv.COLORTERM || "truecolor",
+    LANG: baseEnv.LANG || "en_US.UTF-8",
   };
 }
 
@@ -737,7 +773,7 @@ function spawnTerminalProcess(
   id: string,
   command: string,
   args: string[],
-  options: { cwd?: string; cols: number; rows: number },
+  options: { cwd?: string; cols: number; rows: number; env?: NodeJS.ProcessEnv },
   emit: BackendEmit,
   hooks: { onData?: (data: string) => void; onExit?: () => void } = {},
 ): IPty {
@@ -769,7 +805,7 @@ function spawnTerminalProcess(
     cols: options.cols,
     rows: options.rows,
     cwd: options.cwd,
-    env: terminalEnv(),
+    env: terminalEnv(options.env),
   });
 
   terminalProcesses.set(id, terminalProcess);
@@ -1089,7 +1125,12 @@ async function spawnSetupTerminal(
       sessionId,
       shellPath,
       ["-lc", setupCommand],
-      { cwd: environment.worktreePath, cols: 80, rows: 24 },
+      {
+        cwd: environment.worktreePath,
+        cols: 80,
+        rows: 24,
+        env: envWithPackagedBinaries(context),
+      },
       context.emit,
       { onData: tracker.onData, onExit: tracker.onExit },
     );
@@ -1488,10 +1529,15 @@ async function startLocalServer(
   const port = await allocateLocalPort();
   let command = "";
   let cwd = environment.worktreePath;
-  const env: NodeJS.ProcessEnv = { ...process.env, PORT: String(port), HOSTNAME: "127.0.0.1", CWD: environment.worktreePath };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PORT: String(port),
+    HOSTNAME: "127.0.0.1",
+    CWD: environment.worktreePath,
+  };
 
   if (kind === "opencode") {
-    command = "opencode";
+    command = resolveOpenCodeBinary(context);
   } else if (kind === "claude") {
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "claude-bridge");
@@ -2353,13 +2399,23 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
 
   register("has_claude_credentials", () => pathExists(homePath(".claude", ".credentials.json")).then(async (exists) => exists || pathExists(homePath(".claude.json"))));
   register("get_credential_status", async () => ({ available: await commands.get("has_claude_credentials")?.({}, { storage: null as never, emit: () => undefined, appRoot: "", resourceRoot: "" }), expiresAt: null }));
-  register("check_claude_cli", () => commandExists("claude"));
+  register("check_claude_cli", (_args, context) => hasPackagedOrPathBinary(context, "claude"));
   register("check_claude_config", () => pathExists(homePath(".claude.json")));
-  register("check_opencode_cli", () => commandExists("opencode"));
-  register("check_codex_cli", () => commandExists("codex"));
+  register("check_opencode_cli", (_args, context) => hasPackagedOrPathBinary(context, "opencode"));
+  register("check_codex_cli", (_args, context) => hasPackagedOrPathBinary(context, "codex"));
   register("check_github_cli", () => commandExists("gh"));
-  register("check_any_ai_cli", async () => await commandExists("claude") || await commandExists("opencode") || await commandExists("codex"));
-  register("get_available_ai_cli", async () => await commandExists("claude") ? "claude" : await commandExists("opencode") ? "opencode" : await commandExists("codex") ? "codex" : null);
+  register("check_any_ai_cli", async (_args, context) =>
+    await hasPackagedOrPathBinary(context, "claude")
+    || await hasPackagedOrPathBinary(context, "opencode")
+    || await hasPackagedOrPathBinary(context, "codex"));
+  register("get_available_ai_cli", async (_args, context) =>
+    await hasPackagedOrPathBinary(context, "claude")
+      ? "claude"
+      : await hasPackagedOrPathBinary(context, "opencode")
+        ? "opencode"
+        : await hasPackagedOrPathBinary(context, "codex")
+          ? "codex"
+          : null);
 
   register("open_in_browser", ({ url }) => shell.openExternal(asString(url, "url")).then(() => undefined));
   register("reveal_in_file_manager", ({ path: filePath }) => shell.showItemInFolder(asString(filePath, "path")));
@@ -2485,7 +2541,8 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       rows: asTerminalDimension(rows, 24),
     });
   });
-  register("start_local_terminal_session", async ({ sessionId }, { storage, emit }) => {
+  register("start_local_terminal_session", async ({ sessionId }, context) => {
+    const { storage, emit } = context;
     const id = asString(sessionId, "sessionId");
     const storedConfig = terminalSessionConfigs.get(id);
     const config = storedConfig?.kind === "local" ? storedConfig : {
@@ -2498,7 +2555,18 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const env = await storage.getEnvironment(environmentId);
     if (!env?.worktreePath) throw new Error("Local environment worktree is not available");
     if (!await pathExists(env.worktreePath)) throw new Error(`Local environment worktree does not exist: ${env.worktreePath}`);
-    spawnTerminalProcess(id, resolveLocalShellPath(), ["-l"], { cwd: env.worktreePath, cols: config.cols, rows: config.rows }, emit);
+    spawnTerminalProcess(
+      id,
+      resolveLocalShellPath(),
+      ["-l"],
+      {
+        cwd: env.worktreePath,
+        cols: config.cols,
+        rows: config.rows,
+        env: envWithPackagedBinaries(context),
+      },
+      emit,
+    );
   });
   register("local_terminal_write", ({ sessionId, data }) => terminalProcesses.get(asString(sessionId, "sessionId"))?.write(asString(data, "data")));
   register("local_terminal_resize", ({ sessionId, cols, rows }) => terminalProcesses.get(asString(sessionId, "sessionId"))?.resize(

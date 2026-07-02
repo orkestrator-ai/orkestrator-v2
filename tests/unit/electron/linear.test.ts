@@ -60,7 +60,12 @@ describe("Linear backend API", () => {
   test("loads every Linear issue page until Linear reports completion", async () => {
     const pageCount = 26;
     const fetchMock = mock(async (_url: string | URL | Request, init?: RequestInit) => {
-      const request = JSON.parse(String(init?.body)) as { variables: { after: string | null } };
+      const request = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { after: string | null };
+      };
+      expect(request.query).toContain("sort: [{ manual: { order: Ascending } }]");
+      expect(request.query).toContain("sortOrder");
       const pageIndex = request.variables.after ? Number(request.variables.after.replace("cursor-", "")) : 0;
       const nextPage = pageIndex + 1;
 
@@ -71,7 +76,8 @@ describe("Linear backend API", () => {
               id: `issue-${pageIndex}`,
               identifier: `ENG-${pageIndex}`,
               title: `Issue ${pageIndex}`,
-              updatedAt: `2026-06-${String(pageIndex + 1).padStart(2, "0")}T12:00:00.000Z`,
+              sortOrder: pageCount - pageIndex,
+              updatedAt: `2026-06-${String(pageCount - pageIndex).padStart(2, "0")}T12:00:00.000Z`,
               state: { name: pageIndex % 2 === 0 ? "Todo" : "Done", type: "unstarted" },
               team: { key: "ENG", name: "Engineering" },
               assignee: { name: "Ada" },
@@ -93,6 +99,48 @@ describe("Linear backend API", () => {
     expect(issues).toHaveLength(pageCount);
     expect(issues[0]).toMatchObject({ identifier: "ENG-25", status: "Done", teamKey: "ENG" });
     expect(issues.at(-1)).toMatchObject({ identifier: "ENG-0", status: "Todo" });
+  });
+
+  test("orders issues by sortOrder with updatedAt and identifier tie-breakers", async () => {
+    // Nodes are intentionally supplied out of order to exercise the full comparator.
+    const nodes = [
+      { identifier: "ENG-UND-OLD", updatedAt: "2026-06-05T12:00:00.000Z" }, // no sortOrder
+      { identifier: "ENG-TIE-B", sortOrder: 5, updatedAt: "2026-06-02T12:00:00.000Z" },
+      { identifier: "ENG-3", sortOrder: 2, updatedAt: "2026-06-01T12:00:00.000Z" },
+      { identifier: "ENG-TIE-C", sortOrder: 5, updatedAt: "2026-06-09T12:00:00.000Z" }, // newer updatedAt
+      { identifier: "ENG-UND-NEW", updatedAt: "2026-06-20T12:00:00.000Z" }, // no sortOrder
+      { identifier: "ENG-1", sortOrder: 1, updatedAt: "2026-06-01T12:00:00.000Z" },
+      { identifier: "ENG-TIE-A", sortOrder: 5, updatedAt: "2026-06-02T12:00:00.000Z" }, // equal sortOrder+updatedAt as ENG-TIE-B
+    ].map((node, index) => ({
+      id: `issue-${index}`,
+      title: `Issue ${node.identifier}`,
+      state: { name: "Todo", type: "unstarted" },
+      team: { key: "ENG", name: "Engineering" },
+      assignee: { name: "Ada" },
+      priorityLabel: "High",
+      ...node,
+    }));
+
+    globalThis.fetch = mock(async () => jsonResponse({
+      data: {
+        issues: {
+          nodes,
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      },
+    })) as unknown as typeof fetch;
+
+    const issues = await listLinearIssues("lin_api_secret");
+
+    expect(issues.map((issue) => issue.identifier)).toEqual([
+      "ENG-1", // sortOrder 1
+      "ENG-3", // sortOrder 2
+      "ENG-TIE-C", // sortOrder 5, newest updatedAt wins
+      "ENG-TIE-A", // sortOrder 5, older updatedAt, identifier tie-break before B
+      "ENG-TIE-B", // sortOrder 5, older updatedAt, same updatedAt as A
+      "ENG-UND-NEW", // missing sortOrder sorts last, newest updatedAt first
+      "ENG-UND-OLD", // missing sortOrder sorts last
+    ]);
   });
 
   test("fails issue pagination when Linear reports another page without a cursor", async () => {
@@ -135,6 +183,7 @@ describe("Linear backend API", () => {
           identifier: "ENG-123",
           title: "Ship Linear integration",
           description: "Build the integration",
+          sortOrder: 42,
           updatedAt: "2026-06-28T12:00:00.000Z",
           createdAt: "2026-06-20T12:00:00.000Z",
           url: "https://linear.app/acme/issue/ENG-123",
@@ -154,6 +203,7 @@ describe("Linear backend API", () => {
       id: "issue-1",
       identifier: "ENG-123",
       description: "Build the integration",
+      sortOrder: 42,
       creatorName: "Grace",
       projectName: "Integrations",
       cycleName: "Cycle 1",

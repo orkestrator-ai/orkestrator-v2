@@ -180,6 +180,47 @@ describe("LinearTicketsView", () => {
     });
   });
 
+  test("preserves the backend issue order within a status group", async () => {
+    // Backend order (by manual sortOrder) is intentionally neither alphabetical
+    // nor updatedAt-descending, so a re-sort in the component would be visible.
+    const orderedIssues: LinearIssueListItem[] = [
+      {
+        id: "issue-c",
+        identifier: "ENG-30",
+        title: "Gamma ticket",
+        status: "Todo",
+        updatedAt: "2026-06-10T12:00:00.000Z",
+        teamKey: "ENG",
+        sortOrder: 1,
+      },
+      {
+        id: "issue-a",
+        identifier: "ENG-10",
+        title: "Alpha ticket",
+        status: "Todo",
+        updatedAt: "2026-06-28T12:00:00.000Z",
+        teamKey: "ENG",
+        sortOrder: 2,
+      },
+      {
+        id: "issue-b",
+        identifier: "ENG-20",
+        title: "Beta ticket",
+        status: "Todo",
+        updatedAt: "2026-06-20T12:00:00.000Z",
+        teamKey: "ENG",
+        sortOrder: 3,
+      },
+    ];
+    getLinearIssuesMock.mockResolvedValue(orderedIssues);
+
+    renderLinearTicketsView();
+
+    await screen.findByText("Gamma ticket");
+    const titles = screen.getAllByText(/ ticket$/).map((element) => element.textContent);
+    expect(titles).toEqual(["Gamma ticket", "Alpha ticket", "Beta ticket"]);
+  });
+
   test("opens ticket details and starts a Linear-backed build", async () => {
     renderLinearTicketsView();
 

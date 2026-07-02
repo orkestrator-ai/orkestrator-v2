@@ -101,6 +101,48 @@ describe("Linear backend API", () => {
     expect(issues.at(-1)).toMatchObject({ identifier: "ENG-0", status: "Todo" });
   });
 
+  test("orders issues by sortOrder with updatedAt and identifier tie-breakers", async () => {
+    // Nodes are intentionally supplied out of order to exercise the full comparator.
+    const nodes = [
+      { identifier: "ENG-UND-OLD", updatedAt: "2026-06-05T12:00:00.000Z" }, // no sortOrder
+      { identifier: "ENG-TIE-B", sortOrder: 5, updatedAt: "2026-06-02T12:00:00.000Z" },
+      { identifier: "ENG-3", sortOrder: 2, updatedAt: "2026-06-01T12:00:00.000Z" },
+      { identifier: "ENG-TIE-C", sortOrder: 5, updatedAt: "2026-06-09T12:00:00.000Z" }, // newer updatedAt
+      { identifier: "ENG-UND-NEW", updatedAt: "2026-06-20T12:00:00.000Z" }, // no sortOrder
+      { identifier: "ENG-1", sortOrder: 1, updatedAt: "2026-06-01T12:00:00.000Z" },
+      { identifier: "ENG-TIE-A", sortOrder: 5, updatedAt: "2026-06-02T12:00:00.000Z" }, // equal sortOrder+updatedAt as ENG-TIE-B
+    ].map((node, index) => ({
+      id: `issue-${index}`,
+      title: `Issue ${node.identifier}`,
+      state: { name: "Todo", type: "unstarted" },
+      team: { key: "ENG", name: "Engineering" },
+      assignee: { name: "Ada" },
+      priorityLabel: "High",
+      ...node,
+    }));
+
+    globalThis.fetch = mock(async () => jsonResponse({
+      data: {
+        issues: {
+          nodes,
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      },
+    })) as unknown as typeof fetch;
+
+    const issues = await listLinearIssues("lin_api_secret");
+
+    expect(issues.map((issue) => issue.identifier)).toEqual([
+      "ENG-1", // sortOrder 1
+      "ENG-3", // sortOrder 2
+      "ENG-TIE-C", // sortOrder 5, newest updatedAt wins
+      "ENG-TIE-A", // sortOrder 5, older updatedAt, identifier tie-break before B
+      "ENG-TIE-B", // sortOrder 5, older updatedAt, same updatedAt as A
+      "ENG-UND-NEW", // missing sortOrder sorts last, newest updatedAt first
+      "ENG-UND-OLD", // missing sortOrder sorts last
+    ]);
+  });
+
   test("fails issue pagination when Linear reports another page without a cursor", async () => {
     globalThis.fetch = mock(async () => jsonResponse({
       data: {

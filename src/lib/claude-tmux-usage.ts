@@ -15,8 +15,16 @@ interface IndexedUsageSummary extends TmuxAgentUsageSummary {
 
 const AGENT_USAGE_RE =
   /^(?<name>.+?)\s*[·•]\s*(?<toolUseCount>\d[\d,]*)\s+tools?\s+uses?\s*[·•]\s*(?<tokens>\d[\d,.]*(?:[kKmMbB])?)\s+tokens?\b/;
+// Claude's current agent rows render as "[role]␣␣name … <duration> · ↓ <tokens>".
+// The usage tail (optional right-aligned duration, then the token count) is
+// anchored to the end of the line so the leading label is captured as a single
+// unit; the optional role column is split off afterwards. This avoids letting a
+// multi-word name be mistaken for the role when no role column is present.
 const AGENT_TOKEN_USAGE_RE =
-  /^(?:(?<role>[\p{L}\p{N}_ -]{1,48}?)\s{2,})?(?<name>.+?)\s+(?:(?<duration>(?:\d+\s*[hms]\s*)+)\s*)?(?:[·•]\s*)?[↓↑↕]?\s*(?<tokens>\d[\d,.]*(?:[kKmMbB])?)\s+tokens?\b/iu;
+  /^(?<label>.+?)\s{2,}(?:(?<duration>(?:\d+\s*[hms]\s*)+)\s*(?:[·•]\s*)?)?[↓↑↕]?\s*(?<tokens>\d[\d,.]*(?:[kKmMbB])?)\s+tokens?\s*$/iu;
+// A role column is a single spaceless subagent-type token (e.g. "Explore",
+// "general-purpose"); multi-word segments are always treated as the name.
+const AGENT_ROLE_COLUMN_RE = /^[\p{L}\p{N}_-]+$/u;
 const AGENT_HEADER_RE = /\bRunning\s+\d+\s+(?<role>.+?)\s+agents?\b/i;
 
 function stripAnsi(text: string): string {
@@ -173,12 +181,24 @@ export function parseTmuxAgentUsageSummaries(
     const tokenOnlyMatch = AGENT_TOKEN_USAGE_RE.exec(line);
     if (!tokenOnlyMatch?.groups) continue;
 
-    const inlineRole = tokenOnlyMatch.groups.role?.trim();
-    if (!inlineRole && !currentRole && !hasAgentLineMarker(rawLine)) continue;
-
-    const name = tokenOnlyMatch.groups.name?.replace(/\s*[·•]\s*$/, "").trim();
+    const label = tokenOnlyMatch.groups.label?.trim();
     const tokens = tokenOnlyMatch.groups.tokens;
-    if (!name || !tokens) continue;
+    if (!label || !tokens) continue;
+
+    // Split an optional single-token role column off the front of the label.
+    // Everything else (including any remaining columns) is the agent name.
+    const [firstSegment, ...restSegments] = label.split(/\s{2,}/);
+    let inlineRole: string | undefined;
+    let name: string;
+    if (firstSegment && restSegments.length > 0 && AGENT_ROLE_COLUMN_RE.test(firstSegment)) {
+      inlineRole = firstSegment.trim();
+      name = restSegments.join(" ").trim();
+    } else {
+      name = label;
+    }
+
+    if (!inlineRole && !currentRole && !hasAgentLineMarker(rawLine)) continue;
+    if (!name) continue;
 
     const tokenCount = parseCompactNumber(tokens);
     if (tokenCount === null) continue;

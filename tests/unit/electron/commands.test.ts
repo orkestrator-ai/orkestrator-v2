@@ -3016,6 +3016,63 @@ exit 0
     }
   });
 
+  test("launches the local opencode server through the bundled opencode binary in resources", async () => {
+    const appRoot = await createTempDir("ork-electron-app-opencode-");
+    const resourceRoot = await createTempDir("ork-electron-res-opencode-");
+    const worktreePath = await createTempDir("ork-electron-worktree-opencode-");
+
+    const markerPath = path.join(resourceRoot, "opencode-was-used.log");
+    const opencodeWrapperDir = path.join(resourceRoot, "bin");
+    const opencodeWrapperPath = path.join(opencodeWrapperDir, "opencode");
+    await fs.mkdir(opencodeWrapperDir, { recursive: true });
+    await fs.writeFile(
+      opencodeWrapperPath,
+      `#!/bin/sh
+printf 'used %s\\n' "$*" >> "${markerPath}"
+PORT=""
+HOST="127.0.0.1"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --port)
+      shift
+      PORT="$1"
+      ;;
+    --hostname)
+      shift
+      HOST="$1"
+      ;;
+  esac
+  shift
+done
+exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:http"); const port = Number(process.env.PORT_ARG); const host = process.env.HOST_ARG || "127.0.0.1"; http.createServer((req, res) => { if (req.url === "/global/health") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ ok: true })); return; } res.writeHead(404); res.end(); }).listen(port, host);'
+`,
+    );
+    await fs.chmod(opencodeWrapperPath, 0o755);
+
+    const environment = createEnvironment({ worktreePath });
+    const { context, updates } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = resourceRoot;
+
+    const commands = createCommandRegistry();
+    await expect(commands.get("check_opencode_cli")?.({}, context)).resolves.toBe(true);
+    const result = await commands.get("start_local_opencode_server_cmd")?.({ environmentId: environment.id }, context) as {
+      port: number;
+      pid: number;
+      wasRunning: boolean;
+    };
+
+    try {
+      expect(result.wasRunning).toBe(false);
+      expect(result.port).toBeGreaterThan(0);
+      await expect(requestOk(result.port, "/global/health")).resolves.toBe(true);
+      expect(await fs.readFile(markerPath, "utf8")).toContain("used serve --port");
+      expect(updates).toContainEqual({ localOpencodePort: result.port, opencodePid: result.pid });
+    } finally {
+      await commands.get("stop_local_opencode_server_cmd")?.({ environmentId: environment.id }, context);
+    }
+  });
+
   test("starts in-container bridges with bun, not node", async () => {
     const hostPort = await reserveFreePort();
     const pidFile = path.join(await createTempDir("ork-bridge-pid-"), "pid");
@@ -3095,8 +3152,12 @@ exit 0
 
   test("starts local terminal sessions through a PTY and forwards byte payloads", async () => {
     const worktreePath = await createTempDir("ork-electron-terminal-");
+    const resourceRoot = await createTempDir("ork-electron-terminal-res-");
+    const packagedBinDir = path.join(resourceRoot, "bin");
+    await fs.mkdir(packagedBinDir, { recursive: true });
     const environment = createEnvironment({ worktreePath });
     const { context, emitted } = createContext(environment);
+    context.resourceRoot = resourceRoot;
     const commands = createCommandRegistry();
 
     const sessionId = await commands.get("create_local_terminal_session")?.(
@@ -3114,6 +3175,8 @@ exit 0
       rows: 43,
       cwd: worktreePath,
     });
+    const terminalProcessEnv = spawnCall?.[2]?.env as NodeJS.ProcessEnv | undefined;
+    expect(terminalProcessEnv?.PATH?.split(path.delimiter)[0]).toBe(packagedBinDir);
 
     ptyProcesses[0]?.emitData("ready\r\n");
     expect(emitted).toEqual([

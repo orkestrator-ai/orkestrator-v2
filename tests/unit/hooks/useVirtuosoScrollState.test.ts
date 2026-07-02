@@ -1018,6 +1018,211 @@ describe("useVirtuosoScrollState", () => {
       }
     });
 
+    test("stickToBottomOnActivation waits for Virtuoso to mount after activation", async () => {
+      const { result, rerender } = renderHook(
+        ({ isActive }) =>
+          useVirtuosoScrollState({
+            isActive,
+            stickToBottomOnActivation: true,
+          }),
+        { initialProps: { isActive: false } }
+      );
+
+      rerender({ isActive: true });
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      });
+
+      const scrollToIndexCalls: any[] = [];
+      const scrollToCalls: any[] = [];
+      const scroller = document.createElement("div");
+      document.body.appendChild(scroller);
+
+      try {
+        result.current.virtuosoRef.current = {
+          scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
+          scrollTo: (opts: any) => scrollToCalls.push(opts),
+          getState: () => {},
+        } as any;
+
+        act(() => {
+          result.current.scrollProps.scrollerRef(scroller);
+        });
+
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        });
+
+        expect(scrollToIndexCalls).toEqual([{ index: "LAST", align: "end" }]);
+        expect(scrollToCalls).toEqual([
+          { top: 10_000_000, behavior: "auto" },
+        ]);
+      } finally {
+        document.body.removeChild(scroller);
+      }
+    });
+
+    test("keeps retrying until the Virtuoso handle is ready while the scroller stays mounted", async () => {
+      // Covers the retry branch where the scroller is present at activation but
+      // the Virtuoso handle only becomes ready a few frames later. A controlled
+      // getter simulates the handle arriving on the 4th readiness check, which
+      // is deterministic regardless of the (near-instant) happy-dom rAF timing.
+      const { result, rerender } = renderHook(
+        ({ isActive }) =>
+          useVirtuosoScrollState({
+            isActive,
+            stickToBottomOnActivation: true,
+          }),
+        { initialProps: { isActive: false } }
+      );
+
+      const scroller = document.createElement("div");
+      document.body.appendChild(scroller);
+      const scrollToIndexCalls: any[] = [];
+      const scrollToCalls: any[] = [];
+      const realHandle = {
+        scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
+        scrollTo: (opts: any) => scrollToCalls.push(opts),
+        getState: () => {},
+      };
+
+      let reads = 0;
+      const READY_AFTER = 3;
+      Object.defineProperty(result.current.virtuosoRef, "current", {
+        configurable: true,
+        get() {
+          reads += 1;
+          return reads > READY_AFTER ? realHandle : null;
+        },
+        set() {},
+      });
+
+      try {
+        // Scroller mounts first, then the tab activates.
+        act(() => {
+          result.current.scrollProps.scrollerRef(scroller);
+        });
+        rerender({ isActive: true });
+
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        });
+
+        // The handle became ready on a later retry, so exactly one activation
+        // scroll fired once it was available.
+        expect(reads).toBeGreaterThan(READY_AFTER);
+        expect(scrollToIndexCalls).toEqual([{ index: "LAST", align: "end" }]);
+        expect(scrollToCalls).toEqual([{ top: 10_000_000, behavior: "auto" }]);
+      } finally {
+        Object.defineProperty(result.current.virtuosoRef, "current", {
+          configurable: true,
+          writable: true,
+          value: null,
+        });
+        document.body.removeChild(scroller);
+      }
+    });
+
+    test("clears pending activation scroll after readiness retries are exhausted (no stale re-fire on scroller remount)", async () => {
+      // Covers the exhaustion branch: the scroller is present but the handle
+      // never becomes ready within the retry budget. The pending flag must be
+      // cleared so a later scroller remount can't re-fire the stale activation
+      // scroll and yank a user who has since scrolled up back to the bottom.
+      const { result, rerender } = renderHook(
+        ({ isActive }) =>
+          useVirtuosoScrollState({
+            isActive,
+            stickToBottomOnActivation: true,
+          }),
+        { initialProps: { isActive: false } }
+      );
+
+      const scroller = document.createElement("div");
+      const remount = document.createElement("div");
+      document.body.appendChild(scroller);
+      document.body.appendChild(remount);
+
+      try {
+        // Activate, then mount the scroller — but never provide a handle, so
+        // every readiness check fails until the retry budget is exhausted.
+        rerender({ isActive: true });
+        act(() => {
+          result.current.scrollProps.scrollerRef(scroller);
+        });
+
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        });
+
+        // The handle is now ready and the scroller remounts. Because the
+        // pending flag was cleared on exhaustion, this must NOT fire a scroll.
+        const scrollToIndexCalls: any[] = [];
+        const scrollToCalls: any[] = [];
+        result.current.virtuosoRef.current = {
+          scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
+          scrollTo: (opts: any) => scrollToCalls.push(opts),
+          getState: () => {},
+        } as any;
+
+        act(() => {
+          result.current.scrollProps.scrollerRef(remount);
+        });
+
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        });
+
+        expect(scrollToIndexCalls).toEqual([]);
+        expect(scrollToCalls).toEqual([]);
+      } finally {
+        document.body.removeChild(scroller);
+        document.body.removeChild(remount);
+      }
+    });
+
+    test("fires only one activation scroll when both activation effects run on the same transition", async () => {
+      // Both the activation effect and the scroller-keyed effect run on the
+      // false→true transition. The rAF double-schedule guard must collapse them
+      // into a single scroll rather than stacking two.
+      const { result, rerender } = renderHook(
+        ({ isActive }) =>
+          useVirtuosoScrollState({
+            isActive,
+            stickToBottomOnActivation: true,
+          }),
+        { initialProps: { isActive: false } }
+      );
+
+      const scroller = document.createElement("div");
+      document.body.appendChild(scroller);
+      const scrollToIndexCalls: any[] = [];
+      const scrollToCalls: any[] = [];
+
+      try {
+        // Both the scroller and the handle are ready before activation.
+        result.current.virtuosoRef.current = {
+          scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
+          scrollTo: (opts: any) => scrollToCalls.push(opts),
+          getState: () => {},
+        } as any;
+        act(() => {
+          result.current.scrollProps.scrollerRef(scroller);
+        });
+
+        rerender({ isActive: true });
+
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        });
+
+        expect(scrollToIndexCalls).toEqual([{ index: "LAST", align: "end" }]);
+        expect(scrollToCalls).toEqual([{ top: 10_000_000, behavior: "auto" }]);
+      } finally {
+        document.body.removeChild(scroller);
+      }
+    });
+
     test("cancels pending activation scroll if isActive flips false before rAF fires", async () => {
       // The activation effect schedules its instant jump via rAF and
       // returns a cleanup that cancels it. If the user toggles tabs again

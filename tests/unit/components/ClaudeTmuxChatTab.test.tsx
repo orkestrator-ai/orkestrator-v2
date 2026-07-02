@@ -608,7 +608,7 @@ describe("ClaudeTmuxChatTab", () => {
     expect(screen.getByRole("button", { name: /terminal/i })).toBeTruthy();
   });
 
-  test("surfaces Claude tmux agent tool-use and token counts in native rows", async () => {
+  test("surfaces Claude tmux agent tokens in native rows", async () => {
     mockRunningTmuxStatus();
     getTranscriptMock.mockImplementation(async () => [
       {
@@ -645,8 +645,66 @@ Running 1 Explore agent...
       />,
     );
 
-    expect(await screen.findByText("8 tool uses")).toBeTruthy();
-    expect(screen.getByText("20.4k tokens")).toBeTruthy();
+    expect(await screen.findByText("20.4k tokens")).toBeTruthy();
+    expect(screen.queryByText("8 tool uses")).toBeNull();
+    expect(screen.queryByText("0 updates")).toBeNull();
+  });
+
+  test("surfaces token-only usage for completed agents from current Claude tmux rows", async () => {
+    mockRunningTmuxStatus();
+    getTranscriptMock.mockImplementation(async () => [
+      {
+        type: "assistant",
+        uuid: "assistant-agent-1",
+        timestamp: "2026-06-25T18:20:00.000Z",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "agent-1",
+              name: "Agent",
+              input: {
+                description: "Review db-api test correctness",
+                subagent_type: "Explore",
+                prompt: "Read the db-api tests and report issues.",
+              },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        uuid: "agent-result-1",
+        timestamp: "2026-06-25T18:21:06.000Z",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "agent-1",
+              content: "done",
+            },
+          ],
+        },
+      },
+    ]);
+    capturePaneMock.mockImplementation(async () => `
+● main
+○ Explore  Review db-api test correctness                 1m 6s · ↓ 45.7k tokens
+`);
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByText("45.7k tokens")).toBeTruthy();
+    expect(screen.getByText("Success")).toBeTruthy();
+    expect(screen.queryByText("0 tools")).toBeNull();
     expect(screen.queryByText("0 updates")).toBeNull();
   });
 

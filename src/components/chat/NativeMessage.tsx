@@ -1000,10 +1000,15 @@ function buildAgentDisplayLabel(name: string, role?: string): string {
   return role ? `${name} (${role})` : name;
 }
 
+function shouldShowTokenOnlyAgentUsage(part: NativeMessagePart): boolean {
+  return part.agentUsageDisplay === "token-only" && Boolean(part.tokenCountText);
+}
+
 function SubagentPart({ part }: { part: NativeMessagePart }) {
   const [isOpen, setIsOpen] = useState(false);
   const subagentActions = part.subagentActions ?? [];
   const hasExternalUsage = typeof part.toolUseCount === "number";
+  const tokenOnlyUsage = shouldShowTokenOnlyAgentUsage(part);
   const toolCount = part.toolUseCount ?? part.subagentActionCount ?? 0;
   const displayName = part.subagentName || part.subagentRole || part.content || "subagent";
   const displayLabel = buildAgentDisplayLabel(displayName, part.subagentRole);
@@ -1048,11 +1053,17 @@ function SubagentPart({ part }: { part: NativeMessagePart }) {
             </div>
           </div>
           <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">
-            <div>{toolCountLabel}</div>
-            <div>
-              {part.tokenCountText ??
-                `${subagentActions.length} ${subagentActions.length === 1 ? "update" : "updates"}`}
-            </div>
+            {tokenOnlyUsage ? (
+              <div>{part.tokenCountText}</div>
+            ) : (
+              <>
+                <div>{toolCountLabel}</div>
+                <div>
+                  {part.tokenCountText ??
+                    `${subagentActions.length} ${subagentActions.length === 1 ? "update" : "updates"}`}
+                </div>
+              </>
+            )}
           </div>
         </div>
       </CollapsibleTrigger>
@@ -1141,6 +1152,7 @@ function TaskGroupPart({
     "name",
   );
   const hasExternalUsage = typeof part.task.toolUseCount === "number";
+  const tokenOnlyUsage = shouldShowTokenOnlyAgentUsage(part.task);
   const genericToolLabel = /^(agent|task)$/i.test(toolLabel);
   const displayName =
     explicitName ?? description ?? (genericToolLabel ? "Subagent" : toolLabel);
@@ -1216,11 +1228,17 @@ function TaskGroupPart({
             </div>
           </div>
           <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">
-            <div>{toolCountLabel}</div>
-            <div>
-              {part.task.tokenCountText ??
-                `${childCount} ${childCount === 1 ? "update" : "updates"}`}
-            </div>
+            {tokenOnlyUsage ? (
+              <div>{part.task.tokenCountText}</div>
+            ) : (
+              <>
+                <div>{toolCountLabel}</div>
+                <div>
+                  {part.task.tokenCountText ??
+                    `${childCount} ${childCount === 1 ? "update" : "updates"}`}
+                </div>
+              </>
+            )}
           </div>
         </div>
       </CollapsibleTrigger>

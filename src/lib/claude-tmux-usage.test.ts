@@ -40,6 +40,29 @@ Running 3 Explore agents...
     ]);
   });
 
+  test("parses token-only counts from Claude's current tmux agent rows", () => {
+    const summaries = parseTmuxAgentUsageSummaries(`
+● main
+○ Explore  Review db-api test correctness                 1m 6s · ↓ 45.7k tokens
+○ Explore  Review web test correctness                      57s · ↓ 37.3k tokens
+`);
+
+    expect(summaries).toEqual([
+      {
+        name: "Review db-api test correctness",
+        role: "Explore",
+        tokenCount: 45_700,
+        tokenCountText: "45.7k tokens",
+      },
+      {
+        name: "Review web test correctness",
+        role: "Explore",
+        tokenCount: 37_300,
+        tokenCountText: "37.3k tokens",
+      },
+    ]);
+  });
+
   test("applies parsed counts to matching Claude Agent tool parts", () => {
     const message: ClaudeMessage = {
       id: "assistant-1",
@@ -82,6 +105,7 @@ Running 3 Explore agents...
       toolUseCount: 8,
       tokenCount: 20_400,
       tokenCountText: "20.4k tokens",
+      agentUsageDisplay: "token-only",
     });
     expect(updated?.parts[1]).not.toHaveProperty("toolUseCount");
   });
@@ -224,6 +248,48 @@ Running 3 Worker agents...
       toolUseCount: 8,
       tokenCount: 20_400,
       tokenCountText: "20.4k tokens",
+      agentUsageDisplay: "token-only",
     });
+  });
+
+  test("applies exact token-only matches to completed agents", () => {
+    const message: ClaudeMessage = {
+      id: "assistant-1",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-25T18:20:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          toolName: "Agent",
+          toolTitle: "Agent",
+          toolState: "success",
+          toolArgs: {
+            description: "Review db-api test correctness",
+            subagent_type: "Explore",
+          },
+          toolUseId: "agent-1",
+        },
+      ],
+    };
+
+    const [updated] = applyTmuxAgentUsageSummaries(
+      [message],
+      [
+        {
+          name: "Review db-api test correctness",
+          role: "Explore",
+          tokenCount: 45_700,
+          tokenCountText: "45.7k tokens",
+        },
+      ],
+    );
+
+    expect(updated?.parts[0]).toMatchObject({
+      tokenCount: 45_700,
+      tokenCountText: "45.7k tokens",
+      agentUsageDisplay: "token-only",
+    });
+    expect(updated?.parts[0]).not.toHaveProperty("toolUseCount");
   });
 });

@@ -207,6 +207,7 @@ describe("native message adapters", () => {
           toolUseCount: 8,
           tokenCount: 20_400,
           tokenCountText: "20.4k tokens",
+          agentUsageDisplay: "token-only",
         },
       ],
     };
@@ -218,6 +219,7 @@ describe("native message adapters", () => {
       expect(normalized.parts[0].task.toolUseCount).toBe(8);
       expect(normalized.parts[0].task.tokenCount).toBe(20_400);
       expect(normalized.parts[0].task.tokenCountText).toBe("20.4k tokens");
+      expect(normalized.parts[0].task.agentUsageDisplay).toBe("token-only");
     }
   });
 

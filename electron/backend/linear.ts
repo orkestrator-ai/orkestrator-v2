@@ -26,6 +26,7 @@ export type LinearIssueListItem = {
   title: string;
   status: string;
   statusType?: string;
+  sortOrder?: number;
   updatedAt: string;
   createdAt?: string;
   url?: string;
@@ -77,6 +78,10 @@ function asString(value: unknown, fallback = ""): string {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function nextPageCursor(
@@ -175,6 +180,7 @@ function issueFromNode(value: unknown): LinearIssueListItem | null {
     title,
     status: asString(state.name, "No status"),
     statusType: optionalString(state.type),
+    sortOrder: optionalNumber(value.sortOrder),
     updatedAt,
     createdAt: optionalString(value.createdAt),
     url: optionalString(value.url),
@@ -208,6 +214,17 @@ function detailFromNode(value: unknown): LinearIssueDetail | null {
   };
 }
 
+function compareLinearIssuePosition(a: LinearIssueListItem, b: LinearIssueListItem): number {
+  if (a.sortOrder !== undefined && b.sortOrder !== undefined && a.sortOrder !== b.sortOrder) {
+    return a.sortOrder - b.sortOrder;
+  }
+  if (a.sortOrder !== undefined && b.sortOrder === undefined) return -1;
+  if (a.sortOrder === undefined && b.sortOrder !== undefined) return 1;
+  const updatedAtDelta = b.updatedAt.localeCompare(a.updatedAt);
+  if (updatedAtDelta !== 0) return updatedAtDelta;
+  return a.identifier.localeCompare(b.identifier);
+}
+
 export async function verifyLinearConnection(apiKey: string): Promise<LinearViewer> {
   const data = await linearGraphql<{ viewer: unknown }>(
     apiKey,
@@ -233,11 +250,12 @@ export async function listLinearIssues(apiKey: string): Promise<LinearIssueListI
     const data: LinearIssuesResponse = await linearGraphql<LinearIssuesResponse>(
       apiKey,
       `query OrkestratorLinearIssues($after: String) {
-        issues(first: 100, after: $after) {
+        issues(first: 100, after: $after, sort: [{ manual: { order: Ascending } }]) {
           nodes {
             id
             identifier
             title
+            sortOrder
             updatedAt
             createdAt
             url
@@ -266,7 +284,7 @@ export async function listLinearIssues(apiKey: string): Promise<LinearIssueListI
     cursor = nextCursor;
   }
 
-  return issues.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return issues.sort(compareLinearIssuePosition);
 }
 
 export async function getLinearIssue(apiKey: string, issueId: string): Promise<LinearIssueDetail> {
@@ -278,6 +296,7 @@ export async function getLinearIssue(apiKey: string, issueId: string): Promise<L
         identifier
         title
         description
+        sortOrder
         updatedAt
         createdAt
         url

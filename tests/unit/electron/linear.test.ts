@@ -60,7 +60,12 @@ describe("Linear backend API", () => {
   test("loads every Linear issue page until Linear reports completion", async () => {
     const pageCount = 26;
     const fetchMock = mock(async (_url: string | URL | Request, init?: RequestInit) => {
-      const request = JSON.parse(String(init?.body)) as { variables: { after: string | null } };
+      const request = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { after: string | null };
+      };
+      expect(request.query).toContain("sort: [{ manual: { order: Ascending } }]");
+      expect(request.query).toContain("sortOrder");
       const pageIndex = request.variables.after ? Number(request.variables.after.replace("cursor-", "")) : 0;
       const nextPage = pageIndex + 1;
 
@@ -71,7 +76,8 @@ describe("Linear backend API", () => {
               id: `issue-${pageIndex}`,
               identifier: `ENG-${pageIndex}`,
               title: `Issue ${pageIndex}`,
-              updatedAt: `2026-06-${String(pageIndex + 1).padStart(2, "0")}T12:00:00.000Z`,
+              sortOrder: pageCount - pageIndex,
+              updatedAt: `2026-06-${String(pageCount - pageIndex).padStart(2, "0")}T12:00:00.000Z`,
               state: { name: pageIndex % 2 === 0 ? "Todo" : "Done", type: "unstarted" },
               team: { key: "ENG", name: "Engineering" },
               assignee: { name: "Ada" },
@@ -135,6 +141,7 @@ describe("Linear backend API", () => {
           identifier: "ENG-123",
           title: "Ship Linear integration",
           description: "Build the integration",
+          sortOrder: 42,
           updatedAt: "2026-06-28T12:00:00.000Z",
           createdAt: "2026-06-20T12:00:00.000Z",
           url: "https://linear.app/acme/issue/ENG-123",
@@ -154,6 +161,7 @@ describe("Linear backend API", () => {
       id: "issue-1",
       identifier: "ENG-123",
       description: "Build the integration",
+      sortOrder: 42,
       creatorName: "Grace",
       projectName: "Integrations",
       cycleName: "Cycle 1",

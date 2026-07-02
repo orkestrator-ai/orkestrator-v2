@@ -162,6 +162,12 @@ const linearIssue: LinearIssueDetail = {
   projectName: "Integrations",
   cycleName: "Cycle 1",
   labels: ["linear", "pipeline"],
+  comments: [{
+    id: "comment-1",
+    body: "Customer asked us to keep this small.",
+    createdAt: "2026-06-28T12:01:00.000Z",
+    authorName: "Ada",
+  }],
 };
 
 describe("useBuildPipeline", () => {
@@ -873,6 +879,7 @@ describe("useBuildPipeline", () => {
       "Assignee: Ada",
       "Priority: High",
       "Labels: linear, pipeline",
+      "Ada: Customer asked us to keep this small.",
     ]);
     await waitFor(() => {
       expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(

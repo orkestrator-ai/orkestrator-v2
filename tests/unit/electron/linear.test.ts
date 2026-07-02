@@ -3,6 +3,7 @@ import {
   getLinearIssue,
   listLinearIssues,
   postLinearCompletionComment,
+  postLinearIssueComment,
   sanitizeLinearError,
   verifyLinearConnection,
 } from "../../../electron/backend/linear";
@@ -175,29 +176,57 @@ describe("Linear backend API", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  test("maps Linear issue details and labels", async () => {
-    globalThis.fetch = mock(async () => jsonResponse({
-      data: {
-        issue: {
-          id: "issue-1",
-          identifier: "ENG-123",
-          title: "Ship Linear integration",
-          description: "Build the integration",
-          sortOrder: 42,
-          updatedAt: "2026-06-28T12:00:00.000Z",
-          createdAt: "2026-06-20T12:00:00.000Z",
-          url: "https://linear.app/acme/issue/ENG-123",
-          priorityLabel: "High",
-          state: { name: "Todo", type: "unstarted" },
-          team: { key: "ENG", name: "Engineering" },
-          assignee: { name: "Ada" },
-          creator: { name: "Grace" },
-          project: { name: "Integrations" },
-          cycle: { name: "Cycle 1" },
-          labels: { nodes: [{ name: "linear" }, { name: "pipeline" }] },
+  test("maps Linear issue details, labels, and comments", async () => {
+    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { query: string };
+      if (request.query.includes("OrkestratorLinearIssueComments")) {
+        return jsonResponse({
+          data: {
+            issue: {
+              comments: {
+                nodes: [{
+                  id: "comment-2",
+                  body: "Second comment",
+                  createdAt: "2026-06-28T12:05:00.000Z",
+                  updatedAt: "2026-06-28T12:05:00.000Z",
+                  user: { name: "Ada" },
+                }, {
+                  id: "comment-1",
+                  body: "First comment",
+                  createdAt: "2026-06-28T12:01:00.000Z",
+                  updatedAt: "2026-06-28T12:01:00.000Z",
+                  user: { name: "Grace" },
+                }],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          },
+        });
+      }
+
+      return jsonResponse({
+        data: {
+          issue: {
+            id: "issue-1",
+            identifier: "ENG-123",
+            title: "Ship Linear integration",
+            description: "Build the integration",
+            sortOrder: 42,
+            updatedAt: "2026-06-28T12:00:00.000Z",
+            createdAt: "2026-06-20T12:00:00.000Z",
+            url: "https://linear.app/acme/issue/ENG-123",
+            priorityLabel: "High",
+            state: { name: "Todo", type: "unstarted" },
+            team: { key: "ENG", name: "Engineering" },
+            assignee: { name: "Ada" },
+            creator: { name: "Grace" },
+            project: { name: "Integrations" },
+            cycle: { name: "Cycle 1" },
+            labels: { nodes: [{ name: "linear" }, { name: "pipeline" }] },
+          },
         },
-      },
-    })) as unknown as typeof fetch;
+      });
+    }) as unknown as typeof fetch;
 
     await expect(getLinearIssue("lin_api_secret", "issue-1")).resolves.toMatchObject({
       id: "issue-1",
@@ -208,6 +237,47 @@ describe("Linear backend API", () => {
       projectName: "Integrations",
       cycleName: "Cycle 1",
       labels: ["linear", "pipeline"],
+      comments: [
+        { id: "comment-1", body: "First comment", authorName: "Grace" },
+        { id: "comment-2", body: "Second comment", authorName: "Ada" },
+      ],
+    });
+  });
+
+  test("creates issue comments and maps the created comment", async () => {
+    const fetchMock = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { query: string; variables: Record<string, string> };
+      expect(request.query).toContain("OrkestratorLinearIssueComment");
+      expect(request.variables).toMatchObject({
+        issueId: "issue-1",
+        body: "New comment",
+      });
+      return jsonResponse({
+        data: {
+          commentCreate: {
+            success: true,
+            comment: {
+              id: "comment-new",
+              body: "New comment",
+              createdAt: "2026-06-28T12:10:00.000Z",
+              updatedAt: "2026-06-28T12:10:00.000Z",
+              user: { name: "Ada" },
+            },
+          },
+        },
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(postLinearIssueComment("lin_api_secret", {
+      issueId: "issue-1",
+      body: " New comment ",
+    })).resolves.toEqual({
+      id: "comment-new",
+      body: "New comment",
+      createdAt: "2026-06-28T12:10:00.000Z",
+      updatedAt: "2026-06-28T12:10:00.000Z",
+      authorName: "Ada",
     });
   });
 

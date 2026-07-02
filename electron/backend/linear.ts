@@ -36,12 +36,21 @@ export type LinearIssueListItem = {
   priorityLabel?: string;
 };
 
+export type LinearIssueComment = {
+  id: string;
+  body: string;
+  createdAt: string;
+  updatedAt?: string;
+  authorName?: string;
+};
+
 export type LinearIssueDetail = LinearIssueListItem & {
   description: string;
   creatorName?: string;
   projectName?: string;
   cycleName?: string;
   labels: string[];
+  comments: LinearIssueComment[];
 };
 
 export type LinearCompletionCommentResult = {
@@ -64,6 +73,13 @@ type LinearCommentsResponse = {
       pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
     };
   } | null;
+};
+
+type LinearCommentCreateResponse = {
+  commentCreate?: {
+    success?: boolean;
+    comment?: unknown;
+  };
 };
 
 const LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql";
@@ -211,7 +227,32 @@ function detailFromNode(value: unknown): LinearIssueDetail | null {
     projectName: optionalString(project.name),
     cycleName: optionalString(cycle.name),
     labels,
+    comments: [],
   };
+}
+
+function commentFromNode(value: unknown): LinearIssueComment | null {
+  if (!isRecord(value)) return null;
+
+  const user = isRecord(value.user) ? value.user : {};
+  const id = asString(value.id);
+  const body = asString(value.body);
+  const createdAt = asString(value.createdAt);
+  if (!id || !createdAt) return null;
+
+  return {
+    id,
+    body,
+    createdAt,
+    updatedAt: optionalString(value.updatedAt),
+    authorName: optionalString(user.name),
+  };
+}
+
+function compareLinearCommentPosition(a: LinearIssueComment, b: LinearIssueComment): number {
+  const createdAtDelta = a.createdAt.localeCompare(b.createdAt);
+  if (createdAtDelta !== 0) return createdAtDelta;
+  return a.id.localeCompare(b.id);
 }
 
 function compareLinearIssuePosition(a: LinearIssueListItem, b: LinearIssueListItem): number {
@@ -317,7 +358,52 @@ export async function getLinearIssue(apiKey: string, issueId: string): Promise<L
 
   const issue = detailFromNode(data.issue);
   if (!issue) throw new Error(`Linear issue not found: ${issueId}`);
-  return issue;
+  return {
+    ...issue,
+    comments: await listLinearIssueComments(apiKey, issueId),
+  };
+}
+
+export async function listLinearIssueComments(apiKey: string, issueId: string): Promise<LinearIssueComment[]> {
+  const comments: LinearIssueComment[] = [];
+  let cursor: string | null = null;
+  const seenCursors = new Set<string>();
+
+  while (true) {
+    const data: LinearCommentsResponse = await linearGraphql<LinearCommentsResponse>(
+      apiKey,
+      `query OrkestratorLinearIssueComments($id: String!, $after: String) {
+        issue(id: $id) {
+          comments(first: 100, after: $after) {
+            nodes {
+              id
+              body
+              createdAt
+              updatedAt
+              user { name }
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+          }
+        }
+      }`,
+      { id: issueId, after: cursor },
+    );
+
+    const nodes = Array.isArray(data.issue?.comments?.nodes) ? data.issue.comments.nodes : [];
+    for (const node of nodes) {
+      const comment = commentFromNode(node);
+      if (comment) comments.push(comment);
+    }
+
+    const nextCursor = nextPageCursor(data.issue?.comments?.pageInfo, seenCursors, "comments");
+    if (!nextCursor) break;
+    cursor = nextCursor;
+  }
+
+  return comments.sort(compareLinearCommentPosition);
 }
 
 async function findExistingCompletionComment(
@@ -364,6 +450,41 @@ async function findExistingCompletionComment(
   }
 
   return null;
+}
+
+export async function postLinearIssueComment(
+  apiKey: string,
+  params: {
+    issueId: string;
+    body: string;
+  },
+): Promise<LinearIssueComment> {
+  const body = params.body.trim();
+  if (!body) throw new Error("Linear comment body is required");
+
+  const data = await linearGraphql<LinearCommentCreateResponse>(
+    apiKey,
+    `mutation OrkestratorLinearIssueComment($issueId: String!, $body: String!) {
+      commentCreate(input: { issueId: $issueId, body: $body }) {
+        success
+        comment {
+          id
+          body
+          createdAt
+          updatedAt
+          user { name }
+        }
+      }
+    }`,
+    { issueId: params.issueId, body },
+  );
+
+  const comment = commentFromNode(data.commentCreate?.comment);
+  if (!data.commentCreate?.success || !comment) {
+    throw new Error("Linear did not confirm comment creation");
+  }
+
+  return comment;
 }
 
 export async function postLinearCompletionComment(

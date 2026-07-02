@@ -8,8 +8,10 @@ import {
   ExternalLink,
   FolderGit2,
   Loader2,
+  MessageSquare,
   RefreshCw,
   Search,
+  Send,
   Unplug,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -26,6 +28,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
@@ -35,10 +38,11 @@ import {
   getLinearIssue,
   getLinearIssues,
   openInBrowser,
+  postLinearIssueComment,
 } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import type { EnvironmentType } from "@/types";
-import type { LinearConnectionStatus, LinearIssueDetail, LinearIssueListItem } from "@/types/linear";
+import type { LinearConnectionStatus, LinearIssueComment, LinearIssueDetail, LinearIssueListItem } from "@/types/linear";
 
 interface LinearTicketsViewProps {
   projectId: string;
@@ -94,6 +98,20 @@ function IssueMetadata({ issue }: { issue: LinearIssueListItem | LinearIssueDeta
         <CalendarClock className="h-3 w-3" />
         {formatUpdatedDate(issue.updatedAt)}
       </span>
+    </div>
+  );
+}
+
+function LinearCommentItem({ comment }: { comment: LinearIssueComment }) {
+  return (
+    <div className="rounded-md border border-border/60 p-3">
+      <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+        <span className="font-medium text-foreground">{comment.authorName ?? "Unknown author"}</span>
+        <span>{formatUpdatedDate(comment.createdAt)}</span>
+      </div>
+      <div className="min-w-0 text-sm">
+        <MessageMarkdown content={comment.body} />
+      </div>
     </div>
   );
 }
@@ -189,6 +207,9 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   const [detailError, setDetailError] = useState<string | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const [startingType, setStartingType] = useState<EnvironmentType | null>(null);
+  const [commentBody, setCommentBody] = useState("");
+  const [commentState, setCommentState] = useState<LoadState>("idle");
+  const [commentError, setCommentError] = useState<string | null>(null);
   const connectionRequestRef = useRef(0);
   const issuesRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
@@ -283,6 +304,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
       if (detailRequestRef.current !== requestId) return;
       setDetail(nextDetail);
       setDetailState("loaded");
+      setCommentError(null);
     } catch (error) {
       if (detailRequestRef.current !== requestId) return;
       setDetail(null);
@@ -295,6 +317,9 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
     setSelectedIssueId(issueId);
     setDetail(null);
     setDetailError(null);
+    setCommentBody("");
+    setCommentError(null);
+    setCommentState("idle");
     void loadDetail(issueId);
   };
 
@@ -305,6 +330,9 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
     setDetailError(null);
     setDetailState("idle");
     setStartingType(null);
+    setCommentBody("");
+    setCommentError(null);
+    setCommentState("idle");
   };
 
   const handleToggleStatus = (status: string) => {
@@ -323,6 +351,30 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
       await startBuildFromLinearIssue(detail, projectId, type);
     } finally {
       setStartingType(null);
+    }
+  };
+
+  const handlePostComment = async () => {
+    const body = commentBody.trim();
+    if (!detail || !body || commentState === "loading") return;
+
+    setCommentState("loading");
+    setCommentError(null);
+    try {
+      const comment = await postLinearIssueComment(detail.id, body);
+      setDetail((current) => {
+        if (!current || current.id !== detail.id) return current;
+        return {
+          ...current,
+          comments: [...current.comments, comment].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+        };
+      });
+      setCommentBody("");
+      setCommentState("loaded");
+      toast.success("Linear comment added");
+    } catch (error) {
+      setCommentState("error");
+      setCommentError(error instanceof Error ? error.message : "Failed to add Linear comment");
     }
   };
 
@@ -438,6 +490,60 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
                       </div>
                     </div>
                   )}
+                </div>
+
+                <Separator />
+
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                    <h3 className="text-sm font-medium text-foreground">Comments</h3>
+                    <span className="text-xs text-muted-foreground">{detail.comments.length}</span>
+                  </div>
+                  {detail.comments.length > 0 ? (
+                    <div className="space-y-3">
+                      {detail.comments.map((comment) => (
+                        <LinearCommentItem key={comment.id} comment={comment} />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
+                      No comments
+                    </div>
+                  )}
+                  <div className="space-y-2 rounded-md border border-border/60 p-3">
+                    <Textarea
+                      value={commentBody}
+                      onChange={(event) => {
+                        setCommentBody(event.target.value);
+                        if (commentError) setCommentError(null);
+                      }}
+                      placeholder="Add a comment"
+                      aria-label="Add Linear comment"
+                      className="min-h-24 resize-none"
+                      disabled={commentState === "loading"}
+                    />
+                    {commentError && (
+                      <div className="flex items-start gap-2 text-sm text-destructive">
+                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span className="break-words">{commentError}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-end">
+                      <Button
+                        size="sm"
+                        onClick={() => void handlePostComment()}
+                        disabled={commentState === "loading" || !commentBody.trim()}
+                      >
+                        {commentState === "loading" ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Send className="h-3.5 w-3.5" />
+                        )}
+                        Comment
+                      </Button>
+                    </div>
+                  </div>
                 </div>
 
                 <Separator />

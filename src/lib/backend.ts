@@ -27,6 +27,7 @@ import type {
 import type {
   LinearCompletionCommentResult,
   LinearConnectionStatus,
+  LinearIssueComment,
   LinearIssueDetail,
   LinearIssueListItem,
 } from "@/types/linear";
@@ -259,6 +260,10 @@ export async function getLinearIssues(): Promise<LinearIssueListItem[]> {
 
 export async function getLinearIssue(issueId: string): Promise<LinearIssueDetail> {
   return invoke<LinearIssueDetail>("get_linear_issue", { issueId });
+}
+
+export async function postLinearIssueComment(issueId: string, body: string): Promise<LinearIssueComment> {
+  return invoke<LinearIssueComment>("post_linear_issue_comment", { issueId, body });
 }
 
 export async function postLinearCompletionComment(

@@ -5,8 +5,10 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   newestJsonlFindCommand,
+  newestJsonlInDir,
+  parseFreshJsonlFindOutput,
   registerTmuxBackendCommands,
-  selectSingleNewestJsonl,
+  transcriptContainsSessionId,
   tmuxSessionName,
 } from "../../../electron/backend/tmux";
 import type { Environment } from "../../../electron/backend/models";
@@ -448,7 +450,7 @@ describe("Electron tmux backend command registration", () => {
       const fallbackPath = path.join(transcriptDir, "claude-owned-session.jsonl");
       await fs.writeFile(
         fallbackPath,
-        `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: "Visible" } })}\n`,
+        `${JSON.stringify({ sessionId: status.session_id, type: "assistant", message: { role: "assistant", content: "Visible" } })}\n`,
       );
 
       await expect(invoke(
@@ -456,10 +458,71 @@ describe("Electron tmux backend command registration", () => {
         "claude_tmux_transcript",
         { tabId: "tab-fallback", environmentId: environment.id },
       )).resolves.toEqual([
-        { type: "assistant", message: { role: "assistant", content: "Visible" } },
+        { sessionId: status.session_id, type: "assistant", message: { role: "assistant", content: "Visible" } },
       ]);
 
       await invoke(handlers, "claude_tmux_stop", { tabId: "tab-fallback", environmentId: environment.id }, context);
+    });
+  });
+
+  test("does not bind a fresh tab to another active tab's transcript fallback", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ worktree, home, environment }) => {
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+
+      const reviewStatus = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "review-tab", environmentId: environment.id, initialPrompt: "Review this" },
+        context,
+      ) as { session_id: string; running: boolean };
+      expect(reviewStatus.running).toBe(true);
+
+      const transcriptDir = path.join(home, ".claude", "projects", encodeCwd(worktree));
+      await fs.mkdir(transcriptDir, { recursive: true });
+      await fs.writeFile(
+        path.join(transcriptDir, "review-owned-session.jsonl"),
+        `${JSON.stringify({ sessionId: reviewStatus.session_id, type: "assistant", message: { role: "assistant", content: "Review transcript" } })}\n`,
+      );
+
+      const freshStatus = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "fresh-tab", environmentId: environment.id },
+        context,
+      ) as { session_id: string; running: boolean };
+      expect(freshStatus.running).toBe(true);
+      expect(freshStatus.session_id).not.toBe(reviewStatus.session_id);
+
+      await expect(invoke(
+        handlers,
+        "claude_tmux_transcript",
+        { tabId: "fresh-tab", environmentId: environment.id },
+      )).resolves.toEqual([]);
+
+      await fs.writeFile(
+        path.join(transcriptDir, "fresh-owned-session.jsonl"),
+        `${JSON.stringify({ sessionId: freshStatus.session_id, type: "assistant", message: { role: "assistant", content: "Fresh transcript" } })}\n`,
+      );
+
+      await expect(invoke(
+        handlers,
+        "claude_tmux_transcript",
+        { tabId: "fresh-tab", environmentId: environment.id },
+      )).resolves.toEqual([
+        { sessionId: freshStatus.session_id, type: "assistant", message: { role: "assistant", content: "Fresh transcript" } },
+      ]);
+
+      await invoke(handlers, "claude_tmux_stop", { tabId: "review-tab", environmentId: environment.id }, context);
+      await invoke(handlers, "claude_tmux_stop", { tabId: "fresh-tab", environmentId: environment.id }, context);
     });
   });
 
@@ -567,30 +630,145 @@ describe("container transcript discovery helpers", () => {
     expect(command).toContain("sort -rn");
   });
 
-  test("selects the single newest jsonl path from find output", () => {
+  test("parses a single find line into a path/mtime record", () => {
     const output = "1700000002.5 /home/node/.claude/projects/p/new.jsonl\n";
-    expect(selectSingleNewestJsonl(output)).toBe("/home/node/.claude/projects/p/new.jsonl");
+    expect(parseFreshJsonlFindOutput(output)).toEqual([
+      { path: "/home/node/.claude/projects/p/new.jsonl", mtime: 1700000002.5 },
+    ]);
   });
 
-  test("returns undefined when find output is empty", () => {
-    expect(selectSingleNewestJsonl("")).toBeUndefined();
-    expect(selectSingleNewestJsonl("\n  \n")).toBeUndefined();
+  test("returns no records for empty or whitespace-only output", () => {
+    expect(parseFreshJsonlFindOutput("")).toEqual([]);
+    expect(parseFreshJsonlFindOutput("\n  \n")).toEqual([]);
   });
 
-  test("returns undefined when find output is ambiguous (more than one candidate)", () => {
+  test("parses every candidate when output is ambiguous (more than one line)", () => {
     const output = [
       "1700000003 /home/node/.claude/projects/p/b.jsonl",
       "1700000002 /home/node/.claude/projects/p/a.jsonl",
     ].join("\n");
-    expect(selectSingleNewestJsonl(output)).toBeUndefined();
+    expect(parseFreshJsonlFindOutput(output)).toEqual([
+      { path: "/home/node/.claude/projects/p/b.jsonl", mtime: 1700000003 },
+      { path: "/home/node/.claude/projects/p/a.jsonl", mtime: 1700000002 },
+    ]);
   });
 
-  test("preserves spaces in the selected path", () => {
+  test("preserves spaces in the parsed path", () => {
     const output = "1700000002 /home/node/.claude/projects/p/with space.jsonl\n";
-    expect(selectSingleNewestJsonl(output)).toBe("/home/node/.claude/projects/p/with space.jsonl");
+    expect(parseFreshJsonlFindOutput(output)).toEqual([
+      { path: "/home/node/.claude/projects/p/with space.jsonl", mtime: 1700000002 },
+    ]);
   });
 
-  test("returns undefined when the single line lacks a path field", () => {
-    expect(selectSingleNewestJsonl("1700000002")).toBeUndefined();
+  test("skips lines lacking a path field or with a non-finite mtime", () => {
+    expect(parseFreshJsonlFindOutput("1700000002")).toEqual([]);
+    expect(parseFreshJsonlFindOutput("notanumber /home/node/.claude/projects/p/x.jsonl")).toEqual([]);
+    const mixed = [
+      "1700000003 /home/node/.claude/projects/p/good.jsonl",
+      "1700000002", // no path
+      "bad /home/node/.claude/projects/p/skip.jsonl", // non-finite mtime
+    ].join("\n");
+    expect(parseFreshJsonlFindOutput(mixed)).toEqual([
+      { path: "/home/node/.claude/projects/p/good.jsonl", mtime: 1700000003 },
+    ]);
+  });
+});
+
+describe("transcriptContainsSessionId", () => {
+  test("matches a top-level camelCase sessionId", () => {
+    const content = `${JSON.stringify({ sessionId: "abc-123", type: "assistant" })}\n`;
+    expect(transcriptContainsSessionId(content, "abc-123")).toBe(true);
+  });
+
+  test("matches a top-level snake_case session_id", () => {
+    const content = `${JSON.stringify({ session_id: "abc-123", type: "user" })}\n`;
+    expect(transcriptContainsSessionId(content, "abc-123")).toBe(true);
+  });
+
+  test("matches a session id nested inside objects and arrays", () => {
+    const content = `${JSON.stringify({
+      type: "assistant",
+      message: { meta: [{ session_id: "deep-999" }] },
+    })}\n`;
+    expect(transcriptContainsSessionId(content, "deep-999")).toBe(true);
+  });
+
+  test("does not match a different session id", () => {
+    const content = `${JSON.stringify({ sessionId: "other-session", type: "assistant" })}\n`;
+    expect(transcriptContainsSessionId(content, "abc-123")).toBe(false);
+  });
+
+  test("scans later lines and skips malformed JSON lines", () => {
+    const content = [
+      "not json at all",
+      "{ still not: valid",
+      JSON.stringify({ sessionId: "abc-123", type: "assistant" }),
+    ].join("\n");
+    expect(transcriptContainsSessionId(content, "abc-123")).toBe(true);
+  });
+
+  test("returns false for empty content or empty session id", () => {
+    expect(transcriptContainsSessionId("", "abc-123")).toBe(false);
+    expect(transcriptContainsSessionId(`${JSON.stringify({ sessionId: "abc-123" })}\n`, "")).toBe(false);
+  });
+});
+
+describe("newestJsonlInDir container backend", () => {
+  type Backend = Parameters<typeof newestJsonlInDir>[0];
+
+  function makeContainerBackend(
+    findStdout: string,
+    files: Record<string, string>,
+  ): { backend: Backend; readPaths: string[] } {
+    const readPaths: string[] = [];
+    const backend = {
+      kind: "container",
+      async exec(_args: string[]) {
+        return { stdout: findStdout, stderr: "", exitCode: 0 };
+      },
+      async readFile(filePath: string) {
+        readPaths.push(filePath);
+        return files[filePath];
+      },
+    } as unknown as Backend;
+    return { backend, readPaths };
+  }
+
+  test("resolves the single container jsonl owned by the session", async () => {
+    const findStdout = [
+      "1700000003 /home/node/.claude/projects/p/other.jsonl",
+      "1700000002 /home/node/.claude/projects/p/owned.jsonl",
+    ].join("\n");
+    const { backend } = makeContainerBackend(findStdout, {
+      "/home/node/.claude/projects/p/other.jsonl": `${JSON.stringify({ sessionId: "other" })}\n`,
+      "/home/node/.claude/projects/p/owned.jsonl": `${JSON.stringify({ sessionId: "mine" })}\n`,
+    });
+    await expect(
+      newestJsonlInDir(backend, "/home/node/.claude/projects/p", 1700000000, "mine"),
+    ).resolves.toBe("/home/node/.claude/projects/p/owned.jsonl");
+  });
+
+  test("returns undefined when no container jsonl claims the session", async () => {
+    const findStdout = "1700000003 /home/node/.claude/projects/p/other.jsonl\n";
+    const { backend } = makeContainerBackend(findStdout, {
+      "/home/node/.claude/projects/p/other.jsonl": `${JSON.stringify({ sessionId: "other" })}\n`,
+    });
+    await expect(
+      newestJsonlInDir(backend, "/home/node/.claude/projects/p", 1700000000, "mine"),
+    ).resolves.toBeUndefined();
+  });
+
+  test("returns undefined when multiple container jsonls claim the same session", async () => {
+    const findStdout = [
+      "1700000003 /home/node/.claude/projects/p/a.jsonl",
+      "1700000002 /home/node/.claude/projects/p/b.jsonl",
+    ].join("\n");
+    const { backend } = makeContainerBackend(findStdout, {
+      "/home/node/.claude/projects/p/a.jsonl": `${JSON.stringify({ sessionId: "mine" })}\n`,
+      "/home/node/.claude/projects/p/b.jsonl": `${JSON.stringify({ sessionId: "mine" })}\n`,
+    });
+    await expect(
+      newestJsonlInDir(backend, "/home/node/.claude/projects/p", 1700000000, "mine"),
+    ).resolves.toBeUndefined();
   });
 });

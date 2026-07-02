@@ -667,7 +667,7 @@ async function findTranscriptPath(
     return exact;
   }
   if (minMtimeUnix !== undefined) {
-    return newestJsonlInDir(backend, projectDir, minMtimeUnix);
+    return newestJsonlInDir(backend, projectDir, minMtimeUnix, sessionId);
   }
   return undefined;
 }
@@ -682,40 +682,86 @@ export function newestJsonlFindCommand(dirPath: string, minMtimeUnix: number): s
 }
 
 /**
- * Selects the single newest `.jsonl` path from `find -printf '%T@ %p'` output (sorted
- * newest-first). Returns undefined unless exactly one candidate exists, mirroring the
- * local backend's "only act when unambiguous" rule.
+ * Parses `find -printf '%T@ %p'` output into `{ path, mtime }` records, skipping lines
+ * that lack a path or a finite mtime. Shared by the container and local discovery paths.
  */
-export function selectSingleNewestJsonl(findOutput: string): string | undefined {
-  const lines = findOutput.split("\n").map((line) => line.trim()).filter(Boolean);
-  if (lines.length !== 1) return undefined;
-  const firstSpace = lines[0]!.indexOf(" ");
-  if (firstSpace < 0) return undefined;
-  const candidatePath = lines[0]!.slice(firstSpace + 1).trim();
-  return candidatePath.length > 0 ? candidatePath : undefined;
+export function parseFreshJsonlFindOutput(findOutput: string): Array<{ path: string; mtime: number }> {
+  return findOutput
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      const firstSpace = line.indexOf(" ");
+      if (firstSpace < 0) return [];
+      const mtime = Number.parseFloat(line.slice(0, firstSpace));
+      const candidatePath = line.slice(firstSpace + 1).trim();
+      if (!Number.isFinite(mtime) || candidatePath.length === 0) return [];
+      return [{ path: candidatePath, mtime }];
+    });
 }
 
-async function newestJsonlInDir(
+/**
+ * Finds the fresh (`mtime >= minMtimeUnix`) `.jsonl` in `dirPath` whose content is owned by
+ * `sessionId`. Only resolves when exactly one file claims the session, so a newly started tab
+ * never binds to another tab's transcript. Returns undefined when zero or multiple files match.
+ */
+export async function newestJsonlInDir(
   backend: TmuxBackend,
   dirPath: string,
   minMtimeUnix: number,
+  sessionId: string,
 ): Promise<string | undefined> {
+  let candidates: Array<{ path: string; mtime: number }>;
   if (backend.kind === "container") {
     const out = await backend.exec(["sh", "-c", newestJsonlFindCommand(dirPath, minMtimeUnix)]);
-    return selectSingleNewestJsonl(out.stdout);
+    candidates = parseFreshJsonlFindOutput(out.stdout);
+  } else {
+    const names = await backend.listDir(dirPath);
+    candidates = [];
+    for (const name of names) {
+      if (!name.endsWith(".jsonl")) continue;
+      const fullPath = `${dirPath}/${name}`;
+      const mtime = await backend.fileMtimeUnix(fullPath);
+      if (mtime < minMtimeUnix) continue;
+      candidates.push({ path: fullPath, mtime });
+    }
   }
 
-  const names = await backend.listDir(dirPath);
-  const candidates: Array<{ path: string; mtime: number }> = [];
-  for (const name of names) {
-    if (!name.endsWith(".jsonl")) continue;
-    const fullPath = `${dirPath}/${name}`;
-    const mtime = await backend.fileMtimeUnix(fullPath);
-    if (mtime < minMtimeUnix) continue;
-    candidates.push({ path: fullPath, mtime });
+  const matches: Array<{ path: string; mtime: number }> = [];
+  for (const candidate of candidates) {
+    const content = await backend.readFile(candidate.path) ?? "";
+    if (transcriptContainsSessionId(content, sessionId)) {
+      matches.push(candidate);
+    }
   }
-  if (candidates.length !== 1) return undefined;
-  return candidates[0]?.path;
+  return matches.length === 1 ? matches[0]?.path : undefined;
+}
+
+export function transcriptContainsSessionId(content: string, sessionId: string): boolean {
+  if (!content || !sessionId) return false;
+  for (const raw of content.split("\n")) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    try {
+      if (jsonContainsSessionId(JSON.parse(trimmed), sessionId)) return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
+function jsonContainsSessionId(value: unknown, sessionId: string): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) {
+    return value.some((item) => jsonContainsSessionId(item, sessionId));
+  }
+
+  const record = value as Record<string, unknown>;
+  if (record.sessionId === sessionId || record.session_id === sessionId) {
+    return true;
+  }
+  return Object.values(record).some((item) => jsonContainsSessionId(item, sessionId));
 }
 
 async function listPreviousSessions(

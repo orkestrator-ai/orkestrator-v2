@@ -7,6 +7,7 @@ import {
   newestJsonlFindCommand,
   registerTmuxBackendCommands,
   selectSingleNewestJsonl,
+  tmuxSessionName,
 } from "../../../electron/backend/tmux";
 import type { Environment } from "../../../electron/backend/models";
 
@@ -53,17 +54,30 @@ async function withFakeTmuxRuntime(run: (runtime: { worktree: string; home: stri
   await fs.mkdir(home, { recursive: true });
   await fs.writeFile(path.join(binDir, "tmux"), `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_TMUX_LOG"
-case "$1" in
+command="$1"
+session_name=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -t|-s)
+      shift
+      session_name="$1"
+      break
+      ;;
+  esac
+  shift
+done
+case "$command" in
   has-session)
-    [ -f "$FAKE_TMUX_ALIVE" ] && exit 0
+    [ -n "$session_name" ] && [ -f "$FAKE_TMUX_ALIVE/$session_name" ] && exit 0
     exit 1
     ;;
   new-session)
-    touch "$FAKE_TMUX_ALIVE"
+    mkdir -p "$FAKE_TMUX_ALIVE"
+    [ -n "$session_name" ] && touch "$FAKE_TMUX_ALIVE/$session_name"
     exit 0
     ;;
   kill-session)
-    rm -f "$FAKE_TMUX_ALIVE"
+    [ -n "$session_name" ] && rm -f "$FAKE_TMUX_ALIVE/$session_name"
     exit 0
     ;;
   capture-pane)
@@ -196,6 +210,68 @@ describe("Electron tmux backend command registration", () => {
     await expect(invoke(handlers, "claude_tmux_interrupt", args)).rejects.toThrow("tmux session not running");
     await expect(invoke(handlers, "claude_tmux_pending_hooks", args)).rejects.toThrow("tmux session not running");
     await expect(invoke(handlers, "claude_tmux_detach_interactive_terminal", { terminalSessionId: "missing" })).resolves.toBeUndefined();
+  });
+
+  test("names generated tab ids without tmux session collisions", () => {
+    const first = tmuxSessionName("env-local", "tab-1782973296000-1");
+    const second = tmuxSessionName("env-local", "tab-1782973296000-2");
+
+    expect(first).not.toBe(second);
+    expect(first.startsWith("orkestrator-env-local-tab-178297329600-")).toBe(true);
+    expect(second.startsWith("orkestrator-env-local-tab-178297329600-")).toBe(true);
+  });
+
+  test("starts separate tmux sessions for generated tab ids with the same old prefix", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, log }) => {
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+
+      const first = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-1782973296000-1", environmentId: environment.id },
+        context,
+      ) as { tmux_session: string; running: boolean };
+      const second = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-1782973296000-2", environmentId: environment.id },
+        context,
+      ) as { tmux_session: string; running: boolean };
+
+      expect(first.running).toBe(true);
+      expect(second.running).toBe(true);
+      expect(first.tmux_session).not.toBe(second.tmux_session);
+
+      const tmuxLog = await fs.readFile(log, "utf8");
+      const newSessionLines = tmuxLog
+        .split("\n")
+        .filter((line) => line.startsWith("new-session "));
+      expect(newSessionLines).toHaveLength(2);
+      expect(newSessionLines[0]).toContain(first.tmux_session);
+      expect(newSessionLines[1]).toContain(second.tmux_session);
+
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-1782973296000-1", environmentId: environment.id },
+        context,
+      );
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-1782973296000-2", environmentId: environment.id },
+        context,
+      );
+    });
   });
 
   test("starts with installed hooks, reads transcripts, replies to hooks, and maps interactive input", async () => {

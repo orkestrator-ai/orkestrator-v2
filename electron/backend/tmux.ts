@@ -1,7 +1,7 @@
 import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import type { CommandContext } from "./commands.js";
@@ -76,12 +76,18 @@ function shellDq(value: string): string {
   return `"${value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"").replaceAll("$", "\\$").replaceAll("`", "\\`")}"`;
 }
 
-function shortId(id: string): string {
-  return id.slice(0, 12).replaceAll("-", "");
+function readableIdPrefix(id: string): string {
+  return id.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 16) || "id";
 }
 
-function tmuxSessionName(environmentId: string, tabId: string): string {
-  return `orkestrator-${shortId(environmentId)}-${shortId(tabId)}`;
+export function tmuxSessionName(environmentId: string, tabId: string): string {
+  const identityHash = createHash("sha256")
+    .update(environmentId)
+    .update("\0")
+    .update(tabId)
+    .digest("hex")
+    .slice(0, 16);
+  return `orkestrator-${readableIdPrefix(environmentId)}-${readableIdPrefix(tabId)}-${identityHash}`;
 }
 
 function isBlockingHook(kind: string): boolean {

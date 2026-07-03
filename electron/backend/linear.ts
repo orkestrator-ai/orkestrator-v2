@@ -358,10 +358,20 @@ export async function getLinearIssue(apiKey: string, issueId: string): Promise<L
 
   const issue = detailFromNode(data.issue);
   if (!issue) throw new Error(`Linear issue not found: ${issueId}`);
-  return {
-    ...issue,
-    comments: await listLinearIssueComments(apiKey, issueId),
-  };
+
+  // Comments are a secondary concern: a failure fetching them must not block the
+  // core issue detail (description, metadata, build actions) from rendering.
+  let comments: LinearIssueComment[] = [];
+  try {
+    comments = await listLinearIssueComments(apiKey, issueId);
+  } catch (error) {
+    console.warn(
+      `[linear] Failed to load comments for issue ${issueId}:`,
+      sanitizeLinearError(error, apiKey),
+    );
+  }
+
+  return { ...issue, comments };
 }
 
 export async function listLinearIssueComments(apiKey: string, issueId: string): Promise<LinearIssueComment[]> {

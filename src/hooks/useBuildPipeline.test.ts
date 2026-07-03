@@ -889,6 +889,27 @@ describe("useBuildPipeline", () => {
     });
   });
 
+  test("startBuildFromLinearIssue includes comments without an author as bare text", async () => {
+    const { result } = renderHook(() => useBuildPipeline());
+    const issueWithAnonymousComment: LinearIssueDetail = {
+      ...linearIssue,
+      comments: [{
+        id: "comment-anon",
+        body: "No author on this one.",
+        createdAt: "2026-06-28T12:02:00.000Z",
+      }],
+    };
+
+    await act(async () => {
+      await result.current.startBuildFromLinearIssue(issueWithAnonymousComment, "project-1", "local");
+    });
+
+    const pipeline = Array.from(useBuildPipelineStore.getState().pipelines.values())[0]!;
+    expect(pipeline.taskSnapshot.comments.map((comment) => comment.text)).toContain(
+      "No author on this one.",
+    );
+  });
+
   test("startBuildFromLinearIssue removes the pending pipeline when environment creation fails", async () => {
     mockCreateEnvironment.mockImplementationOnce(async () => {
       throw new Error("environment create failed");

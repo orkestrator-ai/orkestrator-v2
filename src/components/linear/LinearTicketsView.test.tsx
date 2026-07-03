@@ -277,6 +277,37 @@ describe("LinearTicketsView", () => {
     });
   });
 
+  test("surfaces an error and keeps the draft when posting a comment fails", async () => {
+    postLinearIssueCommentMock.mockRejectedValueOnce(new Error("Linear rejected the comment"));
+    renderLinearTicketsView();
+
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+    expect(await screen.findByText("Initial Linear comment")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Add Linear comment"), {
+      target: { value: "Draft that should survive" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^comment$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Linear rejected the comment")).toBeTruthy();
+    });
+    expect(toastSuccessMock).not.toHaveBeenCalledWith("Linear comment added");
+    expect((screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement).value).toBe(
+      "Draft that should survive",
+    );
+  });
+
+  test("shows an empty state when the ticket has no comments", async () => {
+    getLinearIssueMock.mockResolvedValue({ ...issueDetail, comments: [] });
+    renderLinearTicketsView();
+
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+
+    expect(await screen.findByText("Build Linear support")).toBeTruthy();
+    expect(screen.getByText("No comments")).toBeTruthy();
+  });
+
   test("ignores stale detail responses after switching tickets", async () => {
     const firstDetail = deferred<LinearIssueDetail>();
     const secondDetail = deferred<LinearIssueDetail>();

@@ -449,6 +449,36 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.queryByText("0 updates")).toBeNull();
   });
 
+  test("can render Claude tmux agent usage as tokens only", () => {
+    const message = makeMessage([
+      {
+        type: "task-group",
+        content: "Agent",
+        task: {
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolTitle: "Agent",
+          toolState: "success",
+          tokenCount: 45_700,
+          tokenCountText: "45.7k tokens",
+          agentUsageDisplay: "token-only",
+          toolArgs: {
+            description: "Review db-api test correctness",
+            subagent_type: "Explore",
+          },
+        },
+        childTools: [],
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("45.7k tokens")).toBeTruthy();
+    expect(screen.queryByText("0 tools")).toBeNull();
+    expect(screen.queryByText("0 updates")).toBeNull();
+  });
+
   test("uses external tmux usage counts for standalone subagent rows when available", () => {
     const message = makeMessage([
       {
@@ -469,6 +499,29 @@ describe("NativeMessage task list rendering", () => {
 
     expect(screen.getByText("8 tool uses")).toBeTruthy();
     expect(screen.getByText("20.4k tokens")).toBeTruthy();
+    expect(screen.queryByText("0 updates")).toBeNull();
+  });
+
+  test("can render standalone Claude tmux subagent usage as tokens only", () => {
+    const message = makeMessage([
+      {
+        type: "subagent",
+        content: "Review web test correctness",
+        subagentName: "Review web test correctness",
+        subagentRole: "Explore",
+        toolState: "success",
+        subagentActions: [],
+        subagentActionCount: 0,
+        tokenCount: 37_300,
+        tokenCountText: "37.3k tokens",
+        agentUsageDisplay: "token-only",
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("37.3k tokens")).toBeTruthy();
+    expect(screen.queryByText("0 tools")).toBeNull();
     expect(screen.queryByText("0 updates")).toBeNull();
   });
 

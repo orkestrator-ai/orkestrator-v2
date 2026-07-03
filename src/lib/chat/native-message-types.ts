@@ -32,6 +32,8 @@ export interface NativeBasePart {
   toolUseCount?: number;
   tokenCount?: number;
   tokenCountText?: string;
+  /** Hint for agent rows when a provider can report tokens but not child activity. */
+  agentUsageDisplay?: "token-only";
   toolUseId?: string;
   parentTaskUseId?: string;
   isMcpTool?: boolean;

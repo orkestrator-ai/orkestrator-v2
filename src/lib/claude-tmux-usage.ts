@@ -3,7 +3,7 @@ import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
 export interface TmuxAgentUsageSummary {
   name: string;
   role?: string;
-  toolUseCount: number;
+  toolUseCount?: number;
   tokenCount: number;
   tokenCountText: string;
 }
@@ -15,6 +15,16 @@ interface IndexedUsageSummary extends TmuxAgentUsageSummary {
 
 const AGENT_USAGE_RE =
   /^(?<name>.+?)\s*[·•]\s*(?<toolUseCount>\d[\d,]*)\s+tools?\s+uses?\s*[·•]\s*(?<tokens>\d[\d,.]*(?:[kKmMbB])?)\s+tokens?\b/;
+// Claude's current agent rows render as "[role]␣␣name … <duration> · ↓ <tokens>".
+// The usage tail (optional right-aligned duration, then the token count) is
+// anchored to the end of the line so the leading label is captured as a single
+// unit; the optional role column is split off afterwards. This avoids letting a
+// multi-word name be mistaken for the role when no role column is present.
+const AGENT_TOKEN_USAGE_RE =
+  /^(?<label>.+?)\s{2,}(?:(?<duration>(?:\d+\s*[hms]\s*)+)\s*(?:[·•]\s*)?)?[↓↑↕]?\s*(?<tokens>\d[\d,.]*(?:[kKmMbB])?)\s+tokens?\s*$/iu;
+// A role column is a single spaceless subagent-type token (e.g. "Explore",
+// "general-purpose"); multi-word segments are always treated as the name.
+const AGENT_ROLE_COLUMN_RE = /^[\p{L}\p{N}_-]+$/u;
 const AGENT_HEADER_RE = /\bRunning\s+\d+\s+(?<role>.+?)\s+agents?\b/i;
 
 function stripAnsi(text: string): string {
@@ -26,7 +36,11 @@ function stripAnsi(text: string): string {
 }
 
 function stripTreePrefix(line: string): string {
-  return line.trim().replace(/^[│├└┌┐┘┴┬─╭╰╮╯┼┤\s]+/, "").trim();
+  return line.trim().replace(/^[│├└┌┐┘┴┬─╭╰╮╯┼┤○●◦∙\s]+/, "").trim();
+}
+
+function hasAgentLineMarker(line: string): boolean {
+  return /^[│├└┌┐┘┴┬─╭╰╮╯┼┤○●◦∙\s]*[├└○●◦∙]/u.test(line);
 }
 
 function parseCompactNumber(value: string): number | null {
@@ -87,6 +101,9 @@ function agentNameCandidates(part: ClaudeMessagePart): string[] {
 function candidateMatches(candidate: string, summary: IndexedUsageSummary): boolean {
   const normalized = normalizeAgentName(candidate);
   if (!normalized || !summary.normalizedName) return false;
+  if (normalized === "agent" || normalized === "task" || normalized === "subagent") {
+    return false;
+  }
   return (
     normalized === summary.normalizedName ||
     normalized.includes(summary.normalizedName) ||
@@ -109,6 +126,7 @@ function findMatchingSummary(
   summaries: IndexedUsageSummary[],
   used: Set<number>,
   agentIndex: number,
+  allowOrdinalFallback: boolean,
 ): IndexedUsageSummary | undefined {
   const candidates = agentNameCandidates(part);
   const exact = summaries.find(
@@ -117,6 +135,8 @@ function findMatchingSummary(
       candidates.some((candidate) => candidateMatches(candidate, summary)),
   );
   if (exact) return exact;
+
+  if (!allowOrdinalFallback) return undefined;
 
   const ordinal = summaries[agentIndex];
   return ordinal && !used.has(ordinal.index) ? ordinal : undefined;
@@ -138,21 +158,54 @@ export function parseTmuxAgentUsageSummaries(
     }
 
     const match = AGENT_USAGE_RE.exec(line);
-    if (!match?.groups) continue;
+    if (match?.groups) {
+      const name = match.groups.name;
+      const toolUseCountText = match.groups.toolUseCount;
+      const tokens = match.groups.tokens;
+      if (!name || !toolUseCountText || !tokens) continue;
 
-    const name = match.groups.name;
-    const toolUseCountText = match.groups.toolUseCount;
-    const tokens = match.groups.tokens;
-    if (!name || !toolUseCountText || !tokens) continue;
+      const toolUseCount = Number(toolUseCountText.replaceAll(",", ""));
+      const tokenCount = parseCompactNumber(tokens);
+      if (!Number.isFinite(toolUseCount) || tokenCount === null) continue;
 
-    const toolUseCount = Number(toolUseCountText.replaceAll(",", ""));
+      summaries.push({
+        name: name.trim(),
+        role: currentRole,
+        toolUseCount,
+        tokenCount,
+        tokenCountText: `${tokens} tokens`,
+      });
+      continue;
+    }
+
+    const tokenOnlyMatch = AGENT_TOKEN_USAGE_RE.exec(line);
+    if (!tokenOnlyMatch?.groups) continue;
+
+    const label = tokenOnlyMatch.groups.label?.trim();
+    const tokens = tokenOnlyMatch.groups.tokens;
+    if (!label || !tokens) continue;
+
+    // Split an optional single-token role column off the front of the label.
+    // Everything else (including any remaining columns) is the agent name.
+    const [firstSegment, ...restSegments] = label.split(/\s{2,}/);
+    let inlineRole: string | undefined;
+    let name: string;
+    if (firstSegment && restSegments.length > 0 && AGENT_ROLE_COLUMN_RE.test(firstSegment)) {
+      inlineRole = firstSegment.trim();
+      name = restSegments.join(" ").trim();
+    } else {
+      name = label;
+    }
+
+    if (!inlineRole && !currentRole && !hasAgentLineMarker(rawLine)) continue;
+    if (!name) continue;
+
     const tokenCount = parseCompactNumber(tokens);
-    if (!Number.isFinite(toolUseCount) || tokenCount === null) continue;
+    if (tokenCount === null) continue;
 
     summaries.push({
-      name: name.trim(),
-      role: currentRole,
-      toolUseCount,
+      name,
+      role: inlineRole ?? currentRole,
       tokenCount,
       tokenCountText: `${tokens} tokens`,
     });
@@ -177,22 +230,23 @@ export function applyTmuxAgentUsageSummaries(
     const parts = message.parts.map((part) => {
       if (part.type !== "tool-invocation" || !isAgentTool(part)) return part;
 
-      // The tmux pane only reports currently-running agents. Skip agents that
-      // have already finished so their (now-stale) rows never inherit a running
-      // agent's counts via the ordinal fallback. Not advancing agentIndex for
-      // terminal agents also keeps the ordinal position aligned with the pane's
-      // running-agent order.
-      if (isTerminalToolState(part.toolState)) return part;
-
-      const summary = findMatchingSummary(part, indexed, used, agentIndex);
-      agentIndex += 1;
+      const allowOrdinalFallback = !isTerminalToolState(part.toolState);
+      const summary = findMatchingSummary(
+        part,
+        indexed,
+        used,
+        agentIndex,
+        allowOrdinalFallback,
+      );
+      if (allowOrdinalFallback) agentIndex += 1;
       if (!summary) return part;
 
       used.add(summary.index);
       if (
-        part.toolUseCount === summary.toolUseCount &&
+        (summary.toolUseCount === undefined || part.toolUseCount === summary.toolUseCount) &&
         part.tokenCount === summary.tokenCount &&
-        part.tokenCountText === summary.tokenCountText
+        part.tokenCountText === summary.tokenCountText &&
+        part.agentUsageDisplay === "token-only"
       ) {
         return part;
       }
@@ -201,9 +255,10 @@ export function applyTmuxAgentUsageSummaries(
       partsChanged = true;
       return {
         ...part,
-        toolUseCount: summary.toolUseCount,
+        ...(summary.toolUseCount === undefined ? {} : { toolUseCount: summary.toolUseCount }),
         tokenCount: summary.tokenCount,
         tokenCountText: summary.tokenCountText,
+        agentUsageDisplay: "token-only" as const,
       };
     });
 

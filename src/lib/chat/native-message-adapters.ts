@@ -91,6 +91,7 @@ function toNativeToolInvocationPart(
     toolUseCount: part.toolUseCount,
     tokenCount: part.tokenCount,
     tokenCountText: part.tokenCountText,
+    agentUsageDisplay: part.agentUsageDisplay,
     toolUseId: part.toolUseId,
     parentTaskUseId: part.parentTaskUseId,
     isMcpTool: part.isMcpTool,

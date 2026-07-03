@@ -44,6 +44,8 @@ export interface ClaudeMessagePart {
   tokenCount?: number;
   /** Display text for compact provider token counts, e.g. "20.4k tokens". */
   tokenCountText?: string;
+  /** Renderer hint for agent rows when provider metadata is token-only. */
+  agentUsageDisplay?: "token-only";
   /** Tool use ID for this tool invocation */
   toolUseId?: string;
   /** Parent Task tool use ID - used to group child tools under their parent Task */

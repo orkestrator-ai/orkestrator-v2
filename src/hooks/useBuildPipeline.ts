@@ -109,7 +109,12 @@ function linearIssueToTicketInput(issue: LinearIssueDetail, projectId: string): 
     issue.labels.length > 0 ? `Labels: ${issue.labels.join(", ")}` : "",
   ].filter(Boolean);
 
-  const comments = metadata.map((text) => ({ text }));
+  const comments = [
+    ...metadata.map((text) => ({ text })),
+    ...issue.comments.map((comment) => ({
+      text: comment.authorName ? `${comment.authorName}: ${comment.body}` : comment.body,
+    })),
+  ];
   const namingPrompt = [
     issue.identifier,
     issue.title,

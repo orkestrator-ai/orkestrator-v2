@@ -27,12 +27,21 @@ export interface LinearIssueListItem {
   priorityLabel?: string;
 }
 
+export interface LinearIssueComment {
+  id: string;
+  body: string;
+  createdAt: string;
+  updatedAt?: string;
+  authorName?: string;
+}
+
 export interface LinearIssueDetail extends LinearIssueListItem {
   description: string;
   creatorName?: string;
   projectName?: string;
   cycleName?: string;
   labels: string[];
+  comments: LinearIssueComment[];
 }
 
 export interface LinearCompletionCommentResult {

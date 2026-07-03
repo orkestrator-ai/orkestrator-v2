@@ -20,6 +20,12 @@ const getLinearConnectionMock = mock(async (): Promise<LinearConnectionStatus> =
 }));
 const getLinearIssuesMock = mock(async (): Promise<LinearIssueListItem[]> => []);
 const getLinearIssueMock = mock(async (_issueId: string): Promise<LinearIssueDetail> => issueDetail);
+const postLinearIssueCommentMock = mock(async () => ({
+  id: "comment-2",
+  body: "New note from Orkestrator",
+  createdAt: "2026-06-28T12:10:00.000Z",
+  authorName: "Ada",
+}));
 const openInBrowserMock = mock(async () => undefined);
 const startBuildFromLinearIssueMock = mock(async () => undefined);
 const navigateToPipelineMock = mock(async () => undefined);
@@ -31,6 +37,7 @@ mock.module("@/lib/backend", () => ({
   getLinearConnection: getLinearConnectionMock,
   getLinearIssues: getLinearIssuesMock,
   getLinearIssue: getLinearIssueMock,
+  postLinearIssueComment: postLinearIssueCommentMock,
   openInBrowser: openInBrowserMock,
 }));
 
@@ -74,6 +81,12 @@ const issueDetail: LinearIssueDetail = {
   projectName: "Integrations",
   cycleName: "Cycle 1",
   labels: ["linear", "pipeline"],
+  comments: [{
+    id: "comment-1",
+    body: "Initial Linear comment",
+    createdAt: "2026-06-28T12:01:00.000Z",
+    authorName: "Grace",
+  }],
 };
 
 const issue2Detail: LinearIssueDetail = {
@@ -87,6 +100,7 @@ const issue2Detail: LinearIssueDetail = {
   projectName: "Dashboard",
   cycleName: "Cycle 2",
   labels: ["polish"],
+  comments: [],
 };
 
 function deferred<T>() {
@@ -118,6 +132,13 @@ describe("LinearTicketsView", () => {
     getLinearIssuesMock.mockResolvedValue(issues);
     getLinearIssueMock.mockReset();
     getLinearIssueMock.mockResolvedValue(issueDetail);
+    postLinearIssueCommentMock.mockReset();
+    postLinearIssueCommentMock.mockResolvedValue({
+      id: "comment-2",
+      body: "New note from Orkestrator",
+      createdAt: "2026-06-28T12:10:00.000Z",
+      authorName: "Ada",
+    });
     openInBrowserMock.mockClear();
     startBuildFromLinearIssueMock.mockClear();
     navigateToPipelineMock.mockClear();
@@ -227,14 +248,64 @@ describe("LinearTicketsView", () => {
     fireEvent.click(await screen.findByText("Add Linear integration"));
 
     expect(await screen.findByText("Build Linear support")).toBeTruthy();
-    expect(screen.getByText("Grace")).toBeTruthy();
+    expect(screen.getAllByText("Grace").length).toBeGreaterThan(0);
     expect(screen.getByText("Integrations")).toBeTruthy();
+    expect(screen.getByText("Initial Linear comment")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /build local/i }));
 
     await waitFor(() => {
       expect(startBuildFromLinearIssueMock).toHaveBeenCalledWith(issueDetail, "project-1", "local");
     });
+  });
+
+  test("posts a new Linear comment from ticket details", async () => {
+    renderLinearTicketsView();
+
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+    expect(await screen.findByText("Initial Linear comment")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Add Linear comment"), {
+      target: { value: "New note from Orkestrator" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^comment$/i }));
+
+    await waitFor(() => {
+      expect(postLinearIssueCommentMock).toHaveBeenCalledWith("issue-1", "New note from Orkestrator");
+      expect(screen.getByText("New note from Orkestrator")).toBeTruthy();
+      expect(toastSuccessMock).toHaveBeenCalledWith("Linear comment added");
+    });
+  });
+
+  test("surfaces an error and keeps the draft when posting a comment fails", async () => {
+    postLinearIssueCommentMock.mockRejectedValueOnce(new Error("Linear rejected the comment"));
+    renderLinearTicketsView();
+
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+    expect(await screen.findByText("Initial Linear comment")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Add Linear comment"), {
+      target: { value: "Draft that should survive" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^comment$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Linear rejected the comment")).toBeTruthy();
+    });
+    expect(toastSuccessMock).not.toHaveBeenCalledWith("Linear comment added");
+    expect((screen.getByLabelText("Add Linear comment") as HTMLTextAreaElement).value).toBe(
+      "Draft that should survive",
+    );
+  });
+
+  test("shows an empty state when the ticket has no comments", async () => {
+    getLinearIssueMock.mockResolvedValue({ ...issueDetail, comments: [] });
+    renderLinearTicketsView();
+
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+
+    expect(await screen.findByText("Build Linear support")).toBeTruthy();
+    expect(screen.getByText("No comments")).toBeTruthy();
   });
 
   test("ignores stale detail responses after switching tickets", async () => {

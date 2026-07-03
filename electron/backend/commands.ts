@@ -52,6 +52,7 @@ import { registerTmuxBackendCommands } from "./tmux.js";
 import {
   getLinearIssue,
   listLinearIssues,
+  postLinearIssueComment,
   postLinearCompletionComment,
   sanitizeLinearError,
   verifyLinearConnection,
@@ -1969,6 +1970,19 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const apiKey = await requireLinearApiKey(context);
     try {
       return await getLinearIssue(apiKey, asString(issueId, "issueId"));
+    } catch (error) {
+      throw new Error(sanitizeLinearError(error, apiKey));
+    }
+  });
+  register("post_linear_issue_comment", async ({ issueId, body }, context) => {
+    const targetIssueId = asString(issueId, "issueId");
+    const commentBody = asString(body, "body");
+    const apiKey = await requireLinearApiKey(context);
+    try {
+      return await postLinearIssueComment(apiKey, {
+        issueId: targetIssueId,
+        body: commentBody,
+      });
     } catch (error) {
       throw new Error(sanitizeLinearError(error, apiKey));
     }

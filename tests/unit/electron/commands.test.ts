@@ -3265,6 +3265,55 @@ exit 0
     }
   });
 
+  test("posts Linear issue comments through command handlers", async () => {
+    const originalFetch = globalThis.fetch;
+    const { context } = createContext(createEnvironment());
+    const commands = createCommandRegistry();
+
+    Object.assign(context.storage, {
+      getLinearAuth: mock(async () => ({ apiKey: "lin_api_secret" })),
+    });
+
+    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { query: string; variables: Record<string, string> };
+      expect(init?.headers).toMatchObject({ Authorization: "lin_api_secret" });
+      expect(request.query).toContain("OrkestratorLinearIssueComment");
+      expect(request.variables).toMatchObject({
+        issueId: "issue-1",
+        body: "Looks good",
+      });
+      return new Response(JSON.stringify({
+        data: {
+          commentCreate: {
+            success: true,
+            comment: {
+              id: "comment-1",
+              body: "Looks good",
+              createdAt: "2026-06-28T12:10:00.000Z",
+              updatedAt: "2026-06-28T12:10:00.000Z",
+              user: { name: "Ada" },
+            },
+          },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    try {
+      await expect(commands.get("post_linear_issue_comment")?.({
+        issueId: "issue-1",
+        body: " Looks good ",
+      }, context)).resolves.toEqual({
+        id: "comment-1",
+        body: "Looks good",
+        createdAt: "2026-06-28T12:10:00.000Z",
+        updatedAt: "2026-06-28T12:10:00.000Z",
+        authorName: "Ada",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("serializes concurrent Linear completion comments by pipeline ID", async () => {
     const originalFetch = globalThis.fetch;
     const { context } = createContext(createEnvironment());

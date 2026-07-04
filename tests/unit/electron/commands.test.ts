@@ -2470,6 +2470,39 @@ exit 1
     });
   });
 
+  test("injects workspace artifact git excludes before reading container git status", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+if [ "$1" = "exec" ]; then
+  printf 'M\ttracked.txt\n'
+  exit 0
+fi
+exit 1
+`, async (logs) => {
+      await expect(commands.get("get_git_status")?.(
+        { containerId: "container-1", targetBranch: "main" },
+        context,
+      )).resolves.toEqual([expect.objectContaining({ path: "tracked.txt", status: "M" })]);
+
+      const dockerExec = await fs.readFile(logs.exec, "utf8");
+      expect(dockerExec).toContain("git rev-parse --is-inside-work-tree");
+      expect(dockerExec).toContain("git rev-parse --git-path info/exclude");
+      expect(dockerExec).toContain('for pattern in ".orkestrator" ".claude/settings.local.json"; do');
+      expect(dockerExec).toContain('grep -qxF "$pattern" "$exclude_file"');
+      expect(dockerExec).toContain("tail -c 1");
+      expect(dockerExec).toContain("git diff --name-status origin/'main'");
+    });
+  });
+
   test("detects local PRs by listing all PRs for the environment branch", async () => {
     const worktreePath = await createTempDir("ork-electron-pr-worktree-");
     const environment = createEnvironment({ worktreePath, branch: "feature/pr" });

@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 const repoRoot = join(import.meta.dir, "..", "..");
 const setupScript = join(repoRoot, "docker", "workspace-setup.sh");
@@ -346,5 +346,61 @@ describe("workspace setup preserve/restore (functional)", () => {
     expect(ignored.status).toBe(0);
     expect(ignored.stdout).toContain(".orkestrator");
     expect(ignored.stdout).toContain(".claude/settings.local.json");
+  });
+
+  test("git exclude helper resolves linked worktree exclude files", () => {
+    if (!gitAvailable()) {
+      return;
+    }
+
+    const repo = join(workspace, "repo");
+    const linkedWorktree = join(workspace, "linked-worktree");
+    mkdirSync(repo, { recursive: true });
+    runGit(repo, ["init"]);
+    runGit(repo, ["config", "user.name", "Test User"]);
+    runGit(repo, ["config", "user.email", "test@example.com"]);
+    writeFileSync(join(repo, "tracked.txt"), "base\n");
+    runGit(repo, ["add", "tracked.txt"]);
+    runGit(repo, ["commit", "-m", "base"]);
+    runGit(repo, ["worktree", "add", "-b", "linked-branch", linkedWorktree]);
+
+    const excludePathResult = spawnSync("git", ["-C", linkedWorktree, "rev-parse", "--git-path", "info/exclude"], {
+      encoding: "utf8",
+    });
+    expect(excludePathResult.status).toBe(0);
+    expect(lstatSync(join(linkedWorktree, ".git")).isFile()).toBe(true);
+
+    const first = runGitExcludeHarness(linkedWorktree);
+    const second = runGitExcludeHarness(linkedWorktree);
+
+    expect(first.code).toBe(0);
+    expect(second.code).toBe(0);
+    const excludePath = excludePathResult.stdout.trim();
+    const excludeFile = isAbsolute(excludePath) ? excludePath : resolve(linkedWorktree, excludePath);
+    const exclude = readFileSync(excludeFile, "utf8");
+    expect(exclude).toContain(".orkestrator\n");
+    expect(exclude).toContain(".claude/settings.local.json\n");
+    expect(exclude.match(/^\.orkestrator$/gm)?.length).toBe(1);
+    expect(exclude.match(/^\.claude\/settings\.local\.json$/gm)?.length).toBe(1);
+
+    mkdirSync(join(linkedWorktree, ".orkestrator", "clipboard"), { recursive: true });
+    mkdirSync(join(linkedWorktree, ".claude"), { recursive: true });
+    writeFileSync(join(linkedWorktree, ".orkestrator", "clipboard", "image.png"), "binary");
+    writeFileSync(join(linkedWorktree, ".claude", "settings.local.json"), "{}\n");
+
+    const ignored = spawnSync(
+      "git",
+      [
+        "-C",
+        linkedWorktree,
+        "-c",
+        "core.excludesFile=/dev/null",
+        "check-ignore",
+        ".orkestrator/clipboard/image.png",
+        ".claude/settings.local.json",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(ignored.status).toBe(0);
   });
 });

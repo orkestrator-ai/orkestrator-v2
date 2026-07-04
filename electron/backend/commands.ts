@@ -106,6 +106,7 @@ type EnvironmentSetupStartResult = {
 
 const environmentSetupSessions = new Map<string, EnvironmentSetupSession>();
 const environmentSetupTasks = new Map<string, Promise<Environment>>();
+const WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS = [".orkestrator", ".claude/settings.local.json"] as const;
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string") throw new Error(`Expected ${name} to be a string`);
@@ -1346,7 +1347,7 @@ async function createLocalWorktree(
     const createdFromCommit = await readLocalHeadCommit(worktreePath);
 
     await fs.mkdir(path.join(worktreePath, ".orkestrator"), { recursive: true });
-    await fs.appendFile(path.join(worktreePath, ".git", "info", "exclude"), "\n.orkestrator/\n").catch(() => undefined);
+    await addLocalWorkspaceArtifactsToGitExclude(worktreePath);
 
     for (const envFile of [".env", ".env.local"]) {
       const source = path.join(projectPath, envFile);
@@ -1410,6 +1411,32 @@ async function cleanupFailedLocalWorktree(projectPath: string, worktreePath: str
 
   const refName = validateGitRefName(branch, "environment branch");
   await runCommand("git", ["-C", projectPath, "branch", "-D", refName], { timeoutMs: 30_000 }).catch(() => undefined);
+}
+
+async function resolveLocalGitExcludeFile(worktreePath: string): Promise<string> {
+  const { stdout } = await runCommand("git", ["-C", worktreePath, "rev-parse", "--git-path", "info/exclude"], { timeoutMs: 10_000 });
+  const excludeFile = stdout.trim();
+  if (!excludeFile) throw new Error(`Could not resolve git exclude file for ${worktreePath}`);
+  return path.isAbsolute(excludeFile) ? excludeFile : path.resolve(worktreePath, excludeFile);
+}
+
+async function addLocalWorkspaceArtifactsToGitExclude(worktreePath: string): Promise<void> {
+  const excludeFile = await resolveLocalGitExcludeFile(worktreePath);
+  await fs.mkdir(path.dirname(excludeFile), { recursive: true });
+
+  const existing = await fs.readFile(excludeFile, "utf8").catch(() => "");
+  const existingPatterns = new Set(existing.split(/\r?\n/));
+  let next = existing;
+  if (next.length > 0 && !next.endsWith("\n")) next += "\n";
+
+  for (const pattern of WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS) {
+    if (existingPatterns.has(pattern)) continue;
+    next += `${pattern}\n`;
+  }
+
+  if (next !== existing) {
+    await fs.writeFile(excludeFile, next);
+  }
 }
 
 async function dockerExec(containerId: string, command: string, timeoutMs = 120_000): Promise<string> {
@@ -1647,6 +1674,9 @@ async function buildFileTree(rootPath: string, relativePath = ""): Promise<Array
 }
 
 async function getLocalGitStatus(worktreePath: string, targetBranch: string): Promise<unknown[]> {
+  validateGitRefName(targetBranch, "target branch");
+  await addLocalWorkspaceArtifactsToGitExclude(worktreePath);
+
   const base = await resolveLocalGitBase(worktreePath, targetBranch);
   const [nameStatus, numstat, porcelain] = await Promise.all([
     runCommand("git", ["-C", worktreePath, "diff", "--name-status", base], { timeoutMs: 60_000 }),
@@ -2606,6 +2636,22 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const output = await dockerExec(asString(containerId, "containerId"), `
       if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         exit 0
+      fi
+      exclude_path="$(git rev-parse --git-path info/exclude 2>/dev/null || true)"
+      if [ -n "$exclude_path" ]; then
+        case "$exclude_path" in
+          /*) exclude_file="$exclude_path" ;;
+          *) exclude_file="$(pwd)/$exclude_path" ;;
+        esac
+        mkdir -p "$(dirname "$exclude_file")"
+        for pattern in ".orkestrator" ".claude/settings.local.json"; do
+          if ! grep -qxF "$pattern" "$exclude_file" 2>/dev/null; then
+            if [ -s "$exclude_file" ] && [ "$(tail -c 1 "$exclude_file" 2>/dev/null)" != "" ]; then
+              printf '\\n' >> "$exclude_file"
+            fi
+            printf '%s\\n' "$pattern" >> "$exclude_file"
+          fi
+        done
       fi
       git fetch origin ${branch} >/dev/null 2>&1 || true
       git diff --name-status origin/${branch} 2>/dev/null || git diff --name-status ${branch} 2>/dev/null || true

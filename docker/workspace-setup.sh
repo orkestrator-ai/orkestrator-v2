@@ -180,8 +180,17 @@ append_git_exclude_pattern() {
 # Function to add Orkestrator workspace artifacts to .git/info/exclude
 add_workspace_artifacts_to_git_exclude() {
     local workspace="${WORKSPACE_DIR:-/workspace}"
-    if [ -d "$workspace/.git" ]; then
-        local exclude_file="$workspace/.git/info/exclude"
+    if git -C "$workspace" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        local exclude_path
+        exclude_path="$(git -C "$workspace" rev-parse --git-path info/exclude 2>/dev/null || true)"
+        if [ -z "$exclude_path" ]; then
+            return 0
+        fi
+        local exclude_file
+        case "$exclude_path" in
+            /*) exclude_file="$exclude_path" ;;
+            *) exclude_file="$workspace/$exclude_path" ;;
+        esac
         mkdir -p "$(dirname "$exclude_file")"
         for pattern in ".orkestrator" ".claude/settings.local.json"; do
             if ! grep -qxF "$pattern" "$exclude_file" 2>/dev/null; then
@@ -326,6 +335,7 @@ clone_repository() {
 
 # Check if setup already completed
 if [ -f /tmp/.workspace-setup-complete ]; then
+    add_workspace_artifacts_to_git_exclude
     echo -e "${GREEN}Workspace already set up.${NC}"
     exit 0
 fi
@@ -442,11 +452,13 @@ else
     elif [ -d "/workspace/.git" ]; then
         echo "Repository already exists in /workspace"
         cd /workspace
+        add_workspace_artifacts_to_git_exclude
         echo "  Branch: $(git branch --show-current 2>/dev/null || echo 'unknown')"
     fi
 fi
 
 restore_orkestrator_workspace_state
+add_workspace_artifacts_to_git_exclude
 
 # Copy .env files to workspace
 echo ""

@@ -281,6 +281,11 @@ async function runGit(cwd: string, args: string[]): Promise<void> {
   });
 }
 
+async function gitOutput(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", args, { cwd });
+  return stdout.trim();
+}
+
 async function createGitWorktreeWithOrigin(): Promise<{ worktree: string; remote: string }> {
   const root = await createTempDir("ork-electron-git-");
   const remote = path.join(root, "origin.git");
@@ -1855,6 +1860,65 @@ exit 0
     }
   });
 
+  test("injects workspace artifact git excludes into local worktrees before status reads", async () => {
+    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    const suffix = randomUUID().slice(0, 8);
+    const environment = createEnvironment({
+      status: "stopped",
+      worktreePath: undefined,
+      branch: `feature/artifact-excludes-${suffix}`,
+      environmentType: "local",
+    });
+    const { context } = createContext(environment, {
+      project: {
+        id: environment.projectId,
+        name: `Artifact Excludes ${suffix}`,
+        gitUrl: remote,
+        localPath: worktree,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+      repositoryConfig: { defaultBranch: "main", prBaseBranch: "main" },
+    });
+    const commands = createCommandRegistry();
+
+    try {
+      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual(expect.objectContaining({
+        setupCommands: [],
+        setupManagedByBackend: true,
+        setupStarted: false,
+      }));
+
+      expect(environment.worktreePath).toBeDefined();
+      const worktreePath = environment.worktreePath!;
+      const gitDir = await gitOutput(worktreePath, ["rev-parse", "--git-dir"]);
+      const excludePath = await gitOutput(worktreePath, ["rev-parse", "--git-path", "info/exclude"]);
+      expect(gitDir).not.toBe(".git");
+      const excludeFile = path.isAbsolute(excludePath) ? excludePath : path.resolve(worktreePath, excludePath);
+      await expect(fs.readFile(excludeFile, "utf8")).resolves.toContain(".orkestrator\n");
+
+      await fs.writeFile(excludeFile, "existing-pattern");
+      await fs.mkdir(path.join(worktreePath, ".orkestrator", "clipboard"), { recursive: true });
+      await fs.writeFile(path.join(worktreePath, ".orkestrator", "clipboard", "image.png"), "binary");
+      await fs.mkdir(path.join(worktreePath, ".claude"), { recursive: true });
+      await fs.writeFile(path.join(worktreePath, ".claude", "settings.local.json"), "{}\n");
+
+      const changes = await commands.get("get_local_git_status")?.(
+        { worktreePath, targetBranch: "main" },
+        context,
+      ) as Array<{ path: string }>;
+
+      expect(changes.some((change) => change.path.startsWith(".orkestrator/"))).toBe(false);
+      expect(changes.some((change) => change.path === ".claude/settings.local.json")).toBe(false);
+      await expect(fs.readFile(excludeFile, "utf8")).resolves.toBe(
+        "existing-pattern\n.orkestrator\n.claude/settings.local.json\n",
+      );
+      await expect(execFileAsync("git", ["-C", worktreePath, "check-ignore", ".orkestrator/clipboard/image.png", ".claude/settings.local.json"])).resolves.toBeDefined();
+    } finally {
+      if (environment.worktreePath) await fs.rm(environment.worktreePath, { recursive: true, force: true });
+    }
+  });
+
   test("rolls back a local worktree when a configured file is missing", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();
     const suffix = randomUUID().slice(0, 8);
@@ -2403,6 +2467,39 @@ exit 1
 
       const dockerExec = await fs.readFile(logs.exec, "utf8");
       expect(dockerExec).toContain("git rev-parse --is-inside-work-tree");
+    });
+  });
+
+  test("injects workspace artifact git excludes before reading container git status", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+if [ "$1" = "exec" ]; then
+  printf 'M\ttracked.txt\n'
+  exit 0
+fi
+exit 1
+`, async (logs) => {
+      await expect(commands.get("get_git_status")?.(
+        { containerId: "container-1", targetBranch: "main" },
+        context,
+      )).resolves.toEqual([expect.objectContaining({ path: "tracked.txt", status: "M" })]);
+
+      const dockerExec = await fs.readFile(logs.exec, "utf8");
+      expect(dockerExec).toContain("git rev-parse --is-inside-work-tree");
+      expect(dockerExec).toContain("git rev-parse --git-path info/exclude");
+      expect(dockerExec).toContain('for pattern in ".orkestrator" ".claude/settings.local.json"; do');
+      expect(dockerExec).toContain('grep -qxF "$pattern" "$exclude_file"');
+      expect(dockerExec).toContain("tail -c 1");
+      expect(dockerExec).toContain("git diff --name-status origin/'main'");
     });
   });
 

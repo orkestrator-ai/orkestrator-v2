@@ -519,3 +519,56 @@ describe("paneLayoutStore environment scoping", () => {
     expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-b");
   });
 });
+
+describe("paneLayoutStore splitting", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+
+  test("moves a tab into a pane split at the requested edge", () => {
+    usePaneLayoutStore.setState({
+      activeEnvironmentId: "env-split",
+      environments: new Map([
+        ["env-split", {
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              { id: "tab-one", type: "plain" },
+              { id: "tab-two", type: "plain" },
+            ] as any,
+            activeTabId: "tab-two",
+          },
+        }],
+      ]),
+    });
+
+    usePaneLayoutStore.getState().splitPaneAtEdge(
+      "default",
+      "right",
+      "tab-two",
+      "default",
+      "env-split",
+    );
+
+    const root = usePaneLayoutStore.getState().getRoot("env-split");
+    expect(root.kind).toBe("split");
+    if (root.kind !== "split") {
+      throw new Error("root should be split");
+    }
+
+    expect(root.direction).toBe("horizontal");
+    expect(root.children[0]).toMatchObject({
+      kind: "leaf",
+      id: "default",
+      tabs: [{ id: "tab-one" }],
+    });
+    expect(root.children[1]).toMatchObject({
+      kind: "leaf",
+      tabs: [{ id: "tab-two" }],
+      activeTabId: "tab-two",
+    });
+  });
+});

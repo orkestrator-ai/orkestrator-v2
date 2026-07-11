@@ -23,6 +23,7 @@ import { deleteSession as deleteClaudeSession } from "@/lib/claude-client";
 import { stopSession as stopClaudeTmuxSession } from "@/lib/claude-tmux-client";
 import { deleteSession as deleteCodexSession } from "@/lib/codex-client";
 import { deleteSession as deleteOpenCodeSession } from "@/lib/opencode-client";
+import { createUuid } from "@/lib/uuid";
 
 /**
  * Per-environment state for pane layout
@@ -33,9 +34,9 @@ interface EnvironmentPaneState {
   containerId: string | null;
 }
 
-// Generate unique IDs using crypto.randomUUID for collision resistance
+// Generate unique IDs across desktop and secure/insecure browser contexts.
 function generateId(prefix: string): string {
-  return `${prefix}-${crypto.randomUUID()}`;
+  return `${prefix}-${createUuid()}`;
 }
 
 // Tree helper functions

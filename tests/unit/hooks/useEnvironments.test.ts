@@ -123,6 +123,26 @@ describe("useEnvironments", () => {
     expect(result.current.environments[0]?.id).toBe("env-1");
   });
 
+  test("silently refreshes environments without changing loading or error state", async () => {
+    const refreshedEnvironment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "created-in-another-client",
+    });
+    mockGetEnvironments.mockImplementation(() => Promise.resolve([refreshedEnvironment]));
+    useEnvironmentStore.setState({ error: "Existing visible error", isLoading: false });
+
+    const { result } = renderHook(() => useEnvironments(null));
+
+    await act(async () => {
+      await result.current.loadEnvironments("project-1", { silent: true });
+    });
+
+    expect(result.current.allEnvironments).toEqual([refreshedEnvironment]);
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.error).toBe("Existing visible error");
+  });
+
   test("createEnvironment creates an environment successfully", async () => {
     const { result } = renderHook(() => useEnvironments("project-1"));
 

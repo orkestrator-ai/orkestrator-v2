@@ -56,6 +56,11 @@ interface UseEnvironmentsOptions {
   listenForRenameEvents?: boolean;
 }
 
+interface LoadEnvironmentsOptions {
+  /** Refresh store data without changing user-visible loading or error state. */
+  silent?: boolean;
+}
+
 function bindSetupTerminalSession(environment: Environment, sessionId: string): void {
   const key = createSessionKey(environment.containerId ?? null, "default", environment.id);
   const store = useTerminalSessionStore.getState();
@@ -234,17 +239,27 @@ export function useEnvironments(
   ]);
 
   const loadEnvironments = useCallback(
-    async (pid: string) => {
-      setLoading(true);
-      setError(null);
+    async (pid: string, options: LoadEnvironmentsOptions = {}) => {
+      const { silent = false } = options;
+      if (!silent) {
+        setLoading(true);
+        setError(null);
+      }
       try {
         const envs = await backend.getEnvironments(pid);
         // Merge environments for this project (uses current store state, not stale closure)
         mergeEnvironmentsForProject(pid, envs);
       } catch (err) {
-        setError(getErrorMessage(err, "Failed to load environments"));
+        const message = getErrorMessage(err, "Failed to load environments");
+        if (silent) {
+          console.warn(`[useEnvironments] Failed to refresh environments for project ${pid}:`, message);
+        } else {
+          setError(message);
+        }
       } finally {
-        setLoading(false);
+        if (!silent) {
+          setLoading(false);
+        }
       }
     },
     [mergeEnvironmentsForProject, setLoading, setError]

@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useProjects } from "@/hooks/useProjects";
 import { useEnvironments } from "@/hooks/useEnvironments";
+import { useEnvironmentListPolling } from "@/hooks/useEnvironmentListPolling";
 import { useUIStore, useClaudeOptionsStore, useConfigStore } from "@/stores";
 import { RepositorySettings } from "@/components/settings/RepositorySettings";
 import { renameEnvironmentFromPrompt, updateEnvironmentAgentSettings } from "@/lib/backend";
@@ -63,6 +64,11 @@ export function HierarchicalSidebar() {
     reorderEnvironments,
     updateEnvironment,
   } = useEnvironments(null);
+
+  useEnvironmentListPolling(
+    projects.map((project) => project.id),
+    (projectId) => loadEnvironments(projectId, { silent: true }),
+  );
 
   const {
     selectedProjectId,

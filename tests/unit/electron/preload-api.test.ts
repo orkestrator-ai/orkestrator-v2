@@ -58,7 +58,14 @@ describe("preload API factory", () => {
 
     await expect(api.clipboard.readText()).resolves.toEqual({ channel: "orkestrator:clipboard:read-text", args: [] });
     await expect(api.clipboard.writeText("copy")).resolves.toEqual({ channel: "orkestrator:clipboard:write-text", args: ["copy"] });
+    await expect(api.clipboard.readImage()).resolves.toEqual({ channel: "orkestrator:clipboard:read-image", args: [] });
+    await expect(api.clipboard.writeImage("data:image/png;base64,abc")).resolves.toEqual({
+      channel: "orkestrator:clipboard:write-image",
+      args: ["data:image/png;base64,abc"],
+    });
     await expect(api.dialog.open({ directory: true })).resolves.toEqual({ channel: "orkestrator:dialog:open", args: [{ directory: true }] });
+    await expect(api.webClient.getStatus()).resolves.toEqual({ channel: "orkestrator:web-client:get-status", args: [] });
+    await expect(api.webClient.setEnabled(false)).resolves.toEqual({ channel: "orkestrator:web-client:set-enabled", args: [false] });
     await expect(api.process.exit(7)).resolves.toEqual({ channel: "orkestrator:process:exit", args: [7] });
     await expect(api.window.startDragging()).resolves.toEqual({ channel: "orkestrator:window:start-dragging", args: [] });
   });

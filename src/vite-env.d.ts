@@ -21,6 +21,10 @@ interface Window {
         defaultPath?: string;
       }): Promise<string | string[] | null>;
     };
+    webClient?: {
+      getStatus(): Promise<import("./types/webClient").WebClientStatus>;
+      setEnabled(enabled: boolean): Promise<import("./types/webClient").WebClientStatus>;
+    };
     process: {
       exit(code?: number): Promise<void>;
     };

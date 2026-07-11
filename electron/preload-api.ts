@@ -1,3 +1,5 @@
+import type { WebClientStatus } from "../src/types/webClient.js";
+
 type EventCallback<T> = (payload: T) => void;
 
 export type IpcRendererLike = {
@@ -47,6 +49,15 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
     dialog: {
       open(options?: { directory?: boolean; multiple?: boolean; title?: string; defaultPath?: string }): Promise<string | string[] | null> {
         return ipcRenderer.invoke("orkestrator:dialog:open", options ?? {});
+      },
+    },
+
+    webClient: {
+      getStatus(): Promise<WebClientStatus> {
+        return ipcRenderer.invoke("orkestrator:web-client:get-status");
+      },
+      setEnabled(enabled: boolean): Promise<WebClientStatus> {
+        return ipcRenderer.invoke("orkestrator:web-client:set-enabled", enabled);
       },
     },
 

@@ -8,6 +8,9 @@ import { OrkestratorGateway } from "./gateway.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
 import { createMainWindow } from "./window.js";
+import { WebClientController } from "./web-client-controller.js";
+import type { AppConfig } from "./backend/models.js";
+import type { WebClientStatus } from "../src/types/webClient.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,6 +26,22 @@ app.setPath("userData", path.join(app.getPath("appData"), APP_SLUG));
 let mainWindow: BrowserWindow | null = null;
 let backend: OrkestratorBackend | null = null;
 let gateway: OrkestratorGateway | null = null;
+let webClientController: WebClientController | null = null;
+
+function getWebClientStatus(): WebClientStatus {
+  return webClientController?.getStatus() ?? {
+    enabled: true,
+    running: false,
+    url: null,
+    error: "The web client gateway is not initialized.",
+  };
+}
+
+function setWebClientEnabled(enabled: boolean): Promise<WebClientStatus> {
+  return webClientController
+    ? webClientController.setEnabled(enabled)
+    : Promise.resolve(getWebClientStatus());
+}
 
 function emitToRenderers(event: string, payload: unknown): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -90,6 +109,8 @@ function registerIpc(): void {
     dialogApi: dialog,
     appApi: app,
     nativeImageApi: nativeImage,
+    getWebClientStatus,
+    setWebClientEnabled,
   });
 }
 
@@ -114,10 +135,9 @@ app.whenReady().then(async () => {
     rendererRoot: path.join(appRoot, "dist"),
     rendererDevServerUrl: isDev ? process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:1420" : undefined,
   });
-  await gateway.start().catch((error: unknown) => {
-    console.error("[RemoteGateway] Failed to start:", error);
-    gateway = null;
-  });
+  webClientController = new WebClientController(gateway);
+  const config = await backend.invoke<AppConfig>("get_config");
+  await setWebClientEnabled(config.global.webClientEnabled ?? true);
 
   createMenu();
   registerIpc();

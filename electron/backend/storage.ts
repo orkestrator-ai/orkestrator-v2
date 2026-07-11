@@ -236,6 +236,7 @@ export function defaultConfig(): AppConfig {
       terminalScrollback: 1000,
       experimentalCodexRawEventLogging: true,
       debugLogging: false,
+      webClientEnabled: true,
     },
     repositories: {},
   };

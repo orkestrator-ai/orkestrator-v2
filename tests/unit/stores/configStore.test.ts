@@ -149,6 +149,12 @@ describe("configStore", () => {
     expect(useConfigStore.getState().config.global.codexNativeFastModeDefault).toBe(true);
   });
 
+  test("updateGlobalConfig updates web client enablement", () => {
+    useConfigStore.getState().updateGlobalConfig({ webClientEnabled: false });
+
+    expect(useConfigStore.getState().config.global.webClientEnabled).toBe(false);
+  });
+
   test("setRepositoryConfig adds a new repository config", () => {
     const repoConfig: RepositoryConfig = {
       defaultBranch: "main",

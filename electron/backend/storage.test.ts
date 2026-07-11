@@ -13,6 +13,10 @@ describe("defaultConfig", () => {
     expect(global.codexReasoningEffort).toBe("medium");
   });
 
+  test("keeps the existing web client behavior enabled by default", () => {
+    expect(defaultConfig().global.webClientEnabled).toBe(true);
+  });
+
   test("does not point defaults at any retired model id", () => {
     const { global } = defaultConfig();
     const selected = [global.opencodeModel, global.claudeModel, global.codexModel];

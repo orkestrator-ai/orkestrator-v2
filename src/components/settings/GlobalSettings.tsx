@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/select";
 import { useConfigStore } from "@/stores";
 import * as backend from "@/lib/backend";
-import { Loader2, Eye, EyeOff, Key, Github, CheckCircle2, XCircle, AlertCircle, Code2, Check, Terminal, Bot, FolderOpen } from "lucide-react";
+import { Loader2, Eye, EyeOff, Key, Github, CheckCircle2, XCircle, AlertCircle, Code2, Check, Terminal, Bot, FolderOpen, ExternalLink, Globe2, WifiOff } from "lucide-react";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -27,6 +27,7 @@ import type {
   OpenCodeMode,
   PreferredEditor,
   TerminalAppearance,
+  WebClientStatus,
 } from "@/types";
 import {
   DEFAULT_TERMINAL_APPEARANCE,
@@ -101,6 +102,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     global.experimentalCodexRawEventLogging ?? true
   );
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
+  const [webClientEnabled, setWebClientEnabled] = useState(global.webClientEnabled ?? true);
+  const [webClientStatus, setWebClientStatus] = useState<WebClientStatus | null>(null);
+  const [isLoadingWebClientStatus, setIsLoadingWebClientStatus] = useState(false);
   const [logDirectory, setLogDirectory] = useState<string | null>(null);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showGithubToken, setShowGithubToken] = useState(false);
@@ -111,6 +115,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [colorError, setColorError] = useState<string | null>(null);
   const [isTesting, setIsTesting] = useState(false);
   const [testResults, setTestResults] = useState<DomainTestResult[] | null>(null);
+  const webClientStatusRequestRef = useRef(0);
 
   // Sync local state when config changes in the store
   useEffect(() => {
@@ -139,7 +144,35 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     );
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
+    setWebClientEnabled(global.webClientEnabled ?? true);
   }, [global]);
+
+  const refreshWebClientStatus = useCallback(async () => {
+    const requestId = ++webClientStatusRequestRef.current;
+    setIsLoadingWebClientStatus(true);
+    try {
+      const status = await backend.getWebClientStatus();
+      if (requestId === webClientStatusRequestRef.current) setWebClientStatus(status);
+    } catch (error) {
+      if (requestId === webClientStatusRequestRef.current) {
+        setWebClientStatus({
+          enabled: global.webClientEnabled ?? true,
+          running: false,
+          url: null,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } finally {
+      if (requestId === webClientStatusRequestRef.current) setIsLoadingWebClientStatus(false);
+    }
+  }, [global.webClientEnabled]);
+
+  useEffect(() => {
+    if (activeSection === "web-client") void refreshWebClientStatus();
+    return () => {
+      webClientStatusRequestRef.current += 1;
+    };
+  }, [activeSection, refreshWebClientStatus]);
 
   // Fetch log directory path once on mount
   useEffect(() => {
@@ -170,12 +203,13 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       terminalBackgroundColor !== terminalAppearance.backgroundColor ||
       terminalScrollback !== (global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK) ||
       experimentalCodexRawEventLogging !== (global.experimentalCodexRawEventLogging ?? true) ||
-      debugLogging !== (global.debugLogging ?? false);
+      debugLogging !== (global.debugLogging ?? false) ||
+      webClientEnabled !== (global.webClientEnabled ?? true);
     setHasChanges(changed);
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -272,6 +306,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         terminalScrollback: number;
         experimentalCodexRawEventLogging: boolean;
         debugLogging: boolean;
+        webClientEnabled: boolean;
       } = {
         containerResources: { cpuCores, memoryGb },
         envFilePatterns: patterns,
@@ -296,6 +331,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         terminalScrollback,
         experimentalCodexRawEventLogging,
         debugLogging,
+        webClientEnabled,
       };
 
       if (anthropicApiKey) newGlobal.anthropicApiKey = anthropicApiKey;
@@ -303,6 +339,11 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
       const newConfig = await backend.updateGlobalConfig(newGlobal);
       setConfig(newConfig);
+
+      if (!window.orkestratorGateway?.enabled) {
+        const nextWebClientStatus = await backend.setWebClientEnabled(webClientEnabled);
+        setWebClientStatus(nextWebClientStatus);
+      }
 
       // Propagate GitHub token to running containers if it changed
       const oldToken = global.githubToken || "";
@@ -359,6 +400,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     );
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
+    setWebClientEnabled(global.webClientEnabled ?? true);
     setDomainErrors([]);
     setColorError(null);
     setTestResults(null);
@@ -932,6 +974,107 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     </div>
   );
 
+  const renderWebClient = () => {
+    const isRemoteClient = window.orkestratorGateway?.enabled === true;
+    const hasPendingChange = webClientEnabled !== (global.webClientEnabled ?? true);
+    const statusLabel = isLoadingWebClientStatus
+      ? "Checking"
+      : webClientStatus?.running
+        ? "Running"
+        : webClientStatus?.enabled
+          ? "Unavailable"
+          : "Off";
+
+    return (
+      <div className="max-w-2xl space-y-6">
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <Globe2 className="h-4 w-4" />
+            Web client
+          </h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Open Orkestrator from another browser on your Tailscale network.
+          </p>
+        </div>
+
+        <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/50">
+          <div className="flex items-center justify-between gap-6 p-4">
+            <div className="min-w-0 space-y-1">
+              <Label htmlFor="web-client-enabled" className="text-sm font-medium">
+                Allow web access
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                {isRemoteClient
+                  ? "This setting can only be changed in the desktop app."
+                  : "Starts an authenticated web client on this computer's Tailscale address."}
+              </p>
+            </div>
+            <Switch
+              id="web-client-enabled"
+              aria-label="Allow web access"
+              checked={webClientEnabled}
+              disabled={isRemoteClient}
+              onCheckedChange={setWebClientEnabled}
+            />
+          </div>
+
+          <div aria-live="polite" className="border-t border-zinc-800 bg-zinc-900/60 px-4 py-3">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex min-w-0 items-center gap-2">
+                {isLoadingWebClientStatus ? (
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+                ) : webClientStatus?.running ? (
+                  <span className="relative flex h-2.5 w-2.5 shrink-0">
+                    <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-40 motion-safe:animate-ping" />
+                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                  </span>
+                ) : (
+                  <WifiOff className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                )}
+                <span className="text-xs font-medium text-foreground">{statusLabel}</span>
+              </div>
+
+              {webClientStatus?.running && webClientStatus.url && !hasPendingChange && (
+                <a
+                  href={webClientStatus.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(event) => {
+                    if (!isRemoteClient) {
+                      event.preventDefault();
+                      void backend.openInBrowser(webClientStatus.url!);
+                    }
+                  }}
+                  className="flex min-w-0 items-center gap-1.5 font-mono text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  title={webClientStatus.url}
+                >
+                  <span className="truncate">{webClientStatus.url}</span>
+                  <ExternalLink className="h-3 w-3 shrink-0" />
+                </a>
+              )}
+            </div>
+
+            {hasPendingChange && (
+              <p className="mt-2 text-xs text-amber-400/90">
+                Save changes to {webClientEnabled ? "start" : "stop"} the web client.
+              </p>
+            )}
+            {!hasPendingChange && webClientStatus?.error && (
+              <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-400/90">
+                <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+                {webClientStatus.error}
+              </p>
+            )}
+          </div>
+        </div>
+
+        <p className="text-xs leading-relaxed text-muted-foreground/70">
+          Access is limited to Tailscale addresses and protected by the gateway token stored in the app data directory.
+        </p>
+      </div>
+    );
+  };
+
   const renderDebug = () => (
     <div className="max-w-2xl space-y-4">
       <div>
@@ -1054,6 +1197,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     codex: renderCodex,
     terminal: renderTerminal,
     network: renderNetwork,
+    "web-client": renderWebClient,
     container: renderContainer,
     experimental: renderExperimental,
     debug: renderDebug,

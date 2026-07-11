@@ -2,7 +2,17 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createEnvironment, defaultConfig, defaultEnvironmentName, StorageService } from "../../../electron/backend/storage";
+import {
+  createEnvironment,
+  createProject,
+  defaultConfig,
+  defaultEnvironmentName,
+  extractRepoName,
+  parseUpdateObject,
+  sanitizeBranchName,
+  sanitizeEnvironmentName,
+  StorageService,
+} from "../../../electron/backend/storage";
 
 mock.module("sharp", () => {
   const pipeline = {
@@ -61,6 +71,28 @@ afterEach(async () => {
 });
 
 describe("Electron StorageService", () => {
+  test("sanitizes names, extracts repository names, and rejects non-record updates", () => {
+    expect(sanitizeEnvironmentName("  My Feature/🚀  ")).toBe("my-feature");
+    expect(sanitizeEnvironmentName("🚀")).toBe("env");
+    expect(sanitizeEnvironmentName("a".repeat(120))).toHaveLength(100);
+    expect(sanitizeBranchName("Feature.One/Two")).toBe("feature-one-two");
+    expect(extractRepoName("git@github.com:openai/example.git")).toBe("example");
+    expect(parseUpdateObject({ status: "running" })).toEqual({ status: "running" });
+    expect(parseUpdateObject(null)).toEqual({});
+    expect(parseUpdateObject([])).toEqual({});
+  });
+
+  test("creates project records with normalized names and nullable local paths", () => {
+    const project = createProject("https://github.com/openai/example.git");
+    expect(project).toMatchObject({
+      name: "example",
+      gitUrl: "https://github.com/openai/example.git",
+      localPath: null,
+      order: 0,
+    });
+    expect(project.id).toBeTruthy();
+  });
+
   test("default config uses the shared dark terminal background", () => {
     expect(defaultConfig().global.terminalAppearance.backgroundColor).toBe("#141414");
   });
@@ -95,6 +127,60 @@ describe("Electron StorageService", () => {
     await expect(storage.loadConfig()).resolves.toMatchObject({
       global: expect.objectContaining({ defaultAgent: "claude" }),
     });
+  });
+
+  test("covers project, environment, and configuration CRUD boundaries", async () => {
+    const dataDir = await createTempDir("ork-storage-crud-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    const firstProject = await storage.addProject(createProject("https://github.com/acme/first.git"));
+    const secondProject = await storage.addProject(createProject("https://github.com/acme/second.git", "/tmp/second"));
+    await expect(storage.addProject(createProject(firstProject.gitUrl))).rejects.toThrow("Duplicate project URL");
+    await expect(storage.updateProject("missing", { name: "x" })).rejects.toThrow("Project not found");
+    await storage.updateProject(firstProject.id, { name: "First renamed", localPath: "/tmp/first" });
+    expect(await storage.getProject(firstProject.id)).toMatchObject({ name: "First renamed", localPath: "/tmp/first" });
+    expect((await storage.reorderProjects([secondProject.id])).map((project) => project.id)).toEqual([
+      secondProject.id,
+      firstProject.id,
+    ]);
+
+    const firstEnvironment = await storage.addEnvironment(createEnvironment(firstProject.id, { name: "first" }));
+    const secondEnvironment = await storage.addEnvironment(createEnvironment(firstProject.id, { name: "second" }));
+    const otherEnvironment = await storage.addEnvironment(createEnvironment(secondProject.id, { name: "other" }));
+    const updated = await storage.updateEnvironment(firstEnvironment.id, {
+      containerId: "container-1",
+      allowedDomains: ["example.com", 42],
+      setupScriptsComplete: true,
+      networkAccessMode: "full",
+      entryPort: Number.NaN,
+    });
+    expect(updated).toMatchObject({
+      containerId: "container-1",
+      allowedDomains: ["example.com"],
+      setupScriptsComplete: true,
+      networkAccessMode: "full",
+      entryPort: undefined,
+    });
+    await expect(storage.updateEnvironment("missing", {})).rejects.toThrow("Environment not found");
+    expect((await storage.reorderEnvironments(firstProject.id, [secondEnvironment.id])).map((environment) => environment.id)).toEqual([
+      secondEnvironment.id,
+      firstEnvironment.id,
+    ]);
+    expect((await storage.getEnvironmentsByProject(secondProject.id)).map((environment) => environment.id)).toEqual([otherEnvironment.id]);
+
+    expect(await storage.getRepositoryConfig("missing")).toEqual({ defaultBranch: "main", prBaseBranch: "main" });
+    await storage.updateRepositoryConfig(firstProject.id, { defaultBranch: "develop", prBaseBranch: "release" });
+    expect(await storage.getRepositoryConfig(firstProject.id)).toEqual({ defaultBranch: "develop", prBaseBranch: "release" });
+    const global = defaultConfig().global;
+    global.webClientEnabled = false;
+    await storage.updateGlobalConfig(global);
+    expect((await storage.loadConfig()).global.webClientEnabled).toBe(false);
+
+    await storage.removeEnvironment(otherEnvironment.id);
+    await expect(storage.removeEnvironment(otherEnvironment.id)).rejects.toThrow("Environment not found");
+    await storage.removeProject(secondProject.id);
+    await expect(storage.removeProject(secondProject.id)).rejects.toThrow("Project not found");
   });
 
   test("round-trips max and ultra Codex reasoning preferences", async () => {
@@ -142,6 +228,40 @@ describe("Electron StorageService", () => {
     await fs.writeFile(path.join(dataDir, "buffers", "orphan.txt"), "stale");
     await expect(storage.cleanupOrphanedBuffers()).resolves.toEqual(["orphan"]);
     await expect(fs.stat(path.join(dataDir, "buffers", "orphan.txt"))).rejects.toThrow();
+  });
+
+  test("updates, reorders, disconnects, and bulk-removes sessions", async () => {
+    const dataDir = await createTempDir("ork-storage-session-crud-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    const first = await storage.createSession("env-1", "container-1", "tab-1", "terminal");
+    const second = await storage.createSession("env-1", "container-1", "tab-2", "claude");
+    await expect(storage.updateSession("missing", { name: "x" })).rejects.toThrow("Session not found");
+    await storage.updateSession(first.id, { name: "Shell" });
+    expect(await storage.getSession(first.id)).toMatchObject({ status: "connected", name: "Shell" });
+    expect((await storage.reorderSessions("env-1", [second.id])).map((session) => session.id)).toEqual([second.id, first.id]);
+    expect(await storage.disconnectEnvironmentSessions("env-1")).toHaveLength(2);
+    expect(await storage.removeSessionsByEnvironment("env-1")).toEqual(expect.arrayContaining([first.id, second.id]));
+    expect(await storage.getSessionsByEnvironment("env-1")).toEqual([]);
+  });
+
+  test("updates and deletes kanban tasks and comments with missing-id errors", async () => {
+    const dataDir = await createTempDir("ork-storage-kanban-crud-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    const task = await storage.addKanbanTask("project-1", "Build", "Initial");
+    const updated = await storage.updateKanbanTask(task.id, { title: "Build it" });
+    expect(updated.title).toBe("Build it");
+    const commented = await storage.addKanbanComment(task.id, "Looks good");
+    const commentId = commented.comments[0]?.id;
+    expect(commentId).toBeTruthy();
+    expect((await storage.deleteKanbanComment(task.id, commentId!)).comments).toEqual([]);
+    await expect(storage.addKanbanComment("missing", "x")).rejects.toThrow("Kanban task not found");
+    await expect(storage.deleteKanbanComment(task.id, "missing")).resolves.toMatchObject({ comments: [] });
+    await storage.deleteKanbanTask(task.id);
+    await expect(storage.updateKanbanTask(task.id, { title: "x" })).rejects.toThrow("Kanban task not found");
   });
 
   test("stores project notes and updates the existing note for the project", async () => {

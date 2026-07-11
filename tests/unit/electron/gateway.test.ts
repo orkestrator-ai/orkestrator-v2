@@ -479,4 +479,45 @@ describe("remote gateway", () => {
       await new Promise<void>((resolve) => devServer.close(() => resolve()));
     }
   });
+
+  test("stops promptly and disconnects an active streaming proxy response", async () => {
+    const target = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.write("streaming");
+    });
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const targetAddress = target.address();
+    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+
+    const { gateway, info } = await startGateway();
+    const request = httpRequest(`${info.url}__orkestrator/proxy/loopback/${targetAddress.port}/stream`, {
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    let resolveResponseClosed: () => void = () => undefined;
+    const responseClosed = new Promise<void>((resolve) => {
+      resolveResponseClosed = resolve;
+    });
+    const responseStarted = new Promise<void>((resolve, reject) => {
+      request.once("response", (response) => {
+        response.once("close", resolveResponseClosed);
+        response.once("data", () => resolve());
+        response.once("error", reject);
+      });
+      request.once("error", reject);
+    });
+    request.end();
+
+    try {
+      await responseStarted;
+      await Promise.race([
+        gateway.stop(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Gateway stop timed out")), 1_000)),
+      ]);
+      await expect(responseClosed).resolves.toBeUndefined();
+    } finally {
+      request.destroy();
+      target.closeAllConnections();
+      await new Promise<void>((resolve) => target.close(() => resolve()));
+    }
+  });
 });

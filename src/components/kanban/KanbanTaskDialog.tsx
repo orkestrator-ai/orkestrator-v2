@@ -31,6 +31,7 @@ import { readImage } from "@/lib/native/clipboard";
 import { getKanbanImageData, detectPr, detectPrLocal, openInBrowser } from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
+import { createUuid } from "@/lib/uuid";
 
 const STATUS_LABELS: Record<KanbanStatus, string> = {
   backlog: "Backlog",
@@ -287,7 +288,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
       const filename = `clipboard-${timestamp}.png`;
 
       if (isCreateMode || !task) {
-        setPendingImages((prev) => [...prev, { id: crypto.randomUUID(), filename, data: base64Data, previewUrl: dataUrl }]);
+        setPendingImages((prev) => [...prev, { id: createUuid(), filename, data: base64Data, previewUrl: dataUrl }]);
       } else {
         void addImage(task.id, filename, base64Data);
       }
@@ -326,7 +327,7 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
       if (!result) continue;
 
       if (isCreateMode || !task) {
-        setPendingImages((prev) => [...prev, { id: crypto.randomUUID(), ...result }]);
+        setPendingImages((prev) => [...prev, { id: createUuid(), ...result }]);
       } else {
         void addImage(task.id, result.filename, result.data);
       }

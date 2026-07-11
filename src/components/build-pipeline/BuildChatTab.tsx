@@ -32,6 +32,7 @@ import { NativeMessage } from "@/components/chat/NativeMessage";
 import type { BuildTabData } from "@/types/paneLayout";
 import { extractContextUsage } from "@/lib/context-usage";
 import { cn } from "@/lib/utils";
+import { createUuid } from "@/lib/uuid";
 import {
   createPRPrompt,
   createResolveConflictsPrompt,
@@ -709,7 +710,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       setSessionLoading(reviewSession.sessionKey, true);
 
       const userMessage: ClaudeMessageType = {
-        id: crypto.randomUUID(),
+        id: createUuid(),
         role: "user",
         content: "Please address all the above issues and test coverage gaps, without asking questions. Make sensible assumptions. Run typechecking and build validation to ensure the changes are valid as appropriate for the project.",
         parts: [{ type: "text", content: "Please address all the above issues and test coverage gaps, without asking questions. Make sensible assumptions. Run typechecking and build validation to ensure the changes are valid as appropriate for the project." }],
@@ -842,7 +843,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       if (isPipelinePaused()) return;
 
       const userMessage: ClaudeMessageType = {
-        id: crypto.randomUUID(),
+        id: createUuid(),
         role: "user",
         content: taskDescription,
         parts: [{ type: "text", content: taskDescription }],
@@ -893,7 +894,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       const reviewPrompt = createBuildReviewPrompt(task, projectNotes, targetBranch);
 
       const userMessage: ClaudeMessageType = {
-        id: crypto.randomUUID(),
+        id: createUuid(),
         role: "user",
         content: reviewPrompt,
         parts: [{ type: "text", content: reviewPrompt }],
@@ -944,7 +945,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       const verifyPrompt = createVerificationPrompt(task, projectNotes, targetBranch);
 
       const userMessage: ClaudeMessageType = {
-        id: crypto.randomUUID(),
+        id: createUuid(),
         role: "user",
         content: verifyPrompt,
         parts: [{ type: "text", content: verifyPrompt }],
@@ -992,7 +993,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       const fixPrompt = createFixPrompt(task, projectNotes, feedback);
 
       const userMessage: ClaudeMessageType = {
-        id: crypto.randomUUID(),
+        id: createUuid(),
         role: "user",
         content: fixPrompt,
         parts: [{ type: "text", content: fixPrompt }],
@@ -1039,7 +1040,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       const prPrompt = createPRPrompt(targetBranch);
 
       const userMessage: ClaudeMessageType = {
-        id: crypto.randomUUID(),
+        id: createUuid(),
         role: "user",
         content: prPrompt,
         parts: [{ type: "text", content: prPrompt }],
@@ -1113,7 +1114,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       const resolvePrompt = createResolveConflictsPrompt(targetBranch);
 
       const userMessage: ClaudeMessageType = {
-        id: crypto.randomUUID(),
+        id: createUuid(),
         role: "user",
         content: resolvePrompt,
         parts: [{ type: "text", content: resolvePrompt }],
@@ -1170,7 +1171,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     setSessionLoading(currentSession.sessionKey, true);
 
     const userMessage: ClaudeMessageType = {
-      id: crypto.randomUUID(),
+      id: createUuid(),
       role: "user",
       content: text.trim(),
       parts: [{ type: "text", content: text.trim() }],
@@ -1259,7 +1260,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     setSessionLoading(currentSession.sessionKey, true);
 
     const userMessage: ClaudeMessageType = {
-      id: crypto.randomUUID(),
+      id: createUuid(),
       role: "user",
       content: prompt,
       parts: [{ type: "text", content: prompt }],

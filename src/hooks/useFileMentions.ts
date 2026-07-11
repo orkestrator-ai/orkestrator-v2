@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useRef } from "react";
 import type { FileMention, FileCandidate } from "@/types";
+import { createUuid } from "@/lib/uuid";
 
 interface UseFileMentionsOptions {
   /** Callback to search files */
@@ -229,7 +230,7 @@ export function useFileMentions({
    */
   const createMention = useCallback((file: FileCandidate): FileMention => {
     return {
-      id: crypto.randomUUID(),
+      id: createUuid(),
       filename: file.filename,
       relativePath: file.relativePath,
     };

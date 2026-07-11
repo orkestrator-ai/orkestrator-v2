@@ -1,4 +1,5 @@
 import type { FeaturePlan, FeatureStoryCard } from "@/lib/backend";
+import { createUuid } from "@/lib/uuid";
 
 const FEATURE_STATE_BLOCK_RE = /<feature_planner_state>\s*([\s\S]*?)\s*<\/feature_planner_state>/i;
 const STORY_STATE_BLOCK_RE = /<story_refinement>\s*([\s\S]*?)\s*<\/story_refinement>/i;
@@ -173,12 +174,12 @@ export function createStoryCardsFromParsedState(
     const existing = (story.id ? existingById.get(story.id) : undefined)
       ?? existingByTitle.get(story.title.toLowerCase());
     return {
-      id: existing?.id ?? story.id ?? crypto.randomUUID(),
+      id: existing?.id ?? story.id ?? createUuid(),
       title: story.title,
       description: story.description,
       acceptanceCriteria: Array.isArray(story.acceptanceCriteria) ? story.acceptanceCriteria : [],
       messages: existing?.messages ?? [{
-        id: crypto.randomUUID(),
+        id: createUuid(),
         role: "assistant" as const,
         content: "What would you like to refine on this user story?",
         createdAt: now,

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { DefaultAgent, EnvironmentType } from "@/types";
 import type { TaskSnapshot } from "@/prompts";
+import { createUuid } from "@/lib/uuid";
 
 export type BuildPhase =
   | "creating-environment"
@@ -134,7 +135,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
   buildEnvironmentIds: new Set<string>(),
 
   createPipeline: ({ taskId, projectId, environmentType, agentType, taskTitle, taskSnapshot, source }) => {
-    const id = crypto.randomUUID();
+    const id = createUuid();
     const pipeline: BuildPipeline = {
       id,
       taskId,

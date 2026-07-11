@@ -11,6 +11,7 @@ import {
   createOptimisticNativeMessage,
 } from "@/lib/chat/client-only-messages";
 import { formatElapsed } from "@/lib/format-elapsed";
+import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import {
   type CodexConversationMode,
@@ -304,7 +305,7 @@ export function CodexChatTab({
       if (!client || !session?.sessionId) return;
 
       const userMessage = createOptimisticNativeMessage(
-        `${OPTIMISTIC_MESSAGE_PREFIX}${crypto.randomUUID()}`,
+        `${OPTIMISTIC_MESSAGE_PREFIX}${createUuid()}`,
         text,
         attachments,
       );
@@ -313,7 +314,7 @@ export function CodexChatTab({
       if (!session.messages.length) {
         const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
         if (environment && isDefaultTimestampEnvironmentName(environment.name)) {
-          const namingMessageId = `${SYSTEM_MESSAGE_PREFIX}naming-${crypto.randomUUID()}`;
+          const namingMessageId = `${SYSTEM_MESSAGE_PREFIX}naming-${createUuid()}`;
           addMessage(sessionKey, {
             id: namingMessageId,
             role: "assistant" as const,
@@ -370,7 +371,7 @@ export function CodexChatTab({
   const handleQueue = useCallback(
     (text: string, attachments: CodexAttachment[]) => {
       addToQueue(sessionKey, {
-        id: crypto.randomUUID(),
+        id: createUuid(),
         text,
         attachments,
         model: selectedModel,

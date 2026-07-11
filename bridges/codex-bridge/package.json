@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",
-    "@openai/codex-sdk": "0.142.5",
+    "@openai/codex-sdk": "0.144.1",
     "hono": "^4.6.0"
   },
   "devDependencies": {

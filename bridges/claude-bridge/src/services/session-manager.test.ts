@@ -837,4 +837,52 @@ describe("getAvailableModels", () => {
       supportsFastMode: true,
     });
   });
+
+  test("falls back to the built-in catalog when the SDK query throws", async () => {
+    // Make the next query() call fail so getAvailableModels() hits its catch
+    // branch and returns the hard-coded fallback list.
+    mockQuery.mockImplementationOnce(() => {
+      throw new Error("SDK unavailable");
+    });
+
+    const models = await getAvailableModels();
+
+    expect(models.map((m) => m.id)).toEqual([
+      "claude-fable-5",
+      "claude-opus-4-8",
+      "claude-sonnet-5",
+      "claude-haiku-4-5-20251001",
+    ]);
+  });
+
+  test("fallback marks only Opus as fast-mode capable and Haiku without effort", async () => {
+    mockQuery.mockImplementationOnce(() => {
+      throw new Error("SDK unavailable");
+    });
+
+    const models = await getAvailableModels();
+    const byId = new Map(models.map((m) => [m.id, m]));
+
+    // Fast mode is an Opus-tier capability; no other fallback model advertises it.
+    expect(byId.get("claude-opus-4-8")?.supportsFastMode).toBe(true);
+    expect(models.filter((m) => m.supportsFastMode).map((m) => m.id)).toEqual([
+      "claude-opus-4-8",
+    ]);
+
+    // Reasoning-capable models expose the full effort ladder incl. xhigh/max.
+    for (const id of ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"]) {
+      const model = byId.get(id);
+      expect(model?.supportsEffort).toBe(true);
+      expect(model?.supportedEffortLevels).toEqual([
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+      ]);
+    }
+
+    // Haiku is the fast, non-reasoning tier.
+    expect(byId.get("claude-haiku-4-5-20251001")?.supportsEffort).toBe(false);
+  });
 });

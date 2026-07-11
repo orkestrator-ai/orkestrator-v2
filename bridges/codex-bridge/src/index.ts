@@ -451,30 +451,16 @@ const BUILTIN_SLASH_COMMANDS: BuiltinSlashCommand[] = [
 ];
 const FALLBACK_MODELS: BridgeModel[] = [
   {
-    id: "gpt-5.3-codex",
-    name: "gpt-5.3-codex",
-    description: "Latest frontier agentic coding model.",
-    reasoningEfforts: ["medium", "high"],
-    reasoningOptions: [
-      {
-        effort: "medium",
-        label: REASONING_LABELS.medium,
-        description: REASONING_DESCRIPTIONS.medium,
-      },
-      {
-        effort: "high",
-        label: REASONING_LABELS.high,
-        description: REASONING_DESCRIPTIONS.high,
-      },
-    ],
-    defaultReasoningEffort: "medium",
-  },
-  {
     id: "gpt-5.4",
     name: "gpt-5.4",
     description: "Latest frontier agentic coding model.",
-    reasoningEfforts: ["medium", "high"],
+    reasoningEfforts: ["low", "medium", "high", "xhigh"],
     reasoningOptions: [
+      {
+        effort: "low",
+        label: REASONING_LABELS.low,
+        description: REASONING_DESCRIPTIONS.low,
+      },
       {
         effort: "medium",
         label: REASONING_LABELS.medium,
@@ -484,16 +470,26 @@ const FALLBACK_MODELS: BridgeModel[] = [
         effort: "high",
         label: REASONING_LABELS.high,
         description: REASONING_DESCRIPTIONS.high,
+      },
+      {
+        effort: "xhigh",
+        label: REASONING_LABELS.xhigh,
+        description: REASONING_DESCRIPTIONS.xhigh,
       },
     ],
     defaultReasoningEffort: "medium",
   },
   {
-    id: "gpt-5.2-codex",
-    name: "gpt-5.2-codex",
-    description: "Frontier agentic coding model.",
-    reasoningEfforts: ["medium", "high"],
+    id: "gpt-5.4-mini",
+    name: "GPT-5.4-Mini",
+    description: "Smaller frontier agentic coding model.",
+    reasoningEfforts: ["low", "medium", "high", "xhigh"],
     reasoningOptions: [
+      {
+        effort: "low",
+        label: REASONING_LABELS.low,
+        description: REASONING_DESCRIPTIONS.low,
+      },
       {
         effort: "medium",
         label: REASONING_LABELS.medium,
@@ -504,62 +500,10 @@ const FALLBACK_MODELS: BridgeModel[] = [
         label: REASONING_LABELS.high,
         description: REASONING_DESCRIPTIONS.high,
       },
-    ],
-    defaultReasoningEffort: "medium",
-  },
-  {
-    id: "gpt-5.1-codex-max",
-    name: "gpt-5.1-codex-max",
-    description: "Codex-optimized flagship for deep and fast reasoning.",
-    reasoningEfforts: ["medium", "high"],
-    reasoningOptions: [
       {
-        effort: "medium",
-        label: REASONING_LABELS.medium,
-        description: REASONING_DESCRIPTIONS.medium,
-      },
-      {
-        effort: "high",
-        label: REASONING_LABELS.high,
-        description: REASONING_DESCRIPTIONS.high,
-      },
-    ],
-    defaultReasoningEffort: "medium",
-  },
-  {
-    id: "gpt-5.2",
-    name: "gpt-5.2",
-    description: "Latest frontier model with improvements across knowledge, reasoning and coding.",
-    reasoningEfforts: ["medium", "high"],
-    reasoningOptions: [
-      {
-        effort: "medium",
-        label: REASONING_LABELS.medium,
-        description: REASONING_DESCRIPTIONS.medium,
-      },
-      {
-        effort: "high",
-        label: REASONING_LABELS.high,
-        description: REASONING_DESCRIPTIONS.high,
-      },
-    ],
-    defaultReasoningEffort: "medium",
-  },
-  {
-    id: "gpt-5.1-codex-mini",
-    name: "gpt-5.1-codex-mini",
-    description: "Optimized for codex. Cheaper, faster, but less capable.",
-    reasoningEfforts: ["medium", "high"],
-    reasoningOptions: [
-      {
-        effort: "medium",
-        label: REASONING_LABELS.medium,
-        description: REASONING_DESCRIPTIONS.medium,
-      },
-      {
-        effort: "high",
-        label: REASONING_LABELS.high,
-        description: REASONING_DESCRIPTIONS.high,
+        effort: "xhigh",
+        label: REASONING_LABELS.xhigh,
+        description: REASONING_DESCRIPTIONS.xhigh,
       },
     ],
     defaultReasoningEffort: "medium",
@@ -2105,6 +2049,7 @@ async function runPrompt(
 export const __testing = {
   applyRuntimeEnvironmentOutput,
   cleanupIdleSessions,
+  FALLBACK_MODELS,
   EXPIRED_SESSION_RETENTION_MS,
   expiredSessions: expiredSessions as Map<string, any>,
   rebuildAssistantMessage: rebuildAssistantMessage as (

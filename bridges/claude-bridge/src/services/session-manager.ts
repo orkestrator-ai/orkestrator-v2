@@ -1939,12 +1939,32 @@ export async function getAvailableModels(): Promise<Array<{
     // Return fallback models if SDK call fails
     return [
       {
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        description: "Latest and most capable model",
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        description: "Anthropic's most capable widely released model",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+      },
+      {
+        id: "claude-opus-4-8",
+        name: "Claude Opus 4.8",
+        description: "Most capable Opus-tier model for complex reasoning and agentic coding",
         supportsFastMode: true,
         supportsEffort: true,
-        supportedEffortLevels: ["low", "medium", "high"],
+        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+      },
+      {
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        description: "Frontier intelligence for coding, agents, and enterprise workflows",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+      },
+      {
+        id: "claude-haiku-4-5-20251001",
+        name: "Claude Haiku 4.5",
+        description: "Fastest current Claude model",
+        supportsEffort: false,
       },
     ];
   }

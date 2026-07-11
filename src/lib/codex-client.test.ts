@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, mock } from "bun:test";
 import {
   CODEX_MODELS,
+  DEFAULT_CODEX_MODEL,
   abortSession,
   checkHealth,
   createClient,
@@ -439,5 +440,44 @@ describe("codex-client deleteSession", () => {
     mockFetchError(new Error("network unavailable"));
 
     expect(await deleteSession(client, "session-1")).toBe(false);
+  });
+});
+
+describe("CODEX_MODELS catalog", () => {
+  test("is non-empty and every entry has an id/name", () => {
+    expect(CODEX_MODELS.length).toBeGreaterThan(0);
+    for (const model of CODEX_MODELS) {
+      expect(typeof model.id).toBe("string");
+      expect(model.id.length).toBeGreaterThan(0);
+      expect(typeof model.name).toBe("string");
+      expect(model.name.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("model ids are unique", () => {
+    const ids = CODEX_MODELS.map((m) => m.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  test("advertises the current gpt-5.4 family and no retired ids", () => {
+    const ids = CODEX_MODELS.map((m) => m.id);
+    expect(ids).toContain("gpt-5.4");
+    // Retired ids must not linger in the offered list. A persisted preference
+    // pointing at one is reconciled by resolveCodexPreferenceSelection.
+    for (const retired of [
+      "gpt-5.3-codex",
+      "gpt-5.2-codex",
+      "gpt-5.2",
+      "gpt-5.1-codex-max",
+      "gpt-5.1-codex-mini",
+    ]) {
+      expect(ids).not.toContain(retired);
+    }
+  });
+
+  test("DEFAULT_CODEX_MODEL is the first catalog entry and a real model id", () => {
+    expect(DEFAULT_CODEX_MODEL).toBe(CODEX_MODELS[0]!.id);
+    expect(DEFAULT_CODEX_MODEL).toBe("gpt-5.4");
+    expect(CODEX_MODELS.map((m) => m.id)).toContain(DEFAULT_CODEX_MODEL);
   });
 });

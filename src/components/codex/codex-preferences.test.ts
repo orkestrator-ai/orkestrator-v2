@@ -191,7 +191,7 @@ describe("codex-preferences getPersistedCodexPreferences", () => {
     });
 
     expect(getPersistedCodexPreferences(config)).toEqual({
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
       reasoningEffort: "medium",
     });
   });

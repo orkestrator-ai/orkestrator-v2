@@ -524,7 +524,7 @@ if [ -f /opencode-project-json ]; then
 
     # Add default model attribute if missing (use OPENCODE_MODEL env var or fallback to default)
     if ! jq -e '.model' /workspace/opencode.json > /dev/null 2>&1; then
-        DEFAULT_MODEL="${OPENCODE_MODEL:-opencode/grok-code}"
+        DEFAULT_MODEL="${OPENCODE_MODEL:-opencode/claude-sonnet-5}"
         echo -e "  ${YELLOW}No model specified, adding default: $DEFAULT_MODEL${NC}"
         jq --arg model "$DEFAULT_MODEL" '. + {"model": $model}' /workspace/opencode.json > /tmp/opencode.json.tmp
         mv /tmp/opencode.json.tmp /workspace/opencode.json

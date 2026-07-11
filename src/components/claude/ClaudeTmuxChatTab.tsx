@@ -46,6 +46,7 @@ import { ClaudeQuestionCard } from "@/components/claude/ClaudeQuestionCard";
 import { ClaudeTmuxInteractiveTerminal } from "@/components/claude/ClaudeTmuxInteractiveTerminal";
 import { ResumeTmuxSessionDialog } from "@/components/claude/ResumeTmuxSessionDialog";
 import { formatElapsed } from "@/lib/format-elapsed";
+import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import {
   parseSlashCommands,
@@ -819,7 +820,7 @@ export function ClaudeTmuxChatTab({
   const handleQueue = useCallback(
     (text: string, attachments: TmuxAttachment[]) => {
       addToQueue(storeKey, {
-        id: crypto.randomUUID(),
+        id: createUuid(),
         text,
         attachments,
       });
@@ -2412,7 +2413,7 @@ function TmuxComposeBar({
       return [
         ...current,
         {
-          id: crypto.randomUUID(),
+          id: createUuid(),
           filename: file.filename,
           relativePath: file.relativePath,
         },

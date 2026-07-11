@@ -24,6 +24,7 @@ import {
   type PromptAttachment,
 } from "@/lib/opencode-client";
 import { resolveGatewayLoopbackBaseUrl } from "@/lib/gateway-url";
+import { createUuid } from "@/lib/uuid";
 import { createOpenCodeSessionKey } from "@/stores/openCodeStore";
 import type { BuildTabData } from "@/types/paneLayout";
 import type { TaskSnapshotImage } from "@/prompts";
@@ -139,7 +140,7 @@ function taskImagesToAttachments(images: TaskSnapshotImage[]): PromptAttachment[
 
 function buildUserMessage(content: string): OpenCodeMessage {
   return {
-    id: crypto.randomUUID(),
+    id: createUuid(),
     role: "user",
     content,
     parts: [{ type: "text", content }],

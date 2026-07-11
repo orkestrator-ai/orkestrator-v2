@@ -29,6 +29,7 @@ import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIco
 import { cn } from "@/lib/utils";
 import { readImage } from "@/lib/native/clipboard";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
+import { createUuid } from "@/lib/uuid";
 import { toast } from "sonner";
 import type {
   ClaudeMode,
@@ -208,7 +209,7 @@ export function CreateEnvironmentDialog({
       setInitialPromptAttachments((prev) => [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: createUuid(),
           name: generateImageFilename(),
           previewUrl,
           base64Data,

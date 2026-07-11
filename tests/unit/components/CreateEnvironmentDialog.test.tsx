@@ -359,6 +359,7 @@ describe("resolveAgentDefaults", () => {
           initialPrompt: "Use this screenshot",
           initialPromptAttachments: [
             expect.objectContaining({
+              id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
               base64Data: "QUJD",
               previewUrl: "data:image/png;base64,QUJD",
               name: expect.stringMatching(/^initial-prompt-.*\.png$/),
@@ -469,5 +470,61 @@ describe("resolveAgentDefaults", () => {
     expect(wasNotCancelled).toBe(true);
     expect(pasteEvent.defaultPrevented).toBe(false);
     expect(screen.queryByAltText(/initial-prompt-/)).toBeNull();
+  });
+
+  test("adds, validates, updates, and removes port mappings", async () => {
+    const onCreate = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Port Configuration/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Add Port Mapping" }));
+    const containerPort = screen.getByPlaceholderText("Container");
+    const hostPort = screen.getByPlaceholderText("Host");
+    fireEvent.change(containerPort, { target: { value: "0" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    expect(onCreate).not.toHaveBeenCalled();
+
+    fireEvent.change(containerPort, { target: { value: "8080" } });
+    fireEvent.change(hostPort, { target: { value: "18080" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+        portMappings: [{ containerPort: 8080, hostPort: 18080, protocol: "tcp" }],
+      }));
+    });
+
+    cleanup();
+    onCreate.mockClear();
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+        defaultPortMappings={[{ containerPort: 3000, hostPort: 3000, protocol: "tcp" }]}
+      />,
+    );
+    const trashButton = document.querySelector("svg.lucide-trash-2")?.closest("button");
+    expect(trashButton).toBeTruthy();
+    fireEvent.click(trashButton!);
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ portMappings: [] }));
+    });
+  });
+
+  test("keeps the dialog open when environment creation rejects", async () => {
+    const onOpenChange = mock(() => {});
+    const onCreate = mock(async () => {
+      throw new Error("creation failed");
+    });
+    render(
+      <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={onCreate} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(screen.getByRole("dialog")).toBeTruthy();
   });
 });

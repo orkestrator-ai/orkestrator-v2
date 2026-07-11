@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import { Loader2, AlertCircle, RefreshCw, ArrowDown, History } from "lucide-react";
 import { useVirtuosoScrollState, clearPersistedVirtuosoState, useElapsedTimer } from "@/hooks";
 import { formatElapsed } from "@/lib/format-elapsed";
+import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -599,7 +600,7 @@ export function ClaudeChatTab({
 
             // Create user message
             const userMessage = {
-              id: crypto.randomUUID(),
+              id: createUuid(),
               role: "user" as const,
               content: initialPrompt,
               parts: [{ type: "text" as const, content: initialPrompt }],
@@ -949,7 +950,7 @@ export function ClaudeChatTab({
             const matchedSessionKey = eventSessionId ? getSessionKeyBySdkSessionId(eventSessionId) : null;
             if (matchedSessionKey) {
               const systemMessage: ClaudeMessageType = {
-                id: `${SYSTEM_MESSAGE_PREFIX}${crypto.randomUUID()}`,
+                id: `${SYSTEM_MESSAGE_PREFIX}${createUuid()}`,
                 role: "system",
                 content: "Conversation compacted.",
                 parts: [{ type: "text", content: "Conversation compacted." }],
@@ -974,7 +975,7 @@ export function ClaudeChatTab({
                 }
 
                 const systemMessage: ClaudeMessageType = {
-                  id: `${SYSTEM_MESSAGE_PREFIX}${crypto.randomUUID()}`,
+                  id: `${SYSTEM_MESSAGE_PREFIX}${createUuid()}`,
                   role: "system",
                   content,
                   parts: [{ type: "text", content }],
@@ -1029,7 +1030,7 @@ export function ClaudeChatTab({
       const selectedModel = getSelectedModel(sessionKey);
 
       const userMessage = {
-        id: crypto.randomUUID(),
+        id: createUuid(),
         role: "user" as const,
         content: text,
         parts: [{ type: "text" as const, content: text }],
@@ -1044,7 +1045,7 @@ export function ClaudeChatTab({
       if (!session.messages.length) {
         const env = useEnvironmentStore.getState().getEnvironmentById(environmentId);
         if (env && isDefaultTimestampEnvironmentName(env.name)) {
-          const namingMsgId = `${SYSTEM_MESSAGE_PREFIX}naming-${crypto.randomUUID()}`;
+          const namingMsgId = `${SYSTEM_MESSAGE_PREFIX}naming-${createUuid()}`;
           addMessage(sessionKey, {
             id: namingMsgId,
             role: "system" as const,
@@ -1100,7 +1101,7 @@ export function ClaudeChatTab({
   const handleQueue = useCallback(
     (text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => {
       addToQueue(sessionKey, {
-        id: crypto.randomUUID(),
+        id: createUuid(),
         text,
         attachments,
         effort,
@@ -1143,7 +1144,7 @@ export function ClaudeChatTab({
     if (success) {
       // Add a system message to indicate the query was stopped
       const systemMessage: ClaudeMessageType = {
-        id: `${SYSTEM_MESSAGE_PREFIX}${crypto.randomUUID()}`,
+        id: `${SYSTEM_MESSAGE_PREFIX}${createUuid()}`,
         role: "system",
         content: "Query stopped by user.",
         parts: [{ type: "text", content: "Query stopped by user." }],
@@ -1251,7 +1252,7 @@ export function ClaudeChatTab({
               console.error("[ClaudeChatTab] Failed to send queued message:", error);
               // Add error message to inform user which queued message failed
               const errorMessage: ClaudeMessageType = {
-                id: `${ERROR_MESSAGE_PREFIX}${crypto.randomUUID()}`,
+                id: `${ERROR_MESSAGE_PREFIX}${createUuid()}`,
                 role: "assistant",
                 content: `Failed to send queued message: ${error instanceof Error ? error.message : "Unknown error"}`,
                 parts: [{ type: "text", content: `Failed to send queued message: ${error instanceof Error ? error.message : "Unknown error"}` }],

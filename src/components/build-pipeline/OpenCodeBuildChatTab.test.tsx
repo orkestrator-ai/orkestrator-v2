@@ -183,6 +183,36 @@ function seedPipeline(phase: "building" | "paused", sessionStatus: "running" | "
   });
 }
 
+function seedVerifyPipeline(
+  feedback: string,
+  options: { complete: boolean; iteration?: number; maxIterations?: number },
+) {
+  const iteration = options.iteration ?? 0;
+  const verificationMessage: NativeMessage = {
+    id: "verification-message",
+    role: "assistant",
+    content: JSON.stringify({ complete: options.complete, rationale: feedback }),
+    parts: [{ type: "text", content: JSON.stringify({ complete: options.complete, rationale: feedback }) }],
+    createdAt: "2026-04-15T00:00:01.000Z",
+  };
+  seedPipeline("building", "running");
+  useBuildPipelineStore.setState((state) => {
+    const pipelines = new Map(state.pipelines);
+    const pipeline = pipelines.get(PIPELINE_ID)!;
+    pipelines.set(PIPELINE_ID, {
+      ...pipeline,
+      phase: "verifying",
+      iteration,
+      maxIterations: options.maxIterations ?? 3,
+      sessions: [{ ...pipeline.sessions[0]!, phase: "verify", iteration, label: "Verification Session" }],
+    });
+    return { pipelines };
+  });
+  seedOpenCodeStore(false);
+  setOpenCodeBuildMessages([verificationMessage]);
+  mockGetSessionMessages.mockResolvedValue([verificationMessage]);
+}
+
 function seedPendingPipeline() {
   useBuildPipelineStore.setState({
     pipelines: new Map([
@@ -522,6 +552,9 @@ describe("OpenCodeBuildChatTab", () => {
 
     expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions[0]?.status).toBe("running");
     expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+    expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.at(-1)?.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
   });
 
   test("resuming a paused pipeline continues the stopped stage", async () => {
@@ -699,5 +732,65 @@ describe("OpenCodeBuildChatTab", () => {
       expect(mockRejectQuestion).toHaveBeenCalledWith(expect.anything(), "question-1");
       expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase).toBe("failed");
     });
+  });
+
+  test("advances an idle build session into review", async () => {
+    seedPipeline("building", "running");
+    seedOpenCodeStore(false);
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("reviewing");
+      expect(pipeline?.sessions.at(-1)?.phase).toBe("review");
+    });
+    expect(mockCreateSession).toHaveBeenCalled();
+    expect(mockSendPrompt).toHaveBeenCalledWith(
+      expect.anything(),
+      "review-session",
+      expect.stringContaining("review"),
+      expect.objectContaining({ model: "openai/gpt-5", mode: "build" }),
+    );
+  });
+
+  test("starts PR creation after successful verification", async () => {
+    seedVerifyPipeline("All acceptance criteria are satisfied", { complete: true });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("creating-pr");
+      expect(pipeline?.verificationResult).toBe("pass");
+      expect(pipeline?.sessions.at(-1)?.phase).toBe("pr");
+    });
+  });
+
+  test("starts a fix session after failed verification below the iteration limit", async () => {
+    seedVerifyPipeline("Tests still fail", { complete: false, iteration: 0, maxIterations: 3 });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("fixing");
+      expect(pipeline?.verificationResult).toBe("fail");
+      expect(pipeline?.iteration).toBe(1);
+      expect(pipeline?.sessions.at(-1)?.phase).toBe("fix");
+    });
+  });
+
+  test("fails verification at the maximum iteration", async () => {
+    seedVerifyPipeline("Still incomplete", { complete: false, iteration: 3, maxIterations: 3 });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("failed");
+      expect(pipeline?.error).toContain("Max iterations (3) reached");
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
   });
 });

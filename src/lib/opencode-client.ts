@@ -4,6 +4,7 @@
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
 import { isEditTool } from "./tool-names";
+import { createUuid } from "./uuid";
 import type {
   NativeMessage,
   NativeMessagePart,
@@ -574,7 +575,7 @@ export function normalizeOpenCodeMessage(rawMessage: unknown): OpenCodeMessage |
   }
 
   return {
-    id: info?.id || crypto.randomUUID(),
+    id: info?.id || createUuid(),
     role: (info?.role as "user" | "assistant") || "assistant",
     content: textContent,
     parts: parsedParts,

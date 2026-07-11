@@ -6,6 +6,7 @@ import { Separator } from "@/components/ui/separator";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
+import { createUuid } from "@/lib/uuid";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useConfigStore, useCodexStore, useEnvironmentStore } from "@/stores";
@@ -120,7 +121,7 @@ function taskImagesToAttachments(images: TaskSnapshotImage[]): CodexPromptAttach
 
 function buildUserMessage(content: string): CodexMessage {
   return {
-    id: crypto.randomUUID(),
+    id: createUuid(),
     role: "user",
     content,
     parts: [{ type: "text", content }],

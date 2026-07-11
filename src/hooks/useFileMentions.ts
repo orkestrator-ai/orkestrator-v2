@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useRef } from "react";
 import type { FileMention, FileCandidate } from "@/types";
+import { createUuid } from "@/lib/uuid";
 
 interface UseFileMentionsOptions {
   /** Callback to search files */
@@ -159,13 +160,10 @@ export function useFileMentions({
           if (filteredFiles.length === 0) {
             return true;
           }
-          if (filteredFiles[safeSelectedIndex]) {
-            const selectedFile = filteredFiles[safeSelectedIndex];
-            closeMenu({ suppressReopenFor: selectedFile.filename });
-            onSelect(selectedFile);
-            return true;
-          }
-          break;
+          const selectedFile = filteredFiles[safeSelectedIndex] ?? filteredFiles[0]!;
+          closeMenu({ suppressReopenFor: selectedFile.filename });
+          onSelect(selectedFile);
+          return true;
 
         case " ":
         case "Spacebar":
@@ -174,13 +172,10 @@ export function useFileMentions({
             return false;
           }
           handleMenuKey(event);
-          if (filteredFiles[safeSelectedIndex]) {
-            const selectedFile = filteredFiles[safeSelectedIndex];
-            closeMenu({ suppressReopenFor: selectedFile.filename });
-            onSelect(selectedFile);
-            return true;
-          }
-          break;
+          const selectedSpaceFile = filteredFiles[safeSelectedIndex] ?? filteredFiles[0]!;
+          closeMenu({ suppressReopenFor: selectedSpaceFile.filename });
+          onSelect(selectedSpaceFile);
+          return true;
 
         case "Escape":
           handleMenuKey(event);
@@ -229,7 +224,7 @@ export function useFileMentions({
    */
   const createMention = useCallback((file: FileCandidate): FileMention => {
     return {
-      id: crypto.randomUUID(),
+      id: createUuid(),
       filename: file.filename,
       relativePath: file.relativePath,
     };

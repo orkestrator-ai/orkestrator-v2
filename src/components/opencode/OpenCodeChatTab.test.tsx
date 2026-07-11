@@ -93,6 +93,7 @@ mock.module("./OpenCodeComposeBar", () => ({
     onSend,
     onStop,
     onRefreshModels,
+    onQueue,
     disabled,
     isLoading,
     showAddressAll,
@@ -101,6 +102,7 @@ mock.module("./OpenCodeComposeBar", () => ({
     onSend: (text: string, attachments: typeof composeAttachments) => Promise<void>;
     onStop?: () => Promise<void>;
     onRefreshModels?: () => void | Promise<void>;
+    onQueue?: (text: string, attachments: typeof composeAttachments) => void;
     disabled?: boolean;
     isLoading?: boolean;
     showAddressAll?: boolean;
@@ -120,6 +122,9 @@ mock.module("./OpenCodeComposeBar", () => ({
         }}
       >
         Send
+      </button>
+      <button type="button" data-testid="opencode-queue" onClick={() => onQueue?.(composeText, composeAttachments)}>
+        Queue
       </button>
       {isLoading ? (
         <button
@@ -496,6 +501,13 @@ describe("OpenCodeChatTab", () => {
       expect(messages.some((message) => message.content === "Naming environment...")).toBe(true);
       expect(mockSendPrompt).not.toHaveBeenCalled();
     });
+    const messagesDuringRename = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
+    expect(messagesDuringRename.find((message) => message.content === composeText)?.id).toMatch(
+      /^optimistic-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(messagesDuringRename.find((message) => message.content === "Naming environment...")?.id).toMatch(
+      /^system-naming-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
 
     resolveRename?.();
 
@@ -506,6 +518,18 @@ describe("OpenCodeChatTab", () => {
     await waitFor(() => {
       const messages = useOpenCodeStore.getState().getSession(SESSION_KEY)?.messages ?? [];
       expect(messages.some((message) => message.content === "Naming environment...")).toBe(false);
+    });
+  });
+
+  test("queues prompts with a generated UUID", async () => {
+    composeText = "Queue this OpenCode prompt";
+    useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true);
+    render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+    fireEvent.click(screen.getByTestId("opencode-queue"));
+    await waitFor(() => {
+      const queued = useOpenCodeStore.getState().messageQueue.get(SESSION_KEY)?.[0];
+      expect(queued?.text).toBe(composeText);
+      expect(queued?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     });
   });
 

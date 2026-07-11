@@ -238,6 +238,36 @@ function setClaudeBuildMessages(messages: ClaudeMessage[]) {
   }));
 }
 
+function seedClaudeVerifyPipeline(
+  feedback: string,
+  options: { complete: boolean; iteration?: number; maxIterations?: number },
+) {
+  const iteration = options.iteration ?? 0;
+  const verificationMessage: ClaudeMessage = {
+    id: "verification-message",
+    role: "assistant",
+    content: JSON.stringify({ complete: options.complete, rationale: feedback }),
+    parts: [{ type: "text", content: JSON.stringify({ complete: options.complete, rationale: feedback }) }],
+    timestamp: "2026-06-22T00:00:01.000Z",
+  };
+  seedPipelineWithBuildSession("building", "running");
+  useBuildPipelineStore.setState((state) => {
+    const pipelines = new Map(state.pipelines);
+    const pipeline = pipelines.get(PIPELINE_ID)!;
+    pipelines.set(PIPELINE_ID, {
+      ...pipeline,
+      phase: "verifying",
+      iteration,
+      maxIterations: options.maxIterations ?? 3,
+      sessions: [{ ...pipeline.sessions[0]!, phase: "verify", iteration, label: "Verification Session" }],
+    });
+    return { pipelines };
+  });
+  seedClaudeSession(false);
+  setClaudeBuildMessages([verificationMessage]);
+  mockGetSessionMessages.mockResolvedValue([verificationMessage]);
+}
+
 function expectTextOrder(...labels: string[]) {
   const text = document.body.textContent ?? "";
   const positions = labels.map((label) => text.indexOf(label));
@@ -778,6 +808,9 @@ describe("BuildChatTab", () => {
       expect(pipeline?.phase).toBe("building");
       expect(pipeline?.sessions[0]?.status).toBe("running");
       expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages.at(-1)?.id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
     });
 
     test("failed Claude resume returns the pipeline to paused", async () => {
@@ -995,6 +1028,70 @@ describe("BuildChatTab", () => {
       expect(await screen.findByRole("button", { name: "Reconnect" })).toBeTruthy();
       // Still in the connected chat view, not the error screen.
       expect(screen.queryByText("Connection Failed")).toBeNull();
+    });
+  });
+
+  describe("automatic phase advancement", () => {
+    test("advances an idle build session into review", async () => {
+      seedPipelineWithBuildSession("building", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(false);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("reviewing");
+        expect(pipeline?.sessions.at(-1)?.phase).toBe("review");
+      });
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        expect.anything(),
+        SESSION_ID,
+        expect.stringContaining("review"),
+        expect.objectContaining({ permissionMode: "bypassPermissions" }),
+      );
+    });
+
+    test("starts PR creation after successful verification", async () => {
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeVerifyPipeline("All acceptance criteria are satisfied", { complete: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("creating-pr");
+        expect(pipeline?.verificationResult).toBe("pass");
+        expect(pipeline?.sessions.at(-1)?.phase).toBe("pr");
+      });
+    });
+
+    test("starts a fix session after failed verification below the iteration limit", async () => {
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeVerifyPipeline("Tests still fail", { complete: false, iteration: 0, maxIterations: 3 });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("fixing");
+        expect(pipeline?.verificationResult).toBe("fail");
+        expect(pipeline?.iteration).toBe(1);
+        expect(pipeline?.sessions.at(-1)?.phase).toBe("fix");
+      });
+    });
+
+    test("fails verification at the maximum iteration", async () => {
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeVerifyPipeline("Still incomplete", { complete: false, iteration: 3, maxIterations: 3 });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("failed");
+        expect(pipeline?.error).toContain("Max iterations (3) reached");
+      });
     });
   });
 });

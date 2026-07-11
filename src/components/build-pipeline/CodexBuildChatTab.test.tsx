@@ -726,7 +726,9 @@ describe("CodexBuildChatTab", () => {
       );
     });
 
-    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages.at(-1)?.content).toBe("Please also update the tests.");
+    const message = useCodexStore.getState().sessions.get(SESSION_KEY)?.messages.at(-1);
+    expect(message?.content).toBe("Please also update the tests.");
+    expect(message?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 
   test("resuming a paused pipeline continues the stopped stage", async () => {

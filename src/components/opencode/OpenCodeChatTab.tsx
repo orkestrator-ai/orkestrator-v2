@@ -12,6 +12,7 @@ import {
   createOptimisticNativeMessage,
 } from "@/lib/chat/client-only-messages";
 import { formatElapsed } from "@/lib/format-elapsed";
+import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -1156,7 +1157,7 @@ export function OpenCodeChatTab({
 
       // Add user message optimistically
       const userMessage = createOptimisticNativeMessage(
-        `${OPTIMISTIC_MESSAGE_PREFIX}${crypto.randomUUID()}`,
+        `${OPTIMISTIC_MESSAGE_PREFIX}${createUuid()}`,
         text,
         attachments,
       );
@@ -1169,7 +1170,7 @@ export function OpenCodeChatTab({
       if (!session.messages.length) {
         const env = useEnvironmentStore.getState().getEnvironmentById(environmentId);
         if (env && isDefaultTimestampEnvironmentName(env.name)) {
-          const namingMsgId = `${SYSTEM_MESSAGE_PREFIX}naming-${crypto.randomUUID()}`;
+          const namingMsgId = `${SYSTEM_MESSAGE_PREFIX}naming-${createUuid()}`;
           addMessage(sessionKey, {
             id: namingMsgId,
             role: "assistant" as const,
@@ -1237,7 +1238,7 @@ export function OpenCodeChatTab({
   const handleQueue = useCallback(
     (text: string, attachments: OpenCodeAttachment[]) => {
       addToQueue(sessionKey, {
-        id: crypto.randomUUID(),
+        id: createUuid(),
         text,
         attachments,
         model: getSelectedModel(environmentId),
@@ -1298,7 +1299,7 @@ export function OpenCodeChatTab({
           error instanceof Error ? error.message : "Unknown error"
         }`;
         addMessage(sessionKey, {
-          id: `${ERROR_MESSAGE_PREFIX}${crypto.randomUUID()}`,
+          id: `${ERROR_MESSAGE_PREFIX}${createUuid()}`,
           role: "assistant",
           content: errorText,
           parts: [{ type: "text", content: errorText }],

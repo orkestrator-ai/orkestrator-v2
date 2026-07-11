@@ -120,6 +120,7 @@ export interface AppConfig {
     terminalScrollback: number;
     experimentalCodexRawEventLogging?: boolean;
     debugLogging?: boolean;
+    webClientEnabled?: boolean;
   };
   repositories: Record<string, RepositoryConfig>;
 }

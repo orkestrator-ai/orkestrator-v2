@@ -4,10 +4,12 @@ import { fileURLToPath } from "node:url";
 import { OrkestratorBackend } from "./backend/index.js";
 import { APP_SLUG, PRODUCT_NAME } from "./backend/constants.js";
 import { fixPath } from "./backend/fix-path.js";
-import { OrkestratorGateway } from "./gateway.js";
+import { OrkestratorGateway, type GatewayStartInfo } from "./gateway.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
 import { createMainWindow } from "./window.js";
+import type { AppConfig } from "./backend/models.js";
+import type { WebClientStatus } from "../src/types/webClient.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,6 +25,68 @@ app.setPath("userData", path.join(app.getPath("appData"), APP_SLUG));
 let mainWindow: BrowserWindow | null = null;
 let backend: OrkestratorBackend | null = null;
 let gateway: OrkestratorGateway | null = null;
+let gatewayStartInfo: GatewayStartInfo | null = null;
+let gatewayEnabled = true;
+let gatewayError: string | null = null;
+let gatewayTransition: Promise<WebClientStatus> = Promise.resolve({
+  enabled: gatewayEnabled,
+  running: false,
+  url: null,
+  error: null,
+});
+
+function getWebClientStatus(): WebClientStatus {
+  return {
+    enabled: gatewayEnabled,
+    running: gatewayStartInfo !== null,
+    url: gatewayStartInfo?.url ?? null,
+    error: gatewayError,
+  };
+}
+
+async function applyWebClientEnabled(enabled: boolean): Promise<WebClientStatus> {
+  gatewayEnabled = enabled;
+  gatewayError = null;
+
+  if (!gateway) {
+    gatewayError = "The web client is not available because the gateway is not initialized.";
+    return getWebClientStatus();
+  }
+
+  if (!enabled) {
+    try {
+      await gateway.stop();
+    } catch (error) {
+      gatewayError = error instanceof Error ? error.message : String(error);
+      console.error("[RemoteGateway] Failed to stop cleanly:", error);
+    }
+    gatewayStartInfo = null;
+    return getWebClientStatus();
+  }
+
+  if (gatewayStartInfo) return getWebClientStatus();
+
+  try {
+    gatewayStartInfo = await gateway.start();
+    if (!gatewayStartInfo) {
+      gatewayError = process.env.ORKESTRATOR_GATEWAY_DISABLED === "1"
+        ? "The web client is disabled by ORKESTRATOR_GATEWAY_DISABLED."
+        : "No Tailscale connection was found. Connect Tailscale, then save again to retry.";
+    }
+  } catch (error) {
+    gatewayStartInfo = null;
+    gatewayError = error instanceof Error ? error.message : String(error);
+    console.error("[RemoteGateway] Failed to start:", error);
+  }
+  return getWebClientStatus();
+}
+
+function setWebClientEnabled(enabled: boolean): Promise<WebClientStatus> {
+  gatewayTransition = gatewayTransition
+    .catch(() => getWebClientStatus())
+    .then(() => applyWebClientEnabled(enabled));
+  return gatewayTransition;
+}
 
 function emitToRenderers(event: string, payload: unknown): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -90,6 +154,8 @@ function registerIpc(): void {
     dialogApi: dialog,
     appApi: app,
     nativeImageApi: nativeImage,
+    getWebClientStatus,
+    setWebClientEnabled,
   });
 }
 
@@ -114,10 +180,8 @@ app.whenReady().then(async () => {
     rendererRoot: path.join(appRoot, "dist"),
     rendererDevServerUrl: isDev ? process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:1420" : undefined,
   });
-  await gateway.start().catch((error: unknown) => {
-    console.error("[RemoteGateway] Failed to start:", error);
-    gateway = null;
-  });
+  const config = await backend.invoke<AppConfig>("get_config");
+  await setWebClientEnabled(config.global.webClientEnabled ?? true);
 
   createMenu();
   registerIpc();

@@ -263,7 +263,11 @@ export interface GlobalConfig {
   experimentalCodexRawEventLogging?: boolean;
   /** Enable debug logging to disk (requires app restart) */
   debugLogging?: boolean;
+  /** Serve the app to authenticated browsers on the host's Tailscale network */
+  webClientEnabled?: boolean;
 }
+
+export type { WebClientStatus } from "./webClient.js";
 
 export interface RepositoryConfig {
   defaultBranch: string;

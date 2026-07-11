@@ -1,4 +1,5 @@
 import type { BrowserWindow, OpenDialogOptions } from "electron";
+import type { WebClientStatus } from "../src/types/webClient.js";
 
 type BackendInvoker = {
   invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
@@ -35,6 +36,8 @@ export type MainIpcDependencies = {
   dialogApi: DialogLike;
   appApi: AppLike;
   nativeImageApi: NativeImageLike;
+  getWebClientStatus: () => WebClientStatus;
+  setWebClientEnabled: (enabled: boolean) => Promise<WebClientStatus>;
 };
 
 export function registerMainIpc({
@@ -45,6 +48,8 @@ export function registerMainIpc({
   dialogApi,
   appApi,
   nativeImageApi,
+  getWebClientStatus,
+  setWebClientEnabled,
 }: MainIpcDependencies): void {
   ipc.handle("orkestrator:invoke", async (_event, command: unknown, args?: unknown) => {
     const backend = getBackend();
@@ -91,6 +96,12 @@ export function registerMainIpc({
       : await dialogApi.showOpenDialog(dialogOptions);
     if (result.canceled) return null;
     return typedOptions.multiple ? result.filePaths : result.filePaths[0] ?? null;
+  });
+
+  ipc.handle("orkestrator:web-client:get-status", () => getWebClientStatus());
+  ipc.handle("orkestrator:web-client:set-enabled", (_event, enabled: unknown) => {
+    if (typeof enabled !== "boolean") throw new Error("Expected enabled to be a boolean");
+    return setWebClientEnabled(enabled);
   });
 
   ipc.handle("orkestrator:process:exit", (_event, code?: unknown) => {

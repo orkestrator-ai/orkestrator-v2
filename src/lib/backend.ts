@@ -5,6 +5,7 @@ import type {
   EnvironmentType,
   AppConfig,
   GlobalConfig,
+  WebClientStatus,
   RepositoryConfig,
   EnvironmentStatus,
   NetworkAccessMode,
@@ -223,6 +224,28 @@ export async function getGlobalConfig(): Promise<GlobalConfig> {
 
 export async function updateGlobalConfig(global: GlobalConfig): Promise<AppConfig> {
   return invoke<AppConfig>("update_global_config", { global });
+}
+
+export async function getWebClientStatus(): Promise<WebClientStatus> {
+  if (window.orkestrator?.webClient) {
+    return window.orkestrator.webClient.getStatus();
+  }
+  if (window.orkestratorGateway?.enabled) {
+    return {
+      enabled: true,
+      running: true,
+      url: `${window.location.origin}/`,
+      error: null,
+    };
+  }
+  throw new Error("Web client controls are only available in the desktop app");
+}
+
+export async function setWebClientEnabled(enabled: boolean): Promise<WebClientStatus> {
+  if (!window.orkestrator?.webClient) {
+    throw new Error("Web client controls are only available in the desktop app");
+  }
+  return window.orkestrator.webClient.setEnabled(enabled);
 }
 
 export async function getRepositoryConfig(projectId: string): Promise<RepositoryConfig> {

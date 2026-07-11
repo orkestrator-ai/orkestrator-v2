@@ -11,7 +11,7 @@ The gateway is started by the Electron main process. It serves the React app, fo
 - The remote browser must be on the same tailnet and able to reach the host.
 - The gateway token must be available on the host machine.
 
-If no Tailscale address is found, the gateway does not start.
+The gateway can be turned on or off in **Settings → Web client**. If no Tailscale address is found, the setting remains enabled but the gateway reports that it is unavailable until Tailscale is connected and the setting is saved again.
 
 ## Starting And Connecting
 

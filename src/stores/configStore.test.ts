@@ -39,5 +39,6 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
     expect(initialGlobal.codexModel).toBe(backendGlobal.codexModel);
     expect(initialGlobal.codexReasoningEffort).toBe(backendGlobal.codexReasoningEffort);
     expect(initialGlobal.defaultAgent).toBe(backendGlobal.defaultAgent);
+    expect(initialGlobal.webClientEnabled).toBe(backendGlobal.webClientEnabled);
   });
 });

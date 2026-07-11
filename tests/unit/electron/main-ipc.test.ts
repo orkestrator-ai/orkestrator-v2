@@ -25,6 +25,14 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
   const dialogApi = {
     showOpenDialog: mock(async () => ({ canceled: false, filePaths: ["/tmp/a", "/tmp/b"] })),
   };
+  const webClientStatus = { enabled: true, running: true, url: "http://100.88.12.3:34121/", error: null };
+  const getWebClientStatus = mock(() => webClientStatus);
+  const setWebClientEnabled = mock(async (enabled: boolean) => ({
+    ...webClientStatus,
+    enabled,
+    running: enabled,
+    url: enabled ? webClientStatus.url : null,
+  }));
 
   registerMainIpc({
     getBackend: () => backend,
@@ -36,6 +44,8 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
     dialogApi: dialogApi as never,
     appApi,
     nativeImageApi: nativeImage,
+    getWebClientStatus,
+    setWebClientEnabled,
   });
 
   const invoke = (channel: string, ...args: unknown[]) => {
@@ -44,7 +54,7 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
     return Promise.resolve().then(() => handler({}, ...args));
   };
 
-  return { invoke, handlers, backend, window, clipboardApi, clipboardImage, nativeImage, appApi, dialogApi };
+  return { invoke, handlers, backend, window, clipboardApi, clipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled };
 }
 
 describe("main IPC registration", () => {
@@ -73,6 +83,24 @@ describe("main IPC registration", () => {
     await harness.invoke("orkestrator:process:exit", 7);
     expect(harness.appApi.exit).toHaveBeenCalledWith(7);
     await expect(harness.invoke("orkestrator:window:start-dragging")).resolves.toBeUndefined();
+
+    await expect(harness.invoke("orkestrator:web-client:get-status")).resolves.toMatchObject({
+      enabled: true,
+      running: true,
+    });
+    await expect(harness.invoke("orkestrator:web-client:set-enabled", false)).resolves.toMatchObject({
+      enabled: false,
+      running: false,
+    });
+    expect(harness.setWebClientEnabled).toHaveBeenCalledWith(false);
+  });
+
+  test("validates web client toggle values", async () => {
+    const harness = createHarness();
+
+    await expect(harness.invoke("orkestrator:web-client:set-enabled", "yes")).rejects.toThrow(
+      "Expected enabled to be a boolean",
+    );
   });
 
   test("throws for backend commands before the backend is initialized", async () => {

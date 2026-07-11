@@ -79,7 +79,7 @@ bun run dev
 
 ### Remote Gateway Access
 
-When Tailscale is available, Orkestrator starts an authenticated HTTP gateway on the host's Tailscale address. The gateway serves the React app to remote browsers, forwards backend commands and events, and proxies loopback services exposed by environments.
+When enabled in **Settings → Web client** and Tailscale is available, Orkestrator starts an authenticated HTTP gateway on the host's Tailscale address. The gateway serves the React app to remote browsers, forwards backend commands and events, and proxies loopback services exposed by environments. The setting is enabled by default to preserve the existing gateway behavior.
 
 By default the gateway listens on port `34121`. Look for a startup log like:
 
@@ -88,7 +88,7 @@ By default the gateway listens on port `34121`. Look for a startup log like:
 [RemoteGateway] Auth token stored at /path/to/gateway-auth.json
 ```
 
-Open the logged URL from another device or browser on the same tailnet, then enter the gateway token from the host machine. See [Remote Gateway](docs/remote-gateway.md) for setup, environment variables, security notes, and troubleshooting.
+Use the live link in **Settings → Web client** (or the logged URL) from another device or browser on the same tailnet, then enter the gateway token from the host machine. See [Remote Gateway](docs/remote-gateway.md) for setup, environment variables, security notes, and troubleshooting.
 
 ### Configuration
 

@@ -9,6 +9,18 @@ const mockUpdateGlobalConfig = mock(async (globalConfig: unknown) => ({
 }));
 const mockGetLogDirectory = mock(async () => null);
 const mockPropagateGithubTokenToContainers = mock(async () => ({ updated: [] }));
+const mockGetWebClientStatus = mock(async () => ({
+  enabled: true,
+  running: true,
+  url: "http://100.88.12.3:34121/",
+  error: null,
+}));
+const mockSetWebClientEnabled = mock(async (enabled: boolean) => ({
+  enabled,
+  running: enabled,
+  url: enabled ? "http://100.88.12.3:34121/" : null,
+  error: null,
+}));
 const mockToastSuccess = mock(() => {});
 const mockToastError = mock(() => {});
 const actualBackend = await import("../../../src/lib/backend");
@@ -18,6 +30,8 @@ mock.module("@/lib/backend", () => ({
   updateGlobalConfig: mockUpdateGlobalConfig,
   getLogDirectory: mockGetLogDirectory,
   propagateGithubTokenToContainers: mockPropagateGithubTokenToContainers,
+  getWebClientStatus: mockGetWebClientStatus,
+  setWebClientEnabled: mockSetWebClientEnabled,
   testDomainResolution: mock(async () => []),
   revealInFileManager: mock(async () => {}),
 }));
@@ -37,6 +51,8 @@ describe("GlobalSettings", () => {
     mockUpdateGlobalConfig.mockClear();
     mockGetLogDirectory.mockClear();
     mockPropagateGithubTokenToContainers.mockClear();
+    mockGetWebClientStatus.mockClear();
+    mockSetWebClientEnabled.mockClear();
     mockToastSuccess.mockClear();
     mockToastError.mockClear();
 
@@ -65,6 +81,7 @@ describe("GlobalSettings", () => {
           terminalScrollback: 5000,
           experimentalCodexRawEventLogging: true,
           debugLogging: false,
+          webClientEnabled: true,
         },
         repositories: {},
       },
@@ -96,6 +113,23 @@ describe("GlobalSettings", () => {
           codexMode: "terminal",
         })
       );
+    });
+  });
+
+  test("turns off the web client and shows its live link", async () => {
+    const { container } = render(<GlobalSettings activeSection="web-client" />);
+
+    expect(await screen.findByRole("link", { name: /http:\/\/100\.88\.12\.3:34121\// })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("switch", { name: "Allow web access" }));
+    expect(screen.getByText("Save changes to stop the web client.")).toBeTruthy();
+    fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ webClientEnabled: false }),
+      );
+      expect(mockSetWebClientEnabled).toHaveBeenCalledWith(false);
     });
   });
 

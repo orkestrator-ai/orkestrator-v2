@@ -23,6 +23,7 @@ import { deleteSession as deleteClaudeSession } from "@/lib/claude-client";
 import { stopSession as stopClaudeTmuxSession } from "@/lib/claude-tmux-client";
 import { deleteSession as deleteCodexSession } from "@/lib/codex-client";
 import { deleteSession as deleteOpenCodeSession } from "@/lib/opencode-client";
+import { createUuid } from "@/lib/uuid";
 
 /**
  * Per-environment state for pane layout
@@ -33,9 +34,9 @@ interface EnvironmentPaneState {
   containerId: string | null;
 }
 
-// Generate unique IDs using crypto.randomUUID for collision resistance
+// Generate unique IDs across desktop and secure/insecure browser contexts.
 function generateId(prefix: string): string {
-  return `${prefix}-${crypto.randomUUID()}`;
+  return `${prefix}-${createUuid()}`;
 }
 
 // Tree helper functions
@@ -607,6 +608,17 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     if (!envState) return;
 
     const newRoot = updateLeaf(envState.root, paneId, (leaf) => {
+      const hasValidIndexes =
+        Number.isInteger(fromIndex) &&
+        Number.isInteger(toIndex) &&
+        fromIndex >= 0 &&
+        fromIndex < leaf.tabs.length &&
+        toIndex >= 0 &&
+        toIndex < leaf.tabs.length;
+      if (!hasValidIndexes || fromIndex === toIndex) {
+        return leaf;
+      }
+
       const newTabs = [...leaf.tabs];
       const [moved] = newTabs.splice(fromIndex, 1);
       if (moved) {

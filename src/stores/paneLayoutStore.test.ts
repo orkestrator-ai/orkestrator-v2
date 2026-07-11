@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 const closeLocalTerminalSession = mock(async (_sessionId: string) => {});
 const detachTerminal = mock(async (_sessionId: string) => {});
@@ -7,6 +7,8 @@ const stopTmuxSession = mock(async (_tabId: string, _environmentId?: string) => 
 const deleteClaudeSession = mock(async (_client: unknown, _sessionId: string) => true);
 const deleteCodexSession = mock(async (_client: unknown, _sessionId: string) => true);
 const deleteOpenCodeSession = mock(async (_client: unknown, _sessionId: string) => true);
+let consoleDebugSpy: ReturnType<typeof spyOn> | undefined;
+let consoleErrorSpy: ReturnType<typeof spyOn> | undefined;
 
 const realBackend = await import("@/lib/backend");
 const realBackendSnapshot = { ...realBackend };
@@ -66,11 +68,19 @@ afterAll(() => {
   mock.module("@/lib/opencode-client", () => realOpenCodeClientSnapshot);
 });
 
-const { usePaneLayoutStore } = await import("./paneLayoutStore");
+afterEach(() => {
+  consoleDebugSpy?.mockRestore();
+  consoleErrorSpy?.mockRestore();
+  consoleDebugSpy = undefined;
+  consoleErrorSpy = undefined;
+});
+
+const { getAllLeaves, usePaneLayoutStore } = await import("./paneLayoutStore");
 const { useTerminalSessionStore, createSessionKey } = await import("./terminalSessionStore");
 const { useClaudeStore, createClaudeSessionKey } = await import("./claudeStore");
 const { useCodexStore, createCodexSessionKey } = await import("./codexStore");
 const { useOpenCodeStore, createOpenCodeSessionKey } = await import("./openCodeStore");
+const { useEnvironmentStore } = await import("./environmentStore");
 
 function resetStores() {
   usePaneLayoutStore.setState({
@@ -96,6 +106,9 @@ function resetStores() {
     clients: new Map(),
     sessions: new Map(),
     messageQueue: new Map(),
+  });
+  useEnvironmentStore.setState({
+    setupScriptsRunning: new Set(),
   });
 
   closeLocalTerminalSession.mockClear();
@@ -128,6 +141,23 @@ function seedSingleTabEnvironment(
           },
         },
       ],
+    ]),
+  });
+}
+
+function seedPaneTree(
+  root: any,
+  activePaneId: string,
+  environmentId = "env-pane",
+) {
+  usePaneLayoutStore.setState({
+    activeEnvironmentId: environmentId,
+    environments: new Map([
+      [environmentId, {
+        containerId: null,
+        activePaneId,
+        root,
+      }],
     ]),
   });
 }
@@ -295,6 +325,108 @@ describe("paneLayoutStore tab cleanup", () => {
     expect(root.id).toBe("default");
     expect(root.tabs).toEqual([]);
     expect(root.activeTabId).toBeNull();
+  });
+
+  test("clears local and native state when asynchronous cleanup operations reject", async () => {
+    consoleDebugSpy = spyOn(console, "debug").mockImplementation(() => {});
+    consoleErrorSpy = spyOn(console, "error").mockImplementation(() => {});
+    const tabs = [
+      { id: "terminal-tab", type: "plain" },
+      { id: "tmux-tab", type: "claude-tmux" },
+      { id: "claude-tab", type: "claude-native" },
+      { id: "codex-tab", type: "codex-native" },
+      { id: "opencode-tab", type: "opencode-native" },
+    ];
+    seedPaneTree({
+      kind: "leaf",
+      id: "default",
+      tabs,
+      activeTabId: "terminal-tab",
+    }, "default", "env-cleanup-errors");
+
+    const terminalKey = createSessionKey(null, "terminal-tab", "env-cleanup-errors");
+    useTerminalSessionStore.getState().setSession(terminalKey, {
+      sessionId: "pty-cleanup-errors",
+      persistentSessionId: "persistent-cleanup-errors",
+    });
+
+    const claudeKey = createClaudeSessionKey("env-cleanup-errors", "claude-tab");
+    useClaudeStore.getState().setClient("env-cleanup-errors", {} as any);
+    useClaudeStore.getState().setSession(claudeKey, {
+      sessionId: "claude-cleanup-errors",
+      messages: [],
+      isLoading: true,
+    });
+
+    const codexKey = createCodexSessionKey("env-cleanup-errors", "codex-tab");
+    useCodexStore.getState().setClient("env-cleanup-errors", {} as any);
+    useCodexStore.getState().setSession(codexKey, {
+      sessionId: "codex-cleanup-errors",
+      messages: [],
+      isLoading: true,
+    });
+
+    const openCodeKey = createOpenCodeSessionKey("env-cleanup-errors", "opencode-tab");
+    useOpenCodeStore.getState().setClient("env-cleanup-errors", {} as any);
+    useOpenCodeStore.getState().setSession(openCodeKey, {
+      sessionId: "opencode-cleanup-errors",
+      messages: [],
+      isLoading: true,
+    });
+
+    closeLocalTerminalSession.mockRejectedValueOnce(new Error("local close failed"));
+    updateSessionStatus.mockRejectedValueOnce(new Error("status update failed"));
+    stopTmuxSession.mockRejectedValueOnce(new Error("tmux stop failed"));
+    deleteClaudeSession.mockRejectedValueOnce(new Error("Claude delete failed"));
+    deleteCodexSession.mockRejectedValueOnce(new Error("Codex delete failed"));
+    deleteOpenCodeSession.mockRejectedValueOnce(new Error("OpenCode delete failed"));
+
+    const store = usePaneLayoutStore.getState();
+    for (const tab of tabs) {
+      store.removeTab("default", tab.id, "env-cleanup-errors");
+    }
+    await Promise.resolve();
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-cleanup-errors")).toEqual([]);
+    expect(useTerminalSessionStore.getState().sessions.has(terminalKey)).toBe(false);
+    expect(useClaudeStore.getState().sessions.has(claudeKey)).toBe(false);
+    expect(useCodexStore.getState().sessions.has(codexKey)).toBe(false);
+    expect(useOpenCodeStore.getState().sessions.has(openCodeKey)).toBe(false);
+    expect(consoleDebugSpy).toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalled();
+  });
+
+  test("clears setup state and closes a child pane when its last tab is removed", () => {
+    seedPaneTree({
+      kind: "split",
+      id: "root-split",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "setup-pane",
+          tabs: [{ id: "setup-tab", type: "plain", isSetupTab: true }],
+          activeTabId: "setup-tab",
+        },
+        {
+          kind: "leaf",
+          id: "remaining-pane",
+          tabs: [{ id: "remaining-tab", type: "plain" }],
+          activeTabId: "remaining-tab",
+        },
+      ],
+    }, "setup-pane", "env-setup-close");
+    useEnvironmentStore.getState().setSetupScriptsRunning("env-setup-close", true);
+
+    usePaneLayoutStore.getState().removeTab("setup-pane", "setup-tab", "env-setup-close");
+
+    expect(useEnvironmentStore.getState().setupScriptsRunning.has("env-setup-close")).toBe(false);
+    expect(usePaneLayoutStore.getState().getRoot("env-setup-close")).toMatchObject({
+      kind: "leaf",
+      id: "remaining-pane",
+    });
   });
 });
 
@@ -517,5 +649,514 @@ describe("paneLayoutStore environment scoping", () => {
     expect(rightPane.tabs.map((tab) => tab.id)).toEqual(["tab-a-right", "tab-a"]);
     expect(envA.activePaneId).toBe("pane-a-right");
     expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-b");
+  });
+});
+
+describe("paneLayoutStore splitting", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+
+  test.each([
+    ["left", "horizontal", 0],
+    ["right", "horizontal", 1],
+    ["top", "vertical", 0],
+    ["bottom", "vertical", 1],
+  ] as const)("moves a tab into a same-pane %s edge split", (edge, direction, newPaneIndex) => {
+    seedPaneTree({
+      kind: "leaf",
+      id: "default",
+      tabs: [
+        { id: "tab-one", type: "plain" },
+        { id: "tab-two", type: "plain" },
+      ],
+      activeTabId: "tab-two",
+    }, "default", "env-split");
+
+    usePaneLayoutStore.getState().splitPaneAtEdge(
+      "default",
+      edge,
+      "tab-two",
+      "default",
+      "env-split",
+    );
+
+    const root = usePaneLayoutStore.getState().getRoot("env-split");
+    expect(root.kind).toBe("split");
+    if (root.kind !== "split") {
+      throw new Error("root should be split");
+    }
+
+    expect(root.direction).toBe(direction);
+    expect(root.children[newPaneIndex]).toMatchObject({
+      kind: "leaf",
+      tabs: [{ id: "tab-two" }],
+      activeTabId: "tab-two",
+    });
+    expect(root.children[newPaneIndex === 0 ? 1 : 0]).toMatchObject({
+      kind: "leaf",
+      id: "default",
+      tabs: [{ id: "tab-one" }],
+    });
+  });
+
+  test("moves a tab across panes and preserves the non-empty source pane", () => {
+    seedPaneTree({
+      kind: "split",
+      id: "root-split",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "source",
+          tabs: [
+            { id: "source-stays", type: "plain" },
+            { id: "tab-moving", type: "plain" },
+          ],
+          activeTabId: "tab-moving",
+        },
+        {
+          kind: "leaf",
+          id: "target",
+          tabs: [{ id: "target-tab", type: "plain" }],
+          activeTabId: "target-tab",
+        },
+      ],
+    }, "source", "env-cross-split");
+
+    usePaneLayoutStore.getState().splitPaneAtEdge(
+      "target",
+      "top",
+      "tab-moving",
+      "source",
+      "env-cross-split",
+    );
+
+    const root = usePaneLayoutStore.getState().getRoot("env-cross-split");
+    expect(root.kind).toBe("split");
+    if (root.kind !== "split") throw new Error("root should remain split");
+    expect(root.children[0]).toMatchObject({
+      kind: "leaf",
+      id: "source",
+      tabs: [{ id: "source-stays" }],
+      activeTabId: "source-stays",
+    });
+    expect(root.children[1]).toMatchObject({
+      kind: "split",
+      direction: "vertical",
+      children: [
+        { kind: "leaf", tabs: [{ id: "tab-moving" }] },
+        { kind: "leaf", id: "target", tabs: [{ id: "target-tab" }] },
+      ],
+    });
+  });
+
+  test("closes an emptied source pane after a cross-pane split", async () => {
+    seedPaneTree({
+      kind: "split",
+      id: "root-split",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "source",
+          tabs: [{ id: "tab-moving", type: "plain" }],
+          activeTabId: "tab-moving",
+        },
+        {
+          kind: "leaf",
+          id: "target",
+          tabs: [{ id: "target-tab", type: "plain" }],
+          activeTabId: "target-tab",
+        },
+      ],
+    }, "source", "env-empty-source");
+
+    usePaneLayoutStore.getState().splitPaneAtEdge(
+      "target",
+      "right",
+      "tab-moving",
+      "source",
+      "env-empty-source",
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    const root = usePaneLayoutStore.getState().getRoot("env-empty-source");
+    expect(root.kind).toBe("split");
+    expect(getAllLeaves(root).map((leaf) => leaf.id)).not.toContain("source");
+    expect(getAllLeaves(root).flatMap((leaf) => leaf.tabs.map((tab) => tab.id))).toEqual([
+      "target-tab",
+      "tab-moving",
+    ]);
+  });
+
+  test("does not split when the tree has reached the maximum depth", () => {
+    let root: any = {
+      kind: "leaf",
+      id: "deep-target",
+      tabs: [
+        { id: "tab-one", type: "plain" },
+        { id: "tab-two", type: "plain" },
+      ],
+      activeTabId: "tab-two",
+    };
+    for (let depth = 1; depth <= 9; depth += 1) {
+      root = {
+        kind: "split",
+        id: `split-${depth}`,
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth,
+        children: [
+          root,
+          {
+            kind: "leaf",
+            id: `filler-${depth}`,
+            tabs: [],
+            activeTabId: null,
+          },
+        ],
+      };
+    }
+    seedPaneTree(root, "deep-target", "env-max-depth");
+
+    const store = usePaneLayoutStore.getState();
+    store.splitPaneAtEdge(
+      "deep-target",
+      "right",
+      "tab-two",
+      "deep-target",
+      "env-max-depth",
+    );
+    store.splitPane("deep-target", "horizontal", "tab-two", "env-max-depth");
+
+    expect(usePaneLayoutStore.getState().getRoot("env-max-depth")).toBe(root);
+  });
+
+  test("leaves state unchanged for missing environments, panes, and tabs", () => {
+    const storeWithoutEnvironment = usePaneLayoutStore.getState();
+    storeWithoutEnvironment.splitPaneAtEdge("target", "right", "tab", "source");
+    storeWithoutEnvironment.splitPaneAtEdge("target", "right", "tab", "source", "missing-env");
+
+    seedSingleTabEnvironment("env-invalid-split", null, { id: "tab-one", type: "plain" });
+    const store = usePaneLayoutStore.getState();
+    const originalRoot = store.getRoot("env-invalid-split");
+
+    store.splitPaneAtEdge("missing-target", "right", "tab-one", "default", "env-invalid-split");
+    store.splitPaneAtEdge("default", "right", "tab-one", "missing-source", "env-invalid-split");
+    store.splitPaneAtEdge("default", "right", "missing-tab", "default", "env-invalid-split");
+
+    expect(usePaneLayoutStore.getState().getRoot("env-invalid-split")).toBe(originalRoot);
+  });
+});
+
+describe("paneLayoutStore pane and tab actions", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+
+  test("returns default getters and ignores initialization without an environment", () => {
+    const store = usePaneLayoutStore.getState();
+
+    store.initialize(null);
+    store.reset();
+
+    expect(store.getRoot()).toEqual({
+      kind: "leaf",
+      id: "default",
+      tabs: [],
+      activeTabId: null,
+    });
+    expect(store.getActivePaneId()).toBe("default");
+    expect(store.getContainerId()).toBeNull();
+    expect(store.getActivePane()?.id).toBe("default");
+  });
+
+  test("activates an existing tab instead of adding a duplicate", () => {
+    seedPaneTree({
+      kind: "split",
+      id: "root-split",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "left",
+          tabs: [{ id: "left-tab", type: "plain" }],
+          activeTabId: "left-tab",
+        },
+        {
+          kind: "leaf",
+          id: "right",
+          tabs: [
+            { id: "right-tab", type: "plain" },
+            { id: "existing-tab", type: "plain" },
+          ],
+          activeTabId: "right-tab",
+        },
+      ],
+    }, "left", "env-duplicate");
+
+    usePaneLayoutStore.getState().addTab(
+      "left",
+      { id: "existing-tab", type: "plain" },
+      "env-duplicate",
+    );
+
+    const store = usePaneLayoutStore.getState();
+    expect(store.getAllTabs("env-duplicate").filter((tab) => tab.id === "existing-tab")).toHaveLength(1);
+    expect(store.getPane("right", "env-duplicate")?.activeTabId).toBe("existing-tab");
+    expect(store.getActivePaneId("env-duplicate")).toBe("right");
+    expect(store.getPane("missing-pane", "env-duplicate")).toBeNull();
+    expect(store.findPaneWithTab("missing-tab", "env-duplicate")).toBeNull();
+  });
+
+  test("reorders tabs and ignores invalid indexes", () => {
+    seedPaneTree({
+      kind: "leaf",
+      id: "default",
+      tabs: [
+        { id: "tab-a", type: "plain" },
+        { id: "tab-b", type: "plain" },
+        { id: "tab-c", type: "plain" },
+      ],
+      activeTabId: "tab-a",
+    }, "default", "env-reorder");
+
+    const store = usePaneLayoutStore.getState();
+    store.reorderTabs("default", 0, 2, "env-reorder");
+    expect(store.getAllTabs("env-reorder").map((tab) => tab.id)).toEqual(["tab-b", "tab-c", "tab-a"]);
+
+    store.reorderTabs("default", -1, 0, "env-reorder");
+    store.reorderTabs("default", 0, 3, "env-reorder");
+    store.reorderTabs("default", 0.5, 1, "env-reorder");
+    expect(store.getAllTabs("env-reorder").map((tab) => tab.id)).toEqual(["tab-b", "tab-c", "tab-a"]);
+  });
+
+  test("moves tabs within a pane and inserts at a requested cross-pane index", () => {
+    seedPaneTree({
+      kind: "split",
+      id: "root-split",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "left",
+          tabs: [
+            { id: "tab-a", type: "plain" },
+            { id: "tab-b", type: "plain" },
+            { id: "tab-c", type: "plain" },
+          ],
+          activeTabId: "tab-c",
+        },
+        {
+          kind: "leaf",
+          id: "right",
+          tabs: [
+            { id: "tab-x", type: "plain" },
+            { id: "tab-y", type: "plain" },
+          ],
+          activeTabId: "tab-x",
+        },
+      ],
+    }, "left", "env-indexed-move");
+
+    const store = usePaneLayoutStore.getState();
+    store.moveTab("left", "left", "tab-c", 0, "env-indexed-move");
+    expect(store.getPane("left", "env-indexed-move")?.tabs.map((tab) => tab.id)).toEqual([
+      "tab-c",
+      "tab-a",
+      "tab-b",
+    ]);
+
+    store.moveTab("left", "right", "tab-b", 1, "env-indexed-move");
+    expect(store.getPane("left", "env-indexed-move")?.tabs.map((tab) => tab.id)).toEqual([
+      "tab-c",
+      "tab-a",
+    ]);
+    expect(store.getPane("right", "env-indexed-move")?.tabs.map((tab) => tab.id)).toEqual([
+      "tab-x",
+      "tab-b",
+      "tab-y",
+    ]);
+  });
+
+  test("collapses an emptied source pane after moving its last tab", () => {
+    seedPaneTree({
+      kind: "split",
+      id: "root-split",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "left",
+          tabs: [{ id: "tab-moving", type: "plain" }],
+          activeTabId: "tab-moving",
+        },
+        {
+          kind: "leaf",
+          id: "right",
+          tabs: [{ id: "tab-target", type: "plain" }],
+          activeTabId: "tab-target",
+        },
+      ],
+    }, "left", "env-empty-move");
+
+    usePaneLayoutStore.getState().moveTab(
+      "left",
+      "right",
+      "tab-moving",
+      0,
+      "env-empty-move",
+    );
+
+    expect(usePaneLayoutStore.getState().getRoot("env-empty-move")).toMatchObject({
+      kind: "leaf",
+      id: "right",
+      tabs: [{ id: "tab-moving" }, { id: "tab-target" }],
+      activeTabId: "tab-moving",
+    });
+  });
+
+  test("does not mutate state for invalid move requests", () => {
+    usePaneLayoutStore.getState().moveTab("left", "right", "tab");
+    usePaneLayoutStore.getState().moveTab("left", "right", "tab", undefined, "missing-env");
+
+    seedSingleTabEnvironment("env-invalid-move", null, { id: "tab-one", type: "plain" });
+    const originalRoot = usePaneLayoutStore.getState().getRoot("env-invalid-move");
+    const store = usePaneLayoutStore.getState();
+    store.moveTab("missing", "default", "tab-one", undefined, "env-invalid-move");
+    store.moveTab("default", "missing", "tab-one", undefined, "env-invalid-move");
+    store.moveTab("default", "default", "missing-tab", undefined, "env-invalid-move");
+
+    expect(usePaneLayoutStore.getState().getRoot("env-invalid-move")).toBe(originalRoot);
+  });
+
+  test("clears a tab initial prompt without changing its other data", () => {
+    seedPaneTree({
+      kind: "leaf",
+      id: "default",
+      tabs: [{
+        id: "prompt-tab",
+        type: "plain",
+        initialPrompt: "Run the checks",
+        initialCommands: ["bun test"],
+      }],
+      activeTabId: "prompt-tab",
+    }, "default", "env-prompt");
+
+    usePaneLayoutStore.getState().clearTabInitialPrompt("prompt-tab", "env-prompt");
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-prompt")).toEqual([{
+      id: "prompt-tab",
+      type: "plain",
+      initialPrompt: undefined,
+      initialCommands: ["bun test"],
+    }]);
+  });
+
+  test("splits a pane and activates the pane containing the moved tab", () => {
+    seedPaneTree({
+      kind: "leaf",
+      id: "default",
+      tabs: [
+        { id: "tab-one", type: "plain" },
+        { id: "tab-two", type: "plain" },
+      ],
+      activeTabId: "tab-two",
+    }, "default", "env-split-action");
+
+    usePaneLayoutStore.getState().splitPane(
+      "default",
+      "vertical",
+      "tab-two",
+      "env-split-action",
+    );
+
+    const store = usePaneLayoutStore.getState();
+    const root = store.getRoot("env-split-action");
+    expect(root).toMatchObject({
+      kind: "split",
+      direction: "vertical",
+      children: [
+        { kind: "leaf", id: "default", tabs: [{ id: "tab-one" }] },
+        { kind: "leaf", tabs: [{ id: "tab-two" }], activeTabId: "tab-two" },
+      ],
+    });
+    expect(getAllLeaves(root).map((leaf) => leaf.id)).toContain(store.getActivePaneId("env-split-action"));
+    expect(store.getActivePane("env-split-action")?.activeTabId).toBe("tab-two");
+  });
+
+  test("updates nested split sizes and collapses nested panes", () => {
+    seedPaneTree({
+      kind: "split",
+      id: "outer",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "left",
+          tabs: [{ id: "left-tab", type: "plain" }],
+          activeTabId: "left-tab",
+        },
+        {
+          kind: "split",
+          id: "inner",
+          direction: "vertical",
+          sizes: [50, 50],
+          depth: 2,
+          children: [
+            {
+              kind: "leaf",
+              id: "middle",
+              tabs: [{ id: "middle-tab", type: "plain" }],
+              activeTabId: "middle-tab",
+            },
+            {
+              kind: "leaf",
+              id: "right",
+              tabs: [{ id: "right-tab", type: "plain" }],
+              activeTabId: "right-tab",
+            },
+          ],
+        },
+      ],
+    }, "middle", "env-nested");
+
+    const store = usePaneLayoutStore.getState();
+    store.closePane("missing-pane", "env-nested");
+    store.updateSizes("inner", [30, 70], "env-nested");
+    const resizedRoot = store.getRoot("env-nested");
+    expect(resizedRoot.kind).toBe("split");
+    if (resizedRoot.kind !== "split") throw new Error("root should be split");
+    expect(resizedRoot.children[1]).toMatchObject({ kind: "split", id: "inner", sizes: [30, 70] });
+
+    store.closePane("middle", "env-nested");
+    expect(store.getRoot("env-nested")).toMatchObject({
+      kind: "split",
+      id: "outer",
+      children: [
+        { kind: "leaf", id: "left" },
+        { kind: "leaf", id: "right" },
+      ],
+    });
+    expect(store.getActivePaneId("env-nested")).toBe("right");
+
+    store.closePane("left", "env-nested");
+    const singlePaneRoot = store.getRoot("env-nested");
+    expect(singlePaneRoot).toMatchObject({ kind: "leaf", id: "right" });
+    store.closePane("right", "env-nested");
+    expect(store.getRoot("env-nested")).toBe(singlePaneRoot);
   });
 });

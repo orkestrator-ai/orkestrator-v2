@@ -920,7 +920,11 @@ describe("codex bridge abort handling", () => {
 
     const configResponse = await app.request("/session/message-session/config", {
       method: "POST",
-      body: JSON.stringify({ mode: "plan", fastMode: true }),
+      body: JSON.stringify({
+        mode: "plan",
+        fastMode: true,
+        modelReasoningEffort: "ultra",
+      }),
       headers: { "Content-Type": "application/json" },
     });
 
@@ -928,6 +932,9 @@ describe("codex bridge abort handling", () => {
     expect(await configResponse.json()).toEqual({ status: "updated" });
     expect(__testing.sessions.get("message-session")?.conversationMode).toBe("plan");
     expect(__testing.sessions.get("message-session")?.fastMode).toBe(true);
+    expect(
+      __testing.sessions.get("message-session")?.threadOptions.modelReasoningEffort,
+    ).toBe("ultra");
   });
 
   test("prompt and abort routes restore compacted sessions before handling requests", async () => {

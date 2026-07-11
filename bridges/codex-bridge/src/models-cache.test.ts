@@ -16,6 +16,9 @@ const SAMPLE_CATALOG = {
       supported_reasoning_levels: [
         { effort: "medium", description: "Balanced" },
         { effort: "high", description: "Deeper reasoning" },
+        { effort: "xhigh", description: "Extra high reasoning" },
+        { effort: "max", description: "Maximum reasoning" },
+        { effort: "ultra", description: "Automatic task delegation" },
       ],
     },
     {
@@ -61,9 +64,15 @@ describe("parseModelCatalog", () => {
 
   test("maps reasoning levels and picks medium as default when available", () => {
     const [first] = parseModelCatalog(JSON.stringify(SAMPLE_CATALOG));
-    expect(first?.reasoningEfforts).toEqual(["medium", "high"]);
+    expect(first?.reasoningEfforts).toEqual(["medium", "high", "xhigh", "max", "ultra"]);
     expect(first?.defaultReasoningEffort).toBe("medium");
-    expect(first?.reasoningOptions.map((o) => o.effort)).toEqual(["medium", "high"]);
+    expect(first?.reasoningOptions.map((o) => o.effort)).toEqual([
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
   });
 
   test("returns a default reasoning option when levels are missing", () => {

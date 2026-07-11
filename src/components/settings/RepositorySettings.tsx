@@ -62,6 +62,8 @@ const CODEX_EFFORT_LEVELS: { value: CodexReasoningEffort; label: string }[] = [
   { value: "medium", label: "Medium" },
   { value: "high", label: "High" },
   { value: "xhigh", label: "Extra High" },
+  { value: "max", label: "Max" },
+  { value: "ultra", label: "Ultra" },
 ];
 
 /** OpenCode uses model variants for effort/thinking levels */

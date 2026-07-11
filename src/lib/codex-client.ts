@@ -37,7 +37,14 @@ export const CODEX_MODELS: CodexModel[] = [
 ];
 
 export const DEFAULT_CODEX_MODEL = CODEX_MODELS[0]!.id;
-export type CodexReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+export type CodexReasoningEffort =
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "ultra";
 export type CodexConversationMode = "build" | "plan";
 
 interface CodexModelsResponse {

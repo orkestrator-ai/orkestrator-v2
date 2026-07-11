@@ -9,8 +9,8 @@ import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
 import { createMainWindow } from "./window.js";
 import { WebClientController } from "./web-client-controller.js";
+import { createWebClientControls } from "./web-client-controls.js";
 import type { AppConfig } from "./backend/models.js";
-import type { GatewayTokenSettings, WebClientStatus } from "../src/types/webClient.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,31 +27,7 @@ let mainWindow: BrowserWindow | null = null;
 let backend: OrkestratorBackend | null = null;
 let gateway: OrkestratorGateway | null = null;
 let webClientController: WebClientController | null = null;
-
-function getWebClientStatus(): WebClientStatus {
-  return webClientController?.getStatus() ?? {
-    enabled: true,
-    running: false,
-    url: null,
-    error: "The web client gateway is not initialized.",
-  };
-}
-
-function setWebClientEnabled(enabled: boolean): Promise<WebClientStatus> {
-  return webClientController
-    ? webClientController.setEnabled(enabled)
-    : Promise.resolve(getWebClientStatus());
-}
-
-function getGatewayTokenSettings(): Promise<GatewayTokenSettings> {
-  if (!webClientController) throw new Error("The web client gateway is not initialized.");
-  return webClientController.getTokenSettings();
-}
-
-function setGatewayToken(token: string): Promise<GatewayTokenSettings> {
-  if (!webClientController) throw new Error("The web client gateway is not initialized.");
-  return webClientController.setToken(token);
-}
+const webClientControls = createWebClientControls(() => webClientController);
 
 function emitToRenderers(event: string, payload: unknown): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -119,10 +95,10 @@ function registerIpc(): void {
     dialogApi: dialog,
     appApi: app,
     nativeImageApi: nativeImage,
-    getWebClientStatus,
-    setWebClientEnabled,
-    getGatewayTokenSettings,
-    setGatewayToken,
+    getWebClientStatus: webClientControls.getWebClientStatus,
+    setWebClientEnabled: webClientControls.setWebClientEnabled,
+    getGatewayTokenSettings: webClientControls.getGatewayTokenSettings,
+    setGatewayToken: webClientControls.setGatewayToken,
   });
 }
 
@@ -149,7 +125,7 @@ app.whenReady().then(async () => {
   });
   webClientController = new WebClientController(gateway);
   const config = await backend.invoke<AppConfig>("get_config");
-  await setWebClientEnabled(config.global.webClientEnabled ?? true);
+  await webClientControls.setWebClientEnabled(config.global.webClientEnabled ?? true);
 
   createMenu();
   registerIpc();

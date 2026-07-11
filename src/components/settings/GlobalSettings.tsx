@@ -18,6 +18,7 @@ import { Loader2, Eye, EyeOff, Key, Github, CheckCircle2, XCircle, AlertCircle, 
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { getGatewayTokenValidationError } from "@/lib/gateway-token";
 import type {
   ClaudeMode,
   ClaudeNativeBackend,
@@ -1014,11 +1015,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   );
 
   const gatewayTokenValidationError = gatewayTokenSettings?.editable
-    ? gatewayToken.trim().length < 16
-      ? "Gateway token must be at least 16 characters."
-      : gatewayToken.trim().length > 1024
-        ? "Gateway token must be 1024 characters or fewer."
-        : null
+    ? getGatewayTokenValidationError(gatewayToken)
     : null;
 
   const renderWebClient = () => {

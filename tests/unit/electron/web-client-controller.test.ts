@@ -138,4 +138,42 @@ describe("WebClientController", () => {
     expect(getTokenSettings).toHaveBeenCalledTimes(1);
     expect(setToken).toHaveBeenCalledWith("replacement-token-123456");
   });
+
+  test("recovers the operation queue after a token read fails", async () => {
+    const { controller, setToken } = createHarness({
+      getTokenSettings: async () => { throw new Error("read failed"); },
+    });
+
+    await expect(controller.getTokenSettings()).rejects.toThrow("read failed");
+    await expect(controller.setToken("replacement-token-123456")).resolves.toMatchObject({
+      token: "replacement-token-123456",
+    });
+    expect(setToken).toHaveBeenCalledTimes(1);
+  });
+
+  test("serializes token operations with enable and disable transitions", async () => {
+    let releaseToken: (() => void) | undefined;
+    let markTokenStarted: (() => void) | undefined;
+    const tokenPending = new Promise<void>((resolve) => { releaseToken = resolve; });
+    const tokenStarted = new Promise<void>((resolve) => { markTokenStarted = resolve; });
+    const calls: string[] = [];
+    const { controller } = createHarness({
+      setToken: async (token: string) => {
+        calls.push(`token:${token}`);
+        markTokenStarted?.();
+        await tokenPending;
+        return { ...TOKEN_SETTINGS, token };
+      },
+      stop: async () => { calls.push("stop"); },
+    });
+
+    const rotation = controller.setToken("replacement-token-123456");
+    const disable = controller.setEnabled(false);
+    await tokenStarted;
+    expect(calls).toEqual(["token:replacement-token-123456"]);
+
+    releaseToken?.();
+    await Promise.all([rotation, disable]);
+    expect(calls).toEqual(["token:replacement-token-123456", "stop"]);
+  });
 });

@@ -15,6 +15,7 @@ afterAll(() => {
 const wrapperModulePath = "./backend.ts?wrapper-test";
 const originalOrkestrator = window.orkestrator;
 const originalGateway = window.orkestratorGateway;
+const backendWrappers = await import(wrapperModulePath) as typeof import("./backend");
 const {
   connectLinear,
   createEnvironment,
@@ -31,7 +32,7 @@ const {
   setWebClientEnabled,
   setGatewayToken,
   setEnvironmentSetupComplete,
-} = await import(wrapperModulePath) as typeof import("./backend");
+} = backendWrappers;
 
 afterEach(() => {
   window.orkestrator = originalOrkestrator;
@@ -175,5 +176,46 @@ describe("backend web client wrappers", () => {
     await expect(setWebClientEnabled(true)).rejects.toThrow("only available in the desktop app");
     await expect(getGatewayTokenSettings()).rejects.toThrow("unavailable");
     await expect(setGatewayToken("replacement-token-123456")).rejects.toThrow("unavailable");
+  });
+});
+
+describe("backend command wrapper coverage", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(async (command: unknown) =>
+      command === "read_file_base64" ? btoa("binary") : undefined
+    );
+    window.orkestrator = originalOrkestrator;
+    window.orkestratorGateway = originalGateway;
+  });
+
+  test("every exported command wrapper reaches the native invoke boundary", async () => {
+    const specialWrappers = new Set([
+      "getWebClientStatus",
+      "setWebClientEnabled",
+      "getGatewayTokenSettings",
+      "setGatewayToken",
+      "readBinaryFile",
+    ]);
+    const commandWrappers = Object.entries(backendWrappers).flatMap(([name, value]) =>
+      typeof value === "function" && !specialWrappers.has(name)
+        ? [[name, value as (...args: unknown[]) => Promise<unknown>] as const]
+        : []
+    );
+
+    expect(commandWrappers.length).toBeGreaterThan(150);
+    for (const [name, wrapper] of commandWrappers) {
+      invokeMock.mockClear();
+      const args = Array.from({ length: wrapper.length }, () => "value");
+      await wrapper(...args);
+      expect(invokeMock.mock.calls.length, `${name} must call invoke`).toBeGreaterThan(0);
+    }
+  });
+
+  test("readBinaryFile decodes the base64 wrapper result", async () => {
+    await expect(backendWrappers.readBinaryFile("/tmp/image.bin")).resolves.toEqual(
+      Uint8Array.from(new TextEncoder().encode("binary")),
+    );
+    expect(invokeMock).toHaveBeenCalledWith("read_file_base64", { filePath: "/tmp/image.bin" });
   });
 });

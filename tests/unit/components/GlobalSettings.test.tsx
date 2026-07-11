@@ -206,6 +206,101 @@ describe("GlobalSettings", () => {
     expect(screen.getByText(/ORKESTRATOR_GATEWAY_TOKEN/)).toBeTruthy();
   });
 
+  test("validates gateway token character and encoded-cookie boundaries", async () => {
+    render(<GlobalSettings activeSection="web-client" />);
+    const input = await screen.findByLabelText("Gateway token") as HTMLInputElement;
+    const saveButton = screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement;
+
+    fireEvent.change(input, { target: { value: "short" } });
+    expect(screen.getByText("Gateway token must be at least 16 characters.")).toBeTruthy();
+    expect(saveButton.disabled).toBe(true);
+
+    fireEvent.change(input, { target: { value: "😀".repeat(512) } });
+    expect(screen.getByText("Gateway token is too large to store in a browser cookie.")).toBeTruthy();
+    expect(saveButton.disabled).toBe(true);
+
+    fireEvent.change(input, { target: { value: "valid-token-value-123456" } });
+    expect(screen.queryByText(/Gateway token must|too large to store/)).toBeNull();
+    expect(saveButton.disabled).toBe(false);
+  });
+
+  test("resets an unsaved gateway token edit", async () => {
+    render(<GlobalSettings activeSection="web-client" />);
+    const input = await screen.findByLabelText("Gateway token") as HTMLInputElement;
+
+    fireEvent.change(input, { target: { value: "replacement-token-123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+
+    expect(input.value).toBe("gateway-token-123456");
+    expect(mockSetGatewayToken).not.toHaveBeenCalled();
+  });
+
+  test("shows gateway token load failures without enabling an empty input", async () => {
+    mockGetGatewayTokenSettings.mockRejectedValueOnce(new Error("token settings unavailable"));
+    render(<GlobalSettings activeSection="web-client" />);
+
+    expect(await screen.findByText("token settings unavailable")).toBeTruthy();
+    expect((screen.getByLabelText("Gateway token") as HTMLInputElement).disabled).toBe(true);
+  });
+
+  test("reports gateway token persistence failures and keeps the edit retryable", async () => {
+    const originalConsoleError = console.error;
+    console.error = mock(() => undefined);
+    mockSetGatewayToken.mockRejectedValueOnce(new Error("credential write failed"));
+    render(<GlobalSettings activeSection="web-client" />);
+    const input = await screen.findByLabelText("Gateway token") as HTMLInputElement;
+
+    fireEvent.change(input, { target: { value: "replacement-token-123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to save settings",
+      { description: "credential write failed" },
+    ));
+    expect(input.value).toBe("replacement-token-123456");
+    expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(false);
+    console.error = originalConsoleError;
+  });
+
+  test("saves token and lifecycle edits together", async () => {
+    render(<GlobalSettings activeSection="web-client" />);
+    const input = await screen.findByLabelText("Gateway token") as HTMLInputElement;
+
+    fireEvent.change(input, { target: { value: "replacement-token-123456" } });
+    fireEvent.click(screen.getByRole("switch", { name: "Allow web access" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(mockSetGatewayToken).toHaveBeenCalledWith("replacement-token-123456");
+      expect(mockSetWebClientEnabled).toHaveBeenCalledWith(false);
+    });
+  });
+
+  test("ignores an older gateway token response after configuration changes", async () => {
+    let resolveFirst: ((value: { token: string; editable: true; source: "file" }) => void) | undefined;
+    mockGetGatewayTokenSettings
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockResolvedValueOnce({ token: "newer-token-value-123456", editable: true, source: "file" });
+    render(<GlobalSettings activeSection="web-client" />);
+
+    act(() => {
+      useConfigStore.setState((state) => ({
+        config: {
+          ...state.config,
+          global: { ...state.config.global, webClientEnabled: false },
+        },
+      }));
+    });
+
+    const input = await screen.findByLabelText("Gateway token") as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("newer-token-value-123456"));
+    await act(async () => {
+      resolveFirst?.({ token: "stale-token-value-123456", editable: true, source: "file" });
+      await Promise.resolve();
+    });
+    expect(input.value).toBe("newer-token-value-123456");
+  });
+
   test("starts a previously disabled web client", async () => {
     useConfigStore.setState((state) => ({
       config: {

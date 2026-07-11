@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, request as httpRequest, type IncomingHttpHeaders } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -112,6 +112,7 @@ describe("remote gateway", () => {
     const dataDir = await createTempDir("ork-gateway-auth-");
     const generated = await loadOrCreateGatewayToken(dataDir, {});
     expect(generated.token.length).toBeGreaterThanOrEqual(16);
+    expect((await stat(generated.authFile)).mode & 0o777).toBe(0o600);
 
     const loaded = await loadOrCreateGatewayToken(dataDir, {});
     expect(loaded.token).toBe(generated.token);
@@ -120,6 +121,16 @@ describe("remote gateway", () => {
       ORKESTRATOR_GATEWAY_TOKEN: "explicit-token-value",
     });
     expect(explicit.token).toBe("explicit-token-value");
+    expect(explicit).toMatchObject({ editable: false, source: "environment" });
+
+    await expect(loadOrCreateGatewayToken(dataDir, {
+      ORKESTRATOR_GATEWAY_TOKEN: "short",
+    })).rejects.toThrow("Invalid ORKESTRATOR_GATEWAY_TOKEN");
+
+    await writeFile(generated.authFile, JSON.stringify({ token: "invalid" }));
+    const repaired = await loadOrCreateGatewayToken(dataDir, {});
+    expect(repaired.token).not.toBe("invalid");
+    expect(JSON.parse(await readFile(generated.authFile, "utf8"))).toEqual({ token: repaired.token });
   });
 
   test("honors startup guardrails for disabled, missing, invalid, and unsafe binds", async () => {
@@ -311,6 +322,143 @@ describe("remote gateway", () => {
     });
     expect(acceptedNewToken.status).toBe(200);
     expect((await loadOrCreateGatewayToken(dataDir, {})).token).toBe(replacement);
+  });
+
+  test("rejects invalid token boundaries before changing the active credential", async () => {
+    const { info } = await startGateway({ env: {} });
+    const oldCookie = `orkestrator_gateway_auth=${info.token}`;
+    const invalidTokens = [
+      "short",
+      "a".repeat(1025),
+      "\ud800".repeat(16),
+      "😀".repeat(512),
+    ];
+
+    for (const token of invalidTokens) {
+      const response = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
+        method: "PUT",
+        headers: { cookie: oldCookie, "content-type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      expect(response.status).toBe(400);
+    }
+
+    const stillAuthenticated = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
+      headers: { cookie: oldCookie },
+    });
+    expect(stillAuthenticated.status).toBe(200);
+    expect(stillAuthenticated.json()).toMatchObject({ token: info.token });
+  });
+
+  test("normalizes valid token whitespace before persistence and cookie issuance", async () => {
+    const { info, dataDir } = await startGateway({ env: {} });
+    const response = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
+      method: "PUT",
+      headers: {
+        cookie: `orkestrator_gateway_auth=${info.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ token: "  replacement-token-123456  " }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.json()).toMatchObject({ token: "replacement-token-123456" });
+    expect(response.headers["set-cookie"]?.[0]).toContain("replacement-token-123456");
+    expect((await loadOrCreateGatewayToken(dataDir, {})).token).toBe("replacement-token-123456");
+  });
+
+  test("returns client errors for malformed, non-object, oversized, and incomplete settings bodies", async () => {
+    const { info } = await startGateway({ env: {} });
+    const headers = {
+      authorization: `Bearer ${info.token}`,
+      "content-type": "application/json",
+    };
+
+    const malformed = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
+      method: "PUT",
+      headers,
+      body: "{",
+    });
+    expect(malformed.status).toBe(400);
+
+    const nonObject = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
+      method: "PUT",
+      headers,
+      body: "[]",
+    });
+    expect(nonObject.status).toBe(400);
+
+    const incomplete = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
+      method: "PUT",
+      headers,
+      body: "{}",
+    });
+    expect(incomplete.status).toBe(400);
+
+    const oversized = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ token: "x".repeat(2 * 1024 * 1024) }),
+    });
+    expect(oversized.status).toBe(413);
+
+    const wrongMethod = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
+      method: "POST",
+      headers,
+    });
+    expect(wrongMethod.status).toBe(405);
+    expect(wrongMethod.headers.allow).toBe("GET, PUT");
+  });
+
+  test("serializes concurrent rotations and leaves disk and memory on the last queued token", async () => {
+    const { gateway, dataDir } = await startGateway({ env: {} });
+    const firstToken = `first-${"a".repeat(64)}`;
+    const secondToken = `second-${"b".repeat(900)}`;
+
+    await Promise.all([
+      gateway.setToken(firstToken),
+      gateway.setToken(secondToken),
+    ]);
+
+    expect(await gateway.getTokenSettings()).toMatchObject({ token: secondToken });
+    expect((await loadOrCreateGatewayToken(dataDir, {})).token).toBe(secondToken);
+  });
+
+  test("surfaces persistence failures without reporting a successful rotation", async () => {
+    const root = await createTempDir("ork-gateway-write-failure-");
+    const fileInsteadOfDirectory = path.join(root, "not-a-directory");
+    await writeFile(fileInsteadOfDirectory, "blocked");
+    const gateway = new OrkestratorGateway({
+      backend: { invoke: mock(async () => null) },
+      dataDir: path.join(fileInsteadOfDirectory, "child"),
+      rendererRoot: root,
+      env: {},
+      logger: createLogger(),
+    });
+
+    await expect(gateway.setToken("replacement-token-123456")).rejects.toThrow();
+  });
+
+  test("returns 500 for persistence failures and keeps the previous active token", async () => {
+    const { info, dataDir } = await startGateway({ env: {} });
+    await rm(dataDir, { recursive: true, force: true });
+    await writeFile(dataDir, "not a directory");
+    const oldAuthorization = { authorization: `Bearer ${info.token}` };
+
+    const rotation = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
+      method: "PUT",
+      headers: { ...oldAuthorization, "content-type": "application/json" },
+      body: JSON.stringify({ token: "replacement-token-123456" }),
+    });
+    expect(rotation.status).toBe(500);
+    expect(rotation.json()).toEqual({ error: "Unable to persist gateway token" });
+
+    const oldTokenStillWorks = await requestUrl(`${info.url}__orkestrator/invoke`, {
+      method: "POST",
+      headers: { ...oldAuthorization, "content-type": "application/json" },
+      body: JSON.stringify({ command: "get_projects" }),
+    });
+    expect(oldTokenStillWorks.status).toBe(200);
   });
 
   test("rejects edits when the token is managed by the environment", async () => {

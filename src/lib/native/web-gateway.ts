@@ -1,3 +1,5 @@
+import type { GatewayTokenSettings, WebClientStatus } from "@/types";
+
 const GATEWAY_PREFIX = "/__orkestrator";
 
 type EventCallback<T> = (payload: T) => void;
@@ -73,6 +75,43 @@ export function createBrowserGatewayApi() {
     dialog: {
       open(): Promise<string | string[] | null> {
         return Promise.resolve(null);
+      },
+    },
+
+    webClient: {
+      getStatus(): Promise<WebClientStatus> {
+        return Promise.resolve({
+          enabled: true,
+          running: true,
+          url: `${window.location.origin}/`,
+          error: null,
+        });
+      },
+      setEnabled(): Promise<WebClientStatus> {
+        return Promise.reject(new Error("Web client controls are only available in the desktop app"));
+      },
+      async getTokenSettings(): Promise<GatewayTokenSettings> {
+        const response = await fetch(`${GATEWAY_PREFIX}/gateway-settings`, {
+          credentials: "same-origin",
+        });
+        const payload = await response.json().catch(() => ({})) as GatewayTokenSettings & { error?: string };
+        if (!response.ok) {
+          throw new Error(payload.error ?? `Gateway settings request failed with HTTP ${response.status}`);
+        }
+        return payload;
+      },
+      async setToken(token: string): Promise<GatewayTokenSettings> {
+        const response = await fetch(`${GATEWAY_PREFIX}/gateway-settings`, {
+          method: "PUT",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token }),
+        });
+        const payload = await response.json().catch(() => ({})) as GatewayTokenSettings & { error?: string };
+        if (!response.ok) {
+          throw new Error(payload.error ?? `Gateway settings request failed with HTTP ${response.status}`);
+        }
+        return payload;
       },
     },
 

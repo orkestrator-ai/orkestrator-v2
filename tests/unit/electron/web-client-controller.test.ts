@@ -2,6 +2,8 @@ import { describe, expect, mock, test } from "bun:test";
 import { WebClientController } from "../../../electron/web-client-controller";
 import type { GatewayStartInfo } from "../../../electron/gateway";
 
+const TOKEN_SETTINGS = { token: "test-token-123456", editable: true, source: "file" as const };
+
 const START_INFO: GatewayStartInfo = {
   bindAddress: "100.88.12.3",
   port: 34121,
@@ -13,13 +15,17 @@ const START_INFO: GatewayStartInfo = {
 function createHarness(options: {
   start?: () => Promise<GatewayStartInfo | null>;
   stop?: () => Promise<void>;
+  getTokenSettings?: () => Promise<typeof TOKEN_SETTINGS>;
+  setToken?: (token: string) => Promise<typeof TOKEN_SETTINGS>;
   env?: NodeJS.ProcessEnv;
 } = {}) {
   const start = mock(options.start ?? (async () => START_INFO));
   const stop = mock(options.stop ?? (async () => undefined));
+  const getTokenSettings = mock(options.getTokenSettings ?? (async () => TOKEN_SETTINGS));
+  const setToken = mock(options.setToken ?? (async (token: string) => ({ ...TOKEN_SETTINGS, token })));
   const logger = { error: mock(() => undefined) };
-  const controller = new WebClientController({ start, stop }, options.env ?? {}, logger);
-  return { controller, start, stop, logger };
+  const controller = new WebClientController({ start, stop, getTokenSettings, setToken }, options.env ?? {}, logger);
+  return { controller, start, stop, getTokenSettings, setToken, logger };
 }
 
 describe("WebClientController", () => {
@@ -119,5 +125,17 @@ describe("WebClientController", () => {
     await Promise.all([disable, enable]);
     expect(calls).toEqual(["stop", "start"]);
     expect(controller.getStatus()).toMatchObject({ enabled: true, running: true });
+  });
+
+  test("reads and updates gateway token settings through the serialized gateway boundary", async () => {
+    const { controller, getTokenSettings, setToken } = createHarness();
+
+    await expect(controller.getTokenSettings()).resolves.toEqual(TOKEN_SETTINGS);
+    await expect(controller.setToken("replacement-token-123456")).resolves.toEqual({
+      ...TOKEN_SETTINGS,
+      token: "replacement-token-123456",
+    });
+    expect(getTokenSettings).toHaveBeenCalledTimes(1);
+    expect(setToken).toHaveBeenCalledWith("replacement-token-123456");
   });
 });

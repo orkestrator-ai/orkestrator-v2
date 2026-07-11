@@ -1,4 +1,4 @@
-import type { WebClientStatus } from "../src/types/webClient.js";
+import type { GatewayTokenSettings, WebClientStatus } from "../src/types/webClient.js";
 
 type EventCallback<T> = (payload: T) => void;
 
@@ -58,6 +58,12 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       },
       setEnabled(enabled: boolean): Promise<WebClientStatus> {
         return ipcRenderer.invoke("orkestrator:web-client:set-enabled", enabled);
+      },
+      getTokenSettings(): Promise<GatewayTokenSettings> {
+        return ipcRenderer.invoke("orkestrator:web-client:get-token-settings");
+      },
+      setToken(token: string): Promise<GatewayTokenSettings> {
+        return ipcRenderer.invoke("orkestrator:web-client:set-token", token);
       },
     },
 

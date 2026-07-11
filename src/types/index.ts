@@ -269,7 +269,7 @@ export interface GlobalConfig {
   webClientEnabled?: boolean;
 }
 
-export type { WebClientStatus } from "./webClient.js";
+export type { GatewayTokenSettings, WebClientStatus } from "./webClient.js";
 
 export interface RepositoryConfig {
   defaultBranch: string;

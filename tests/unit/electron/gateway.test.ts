@@ -278,6 +278,58 @@ describe("remote gateway", () => {
     expect(logout.headers["set-cookie"]?.[0]).toContain("Max-Age=0");
   });
 
+  test("returns and rotates the persisted token for an authenticated client", async () => {
+    const { info, dataDir } = await startGateway({ env: {} });
+    const oldCookie = `orkestrator_gateway_auth=${info.token}`;
+
+    const current = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
+      headers: { cookie: oldCookie },
+    });
+    expect(current.status).toBe(200);
+    expect(current.json()).toEqual({ token: info.token, editable: true, source: "file" });
+
+    const replacement = "replacement-token-123456";
+    const updated = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
+      method: "PUT",
+      headers: {
+        cookie: oldCookie,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ token: replacement }),
+    });
+    expect(updated.status).toBe(200);
+    expect(updated.json()).toEqual({ token: replacement, editable: true, source: "file" });
+    expect(updated.headers["set-cookie"]?.[0]).toContain(`orkestrator_gateway_auth=${replacement}`);
+
+    const rejectedOldToken = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
+      headers: { cookie: oldCookie },
+    });
+    expect(rejectedOldToken.status).toBe(401);
+
+    const acceptedNewToken = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
+      headers: { cookie: `orkestrator_gateway_auth=${replacement}` },
+    });
+    expect(acceptedNewToken.status).toBe(200);
+    expect((await loadOrCreateGatewayToken(dataDir, {})).token).toBe(replacement);
+  });
+
+  test("rejects edits when the token is managed by the environment", async () => {
+    const { info } = await startGateway();
+    const response = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer ${info.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ token: "replacement-token-123456" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.json()).toEqual({
+      error: "Gateway token is managed by ORKESTRATOR_GATEWAY_TOKEN and cannot be changed here",
+    });
+  });
+
   test("serves static renderer files and blocks traversal outside the renderer root", async () => {
     const dataDir = await createTempDir("ork-gateway-static-");
     const rendererRoot = await createRendererRoot(dataDir, "<main>app</main>");

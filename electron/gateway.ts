@@ -12,6 +12,7 @@ import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 import type { Socket } from "node:net";
 import path from "node:path";
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import type { GatewayTokenSettings } from "../src/types/webClient.js";
 
 type BackendInvoker = {
   invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
@@ -127,10 +128,16 @@ function mimeType(filePath: string): string {
   }
 }
 
-function jsonResponse(response: ServerResponse, statusCode: number, payload: unknown): void {
+function jsonResponse(
+  response: ServerResponse,
+  statusCode: number,
+  payload: unknown,
+  headers: OutgoingHttpHeaders = {},
+): void {
   response.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
+    ...headers,
   });
   response.end(JSON.stringify(payload));
 }
@@ -173,25 +180,35 @@ function authFilePath(dataDir: string): string {
   return path.join(dataDir, "gateway-auth.json");
 }
 
-export async function loadOrCreateGatewayToken(dataDir: string, env: NodeJS.ProcessEnv = process.env): Promise<{ token: string; authFile: string }> {
+export async function loadOrCreateGatewayToken(
+  dataDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<GatewayTokenSettings & { authFile: string }> {
   const authFile = authFilePath(dataDir);
   const envToken = env.ORKESTRATOR_GATEWAY_TOKEN?.trim();
   if (envToken) {
     if (envToken.length < 16) throw new Error("ORKESTRATOR_GATEWAY_TOKEN must be at least 16 characters");
-    return { token: envToken, authFile };
+    return { token: envToken, authFile, editable: false, source: "environment" };
   }
 
   const existing = await readFile(authFile, "utf8")
     .then((contents) => JSON.parse(contents) as { token?: unknown })
     .catch(() => null);
   if (typeof existing?.token === "string" && existing.token.length >= 16) {
-    return { token: existing.token, authFile };
+    return { token: existing.token, authFile, editable: true, source: "file" };
   }
 
   const token = randomBytes(32).toString("base64url");
   await mkdir(path.dirname(authFile), { recursive: true });
   await writeFile(authFile, `${JSON.stringify({ token }, null, 2)}\n`, { mode: 0o600 });
-  return { token, authFile };
+  return { token, authFile, editable: true, source: "file" };
+}
+
+function validateGatewayToken(value: string): string {
+  const token = value.trim();
+  if (token.length < 16) throw new Error("Gateway token must be at least 16 characters");
+  if (token.length > 1024) throw new Error("Gateway token must be 1024 characters or fewer");
+  return token;
 }
 
 async function readRequestBody(request: IncomingMessage, maxBytes = MAX_JSON_BODY_BYTES): Promise<Buffer> {
@@ -479,6 +496,31 @@ export class OrkestratorGateway {
     return { bindAddress, port: resolvedPort, url, token: this.token, authFile: this.authFile };
   }
 
+  async getTokenSettings(): Promise<GatewayTokenSettings> {
+    const auth = await loadOrCreateGatewayToken(this.dataDir, this.env);
+    this.authFile = auth.authFile;
+    return {
+      token: this.token || auth.token,
+      editable: auth.editable,
+      source: auth.source,
+    };
+  }
+
+  async setToken(value: string): Promise<GatewayTokenSettings> {
+    const envToken = this.env.ORKESTRATOR_GATEWAY_TOKEN?.trim();
+    if (envToken) {
+      throw new Error("Gateway token is managed by ORKESTRATOR_GATEWAY_TOKEN and cannot be changed here");
+    }
+
+    const token = validateGatewayToken(value);
+    const authFile = authFilePath(this.dataDir);
+    await mkdir(path.dirname(authFile), { recursive: true });
+    await writeFile(authFile, `${JSON.stringify({ token }, null, 2)}\n`, { mode: 0o600 });
+    this.token = token;
+    this.authFile = authFile;
+    return { token, editable: true, source: "file" };
+  }
+
   async stop(): Promise<void> {
     if (this.keepalive) {
       clearInterval(this.keepalive);
@@ -546,6 +588,11 @@ export class OrkestratorGateway {
       return;
     }
 
+    if (url.pathname === `${API_PREFIX}/gateway-settings`) {
+      await this.handleGatewaySettings(request, response);
+      return;
+    }
+
     if (url.pathname === `${API_PREFIX}/invoke`) {
       await this.handleInvoke(request, response);
       return;
@@ -562,6 +609,31 @@ export class OrkestratorGateway {
     }
 
     await this.serveStatic(request, url, response);
+  }
+
+  private async handleGatewaySettings(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method === "GET") {
+      jsonResponse(response, 200, await this.getTokenSettings());
+      return;
+    }
+    if (request.method !== "PUT") {
+      response.writeHead(405, { allow: "GET, PUT" });
+      response.end();
+      return;
+    }
+
+    const body = await readJsonBody(request);
+    if (typeof body.token !== "string") {
+      jsonResponse(response, 400, { error: "Expected token to be a string" });
+      return;
+    }
+
+    try {
+      const settings = await this.setToken(body.token);
+      jsonResponse(response, 200, settings, { "set-cookie": cookieHeader(settings.token) });
+    } catch (error) {
+      jsonResponse(response, 400, { error: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   private async handleLogin(request: IncomingMessage, response: ServerResponse): Promise<void> {

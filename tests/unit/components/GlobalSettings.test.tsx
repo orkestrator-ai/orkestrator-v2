@@ -21,6 +21,16 @@ const mockSetWebClientEnabled = mock(async (enabled: boolean) => ({
   url: enabled ? "http://100.88.12.3:34121/" : null,
   error: null,
 }));
+const mockGetGatewayTokenSettings = mock(async () => ({
+  token: "gateway-token-123456",
+  editable: true,
+  source: "file" as const,
+}));
+const mockSetGatewayToken = mock(async (token: string) => ({
+  token: token.trim(),
+  editable: true,
+  source: "file" as const,
+}));
 const mockOpenInBrowser = mock(async () => undefined);
 const mockTestDomainResolution = mock(async () => []);
 const mockToastSuccess = mock(() => {});
@@ -34,6 +44,8 @@ mock.module("@/lib/backend", () => ({
   propagateGithubTokenToContainers: mockPropagateGithubTokenToContainers,
   getWebClientStatus: mockGetWebClientStatus,
   setWebClientEnabled: mockSetWebClientEnabled,
+  getGatewayTokenSettings: mockGetGatewayTokenSettings,
+  setGatewayToken: mockSetGatewayToken,
   openInBrowser: mockOpenInBrowser,
   testDomainResolution: mockTestDomainResolution,
   revealInFileManager: mock(async () => {}),
@@ -56,6 +68,8 @@ describe("GlobalSettings", () => {
     mockPropagateGithubTokenToContainers.mockClear();
     mockGetWebClientStatus.mockClear();
     mockSetWebClientEnabled.mockClear();
+    mockGetGatewayTokenSettings.mockClear();
+    mockSetGatewayToken.mockClear();
     mockOpenInBrowser.mockClear();
     mockTestDomainResolution.mockClear();
     mockToastSuccess.mockClear();
@@ -71,6 +85,16 @@ describe("GlobalSettings", () => {
       running: enabled,
       url: enabled ? "http://100.88.12.3:34121/" : null,
       error: null,
+    }));
+    mockGetGatewayTokenSettings.mockImplementation(async () => ({
+      token: "gateway-token-123456",
+      editable: true,
+      source: "file" as const,
+    }));
+    mockSetGatewayToken.mockImplementation(async (token: string) => ({
+      token: token.trim(),
+      editable: true,
+      source: "file" as const,
     }));
     window.orkestratorGateway = undefined;
 
@@ -150,6 +174,36 @@ describe("GlobalSettings", () => {
       );
       expect(mockSetWebClientEnabled).toHaveBeenCalledWith(false);
     });
+  });
+
+  test("displays, reveals, edits, and saves the gateway token", async () => {
+    const { container } = render(<GlobalSettings activeSection="web-client" />);
+    const input = await screen.findByLabelText("Gateway token") as HTMLInputElement;
+
+    expect(input.type).toBe("password");
+    expect(input.value).toBe("gateway-token-123456");
+    fireEvent.click(screen.getByRole("button", { name: "Show gateway token" }));
+    expect(input.type).toBe("text");
+
+    fireEvent.change(input, { target: { value: "replacement-token-123456" } });
+    expect(screen.getByText("Save changes to use this token for future sign-ins.")).toBeTruthy();
+    fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockSetGatewayToken).toHaveBeenCalledWith("replacement-token-123456"));
+  });
+
+  test("shows an environment-managed gateway token as read-only", async () => {
+    mockGetGatewayTokenSettings.mockResolvedValueOnce({
+      token: "environment-token-123456",
+      editable: false,
+      source: "environment",
+    });
+    render(<GlobalSettings activeSection="web-client" />);
+
+    const input = await screen.findByLabelText("Gateway token") as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("environment-token-123456"));
+    expect(input.disabled).toBe(true);
+    expect(screen.getByText(/ORKESTRATOR_GATEWAY_TOKEN/)).toBeTruthy();
   });
 
   test("starts a previously disabled web client", async () => {

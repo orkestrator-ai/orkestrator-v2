@@ -10,7 +10,7 @@ import { resolveRuntimeRoots } from "./paths.js";
 import { createMainWindow } from "./window.js";
 import { WebClientController } from "./web-client-controller.js";
 import type { AppConfig } from "./backend/models.js";
-import type { WebClientStatus } from "../src/types/webClient.js";
+import type { GatewayTokenSettings, WebClientStatus } from "../src/types/webClient.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -41,6 +41,16 @@ function setWebClientEnabled(enabled: boolean): Promise<WebClientStatus> {
   return webClientController
     ? webClientController.setEnabled(enabled)
     : Promise.resolve(getWebClientStatus());
+}
+
+function getGatewayTokenSettings(): Promise<GatewayTokenSettings> {
+  if (!webClientController) throw new Error("The web client gateway is not initialized.");
+  return webClientController.getTokenSettings();
+}
+
+function setGatewayToken(token: string): Promise<GatewayTokenSettings> {
+  if (!webClientController) throw new Error("The web client gateway is not initialized.");
+  return webClientController.setToken(token);
 }
 
 function emitToRenderers(event: string, payload: unknown): void {
@@ -111,6 +121,8 @@ function registerIpc(): void {
     nativeImageApi: nativeImage,
     getWebClientStatus,
     setWebClientEnabled,
+    getGatewayTokenSettings,
+    setGatewayToken,
   });
 }
 

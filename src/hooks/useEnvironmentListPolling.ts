@@ -12,25 +12,25 @@ export function useEnvironmentListPolling(
 ): void {
   const projectIdsRef = useRef(projectIds);
   const refreshProjectRef = useRef(refreshProject);
-  const isPollingRef = useRef(false);
+  const inFlightProjectIdsRef = useRef(new Set<string>());
 
   projectIdsRef.current = projectIds;
   refreshProjectRef.current = refreshProject;
 
   useEffect(() => {
     const poll = async () => {
-      if (isPollingRef.current) {
-        return;
-      }
+      const refreshes = projectIdsRef.current
+        .filter((projectId) => !inFlightProjectIdsRef.current.has(projectId))
+        .map(async (projectId) => {
+          inFlightProjectIdsRef.current.add(projectId);
+          try {
+            await refreshProjectRef.current(projectId);
+          } finally {
+            inFlightProjectIdsRef.current.delete(projectId);
+          }
+        });
 
-      isPollingRef.current = true;
-      try {
-        await Promise.allSettled(
-          projectIdsRef.current.map((projectId) => refreshProjectRef.current(projectId)),
-        );
-      } finally {
-        isPollingRef.current = false;
-      }
+      await Promise.allSettled(refreshes);
     };
 
     const intervalId = window.setInterval(() => {

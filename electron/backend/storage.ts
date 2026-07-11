@@ -345,6 +345,7 @@ async function exists(filePath: string): Promise<boolean> {
 export class StorageService {
   private readonly dataDir: string;
   private writeQueue = Promise.resolve();
+  private environmentMutationQueue: Promise<unknown> = Promise.resolve();
   private featurePlanMutation: Promise<unknown> = Promise.resolve();
 
   constructor(dataDir: string) {
@@ -447,6 +448,60 @@ export class StorageService {
     const next = this.writeQueue.then(operation, operation);
     this.writeQueue = next.then(() => undefined, () => undefined);
     return next;
+  }
+
+  private enqueueEnvironmentMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireEnvironmentMutationLock();
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.environmentMutationQueue.then(run, run);
+    this.environmentMutationQueue = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private async acquireEnvironmentMutationLock(): Promise<() => Promise<void>> {
+    const lockPath = `${this.environmentsFile()}.lock`;
+    const token = randomUUID();
+    const deadline = Date.now() + 20_000;
+    await fs.mkdir(path.dirname(lockPath), { recursive: true });
+
+    while (true) {
+      try {
+        const handle = await fs.open(lockPath, "wx", 0o600);
+        try {
+          await handle.writeFile(token, "utf8");
+        } catch (error) {
+          await handle.close();
+          await fs.rm(lockPath, { force: true });
+          throw error;
+        }
+        return async () => {
+          await handle.close();
+          const currentToken = await fs.readFile(lockPath, "utf8").catch(() => null);
+          if (currentToken === token) {
+            await fs.rm(lockPath, { force: true });
+          }
+        };
+      } catch (error) {
+        const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+        if (code !== "EEXIST") throw error;
+
+        const stat = await fs.stat(lockPath).catch(() => null);
+        if (stat && Date.now() - stat.mtimeMs > 15_000) {
+          await fs.rm(lockPath, { force: true });
+          continue;
+        }
+        if (Date.now() >= deadline) {
+          throw new Error("Timed out waiting for environment storage lock");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
   }
 
   private backupPath(filePath: string, index: number): string {
@@ -560,84 +615,92 @@ export class StorageService {
   }
 
   async addEnvironment(environment: Environment): Promise<Environment> {
-    const environments = await this.loadEnvironments();
-    environment.order =
-      Math.max(-1, ...environments.filter((item) => item.projectId === environment.projectId).map((item) => item.order)) + 1;
-    environments.push(environment);
-    await this.saveJson(this.environmentsFile(), environments);
-    return environment;
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      environment.order =
+        Math.max(-1, ...environments.filter((item) => item.projectId === environment.projectId).map((item) => item.order)) + 1;
+      environments.push(environment);
+      await this.saveJson(this.environmentsFile(), environments);
+      return environment;
+    });
   }
 
   async removeEnvironment(environmentId: string): Promise<void> {
-    const environments = await this.loadEnvironments();
-    const filtered = environments.filter((environment) => environment.id !== environmentId);
-    if (filtered.length === environments.length) throw new Error(`Environment not found: ${environmentId}`);
-    await this.saveJson(this.environmentsFile(), filtered);
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const filtered = environments.filter((environment) => environment.id !== environmentId);
+      if (filtered.length === environments.length) throw new Error(`Environment not found: ${environmentId}`);
+      await this.saveJson(this.environmentsFile(), filtered);
+    });
   }
 
   async updateEnvironment(environmentId: string, updates: JsonRecord): Promise<Environment> {
-    const environments = await this.loadEnvironments();
-    const environment = environments.find((candidate) => candidate.id === environmentId);
-    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
 
-    const stringFields = [
-      "name",
-      "branch",
-      "status",
-      "environmentType",
-      "worktreePath",
-      "defaultAgent",
-      "claudeMode",
-      "claudeNativeBackend",
-      "opencodeMode",
-      "codexMode",
-      "initialPrompt",
-      "createdFromCommit",
-    ] as const;
-    for (const field of stringFields) {
-      if (field in updates) {
-        (environment as unknown as Record<string, unknown>)[field] = asNullableString(updates[field]) ?? undefined;
+      const stringFields = [
+        "name",
+        "branch",
+        "status",
+        "environmentType",
+        "worktreePath",
+        "defaultAgent",
+        "claudeMode",
+        "claudeNativeBackend",
+        "opencodeMode",
+        "codexMode",
+        "initialPrompt",
+        "createdFromCommit",
+      ] as const;
+      for (const field of stringFields) {
+        if (field in updates) {
+          (environment as unknown as Record<string, unknown>)[field] = asNullableString(updates[field]) ?? undefined;
+        }
       }
-    }
 
-    if ("containerId" in updates) environment.containerId = asNullableString(updates.containerId) ?? null;
-    if ("prUrl" in updates) environment.prUrl = asNullableString(updates.prUrl) ?? null;
-    if ("prState" in updates) environment.prState = (asNullableString(updates.prState) as PrState | null | undefined) ?? null;
-    if ("hasMergeConflicts" in updates) environment.hasMergeConflicts = asOptionalBoolean(updates.hasMergeConflicts) ?? null;
-    if ("allowedDomains" in updates) environment.allowedDomains = Array.isArray(updates.allowedDomains) ? updates.allowedDomains.filter((value): value is string => typeof value === "string") : undefined;
-    if ("portMappings" in updates) environment.portMappings = Array.isArray(updates.portMappings) ? updates.portMappings as PortMapping[] : undefined;
-    if ("opencodePid" in updates) environment.opencodePid = asOptionalNumber(updates.opencodePid);
-    if ("claudeBridgePid" in updates) environment.claudeBridgePid = asOptionalNumber(updates.claudeBridgePid);
-    if ("codexBridgePid" in updates) environment.codexBridgePid = asOptionalNumber(updates.codexBridgePid);
-    if ("localOpencodePort" in updates) environment.localOpencodePort = asOptionalNumber(updates.localOpencodePort);
-    if ("localClaudePort" in updates) environment.localClaudePort = asOptionalNumber(updates.localClaudePort);
-    if ("localCodexPort" in updates) environment.localCodexPort = asOptionalNumber(updates.localCodexPort);
-    if ("entryPort" in updates) environment.entryPort = asOptionalNumber(updates.entryPort);
-    if ("hostEntryPort" in updates) environment.hostEntryPort = asOptionalNumber(updates.hostEntryPort);
-    if ("setupScriptsComplete" in updates) environment.setupScriptsComplete = asOptionalBoolean(updates.setupScriptsComplete) ?? false;
-    if ("networkAccessMode" in updates && (updates.networkAccessMode === "full" || updates.networkAccessMode === "restricted")) {
-      environment.networkAccessMode = updates.networkAccessMode;
-    }
+      if ("containerId" in updates) environment.containerId = asNullableString(updates.containerId) ?? null;
+      if ("prUrl" in updates) environment.prUrl = asNullableString(updates.prUrl) ?? null;
+      if ("prState" in updates) environment.prState = (asNullableString(updates.prState) as PrState | null | undefined) ?? null;
+      if ("hasMergeConflicts" in updates) environment.hasMergeConflicts = asOptionalBoolean(updates.hasMergeConflicts) ?? null;
+      if ("allowedDomains" in updates) environment.allowedDomains = Array.isArray(updates.allowedDomains) ? updates.allowedDomains.filter((value): value is string => typeof value === "string") : undefined;
+      if ("portMappings" in updates) environment.portMappings = Array.isArray(updates.portMappings) ? updates.portMappings as PortMapping[] : undefined;
+      if ("opencodePid" in updates) environment.opencodePid = asOptionalNumber(updates.opencodePid);
+      if ("claudeBridgePid" in updates) environment.claudeBridgePid = asOptionalNumber(updates.claudeBridgePid);
+      if ("codexBridgePid" in updates) environment.codexBridgePid = asOptionalNumber(updates.codexBridgePid);
+      if ("localOpencodePort" in updates) environment.localOpencodePort = asOptionalNumber(updates.localOpencodePort);
+      if ("localClaudePort" in updates) environment.localClaudePort = asOptionalNumber(updates.localClaudePort);
+      if ("localCodexPort" in updates) environment.localCodexPort = asOptionalNumber(updates.localCodexPort);
+      if ("entryPort" in updates) environment.entryPort = asOptionalNumber(updates.entryPort);
+      if ("hostEntryPort" in updates) environment.hostEntryPort = asOptionalNumber(updates.hostEntryPort);
+      if ("setupScriptsComplete" in updates) environment.setupScriptsComplete = asOptionalBoolean(updates.setupScriptsComplete) ?? false;
+      if ("networkAccessMode" in updates && (updates.networkAccessMode === "full" || updates.networkAccessMode === "restricted")) {
+        environment.networkAccessMode = updates.networkAccessMode;
+      }
 
-    await this.saveJson(this.environmentsFile(), environments);
-    return environment;
+      await this.saveJson(this.environmentsFile(), environments);
+      return environment;
+    });
   }
 
   async reorderEnvironments(projectId: string, environmentIds: string[]): Promise<Environment[]> {
-    const environments = await this.loadEnvironments();
-    const provided = new Set(environmentIds);
-    for (const [index, id] of environmentIds.entries()) {
-      const environment = environments.find((candidate) => candidate.id === id && candidate.projectId === projectId);
-      if (environment) environment.order = index;
-    }
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const provided = new Set(environmentIds);
+      for (const [index, id] of environmentIds.entries()) {
+        const environment = environments.find((candidate) => candidate.id === id && candidate.projectId === projectId);
+        if (environment) environment.order = index;
+      }
 
-    let order = environmentIds.length;
-    for (const environment of environments) {
-      if (environment.projectId === projectId && !provided.has(environment.id)) environment.order = order++;
-    }
+      let order = environmentIds.length;
+      for (const environment of environments) {
+        if (environment.projectId === projectId && !provided.has(environment.id)) environment.order = order++;
+      }
 
-    await this.saveJson(this.environmentsFile(), environments);
-    return environments.filter((environment) => environment.projectId === projectId).sort((a, b) => a.order - b.order);
+      await this.saveJson(this.environmentsFile(), environments);
+      return environments.filter((environment) => environment.projectId === projectId).sort((a, b) => a.order - b.order);
+    });
   }
 
   async loadConfig(): Promise<AppConfig> {
@@ -1035,15 +1098,17 @@ export class StorageService {
   }
 
   async setAllEnvironmentStatusesForContainer(containerId: string, status: EnvironmentStatus): Promise<void> {
-    const environments = await this.loadEnvironments();
-    let changed = false;
-    for (const environment of environments) {
-      if (environment.containerId === containerId) {
-        environment.status = status;
-        changed = true;
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      let changed = false;
+      for (const environment of environments) {
+        if (environment.containerId === containerId) {
+          environment.status = status;
+          changed = true;
+        }
       }
-    }
-    if (changed) await this.saveJson(this.environmentsFile(), environments);
+      if (changed) await this.saveJson(this.environmentsFile(), environments);
+    });
   }
 }
 

@@ -39,6 +39,73 @@ import { renameEnvironmentFromPrompt, updateEnvironmentAgentSettings } from "@/l
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import type { Environment, Project } from "@/types";
 
+export type SidebarReorderResult =
+  | { type: "project"; ids: string[] }
+  | { type: "environment"; projectId: string; ids: string[] };
+
+export function resolveSidebarReorder(
+  activeId: string,
+  overId: string,
+  activeType: "project" | "environment" | null,
+  projects: Project[],
+  environments: Environment[],
+): SidebarReorderResult | null {
+  if (activeId === overId) return null;
+  if (activeType === "project") {
+    const oldIndex = projects.findIndex((project) => project.id === activeId);
+    const newIndex = projects.findIndex((project) => project.id === overId);
+    if (oldIndex === -1 || newIndex === -1) return null;
+    const reordered = [...projects];
+    const [removed] = reordered.splice(oldIndex, 1);
+    if (!removed) return null;
+    reordered.splice(newIndex, 0, removed);
+    return { type: "project", ids: reordered.map((project) => project.id) };
+  }
+  if (activeType === "environment") {
+    const activeEnvironment = environments.find((environment) => environment.id === activeId);
+    const overEnvironment = environments.find((environment) => environment.id === overId);
+    if (!activeEnvironment || !overEnvironment || activeEnvironment.projectId !== overEnvironment.projectId) {
+      return null;
+    }
+    const projectEnvironments = environments
+      .filter((environment) => environment.projectId === activeEnvironment.projectId)
+      .sort((left, right) => left.order - right.order);
+    const oldIndex = projectEnvironments.findIndex((environment) => environment.id === activeId);
+    const newIndex = projectEnvironments.findIndex((environment) => environment.id === overId);
+    if (oldIndex === -1 || newIndex === -1) return null;
+    const [removed] = projectEnvironments.splice(oldIndex, 1);
+    if (!removed) return null;
+    projectEnvironments.splice(newIndex, 0, removed);
+    return {
+      type: "environment",
+      projectId: activeEnvironment.projectId,
+      ids: projectEnvironments.map((environment) => environment.id),
+    };
+  }
+  return null;
+}
+
+export async function deleteProjectAndEnvironments(
+  projectId: string,
+  environments: Environment[],
+  deleteEnvironment: (environmentId: string) => Promise<unknown>,
+  removeProject: (projectId: string) => Promise<unknown>,
+): Promise<void> {
+  const failedNames: string[] = [];
+  for (const environment of environments) {
+    try {
+      await deleteEnvironment(environment.id);
+    } catch (error) {
+      console.error(`Failed to delete environment ${environment.name}:`, error);
+      failedNames.push(environment.name);
+    }
+  }
+  if (failedNames.length > 0) {
+    throw new Error(`Failed to delete some environments: ${failedNames.join(", ")}`);
+  }
+  await removeProject(projectId);
+}
+
 export function HierarchicalSidebar() {
   // Poll git diff stats for all environments
   useEnvironmentDiffStats();
@@ -67,7 +134,7 @@ export function HierarchicalSidebar() {
 
   useEnvironmentListPolling(
     projects.map((project) => project.id),
-    (projectId) => loadEnvironments(projectId, { silent: true }),
+    (projectId) => loadEnvironments(projectId, { silent: true, reconcileStatus: false }),
   );
 
   const {
@@ -187,44 +254,16 @@ export function HierarchicalSidebar() {
     setActiveId(null);
     setActiveType(null);
 
-    if (!over || active.id === over.id) return;
-
-    if (activeType === "project") {
-      // Reorder projects
-      const oldIndex = projects.findIndex((p) => p.id === active.id);
-      const newIndex = projects.findIndex((p) => p.id === over.id);
-
-      if (oldIndex !== -1 && newIndex !== -1) {
-        const newOrder = [...projects];
-        const removed = newOrder.splice(oldIndex, 1)[0];
-        if (removed) {
-          newOrder.splice(newIndex, 0, removed);
-          await reorderProjects(newOrder.map((p) => p.id));
-        }
-      }
-    } else if (activeType === "environment") {
-      // Find which project the active environment belongs to
-      const activeEnv = allEnvironments.find((e) => e.id === active.id);
-      const overEnv = allEnvironments.find((e) => e.id === over.id);
-
-      if (activeEnv && overEnv && activeEnv.projectId === overEnv.projectId) {
-        // Same project - reorder within project
-        const projectId = activeEnv.projectId;
-        const projectEnvs = getProjectEnvironments(projectId);
-
-        const oldIndex = projectEnvs.findIndex((e) => e.id === active.id);
-        const newIndex = projectEnvs.findIndex((e) => e.id === over.id);
-
-        if (oldIndex !== -1 && newIndex !== -1) {
-          const newOrder = [...projectEnvs];
-          const removed = newOrder.splice(oldIndex, 1)[0];
-          if (removed) {
-            newOrder.splice(newIndex, 0, removed);
-            await reorderEnvironments(projectId, newOrder.map((e) => e.id));
-          }
-        }
-      }
-    }
+    if (!over) return;
+    const reorder = resolveSidebarReorder(
+      String(active.id),
+      String(over.id),
+      activeType,
+      projects,
+      allEnvironments,
+    );
+    if (reorder?.type === "project") await reorderProjects(reorder.ids);
+    if (reorder?.type === "environment") await reorderEnvironments(reorder.projectId, reorder.ids);
   };
 
   const handleAddProject = async (gitUrl: string, localPath?: string) => {
@@ -237,26 +276,9 @@ export function HierarchicalSidebar() {
   };
 
   const handleDeleteProject = async (projectId: string) => {
-    // First delete all environments for this project
     const projectEnvs = getProjectEnvironments(projectId);
-    const failedEnvs: string[] = [];
-
-    for (const env of projectEnvs) {
-      try {
-        await deleteEnvironment(env.id);
-      } catch (err) {
-        console.error(`Failed to delete environment ${env.name}:`, err);
-        failedEnvs.push(env.name);
-      }
-    }
-
-    if (failedEnvs.length > 0) {
-      console.error(`Failed to delete environments: ${failedEnvs.join(", ")}. Project deletion aborted.`);
-      throw new Error(`Failed to delete some environments: ${failedEnvs.join(", ")}`);
-    }
-
     try {
-      await removeProject(projectId);
+      await deleteProjectAndEnvironments(projectId, projectEnvs, deleteEnvironment, removeProject);
       // Clean up the loaded projects ref since project is deleted
       loadedProjectIdsRef.current.delete(projectId);
     } catch (err) {

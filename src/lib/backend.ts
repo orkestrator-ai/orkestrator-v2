@@ -73,6 +73,14 @@ export async function getEnvironments(projectId: string): Promise<Environment[]>
   return invoke<Environment[]>("get_environments", { projectId });
 }
 
+/**
+ * Read the persisted environment list without reconciling Docker state.
+ * Intended for frequent cross-client snapshot refreshes.
+ */
+export async function getEnvironmentSnapshots(projectId: string): Promise<Environment[]> {
+  return invoke<Environment[]>("get_environment_snapshots", { projectId });
+}
+
 export async function reorderEnvironments(projectId: string, environmentIds: string[]): Promise<Environment[]> {
   return invoke<Environment[]>("reorder_environments", { projectId, environmentIds });
 }

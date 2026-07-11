@@ -7,6 +7,7 @@ import { createMockEnvironment } from "../utils/testFactories";
 
 // Mock backend module BEFORE importing the hook
 const mockGetEnvironments = mock<(projectId: string) => Promise<Environment[]>>(() => Promise.resolve([]));
+const mockGetEnvironmentSnapshots = mock<(projectId: string) => Promise<Environment[]>>(() => Promise.resolve([]));
 const mockGetEnvironment = mock<(environmentId: string) => Promise<Environment | null>>(() => Promise.resolve(null));
 const mockCreateEnvironment = mock<(
   projectId: string,
@@ -25,16 +26,25 @@ const mockStopEnvironment = mock<(environmentId: string) => Promise<void>>(() =>
 const mockSyncEnvironmentStatus = mock<(environmentId: string) => Promise<Environment>>((environmentId) =>
   Promise.resolve(createMockEnvironment({ id: environmentId, containerId: "container-123", status: "running" }))
 );
+const mockReorderEnvironments = mock<(projectId: string, environmentIds: string[]) => Promise<Environment[]>>(
+  () => Promise.resolve([]),
+);
+const mockUpdatePortMappings = mock<(environmentId: string, portMappings: PortMapping[]) => Promise<Environment>>(
+  (environmentId) => Promise.resolve(createMockEnvironment({ id: environmentId })),
+);
 const mockClearEnvironmentPr = mock<(environmentId: string) => Promise<void>>(() => Promise.resolve());
 
 mock.module("@/lib/backend", () => ({
   getEnvironments: mockGetEnvironments,
+  getEnvironmentSnapshots: mockGetEnvironmentSnapshots,
   getEnvironment: mockGetEnvironment,
   createEnvironment: mockCreateEnvironment,
   deleteEnvironment: mockDeleteEnvironment,
   startEnvironment: mockStartEnvironment,
   stopEnvironment: mockStopEnvironment,
   syncEnvironmentStatus: mockSyncEnvironmentStatus,
+  reorderEnvironments: mockReorderEnvironments,
+  updatePortMappings: mockUpdatePortMappings,
   clearEnvironmentPr: mockClearEnvironmentPr,
 }));
 
@@ -74,17 +84,21 @@ describe("useEnvironments", () => {
 
     // Reset mocks
     mockGetEnvironments.mockClear();
+    mockGetEnvironmentSnapshots.mockClear();
     mockGetEnvironment.mockClear();
     mockCreateEnvironment.mockClear();
     mockDeleteEnvironment.mockClear();
     mockStartEnvironment.mockClear();
     mockStopEnvironment.mockClear();
     mockSyncEnvironmentStatus.mockClear();
+    mockReorderEnvironments.mockClear();
+    mockUpdatePortMappings.mockClear();
     mockClearEnvironmentPr.mockClear();
     mockListen.mockClear();
 
     // Reset to default implementations
     mockGetEnvironments.mockImplementation(() => Promise.resolve([]));
+    mockGetEnvironmentSnapshots.mockImplementation(() => Promise.resolve([]));
     mockGetEnvironment.mockImplementation(() => Promise.resolve(null));
     mockCreateEnvironment.mockImplementation((projectId) =>
       Promise.resolve(createMockEnvironment({ id: "new-env-id", projectId, name: "test-env" }))
@@ -94,6 +108,10 @@ describe("useEnvironments", () => {
     mockStopEnvironment.mockImplementation(() => Promise.resolve());
     mockSyncEnvironmentStatus.mockImplementation((environmentId) =>
       Promise.resolve(createMockEnvironment({ id: environmentId, containerId: "container-123", status: "running" }))
+    );
+    mockReorderEnvironments.mockImplementation(() => Promise.resolve([]));
+    mockUpdatePortMappings.mockImplementation((environmentId) =>
+      Promise.resolve(createMockEnvironment({ id: environmentId }))
     );
     mockClearEnvironmentPr.mockImplementation(() => Promise.resolve());
     mockListen.mockImplementation(() => Promise.resolve(() => {}));
@@ -123,24 +141,50 @@ describe("useEnvironments", () => {
     expect(result.current.environments[0]?.id).toBe("env-1");
   });
 
-  test("silently refreshes environments without changing loading or error state", async () => {
+  test("silently refreshes read-only snapshots without changing loading or error state", async () => {
     const refreshedEnvironment = createMockEnvironment({
       id: "env-1",
       projectId: "project-1",
       name: "created-in-another-client",
     });
-    mockGetEnvironments.mockImplementation(() => Promise.resolve([refreshedEnvironment]));
+    mockGetEnvironmentSnapshots.mockImplementation(() => Promise.resolve([refreshedEnvironment]));
     useEnvironmentStore.setState({ error: "Existing visible error", isLoading: false });
 
     const { result } = renderHook(() => useEnvironments(null));
 
     await act(async () => {
-      await result.current.loadEnvironments("project-1", { silent: true });
+      await result.current.loadEnvironments("project-1", { silent: true, reconcileStatus: false });
     });
 
     expect(result.current.allEnvironments).toEqual([refreshedEnvironment]);
     expect(result.current.isLoading).toBe(false);
     expect(result.current.error).toBe("Existing visible error");
+    expect(mockGetEnvironmentSnapshots).toHaveBeenCalledWith("project-1");
+    expect(mockGetEnvironments).not.toHaveBeenCalled();
+  });
+
+  test("keeps visible state unchanged when a silent snapshot refresh fails", async () => {
+    const consoleWarn = console.warn;
+    const warnMock = mock(() => undefined);
+    console.warn = warnMock as typeof console.warn;
+    mockGetEnvironmentSnapshots.mockImplementation(() => Promise.reject(new Error("snapshot unavailable")));
+    useEnvironmentStore.setState({ error: "Existing visible error", isLoading: false });
+    const { result } = renderHook(() => useEnvironments(null));
+
+    try {
+      await act(async () => {
+        await result.current.loadEnvironments("project-1", { silent: true, reconcileStatus: false });
+      });
+    } finally {
+      console.warn = consoleWarn;
+    }
+
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.error).toBe("Existing visible error");
+    expect(warnMock).toHaveBeenCalledWith(
+      "[useEnvironments] Failed to refresh environments for project project-1:",
+      "snapshot unavailable",
+    );
   });
 
   test("createEnvironment creates an environment successfully", async () => {
@@ -629,6 +673,156 @@ describe("useEnvironments", () => {
     expect(result.current.allEnvironments[0]?.containerId).toBe("container-123");
   });
 
+  test("syncEnvironmentStatus leaves state unchanged when synchronization fails", async () => {
+    const existingEnv = createMockEnvironment({ id: "env-1", projectId: "project-1", status: "running" });
+    useEnvironmentStore.setState({ environments: [existingEnv] });
+    mockSyncEnvironmentStatus.mockImplementation(() => Promise.reject(new Error("docker unavailable")));
+    const consoleError = console.error;
+    const errorMock = mock(() => undefined);
+    console.error = errorMock as typeof console.error;
+    const { result } = renderHook(() => useEnvironments(null));
+
+    try {
+      let synced: Environment | undefined;
+      await act(async () => {
+        synced = await result.current.syncEnvironmentStatus("env-1");
+      });
+      expect(synced).toBeUndefined();
+    } finally {
+      console.error = consoleError;
+    }
+
+    expect(result.current.allEnvironments).toEqual([existingEnv]);
+    expect(errorMock).toHaveBeenCalled();
+  });
+
+  test("restartEnvironment stops, disconnects, and starts the environment", async () => {
+    const existingEnv = createMockEnvironment({ id: "env-1", projectId: "project-1", status: "running" });
+    useEnvironmentStore.setState({ environments: [existingEnv] });
+    mockGetEnvironment.mockImplementation(() => Promise.resolve({ ...existingEnv, status: "running" }));
+    const { result } = renderHook(() => useEnvironments(null));
+
+    await act(async () => {
+      await result.current.restartEnvironment("env-1");
+    });
+
+    expect(mockStopEnvironment).toHaveBeenCalledWith("env-1");
+    expect(mockStartEnvironment).toHaveBeenCalledWith("env-1");
+    expect(result.current.allEnvironments[0]?.status).toBe("running");
+  });
+
+  test("restartEnvironment records an error when stopping fails", async () => {
+    const existingEnv = createMockEnvironment({ id: "env-1", projectId: "project-1", status: "running" });
+    useEnvironmentStore.setState({ environments: [existingEnv] });
+    mockStopEnvironment.mockImplementation(() => Promise.reject(new Error("stop failed")));
+    const { result } = renderHook(() => useEnvironments(null));
+
+    let thrownError: Error | undefined;
+    try {
+      await act(async () => {
+        await result.current.restartEnvironment("env-1");
+      });
+    } catch (error) {
+      thrownError = error as Error;
+    }
+
+    expect(thrownError?.message).toBe("stop failed");
+    expect(result.current.error).toBe("stop failed");
+    expect(result.current.allEnvironments[0]?.status).toBe("error");
+  });
+
+  test("setEnvironmentPR updates PR state", async () => {
+    const existingEnv = createMockEnvironment({ id: "env-1", projectId: "project-1" });
+    useEnvironmentStore.setState({ environments: [existingEnv] });
+    const { result } = renderHook(() => useEnvironments(null));
+
+    await act(async () => {
+      await result.current.setEnvironmentPR("env-1", "https://github.com/acme/repo/pull/1", "open");
+    });
+
+    expect(result.current.allEnvironments[0]).toMatchObject({
+      prUrl: "https://github.com/acme/repo/pull/1",
+      prState: "open",
+    });
+  });
+
+  test("reorderEnvironments persists and merges the backend order", async () => {
+    const first = createMockEnvironment({ id: "env-1", projectId: "project-1", order: 0 });
+    const second = createMockEnvironment({ id: "env-2", projectId: "project-1", order: 1 });
+    useEnvironmentStore.setState({ environments: [first, second] });
+    mockReorderEnvironments.mockImplementation(() => Promise.resolve([
+      { ...second, order: 0 },
+      { ...first, order: 1 },
+    ]));
+    const { result } = renderHook(() => useEnvironments(null));
+
+    await act(async () => {
+      await result.current.reorderEnvironments("project-1", ["env-2", "env-1"]);
+    });
+
+    expect(mockReorderEnvironments).toHaveBeenCalledWith("project-1", ["env-2", "env-1"]);
+    expect(result.current.allEnvironments.map((environment) => environment.id)).toEqual(["env-2", "env-1"]);
+  });
+
+  test("reorderEnvironments reloads the authoritative order after persistence fails", async () => {
+    const first = createMockEnvironment({ id: "env-1", projectId: "project-1", order: 0 });
+    const second = createMockEnvironment({ id: "env-2", projectId: "project-1", order: 1 });
+    useEnvironmentStore.setState({ environments: [first, second] });
+    mockReorderEnvironments.mockImplementation(() => Promise.reject(new Error("write failed")));
+    mockGetEnvironments.mockImplementation(() => Promise.resolve([first, second]));
+    const { result } = renderHook(() => useEnvironments(null));
+
+    let thrownError: Error | undefined;
+    try {
+      await act(async () => {
+        await result.current.reorderEnvironments("project-1", ["env-2", "env-1"]);
+      });
+    } catch (error) {
+      thrownError = error as Error;
+    }
+
+    expect(thrownError?.message).toBe("write failed");
+    expect(mockGetEnvironments).toHaveBeenCalledWith("project-1");
+    expect(result.current.allEnvironments.map((environment) => environment.id)).toEqual(["env-1", "env-2"]);
+  });
+
+  test("updatePortMappings updates the environment and reports failures", async () => {
+    const existingEnv = createMockEnvironment({ id: "env-1", projectId: "project-1" });
+    const portMappings: PortMapping[] = [{ hostPort: 3000, containerPort: 3000, protocol: "tcp" }];
+    useEnvironmentStore.setState({ environments: [existingEnv] });
+    mockUpdatePortMappings.mockImplementation(() => Promise.resolve({ ...existingEnv, portMappings }));
+    const { result } = renderHook(() => useEnvironments(null));
+
+    await act(async () => {
+      await result.current.updatePortMappings("env-1", portMappings);
+    });
+    expect(result.current.allEnvironments[0]?.portMappings).toEqual(portMappings);
+
+    mockUpdatePortMappings.mockImplementation(() => Promise.reject(new Error("port update failed")));
+    let thrownError: Error | undefined;
+    try {
+      await act(async () => {
+        await result.current.updatePortMappings("env-1", []);
+      });
+    } catch (error) {
+      thrownError = error as Error;
+    }
+    expect(thrownError?.message).toBe("port update failed");
+    expect(result.current.error).toBe("port update failed");
+  });
+
+  test("exposes direct environment updates", () => {
+    const existingEnv = createMockEnvironment({ id: "env-1", projectId: "project-1", name: "before" });
+    useEnvironmentStore.setState({ environments: [existingEnv] });
+    const { result } = renderHook(() => useEnvironments(null));
+
+    act(() => {
+      result.current.updateEnvironment("env-1", { name: "after" });
+    });
+
+    expect(result.current.allEnvironments[0]?.name).toBe("after");
+  });
+
   test("getEnvironmentsByProjectId filters environments correctly", async () => {
     const envs: Environment[] = [
       createMockEnvironment({ id: "env-1", projectId: "project-1", name: "test-env-1" }),
@@ -675,6 +869,103 @@ describe("useEnvironments", () => {
 
     expect(result.current.error).toBe("Network error");
     expect(result.current.environments).toEqual([]);
+  });
+
+  test("applies backend-owned setup start and completion events", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      environmentType: "local",
+      setupScriptsComplete: false,
+    });
+    useEnvironmentStore.setState({ environments: [environment] });
+    const callbacks = new Map<string, (event: { payload: any }) => void>();
+    mockListen.mockImplementation((eventName: string, callback: (event: { payload: any }) => void) => {
+      callbacks.set(eventName, callback);
+      return Promise.resolve(() => {});
+    });
+    renderHook(() => useEnvironments(null));
+
+    await waitFor(() => {
+      expect(callbacks.has("environment-setup-started")).toBe(true);
+      expect(callbacks.has("environment-setup-complete")).toBe(true);
+    });
+
+    act(() => {
+      callbacks.get("environment-setup-started")?.({
+        payload: { environment_id: "env-1", session_id: "setup-1", environment },
+      });
+    });
+    let state = useEnvironmentStore.getState();
+    expect(state.isSetupCommandsResolved("env-1")).toBe(true);
+    expect(state.isSetupScriptsRunning("env-1")).toBe(true);
+    expect(state.isWorkspaceReady("env-1")).toBe(false);
+
+    const completedEnvironment = { ...environment, setupScriptsComplete: true };
+    act(() => {
+      callbacks.get("environment-setup-complete")?.({
+        payload: { environment_id: "env-1", success: true, environment: completedEnvironment },
+      });
+    });
+    state = useEnvironmentStore.getState();
+    expect(state.getEnvironmentById("env-1")?.setupScriptsComplete).toBe(true);
+    expect(state.isSetupScriptsRunning("env-1")).toBe(false);
+    expect(state.isWorkspaceReady("env-1")).toBe(true);
+  });
+
+  test("does not mark the workspace ready after a failed setup completion event", async () => {
+    const environment = createMockEnvironment({ id: "env-1", projectId: "project-1" });
+    useEnvironmentStore.setState({ environments: [environment] });
+    let completeCallback: ((event: { payload: any }) => void) | undefined;
+    mockListen.mockImplementation((eventName: string, callback: (event: { payload: any }) => void) => {
+      if (eventName === "environment-setup-complete") completeCallback = callback;
+      return Promise.resolve(() => {});
+    });
+    renderHook(() => useEnvironments(null));
+    await waitFor(() => expect(completeCallback).toBeDefined());
+
+    act(() => {
+      completeCallback?.({ payload: { environment_id: "env-1", success: false, error: "setup failed" } });
+    });
+
+    const state = useEnvironmentStore.getState();
+    expect(state.isSetupScriptsRunning("env-1")).toBe(false);
+    expect(state.isWorkspaceReady("env-1")).toBe(false);
+  });
+
+  test("can disable rename events while keeping setup lifecycle listeners", async () => {
+    const eventNames: string[] = [];
+    mockListen.mockImplementation((eventName: string) => {
+      eventNames.push(eventName);
+      return Promise.resolve(() => {});
+    });
+    renderHook(() => useEnvironments(null, { listenForRenameEvents: false }));
+
+    await waitFor(() => expect(eventNames).toContain("environment-setup-complete"));
+    expect(eventNames).not.toContain("environment-renamed");
+  });
+
+  test("disposes listeners that finish registering after unmount", async () => {
+    const resolvers: Array<(unlisten: () => void) => void> = [];
+    const unlisteners = [mock(() => {}), mock(() => {}), mock(() => {})];
+    mockListen.mockImplementation(() => new Promise((resolve) => {
+      resolvers.push(resolve);
+    }));
+    const { unmount } = renderHook(() => useEnvironments(null));
+    await waitFor(() => expect(resolvers).toHaveLength(2));
+
+    unmount();
+    await act(async () => {
+      resolvers[0]?.(unlisteners[0]!);
+      resolvers[1]?.(unlisteners[1]!);
+      await Promise.resolve();
+      resolvers[2]?.(unlisteners[2]!);
+      await Promise.resolve();
+    });
+
+    expect(unlisteners[0]).toHaveBeenCalledTimes(1);
+    expect(unlisteners[1]).toHaveBeenCalledTimes(1);
+    expect(unlisteners[2]).toHaveBeenCalledTimes(1);
   });
 
   // --- environment-renamed event listener tests ---

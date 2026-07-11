@@ -183,6 +183,56 @@ describe("Electron StorageService", () => {
     await expect(storage.removeProject(secondProject.id)).rejects.toThrow("Project not found");
   });
 
+  test("preserves concurrent environment mutations across storage instances", async () => {
+    const dataDir = await createTempDir("ork-storage-concurrent-environments-");
+    const firstStorage = new StorageService(dataDir);
+    const secondStorage = new StorageService(dataDir);
+    await Promise.all([firstStorage.init(), secondStorage.init()]);
+
+    const environments = Array.from({ length: 12 }, (_, index) =>
+      createEnvironment("project-1", { name: `environment-${index}` })
+    );
+    await Promise.all(
+      environments.map((environment, index) =>
+        (index % 2 === 0 ? firstStorage : secondStorage).addEnvironment(environment)
+      ),
+    );
+
+    const persisted = await firstStorage.getEnvironmentsByProject("project-1");
+    expect(persisted).toHaveLength(environments.length);
+    expect(new Set(persisted.map((environment) => environment.id)).size).toBe(environments.length);
+    expect(new Set(persisted.map((environment) => environment.order)).size).toBe(environments.length);
+
+    await Promise.all(
+      persisted.map((environment, index) =>
+        (index % 2 === 0 ? firstStorage : secondStorage).updateEnvironment(environment.id, {
+          status: index % 2 === 0 ? "running" : "stopped",
+          name: `updated-${index}`,
+        })
+      ),
+    );
+
+    const updated = await secondStorage.getEnvironmentsByProject("project-1");
+    expect(updated.map((environment) => environment.name).sort()).toEqual(
+      Array.from({ length: environments.length }, (_, index) => `updated-${index}`).sort(),
+    );
+  });
+
+  test("recovers an abandoned environment mutation lock", async () => {
+    const dataDir = await createTempDir("ork-storage-stale-environment-lock-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const lockPath = path.join(dataDir, "environments.json.lock");
+    await fs.writeFile(lockPath, "abandoned");
+    const staleTime = new Date(Date.now() - 20_000);
+    await fs.utimes(lockPath, staleTime, staleTime);
+
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+
+    expect((await storage.getEnvironment(environment.id))?.id).toBe(environment.id);
+    await expect(fs.access(lockPath)).rejects.toThrow();
+  });
+
   test("round-trips max and ultra Codex reasoning preferences", async () => {
     const dataDir = await createTempDir("ork-storage-codex-effort-");
     const storage = new StorageService(dataDir);

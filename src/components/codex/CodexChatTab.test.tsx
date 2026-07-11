@@ -92,6 +92,7 @@ mock.module("./CodexComposeBar", () => ({
     onStop,
     onModeChange,
     onFastModeChange,
+    onQueue,
     disabled,
     isLoading,
     showAddressAll,
@@ -101,6 +102,7 @@ mock.module("./CodexComposeBar", () => ({
     onStop?: () => Promise<void>;
     onModeChange?: (mode: "build" | "plan") => Promise<void>;
     onFastModeChange?: (enabled: boolean) => void;
+    onQueue?: (text: string, attachments: typeof composeAttachments) => void;
     disabled?: boolean;
     isLoading?: boolean;
     showAddressAll?: boolean;
@@ -120,6 +122,9 @@ mock.module("./CodexComposeBar", () => ({
         }}
       >
         Send
+      </button>
+      <button type="button" data-testid="codex-queue" onClick={() => onQueue?.(composeText, composeAttachments)}>
+        Queue
       </button>
       {isLoading ? (
         <button
@@ -475,6 +480,22 @@ describe("CodexChatTab", () => {
         composeText,
         { attachments: undefined },
       );
+    });
+    const optimistic = useCodexStore.getState().getSession(SESSION_KEY)?.messages.find(
+      (message) => message.role === "user" && message.content === composeText,
+    );
+    expect(optimistic?.id).toMatch(/^optimistic-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
+  test("queues prompts with a generated UUID", async () => {
+    composeText = "Queue this prompt";
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+    fireEvent.click(screen.getByTestId("codex-queue"));
+    await waitFor(() => {
+      const queued = useCodexStore.getState().messageQueue.get(SESSION_KEY)?.[0];
+      expect(queued?.text).toBe(composeText);
+      expect(queued?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     });
   });
 

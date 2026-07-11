@@ -136,8 +136,11 @@ describe("createStoryCardsFromParsedState", () => {
     });
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({ title: "New story", description: "d", acceptanceCriteria: ["a"] });
-    expect(cards[0]?.id).toBeTruthy();
-    expect(cards[0]?.messages[0]).toMatchObject({ role: "assistant" });
+    expect(cards[0]?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(cards[0]?.messages[0]).toMatchObject({
+      id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+      role: "assistant",
+    });
   });
 
   test("coerces a non-array acceptanceCriteria to an empty array", () => {

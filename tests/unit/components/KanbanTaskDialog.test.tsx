@@ -26,6 +26,9 @@ const getKanbanImageDataMock = mock(async () => "");
 const detectPrMock = mock(async () => null as { url: string; state: "open" | "merged" | "closed"; hasMergeConflicts: boolean } | null);
 const detectPrLocalMock = mock(async () => null as { url: string; state: "open" | "merged" | "closed"; hasMergeConflicts: boolean } | null);
 const openInBrowserMock = mock(async () => {});
+const readImageMock = mock(async () => {
+  throw new Error("no image");
+});
 
 const addTaskMock = mock(async (_projectId: string, _title: string, _description: string) => "task-created");
 const updateTaskMock = mock(async (_taskId: string, _updates: KanbanTaskUpdates) => {});
@@ -70,9 +73,7 @@ mock.module("@/lib/backend", () => ({
 
 mock.module("@/lib/native/clipboard", () => ({
   ...realClipboardSnapshot,
-  readImage: mock(async () => {
-    throw new Error("no image");
-  }),
+  readImage: readImageMock,
 }));
 
 const { KanbanTaskDialog } = await import("@/components/kanban/KanbanTaskDialog");
@@ -80,6 +81,19 @@ const { useKanbanStore } = await import("@/stores/kanbanStore");
 const { useEnvironmentStore } = await import("@/stores/environmentStore");
 const initialKanbanState = useKanbanStore.getState();
 const initialEnvironmentState = useEnvironmentStore.getState();
+const originalGetContext = HTMLCanvasElement.prototype.getContext;
+const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+const putImageDataMock = mock(() => {});
+
+if (typeof globalThis.ImageData === "undefined") {
+  (globalThis as Record<string, unknown>).ImageData = class ImageData {
+    constructor(
+      public data: Uint8ClampedArray,
+      public width: number,
+      public height: number,
+    ) {}
+  };
+}
 
 function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
   return {
@@ -182,6 +196,10 @@ describe("KanbanTaskDialog", () => {
     detectPrLocalMock.mockClear();
     detectPrLocalMock.mockImplementation(async () => null);
     openInBrowserMock.mockClear();
+    readImageMock.mockClear();
+    readImageMock.mockImplementation(async () => {
+      throw new Error("no image");
+    });
     addTaskMock.mockClear();
     addTaskMock.mockImplementation(async () => "task-created");
     updateTaskMock.mockClear();
@@ -194,11 +212,19 @@ describe("KanbanTaskDialog", () => {
     deleteImageMock.mockClear();
     resetStores();
     installKanbanActionMocks();
+    putImageDataMock.mockClear();
+    HTMLCanvasElement.prototype.getContext = (() => ({
+      putImageData: putImageDataMock,
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.toDataURL = (() =>
+      "data:image/png;base64,QUJD") as typeof HTMLCanvasElement.prototype.toDataURL;
   });
 
   afterEach(() => {
     cleanup();
     resetStores();
+    HTMLCanvasElement.prototype.getContext = originalGetContext;
+    HTMLCanvasElement.prototype.toDataURL = originalToDataURL;
   });
 
   afterAll(() => {
@@ -486,6 +512,105 @@ describe("KanbanTaskDialog", () => {
     await waitFor(() => {
       expect(addTaskMock).toHaveBeenCalledWith("project-1", "Task with image", "");
       expect(addImageMock).toHaveBeenCalledWith("task-created", "attached.png", expect.any(String));
+    });
+  });
+
+  test("rejects non-image and oversized attachments", async () => {
+    render(
+      <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
+    );
+    const fileInput = document.querySelector<HTMLInputElement>("input[type='file']")!;
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["text"], "notes.txt", { type: "text/plain" })] },
+    });
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Only image files are supported"));
+
+    toastErrorMock.mockClear();
+    const oversized = new File(["x"], "large.png", { type: "image/png" });
+    Object.defineProperty(oversized, "size", { value: 5 * 1024 * 1024 + 1 });
+    fireEvent.change(fileInput, { target: { files: [oversized] } });
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Image is too large (max 5 MB)"));
+    expect(screen.queryByAltText("notes.txt")).toBeNull();
+    expect(screen.queryByAltText("large.png")).toBeNull();
+  });
+
+  test("reports failed image persistence after creating a task", async () => {
+    addImageMock.mockRejectedValueOnce(new Error("disk full"));
+    render(
+      <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
+    );
+    fireEvent.change(screen.getByPlaceholderText("Task title..."), { target: { value: "Image failure" } });
+    const fileInput = document.querySelector<HTMLInputElement>("input[type='file']")!;
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["image"], "failure.png", { type: "image/png" })] },
+    });
+    await screen.findByAltText("failure.png");
+    fireEvent.click(screen.getByRole("button", { name: "Create Task" }));
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Failed to save 1 image"));
+  });
+
+  test("reports when a newly created task cannot be found for building", async () => {
+    render(
+      <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
+    );
+    fireEvent.change(screen.getByPlaceholderText("Task title..."), { target: { value: "Missing build task" } });
+    fireEvent.click(screen.getByRole("button", { name: "Build Container" }));
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith("Task created but could not start build");
+    });
+    expect(startBuildMock).not.toHaveBeenCalled();
+  });
+
+  test("creates a task and starts its local build", async () => {
+    const createdTask = makeTask({ id: "task-created", title: "Created build task" });
+    addTaskMock.mockImplementationOnce(async () => {
+      useKanbanStore.setState({ tasks: [createdTask] });
+      return createdTask.id;
+    });
+    render(
+      <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
+    );
+    fireEvent.change(screen.getByPlaceholderText("Task title..."), { target: { value: createdTask.title } });
+    fireEvent.click(screen.getByRole("button", { name: "Build Local" }));
+    await waitFor(() => expect(startBuildMock).toHaveBeenCalledWith(createdTask, "local"));
+  });
+
+  test("create mode attaches a pasted clipboard image with a generated UUID", async () => {
+    readImageMock.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+
+    render(
+      <KanbanTaskDialog
+        task={null}
+        open
+        onOpenChange={() => {}}
+        createForProjectId="project-1"
+      />,
+    );
+
+    const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+    document.dispatchEvent(pasteEvent);
+
+    await waitFor(() => {
+      expect(readImageMock).toHaveBeenCalledTimes(1);
+      expect(screen.getByAltText(/^clipboard-.*\.png$/)).toBeTruthy();
+      expect(toastSuccessMock).toHaveBeenCalledWith("Image pasted");
+    });
+    expect(pasteEvent.defaultPrevented).toBe(true);
+
+    fireEvent.change(screen.getByPlaceholderText("Task title..."), {
+      target: { value: "Pasted image task" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create Task" }));
+
+    await waitFor(() => {
+      expect(addImageMock).toHaveBeenCalledWith(
+        "task-created",
+        expect.stringMatching(/^clipboard-.*\.png$/),
+        expect.any(String),
+      );
     });
   });
 

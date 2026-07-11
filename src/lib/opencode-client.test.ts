@@ -1,16 +1,26 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   buildOpenCodeMessageFromPart,
+  abortSession,
   createClient,
+  createSession,
+  deleteSession,
   formatOpenCodeError,
   getAvailableSlashCommands,
+  getModels,
   getModelsWithDefaults,
   getOpenCodePartKey,
+  getPendingPermissions,
+  getPendingQuestions,
   getSessionMessages,
   listSessions,
   normalizeOpenCodeMessage,
   normalizeOpenCodePart,
+  rejectQuestion,
+  replyToPermission,
+  replyToQuestion,
   sendPrompt,
+  subscribeToEvents,
   type OpencodeClient,
   type OpenCodeMessage,
 } from "./opencode-client";
@@ -938,5 +948,185 @@ describe("opencode-client formatOpenCodeError", () => {
     expect(errorText).not.toContain("top-secret-token");
     expect(errorText).not.toContain("sk-secret-key");
     expect(errorText).not.toContain("refresh-secret");
+  });
+});
+
+describe("opencode-client session lifecycle", () => {
+  test("creates sessions and normalizes numeric and string timestamps", async () => {
+    const create = mock(async ({ title }: { title?: string }) => ({
+      data: { id: `session-${title}`, title, time: { created: title === "numeric" ? 1_700_000_000_000 : "2026-01-02T03:04:05.000Z" } },
+    }));
+    const client = { session: { create } } as unknown as OpencodeClient;
+
+    expect(await createSession(client, "numeric")).toEqual({
+      id: "session-numeric",
+      title: "numeric",
+      createdAt: new Date(1_700_000_000_000).toISOString(),
+    });
+    expect((await createSession(client, "string")).createdAt).toBe("2026-01-02T03:04:05.000Z");
+  });
+
+  test("rejects an empty create response", async () => {
+    const client = { session: { create: async () => ({ data: undefined }) } } as unknown as OpencodeClient;
+    await expect(createSession(client)).rejects.toThrow("empty session response");
+  });
+
+  test("returns empty messages for empty responses and transport failures", async () => {
+    const empty = { session: { messages: async () => ({ data: undefined }) } } as unknown as OpencodeClient;
+    const failed = { session: { messages: async () => { throw new Error("offline"); } } } as unknown as OpencodeClient;
+
+    expect(await getSessionMessages(empty, "session-1")).toEqual([]);
+    expect(await getSessionMessages(failed, "session-1")).toEqual([]);
+  });
+
+  test("deletes and aborts sessions on success and reports failures", async () => {
+    const deleteCall = mock(async () => ({}));
+    const abortCall = mock(async () => ({}));
+    const client = { session: { delete: deleteCall, abort: abortCall } } as unknown as OpencodeClient;
+
+    expect(await deleteSession(client, "session-1")).toBe(true);
+    expect(await abortSession(client, "session-1")).toBe(true);
+    expect(deleteCall).toHaveBeenCalledWith({ sessionID: "session-1" });
+    expect(abortCall).toHaveBeenCalledWith({ sessionID: "session-1" });
+
+    const failed = {
+      session: {
+        delete: async () => { throw new Error("delete failed"); },
+        abort: async () => { throw new Error("abort failed"); },
+      },
+    } as unknown as OpencodeClient;
+    expect(await deleteSession(failed, "session-1")).toBe(false);
+    expect(await abortSession(failed, "session-1")).toBe(false);
+  });
+
+  test("lists empty sessions and normalizes string and missing timestamps", async () => {
+    const empty = { session: { list: async () => ({ data: undefined }) } } as unknown as OpencodeClient;
+    expect(await listSessions(empty)).toEqual([]);
+
+    const client = {
+      session: {
+        list: async () => ({ data: [
+          { id: "string", title: "String", time: { created: "2026-02-03T04:05:06.000Z" } },
+          { id: "missing", title: "Missing", time: {} },
+        ] }),
+      },
+    } as unknown as OpencodeClient;
+    const sessions = await listSessions(client);
+    expect(sessions[0]?.createdAt).toBe("2026-02-03T04:05:06.000Z");
+    expect(Number.isNaN(Date.parse(sessions[1]?.createdAt ?? ""))).toBe(false);
+  });
+});
+
+describe("opencode-client events and pending requests", () => {
+  test("subscribes through stream and directly iterable response shapes", async () => {
+    const stream = (async function* () { yield { type: "session.updated" }; })();
+    const wrapped = { event: { subscribe: async () => ({ stream }) } } as unknown as OpencodeClient;
+    expect(await subscribeToEvents(wrapped)).toBe(stream);
+
+    const direct = (async function* () { yield { type: "session.updated" }; })();
+    const directClient = { event: { subscribe: async () => direct } } as unknown as OpencodeClient;
+    expect(await subscribeToEvents(directClient)).toBe(direct);
+  });
+
+  test("returns null for invalid or failed event subscriptions", async () => {
+    const invalid = { event: { subscribe: async () => ({}) } } as unknown as OpencodeClient;
+    const failed = { event: { subscribe: async () => { throw new Error("stream failed"); } } } as unknown as OpencodeClient;
+    expect(await subscribeToEvents(invalid)).toBeNull();
+    expect(await subscribeToEvents(failed)).toBeNull();
+  });
+
+  test("lists pending questions and permissions, including empty and failed responses", async () => {
+    const client = {
+      question: { list: async () => ({ data: [{ id: "question-1", questions: [] }] }) },
+      permission: { list: async () => ({ data: [{ id: "permission-1", permission: "edit" }] }) },
+    } as unknown as OpencodeClient;
+    expect(await getPendingQuestions(client)).toHaveLength(1);
+    expect(await getPendingPermissions(client)).toHaveLength(1);
+
+    const empty = {
+      question: { list: async () => ({ data: undefined }) },
+      permission: { list: async () => ({ data: undefined }) },
+    } as unknown as OpencodeClient;
+    expect(await getPendingQuestions(empty)).toEqual([]);
+    expect(await getPendingPermissions(empty)).toEqual([]);
+
+    const failed = {
+      question: { list: async () => { throw new Error("question failed"); } },
+      permission: { list: async () => { throw new Error("permission failed"); } },
+    } as unknown as OpencodeClient;
+    expect(await getPendingQuestions(failed)).toEqual([]);
+    expect(await getPendingPermissions(failed)).toEqual([]);
+  });
+
+  test("replies to and rejects requests with the v2 SDK shape", async () => {
+    const questionReply = mock(async () => ({}));
+    const questionReject = mock(async () => ({}));
+    const permissionReply = mock(async () => ({}));
+    const client = {
+      question: { reply: questionReply, reject: questionReject },
+      permission: { reply: permissionReply },
+    } as unknown as OpencodeClient;
+
+    expect(await replyToQuestion(client, "question-1", [["Yes"]])).toBe(true);
+    expect(await replyToPermission(client, "permission-1", "always", "remember")).toBe(true);
+    expect(await rejectQuestion(client, "question-1")).toBe(true);
+    expect(questionReply).toHaveBeenCalledWith({ requestID: "question-1", answers: [["Yes"]] });
+    expect(permissionReply).toHaveBeenCalledWith({ requestID: "permission-1", reply: "always", message: "remember" });
+    expect(questionReject).toHaveBeenCalledWith({ requestID: "question-1" });
+  });
+
+  test("returns false when replying to or rejecting requests fails", async () => {
+    const failed = {
+      question: {
+        reply: async () => { throw new Error("reply failed"); },
+        reject: async () => { throw new Error("reject failed"); },
+      },
+      permission: { reply: async () => { throw new Error("permission failed"); } },
+    } as unknown as OpencodeClient;
+    expect(await replyToQuestion(failed, "question-1", [])).toBe(false);
+    expect(await replyToPermission(failed, "permission-1", "reject")).toBe(false);
+    expect(await rejectQuestion(failed, "question-1")).toBe(false);
+  });
+});
+
+describe("opencode-client model and attachment edge cases", () => {
+  test("getModels returns only the normalized model list", async () => {
+    const client = {
+      provider: { list: async () => ({ data: { all: [{ id: "provider", models: { model: { id: "model", name: "Model" } } }] } }) },
+      config: { providers: async () => ({ data: undefined }) },
+    } as unknown as OpencodeClient;
+    expect(await getModels(client)).toEqual([{ id: "provider/model", name: "Model", provider: "provider" }]);
+  });
+
+  test("maps image and file attachment MIME types and file URL fallback", async () => {
+    const promptAsync = mock(async (_input: unknown) => ({}));
+    const client = { session: { promptAsync } } as unknown as OpencodeClient;
+    await sendPrompt(client, "session-1", "attachments", {
+      attachments: [
+        { type: "image", path: "/tmp/a.jpg", filename: "a.jpg" },
+        { type: "image", path: "/tmp/b.gif", filename: "b.gif", dataUrl: "data:image/gif;base64,AA==" },
+        { type: "image", path: "/tmp/c.webp", filename: "c.webp" },
+        { type: "file", path: "/tmp/d.ts", filename: "d.ts" },
+        { type: "file", path: "/tmp/e.bin" },
+        { type: "file", path: "/tmp/f.txt", filename: "f.txt" },
+        { type: "file", path: "/tmp/g.json", filename: "g.json" },
+        { type: "file", path: "/tmp/h.js", filename: "h.js" },
+        { type: "file", path: "/tmp/i.mjs", filename: "i.mjs" },
+        { type: "file", path: "/tmp/j.tsx", filename: "j.tsx" },
+        { type: "file", path: "/tmp/k.md", filename: "k.md" },
+        { type: "file", path: "/tmp/l.html", filename: "l.html" },
+        { type: "file", path: "/tmp/m.css", filename: "m.css" },
+        { type: "file", path: "/tmp/n.py", filename: "n.py" },
+        { type: "file", path: "/tmp/o.rs", filename: "o.rs" },
+      ],
+    });
+    const parts = (promptAsync.mock.calls[0]?.[0] as { parts: Array<Record<string, unknown>> }).parts;
+    expect(parts.slice(1).map((part) => part.mime)).toEqual([
+      "image/jpeg", "image/gif", "image/webp", "text/typescript", "application/octet-stream",
+      "text/plain", "application/json", "text/javascript", "text/javascript", "text/typescript",
+      "text/markdown", "text/html", "text/css", "text/x-python", "text/x-rust",
+    ]);
+    expect(parts[1]?.url).toBe("file:///tmp/a.jpg");
+    expect(parts[2]?.url).toBe("data:image/gif;base64,AA==");
   });
 });

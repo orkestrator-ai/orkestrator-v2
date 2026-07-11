@@ -358,6 +358,26 @@ describe("ClaudeChatTab", () => {
         expect.objectContaining({ attachments: undefined }),
       );
     });
+    const sentMessage = useClaudeStore.getState().getSession(SESSION_KEY)?.messages.find(
+      (candidate) => candidate.role === "user" && candidate.content === ADDRESS_ALL_REVIEW_PROMPT,
+    );
+    expect(sentMessage?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
+  test("queues prompts with a generated UUID while Claude is busy", async () => {
+    useClaudeStore.getState().setSessionLoading(SESSION_KEY, true);
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+    const textarea = document.querySelector<HTMLElement>('[data-placeholder="Ask Claude anything..."]');
+    expect(textarea).toBeTruthy();
+    textarea!.textContent = "Queue this Claude prompt";
+    fireEvent.input(textarea!);
+    fireEvent.click(screen.getByTitle("Add to queue"));
+
+    await waitFor(() => {
+      const queued = useClaudeStore.getState().messageQueue.get(SESSION_KEY)?.[0];
+      expect(queued?.text).toBe("Queue this Claude prompt");
+      expect(queued?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    });
   });
 
   test("passes the container id to rendered message attachment previews", async () => {
@@ -870,7 +890,9 @@ describe("ClaudeChatTab", () => {
 
     await waitFor(() => {
       const messages = useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages ?? [];
-      expect(messages.some((message) => message.content === "Query stopped by user.")).toBe(true);
+      expect(messages.find((message) => message.content === "Query stopped by user.")?.id).toMatch(
+        /^system-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
     });
   });
 

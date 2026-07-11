@@ -160,13 +160,10 @@ export function useFileMentions({
           if (filteredFiles.length === 0) {
             return true;
           }
-          if (filteredFiles[safeSelectedIndex]) {
-            const selectedFile = filteredFiles[safeSelectedIndex];
-            closeMenu({ suppressReopenFor: selectedFile.filename });
-            onSelect(selectedFile);
-            return true;
-          }
-          break;
+          const selectedFile = filteredFiles[safeSelectedIndex] ?? filteredFiles[0]!;
+          closeMenu({ suppressReopenFor: selectedFile.filename });
+          onSelect(selectedFile);
+          return true;
 
         case " ":
         case "Spacebar":
@@ -175,13 +172,10 @@ export function useFileMentions({
             return false;
           }
           handleMenuKey(event);
-          if (filteredFiles[safeSelectedIndex]) {
-            const selectedFile = filteredFiles[safeSelectedIndex];
-            closeMenu({ suppressReopenFor: selectedFile.filename });
-            onSelect(selectedFile);
-            return true;
-          }
-          break;
+          const selectedSpaceFile = filteredFiles[safeSelectedIndex] ?? filteredFiles[0]!;
+          closeMenu({ suppressReopenFor: selectedSpaceFile.filename });
+          onSelect(selectedSpaceFile);
+          return true;
 
         case "Escape":
           handleMenuKey(event);

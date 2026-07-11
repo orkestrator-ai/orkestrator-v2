@@ -1691,6 +1691,9 @@ Running 1 Explore agent...
     await waitFor(() => {
       expect(textarea.value).toBe("Review @src/components/Button.tsx ");
     });
+    expect(useClaudeTmuxStore.getState().getDraftMentions("tab-1")[0]?.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
     expect(screen.queryByText("Button.tsx")).toBeNull();
   });
 
@@ -2655,6 +2658,9 @@ Running 1 Explore agent...
       expect(useClaudeTmuxStore.getState().messageQueue.get(stateKey)?.map((m) => m.text)).toEqual([
         "continue with this",
       ]);
+      expect(useClaudeTmuxStore.getState().messageQueue.get(stateKey)?.[0]?.id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
       expect(textarea.value).toBe("");
     });
     expect(submitMock).not.toHaveBeenCalled();

@@ -58,6 +58,7 @@ describe("buildPipelineStore", () => {
 
       const pipeline = useBuildPipelineStore.getState().pipelines.get(id);
       expect(pipeline).toBeDefined();
+      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
       expect(pipeline!.taskId).toBe("task-1");
       expect(pipeline!.projectId).toBe("project-1");
       expect(pipeline!.environmentType).toBe("local");

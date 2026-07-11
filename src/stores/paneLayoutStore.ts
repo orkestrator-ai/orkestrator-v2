@@ -608,6 +608,17 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     if (!envState) return;
 
     const newRoot = updateLeaf(envState.root, paneId, (leaf) => {
+      const hasValidIndexes =
+        Number.isInteger(fromIndex) &&
+        Number.isInteger(toIndex) &&
+        fromIndex >= 0 &&
+        fromIndex < leaf.tabs.length &&
+        toIndex >= 0 &&
+        toIndex < leaf.tabs.length;
+      if (!hasValidIndexes || fromIndex === toIndex) {
+        return leaf;
+      }
+
       const newTabs = [...leaf.tabs];
       const [moved] = newTabs.splice(fromIndex, 1);
       if (moved) {

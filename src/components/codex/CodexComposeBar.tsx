@@ -47,6 +47,8 @@ const REASONING_LABELS: Record<CodexReasoningEffort, string> = {
   medium: "Medium",
   high: "High",
   xhigh: "Extra high",
+  max: "Max",
+  ultra: "Ultra",
 };
 const REASONING_DESCRIPTIONS: Record<CodexReasoningEffort, string> = {
   minimal: "Shortest reasoning path for the fastest possible responses",
@@ -54,6 +56,8 @@ const REASONING_DESCRIPTIONS: Record<CodexReasoningEffort, string> = {
   medium: "Balances speed and reasoning depth for everyday tasks",
   high: "Greater reasoning depth for complex problems",
   xhigh: "Extra high reasoning depth for complex problems",
+  max: "Maximum reasoning depth for the hardest problems",
+  ultra: "Maximum reasoning with automatic task delegation",
 };
 
 interface CodexComposeBarProps {

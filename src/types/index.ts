@@ -212,7 +212,9 @@ export type CodexReasoningEffortPreference =
   | "low"
   | "medium"
   | "high"
-  | "xhigh";
+  | "xhigh"
+  | "max"
+  | "ultra";
 
 /** Terminal appearance settings */
 export interface TerminalAppearance {

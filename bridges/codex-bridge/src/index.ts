@@ -34,6 +34,7 @@ import {
   normalizeReasoningOptions,
   parseModelCatalog,
   type BridgeModel,
+  type BridgeReasoningEffort,
 } from "./models-cache.js";
 
 type ToolState = "success" | "failure" | "pending";
@@ -1247,10 +1248,15 @@ function bridgeCachePath(): string {
   return join(bridgeCacheDir(), "models-cache.json");
 }
 
+const BRIDGE_MODEL_CACHE_VERSION = 2;
+
 async function readPersistedBridgeCache(): Promise<BridgeModel[] | null> {
   try {
     const raw = await readFile(bridgeCachePath(), "utf8");
-    const parsed = JSON.parse(raw) as { models?: BridgeModel[] };
+    const parsed = JSON.parse(raw) as { version?: number; models?: BridgeModel[] };
+    // Version 1 catalogs were normalized with a ladder that ended at xhigh,
+    // so force one fresh read from the CLI cache after upgrading.
+    if (parsed.version !== BRIDGE_MODEL_CACHE_VERSION) return null;
     return Array.isArray(parsed.models) && parsed.models.length > 0 ? parsed.models : null;
   } catch {
     return null;
@@ -1262,7 +1268,7 @@ async function writePersistedBridgeCache(models: BridgeModel[]): Promise<void> {
     await mkdir(bridgeCacheDir(), { recursive: true });
     await writeFile(
       bridgeCachePath(),
-      JSON.stringify({ at: Date.now(), models }, null, 2),
+      JSON.stringify({ version: BRIDGE_MODEL_CACHE_VERSION, at: Date.now(), models }, null, 2),
     );
   } catch (error) {
     console.warn(
@@ -1322,8 +1328,8 @@ function buildThreadOptions(body: Record<string, unknown>): ThreadOptions {
       : undefined;
   const modelReasoningEffort =
     typeof body.modelReasoningEffort === "string"
-    && MODEL_REASONING_EFFORTS.has(body.modelReasoningEffort as ModelReasoningEffort)
-      ? (body.modelReasoningEffort as ModelReasoningEffort)
+    && MODEL_REASONING_EFFORTS.has(body.modelReasoningEffort as BridgeReasoningEffort)
+      ? (body.modelReasoningEffort as BridgeReasoningEffort)
       : undefined;
 
   return {
@@ -1332,7 +1338,9 @@ function buildThreadOptions(body: Record<string, unknown>): ThreadOptions {
     sandboxMode: mode === "plan" ? "read-only" : "danger-full-access",
     networkAccessEnabled: true,
     model,
-    modelReasoningEffort,
+    // The CLI supports max/ultra before @openai/codex-sdk's type declaration
+    // does; the SDK forwards this string to the spawned Codex process.
+    modelReasoningEffort: modelReasoningEffort as ModelReasoningEffort | undefined,
   };
 }
 
@@ -2048,6 +2056,8 @@ async function runPrompt(
 
 export const __testing = {
   applyRuntimeEnvironmentOutput,
+  BRIDGE_MODEL_CACHE_VERSION,
+  buildThreadOptions,
   cleanupIdleSessions,
   FALLBACK_MODELS,
   EXPIRED_SESSION_RETENTION_MS,
@@ -2057,6 +2067,7 @@ export const __testing = {
     options?: { receivedAt?: string },
   ) => Promise<any>,
   refreshRuntimeEnvironment,
+  readPersistedBridgeCache,
   runInlinePromptCommand,
   runPrompt: runPrompt as (session: any, prompt: string) => Promise<void>,
   buildResumeRecoveryPromptForTesting: buildResumeRecoveryPrompt,
@@ -2067,6 +2078,7 @@ export const __testing = {
     freshThreadFactoryForTesting = factory;
   },
   sessions: sessions as Map<string, any>,
+  writePersistedBridgeCache,
 };
 
 app.use(

@@ -1,7 +1,12 @@
 import type { ModelReasoningEffort } from "@openai/codex-sdk";
 
+// The Codex CLI can expose reasoning levels before the SDK's declarations are
+// updated. Keep the bridge catalog aligned with the CLI's authoritative model
+// metadata while retaining the SDK's built-in effort type.
+export type BridgeReasoningEffort = ModelReasoningEffort | "max" | "ultra";
+
 export interface ModelReasoningOption {
-  effort: ModelReasoningEffort;
+  effort: BridgeReasoningEffort;
   label: string;
   description?: string;
 }
@@ -10,9 +15,9 @@ export interface BridgeModel {
   id: string;
   name: string;
   description?: string;
-  reasoningEfforts: ModelReasoningEffort[];
+  reasoningEfforts: BridgeReasoningEffort[];
   reasoningOptions: ModelReasoningOption[];
-  defaultReasoningEffort: ModelReasoningEffort;
+  defaultReasoningEffort: BridgeReasoningEffort;
 }
 
 interface ModelCacheReasoningLevel {
@@ -33,30 +38,36 @@ interface ModelCachePayload {
   models?: unknown;
 }
 
-export const MODEL_REASONING_EFFORTS = new Set<ModelReasoningEffort>([
+export const MODEL_REASONING_EFFORTS = new Set<BridgeReasoningEffort>([
   "minimal",
   "low",
   "medium",
   "high",
   "xhigh",
+  "max",
+  "ultra",
 ]);
 
-export const DEFAULT_REASONING_EFFORT: ModelReasoningEffort = "medium";
+export const DEFAULT_REASONING_EFFORT: BridgeReasoningEffort = "medium";
 
-export const REASONING_LABELS: Record<ModelReasoningEffort, string> = {
+export const REASONING_LABELS: Record<BridgeReasoningEffort, string> = {
   minimal: "Minimal",
   low: "Low",
   medium: "Medium",
   high: "High",
   xhigh: "Extra high",
+  max: "Max",
+  ultra: "Ultra",
 };
 
-export const REASONING_DESCRIPTIONS: Record<ModelReasoningEffort, string> = {
+export const REASONING_DESCRIPTIONS: Record<BridgeReasoningEffort, string> = {
   minimal: "Shortest reasoning path for the fastest possible responses",
   low: "Fast responses with lighter reasoning",
   medium: "Balances speed and reasoning depth for everyday tasks",
   high: "Greater reasoning depth for complex problems",
   xhigh: "Extra high reasoning depth for complex problems",
+  max: "Maximum reasoning depth for the hardest problems",
+  ultra: "Maximum reasoning with automatic task delegation",
 };
 
 export function normalizeReasoningOptions(value: unknown): ModelReasoningOption[] {
@@ -71,6 +82,7 @@ export function normalizeReasoningOptions(value: unknown): ModelReasoningOption[
   }
 
   const options: ModelReasoningOption[] = [];
+  const seenEfforts = new Set<BridgeReasoningEffort>();
   for (const entry of value) {
     const rawEffort =
       typeof (entry as ModelCacheReasoningLevel | null)?.effort === "string"
@@ -79,12 +91,14 @@ export function normalizeReasoningOptions(value: unknown): ModelReasoningOption[
 
     if (
       typeof rawEffort !== "string"
-      || !MODEL_REASONING_EFFORTS.has(rawEffort as ModelReasoningEffort)
+      || !MODEL_REASONING_EFFORTS.has(rawEffort as BridgeReasoningEffort)
     ) {
       continue;
     }
 
-    const effort = rawEffort as ModelReasoningEffort;
+    const effort = rawEffort as BridgeReasoningEffort;
+    if (seenEfforts.has(effort)) continue;
+    seenEfforts.add(effort);
     const description =
       typeof (entry as ModelCacheReasoningLevel | null)?.description === "string"
         ? ((entry as ModelCacheReasoningLevel).description as string)

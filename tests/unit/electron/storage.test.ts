@@ -183,6 +183,35 @@ describe("Electron StorageService", () => {
     await expect(storage.removeProject(secondProject.id)).rejects.toThrow("Project not found");
   });
 
+  test("round-trips max and ultra Codex reasoning preferences", async () => {
+    const dataDir = await createTempDir("ork-storage-codex-effort-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    const config = defaultConfig();
+    config.global.codexModel = "gpt-5.6-sol";
+    config.global.codexReasoningEffort = "ultra";
+    await storage.saveConfig(config);
+    await expect(storage.loadConfig()).resolves.toMatchObject({
+      global: {
+        codexModel: "gpt-5.6-sol",
+        codexReasoningEffort: "ultra",
+      },
+    });
+
+    await storage.updateGlobalConfig({
+      ...config.global,
+      codexModel: "gpt-5.6-luna",
+      codexReasoningEffort: "max",
+    });
+    await expect(storage.loadConfig()).resolves.toMatchObject({
+      global: {
+        codexModel: "gpt-5.6-luna",
+        codexReasoningEffort: "max",
+      },
+    });
+  });
+
   test("persists session buffers, deletes removed session buffers, and cleans orphan buffers", async () => {
     const dataDir = await createTempDir("ork-storage-sessions-");
     const storage = new StorageService(dataDir);

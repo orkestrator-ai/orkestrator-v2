@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
   ModelCatalogCache,
+  normalizeReasoningOptions,
   parseModelCatalog,
   type BridgeModel,
 } from "./models-cache.js";
@@ -16,6 +17,9 @@ const SAMPLE_CATALOG = {
       supported_reasoning_levels: [
         { effort: "medium", description: "Balanced" },
         { effort: "high", description: "Deeper reasoning" },
+        { effort: "xhigh", description: "Extra high reasoning" },
+        { effort: "max", description: "Maximum reasoning" },
+        { effort: "ultra", description: "Automatic task delegation" },
       ],
     },
     {
@@ -61,9 +65,15 @@ describe("parseModelCatalog", () => {
 
   test("maps reasoning levels and picks medium as default when available", () => {
     const [first] = parseModelCatalog(JSON.stringify(SAMPLE_CATALOG));
-    expect(first?.reasoningEfforts).toEqual(["medium", "high"]);
+    expect(first?.reasoningEfforts).toEqual(["medium", "high", "xhigh", "max", "ultra"]);
     expect(first?.defaultReasoningEffort).toBe("medium");
-    expect(first?.reasoningOptions.map((o) => o.effort)).toEqual(["medium", "high"]);
+    expect(first?.reasoningOptions.map((o) => o.effort)).toEqual([
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
   });
 
   test("returns a default reasoning option when levels are missing", () => {
@@ -76,6 +86,10 @@ describe("parseModelCatalog", () => {
   test("returns empty array when payload.models is not an array", () => {
     expect(parseModelCatalog(JSON.stringify({}))).toEqual([]);
     expect(parseModelCatalog(JSON.stringify({ models: "not an array" }))).toEqual([]);
+  });
+
+  test("throws on malformed JSON so cache readers can fall back", () => {
+    expect(() => parseModelCatalog("{not-json")).toThrow();
   });
 
   test("skips reasoning entries with unknown effort values", () => {
@@ -93,6 +107,33 @@ describe("parseModelCatalog", () => {
     const [noisy] = parseModelCatalog(raw);
     expect(noisy?.reasoningEfforts).toEqual(["high"]);
     expect(noisy?.defaultReasoningEffort).toBe("high");
+  });
+});
+
+describe("normalizeReasoningOptions", () => {
+  test("deduplicates effort levels and fills missing descriptions", () => {
+    expect(normalizeReasoningOptions([
+      { effort: "max" },
+      { effort: "max", description: "Duplicate" },
+      { effort: "ultra", description: "Delegates work" },
+    ])).toEqual([
+      {
+        effort: "max",
+        label: "Max",
+        description: "Maximum reasoning depth for the hardest problems",
+      },
+      {
+        effort: "ultra",
+        label: "Ultra",
+        description: "Delegates work",
+      },
+    ]);
+  });
+
+  test("falls back to medium for non-array and wholly invalid inputs", () => {
+    for (const value of [null, {}, [{ effort: "unknown" }]]) {
+      expect(normalizeReasoningOptions(value).map((option) => option.effort)).toEqual(["medium"]);
+    }
   });
 });
 

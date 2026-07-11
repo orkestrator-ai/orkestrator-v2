@@ -288,7 +288,14 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         opencodeModel: string;
         claudeModel: string;
         codexModel: string;
-        codexReasoningEffort: "minimal" | "low" | "medium" | "high" | "xhigh";
+        codexReasoningEffort:
+          | "minimal"
+          | "low"
+          | "medium"
+          | "high"
+          | "xhigh"
+          | "max"
+          | "ultra";
         opencodeMode: OpenCodeMode;
         claudeMode: ClaudeMode;
         claudeNativeBackend: ClaudeNativeBackend;
@@ -394,6 +401,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
     setWebClientEnabled(global.webClientEnabled ?? true);
+    setDomainErrors([]);
+    setColorError(null);
+    setTestResults(null);
   };
 
   // --- Section renderers ---

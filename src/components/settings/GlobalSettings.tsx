@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -115,6 +115,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [colorError, setColorError] = useState<string | null>(null);
   const [isTesting, setIsTesting] = useState(false);
   const [testResults, setTestResults] = useState<DomainTestResult[] | null>(null);
+  const webClientStatusRequestRef = useRef(0);
 
   // Sync local state when config changes in the store
   useEffect(() => {
@@ -147,23 +148,30 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   }, [global]);
 
   const refreshWebClientStatus = useCallback(async () => {
+    const requestId = ++webClientStatusRequestRef.current;
     setIsLoadingWebClientStatus(true);
     try {
-      setWebClientStatus(await backend.getWebClientStatus());
+      const status = await backend.getWebClientStatus();
+      if (requestId === webClientStatusRequestRef.current) setWebClientStatus(status);
     } catch (error) {
-      setWebClientStatus({
-        enabled: global.webClientEnabled ?? true,
-        running: false,
-        url: null,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      if (requestId === webClientStatusRequestRef.current) {
+        setWebClientStatus({
+          enabled: global.webClientEnabled ?? true,
+          running: false,
+          url: null,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     } finally {
-      setIsLoadingWebClientStatus(false);
+      if (requestId === webClientStatusRequestRef.current) setIsLoadingWebClientStatus(false);
     }
   }, [global.webClientEnabled]);
 
   useEffect(() => {
     if (activeSection === "web-client") void refreshWebClientStatus();
+    return () => {
+      webClientStatusRequestRef.current += 1;
+    };
   }, [activeSection, refreshWebClientStatus]);
 
   // Fetch log directory path once on mount

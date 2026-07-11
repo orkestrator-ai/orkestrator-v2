@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 const invokeMock = mock<(...args: unknown[]) => Promise<unknown>>(() => Promise.resolve());
 
@@ -13,6 +13,8 @@ afterAll(() => {
 });
 
 const wrapperModulePath = "./backend.ts?wrapper-test";
+const originalOrkestrator = window.orkestrator;
+const originalGateway = window.orkestratorGateway;
 const {
   connectLinear,
   createEnvironment,
@@ -22,10 +24,17 @@ const {
   getLinearIssue,
   getLinearIssues,
   getSetupCommands,
+  getWebClientStatus,
   postLinearCompletionComment,
   runEnvironmentSetup,
+  setWebClientEnabled,
   setEnvironmentSetupComplete,
 } = await import(wrapperModulePath) as typeof import("./backend");
+
+afterEach(() => {
+  window.orkestrator = originalOrkestrator;
+  window.orkestratorGateway = originalGateway;
+});
 
 describe("backend setup wrappers", () => {
   beforeEach(() => {
@@ -112,5 +121,47 @@ describe("backend setup wrappers", () => {
       }],
       ["disconnect_linear"],
     ]);
+  });
+});
+
+describe("backend web client wrappers", () => {
+  test("uses the Electron preload API for status and transitions", async () => {
+    const status = { enabled: true, running: true, url: "http://100.88.12.3:34121/", error: null };
+    const getStatus = mock(async () => status);
+    const setEnabled = mock(async (enabled: boolean) => ({
+      ...status,
+      enabled,
+      running: enabled,
+      url: enabled ? status.url : null,
+    }));
+    window.orkestrator = {
+      ...originalOrkestrator!,
+      webClient: { getStatus, setEnabled },
+    };
+
+    await expect(getWebClientStatus()).resolves.toEqual(status);
+    await expect(setWebClientEnabled(false)).resolves.toMatchObject({ enabled: false, running: false });
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(setEnabled).toHaveBeenCalledWith(false);
+  });
+
+  test("reports the current browser origin as running in authenticated gateway mode", async () => {
+    window.orkestrator = undefined;
+    window.orkestratorGateway = { enabled: true };
+
+    await expect(getWebClientStatus()).resolves.toEqual({
+      enabled: true,
+      running: true,
+      url: `${window.location.origin}/`,
+      error: null,
+    });
+  });
+
+  test("rejects status and mutations outside Electron or gateway mode", async () => {
+    window.orkestrator = undefined;
+    window.orkestratorGateway = undefined;
+
+    await expect(getWebClientStatus()).rejects.toThrow("only available in the desktop app");
+    await expect(setWebClientEnabled(true)).rejects.toThrow("only available in the desktop app");
   });
 });

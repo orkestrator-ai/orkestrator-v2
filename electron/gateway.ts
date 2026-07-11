@@ -9,6 +9,7 @@ import http, {
   type ServerResponse,
 } from "node:http";
 import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
+import type { Socket } from "node:net";
 import path from "node:path";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 
@@ -409,6 +410,8 @@ export class OrkestratorGateway {
   private token = "";
   private authFile = "";
   private clients = new Set<ServerResponse>();
+  private proxyRequests = new Set<ReturnType<typeof http.request>>();
+  private sockets = new Set<Socket>();
   private keepalive: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: OrkestratorGatewayOptions) {
@@ -454,6 +457,10 @@ export class OrkestratorGateway {
         }
       });
     });
+    this.server.on("connection", (socket) => {
+      this.sockets.add(socket);
+      socket.once("close", () => this.sockets.delete(socket));
+    });
 
     await new Promise<void>((resolve, reject) => {
       this.server?.once("error", reject);
@@ -478,15 +485,25 @@ export class OrkestratorGateway {
       this.keepalive = null;
     }
     for (const client of this.clients) {
-      client.end();
+      client.destroy();
     }
     this.clients.clear();
+    for (const proxyRequest of this.proxyRequests) {
+      proxyRequest.destroy(new Error("Remote gateway stopped"));
+    }
+    this.proxyRequests.clear();
     const server = this.server;
-    this.server = null;
     if (!server) return;
     await new Promise<void>((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());
+      // Explicitly disabling remote access must also revoke active keep-alive,
+      // static-file, and streaming proxy connections. `server.close()` alone
+      // waits indefinitely for active responses to finish.
+      server.closeAllConnections();
+      for (const socket of this.sockets) socket.destroy();
     });
+    this.sockets.clear();
+    this.server = null;
   }
 
   emit(event: string, payload: unknown): void {
@@ -657,6 +674,10 @@ export class OrkestratorGateway {
         response.writeHead(proxyResponse.statusCode ?? 502, sanitizeProxyResponseHeaders(proxyResponse.headers, target, proxyPrefix));
         proxyResponse.pipe(response);
         proxyResponse.once("end", resolve);
+      });
+      this.proxyRequests.add(proxyRequest);
+      proxyRequest.once("close", () => {
+        this.proxyRequests.delete(proxyRequest);
       });
 
       proxyRequest.once("error", (error) => {

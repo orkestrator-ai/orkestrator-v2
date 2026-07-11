@@ -8,7 +8,7 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
   const backend = options.backend === undefined
     ? { invoke: mock(async (_command: string, args: Record<string, unknown>) => ({ ok: true, args })) }
     : options.backend;
-  const window = options.window ?? { id: 1 };
+  const window = options.window === undefined ? { id: 1 } : options.window;
   const clipboardImage = {
     isEmpty: mock(() => false),
     getSize: mock(() => ({ width: 16, height: 9 })),
@@ -109,6 +109,16 @@ describe("main IPC registration", () => {
     await expect(harness.invoke("orkestrator:invoke", "get_projects", {})).rejects.toThrow("Backend is not initialized");
   });
 
+  test("validates backend command names and normalizes malformed arguments", async () => {
+    const harness = createHarness();
+
+    await expect(harness.invoke("orkestrator:invoke", 42, {})).rejects.toThrow(
+      "Expected command to be a string",
+    );
+    await harness.invoke("orkestrator:invoke", "get_projects", ["invalid"]);
+    expect(harness.backend?.invoke).toHaveBeenCalledWith("get_projects", {});
+  });
+
   test("maps dialog options through the main window and supports canceled dialogs", async () => {
     const harness = createHarness();
 
@@ -131,5 +141,24 @@ describe("main IPC registration", () => {
     harness.clipboardImage.isEmpty.mockReturnValueOnce(true);
 
     await expect(harness.invoke("orkestrator:clipboard:read-image")).resolves.toBeNull();
+  });
+
+  test("uses windowless dialog overloads and safe defaults for malformed utility input", async () => {
+    const harness = createHarness({ window: null });
+
+    await expect(harness.invoke("orkestrator:dialog:open", "invalid")).resolves.toBe("/tmp/a");
+    expect(harness.dialogApi.showOpenDialog).toHaveBeenCalledWith({
+      title: undefined,
+      defaultPath: undefined,
+      properties: ["openFile"],
+    });
+
+    await harness.invoke("orkestrator:clipboard:write-text", 42);
+    expect(harness.clipboardApi.writeText).toHaveBeenCalledWith("");
+    await harness.invoke("orkestrator:clipboard:write-image", null);
+    expect(harness.nativeImage.createFromDataURL).toHaveBeenCalledWith("");
+
+    await harness.invoke("orkestrator:process:exit", "invalid");
+    expect(harness.appApi.exit).toHaveBeenCalledWith(0);
   });
 });

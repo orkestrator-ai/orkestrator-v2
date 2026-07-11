@@ -1,23 +1,25 @@
 import type { GatewayStartInfo } from "./gateway.js";
-import type { WebClientStatus } from "../src/types/webClient.js";
+import type { GatewayTokenSettings, WebClientStatus } from "../src/types/webClient.js";
 
 export type WebClientGateway = {
   start(): Promise<GatewayStartInfo | null>;
   stop(): Promise<void>;
+  getTokenSettings(): Promise<GatewayTokenSettings>;
+  setToken(token: string): Promise<GatewayTokenSettings>;
 };
 
 export class WebClientController {
   private startInfo: GatewayStartInfo | null = null;
   private enabled = true;
   private error: string | null = null;
-  private transition: Promise<WebClientStatus>;
+  private transition: Promise<unknown>;
 
   constructor(
     private readonly gateway: WebClientGateway,
     private readonly env: NodeJS.ProcessEnv = process.env,
     private readonly logger: Pick<Console, "error"> = console,
   ) {
-    this.transition = Promise.resolve(this.getStatus());
+    this.transition = Promise.resolve();
   }
 
   getStatus(): WebClientStatus {
@@ -30,10 +32,21 @@ export class WebClientController {
   }
 
   setEnabled(enabled: boolean): Promise<WebClientStatus> {
-    this.transition = this.transition
-      .catch(() => this.getStatus())
-      .then(() => this.applyEnabled(enabled));
-    return this.transition;
+    return this.enqueue(() => this.applyEnabled(enabled));
+  }
+
+  getTokenSettings(): Promise<GatewayTokenSettings> {
+    return this.enqueue(() => this.gateway.getTokenSettings());
+  }
+
+  setToken(token: string): Promise<GatewayTokenSettings> {
+    return this.enqueue(() => this.gateway.setToken(token));
+  }
+
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.transition.catch(() => undefined).then(operation);
+    this.transition = result;
+    return result;
   }
 
   private async applyEnabled(enabled: boolean): Promise<WebClientStatus> {

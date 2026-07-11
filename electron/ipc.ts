@@ -1,5 +1,5 @@
 import type { BrowserWindow, OpenDialogOptions } from "electron";
-import type { WebClientStatus } from "../src/types/webClient.js";
+import type { GatewayTokenSettings, WebClientStatus } from "../src/types/webClient.js";
 
 type BackendInvoker = {
   invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
@@ -38,6 +38,8 @@ export type MainIpcDependencies = {
   nativeImageApi: NativeImageLike;
   getWebClientStatus: () => WebClientStatus;
   setWebClientEnabled: (enabled: boolean) => Promise<WebClientStatus>;
+  getGatewayTokenSettings: () => Promise<GatewayTokenSettings>;
+  setGatewayToken: (token: string) => Promise<GatewayTokenSettings>;
 };
 
 export function registerMainIpc({
@@ -50,6 +52,8 @@ export function registerMainIpc({
   nativeImageApi,
   getWebClientStatus,
   setWebClientEnabled,
+  getGatewayTokenSettings,
+  setGatewayToken,
 }: MainIpcDependencies): void {
   ipc.handle("orkestrator:invoke", async (_event, command: unknown, args?: unknown) => {
     const backend = getBackend();
@@ -102,6 +106,11 @@ export function registerMainIpc({
   ipc.handle("orkestrator:web-client:set-enabled", (_event, enabled: unknown) => {
     if (typeof enabled !== "boolean") throw new Error("Expected enabled to be a boolean");
     return setWebClientEnabled(enabled);
+  });
+  ipc.handle("orkestrator:web-client:get-token-settings", () => getGatewayTokenSettings());
+  ipc.handle("orkestrator:web-client:set-token", (_event, token: unknown) => {
+    if (typeof token !== "string") throw new Error("Expected token to be a string");
+    return setGatewayToken(token);
   });
 
   ipc.handle("orkestrator:process:exit", (_event, code?: unknown) => {

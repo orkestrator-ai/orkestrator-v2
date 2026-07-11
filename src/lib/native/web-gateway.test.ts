@@ -89,6 +89,60 @@ describe("web gateway browser API", () => {
     await expect(api.invoke("get_projects")).rejects.toThrow("not allowed");
   });
 
+  test("reads and updates gateway token settings through the authenticated endpoint", async () => {
+    const requests: Array<{ input: string; init?: RequestInit }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      requests.push({ input: String(input), init });
+      const token = init?.method === "PUT" ? "replacement-token-123456" : "gateway-token-123456";
+      return new Response(JSON.stringify({ token, editable: true, source: "file" }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi();
+
+    await expect(api.webClient.getTokenSettings()).resolves.toMatchObject({ token: "gateway-token-123456" });
+    await expect(api.webClient.setToken("replacement-token-123456")).resolves.toMatchObject({
+      token: "replacement-token-123456",
+    });
+    expect(requests).toEqual([
+      {
+        input: "/__orkestrator/gateway-settings",
+        init: { credentials: "same-origin" },
+      },
+      {
+        input: "/__orkestrator/gateway-settings",
+        init: {
+          method: "PUT",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: "replacement-token-123456" }),
+        },
+      },
+    ]);
+  });
+
+  test("reports browser gateway status and rejects desktop-only lifecycle controls", async () => {
+    const api = createBrowserGatewayApi();
+
+    await expect(api.webClient.getStatus()).resolves.toEqual({
+      enabled: true,
+      running: true,
+      url: `${window.location.origin}/`,
+      error: null,
+    });
+    await expect(api.webClient.setEnabled()).rejects.toThrow("only available in the desktop app");
+  });
+
+  test("surfaces JSON and non-JSON errors from gateway token requests", async () => {
+    globalThis.fetch = mock()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "token unavailable" }), { status: 503 }))
+      .mockResolvedValueOnce(new Response("upstream failed", { status: 502 })) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi();
+
+    await expect(api.webClient.getTokenSettings()).rejects.toThrow("token unavailable");
+    await expect(api.webClient.setToken("replacement-token-123456")).rejects.toThrow(
+      "Gateway settings request failed with HTTP 502",
+    );
+  });
+
   test("subscribes to gateway events and closes the stream when idle", () => {
     globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
     const api = createBrowserGatewayApi();

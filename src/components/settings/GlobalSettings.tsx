@@ -18,12 +18,14 @@ import { Loader2, Eye, EyeOff, Key, Github, CheckCircle2, XCircle, AlertCircle, 
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { getGatewayTokenValidationError } from "@/lib/gateway-token";
 import type {
   ClaudeMode,
   ClaudeNativeBackend,
   CodexMode,
   DefaultAgent,
   DomainTestResult,
+  GatewayTokenSettings,
   OpenCodeMode,
   PreferredEditor,
   TerminalAppearance,
@@ -104,10 +106,16 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
   const [webClientEnabled, setWebClientEnabled] = useState(global.webClientEnabled ?? true);
   const [webClientStatus, setWebClientStatus] = useState<WebClientStatus | null>(null);
+  const [gatewayTokenSettings, setGatewayTokenSettings] = useState<GatewayTokenSettings | null>(null);
+  const [gatewayToken, setGatewayToken] = useState("");
+  const [savedGatewayToken, setSavedGatewayToken] = useState("");
+  const [gatewayTokenLoadError, setGatewayTokenLoadError] = useState<string | null>(null);
   const [isLoadingWebClientStatus, setIsLoadingWebClientStatus] = useState(false);
+  const [isLoadingGatewayToken, setIsLoadingGatewayToken] = useState(false);
   const [logDirectory, setLogDirectory] = useState<string | null>(null);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showGithubToken, setShowGithubToken] = useState(false);
+  const [showGatewayToken, setShowGatewayToken] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
@@ -150,21 +158,44 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const refreshWebClientStatus = useCallback(async () => {
     const requestId = ++webClientStatusRequestRef.current;
     setIsLoadingWebClientStatus(true);
-    try {
-      const status = await backend.getWebClientStatus();
-      if (requestId === webClientStatusRequestRef.current) setWebClientStatus(status);
-    } catch (error) {
-      if (requestId === webClientStatusRequestRef.current) {
-        setWebClientStatus({
-          enabled: global.webClientEnabled ?? true,
-          running: false,
-          url: null,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    } finally {
-      if (requestId === webClientStatusRequestRef.current) setIsLoadingWebClientStatus(false);
-    }
+    setIsLoadingGatewayToken(true);
+    setGatewayTokenLoadError(null);
+
+    const statusRequest = backend.getWebClientStatus()
+      .then((status) => {
+        if (requestId === webClientStatusRequestRef.current) setWebClientStatus(status);
+      })
+      .catch((error: unknown) => {
+        if (requestId === webClientStatusRequestRef.current) {
+          setWebClientStatus({
+            enabled: global.webClientEnabled ?? true,
+            running: false,
+            url: null,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      })
+      .finally(() => {
+        if (requestId === webClientStatusRequestRef.current) setIsLoadingWebClientStatus(false);
+      });
+
+    const tokenRequest = backend.getGatewayTokenSettings()
+      .then((settings) => {
+        if (requestId !== webClientStatusRequestRef.current) return;
+        setGatewayTokenSettings(settings);
+        setGatewayToken(settings.token);
+        setSavedGatewayToken(settings.token);
+      })
+      .catch((error: unknown) => {
+        if (requestId === webClientStatusRequestRef.current) {
+          setGatewayTokenLoadError(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (requestId === webClientStatusRequestRef.current) setIsLoadingGatewayToken(false);
+      });
+
+    await Promise.all([statusRequest, tokenRequest]);
   }, [global.webClientEnabled]);
 
   useEffect(() => {
@@ -204,12 +235,13 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       terminalScrollback !== (global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK) ||
       experimentalCodexRawEventLogging !== (global.experimentalCodexRawEventLogging ?? true) ||
       debugLogging !== (global.debugLogging ?? false) ||
-      webClientEnabled !== (global.webClientEnabled ?? true);
+      webClientEnabled !== (global.webClientEnabled ?? true) ||
+      gatewayToken !== savedGatewayToken;
     setHasChanges(changed);
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, gatewayToken, savedGatewayToken, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -340,6 +372,13 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       const newConfig = await backend.updateGlobalConfig(newGlobal);
       setConfig(newConfig);
 
+      if (gatewayTokenSettings?.editable && gatewayToken !== savedGatewayToken) {
+        const nextGatewayTokenSettings = await backend.setGatewayToken(gatewayToken);
+        setGatewayTokenSettings(nextGatewayTokenSettings);
+        setGatewayToken(nextGatewayTokenSettings.token);
+        setSavedGatewayToken(nextGatewayTokenSettings.token);
+      }
+
       if (!window.orkestratorGateway?.enabled) {
         const nextWebClientStatus = await backend.setWebClientEnabled(webClientEnabled);
         setWebClientStatus(nextWebClientStatus);
@@ -401,6 +440,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
     setWebClientEnabled(global.webClientEnabled ?? true);
+    setGatewayToken(savedGatewayToken);
     setDomainErrors([]);
     setColorError(null);
     setTestResults(null);
@@ -974,6 +1014,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     </div>
   );
 
+  const gatewayTokenValidationError = gatewayTokenSettings?.editable
+    ? getGatewayTokenValidationError(gatewayToken)
+    : null;
+
   const renderWebClient = () => {
     const isRemoteClient = window.orkestratorGateway?.enabled === true;
     const hasPendingChange = webClientEnabled !== (global.webClientEnabled ?? true);
@@ -1016,6 +1060,65 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
               disabled={isRemoteClient}
               onCheckedChange={setWebClientEnabled}
             />
+          </div>
+
+          <div className="space-y-2 border-t border-zinc-800 p-4">
+            <div className="space-y-1">
+              <Label htmlFor="gateway-token" className="flex items-center gap-2 text-sm font-medium">
+                <Key className="h-3.5 w-3.5" />
+                Gateway token
+              </Label>
+              <p id="gateway-token-description" className="text-xs text-muted-foreground">
+                Enter this token when signing in to the web client from another browser.
+              </p>
+            </div>
+
+            <div className="relative">
+              <Input
+                id="gateway-token"
+                type={showGatewayToken ? "text" : "password"}
+                value={gatewayToken}
+                onChange={(event) => setGatewayToken(event.target.value)}
+                placeholder={isLoadingGatewayToken ? "Loading gateway token…" : "Gateway token"}
+                className="pr-10 font-mono text-xs"
+                disabled={isLoadingGatewayToken || !gatewayTokenSettings?.editable || isSaving}
+                aria-describedby="gateway-token-description"
+                aria-invalid={gatewayTokenValidationError ? true : undefined}
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2"
+                onClick={() => setShowGatewayToken((visible) => !visible)}
+                disabled={isLoadingGatewayToken || !gatewayToken}
+                aria-label={showGatewayToken ? "Hide gateway token" : "Show gateway token"}
+              >
+                {showGatewayToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </Button>
+            </div>
+
+            {gatewayTokenValidationError && (
+              <p className="text-xs text-destructive">{gatewayTokenValidationError}</p>
+            )}
+            {gatewayTokenLoadError && (
+              <p className="flex items-start gap-1.5 text-xs text-amber-400/90">
+                <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+                {gatewayTokenLoadError}
+              </p>
+            )}
+            {gatewayTokenSettings?.source === "environment" && (
+              <p className="text-xs text-muted-foreground">
+                This token is managed by <code className="font-mono">ORKESTRATOR_GATEWAY_TOKEN</code> and cannot be changed here.
+              </p>
+            )}
+            {gatewayTokenSettings?.editable && gatewayToken !== savedGatewayToken && !gatewayTokenValidationError && (
+              <p className="text-xs text-amber-400/90">
+                Save changes to use this token for future sign-ins.
+              </p>
+            )}
           </div>
 
           <div aria-live="polite" className="border-t border-zinc-800 bg-zinc-900/60 px-4 py-3">
@@ -1069,7 +1172,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         </div>
 
         <p className="text-xs leading-relaxed text-muted-foreground/70">
-          Access is limited to Tailscale addresses and protected by the gateway token stored in the app data directory.
+          Access is limited to Tailscale addresses. Changing the token keeps this browser signed in, but other browsers must use the new token on their next sign-in.
         </p>
       </div>
     );
@@ -1214,7 +1317,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         <Button variant="outline" onClick={handleReset} disabled={!hasChanges}>
           Reset
         </Button>
-        <Button onClick={handleSave} disabled={!hasChanges || isSaving || saveSuccess || domainErrors.length > 0 || !!colorError}>
+        <Button onClick={handleSave} disabled={!hasChanges || isSaving || saveSuccess || domainErrors.length > 0 || !!colorError || !!gatewayTokenValidationError}>
           {saveSuccess ? (
             <>
               <Check className="mr-2 h-4 w-4" />

@@ -15,6 +15,7 @@ afterAll(() => {
 const wrapperModulePath = "./backend.ts?wrapper-test";
 const originalOrkestrator = window.orkestrator;
 const originalGateway = window.orkestratorGateway;
+const backendWrappers = await import(wrapperModulePath) as typeof import("./backend");
 const {
   connectLinear,
   createEnvironment,
@@ -25,12 +26,14 @@ const {
   getLinearIssue,
   getLinearIssues,
   getSetupCommands,
+  getGatewayTokenSettings,
   getWebClientStatus,
   postLinearCompletionComment,
   runEnvironmentSetup,
   setWebClientEnabled,
+  setGatewayToken,
   setEnvironmentSetupComplete,
-} = await import(wrapperModulePath) as typeof import("./backend");
+} = backendWrappers;
 
 afterEach(() => {
   window.orkestrator = originalOrkestrator;
@@ -144,15 +147,23 @@ describe("backend web client wrappers", () => {
       running: enabled,
       url: enabled ? status.url : null,
     }));
+    const tokenSettings = { token: "test-token-123456", editable: true, source: "file" as const };
+    const getTokenSettings = mock(async () => tokenSettings);
+    const setToken = mock(async (token: string) => ({ ...tokenSettings, token }));
     window.orkestrator = {
       ...originalOrkestrator!,
-      webClient: { getStatus, setEnabled },
+      webClient: { getStatus, setEnabled, getTokenSettings, setToken },
     };
 
     await expect(getWebClientStatus()).resolves.toEqual(status);
     await expect(setWebClientEnabled(false)).resolves.toMatchObject({ enabled: false, running: false });
+    await expect(getGatewayTokenSettings()).resolves.toEqual(tokenSettings);
+    await expect(setGatewayToken("replacement-token-123456")).resolves.toMatchObject({
+      token: "replacement-token-123456",
+    });
     expect(getStatus).toHaveBeenCalledTimes(1);
     expect(setEnabled).toHaveBeenCalledWith(false);
+    expect(setToken).toHaveBeenCalledWith("replacement-token-123456");
   });
 
   test("reports the current browser origin as running in authenticated gateway mode", async () => {
@@ -173,5 +184,48 @@ describe("backend web client wrappers", () => {
 
     await expect(getWebClientStatus()).rejects.toThrow("only available in the desktop app");
     await expect(setWebClientEnabled(true)).rejects.toThrow("only available in the desktop app");
+    await expect(getGatewayTokenSettings()).rejects.toThrow("unavailable");
+    await expect(setGatewayToken("replacement-token-123456")).rejects.toThrow("unavailable");
+  });
+});
+
+describe("backend command wrapper coverage", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(async (command: unknown) =>
+      command === "read_file_base64" ? btoa("binary") : undefined
+    );
+    window.orkestrator = originalOrkestrator;
+    window.orkestratorGateway = originalGateway;
+  });
+
+  test("every exported command wrapper reaches the native invoke boundary", async () => {
+    const specialWrappers = new Set([
+      "getWebClientStatus",
+      "setWebClientEnabled",
+      "getGatewayTokenSettings",
+      "setGatewayToken",
+      "readBinaryFile",
+    ]);
+    const commandWrappers = Object.entries(backendWrappers).flatMap(([name, value]) =>
+      typeof value === "function" && !specialWrappers.has(name)
+        ? [[name, value as (...args: unknown[]) => Promise<unknown>] as const]
+        : []
+    );
+
+    expect(commandWrappers.length).toBeGreaterThan(150);
+    for (const [name, wrapper] of commandWrappers) {
+      invokeMock.mockClear();
+      const args = Array.from({ length: wrapper.length }, () => "value");
+      await wrapper(...args);
+      expect(invokeMock.mock.calls.length, `${name} must call invoke`).toBeGreaterThan(0);
+    }
+  });
+
+  test("readBinaryFile decodes the base64 wrapper result", async () => {
+    await expect(backendWrappers.readBinaryFile("/tmp/image.bin")).resolves.toEqual(
+      Uint8Array.from(new TextEncoder().encode("binary")),
+    );
+    expect(invokeMock).toHaveBeenCalledWith("read_file_base64", { filePath: "/tmp/image.bin" });
   });
 });

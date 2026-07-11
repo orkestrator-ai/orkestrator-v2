@@ -5,3 +5,10 @@ export interface WebClientStatus {
   url: string | null;
   error: string | null;
 }
+
+/** Gateway credential settings exposed only to an authenticated client. */
+export interface GatewayTokenSettings {
+  token: string;
+  editable: boolean;
+  source: "file" | "environment";
+}

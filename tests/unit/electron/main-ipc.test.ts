@@ -33,6 +33,9 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
     running: enabled,
     url: enabled ? webClientStatus.url : null,
   }));
+  const gatewayTokenSettings = { token: "test-token-123456", editable: true, source: "file" as const };
+  const getGatewayTokenSettings = mock(async () => gatewayTokenSettings);
+  const setGatewayToken = mock(async (token: string) => ({ ...gatewayTokenSettings, token }));
 
   registerMainIpc({
     getBackend: () => backend,
@@ -46,6 +49,8 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
     nativeImageApi: nativeImage,
     getWebClientStatus,
     setWebClientEnabled,
+    getGatewayTokenSettings,
+    setGatewayToken,
   });
 
   const invoke = (channel: string, ...args: unknown[]) => {
@@ -54,7 +59,7 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
     return Promise.resolve().then(() => handler({}, ...args));
   };
 
-  return { invoke, handlers, backend, window, clipboardApi, clipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled };
+  return { invoke, handlers, backend, window, clipboardApi, clipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled, getGatewayTokenSettings, setGatewayToken };
 }
 
 describe("main IPC registration", () => {
@@ -93,6 +98,14 @@ describe("main IPC registration", () => {
       running: false,
     });
     expect(harness.setWebClientEnabled).toHaveBeenCalledWith(false);
+    await expect(harness.invoke("orkestrator:web-client:get-token-settings")).resolves.toMatchObject({
+      token: "test-token-123456",
+      editable: true,
+    });
+    await expect(harness.invoke("orkestrator:web-client:set-token", "replacement-token-123456")).resolves.toMatchObject({
+      token: "replacement-token-123456",
+    });
+    expect(harness.setGatewayToken).toHaveBeenCalledWith("replacement-token-123456");
   });
 
   test("validates web client toggle values", async () => {
@@ -100,6 +113,9 @@ describe("main IPC registration", () => {
 
     await expect(harness.invoke("orkestrator:web-client:set-enabled", "yes")).rejects.toThrow(
       "Expected enabled to be a boolean",
+    );
+    await expect(harness.invoke("orkestrator:web-client:set-token", 42)).rejects.toThrow(
+      "Expected token to be a string",
     );
   });
 

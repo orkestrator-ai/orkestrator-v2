@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import http, {
   createServer,
   type IncomingHttpHeaders,
@@ -12,6 +12,13 @@ import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 import type { Socket } from "node:net";
 import path from "node:path";
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import type { GatewayTokenSettings } from "../src/types/webClient.js";
+import {
+  GatewayTokenValidationError,
+  gatewayTokenCookieHeader,
+  getGatewayTokenValidationError,
+  normalizeGatewayToken,
+} from "../src/lib/gateway-token.js";
 
 type BackendInvoker = {
   invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
@@ -45,6 +52,9 @@ const API_PREFIX = "/__orkestrator";
 const DEFAULT_GATEWAY_PORT = 34121;
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const KEEPALIVE_MS = 25_000;
+
+class InvalidRequestBodyError extends Error {}
+class RequestBodyTooLargeError extends Error {}
 
 function parsePort(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
@@ -127,10 +137,16 @@ function mimeType(filePath: string): string {
   }
 }
 
-function jsonResponse(response: ServerResponse, statusCode: number, payload: unknown): void {
+function jsonResponse(
+  response: ServerResponse,
+  statusCode: number,
+  payload: unknown,
+  headers: OutgoingHttpHeaders = {},
+): void {
   response.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
+    ...headers,
   });
   response.end(JSON.stringify(payload));
 }
@@ -173,47 +189,84 @@ function authFilePath(dataDir: string): string {
   return path.join(dataDir, "gateway-auth.json");
 }
 
-export async function loadOrCreateGatewayToken(dataDir: string, env: NodeJS.ProcessEnv = process.env): Promise<{ token: string; authFile: string }> {
+export async function loadOrCreateGatewayToken(
+  dataDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<GatewayTokenSettings & { authFile: string }> {
   const authFile = authFilePath(dataDir);
   const envToken = env.ORKESTRATOR_GATEWAY_TOKEN?.trim();
   if (envToken) {
-    if (envToken.length < 16) throw new Error("ORKESTRATOR_GATEWAY_TOKEN must be at least 16 characters");
-    return { token: envToken, authFile };
+    try {
+      return {
+        token: normalizeGatewayToken(envToken),
+        authFile,
+        editable: false,
+        source: "environment",
+      };
+    } catch (error) {
+      if (error instanceof GatewayTokenValidationError) {
+        throw new Error(`Invalid ORKESTRATOR_GATEWAY_TOKEN: ${error.message}`);
+      }
+      throw error;
+    }
   }
 
   const existing = await readFile(authFile, "utf8")
     .then((contents) => JSON.parse(contents) as { token?: unknown })
     .catch(() => null);
-  if (typeof existing?.token === "string" && existing.token.length >= 16) {
-    return { token: existing.token, authFile };
+  if (typeof existing?.token === "string" && getGatewayTokenValidationError(existing.token) === null) {
+    return { token: normalizeGatewayToken(existing.token), authFile, editable: true, source: "file" };
   }
 
   const token = randomBytes(32).toString("base64url");
+  await persistGatewayToken(authFile, token);
+  return { token, authFile, editable: true, source: "file" };
+}
+
+async function persistGatewayToken(authFile: string, token: string): Promise<void> {
   await mkdir(path.dirname(authFile), { recursive: true });
-  await writeFile(authFile, `${JSON.stringify({ token }, null, 2)}\n`, { mode: 0o600 });
-  return { token, authFile };
+  const temporaryFile = `${authFile}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  try {
+    await writeFile(temporaryFile, `${JSON.stringify({ token }, null, 2)}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+    await rename(temporaryFile, authFile);
+  } finally {
+    await rm(temporaryFile, { force: true }).catch(() => undefined);
+  }
 }
 
 async function readRequestBody(request: IncomingMessage, maxBytes = MAX_JSON_BODY_BYTES): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let total = 0;
+  let tooLarge = false;
 
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buffer.length;
-    if (total > maxBytes) throw new Error("Request body is too large");
-    chunks.push(buffer);
+    if (total > maxBytes) {
+      tooLarge = true;
+    } else {
+      chunks.push(buffer);
+    }
   }
 
+  if (tooLarge) throw new RequestBodyTooLargeError("Request body is too large");
   return Buffer.concat(chunks);
 }
 
 async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
   const body = await readRequestBody(request);
   if (body.length === 0) return {};
-  const parsed = JSON.parse(body.toString("utf8")) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body.toString("utf8")) as unknown;
+  } catch {
+    throw new InvalidRequestBodyError("Malformed JSON request body");
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Expected JSON object body");
+    throw new InvalidRequestBodyError("Expected JSON object body");
   }
   return parsed as Record<string, unknown>;
 }
@@ -271,10 +324,6 @@ function loginPage(message = ""): string {
 
 function wantsHtml(request: IncomingMessage): boolean {
   return request.headers.accept?.includes("text/html") ?? false;
-}
-
-function cookieHeader(token: string): string {
-  return `${AUTH_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/`;
 }
 
 function filterGatewayCookie(cookieHeader: string | string[] | undefined): string | undefined {
@@ -413,6 +462,7 @@ export class OrkestratorGateway {
   private proxyRequests = new Set<ReturnType<typeof http.request>>();
   private sockets = new Set<Socket>();
   private keepalive: ReturnType<typeof setInterval> | null = null;
+  private tokenTransition: Promise<unknown> = Promise.resolve();
 
   constructor(options: OrkestratorGatewayOptions) {
     this.backend = options.backend;
@@ -443,7 +493,7 @@ export class OrkestratorGateway {
     }
 
     const port = this.port ?? parsePort(this.env.ORKESTRATOR_GATEWAY_PORT, DEFAULT_GATEWAY_PORT);
-    const auth = await loadOrCreateGatewayToken(this.dataDir, this.env);
+    const auth = await this.enqueueTokenOperation(() => loadOrCreateGatewayToken(this.dataDir, this.env));
     this.token = auth.token;
     this.authFile = auth.authFile;
 
@@ -477,6 +527,42 @@ export class OrkestratorGateway {
     this.logger.info(`[RemoteGateway] Auth token stored at ${this.authFile}`);
 
     return { bindAddress, port: resolvedPort, url, token: this.token, authFile: this.authFile };
+  }
+
+  async getTokenSettings(): Promise<GatewayTokenSettings> {
+    return this.enqueueTokenOperation(async () => {
+      const auth = await loadOrCreateGatewayToken(this.dataDir, this.env);
+      this.authFile = auth.authFile;
+      return {
+        token: this.token || auth.token,
+        editable: auth.editable,
+        source: auth.source,
+      };
+    });
+  }
+
+  async setToken(value: string): Promise<GatewayTokenSettings> {
+    return this.enqueueTokenOperation(async () => {
+      const envToken = this.env.ORKESTRATOR_GATEWAY_TOKEN?.trim();
+      if (envToken) {
+        throw new GatewayTokenValidationError(
+          "Gateway token is managed by ORKESTRATOR_GATEWAY_TOKEN and cannot be changed here",
+        );
+      }
+
+      const token = normalizeGatewayToken(value);
+      const authFile = authFilePath(this.dataDir);
+      await persistGatewayToken(authFile, token);
+      this.token = token;
+      this.authFile = authFile;
+      return { token, editable: true, source: "file" };
+    });
+  }
+
+  private enqueueTokenOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.tokenTransition.catch(() => undefined).then(operation);
+    this.tokenTransition = result;
+    return result;
   }
 
   async stop(): Promise<void> {
@@ -546,6 +632,11 @@ export class OrkestratorGateway {
       return;
     }
 
+    if (url.pathname === `${API_PREFIX}/gateway-settings`) {
+      await this.handleGatewaySettings(request, response);
+      return;
+    }
+
     if (url.pathname === `${API_PREFIX}/invoke`) {
       await this.handleInvoke(request, response);
       return;
@@ -562,6 +653,49 @@ export class OrkestratorGateway {
     }
 
     await this.serveStatic(request, url, response);
+  }
+
+  private async handleGatewaySettings(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (request.method === "GET") {
+      jsonResponse(response, 200, await this.getTokenSettings());
+      return;
+    }
+    if (request.method !== "PUT") {
+      response.writeHead(405, { allow: "GET, PUT" });
+      response.end();
+      return;
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      body = await readJsonBody(request);
+    } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) {
+        jsonResponse(response, 413, { error: error.message });
+        return;
+      }
+      if (error instanceof InvalidRequestBodyError) {
+        jsonResponse(response, 400, { error: error.message });
+        return;
+      }
+      throw error;
+    }
+    if (typeof body.token !== "string") {
+      jsonResponse(response, 400, { error: "Expected token to be a string" });
+      return;
+    }
+
+    try {
+      const settings = await this.setToken(body.token);
+      jsonResponse(response, 200, settings, { "set-cookie": gatewayTokenCookieHeader(settings.token) });
+    } catch (error) {
+      if (error instanceof GatewayTokenValidationError) {
+        jsonResponse(response, 400, { error: error.message });
+        return;
+      }
+      this.logger.error("[RemoteGateway] Failed to persist gateway token:", error);
+      jsonResponse(response, 500, { error: "Unable to persist gateway token" });
+    }
   }
 
   private async handleLogin(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -583,7 +717,7 @@ export class OrkestratorGateway {
 
     response.writeHead(303, {
       location: "/",
-      "set-cookie": cookieHeader(this.token),
+      "set-cookie": gatewayTokenCookieHeader(this.token),
       "cache-control": "no-store",
     });
     response.end();

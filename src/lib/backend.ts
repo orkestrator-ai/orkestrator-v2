@@ -5,6 +5,7 @@ import type {
   EnvironmentType,
   AppConfig,
   GlobalConfig,
+  GatewayTokenSettings,
   WebClientStatus,
   RepositoryConfig,
   EnvironmentStatus,
@@ -254,6 +255,20 @@ export async function setWebClientEnabled(enabled: boolean): Promise<WebClientSt
     throw new Error("Web client controls are only available in the desktop app");
   }
   return window.orkestrator.webClient.setEnabled(enabled);
+}
+
+export async function getGatewayTokenSettings(): Promise<GatewayTokenSettings> {
+  if (!window.orkestrator?.webClient) {
+    throw new Error("Gateway token settings are unavailable");
+  }
+  return window.orkestrator.webClient.getTokenSettings();
+}
+
+export async function setGatewayToken(token: string): Promise<GatewayTokenSettings> {
+  if (!window.orkestrator?.webClient) {
+    throw new Error("Gateway token settings are unavailable");
+  }
+  return window.orkestrator.webClient.setToken(token);
 }
 
 export async function getRepositoryConfig(projectId: string): Promise<RepositoryConfig> {

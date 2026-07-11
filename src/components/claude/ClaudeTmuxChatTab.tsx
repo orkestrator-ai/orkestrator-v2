@@ -169,8 +169,11 @@ const DEFAULT_MODEL = "default";
  * an old saved preference still resolves to a sensible current model.
  */
 const LEGACY_TMUX_MODEL_ALIASES: Record<string, string> = {
+  "claude-fable-5": "default",
+  "claude-opus-4-8": "default",
   "claude-opus-4-7": "default",
   "claude-opus-4-6": "default",
+  "claude-sonnet-5": "sonnet",
   "claude-sonnet-4-6": "sonnet",
   "claude-haiku-4-5": "haiku",
   "claude-haiku-4-5-20251001": "haiku",

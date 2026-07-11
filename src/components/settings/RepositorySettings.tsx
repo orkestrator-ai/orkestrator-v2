@@ -40,9 +40,10 @@ const DEFAULT_CONFIG: RepositoryConfig = {
 
 /** Fallback Claude models when no bridge server is running */
 const FALLBACK_CLAUDE_MODELS: ClaudeModel[] = [
-  { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high"] },
-  { id: "claude-opus-4-6", name: "Claude Opus 4.6", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high"] },
-  { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high"] },
+  { id: "claude-fable-5", name: "Claude Fable 5", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },
+  { id: "claude-opus-4-8", name: "Claude Opus 4.8", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },
+  { id: "claude-sonnet-5", name: "Claude Sonnet 5", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },
+  { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", supportsEffort: false },
 ];
 
 /** Sentinel value representing "use the app-level default" for project overrides */

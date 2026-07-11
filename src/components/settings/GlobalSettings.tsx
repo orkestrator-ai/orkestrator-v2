@@ -63,7 +63,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     global.defaultAgent || "claude"
   );
   const [opencodeModel, setOpencodeModel] = useState(
-    global.opencodeModel || "opencode/grok-code"
+    global.opencodeModel || "opencode/claude-sonnet-5"
   );
   const [opencodeMode, setOpencodeMode] = useState<OpenCodeMode>(
     global.opencodeMode || "terminal"
@@ -122,7 +122,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setAllowedDomains((global.allowedDomains || []).join("\n"));
     setPreferredEditor(global.preferredEditor || "vscode");
     setDefaultAgent(global.defaultAgent || "claude");
-    setOpencodeModel(global.opencodeModel || "opencode/grok-code");
+    setOpencodeModel(global.opencodeModel || "opencode/claude-sonnet-5");
     setOpencodeMode(global.opencodeMode || "terminal");
     setClaudeMode(global.claudeMode || "terminal");
     setClaudeNativeBackend(global.claudeNativeBackend || "sdk");
@@ -158,7 +158,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       allowedDomains !== (global.allowedDomains || []).join("\n") ||
       preferredEditor !== (global.preferredEditor || "vscode") ||
       defaultAgent !== (global.defaultAgent || "claude") ||
-      opencodeModel !== (global.opencodeModel || "opencode/grok-code") ||
+      opencodeModel !== (global.opencodeModel || "opencode/claude-sonnet-5") ||
       opencodeMode !== (global.opencodeMode || "terminal") ||
       claudeMode !== (global.claudeMode || "terminal") ||
       claudeNativeBackend !== (global.claudeNativeBackend || "sdk") ||
@@ -272,8 +272,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         preferredEditor,
         defaultAgent,
         opencodeModel,
-        claudeModel: global.claudeModel || "claude-sonnet-4-6",
-        codexModel: global.codexModel || "gpt-5.3-codex",
+        claudeModel: global.claudeModel || "claude-sonnet-5",
+        codexModel: global.codexModel || "gpt-5.4",
         codexReasoningEffort: global.codexReasoningEffort || "medium",
         opencodeMode,
         claudeMode,
@@ -335,7 +335,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setAllowedDomains((global.allowedDomains || []).join("\n"));
     setPreferredEditor(global.preferredEditor || "vscode");
     setDefaultAgent(global.defaultAgent || "claude");
-    setOpencodeModel(global.opencodeModel || "opencode/grok-code");
+    setOpencodeModel(global.opencodeModel || "opencode/claude-sonnet-5");
     setOpencodeMode(global.opencodeMode || "terminal");
     setClaudeMode(global.claudeMode || "terminal");
     setClaudeNativeBackend(global.claudeNativeBackend || "sdk");

@@ -25,34 +25,14 @@ export interface CodexSlashCommand {
 
 export const CODEX_MODELS: CodexModel[] = [
   {
-    id: "gpt-5.3-codex",
-    name: "gpt-5.3-codex",
-    description: "Latest frontier agentic coding model.",
-  },
-  {
     id: "gpt-5.4",
     name: "gpt-5.4",
     description: "Latest frontier agentic coding model.",
   },
   {
-    id: "gpt-5.2-codex",
-    name: "gpt-5.2-codex",
-    description: "Frontier agentic coding model.",
-  },
-  {
-    id: "gpt-5.1-codex-max",
-    name: "gpt-5.1-codex-max",
-    description: "Codex-optimized flagship for deep and fast reasoning.",
-  },
-  {
-    id: "gpt-5.2",
-    name: "gpt-5.2",
-    description: "Latest frontier model with improvements across knowledge, reasoning and coding.",
-  },
-  {
-    id: "gpt-5.1-codex-mini",
-    name: "gpt-5.1-codex-mini",
-    description: "Optimized for codex. Cheaper, faster, but less capable.",
+    id: "gpt-5.4-mini",
+    name: "GPT-5.4-Mini",
+    description: "Smaller frontier agentic coding model.",
   },
 ];
 

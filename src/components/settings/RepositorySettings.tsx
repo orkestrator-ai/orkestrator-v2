@@ -424,6 +424,13 @@ export function RepositorySettings({
     }
   }, [effectiveAgent, claudeModels, openCodeModelsMap, codexModels]);
 
+  const selectedCodexModel = useMemo(() => {
+    if (effectiveAgent !== "codex") return undefined;
+    const models = codexModels.length > 0 ? codexModels : CODEX_MODELS;
+    const effectiveModel = defaultModel || config.global.codexModel;
+    return models.find((model) => model.id === effectiveModel);
+  }, [codexModels, config.global.codexModel, defaultModel, effectiveAgent]);
+
   const availableEffortLevels = useMemo((): { value: string; label: string }[] => {
     switch (effectiveAgent) {
       case "claude": {
@@ -447,12 +454,28 @@ export function RepositorySettings({
         }
         return OPENCODE_DEFAULT_VARIANTS.map((v) => ({ value: v, label: v.charAt(0).toUpperCase() + v.slice(1) }));
       }
-      case "codex":
-        return CODEX_EFFORT_LEVELS;
+      case "codex": {
+        const supportedEfforts = selectedCodexModel?.reasoningEfforts;
+        return supportedEfforts?.length
+          ? CODEX_EFFORT_LEVELS.filter((effort) => supportedEfforts.includes(effort.value))
+          : CODEX_EFFORT_LEVELS;
+      }
       default:
         return [];
     }
-  }, [effectiveAgent, defaultModel, claudeModels, openCodeModelsMap]);
+  }, [effectiveAgent, defaultModel, claudeModels, openCodeModelsMap, selectedCodexModel]);
+
+  useEffect(() => {
+    if (
+      effectiveAgent === "codex"
+      && selectedCodexModel
+      && defaultEffort
+      && selectedCodexModel.reasoningEfforts?.length
+      && !selectedCodexModel.reasoningEfforts.includes(defaultEffort as CodexReasoningEffort)
+    ) {
+      setDefaultEffort("");
+    }
+  }, [defaultEffort, effectiveAgent, selectedCodexModel]);
 
   const agentLabel = effectiveAgent === "claude" ? "Claude" : effectiveAgent === "opencode" ? "OpenCode" : "Codex";
   const appDefaultAgentLabel = globalDefaultAgent === "claude" ? "Claude" : globalDefaultAgent === "opencode" ? "OpenCode" : "Codex";

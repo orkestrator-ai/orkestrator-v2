@@ -442,6 +442,95 @@ describe("RepositorySettings", () => {
       expect(values).toContain("xhigh");
     });
 
+    test("filters Codex efforts by model and clears an unsupported saved effort", async () => {
+      renderSettings({
+        config: {
+          global: { defaultAgent: "codex" } as AppConfig["global"],
+          repositories: {
+            "project-1": {
+              defaultBranch: "main",
+              prBaseBranch: "main",
+              defaultAgent: "codex",
+              defaultModel: "gpt-5.4",
+              defaultEffort: "ultra",
+            },
+          },
+        },
+        prepareStores: () => {
+          useCodexStore.setState({
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                reasoningEfforts: ["low", "medium", "high", "xhigh"],
+              },
+              {
+                id: "gpt-5.6-sol",
+                name: "GPT-5.6 Sol",
+                reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+              },
+            ],
+          });
+        },
+      });
+
+      let selects = getMockSelects();
+      let effortSelect = selects[3]!;
+      let effortValues = Array.from(effortSelect.options).map((option) => option.value);
+      expect(effortValues).not.toContain("max");
+      expect(effortValues).not.toContain("ultra");
+      await waitFor(() => expect(effortSelect.value).toBe(""));
+
+      const modelSelect = selects[2]!;
+      fireEvent.change(modelSelect, { target: { value: "gpt-5.6-sol" } });
+
+      selects = getMockSelects();
+      effortSelect = selects[3]!;
+      effortValues = Array.from(effortSelect.options).map((option) => option.value);
+      expect(effortValues).toContain("max");
+      expect(effortValues).toContain("ultra");
+
+      fireEvent.change(effortSelect, { target: { value: "ultra" } });
+      fireEvent.click(getSaveButton());
+      await waitFor(() => expect(mockUpdateRepositoryConfig).toHaveBeenCalledTimes(1));
+      expect(getSavedConfig()).toEqual(expect.objectContaining({
+        defaultModel: "gpt-5.6-sol",
+        defaultEffort: "ultra",
+      }));
+    });
+
+    test("filters Codex efforts using the inherited global model", () => {
+      renderSettings({
+        config: {
+          global: {
+            defaultAgent: "codex",
+            codexModel: "gpt-5.4",
+          } as AppConfig["global"],
+          repositories: {
+            "project-1": {
+              defaultBranch: "main",
+              prBaseBranch: "main",
+              defaultAgent: "codex",
+            },
+          },
+        },
+        prepareStores: () => {
+          useCodexStore.setState({
+            models: [{
+              id: "gpt-5.4",
+              name: "GPT-5.4",
+              reasoningEfforts: ["low", "medium", "high", "xhigh"],
+            }],
+          });
+        },
+      });
+
+      const effortSelect = getMockSelects()[3]!;
+      const effortValues = Array.from(effortSelect.options).map((option) => option.value);
+      expect(effortValues).not.toContain("max");
+      expect(effortValues).not.toContain("ultra");
+    });
+
     test("shows a no-models hint when the effective agent has no available models", () => {
       renderSettings({
         config: {
@@ -467,6 +556,15 @@ describe("RepositorySettings", () => {
       fireEvent.change(screen.getByLabelText("Name"), { target: { value: "   " } });
 
       expect(screen.getByText("Name cannot be empty")).toBeTruthy();
+      expect((getSaveButton() as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    test("rejects project names longer than 100 characters", () => {
+      renderSettings({ section: "general" });
+
+      fireEvent.change(screen.getByLabelText("Name"), { target: { value: "x".repeat(101) } });
+
+      expect(screen.getByText("Name cannot exceed 100 characters")).toBeTruthy();
       expect((getSaveButton() as HTMLButtonElement).disabled).toBe(true);
     });
 
@@ -611,6 +709,25 @@ describe("RepositorySettings", () => {
       expect((getSaveButton() as HTMLButtonElement).disabled).toBe(true);
     });
 
+    test("disables save when a container port is outside the valid range", () => {
+      renderSettings({
+        section: "ports",
+        config: {
+          repositories: {
+            "project-1": {
+              defaultBranch: "main",
+              prBaseBranch: "main",
+              defaultPortMappings: [
+                { containerPort: 0, hostPort: 4000, protocol: "tcp" },
+              ],
+            },
+          },
+        },
+      });
+
+      expect((getSaveButton() as HTMLButtonElement).disabled).toBe(true);
+    });
+
     test("omits an out-of-range entry port on save", async () => {
       renderSettings({ section: "ports" });
 
@@ -651,6 +768,41 @@ describe("RepositorySettings", () => {
       });
 
       expect((getSaveButton() as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    test("rejects duplicate file paths case-insensitively", () => {
+      renderSettings({
+        section: "files",
+        config: {
+          repositories: {
+            "project-1": {
+              defaultBranch: "main",
+              prBaseBranch: "main",
+              filesToCopy: ["Config/.env", "config/.ENV"],
+            },
+          },
+        },
+      });
+
+      expect((getSaveButton() as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    test("disables file browsing until a local path is configured", () => {
+      renderSettings({
+        section: "files",
+        config: {
+          repositories: {
+            "project-1": {
+              defaultBranch: "main",
+              prBaseBranch: "main",
+              filesToCopy: [""],
+            },
+          },
+        },
+      });
+
+      expect((within(getSettingsContent()).getByTitle("Set local path first") as HTMLButtonElement).disabled)
+        .toBe(true);
     });
 
     test("browse file converts an absolute path under the repo to a relative path", async () => {

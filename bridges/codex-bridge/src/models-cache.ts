@@ -82,6 +82,7 @@ export function normalizeReasoningOptions(value: unknown): ModelReasoningOption[
   }
 
   const options: ModelReasoningOption[] = [];
+  const seenEfforts = new Set<BridgeReasoningEffort>();
   for (const entry of value) {
     const rawEffort =
       typeof (entry as ModelCacheReasoningLevel | null)?.effort === "string"
@@ -96,6 +97,8 @@ export function normalizeReasoningOptions(value: unknown): ModelReasoningOption[
     }
 
     const effort = rawEffort as BridgeReasoningEffort;
+    if (seenEfforts.has(effort)) continue;
+    seenEfforts.add(effort);
     const description =
       typeof (entry as ModelCacheReasoningLevel | null)?.description === "string"
         ? ((entry as ModelCacheReasoningLevel).description as string)

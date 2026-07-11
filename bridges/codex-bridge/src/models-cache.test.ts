@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
   ModelCatalogCache,
+  normalizeReasoningOptions,
   parseModelCatalog,
   type BridgeModel,
 } from "./models-cache.js";
@@ -87,6 +88,10 @@ describe("parseModelCatalog", () => {
     expect(parseModelCatalog(JSON.stringify({ models: "not an array" }))).toEqual([]);
   });
 
+  test("throws on malformed JSON so cache readers can fall back", () => {
+    expect(() => parseModelCatalog("{not-json")).toThrow();
+  });
+
   test("skips reasoning entries with unknown effort values", () => {
     const raw = JSON.stringify({
       models: [
@@ -102,6 +107,33 @@ describe("parseModelCatalog", () => {
     const [noisy] = parseModelCatalog(raw);
     expect(noisy?.reasoningEfforts).toEqual(["high"]);
     expect(noisy?.defaultReasoningEffort).toBe("high");
+  });
+});
+
+describe("normalizeReasoningOptions", () => {
+  test("deduplicates effort levels and fills missing descriptions", () => {
+    expect(normalizeReasoningOptions([
+      { effort: "max" },
+      { effort: "max", description: "Duplicate" },
+      { effort: "ultra", description: "Delegates work" },
+    ])).toEqual([
+      {
+        effort: "max",
+        label: "Max",
+        description: "Maximum reasoning depth for the hardest problems",
+      },
+      {
+        effort: "ultra",
+        label: "Ultra",
+        description: "Delegates work",
+      },
+    ]);
+  });
+
+  test("falls back to medium for non-array and wholly invalid inputs", () => {
+    for (const value of [null, {}, [{ effort: "unknown" }]]) {
+      expect(normalizeReasoningOptions(value).map((option) => option.effort)).toEqual(["medium"]);
+    }
   });
 });
 

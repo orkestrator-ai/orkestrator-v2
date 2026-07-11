@@ -2056,6 +2056,8 @@ async function runPrompt(
 
 export const __testing = {
   applyRuntimeEnvironmentOutput,
+  BRIDGE_MODEL_CACHE_VERSION,
+  buildThreadOptions,
   cleanupIdleSessions,
   FALLBACK_MODELS,
   EXPIRED_SESSION_RETENTION_MS,
@@ -2065,6 +2067,7 @@ export const __testing = {
     options?: { receivedAt?: string },
   ) => Promise<any>,
   refreshRuntimeEnvironment,
+  readPersistedBridgeCache,
   runInlinePromptCommand,
   runPrompt: runPrompt as (session: any, prompt: string) => Promise<void>,
   buildResumeRecoveryPromptForTesting: buildResumeRecoveryPrompt,
@@ -2075,6 +2078,7 @@ export const __testing = {
     freshThreadFactoryForTesting = factory;
   },
   sessions: sessions as Map<string, any>,
+  writePersistedBridgeCache,
 };
 
 app.use(

@@ -2049,6 +2049,7 @@ async function runPrompt(
 export const __testing = {
   applyRuntimeEnvironmentOutput,
   cleanupIdleSessions,
+  FALLBACK_MODELS,
   EXPIRED_SESSION_RETENTION_MS,
   expiredSessions: expiredSessions as Map<string, any>,
   rebuildAssistantMessage: rebuildAssistantMessage as (

@@ -39,7 +39,7 @@ const DEFAULT_CONFIG: RepositoryConfig = {
 };
 
 /** Fallback Claude models when no bridge server is running */
-const FALLBACK_CLAUDE_MODELS: ClaudeModel[] = [
+export const FALLBACK_CLAUDE_MODELS: ClaudeModel[] = [
   { id: "claude-fable-5", name: "Claude Fable 5", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },
   { id: "claude-opus-4-8", name: "Claude Opus 4.8", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },
   { id: "claude-sonnet-5", name: "Claude Sonnet 5", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },

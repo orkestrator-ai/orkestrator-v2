@@ -17,5 +17,6 @@
     "rootDir": ".",
     "sourceMap": true
   },
-  "include": ["electron/**/*.ts", "scripts/electron-dev.ts"]
+  "include": ["electron/**/*.ts", "scripts/electron-dev.ts"],
+  "exclude": ["electron/**/*.test.ts"]
 }

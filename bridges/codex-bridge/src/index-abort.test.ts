@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TransformStream } from "node:stream/web";
+import type { BridgeModel } from "./models-cache.js";
 
 process.env.CODEX_BRIDGE_NO_SERVER = "1";
 globalThis.TransformStream = TransformStream as typeof globalThis.TransformStream;
@@ -920,7 +921,11 @@ describe("codex bridge abort handling", () => {
 
     const configResponse = await app.request("/session/message-session/config", {
       method: "POST",
-      body: JSON.stringify({ mode: "plan", fastMode: true }),
+      body: JSON.stringify({
+        mode: "plan",
+        fastMode: true,
+        modelReasoningEffort: "ultra",
+      }),
       headers: { "Content-Type": "application/json" },
     });
 
@@ -928,6 +933,9 @@ describe("codex bridge abort handling", () => {
     expect(await configResponse.json()).toEqual({ status: "updated" });
     expect(__testing.sessions.get("message-session")?.conversationMode).toBe("plan");
     expect(__testing.sessions.get("message-session")?.fastMode).toBe(true);
+    expect(
+      __testing.sessions.get("message-session")?.threadOptions.modelReasoningEffort,
+    ).toBe("ultra");
   });
 
   test("prompt and abort routes restore compacted sessions before handling requests", async () => {
@@ -1037,6 +1045,46 @@ describe("codex bridge abort handling", () => {
         ]),
       });
     });
+  });
+
+  test("rejects stale bridge model caches and writes the current version", async () => {
+    await withBridgeEnv(async ({ codexHome }) => {
+      const cacheDir = join(codexHome, "orkestrator-bridge");
+      const cachePath = join(cacheDir, "models-cache.json");
+      mkdirSync(cacheDir, { recursive: true });
+      writeFileSync(cachePath, JSON.stringify({
+        version: __testing.BRIDGE_MODEL_CACHE_VERSION - 1,
+        models: [{ id: "stale", name: "Stale" }],
+      }));
+
+      await expect(__testing.readPersistedBridgeCache()).resolves.toBeNull();
+
+      const models: BridgeModel[] = [{
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        reasoningEfforts: ["max", "ultra"],
+        reasoningOptions: [
+          { effort: "max", label: "Max" },
+          { effort: "ultra", label: "Ultra" },
+        ],
+        defaultReasoningEffort: "max",
+      }];
+      await __testing.writePersistedBridgeCache(models);
+
+      const persisted = JSON.parse(readFileSync(cachePath, "utf8"));
+      expect(persisted.version).toBe(__testing.BRIDGE_MODEL_CACHE_VERSION);
+      expect(persisted.models).toEqual(models);
+      await expect(__testing.readPersistedBridgeCache()).resolves.toEqual(models);
+    });
+  });
+
+  test("buildThreadOptions accepts new efforts and rejects unknown values", () => {
+    expect(__testing.buildThreadOptions({ modelReasoningEffort: "max" }).modelReasoningEffort)
+      .toBe("max");
+    expect(__testing.buildThreadOptions({ modelReasoningEffort: "ultra" }).modelReasoningEffort)
+      .toBe("ultra");
+    expect(__testing.buildThreadOptions({ modelReasoningEffort: "turbo" }).modelReasoningEffort)
+      .toBeUndefined();
   });
 
   test("session create, list, and resume routes cover persisted sessions", async () => {

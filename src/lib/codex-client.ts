@@ -28,16 +28,27 @@ export const CODEX_MODELS: CodexModel[] = [
     id: "gpt-5.4",
     name: "gpt-5.4",
     description: "Latest frontier agentic coding model.",
+    reasoningEfforts: ["low", "medium", "high", "xhigh"],
+    defaultReasoningEffort: "medium",
   },
   {
     id: "gpt-5.4-mini",
     name: "GPT-5.4-Mini",
     description: "Smaller frontier agentic coding model.",
+    reasoningEfforts: ["low", "medium", "high", "xhigh"],
+    defaultReasoningEffort: "medium",
   },
 ];
 
 export const DEFAULT_CODEX_MODEL = CODEX_MODELS[0]!.id;
-export type CodexReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+export type CodexReasoningEffort =
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "ultra";
 export type CodexConversationMode = "build" | "plan";
 
 interface CodexModelsResponse {

@@ -105,7 +105,14 @@ export interface AppConfig {
     opencodeModel: string;
     claudeModel?: string;
     codexModel: string;
-    codexReasoningEffort: "minimal" | "low" | "medium" | "high" | "xhigh";
+    codexReasoningEffort:
+      | "minimal"
+      | "low"
+      | "medium"
+      | "high"
+      | "xhigh"
+      | "max"
+      | "ultra";
     opencodeMode: OpenCodeMode;
     claudeMode: ClaudeMode;
     claudeNativeBackend: ClaudeNativeBackend;

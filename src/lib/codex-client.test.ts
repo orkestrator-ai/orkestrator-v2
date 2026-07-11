@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test, mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, mock } from "bun:test";
 import {
   CODEX_MODELS,
   DEFAULT_CODEX_MODEL,
@@ -14,6 +14,7 @@ import {
   listSessions,
   resumeSession,
   sendPrompt,
+  subscribeToEvents,
   updateSessionConfig,
   type CodexClient,
 } from "./codex-client";
@@ -150,6 +151,27 @@ describe("codex-client createSession", () => {
     expect(session.title).toBe("My Session");
   });
 
+  test("serializes max and ultra reasoning efforts", async () => {
+    mockFetch(async () =>
+      new Response(JSON.stringify({ sessionId: "session-abc" }), { status: 201 }),
+    );
+
+    await createSession(client, {
+      model: "gpt-5.6-sol",
+      modelReasoningEffort: "ultra",
+    });
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://127.0.0.1:4000/session/create",
+      expect.objectContaining({
+        body: JSON.stringify({
+          model: "gpt-5.6-sol",
+          modelReasoningEffort: "ultra",
+        }),
+      }),
+    );
+  });
+
   test("throws on non-ok HTTP response with status and body", async () => {
     mockFetch(async () =>
       new Response("Internal Server Error", { status: 500 }),
@@ -254,6 +276,29 @@ describe("codex-client getSessionMessages", () => {
     expect(resumed?.messages).toHaveLength(1);
     expect(resumed?.messages[0]?.id).toBe("msg-2");
     expect(resumed?.messages[0]?.planReview).toBe(true);
+  });
+
+  test("serializes max reasoning when resuming a session", async () => {
+    mockFetch(async () =>
+      new Response(JSON.stringify({ sessionId: "session-1", messages: [] }), { status: 201 }),
+    );
+
+    await resumeSession(client, {
+      threadId: "thread-1",
+      model: "gpt-5.6-luna",
+      modelReasoningEffort: "max",
+    });
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://127.0.0.1:4000/session/resume",
+      expect.objectContaining({
+        body: JSON.stringify({
+          threadId: "thread-1",
+          model: "gpt-5.6-luna",
+          modelReasoningEffort: "max",
+        }),
+      }),
+    );
   });
 
   test("returns messages as-is when no TodoWrite parts exist", async () => {
@@ -459,6 +504,15 @@ describe("CODEX_MODELS catalog", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  test("bundled fallback models expose only their supported reasoning efforts", () => {
+    for (const model of CODEX_MODELS) {
+      expect(model.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh"]);
+      expect(model.defaultReasoningEffort).toBe("medium");
+      expect(model.reasoningEfforts).not.toContain("max");
+      expect(model.reasoningEfforts).not.toContain("ultra");
+    }
+  });
+
   test("advertises the current gpt-5.4 family and no retired ids", () => {
     const ids = CODEX_MODELS.map((m) => m.id);
     expect(ids).toContain("gpt-5.4");
@@ -479,5 +533,73 @@ describe("CODEX_MODELS catalog", () => {
     expect(DEFAULT_CODEX_MODEL).toBe(CODEX_MODELS[0]!.id);
     expect(DEFAULT_CODEX_MODEL).toBe("gpt-5.4");
     expect(CODEX_MODELS.map((m) => m.id)).toContain(DEFAULT_CODEX_MODEL);
+  });
+});
+
+describe("codex-client subscribeToEvents", () => {
+  const originalEventSource = globalThis.EventSource;
+
+  class MockEventSource {
+    static instances: MockEventSource[] = [];
+    readonly listeners = new Map<string, Array<(event: MessageEvent) => void>>();
+    readonly close = mock(() => {});
+    onerror: (() => void) | null = null;
+
+    constructor(readonly url: string) {
+      MockEventSource.instances.push(this);
+    }
+
+    addEventListener(type: string, listener: (event: MessageEvent) => void) {
+      const listeners = this.listeners.get(type) ?? [];
+      listeners.push(listener);
+      this.listeners.set(type, listeners);
+    }
+
+    emit(type: string, data: Record<string, unknown>) {
+      const event = { type, data: JSON.stringify(data) } as MessageEvent;
+      for (const listener of this.listeners.get(type) ?? []) listener(event);
+    }
+  }
+
+  beforeEach(() => {
+    MockEventSource.instances = [];
+    (globalThis as unknown as { EventSource: unknown }).EventSource = MockEventSource;
+  });
+
+  afterEach(() => {
+    (globalThis as unknown as { EventSource: unknown }).EventSource = originalEventSource;
+  });
+
+  test("yields parsed events and closes when iteration is aborted", async () => {
+    const controller = new AbortController();
+    const iterator = subscribeToEvents(client, controller.signal)[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    const source = MockEventSource.instances[0]!;
+
+    expect(source.url).toBe("http://127.0.0.1:4000/event/subscribe");
+    source.emit("session.updated", { sessionId: "session-1", status: "running" });
+    await expect(pending).resolves.toEqual({
+      done: false,
+      value: {
+        type: "session.updated",
+        sessionId: "session-1",
+        data: { sessionId: "session-1", status: "running" },
+      },
+    });
+
+    controller.abort();
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+    expect(source.close).toHaveBeenCalledTimes(1);
+  });
+
+  test("rejects a pending read when the event stream errors", async () => {
+    const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    const source = MockEventSource.instances[0]!;
+
+    source.onerror?.();
+
+    await expect(pending).rejects.toThrow("SSE connection error");
+    expect(source.close).toHaveBeenCalledTimes(1);
   });
 });

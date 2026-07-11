@@ -131,7 +131,7 @@ const defaultModels: CodexModel[] = [
     id: "gpt-5.3-codex",
     name: "gpt-5.3-codex",
     description: "Latest frontier agentic coding model.",
-    reasoningEfforts: ["medium", "high", "xhigh"],
+    reasoningEfforts: ["medium", "high", "xhigh", "max", "ultra"],
     defaultReasoningEffort: "high",
   },
   {
@@ -254,6 +254,25 @@ describe("CodexComposeBar", () => {
   test("renders reasoning effort label from selected model", () => {
     renderComposeBar({ selectedReasoningEffort: "xhigh" });
     expect(screen.getByText("Extra high")).toBeTruthy();
+  });
+
+  test.each([
+    ["max", "Max"],
+    ["ultra", "Ultra"],
+  ] as const)("renders the %s reasoning effort from the CLI model catalog", (effort, label) => {
+    renderComposeBar({ selectedReasoningEffort: effort });
+    expect(screen.getByText(label)).toBeTruthy();
+  });
+
+  test.each([
+    ["max", "Max"],
+    ["ultra", "Ultra"],
+  ] as const)("selects the %s reasoning effort from the model menu", async (effort, label) => {
+    const { onReasoningEffortChange } = renderComposeBar();
+    fireEvent.pointerDown(screen.getByTitle("Choose reasoning effort"));
+    fireEvent.click(await screen.findByText(label));
+
+    expect(onReasoningEffortChange).toHaveBeenCalledWith(effort);
   });
 
   test("falls back to model default reasoning effort when current effort unsupported", () => {

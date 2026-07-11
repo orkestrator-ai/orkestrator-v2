@@ -56,6 +56,13 @@ interface UseEnvironmentsOptions {
   listenForRenameEvents?: boolean;
 }
 
+interface LoadEnvironmentsOptions {
+  /** Refresh store data without changing user-visible loading or error state. */
+  silent?: boolean;
+  /** Reconcile persisted container state with Docker before returning the list. */
+  reconcileStatus?: boolean;
+}
+
 function bindSetupTerminalSession(environment: Environment, sessionId: string): void {
   const key = createSessionKey(environment.containerId ?? null, "default", environment.id);
   const store = useTerminalSessionStore.getState();
@@ -134,9 +141,10 @@ export function useEnvironments(
     }
 
     let unlisten: UnlistenFn | null = null;
+    let disposed = false;
 
     const setupListener = async () => {
-      unlisten = await listen<EnvironmentRenamedPayload>("environment-renamed", (event) => {
+      const stop = await listen<EnvironmentRenamedPayload>("environment-renamed", (event) => {
         console.log("[useEnvironments] Received environment-renamed event:", event.payload);
         const { environment_id, new_name, new_branch } = event.payload;
 
@@ -160,11 +168,14 @@ export function useEnvironments(
           branch: new_branch,
         });
       });
+      if (disposed) stop();
+      else unlisten = stop;
     };
 
     setupListener();
 
     return () => {
+      disposed = true;
       if (unlisten) {
         unlisten();
       }
@@ -177,9 +188,10 @@ export function useEnvironments(
   useEffect(() => {
     let unlistenStarted: UnlistenFn | null = null;
     let unlistenComplete: UnlistenFn | null = null;
+    let disposed = false;
 
     const setupListeners = async () => {
-      unlistenStarted = await listen<EnvironmentSetupStartedPayload>("environment-setup-started", (event) => {
+      const stopStarted = await listen<EnvironmentSetupStartedPayload>("environment-setup-started", (event) => {
         const { environment_id, session_id, environment } = event.payload;
         console.info("[setup-terminal] received environment-setup-started", {
           environmentId: environment_id,
@@ -197,8 +209,10 @@ export function useEnvironments(
         setSetupScriptsRunning(environment_id, true);
         setWorkspaceReady(environment_id, false);
       });
+      if (disposed) stopStarted();
+      else unlistenStarted = stopStarted;
 
-      unlistenComplete = await listen<EnvironmentSetupCompletePayload>("environment-setup-complete", (event) => {
+      const stopComplete = await listen<EnvironmentSetupCompletePayload>("environment-setup-complete", (event) => {
         const { environment_id, success, environment } = event.payload;
         console.info("[setup-terminal] received environment-setup-complete", {
           environmentId: environment_id,
@@ -217,11 +231,14 @@ export function useEnvironments(
           setWorkspaceReady(environment_id, true);
         }
       });
+      if (disposed) stopComplete();
+      else unlistenComplete = stopComplete;
     };
 
     setupListeners();
 
     return () => {
+      disposed = true;
       unlistenStarted?.();
       unlistenComplete?.();
     };
@@ -234,17 +251,29 @@ export function useEnvironments(
   ]);
 
   const loadEnvironments = useCallback(
-    async (pid: string) => {
-      setLoading(true);
-      setError(null);
+    async (pid: string, options: LoadEnvironmentsOptions = {}) => {
+      const { silent = false, reconcileStatus = true } = options;
+      if (!silent) {
+        setLoading(true);
+        setError(null);
+      }
       try {
-        const envs = await backend.getEnvironments(pid);
+        const envs = reconcileStatus
+          ? await backend.getEnvironments(pid)
+          : await backend.getEnvironmentSnapshots(pid);
         // Merge environments for this project (uses current store state, not stale closure)
         mergeEnvironmentsForProject(pid, envs);
       } catch (err) {
-        setError(getErrorMessage(err, "Failed to load environments"));
+        const message = getErrorMessage(err, "Failed to load environments");
+        if (silent) {
+          console.warn(`[useEnvironments] Failed to refresh environments for project ${pid}:`, message);
+        } else {
+          setError(message);
+        }
       } finally {
-        setLoading(false);
+        if (!silent) {
+          setLoading(false);
+        }
       }
     },
     [mergeEnvironmentsForProject, setLoading, setError]

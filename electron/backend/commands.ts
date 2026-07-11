@@ -908,8 +908,16 @@ async function syncStoredEnvironmentStatus(environment: Environment, storage: St
       return storage.updateEnvironment(environment.id, { status });
     }
     return environment;
-  } catch {
-    return storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/no such (object|container)/i.test(message)) {
+      return storage.updateEnvironment(environment.id, { status: "stopped", containerId: null });
+    }
+    console.warn("[environment-status] Preserving container state after transient Docker error", {
+      environmentId: environment.id,
+      message,
+    });
+    return environment;
   }
 }
 
@@ -2060,6 +2068,9 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const environments = await storage.getEnvironmentsByProject(asString(projectId, "projectId"));
     return Promise.all(environments.map((environment) => syncStoredEnvironmentStatus(environment, storage)));
   });
+  register("get_environment_snapshots", ({ projectId }, { storage }) =>
+    storage.getEnvironmentsByProject(asString(projectId, "projectId"))
+  );
   register("get_environment", ({ environmentId }, { storage }) => storage.getEnvironment(asString(environmentId, "environmentId")));
   register("reorder_environments", ({ projectId, environmentIds }, { storage }) => storage.reorderEnvironments(asString(projectId, "projectId"), asStringArray(environmentIds)));
   register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType }, context) => {

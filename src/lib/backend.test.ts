@@ -20,6 +20,7 @@ const {
   createEnvironment,
   disconnectLinear,
   ensureEnvironmentSetup,
+  getEnvironmentSnapshots,
   getLinearConnection,
   getLinearIssue,
   getLinearIssues,
@@ -98,6 +99,15 @@ describe("backend setup wrappers", () => {
         environmentType: "containerized",
         namingPrompt: "Build task\n\nShip the feature",
       }],
+    ]);
+  });
+
+  test("calls the read-only environment snapshot command", async () => {
+    invokeMock.mockResolvedValue([]);
+
+    await expect(getEnvironmentSnapshots("project-1")).resolves.toEqual([]);
+    expect(invokeMock.mock.calls).toEqual([
+      ["get_environment_snapshots", { projectId: "project-1" }],
     ]);
   });
 

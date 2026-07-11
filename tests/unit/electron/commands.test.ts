@@ -973,6 +973,67 @@ printf '%s\\n' '{}' > "$out"
     expect(updates).toHaveLength(0);
   });
 
+  test("returns read-only environment snapshots without invoking Docker reconciliation", async () => {
+    const environment = createEnvironment({
+      status: "running",
+      containerId: "container-existing",
+      environmentType: "containerized",
+    });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("get_environment_snapshots")?.(
+      { projectId: environment.projectId },
+      context,
+    )).resolves.toEqual([environment]);
+    expect(updates).toHaveLength(0);
+  });
+
+  test("preserves container identity when Docker status reconciliation fails transiently", async () => {
+    const environment = createEnvironment({
+      status: "running",
+      containerId: "container-existing",
+      environmentType: "containerized",
+    });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\n' 'Cannot connect to the Docker daemon' >&2
+exit 1
+`, async () => {
+      await expect(commands.get("get_environments")?.(
+        { projectId: environment.projectId },
+        context,
+      )).resolves.toEqual([environment]);
+    });
+
+    expect(environment.containerId).toBe("container-existing");
+    expect(environment.status).toBe("running");
+    expect(updates).toHaveLength(0);
+  });
+
+  test("clears a container identity only when Docker confirms the container is absent", async () => {
+    const environment = createEnvironment({
+      status: "running",
+      containerId: "container-missing",
+      environmentType: "containerized",
+    });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\n' 'Error: No such object: container-missing' >&2
+exit 1
+`, async () => {
+      await commands.get("get_environments")?.({ projectId: environment.projectId }, context);
+    });
+
+    expect(environment.containerId).toBeNull();
+    expect(environment.status).toBe("stopped");
+    expect(updates).toContainEqual({ status: "stopped", containerId: null });
+  });
+
   test("returns container workspace setup command from the backend setup plan", async () => {
     const environment = createEnvironment({
       environmentType: "containerized",

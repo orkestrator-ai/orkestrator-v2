@@ -12,7 +12,7 @@ mock.module("@/lib/backend", () => ({
 }));
 
 // Import hook AFTER mocking
-import { useFileSearch } from "../../../src/hooks/useFileSearch";
+import { useFileSearch } from "../../../apps/web/src/hooks/useFileSearch";
 
 // Sample file tree for testing
 const createMockFileTree = (): FileNode[] => [

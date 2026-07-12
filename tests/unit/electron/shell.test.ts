@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { APP_SLUG } from "../../../electron/backend/constants";
+import { APP_SLUG } from "../../../apps/backend/src/core/constants";
 import {
   commandExists,
   homePath,
@@ -12,7 +12,7 @@ import {
   readTextFile,
   runCommand,
   writeFileBase64,
-} from "../../../electron/backend/shell";
+} from "../../../apps/backend/src/core/shell";
 
 const tempDirs: string[] = [];
 

@@ -8,7 +8,7 @@ import {
   loadOrCreateGatewayToken,
   OrkestratorGateway,
   selectTailscaleBindAddress,
-} from "../../../electron/gateway";
+} from "../../../apps/backend/src/gateway";
 
 const tempDirs: string[] = [];
 const gateways: OrkestratorGateway[] = [];

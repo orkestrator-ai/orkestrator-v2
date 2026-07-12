@@ -1,5 +1,10 @@
 [test]
 preload = ["./tests/setup.ts"]
 pathIgnorePatterns = [
+  "apps/backend/src/**",
+  "apps/backend/tests/**",
+  "apps/**/dist/**",
+  "apps/web/src/**",
   "bridges/**/dist/**",
+  "release/**",
 ]

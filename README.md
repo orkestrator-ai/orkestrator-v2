@@ -77,9 +77,23 @@ bun run dev
 - Use "Create PR" to run `gh pr create` interactively
 - After PR creation, the button becomes "View PR"
 
-### Remote Gateway Access
+### Standalone Backend And Remote Web Access
 
-When enabled in **Settings → Web client** and Tailscale is available, Orkestrator starts an authenticated HTTP gateway on the host's Tailscale address. The gateway serves the React app to remote browsers, forwards backend commands and events, and proxies loopback services exposed by environments. The setting is enabled by default to preserve the existing gateway behavior.
+The backend is a standalone Bun service in `apps/backend`. Electron launches a private loopback instance and talks to it over authenticated HTTP/SSE; it no longer owns Docker, terminal, storage, or agent state itself. The same backend artifact can run without Electron and serve the React app to a browser over Tailscale.
+
+Build the renderer and backend, then start the service on a machine connected to your tailnet:
+
+```bash
+bun run build:renderer
+bun run build:backend
+bun run --cwd apps/backend start
+```
+
+By default the service detects and binds to the first Tailscale address on port `34121`. For a local-only development instance, bind explicitly:
+
+```bash
+bun run --cwd apps/backend start --host 127.0.0.1 --port 34121 --unsafe-allow-non-tailscale-bind
+```
 
 By default the gateway listens on port `34121`. Look for a startup log like:
 
@@ -88,7 +102,7 @@ By default the gateway listens on port `34121`. Look for a startup log like:
 [RemoteGateway] Auth token stored at /path/to/gateway-auth.json
 ```
 
-Use the live link in **Settings → Web client** (or the logged URL) from another device or browser on the same tailnet, then enter the gateway token from the host machine. See [Remote Gateway](docs/remote-gateway.md) for setup, environment variables, security notes, and troubleshooting.
+Open the logged URL from another browser on the same tailnet, then enter the token from the host machine. See [Standalone Backend and Remote Gateway](docs/remote-gateway.md) for service flags, environment variables, security notes, and troubleshooting.
 
 ### Configuration
 
@@ -131,19 +145,28 @@ bun test
 bun run build
 ```
 
+## Monorepo Layout
+
+```text
+apps/backend/   Standalone Bun service and authoritative long-running state
+apps/desktop/   Electron shell, preload API, native IPC, and backend supervision
+apps/web/       React/Vite application used by Electron and remote browsers
+packages/       Shared cross-runtime contracts and validation
+bridges/        Claude and Codex native-mode bridge services
+```
+
+The web application is independently built. Electron loads that build as its renderer, while the standalone backend serves the same build to authenticated browsers over Tailscale.
+
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                   Electron Application                   │
-├─────────────────────────┬───────────────────────────────┤
-│      React Frontend     │     Electron TS Backend       │
-│  ┌───────────────────┐  │  ┌─────────────────────────┐  │
-│  │ shadcn/ui + xterm │  │  │ Docker CLI Integration  │  │
-│  │ Zustand stores    │◄─┼──┤ PTY Terminal Sessions   │  │
-│  │ Electron IPC      │  │  │ JSON File Storage       │  │
-│  └───────────────────┘  │  └─────────────────────────┘  │
-├─────────────────────────┴───────────────────────────────┤
+│ Electron shell / web browser: React + Zustand + xterm   │
+│             HTTP commands + server-sent events          │
+├─────────────────────────────────────────────────────────┤
+│ Standalone Bun backend service                          │
+│ Docker · PTY sessions · agent bridges · JSON storage    │
+├─────────────────────────────────────────────────────────┤
 │                    Docker Containers                     │
 │  ┌────────────────────────────────────────────────────┐ │
 │  │ orkestrator-v2:latest                              │ │

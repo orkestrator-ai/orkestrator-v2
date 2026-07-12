@@ -94,7 +94,7 @@ describe("container runtime environment wiring", () => {
   });
 
   test("container native launch paths source the captured runtime environment", () => {
-    const backend = read("electron/backend/commands.ts");
+    const backend = read("apps/backend/src/core/commands.ts");
     const commands = [
       "start_opencode_server",
       "start_claude_server",

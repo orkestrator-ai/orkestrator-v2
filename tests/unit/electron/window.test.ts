@@ -1,8 +1,8 @@
 import path from "node:path";
 import { describe, expect, mock, test } from "bun:test";
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions } from "electron";
-import { PRODUCT_NAME } from "../../../electron/backend/constants";
-import { createMainWindow } from "../../../electron/window";
+import { PRODUCT_NAME } from "../../../apps/backend/src/core/constants";
+import { createMainWindow } from "../../../apps/desktop/electron/window";
 
 function createHarness() {
   const windows: FakeBrowserWindow[] = [];
@@ -36,7 +36,7 @@ describe("createMainWindow", () => {
     const window = await createMainWindow({
       BrowserWindowCtor: harness.FakeBrowserWindow as never,
       menu: harness.menu,
-      dirname: "/app/dist-electron/electron",
+      dirname: "/app/apps/desktop/dist/electron",
       isDev: false,
       appPath: "/app",
     });
@@ -50,7 +50,7 @@ describe("createMainWindow", () => {
       minWidth: 800,
       minHeight: 600,
       webPreferences: {
-        preload: path.join("/app/dist-electron/electron", "preload.js"),
+        preload: path.join("/app/apps/desktop/dist/electron", "preload.js"),
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: false,
@@ -68,7 +68,7 @@ describe("createMainWindow", () => {
     await createMainWindow({
       BrowserWindowCtor: harness.FakeBrowserWindow as never,
       menu: harness.menu,
-      dirname: "/app/dist-electron/electron",
+      dirname: "/app/apps/desktop/dist/electron",
       isDev: true,
       appPath: "/app",
       devServerUrl: "http://127.0.0.1:5173",
@@ -85,7 +85,7 @@ describe("createMainWindow", () => {
     await createMainWindow({
       BrowserWindowCtor: harness.FakeBrowserWindow as never,
       menu: harness.menu,
-      dirname: "/app/dist-electron/electron",
+      dirname: "/app/apps/desktop/dist/electron",
       isDev: true,
       appPath: "/app",
     });

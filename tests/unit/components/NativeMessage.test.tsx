@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
-import type { NativeMessage as NativeMessageType } from "../../../src/lib/chat/native-message-types";
+import type { NativeMessage as NativeMessageType } from "../../../apps/web/src/lib/chat/native-message-types";
 import { mockWriteText } from "../../mocks/clipboard";
 import {
   type CreateFileTabOptions,
   TerminalProvider,
   useTerminalContext,
-} from "../../../src/contexts/TerminalContext";
+} from "../../../apps/web/src/contexts/TerminalContext";
 
 const mockOpenInBrowser = mock(async () => {});
 const mockReadFileBase64 = mock(async () => "image-base64");
@@ -19,7 +19,7 @@ mock.module("@/lib/backend", () => ({
   readFileBase64: mockReadFileBase64,
 }));
 
-import { NativeMessage } from "../../../src/components/chat/NativeMessage";
+import { NativeMessage } from "../../../apps/web/src/components/chat/NativeMessage";
 
 function TerminalContextHarness({
   children,

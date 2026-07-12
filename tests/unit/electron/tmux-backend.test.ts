@@ -10,8 +10,8 @@ import {
   registerTmuxBackendCommands,
   transcriptContainsSessionId,
   tmuxSessionName,
-} from "../../../electron/backend/tmux";
-import type { Environment } from "../../../electron/backend/models";
+} from "../../../apps/backend/src/core/tmux";
+import type { Environment } from "../../../apps/backend/src/core/models";
 
 const tempDirs: string[] = [];
 

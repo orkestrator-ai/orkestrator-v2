@@ -1,12 +1,12 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
-import { useConfigStore } from "../../../src/stores/configStore";
-import { useEnvironmentStore } from "../../../src/stores/environmentStore";
-import { useFilesPanelStore } from "../../../src/stores/filesPanelStore";
-import { useUIStore } from "../../../src/stores/uiStore";
-import type { FileNode, GitFileChange } from "../../../src/lib/backend";
-import type { Environment, RepositoryConfig } from "../../../src/types";
+import { useConfigStore } from "../../../apps/web/src/stores/configStore";
+import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
+import { useFilesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
+import { useUIStore } from "../../../apps/web/src/stores/uiStore";
+import type { FileNode, GitFileChange } from "../../../apps/web/src/lib/backend";
+import type { Environment, RepositoryConfig } from "../../../apps/web/src/types";
 import { createMockEnvironment } from "../utils/testFactories";
 
 const realBackendSnapshot = { ...realBackend };
@@ -29,7 +29,7 @@ mock.module("@/lib/backend", () => ({
   getLocalFileTree: mockGetLocalFileTree,
 }));
 
-const { useFilesPanel } = await import("../../../src/hooks/useFilesPanel");
+const { useFilesPanel } = await import("../../../apps/web/src/hooks/useFilesPanel");
 
 const change: GitFileChange = {
   path: "src/App.tsx",

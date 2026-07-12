@@ -1,11 +1,11 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
-import { useConfigStore } from "../../../src/stores/configStore";
-import { useEnvironmentDiffStore } from "../../../src/stores/environmentDiffStore";
-import { useEnvironmentStore } from "../../../src/stores/environmentStore";
-import type { GitFileChange } from "../../../src/lib/backend";
-import type { Environment, RepositoryConfig } from "../../../src/types";
+import { useConfigStore } from "../../../apps/web/src/stores/configStore";
+import { useEnvironmentDiffStore } from "../../../apps/web/src/stores/environmentDiffStore";
+import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
+import type { GitFileChange } from "../../../apps/web/src/lib/backend";
+import type { Environment, RepositoryConfig } from "../../../apps/web/src/types";
 import { createMockEnvironment } from "../utils/testFactories";
 
 const realBackendSnapshot = { ...realBackend };
@@ -23,7 +23,7 @@ mock.module("@/lib/backend", () => ({
   getLocalGitStatus: mockGetLocalGitStatus,
 }));
 
-const { useEnvironmentDiffStats } = await import("../../../src/hooks/useEnvironmentDiffStats");
+const { useEnvironmentDiffStats } = await import("../../../apps/web/src/hooks/useEnvironmentDiffStats");
 
 function resetStores(
   environments: Environment[] = [],

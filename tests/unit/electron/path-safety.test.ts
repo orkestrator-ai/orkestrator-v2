@@ -5,7 +5,7 @@ import {
   MAX_WRITE_FILE_BYTES,
   validateRelativeFilePath,
   workspaceFilePath,
-} from "../../../electron/backend/path-safety";
+} from "../../../apps/backend/src/core/path-safety";
 
 describe("Electron backend path safety", () => {
   test("normalizes workspace-relative file paths", () => {

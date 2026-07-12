@@ -96,16 +96,10 @@ mock.module("@/hooks/useFileMentions", () => ({
   }),
 }));
 
-mock.module("@/lib/canvas-utils", () => ({
-  resizeCanvasIfNeeded: (c: unknown) => c,
-  resizeCanvasToMaxDimension: (c: unknown) => c,
-  MAX_IMAGE_DIMENSION: 4096,
-}));
-
-import { CodexComposeBar } from "../../../src/components/codex/CodexComposeBar";
-import { useCodexStore } from "../../../src/stores/codexStore";
-import type { CodexModel } from "../../../src/lib/codex-client";
-import { ADDRESS_ALL_REVIEW_PROMPT } from "../../../src/lib/review-actions";
+import { CodexComposeBar } from "../../../apps/web/src/components/codex/CodexComposeBar";
+import { useCodexStore } from "../../../apps/web/src/stores/codexStore";
+import type { CodexModel } from "../../../apps/web/src/lib/codex-client";
+import { ADDRESS_ALL_REVIEW_PROMPT } from "../../../apps/web/src/lib/review-actions";
 
 if (typeof globalThis.ImageData === "undefined") {
   (globalThis as Record<string, unknown>).ImageData = class ImageData {

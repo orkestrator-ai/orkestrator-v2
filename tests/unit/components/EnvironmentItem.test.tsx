@@ -1,6 +1,6 @@
 import { afterEach, describe, test, expect, mock, beforeEach } from "bun:test";
 import { cleanup, render, fireEvent, waitFor } from "@testing-library/react";
-import type { Environment } from "../../../src/types";
+import type { Environment } from "../../../apps/web/src/types";
 
 const toastSuccessMock = mock(() => {});
 const toastErrorMock = mock(() => {});
@@ -101,8 +101,8 @@ mock.module("@/lib/backend", () => ({
   readFileBase64: async () => "",
 }));
 
-import { EnvironmentItem } from "../../../src/components/environments/EnvironmentItem";
-import { useAgentActivityStore } from "../../../src/stores/agentActivityStore";
+import { EnvironmentItem } from "../../../apps/web/src/components/environments/EnvironmentItem";
+import { useAgentActivityStore } from "../../../apps/web/src/stores/agentActivityStore";
 
 function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
   return {

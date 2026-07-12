@@ -20,10 +20,6 @@ mock.module("@/lib/backend", () => ({
   writeLocalFile: mockWriteLocalFile,
 }));
 
-mock.module("@/lib/canvas-utils", () => ({
-  resizeCanvasIfNeeded: (canvas: HTMLCanvasElement) => canvas,
-}));
-
 // Ensure ImageData is available (happy-dom may not provide it)
 if (typeof globalThis.ImageData === "undefined") {
   (globalThis as Record<string, unknown>).ImageData = class ImageData {
@@ -45,7 +41,7 @@ const mockPutImageData = mock(() => {});
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
 
-import { processClipboardPaste, processLocalClipboardPaste } from "../../../src/hooks/useClipboardImagePaste";
+import { processClipboardPaste, processLocalClipboardPaste } from "../../../apps/web/src/hooks/useClipboardImagePaste";
 
 describe("processLocalClipboardPaste", () => {
   beforeEach(() => {

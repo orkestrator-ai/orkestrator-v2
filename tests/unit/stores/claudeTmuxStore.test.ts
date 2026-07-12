@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach } from "bun:test";
 import {
   createClaudeTmuxStateKey,
   useClaudeTmuxStore,
-} from "../../../src/stores/claudeTmuxStore";
+} from "../../../apps/web/src/stores/claudeTmuxStore";
 
 describe("claudeTmuxStore", () => {
   beforeEach(() => {

@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, mock } from "bun:test";
 import { renderHook, act } from "@testing-library/react";
-import { useEnvironmentStore } from "../../../src/stores/environmentStore";
+import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
 import { createMockEnvironment } from "../utils/testFactories";
 
 // Mock backend module BEFORE importing the hook
@@ -26,7 +26,7 @@ mock.module("@/stores/prMonitorStore", () => ({
 }));
 
 // Import hook AFTER mocking
-import { usePullRequest } from "../../../src/hooks/usePullRequest";
+import { usePullRequest } from "../../../apps/web/src/hooks/usePullRequest";
 
 describe("usePullRequest", () => {
   beforeEach(() => {

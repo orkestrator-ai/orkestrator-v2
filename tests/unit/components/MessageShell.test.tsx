@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import {
   MessageShell,
   MessageErrorAlert,
-} from "../../../src/components/chat/MessageShell";
+} from "../../../apps/web/src/components/chat/MessageShell";
 
 describe("MessageShell", () => {
   test("renders children and header by default", () => {

@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import {
   createContextMenuTemplate,
   installDefaultContextMenu,
-} from "../../../electron/context-menu";
+} from "../../../apps/desktop/electron/context-menu";
 import type { ContextMenuParams, MenuItemConstructorOptions } from "electron";
 
 function createParams(overrides: Partial<ContextMenuParams> = {}): ContextMenuParams {

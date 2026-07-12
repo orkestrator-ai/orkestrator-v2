@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { useFilesPanelStore } from "../../../src/stores/filesPanelStore";
-import type { FileNode, GitFileChange } from "../../../src/lib/backend";
+import { useFilesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
+import type { FileNode, GitFileChange } from "../../../apps/web/src/lib/backend";
 
 const change: GitFileChange = {
   path: "src/App.tsx",

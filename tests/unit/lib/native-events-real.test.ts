@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
 async function loadNativeEvents() {
-  return import("../../../src/lib/native/events.ts?real") as Promise<typeof import("../../../src/lib/native/events")>;
+  return import("../../../apps/web/src/lib/native/events.ts?real") as Promise<typeof import("../../../apps/web/src/lib/native/events")>;
 }
 
 afterEach(() => {

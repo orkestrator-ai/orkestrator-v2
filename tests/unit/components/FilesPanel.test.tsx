@@ -1,8 +1,8 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { TerminalProvider } from "../../../src/contexts/TerminalContext";
-import { useFilesPanelStore } from "../../../src/stores/filesPanelStore";
-import type { FileNode, GitFileChange } from "../../../src/lib/backend";
+import { TerminalProvider } from "../../../apps/web/src/contexts/TerminalContext";
+import { useFilesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
+import type { FileNode, GitFileChange } from "../../../apps/web/src/lib/backend";
 import * as realHooks from "@/hooks";
 
 const realHooksSnapshot = { ...realHooks };
@@ -21,9 +21,9 @@ mock.module("@/hooks", () => ({
   }),
 }));
 
-const { ChangedFileItem } = await import("../../../src/components/files-panel/ChangedFileItem");
-const { FilesPanelHeader } = await import("../../../src/components/files-panel/FilesPanelHeader");
-const { FilesPanel } = await import("../../../src/components/files-panel/FilesPanel");
+const { ChangedFileItem } = await import("../../../apps/web/src/components/files-panel/ChangedFileItem");
+const { FilesPanelHeader } = await import("../../../apps/web/src/components/files-panel/FilesPanelHeader");
+const { FilesPanel } = await import("../../../apps/web/src/components/files-panel/FilesPanel");
 
 const change: GitFileChange = {
   path: "src/components/Button.tsx",

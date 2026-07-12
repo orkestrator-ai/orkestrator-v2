@@ -143,7 +143,7 @@ describe("version drift between SDK pins and bundled/container CLIs", () => {
   });
 
   test("OpenCode: SDK pin, bundled binary, and Docker CLI all match", () => {
-    const sdkPin = expectExactVersion("package.json", "@opencode-ai/sdk");
+    const sdkPin = expectExactVersion("apps/web/package.json", "@opencode-ai/sdk");
     const downloadScriptPin = getShellVar(
       "scripts/download-opencode.sh",
       "OPENCODE_VERSION",

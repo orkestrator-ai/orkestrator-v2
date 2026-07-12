@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { useProjectStore } from "../../../src/stores/projectStore";
-import type { Project } from "../../../src/types";
+import { useProjectStore } from "../../../apps/web/src/stores/projectStore";
+import type { Project } from "../../../apps/web/src/types";
 
 describe("projectStore", () => {
   beforeEach(() => {

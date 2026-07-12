@@ -128,17 +128,11 @@ mock.module("@/components/chat/ContextUsageWheel", () => ({
   ContextUsageWheel: () => null,
 }));
 
-mock.module("@/lib/canvas-utils", () => ({
-  resizeCanvasIfNeeded: (c: unknown) => c,
-  resizeCanvasToMaxDimension: (c: unknown) => c,
-  MAX_IMAGE_DIMENSION: 4096,
-}));
-
-import { ClaudeComposeBar } from "../../../src/components/claude/ClaudeComposeBar";
-import { useClaudeStore } from "../../../src/stores/claudeStore";
-import { useConfigStore } from "../../../src/stores/configStore";
-import { useEnvironmentStore } from "../../../src/stores/environmentStore";
-import { ADDRESS_ALL_REVIEW_PROMPT } from "../../../src/lib/review-actions";
+import { ClaudeComposeBar } from "../../../apps/web/src/components/claude/ClaudeComposeBar";
+import { useClaudeStore } from "../../../apps/web/src/stores/claudeStore";
+import { useConfigStore } from "../../../apps/web/src/stores/configStore";
+import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
+import { ADDRESS_ALL_REVIEW_PROMPT } from "../../../apps/web/src/lib/review-actions";
 
 if (typeof globalThis.ImageData === "undefined") {
   (globalThis as Record<string, unknown>).ImageData = class ImageData {

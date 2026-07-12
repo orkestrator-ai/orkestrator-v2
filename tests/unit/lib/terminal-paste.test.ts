@@ -16,7 +16,7 @@ mock.module("@/hooks/useClipboardImagePaste", () => ({
   processLocalClipboardPaste: mockProcessLocalClipboardPaste,
 }));
 
-import { escapePathForTerminalInput, handleTerminalPaste } from "../../../src/lib/terminal-paste";
+import { escapePathForTerminalInput, handleTerminalPaste } from "../../../apps/web/src/lib/terminal-paste";
 
 describe("handleTerminalPaste", () => {
   const mockWriteToTerminal = mock<(text: string) => Promise<void>>(() => Promise.resolve());

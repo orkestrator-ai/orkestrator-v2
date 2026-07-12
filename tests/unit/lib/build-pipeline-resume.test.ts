@@ -3,12 +3,12 @@ import {
   createPipelineResumePrompt,
   getPipelineResumePhase,
   isSessionCompatibleWithResumePhase,
-} from "../../../src/lib/build-pipeline-resume";
+} from "../../../apps/web/src/lib/build-pipeline-resume";
 import type {
   BuildPipeline,
   PipelineSession,
   ResumableBuildPhase,
-} from "../../../src/stores/buildPipelineStore";
+} from "../../../apps/web/src/stores/buildPipelineStore";
 
 function createSession(phase: PipelineSession["phase"]): PipelineSession {
   return {

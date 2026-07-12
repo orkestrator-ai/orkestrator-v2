@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { Environment, Project } from "../../../src/types";
+import type { Environment, Project } from "../../../apps/web/src/types";
 import * as realSortable from "@dnd-kit/sortable";
 import * as realEnvironmentItem from "@/components/environments/EnvironmentItem";
 
@@ -38,8 +38,8 @@ mock.module("@/components/environments/EnvironmentItem", () => ({
   ),
 }));
 
-const { SortableEnvironmentItem } = await import("../../../src/components/sidebar/SortableEnvironmentItem");
-const { SortableProjectGroup } = await import("../../../src/components/sidebar/SortableProjectGroup");
+const { SortableEnvironmentItem } = await import("../../../apps/web/src/components/sidebar/SortableEnvironmentItem");
+const { SortableProjectGroup } = await import("../../../apps/web/src/components/sidebar/SortableProjectGroup");
 
 const project: Project = {
   id: "project-1",

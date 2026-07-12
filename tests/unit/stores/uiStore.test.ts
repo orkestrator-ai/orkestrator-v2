@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { useUIStore } from "../../../src/stores/uiStore";
+import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 
 describe("uiStore", () => {
   beforeEach(() => {

@@ -12,7 +12,7 @@ import {
   sanitizeBranchName,
   sanitizeEnvironmentName,
   StorageService,
-} from "../../../electron/backend/storage";
+} from "../../../apps/backend/src/core/storage";
 
 mock.module("sharp", () => {
   const pipeline = {

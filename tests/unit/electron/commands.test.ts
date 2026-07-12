@@ -6,9 +6,9 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { Environment, RepositoryConfig } from "../../../electron/backend/models";
-import type { CommandContext } from "../../../electron/backend/commands";
-import { APP_SLUG } from "../../../electron/backend/constants";
+import type { Environment, RepositoryConfig } from "../../../apps/backend/src/core/models";
+import type { CommandContext } from "../../../apps/backend/src/core/commands";
+import { APP_SLUG } from "../../../apps/backend/src/core/constants";
 
 const execFileAsync = promisify(execFile);
 
@@ -69,11 +69,35 @@ const ptySpawn = mock((command: string, args: string[], options: Record<string, 
 
 mock.module("node-pty", () => ({ spawn: ptySpawn }));
 
-const { createCommandRegistry } = await import("../../../electron/backend/commands");
+const { createCommandRegistry, resolveBrowserOpenCommand } = await import("../../../apps/backend/src/core/commands");
 
 const tempDirs: string[] = [];
 const SETUP_DONE_OSC = "\u001b]9999;setup_done\u0007";
 const SETUP_FAILED_OSC = "\u001b]9999;setup_failed\u0007";
+
+describe("resolveBrowserOpenCommand", () => {
+  test("uses direct platform launchers without a command interpreter", () => {
+    expect(resolveBrowserOpenCommand("https://example.com/a?x=1&y=2", "darwin")).toEqual({
+      command: "open",
+      args: ["https://example.com/a?x=1&y=2"],
+    });
+    expect(resolveBrowserOpenCommand("https://example.com/a?x=1&y=2", "win32")).toEqual({
+      command: "explorer.exe",
+      args: ["https://example.com/a?x=1&y=2"],
+    });
+    expect(resolveBrowserOpenCommand("http://127.0.0.1:34121/", "linux")).toEqual({
+      command: "xdg-open",
+      args: ["http://127.0.0.1:34121/"],
+    });
+  });
+
+  test("rejects malformed and non-web URLs", () => {
+    expect(() => resolveBrowserOpenCommand("not a url", "win32")).toThrow("Invalid browser URL");
+    expect(() => resolveBrowserOpenCommand("file:///tmp/secret", "win32")).toThrow(
+      "Unsupported browser URL protocol",
+    );
+  });
+});
 
 async function createTempDir(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -495,7 +519,7 @@ afterAll(async () => {
 
 describe("Electron backend command registry", () => {
   test("registers every command exposed by the typed frontend wrapper", async () => {
-    const source = await fs.readFile(path.join(process.cwd(), "src", "lib", "backend.ts"), "utf8");
+    const source = await fs.readFile(path.join(process.cwd(), "apps", "web", "src", "lib", "backend.ts"), "utf8");
     const exposedCommands = Array.from(source.matchAll(/invoke(?:<[^>]+>)?\("([^"]+)"/g), (match) => match[1]);
     const commands = createCommandRegistry();
 
@@ -504,10 +528,10 @@ describe("Electron backend command registry", () => {
     }
   });
 
-  test("opens a directory picker through the Electron dialog command", async () => {
+  test("leaves directory picking to the connected client", async () => {
     const commands = createCommandRegistry();
-    await expect(commands.get("browse_for_directory")?.({}, createContext(createEnvironment()).context)).resolves.toBe("/tmp/project");
-    expect(showOpenDialog).toHaveBeenCalledWith({ properties: ["openDirectory"] });
+    await expect(commands.get("browse_for_directory")?.({}, createContext(createEnvironment()).context)).resolves.toBeNull();
+    expect(showOpenDialog).not.toHaveBeenCalled();
   });
 
   test("creates unnamed environments with a default timestamp while storing the initial prompt", async () => {

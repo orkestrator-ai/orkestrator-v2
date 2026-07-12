@@ -100,16 +100,10 @@ mock.module("@/hooks/useFileMentions", () => ({
   }),
 }));
 
-mock.module("@/lib/canvas-utils", () => ({
-  resizeCanvasIfNeeded: (c: unknown) => c,
-  resizeCanvasToMaxDimension: (c: unknown) => c,
-  MAX_IMAGE_DIMENSION: 4096,
-}));
-
-import { OpenCodeComposeBar } from "../../../src/components/opencode/OpenCodeComposeBar";
-import { useOpenCodeStore } from "../../../src/stores/openCodeStore";
-import type { OpenCodeModel } from "../../../src/lib/opencode-client";
-import { ADDRESS_ALL_REVIEW_PROMPT } from "../../../src/lib/review-actions";
+import { OpenCodeComposeBar } from "../../../apps/web/src/components/opencode/OpenCodeComposeBar";
+import { useOpenCodeStore } from "../../../apps/web/src/stores/openCodeStore";
+import type { OpenCodeModel } from "../../../apps/web/src/lib/opencode-client";
+import { ADDRESS_ALL_REVIEW_PROMPT } from "../../../apps/web/src/lib/review-actions";
 
 if (typeof globalThis.ImageData === "undefined") {
   (globalThis as Record<string, unknown>).ImageData = class ImageData {

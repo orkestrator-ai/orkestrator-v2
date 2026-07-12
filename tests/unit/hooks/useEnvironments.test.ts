@@ -1,8 +1,8 @@
 import { describe, test, expect, beforeEach, mock } from "bun:test";
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { useConfigStore } from "../../../src/stores/configStore";
-import { useEnvironmentStore } from "../../../src/stores/environmentStore";
-import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, StartEnvironmentResult } from "../../../src/types";
+import { useConfigStore } from "../../../apps/web/src/stores/configStore";
+import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
+import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, StartEnvironmentResult } from "../../../apps/web/src/types";
 import { createMockEnvironment } from "../utils/testFactories";
 
 // Mock backend module BEFORE importing the hook
@@ -53,7 +53,7 @@ import { listen } from "@/lib/native/events";
 const mockListen = listen as ReturnType<typeof mock>;
 
 // Import hook AFTER mocking
-import { useEnvironments } from "../../../src/hooks/useEnvironments";
+import { useEnvironments } from "../../../apps/web/src/hooks/useEnvironments";
 
 describe("useEnvironments", () => {
   beforeEach(() => {

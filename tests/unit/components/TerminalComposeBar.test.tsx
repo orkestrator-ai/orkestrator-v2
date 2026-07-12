@@ -9,8 +9,8 @@ mock.module("@/lib/backend", () => ({
   writeLocalFile: mockWriteLocalFile,
 }));
 
-import { ComposeBar } from "../../../src/components/terminal/ComposeBar";
-import { useTerminalSessionStore } from "../../../src/stores/terminalSessionStore";
+import { ComposeBar } from "../../../apps/web/src/components/terminal/ComposeBar";
+import { useTerminalSessionStore } from "../../../apps/web/src/stores/terminalSessionStore";
 
 const SESSION_KEY = "container-1:tab-1";
 

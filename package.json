@@ -3,24 +3,32 @@
   "version": "2.3.0",
   "private": true,
   "type": "module",
-  "main": "dist-electron/electron/main.js",
+  "packageManager": "bun@1.3.14",
+  "workspaces": [
+    "apps/*",
+    "bridges/*",
+    "packages/*"
+  ],
+  "main": "apps/desktop/dist/electron/main.js",
   "scripts": {
-    "dev": "bun scripts/electron-dev.ts",
-    "dev:renderer": "bunx vite --host 127.0.0.1",
-    "build": "bun run build:renderer && bun run build:electron",
-    "build:renderer": "bunx tsc && bunx vite build",
-    "build:electron": "bunx tsc -p tsconfig.electron.json",
-    "build:claude-bridge": "cd bridges/claude-bridge && bun install && bun run build",
-    "build:codex-bridge": "cd bridges/codex-bridge && bun install && bun run build",
+    "dev": "turbo --cwd . run dev --filter=@orkestrator/desktop --cache-dir .turbo",
+    "dev:renderer": "turbo --cwd . run dev --filter=@orkestrator/web --cache-dir .turbo",
+    "build": "turbo --cwd . run build --filter=@orkestrator/desktop --cache-dir .turbo",
+    "build:desktop": "turbo --cwd . run build --filter=@orkestrator/desktop --cache-dir .turbo",
+    "build:backend": "turbo --cwd . run build --filter=@orkestrator/backend --cache-dir .turbo",
+    "build:renderer": "turbo --cwd . run build --filter=@orkestrator/web --cache-dir .turbo",
+    "build:electron": "turbo --cwd . run build --filter=@orkestrator/desktop --cache-dir .turbo",
+    "build:claude-bridge": "turbo --cwd . run build --filter=claude-bridge --cache-dir .turbo",
+    "build:codex-bridge": "turbo --cwd . run build --filter=codex-bridge --cache-dir .turbo",
     "download:bun": "./scripts/download-bun.sh",
     "download:claude": "./scripts/download-claude.sh",
     "download:opencode": "./scripts/download-opencode.sh",
     "download:codex": "./scripts/download-codex.sh",
     "download:binaries": "bun run download:bun && bun run download:claude && bun run download:opencode && bun run download:codex",
     "setup": "bun run download:binaries && bun install && bun run build:claude-bridge && bun run build:codex-bridge",
-    "build:all": "bun run download:binaries && bun run build:claude-bridge && bun run build:codex-bridge && bun run build",
-    "preview": "bunx vite preview",
-    "test": "bun test",
+    "build:all": "bun run download:binaries && turbo --cwd . run build --cache-dir .turbo",
+    "preview": "bun run --cwd apps/web preview",
+    "test": "bun scripts/test-all.ts",
     "test:unit": "bun test tests/unit",
     "docker:build": "docker build -t orkestrator-v2:latest --no-cache -f docker/Dockerfile .",
     "package": "bun run build:all && bunx electron-builder && bun scripts/install-packaged-app.ts"
@@ -29,18 +37,45 @@
     "appId": "com.orkestrator.v2",
     "productName": "OrkestratorV2",
     "directories": {
-      "buildResources": "electron/resources",
+      "buildResources": "apps/desktop/electron/resources",
       "output": "release"
     },
     "files": [
-      "dist/**",
-      "dist-electron/**",
+      "apps/desktop/dist/**",
       "package.json"
     ],
     "asarUnpack": [
       "**/node_modules/node-pty/**"
     ],
     "extraResources": [
+      {
+        "from": "apps/web/dist",
+        "to": "web",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "apps/backend/dist",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "apps/backend/dist/node_modules/node-pty",
+        "to": "backend/vendor/node-pty",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "apps/backend/dist/node_modules/@img",
+        "to": "backend/vendor/@img",
+        "filter": [
+          "**/*"
+        ]
+      },
       {
         "from": "bridges/claude-bridge",
         "to": "claude-bridge",
@@ -81,63 +116,16 @@
       "icon": "icons"
     }
   },
-  "dependencies": {
-    "@dnd-kit/core": "^6.3.1",
-    "@dnd-kit/sortable": "^10.0.0",
-    "@dnd-kit/utilities": "^3.2.2",
-    "@monaco-editor/react": "^4.7.0",
-    "@opencode-ai/sdk": "1.17.18",
-    "@radix-ui/react-alert-dialog": "^1.1.15",
-    "@radix-ui/react-checkbox": "^1.3.3",
-    "@radix-ui/react-collapsible": "^1.1.12",
-    "@radix-ui/react-context-menu": "^2.2.16",
-    "@radix-ui/react-dialog": "^1.1.15",
-    "@radix-ui/react-dropdown-menu": "^2.1.16",
-    "@radix-ui/react-label": "^2.1.8",
-    "@radix-ui/react-progress": "^1.1.8",
-    "@radix-ui/react-scroll-area": "^1.2.10",
-    "@radix-ui/react-select": "^2.2.6",
-    "@radix-ui/react-separator": "^1.1.8",
-    "@radix-ui/react-slider": "^1.3.6",
-    "@radix-ui/react-slot": "^1.2.4",
-    "@radix-ui/react-switch": "^1.2.6",
-    "@radix-ui/react-tabs": "^1.1.13",
-    "@radix-ui/react-tooltip": "^1.2.8",
-    "@tailwindcss/vite": "^4.1.18",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/addon-serialize": "^0.14.0",
-    "@xterm/addon-web-links": "^0.12.0",
-    "@xterm/xterm": "^6.0.0",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
-    "lucide-react": "^0.562.0",
-    "node-pty": "^1.1.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "react-markdown": "^10.1.0",
-    "react-resizable-panels": "^4.2.2",
-    "react-virtuoso": "^4.18.4",
-    "remark-breaks": "^4.0.0",
-    "remark-gfm": "^4.0.1",
-    "sharp": "^0.35.1",
-    "sonner": "^2.0.7",
-    "tailwind-merge": "^3.4.0",
-    "tailwindcss": "^4.1.18",
-    "zustand": "^5.0.0"
-  },
   "devDependencies": {
     "@happy-dom/global-registrator": "^20.1.0",
-    "@tailwindcss/typography": "^0.5.19",
     "@testing-library/react": "^16.3.1",
     "@types/bun": "latest",
     "@types/node": "^25.9.3",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^4.6.0",
-    "electron": "^42.4.1",
     "electron-builder": "^26.15.3",
     "happy-dom": "^20.1.0",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "turbo": "^2.8.20"
   }
 }

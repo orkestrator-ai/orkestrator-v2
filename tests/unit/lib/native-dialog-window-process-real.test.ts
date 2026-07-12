@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
 async function loadNativeDialog() {
-  return import("../../../src/lib/native/dialog.ts?real") as Promise<typeof import("../../../src/lib/native/dialog")>;
+  return import("../../../apps/web/src/lib/native/dialog.ts?real") as Promise<typeof import("../../../apps/web/src/lib/native/dialog")>;
 }
 
 async function loadNativeWindow() {
-  return import("../../../src/lib/native/window.ts?real") as Promise<typeof import("../../../src/lib/native/window")>;
+  return import("../../../apps/web/src/lib/native/window.ts?real") as Promise<typeof import("../../../apps/web/src/lib/native/window")>;
 }
 
 async function loadNativeProcess() {
-  return import("../../../src/lib/native/process.ts?real") as Promise<typeof import("../../../src/lib/native/process")>;
+  return import("../../../apps/web/src/lib/native/process.ts?real") as Promise<typeof import("../../../apps/web/src/lib/native/process")>;
 }
 
 afterEach(() => {

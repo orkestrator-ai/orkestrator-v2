@@ -3,14 +3,14 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { useState } from "react";
 import { invoke } from "@/lib/native/backend";
 import { useConfigStore } from "@/stores/configStore";
-import { defaultConfig } from "../../../electron/backend/storage";
+import { defaultConfig } from "../../../apps/backend/src/core/storage";
 
-import * as realGlobalSettings from "../../../src/components/settings/GlobalSettings";
+import * as realGlobalSettings from "../../../apps/web/src/components/settings/GlobalSettings";
 const realGlobalSettingsSnapshot = { ...realGlobalSettings };
-import * as previousFullscreenSettingsLayout from "../../../src/components/settings/FullscreenSettingsLayout";
+import * as previousFullscreenSettingsLayout from "../../../apps/web/src/components/settings/FullscreenSettingsLayout";
 const previousFullscreenSettingsLayoutSnapshot = { ...previousFullscreenSettingsLayout };
 
-mock.module("../../../src/components/settings/GlobalSettings", () => ({
+mock.module("../../../apps/web/src/components/settings/GlobalSettings", () => ({
   GlobalSettings: ({ activeSection, onSaveSuccess }: { activeSection: string; onSaveSuccess?: () => void }) => (
     <div>
       <span data-testid="active-settings-section">{activeSection}</span>
@@ -18,7 +18,7 @@ mock.module("../../../src/components/settings/GlobalSettings", () => ({
     </div>
   ),
 }));
-mock.module("../../../src/components/settings/FullscreenSettingsLayout", () => ({
+mock.module("../../../apps/web/src/components/settings/FullscreenSettingsLayout", () => ({
   FullscreenSettingsLayout: ({
     open,
     menuItems,
@@ -41,13 +41,13 @@ mock.module("../../../src/components/settings/FullscreenSettingsLayout", () => (
   },
 }));
 
-const { SettingsPage } = await import("../../../src/components/settings/SettingsPage");
+const { SettingsPage } = await import("../../../apps/web/src/components/settings/SettingsPage");
 const invokeMock = invoke as ReturnType<typeof mock>;
 const originalConsoleError = console.error;
 
 afterAll(() => {
-  mock.module("../../../src/components/settings/GlobalSettings", () => realGlobalSettingsSnapshot);
-  mock.module("../../../src/components/settings/FullscreenSettingsLayout", () => previousFullscreenSettingsLayoutSnapshot);
+  mock.module("../../../apps/web/src/components/settings/GlobalSettings", () => realGlobalSettingsSnapshot);
+  mock.module("../../../apps/web/src/components/settings/FullscreenSettingsLayout", () => previousFullscreenSettingsLayoutSnapshot);
 });
 
 describe("SettingsPage", () => {

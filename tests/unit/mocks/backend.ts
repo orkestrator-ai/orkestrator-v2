@@ -1,5 +1,5 @@
 // Mock implementations for backend commands
-import type { Project, Environment, AppConfig, EnvironmentStatus } from "../../../src/types";
+import type { Project, Environment, AppConfig, EnvironmentStatus } from "../../../apps/web/src/types";
 import { mock, type Mock } from "bun:test";
 import { createMockProject, createMockEnvironment } from "../utils/testFactories";
 

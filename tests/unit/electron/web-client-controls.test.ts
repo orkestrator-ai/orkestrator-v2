@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import {
   createWebClientControls,
   type WebClientControlTarget,
-} from "../../../electron/web-client-controls";
+} from "../../../apps/desktop/electron/web-client-controls";
 
 const STATUS = {
   enabled: true,

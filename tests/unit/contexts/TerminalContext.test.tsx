@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
-import * as TerminalContextBarrel from "../../../src/contexts";
+import * as TerminalContextBarrel from "../../../apps/web/src/contexts";
 import {
   MAX_TABS,
   TerminalProvider,
@@ -8,8 +8,8 @@ import {
   useTerminalContext,
   type CreateTabOptions,
   type TerminalTabType,
-} from "../../../src/contexts/TerminalContext";
-import type { AgentLaunchModeOverride } from "../../../src/contexts";
+} from "../../../apps/web/src/contexts/TerminalContext";
+import type { AgentLaunchModeOverride } from "../../../apps/web/src/contexts";
 
 describe("TerminalContext", () => {
   test("useOptionalTerminalContext returns null outside a provider", () => {

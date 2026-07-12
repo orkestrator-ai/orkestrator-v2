@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { useConfigStore } from "../../../src/stores/configStore";
-import type { RepositoryConfig } from "../../../src/types";
+import { useConfigStore } from "../../../apps/web/src/stores/configStore";
+import type { RepositoryConfig } from "../../../apps/web/src/types";
 
 describe("configStore", () => {
   beforeEach(() => {

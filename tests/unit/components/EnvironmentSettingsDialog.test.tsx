@@ -23,7 +23,7 @@ const mockUpdateEnvironmentAgentSettings = mock(async (
 }));
 const mockToastSuccess = mock(() => {});
 const mockToastError = mock(() => {});
-const actualBackend = await import("../../../src/lib/backend");
+const actualBackend = await import("../../../apps/web/src/lib/backend");
 
 mock.module("@/lib/backend", () => ({
   ...actualBackend,
@@ -65,7 +65,7 @@ mock.module("@/components/settings/FullscreenSettingsLayout", () => ({
   },
 }));
 
-const { EnvironmentSettingsDialog } = await import("../../../src/components/environments/EnvironmentSettingsDialog");
+const { EnvironmentSettingsDialog } = await import("../../../apps/web/src/components/environments/EnvironmentSettingsDialog");
 
 function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
   return {

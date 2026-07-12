@@ -23,7 +23,7 @@ When adding or changing background behavior (agent sessions, tmux sessions, term
 | Layer    | Technology                                                |
 | -------- | --------------------------------------------------------- |
 | Frontend | React 19, TypeScript, Tailwind CSS v4, shadcn/ui, Zustand |
-| Backend  | Electron, Node.js, TypeScript                             |
+| Backend  | Bun, Node.js APIs, TypeScript                             |
 | Terminal | xterm.js                                                  |
 | Docker   |                                                           |
 | OpenCode | `@opencode-ai/sdk` v2                                     |
@@ -31,23 +31,16 @@ When adding or changing background behavior (agent sessions, tmux sessions, term
 ## Project Structure
 
 ```
-src/                        # React frontend
-├── components/             # UI components (shadcn/ui based)
-│   ├── codex/              # Codex Native Mode components
-│   ├── opencode/           # OpenCode Native Mode components
-│   ├── terminal/           # Terminal/xterm.js components
-│   └── ui/                 # shadcn/ui primitives
-├── stores/                 # Zustand state stores
-├── contexts/               # React contexts
-├── hooks/                  # Custom React hooks
-├── lib/                    # Utilities and native IPC wrappers
-└── types/                  # TypeScript type definitions
+apps/
+├── web/                    # React/Vite frontend application
+│   └── src/                # Components, stores, contexts, hooks, and client adapters
+├── desktop/                # Electron desktop application
+│   └── electron/           # Main process, preload, IPC, and backend supervisor
+└── backend/                # Standalone Bun backend service
+    └── src/core/           # Docker, worktree, PTY, storage, and agent lifecycle state
 
-electron/                   # Electron main process and backend
-├── backend/                # Command registry, Docker/local env management, storage
-├── ipc.ts                  # Main-process IPC handlers
-├── preload.ts              # Preload entrypoint
-└── preload-api.ts          # Renderer-facing native API
+packages/
+└── protocol/               # Shared gateway contracts and validation
 
 bridges/                    # Native-mode bridge servers
 ├── claude-bridge/          # Claude Native Mode bridge server
@@ -133,10 +126,10 @@ The OpenCode server sends these event types:
 - `question.replied` - Question was answered
 - `question.rejected` - Question was dismissed
 
-## Electron Backend
+## Standalone Backend
 
-- Register backend commands in `electron/backend/commands.ts` through `createCommandRegistry()`.
-- Keep long-running process state in the Electron backend, bridge process, persistent store, or external process; renderer state should rehydrate from backend snapshots.
+- Register backend commands in `apps/backend/src/core/commands.ts` through `createCommandRegistry()`.
+- Keep long-running process state in the standalone backend, bridge process, persistent store, or external process; renderer state should rehydrate from backend snapshots.
 - Use the existing `CommandContext` and `StorageService` patterns instead of adding renderer-only state for Docker, tmux, terminal, or local server lifecycles.
 - Do not log secrets such as API keys, tokens, SSH keys, or credential file contents.
 
@@ -146,24 +139,24 @@ The OpenCode server sends these event types:
 
 | File                                            | Purpose                     |
 | ----------------------------------------------- | --------------------------- |
-| `src/components/codex/CodexChatTab.tsx`         | Codex Native Mode chat      |
-| `src/components/terminal/TerminalContainer.tsx` | xterm.js integration        |
-| `src/components/opencode/OpenCodeChatTab.tsx`   | OpenCode Native Mode chat   |
-| `src/lib/codex-client.ts`                       | Codex bridge client wrapper |
-| `src/lib/opencode-client.ts`                    | OpenCode SDK v2 wrapper     |
-| `src/stores/codexStore.ts`                      | Codex state management      |
-| `src/stores/openCodeStore.ts`                   | OpenCode state management   |
-| `src/lib/native/backend.ts`                     | Native IPC command wrapper  |
+| `apps/web/src/components/codex/CodexChatTab.tsx`         | Codex Native Mode chat      |
+| `apps/web/src/components/terminal/TerminalContainer.tsx` | xterm.js integration        |
+| `apps/web/src/components/opencode/OpenCodeChatTab.tsx`   | OpenCode Native Mode chat   |
+| `apps/web/src/lib/codex-client.ts`                       | Codex bridge client wrapper |
+| `apps/web/src/lib/opencode-client.ts`                    | OpenCode SDK v2 wrapper     |
+| `apps/web/src/stores/codexStore.ts`                      | Codex state management      |
+| `apps/web/src/stores/openCodeStore.ts`                   | OpenCode state management   |
+| `apps/web/src/lib/native/backend.ts`                     | Native IPC command wrapper  |
 
 ### Backend
 
 | File                           | Purpose                                      |
 | ------------------------------ | -------------------------------------------- |
-| `electron/backend/commands.ts` | Backend command registry and Docker/local env management |
-| `electron/backend/tmux.ts`     | Claude tmux mode backend                     |
-| `electron/backend/storage.ts`  | JSON file persistence                        |
-| `electron/ipc.ts`              | Main-process IPC handlers                    |
-| `electron/preload-api.ts`      | Renderer-facing native API                   |
+| `apps/backend/src/core/commands.ts` | Backend command registry and Docker/local env management |
+| `apps/backend/src/core/tmux.ts`     | Claude tmux mode backend                     |
+| `apps/backend/src/core/storage.ts`  | JSON file persistence                        |
+| `apps/desktop/electron/ipc.ts`      | Main-process IPC handlers                    |
+| `apps/desktop/electron/preload-api.ts` | Renderer-facing native API                |
 
 ### Docker
 
@@ -205,9 +198,11 @@ Files:
 ## Testing
 
 ```bash
-bun test                      # Test suite
-bunx tsc --noEmit             # Renderer TypeScript type checking
-bunx tsc -p tsconfig.electron.json # Electron TypeScript type checking
+bun run test                  # Full suite, isolated by workspace through Turbo
+bun test tests                # Root integration/unit tests only
+bun run --cwd apps/web typecheck       # Web TypeScript type checking
+bun run --cwd apps/desktop typecheck   # Electron TypeScript type checking
+bun run --cwd apps/backend typecheck   # Backend TypeScript type checking
 ```
 
 ### Bun `mock.module()` Rules
@@ -274,12 +269,12 @@ docker build -t orkestrator-v2:latest -f docker/Dockerfile .
 
 This project uses **shadcn/ui** components. When adding new UI:
 1. Check if a shadcn/ui component exists first
-2. Components are in `src/components/ui/`
+2. Components are in `apps/web/src/components/ui/`
 3. Follow existing patterns in the codebase
 4. Use Tailwind CSS v4 for styling
 
 ## State Management
 
-- **Zustand** for global state (`src/stores/`)
-- **React Context** for component-tree state (`src/contexts/`)
+- **Zustand** for global state (`apps/web/src/stores/`)
+- **React Context** for component-tree state (`apps/web/src/contexts/`)
 - Stores use `Map<string, T>` pattern for per-environment/per-session state

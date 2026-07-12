@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { GatewayTokenSettings as BarrelGatewayTokenSettings } from "../../../src/types";
-import type { GatewayTokenSettings, WebClientStatus } from "../../../src/types/webClient";
+import type { GatewayTokenSettings as BarrelGatewayTokenSettings } from "../../../apps/web/src/types";
+import type { GatewayTokenSettings, WebClientStatus } from "../../../apps/web/src/types/webClient";
 
 type WindowWebClientApi = NonNullable<NonNullable<Window["orkestrator"]>["webClient"]>;
 

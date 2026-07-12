@@ -1,0 +1,14 @@
+{
+  "name": "@orkestrator/protocol",
+  "version": "2.3.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./gateway-token": "./src/gateway-token.ts",
+    "./web-client": "./src/web-client.ts"
+  },
+  "scripts": {
+    "build": "bunx tsc --noEmit -p tsconfig.json",
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json"
+  }
+}

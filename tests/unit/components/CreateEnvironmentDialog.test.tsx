@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, test, expect, mock } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import { mockReadImage } from "../../mocks/clipboard";
-import { resolveAgentDefaults } from "../../../src/components/environments/CreateEnvironmentDialog";
+import { resolveAgentDefaults } from "../../../apps/web/src/components/environments/CreateEnvironmentDialog";
 
 const toastSuccessMock = mock(() => {});
 const toastErrorMock = mock(() => {});
@@ -14,7 +14,7 @@ mock.module("sonner", () => ({
   },
 }));
 
-const { CreateEnvironmentDialog } = await import("../../../src/components/environments/CreateEnvironmentDialog");
+const { CreateEnvironmentDialog } = await import("../../../apps/web/src/components/environments/CreateEnvironmentDialog");
 
 if (typeof globalThis.ImageData === "undefined") {
   (globalThis as Record<string, unknown>).ImageData = class ImageData {

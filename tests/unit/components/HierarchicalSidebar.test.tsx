@@ -96,7 +96,7 @@ const {
   HierarchicalSidebar,
   deleteProjectAndEnvironments,
   resolveSidebarReorder,
-} = await import("../../../src/components/sidebar/HierarchicalSidebar");
+} = await import("../../../apps/web/src/components/sidebar/HierarchicalSidebar");
 
 afterAll(() => {
   mock.module("@/hooks/useProjects", () => realUseProjectsSnapshot);

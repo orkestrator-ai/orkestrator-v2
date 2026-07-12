@@ -6,14 +6,14 @@ import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
-} from "../../../src/components/ui/resizable";
+} from "../../../apps/web/src/components/ui/resizable";
 
 describe("styled UI primitives", () => {
   afterEach(() => cleanup());
 
   test("ContextMenu source keeps the dark popup treatment", () => {
     const source = readFileSync(
-      join(import.meta.dir, "../../../src/components/ui/context-menu.tsx"),
+      join(import.meta.dir, "../../../apps/web/src/components/ui/context-menu.tsx"),
       "utf8",
     );
 
@@ -24,7 +24,7 @@ describe("styled UI primitives", () => {
 
   test("DropdownMenu source keeps the dark popup treatment", () => {
     const source = readFileSync(
-      join(import.meta.dir, "../../../src/components/ui/dropdown-menu.tsx"),
+      join(import.meta.dir, "../../../apps/web/src/components/ui/dropdown-menu.tsx"),
       "utf8",
     );
 
@@ -35,7 +35,7 @@ describe("styled UI primitives", () => {
 
   test("Select source keeps the dark popup treatment", () => {
     const source = readFileSync(
-      join(import.meta.dir, "../../../src/components/ui/select.tsx"),
+      join(import.meta.dir, "../../../apps/web/src/components/ui/select.tsx"),
       "utf8",
     );
 

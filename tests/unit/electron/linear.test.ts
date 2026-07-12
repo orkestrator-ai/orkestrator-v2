@@ -7,7 +7,7 @@ import {
   postLinearIssueComment,
   sanitizeLinearError,
   verifyLinearConnection,
-} from "../../../electron/backend/linear";
+} from "../../../apps/backend/src/core/linear";
 
 const originalFetch = globalThis.fetch;
 

@@ -24,7 +24,7 @@ mock.module("sonner", () => ({
   },
 }));
 
-import { useNativeComposeBarPaste } from "../../../src/hooks/useNativeComposeBarPaste";
+import { useNativeComposeBarPaste } from "../../../apps/web/src/hooks/useNativeComposeBarPaste";
 
 if (typeof globalThis.ImageData === "undefined") {
   (globalThis as Record<string, unknown>).ImageData = class ImageData {

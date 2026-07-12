@@ -1,0 +1,21 @@
+{
+  "name": "@orkestrator/desktop",
+  "version": "2.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "dev": "bun scripts/dev.ts",
+    "typecheck": "bunx tsc --noEmit -p tsconfig.electron.json"
+  },
+  "dependencies": {
+    "@orkestrator/backend": "workspace:*",
+    "@orkestrator/protocol": "workspace:*",
+    "@orkestrator/web": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "electron": "^42.4.1",
+    "typescript": "~5.8.3"
+  }
+}

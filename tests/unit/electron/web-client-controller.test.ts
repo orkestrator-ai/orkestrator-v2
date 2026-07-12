@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
-import { WebClientController } from "../../../electron/web-client-controller";
-import type { GatewayStartInfo } from "../../../electron/gateway";
+import { WebClientController } from "../../../apps/desktop/electron/web-client-controller";
+import type { GatewayStartInfo } from "../../../apps/backend/src/gateway";
 
 const TOKEN_SETTINGS = { token: "test-token-123456", editable: true, source: "file" as const };
 

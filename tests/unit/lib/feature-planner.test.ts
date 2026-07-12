@@ -11,8 +11,8 @@ import {
   selectFeaturePlannerPrompt,
   stripFeaturePlannerStateBlocks,
   stripStoryRefinementStateBlocks,
-} from "../../../src/lib/feature-planner";
-import type { FeaturePlan, FeatureStoryCard } from "../../../src/lib/backend";
+} from "../../../apps/web/src/lib/feature-planner";
+import type { FeaturePlan, FeatureStoryCard } from "../../../apps/web/src/lib/backend";
 
 function makeStory(overrides: Partial<FeatureStoryCard> = {}): FeatureStoryCard {
   return {

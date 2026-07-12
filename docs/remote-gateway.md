@@ -1,31 +1,38 @@
-# Remote Gateway
+# Standalone Backend And Remote Gateway
 
-The remote gateway lets you use Orkestrator from a normal browser on the same Tailscale network as the desktop host. It is designed for trusted tailnets, not for public internet exposure.
+The standalone backend lets you use Orkestrator from a normal browser on the same Tailscale network as the backend host. It is designed for trusted tailnets, not for public internet exposure.
 
-The gateway is started by the Electron main process. It serves the React app, forwards renderer backend calls, streams backend events, and proxies loopback services that normally only exist on the desktop host.
+The service serves the React app, owns long-running backend state, accepts renderer commands, streams backend events, and proxies loopback services on the backend host. Electron starts a bundled loopback instance and connects through the same HTTP API; a remote installation does not require Electron.
 
 ## Requirements
 
-- The desktop app must be running.
+- Bun, Docker, and the Orkestrator build must be present on the backend machine.
 - The host must have an active Tailscale address.
 - The remote browser must be on the same tailnet and able to reach the host.
 - The gateway token must be available on the host machine.
 
-The gateway can be turned on or off in **Settings → Web client**. If no Tailscale address is found, the setting remains enabled but the gateway reports that it is unavailable until Tailscale is connected and the setting is saved again.
+The service refuses non-Tailscale bind addresses by default. The explicit unsafe flag exists only for loopback development and the bundled Electron child process.
 
 ## Starting And Connecting
 
-1. Start Orkestrator.
-2. Check the app logs for the gateway URL and token file:
+1. Build and start the backend:
+
+   ```bash
+   bun run build:renderer
+   bun run build:backend
+   bun run --cwd apps/backend start
+   ```
+
+2. Check the service logs for the gateway URL and token file:
 
    ```text
    [RemoteGateway] Listening on http://100.x.y.z:34121/
    [RemoteGateway] Auth token stored at /path/to/gateway-auth.json
    ```
 
-3. On the host machine, read the token from `gateway-auth.json`, unless you supplied `ORKESTRATOR_GATEWAY_TOKEN`.
+3. On the backend machine, read the token from `gateway-auth.json`, unless you supplied `ORKESTRATOR_GATEWAY_TOKEN`.
 4. Open the logged `http://100.x.y.z:34121/` URL from a browser on the same tailnet.
-5. Enter the token on the gateway login page.
+5. Enter the token on the login page.
 
 After login, the gateway stores the token in an `HttpOnly` `SameSite=Strict` cookie named `orkestrator_gateway_auth`.
 
@@ -39,6 +46,10 @@ The gateway supports these environment variables:
 | `ORKESTRATOR_GATEWAY_HOST` | first detected Tailscale address | Overrides the bind address. The address must still be a Tailscale address. |
 | `ORKESTRATOR_GATEWAY_PORT` | `34121` | Overrides the gateway port. |
 | `ORKESTRATOR_GATEWAY_TOKEN` | generated token in `gateway-auth.json` | Sets the login token. Must be at least 16 characters. |
+| `ORKESTRATOR_DATA_DIR` | platform application-data directory | Stores projects, environments, configuration, and gateway authentication. |
+| `ORKESTRATOR_APP_ROOT` | detected repository/application root | Root used for application assets and development binaries. |
+| `ORKESTRATOR_RESOURCE_ROOT` | application root | Root containing packaged bridges and binaries. |
+| `ORKESTRATOR_RENDERER_ROOT` | `<app-root>/apps/web/dist` | Built web frontend served to browsers. |
 
 Without `ORKESTRATOR_GATEWAY_TOKEN`, the app creates or reuses:
 
@@ -63,7 +74,7 @@ All other authenticated routes serve the React renderer. In development, those r
 
 ## How The App Uses It
 
-When the renderer is loaded in Electron, it uses the preload IPC API. When the renderer is loaded over HTTP through the gateway, `src/lib/native/web-gateway.ts` installs a browser-backed `window.orkestrator` implementation instead.
+When the renderer is loaded in Electron, it uses the preload IPC API. When the renderer is loaded over HTTP through the gateway, `apps/web/src/lib/native/web-gateway.ts` installs a browser-backed `window.orkestrator` implementation instead.
 
 That browser implementation:
 
@@ -113,7 +124,7 @@ Traffic is plain HTTP because it is expected to travel over Tailscale. Do not bi
 
 - Native desktop APIs are limited in remote browser mode. File dialogs return `null`, image clipboard read/write is unavailable, and window drag/close behavior depends on the browser.
 - The gateway proxies HTTP loopback services. Services that require a different protocol or direct socket access need a separate access path.
-- The gateway relies on the desktop app process. Closing the app stops remote access.
+- A backend started by Electron follows the desktop app lifecycle. A backend started with `apps/backend` remains independent of Electron.
 - Apps that set `Secure` cookies over plain HTTP may not persist those cookies in the browser.
 
 ## Troubleshooting

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
 async function loadNativeClipboard() {
-  return import("../../../src/lib/native/clipboard.ts?real") as Promise<typeof import("../../../src/lib/native/clipboard")>;
+  return import("../../../apps/web/src/lib/native/clipboard.ts?real") as Promise<typeof import("../../../apps/web/src/lib/native/clipboard")>;
 }
 
 afterEach(() => {

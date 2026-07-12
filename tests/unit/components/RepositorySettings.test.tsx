@@ -146,7 +146,7 @@ import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
-import { RepositorySettings } from "../../../src/components/settings/RepositorySettings";
+import { RepositorySettings } from "../../../apps/web/src/components/settings/RepositorySettings";
 import type { AppConfig, Project } from "@/types";
 
 // ---------------------------------------------------------------------------

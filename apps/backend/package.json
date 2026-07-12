@@ -1,0 +1,22 @@
+{
+  "name": "@orkestrator/backend",
+  "version": "2.3.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./gateway": "./src/gateway.ts"
+  },
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "dev": "bun --watch src/main.ts",
+    "start": "bun dist/main.js",
+    "test": "bun test src tests",
+    "test:workspace": "bun test src tests",
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@orkestrator/protocol": "workspace:*",
+    "node-pty": "^1.1.0",
+    "sharp": "^0.35.1"
+  }
+}

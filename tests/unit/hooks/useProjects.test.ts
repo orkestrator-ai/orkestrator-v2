@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, mock } from "bun:test";
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { useProjectStore } from "../../../src/stores/projectStore";
-import type { Project } from "../../../src/types";
+import { useProjectStore } from "../../../apps/web/src/stores/projectStore";
+import type { Project } from "../../../apps/web/src/types";
 import { createMockProject } from "../utils/testFactories";
 
 // Mock backend module BEFORE importing the hook
@@ -20,7 +20,7 @@ mock.module("@/lib/backend", () => ({
 }));
 
 // Import hook AFTER mocking
-import { useProjects } from "../../../src/hooks/useProjects";
+import { useProjects } from "../../../apps/web/src/hooks/useProjects";
 
 describe("useProjects", () => {
   beforeEach(() => {

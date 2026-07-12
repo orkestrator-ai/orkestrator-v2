@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createOrkestratorElectronApi, type IpcRendererLike } from "../../../electron/preload-api";
+import { createOrkestratorElectronApi, type IpcRendererLike } from "../../../apps/desktop/electron/preload-api";
 
 function createIpcMock() {
   const listeners = new Map<string, (event: unknown, name: string, payload: unknown) => void>();

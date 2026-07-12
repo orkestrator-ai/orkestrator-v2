@@ -35,7 +35,7 @@ const mockOpenInBrowser = mock(async () => undefined);
 const mockTestDomainResolution = mock(async () => []);
 const mockToastSuccess = mock(() => {});
 const mockToastError = mock(() => {});
-const actualBackend = await import("../../../src/lib/backend");
+const actualBackend = await import("../../../apps/web/src/lib/backend");
 
 mock.module("@/lib/backend", () => ({
   ...actualBackend,
@@ -58,7 +58,7 @@ mock.module("sonner", () => ({
   },
 }));
 
-const { GlobalSettings } = await import("../../../src/components/settings/GlobalSettings");
+const { GlobalSettings } = await import("../../../apps/web/src/components/settings/GlobalSettings");
 
 describe("GlobalSettings", () => {
   beforeEach(() => {

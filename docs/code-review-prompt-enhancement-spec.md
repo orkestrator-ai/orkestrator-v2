@@ -516,7 +516,7 @@ The implementation is complete when:
 
 ## Suggested tests
 
-Add or update tests in `src/prompts/git-workflows.test.ts` to assert that `createReviewPrompt("main")` includes:
+Add or update tests in `apps/web/src/prompts/git-workflows.test.ts` to assert that `createReviewPrompt("main")` includes:
 
 ```text
 git status --porcelain

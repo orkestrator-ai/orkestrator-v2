@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { useBuildPipelineStore } from "../../../src/stores/buildPipelineStore";
-import type { BuildPipeline, PipelineSession } from "../../../src/stores/buildPipelineStore";
-import type { TaskSnapshot } from "../../../src/prompts";
+import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
+import type { BuildPipeline, PipelineSession } from "../../../apps/web/src/stores/buildPipelineStore";
+import type { TaskSnapshot } from "../../../apps/web/src/prompts";
 
 const defaultTaskSnapshot: TaskSnapshot = {
   title: "Test task",

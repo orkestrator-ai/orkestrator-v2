@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { useEnvironmentStore } from "../../../src/stores/environmentStore";
-import type { Environment } from "../../../src/types";
+import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
+import type { Environment } from "../../../apps/web/src/types";
 
 const createEnvironment = (overrides: Partial<Environment> = {}): Environment => ({
   id: "env-1",

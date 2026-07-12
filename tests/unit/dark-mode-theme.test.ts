@@ -19,14 +19,14 @@ function read(rel: string): string {
 // dark @theme colors remain, reproducing the original low-contrast bug.
 describe("forced dark mode theming", () => {
   test("index.html marks the document as dark", () => {
-    const html = read("index.html");
+    const html = read("apps/web/index.html");
 
     // <html ... class="dark" ...> — order/other attrs are irrelevant.
     expect(html).toMatch(/<html\b[^>]*\bclass=("|')[^"']*\bdark\b[^"']*\1/);
   });
 
   test("index.html declares a dark color-scheme meta", () => {
-    const html = read("index.html");
+    const html = read("apps/web/index.html");
 
     expect(html).toMatch(
       /<meta\b[^>]*\bname=("|')color-scheme\1[^>]*\bcontent=("|')[^"']*\bdark\b[^"']*\2/,
@@ -34,7 +34,7 @@ describe("forced dark mode theming", () => {
   });
 
   test("index.css registers a class-based dark custom variant", () => {
-    const css = read("src/index.css");
+    const css = read("apps/web/src/index.css");
 
     // Tailwind v4 selector-based dark variant keyed off the `.dark` class.
     // Whitespace inside the parens may vary; the `.dark` selector must remain.
@@ -42,7 +42,7 @@ describe("forced dark mode theming", () => {
   });
 
   test("index.css keeps a dark color-scheme on the html element", () => {
-    const css = read("src/index.css");
+    const css = read("apps/web/src/index.css");
 
     expect(css).toMatch(/color-scheme:\s*dark/);
   });

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { isValidGitUrl, extractRepoName, normalizeGitUrl } from "../../../src/lib/gitUrl";
+import { isValidGitUrl, extractRepoName, normalizeGitUrl } from "../../../apps/web/src/lib/gitUrl";
 
 describe("gitUrl utilities", () => {
   describe("isValidGitUrl", () => {

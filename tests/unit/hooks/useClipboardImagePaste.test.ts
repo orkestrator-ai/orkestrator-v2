@@ -45,7 +45,7 @@ const mockPutImageData = mock(() => {});
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
 
-import { processClipboardPaste, processLocalClipboardPaste } from "../../../src/hooks/useClipboardImagePaste";
+import { processClipboardPaste, processLocalClipboardPaste } from "../../../apps/web/src/hooks/useClipboardImagePaste";
 
 describe("processLocalClipboardPaste", () => {
   beforeEach(() => {

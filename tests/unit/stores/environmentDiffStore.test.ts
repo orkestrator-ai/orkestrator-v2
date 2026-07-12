@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { useEnvironmentDiffStore } from "../../../src/stores/environmentDiffStore";
+import { useEnvironmentDiffStore } from "../../../apps/web/src/stores/environmentDiffStore";
 
 function resetStore() {
   useEnvironmentDiffStore.setState({

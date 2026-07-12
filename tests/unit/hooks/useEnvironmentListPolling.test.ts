@@ -3,7 +3,7 @@ import { act, renderHook } from "@testing-library/react";
 import {
   ENVIRONMENT_LIST_POLL_INTERVAL_MS,
   useEnvironmentListPolling,
-} from "../../../src/hooks/useEnvironmentListPolling";
+} from "../../../apps/web/src/hooks/useEnvironmentListPolling";
 
 const originalSetInterval = globalThis.setInterval;
 const originalClearInterval = globalThis.clearInterval;

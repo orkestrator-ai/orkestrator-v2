@@ -58,7 +58,7 @@ mock.module("@/lib/backend", () => ({
 }));
 
 const { useKanbanStore, findTaskForEnvironment } =
-  await import("../../../src/stores/kanbanStore.ts?kanban-store-test") as typeof import("../../../src/stores/kanbanStore");
+  await import("../../../apps/web/src/stores/kanbanStore.ts?kanban-store-test") as typeof import("../../../apps/web/src/stores/kanbanStore");
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import type { KanbanTask } from "@/lib/backend";
 

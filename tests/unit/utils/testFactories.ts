@@ -1,5 +1,5 @@
 // Test factory functions for creating mock data
-import type { Project, Environment, EnvironmentStatus, AppConfig, RepositoryConfig } from "../../../src/types";
+import type { Project, Environment, EnvironmentStatus, AppConfig, RepositoryConfig } from "../../../apps/web/src/types";
 
 /**
  * Creates a mock Project with sensible defaults that can be overridden

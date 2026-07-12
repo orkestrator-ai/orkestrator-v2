@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, mock } from "bun:test";
 import { render, screen } from "@testing-library/react";
-import type { EnvironmentStatus } from "../../../src/types";
+import type { EnvironmentStatus } from "../../../apps/web/src/types";
 
 // Mock the Tooltip components since they require a context
 mock.module("@/components/ui/tooltip", () => ({
@@ -23,7 +23,7 @@ mock.module("@/components/ui/tooltip", () => ({
 
 // Import component after mocking (lucide-react is NOT mocked to avoid
 // polluting Bun's module cache for other test files)
-import { StatusIndicator } from "../../../src/components/environments/StatusIndicator";
+import { StatusIndicator } from "../../../apps/web/src/components/environments/StatusIndicator";
 
 describe("StatusIndicator", () => {
   test("renders without crashing for running status", () => {

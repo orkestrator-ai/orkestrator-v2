@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { registerMainIpc } from "../../../electron/ipc";
+import { registerMainIpc } from "../../../apps/desktop/electron/ipc";
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown;
 

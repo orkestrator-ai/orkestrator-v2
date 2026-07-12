@@ -96,12 +96,6 @@ mock.module("@/hooks/useFileMentions", () => ({
   }),
 }));
 
-mock.module("@/lib/canvas-utils", () => ({
-  resizeCanvasIfNeeded: (c: unknown) => c,
-  resizeCanvasToMaxDimension: (c: unknown) => c,
-  MAX_IMAGE_DIMENSION: 4096,
-}));
-
 import { CodexComposeBar } from "../../../apps/web/src/components/codex/CodexComposeBar";
 import { useCodexStore } from "../../../apps/web/src/stores/codexStore";
 import type { CodexModel } from "../../../apps/web/src/lib/codex-client";

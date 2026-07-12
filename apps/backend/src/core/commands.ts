@@ -171,6 +171,26 @@ function quoteShell(value: string): string {
   return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 
+export function resolveBrowserOpenCommand(
+  value: string,
+  platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[] } {
+  let target: URL;
+  try {
+    target = new URL(value);
+  } catch {
+    throw new Error(`Invalid browser URL: ${value}`);
+  }
+  if (target.protocol !== "http:" && target.protocol !== "https:") {
+    throw new Error(`Unsupported browser URL protocol: ${target.protocol}`);
+  }
+
+  const normalized = target.toString();
+  if (platform === "darwin") return { command: "open", args: [normalized] };
+  if (platform === "win32") return { command: "explorer.exe", args: [normalized] };
+  return { command: "xdg-open", args: [normalized] };
+}
+
 function validateGitRefName(value: string, name = "git ref"): string {
   const trimmed = value.trim();
   if (
@@ -2470,10 +2490,8 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
           : null);
 
   register("open_in_browser", ({ url }) => {
-    const target = asString(url, "url");
-    if (process.platform === "darwin") return runCommand("open", [target]).then(() => undefined);
-    if (process.platform === "win32") return runCommand("cmd", ["/c", "start", "", target]).then(() => undefined);
-    return runCommand("xdg-open", [target]).then(() => undefined);
+    const { command, args } = resolveBrowserOpenCommand(asString(url, "url"));
+    return runCommand(command, args).then(() => undefined);
   });
   register("reveal_in_file_manager", ({ path: filePath }) => {
     const target = asString(filePath, "path");

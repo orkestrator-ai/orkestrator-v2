@@ -40,19 +40,28 @@ export function ProjectItem({ project, isSelected, onSelect, onDelete }: Project
     <>
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            onClick={() => onSelect(project.id)}
+          <div
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
             className={cn(
-              "group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
+              "group flex w-full items-center rounded-md text-left text-sm transition-colors",
               isSelected
                 ? "bg-accent text-accent-foreground"
                 : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
             )}
           >
-            <FolderGit2 className="h-4 w-4 shrink-0" />
-            <span className="flex-1 truncate">{project.name}</span>
+            <button
+              type="button"
+              onClick={() => onSelect(project.id)}
+              className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left"
+            >
+              <FolderGit2 className="h-4 w-4 shrink-0" />
+              <span className="flex-1 truncate">{project.name}</span>
+              <ChevronRight className={cn(
+                "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+                isSelected && "rotate-90"
+              )} />
+            </button>
 
             {/* Delete button - shown on hover */}
             <div
@@ -66,16 +75,12 @@ export function ProjectItem({ project, isSelected, onSelect, onDelete }: Project
                 size="icon"
                 className="h-6 w-6 text-muted-foreground hover:text-destructive"
                 onClick={handleDelete}
+                aria-label={`Delete ${project.name}`}
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
             </div>
-
-            <ChevronRight className={cn(
-              "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
-              isSelected && "rotate-90"
-            )} />
-          </button>
+          </div>
         </TooltipTrigger>
         <TooltipContent side="right" align="center">
           <p className="font-mono text-xs">{project.gitUrl}</p>

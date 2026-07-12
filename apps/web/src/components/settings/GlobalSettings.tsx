@@ -50,6 +50,7 @@ interface GlobalSettingsProps {
 export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsProps) {
   const { config, setConfig } = useConfigStore();
   const global = config.global;
+  const isRemoteClient = window.orkestratorGateway?.enabled === true;
 
   const [cpuCores, setCpuCores] = useState(global.containerResources.cpuCores);
   const [memoryGb, setMemoryGb] = useState(global.containerResources.memoryGb);
@@ -104,7 +105,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     global.experimentalCodexRawEventLogging ?? true
   );
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
-  const [webClientEnabled, setWebClientEnabled] = useState(global.webClientEnabled ?? true);
   const [webClientStatus, setWebClientStatus] = useState<WebClientStatus | null>(null);
   const [gatewayTokenSettings, setGatewayTokenSettings] = useState<GatewayTokenSettings | null>(null);
   const [gatewayToken, setGatewayToken] = useState("");
@@ -152,7 +152,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     );
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
-    setWebClientEnabled(global.webClientEnabled ?? true);
   }, [global]);
 
   const refreshWebClientStatus = useCallback(async () => {
@@ -168,7 +167,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       .catch((error: unknown) => {
         if (requestId === webClientStatusRequestRef.current) {
           setWebClientStatus({
-            enabled: global.webClientEnabled ?? true,
+            enabled: true,
             running: false,
             url: null,
             error: error instanceof Error ? error.message : String(error),
@@ -196,14 +195,14 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       });
 
     await Promise.all([statusRequest, tokenRequest]);
-  }, [global.webClientEnabled]);
+  }, []);
 
   useEffect(() => {
-    if (activeSection === "web-client") void refreshWebClientStatus();
+    if (activeSection === "web-client" && isRemoteClient) void refreshWebClientStatus();
     return () => {
       webClientStatusRequestRef.current += 1;
     };
-  }, [activeSection, refreshWebClientStatus]);
+  }, [activeSection, isRemoteClient, refreshWebClientStatus]);
 
   // Fetch log directory path once on mount
   useEffect(() => {
@@ -235,13 +234,12 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       terminalScrollback !== (global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK) ||
       experimentalCodexRawEventLogging !== (global.experimentalCodexRawEventLogging ?? true) ||
       debugLogging !== (global.debugLogging ?? false) ||
-      webClientEnabled !== (global.webClientEnabled ?? true) ||
-      gatewayToken !== savedGatewayToken;
+      (isRemoteClient && gatewayToken !== savedGatewayToken);
     setHasChanges(changed);
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, gatewayToken, savedGatewayToken, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, gatewayToken, savedGatewayToken, global, isRemoteClient]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -363,7 +361,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         terminalScrollback,
         experimentalCodexRawEventLogging,
         debugLogging,
-        webClientEnabled,
+        webClientEnabled: global.webClientEnabled ?? true,
       };
 
       if (anthropicApiKey) newGlobal.anthropicApiKey = anthropicApiKey;
@@ -372,16 +370,11 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       const newConfig = await backend.updateGlobalConfig(newGlobal);
       setConfig(newConfig);
 
-      if (gatewayTokenSettings?.editable && gatewayToken !== savedGatewayToken) {
+      if (isRemoteClient && gatewayTokenSettings?.editable && gatewayToken !== savedGatewayToken) {
         const nextGatewayTokenSettings = await backend.setGatewayToken(gatewayToken);
         setGatewayTokenSettings(nextGatewayTokenSettings);
         setGatewayToken(nextGatewayTokenSettings.token);
         setSavedGatewayToken(nextGatewayTokenSettings.token);
-      }
-
-      if (!window.orkestratorGateway?.enabled) {
-        const nextWebClientStatus = await backend.setWebClientEnabled(webClientEnabled);
-        setWebClientStatus(nextWebClientStatus);
       }
 
       // Propagate GitHub token to running containers if it changed
@@ -439,7 +432,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     );
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
-    setWebClientEnabled(global.webClientEnabled ?? true);
     setGatewayToken(savedGatewayToken);
     setDomainErrors([]);
     setColorError(null);
@@ -1019,15 +1011,30 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     : null;
 
   const renderWebClient = () => {
-    const isRemoteClient = window.orkestratorGateway?.enabled === true;
-    const hasPendingChange = webClientEnabled !== (global.webClientEnabled ?? true);
+    if (!isRemoteClient) {
+      return (
+        <div className="max-w-2xl space-y-4">
+          <div>
+            <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <Globe2 className="h-4 w-4" />
+              Remote web access
+            </h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Remote access is provided by the standalone backend service, independently of the desktop app.
+            </p>
+          </div>
+          <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-4 text-xs leading-relaxed text-muted-foreground">
+            Build the renderer and backend, then run <code className="font-mono text-foreground">bun run --cwd apps/backend start</code> on a machine connected to your Tailscale network. The service logs its URL and the path to its protected token file.
+          </div>
+        </div>
+      );
+    }
+
     const statusLabel = isLoadingWebClientStatus
       ? "Checking"
       : webClientStatus?.running
         ? "Running"
-        : webClientStatus?.enabled
-          ? "Unavailable"
-          : "Off";
+        : "Unavailable";
 
     return (
       <div className="max-w-2xl space-y-6">
@@ -1042,27 +1049,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         </div>
 
         <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/50">
-          <div className="flex items-center justify-between gap-6 p-4">
-            <div className="min-w-0 space-y-1">
-              <Label htmlFor="web-client-enabled" className="text-sm font-medium">
-                Allow web access
-              </Label>
-              <p className="text-xs text-muted-foreground">
-                {isRemoteClient
-                  ? "This setting can only be changed in the desktop app."
-                  : "Starts an authenticated web client on this computer's Tailscale address."}
-              </p>
-            </div>
-            <Switch
-              id="web-client-enabled"
-              aria-label="Allow web access"
-              checked={webClientEnabled}
-              disabled={isRemoteClient}
-              onCheckedChange={setWebClientEnabled}
-            />
-          </div>
-
-          <div className="space-y-2 border-t border-zinc-800 p-4">
+          <div className="space-y-2 p-4">
             <div className="space-y-1">
               <Label htmlFor="gateway-token" className="flex items-center gap-2 text-sm font-medium">
                 <Key className="h-3.5 w-3.5" />
@@ -1137,17 +1124,11 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
                 <span className="text-xs font-medium text-foreground">{statusLabel}</span>
               </div>
 
-              {webClientStatus?.running && webClientStatus.url && !hasPendingChange && (
+              {webClientStatus?.running && webClientStatus.url && (
                 <a
                   href={webClientStatus.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  onClick={(event) => {
-                    if (!isRemoteClient) {
-                      event.preventDefault();
-                      void backend.openInBrowser(webClientStatus.url!);
-                    }
-                  }}
                   className="flex min-w-0 items-center gap-1.5 font-mono text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   title={webClientStatus.url}
                 >
@@ -1157,12 +1138,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
               )}
             </div>
 
-            {hasPendingChange && (
-              <p className="mt-2 text-xs text-amber-400/90">
-                Save changes to {webClientEnabled ? "start" : "stop"} the web client.
-              </p>
-            )}
-            {!hasPendingChange && webClientStatus?.error && (
+            {webClientStatus?.error && (
               <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-400/90">
                 <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
                 {webClientStatus.error}

@@ -128,12 +128,6 @@ mock.module("@/components/chat/ContextUsageWheel", () => ({
   ContextUsageWheel: () => null,
 }));
 
-mock.module("@/lib/canvas-utils", () => ({
-  resizeCanvasIfNeeded: (c: unknown) => c,
-  resizeCanvasToMaxDimension: (c: unknown) => c,
-  MAX_IMAGE_DIMENSION: 4096,
-}));
-
 import { ClaudeComposeBar } from "../../../apps/web/src/components/claude/ClaudeComposeBar";
 import { useClaudeStore } from "../../../apps/web/src/stores/claudeStore";
 import { useConfigStore } from "../../../apps/web/src/stores/configStore";

@@ -96,7 +96,7 @@ describe("GlobalSettings", () => {
       editable: true,
       source: "file" as const,
     }));
-    window.orkestratorGateway = undefined;
+    window.orkestratorGateway = { enabled: true };
 
     useConfigStore.setState({
       config: {
@@ -159,21 +159,16 @@ describe("GlobalSettings", () => {
     });
   });
 
-  test("turns off the web client and shows its live link", async () => {
-    const { container } = render(<GlobalSettings activeSection="web-client" />);
+  test("explains standalone remote access without exposing obsolete desktop controls", () => {
+    window.orkestratorGateway = undefined;
+    render(<GlobalSettings activeSection="web-client" />);
 
-    expect(await screen.findByRole("link", { name: /http:\/\/100\.88\.12\.3:34121\// })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("switch", { name: "Allow web access" }));
-    expect(screen.getByText("Save changes to stop the web client.")).toBeTruthy();
-    fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
-
-    await waitFor(() => {
-      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ webClientEnabled: false }),
-      );
-      expect(mockSetWebClientEnabled).toHaveBeenCalledWith(false);
-    });
+    expect(screen.getByText("Remote web access")).toBeTruthy();
+    expect(screen.getByText(/standalone backend service/)).toBeTruthy();
+    expect(screen.queryByRole("switch", { name: "Allow web access" })).toBeNull();
+    expect(screen.queryByLabelText("Gateway token")).toBeNull();
+    expect(mockGetWebClientStatus).not.toHaveBeenCalled();
+    expect(mockGetGatewayTokenSettings).not.toHaveBeenCalled();
   });
 
   test("displays, reveals, edits, and saves the gateway token", async () => {
@@ -262,26 +257,22 @@ describe("GlobalSettings", () => {
     console.error = originalConsoleError;
   });
 
-  test("saves token and lifecycle edits together", async () => {
+  test("saves a token without calling the removed desktop lifecycle control", async () => {
     render(<GlobalSettings activeSection="web-client" />);
     const input = await screen.findByLabelText("Gateway token") as HTMLInputElement;
 
     fireEvent.change(input, { target: { value: "replacement-token-123456" } });
-    fireEvent.click(screen.getByRole("switch", { name: "Allow web access" }));
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
       expect(mockSetGatewayToken).toHaveBeenCalledWith("replacement-token-123456");
-      expect(mockSetWebClientEnabled).toHaveBeenCalledWith(false);
+      expect(mockSetWebClientEnabled).not.toHaveBeenCalled();
     });
   });
 
-  test("ignores an older gateway token response after configuration changes", async () => {
-    let resolveFirst: ((value: { token: string; editable: true; source: "file" }) => void) | undefined;
-    mockGetGatewayTokenSettings
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
-      .mockResolvedValueOnce({ token: "newer-token-value-123456", editable: true, source: "file" });
+  test("does not refetch gateway credentials for unrelated configuration changes", async () => {
     render(<GlobalSettings activeSection="web-client" />);
+    await screen.findByLabelText("Gateway token");
 
     act(() => {
       useConfigStore.setState((state) => ({
@@ -291,33 +282,7 @@ describe("GlobalSettings", () => {
         },
       }));
     });
-
-    const input = await screen.findByLabelText("Gateway token") as HTMLInputElement;
-    await waitFor(() => expect(input.value).toBe("newer-token-value-123456"));
-    await act(async () => {
-      resolveFirst?.({ token: "stale-token-value-123456", editable: true, source: "file" });
-      await Promise.resolve();
-    });
-    expect(input.value).toBe("newer-token-value-123456");
-  });
-
-  test("starts a previously disabled web client", async () => {
-    useConfigStore.setState((state) => ({
-      config: {
-        ...state.config,
-        global: { ...state.config.global, webClientEnabled: false },
-      },
-    }));
-    mockGetWebClientStatus.mockResolvedValueOnce({ enabled: false, running: false, url: null, error: null });
-    const { container } = render(<GlobalSettings activeSection="web-client" />);
-    const toggle = screen.getByRole("switch", { name: "Allow web access" });
-    await screen.findByText("Off");
-
-    fireEvent.click(toggle);
-    fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
-
-    await waitFor(() => expect(mockSetWebClientEnabled).toHaveBeenCalledWith(true));
-    expect(await screen.findByText("Running")).toBeTruthy();
+    expect(mockGetGatewayTokenSettings).toHaveBeenCalledTimes(1);
   });
 
   test("shows unavailable and status-fetch errors", async () => {
@@ -338,79 +303,22 @@ describe("GlobalSettings", () => {
     expect(await screen.findByText("IPC unavailable")).toBeTruthy();
   });
 
-  test("keeps web-client controls read-only in a remote browser", async () => {
-    window.orkestratorGateway = { enabled: true };
+  test("shows credential controls but no lifecycle toggle in a remote browser", async () => {
     render(<GlobalSettings activeSection="web-client" />);
     await screen.findByText("Running");
 
-    const toggle = screen.getByRole("switch", { name: "Allow web access" }) as HTMLButtonElement;
-    expect(toggle.disabled).toBe(true);
-    expect(screen.getByText("This setting can only be changed in the desktop app.")).toBeTruthy();
+    expect(screen.getByLabelText("Gateway token")).toBeTruthy();
+    expect(screen.queryByRole("switch", { name: "Allow web access" })).toBeNull();
     expect(mockSetWebClientEnabled).not.toHaveBeenCalled();
   });
 
-  test("reports transition failures without showing save success", async () => {
-    const originalConsoleError = console.error;
-    console.error = mock(() => undefined);
-    mockSetWebClientEnabled.mockRejectedValueOnce(new Error("gateway transition failed"));
-    const { container } = render(<GlobalSettings activeSection="web-client" />);
-    await screen.findByText("Running");
-
-    fireEvent.click(screen.getByRole("switch", { name: "Allow web access" }));
-    fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
-
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
-      "Failed to save settings",
-      { description: "gateway transition failed" },
-    ));
-    expect(mockToastSuccess).not.toHaveBeenCalledWith("Settings saved");
-    console.error = originalConsoleError;
-  });
-
-  test("resets a pending web-client change", async () => {
-    const { container } = render(<GlobalSettings activeSection="web-client" />);
-    await screen.findByText("Running");
-    const toggle = screen.getByRole("switch", { name: "Allow web access" });
-
-    fireEvent.click(toggle);
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
-    fireEvent.click(within(container).getByRole("button", { name: "Reset" }));
-
-    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
-    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
-  });
-
-  test("opens the live gateway link through the desktop browser API", async () => {
+  test("uses a normal browser link for the active remote gateway", async () => {
     render(<GlobalSettings activeSection="web-client" />);
-    const link = await screen.findByRole("link", { name: /100\.88\.12\.3/ });
+    const link = await screen.findByRole("link", { name: /100\.88\.12\.3/ }) as HTMLAnchorElement;
 
-    fireEvent.click(link);
-    expect(mockOpenInBrowser).toHaveBeenCalledWith("http://100.88.12.3:34121/");
-  });
-
-  test("ignores an older status response after configuration changes", async () => {
-    let resolveFirst: ((value: { enabled: boolean; running: boolean; url: string | null; error: string | null }) => void) | undefined;
-    mockGetWebClientStatus
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
-      .mockResolvedValueOnce({ enabled: true, running: false, url: null, error: "new status" });
-    render(<GlobalSettings activeSection="web-client" />);
-
-    act(() => {
-      useConfigStore.setState((state) => ({
-        config: {
-          ...state.config,
-          global: { ...state.config.global, webClientEnabled: false },
-        },
-      }));
-    });
-    expect(await screen.findByText("new status")).toBeTruthy();
-
-    await act(async () => {
-      resolveFirst?.({ enabled: true, running: true, url: "http://stale.invalid/", error: null });
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(screen.queryByText("http://stale.invalid/")).toBeNull());
-    expect(screen.getByText("new status")).toBeTruthy();
+    expect(link.href).toBe("http://100.88.12.3:34121/");
+    expect(link.target).toBe("_blank");
+    expect(mockOpenInBrowser).not.toHaveBeenCalled();
   });
 
   test("renders every settings section", () => {

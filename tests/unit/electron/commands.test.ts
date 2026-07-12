@@ -69,11 +69,35 @@ const ptySpawn = mock((command: string, args: string[], options: Record<string, 
 
 mock.module("node-pty", () => ({ spawn: ptySpawn }));
 
-const { createCommandRegistry } = await import("../../../apps/backend/src/core/commands");
+const { createCommandRegistry, resolveBrowserOpenCommand } = await import("../../../apps/backend/src/core/commands");
 
 const tempDirs: string[] = [];
 const SETUP_DONE_OSC = "\u001b]9999;setup_done\u0007";
 const SETUP_FAILED_OSC = "\u001b]9999;setup_failed\u0007";
+
+describe("resolveBrowserOpenCommand", () => {
+  test("uses direct platform launchers without a command interpreter", () => {
+    expect(resolveBrowserOpenCommand("https://example.com/a?x=1&y=2", "darwin")).toEqual({
+      command: "open",
+      args: ["https://example.com/a?x=1&y=2"],
+    });
+    expect(resolveBrowserOpenCommand("https://example.com/a?x=1&y=2", "win32")).toEqual({
+      command: "explorer.exe",
+      args: ["https://example.com/a?x=1&y=2"],
+    });
+    expect(resolveBrowserOpenCommand("http://127.0.0.1:34121/", "linux")).toEqual({
+      command: "xdg-open",
+      args: ["http://127.0.0.1:34121/"],
+    });
+  });
+
+  test("rejects malformed and non-web URLs", () => {
+    expect(() => resolveBrowserOpenCommand("not a url", "win32")).toThrow("Invalid browser URL");
+    expect(() => resolveBrowserOpenCommand("file:///tmp/secret", "win32")).toThrow(
+      "Unsupported browser URL protocol",
+    );
+  });
+});
 
 async function createTempDir(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));

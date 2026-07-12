@@ -20,10 +20,6 @@ mock.module("@/lib/backend", () => ({
   writeLocalFile: mockWriteLocalFile,
 }));
 
-mock.module("@/lib/canvas-utils", () => ({
-  resizeCanvasIfNeeded: (canvas: HTMLCanvasElement) => canvas,
-}));
-
 // Ensure ImageData is available (happy-dom may not provide it)
 if (typeof globalThis.ImageData === "undefined") {
   (globalThis as Record<string, unknown>).ImageData = class ImageData {

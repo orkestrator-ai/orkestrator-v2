@@ -17,6 +17,12 @@ app.setPath("userData", path.join(app.getPath("appData"), APP_SLUG));
 let mainWindow: BrowserWindow | null = null;
 let backend: BackendHttpClient | null = null;
 const backendProcess = new BackendProcess();
+const standaloneWebAccessStatus = {
+  enabled: false,
+  running: false,
+  url: null,
+  error: "Remote web access is managed by the standalone backend service.",
+} as const;
 
 function emitToRenderers(event: string, payload: unknown): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -84,14 +90,8 @@ function registerIpc(): void {
     dialogApi: dialog,
     appApi: app,
     nativeImageApi: nativeImage,
-    getWebClientStatus: () => {
-      const info = backendProcess.getInfo();
-      return { enabled: true, running: info !== null, url: info?.url ?? null, error: null };
-    },
-    setWebClientEnabled: async () => {
-      const info = backendProcess.getInfo();
-      return { enabled: true, running: info !== null, url: info?.url ?? null, error: null };
-    },
+    getWebClientStatus: () => standaloneWebAccessStatus,
+    setWebClientEnabled: async () => standaloneWebAccessStatus,
     getGatewayTokenSettings: () => {
       if (!backend) throw new Error("Backend is not initialized");
       return backend.getTokenSettings();
@@ -117,6 +117,13 @@ app.whenReady().then(async () => {
     resourceRoot,
     rendererDevServerUrl: isDev ? process.env.VITE_DEV_SERVER_URL : undefined,
     onEvent: emitToRenderers,
+    onUnexpectedExit: (error) => {
+      dialog.showErrorBox(
+        `${PRODUCT_NAME} backend stopped`,
+        `${error.message}\n\nThe application will close. Restart it to recover.`,
+      );
+      app.quit();
+    },
   });
   await backend.invoke("get_config");
 

@@ -1,8 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createServer } from "node:net";
 
 const root = path.resolve(import.meta.dir, "../../..");
 const temporaryDirectories: string[] = [];
@@ -13,26 +12,22 @@ afterAll(async () => {
   await Promise.all(temporaryDirectories.map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-async function startBackend(): Promise<{ url: string; token: string }> {
+async function startBackend(): Promise<{
+  url: string;
+  token: string;
+  readyMessage: Record<string, unknown>;
+  child: Bun.Subprocess;
+}> {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-standalone-test-"));
   temporaryDirectories.push(dataDir);
   const rendererRoot = path.join(dataDir, "renderer");
   await mkdir(rendererRoot);
   await writeFile(path.join(rendererRoot, "index.html"), "<!doctype html><title>Orkestrator</title>");
-  const port = await new Promise<number>((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const selected = typeof address === "object" && address ? address.port : 0;
-      server.close((error) => error ? reject(error) : resolve(selected));
-    });
-  });
   const child = Bun.spawn([
     process.execPath,
     path.join(root, "apps/backend/dist/main.js"),
     "--host", "127.0.0.1",
-    "--port", String(port),
+    "--port", "0",
     "--unsafe-allow-non-tailscale-bind",
     "--data-dir", dataDir,
     "--app-root", root,
@@ -53,9 +48,15 @@ async function startBackend(): Promise<{ url: string; token: string }> {
     pending = lines.pop() ?? "";
     for (const line of lines) {
       try {
-        const message = JSON.parse(line) as { type?: string; url?: string; token?: string };
-        if (message.type === "orkestrator-backend-ready" && message.url && message.token) {
-          return { url: message.url, token: message.token };
+        const message = JSON.parse(line) as Record<string, unknown>;
+        if (
+          message.type === "orkestrator-backend-ready"
+          && typeof message.url === "string"
+          && typeof message.authFile === "string"
+        ) {
+          const auth = JSON.parse(await readFile(message.authFile, "utf8")) as { token?: unknown };
+          if (typeof auth.token !== "string") throw new Error("Backend auth file is missing its token");
+          return { url: message.url, token: auth.token, readyMessage: message, child };
         }
       } catch {
         // Human-readable gateway logs precede the machine-readable ready line.
@@ -68,7 +69,9 @@ async function startBackend(): Promise<{ url: string; token: string }> {
 
 describe("standalone backend service", () => {
   test("serves the web app and invokes backend commands without Electron", async () => {
-    const { url, token } = await startBackend();
+    const { url, token, readyMessage } = await startBackend();
+    expect(readyMessage).not.toHaveProperty("token");
+    expect(JSON.stringify(readyMessage)).not.toContain(token);
     const authorization = { authorization: `Bearer ${token}` };
     const invokeResponse = await Bun.fetch(new URL("/__orkestrator/invoke", url), {
       method: "POST",
@@ -83,5 +86,11 @@ describe("standalone backend service", () => {
     const webResponse = await Bun.fetch(url, { headers: authorization });
     expect(webResponse.status).toBe(200);
     expect(webResponse.headers.get("content-type")).toContain("text/html");
+  });
+
+  test("stops cleanly when a service manager sends SIGTERM", async () => {
+    const { child } = await startBackend();
+    child.kill("SIGTERM");
+    await expect(child.exited).resolves.toBe(0);
   });
 });

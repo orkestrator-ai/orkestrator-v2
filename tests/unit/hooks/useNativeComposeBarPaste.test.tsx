@@ -12,12 +12,6 @@ mock.module("@/lib/backend", () => ({
   writeLocalFile: mockWriteLocalFile,
 }));
 
-mock.module("@/lib/canvas-utils", () => ({
-  resizeCanvasIfNeeded: (canvas: HTMLCanvasElement) => canvas,
-  resizeCanvasToMaxDimension: (canvas: HTMLCanvasElement) => canvas,
-  MAX_IMAGE_DIMENSION: 4096,
-}));
-
 mock.module("sonner", () => ({
   toast: {
     error: toastError,

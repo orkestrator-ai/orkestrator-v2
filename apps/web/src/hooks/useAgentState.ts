@@ -35,6 +35,7 @@ export function useAgentState(
     }
 
     const eventName = `claude-state-${containerId}`;
+    let disposed = false;
 
     listen<AgentStateEvent>(eventName, (event) => {
       const state = event.payload.state as AgentActivityState;
@@ -43,13 +44,18 @@ export function useAgentState(
       }
     })
       .then((unlisten) => {
-        unlistenRef.current = unlisten;
+        if (disposed) {
+          unlisten();
+        } else {
+          unlistenRef.current = unlisten;
+        }
       })
       .catch((e) => {
         console.error("Failed to listen for agent state events:", e);
       });
 
     return () => {
+      disposed = true;
       if (unlistenRef.current) {
         unlistenRef.current();
         unlistenRef.current = null;

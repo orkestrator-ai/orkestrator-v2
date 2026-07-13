@@ -101,9 +101,6 @@
         "dmg"
       ]
     },
-    "win": {
-      "icon": "icon.ico"
-    },
     "linux": {
       "icon": "icons"
     }

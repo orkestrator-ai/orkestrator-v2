@@ -2,16 +2,17 @@
 
 The shared backend lets you use Orkestrator from Electron and normal browsers against one authoritative process. It is designed for trusted tailnets, not for public internet exposure.
 
-The service serves the React app, owns long-running backend state, accepts renderer commands, streams backend events, and proxies loopback services on the backend host. Electron starts and supervises this service; its Tailscale URL can be used by browser clients at the same time. The identical backend can also run standalone without Electron.
+The service serves the React app, owns long-running backend state, accepts renderer commands, streams backend events, and proxies loopback services on the backend host. Electron starts and supervises this service with an ephemeral loopback control listener; its separate Tailscale listener can be used by browser clients at the same time. Both listeners share one authenticated backend instance. The identical backend can also run standalone without Electron.
 
 ## Requirements
 
+- macOS or Linux. Windows is not supported because terminal sessions use Bun's native PTY.
 - Bun, Docker, and the Orkestrator build must be present on the backend machine.
 - The host must have an active Tailscale address.
 - The remote browser must be on the same tailnet and able to reach the host.
 - The gateway token must be available on the host machine.
 
-The service refuses non-Tailscale bind addresses by default. The explicit unsafe flag exists only for loopback development and the bundled Electron child process.
+The service refuses non-Tailscale browser bind addresses by default. The explicit unsafe flag exists only for loopback development. Electron's internal control listener is always restricted to loopback.
 
 ## Starting And Connecting
 
@@ -152,6 +153,8 @@ The token is missing or wrong. Open the login route again, or clear the `orkestr
 ### The gateway fails to start
 
 Check whether another process is using the configured port. Either stop that process or set `ORKESTRATOR_GATEWAY_PORT` to a free port.
+
+When Electron owns the backend, a port conflict disables browser access and is shown in Web Client settings, but the desktop app continues through its independent loopback control listener. A standalone backend still exits because it has no separate desktop control channel.
 
 ### A proxied environment URL returns a 502
 

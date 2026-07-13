@@ -31,6 +31,7 @@ A desktop application for managing isolated Docker-based development environment
 
 ## Prerequisites
 
+- macOS or Linux. Windows is not supported because terminal sessions use Bun's native PTY.
 - [Bun](https://bun.sh) 1.3.14 or newer - JavaScript runtime, package manager, and native PTY provider
 - [Docker](https://docker.com) - Container runtime
 - [Tailscale](https://tailscale.com) - Optional, required for remote browser access through the gateway
@@ -81,7 +82,7 @@ bun run dev
 
 The backend is a standalone-capable Bun service in `apps/backend` and is the authoritative owner of Docker, terminal, storage, and agent state. There are two supported launch modes:
 
-- `bun run dev` starts Electron, and Electron supervises one backend instance. That same instance serves the Electron renderer and authenticated web clients. It binds to Tailscale on port `34121` when available and otherwise falls back to local-only access at `127.0.0.1:34121`.
+- `bun run dev` starts Electron, and Electron supervises one backend instance. Electron talks to an ephemeral loopback control listener, while authenticated browser clients use a separate Tailscale listener on port `34121` (or a local-only fallback). Losing Tailscale or encountering a browser-port conflict does not take down the desktop control channel.
 - `bun run start:web` builds and starts the backend without Electron. The backend serves the built React app directly to authenticated browsers.
 
 For local web development with Vite and the backend in one Turbo invocation:

@@ -23,6 +23,10 @@ export type SpawnPtyOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
+export function isPtyPlatformSupported(platform: NodeJS.Platform): boolean {
+  return platform !== "win32";
+}
+
 /**
  * Spawn an interactive process with Bun's runtime-owned PTY.
  *
@@ -33,6 +37,9 @@ export type SpawnPtyOptions = {
  * behave the same way when supervised by Electron or launched on its own.
  */
 export function spawnPty(command: string, args: string[], options: SpawnPtyOptions): PtyProcess {
+  if (!isPtyPlatformSupported(process.platform)) {
+    throw new Error("Orkestrator's Bun PTY does not support Windows. Use macOS or Linux.");
+  }
   if (typeof Bun.Terminal !== "function") {
     throw new Error("This Bun version does not support native terminal sessions. Upgrade Bun before starting Orkestrator.");
   }

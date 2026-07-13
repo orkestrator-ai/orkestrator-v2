@@ -2,8 +2,9 @@ import { memo, useCallback, useRef, useEffect } from "react";
 import { type Layout } from "react-resizable-panels";
 import { useMediaQuery } from "@/hooks";
 import { usePaneLayoutStore } from "@/stores";
-import { isPaneLeaf, type PaneNode, type PaneSplit } from "@/types/paneLayout";
+import { isPaneLeaf, type PaneLeaf, type PaneNode, type PaneSplit } from "@/types/paneLayout";
 import { PaneTree } from "./PaneTree";
+import { MobilePaneSwitcher } from "./MobilePaneSwitcher";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -13,13 +14,9 @@ import {
 /** Debounce delay for store updates during resize operations (ms) */
 const RESIZE_DEBOUNCE_MS = 100;
 
-function findPane(node: PaneNode, paneId: string): PaneNode | null {
-  if (isPaneLeaf(node)) return node.id === paneId ? node : null;
-  return findPane(node.children[0], paneId) ?? findPane(node.children[1], paneId);
-}
-
-function firstPane(node: PaneNode): PaneNode {
-  return isPaneLeaf(node) ? node : firstPane(node.children[0]);
+export function collectPaneLeaves(node: PaneNode): PaneLeaf[] {
+  if (isPaneLeaf(node)) return [node];
+  return [...collectPaneLeaves(node.children[0]), ...collectPaneLeaves(node.children[1])];
 }
 
 interface PaneSplitContainerProps {
@@ -45,6 +42,7 @@ export const PaneSplitContainer = memo(function PaneSplitContainer({
   // Use a selector to only get the updateSizes function - this prevents re-renders
   // when other parts of the store change
   const updateSizes = usePaneLayoutStore((state) => state.updateSizes);
+  const setActivePane = usePaneLayoutStore((state) => state.setActivePane);
   const activePaneId = usePaneLayoutStore(
     (state) => state.environments.get(environmentId)?.activePaneId,
   );
@@ -98,15 +96,29 @@ export const PaneSplitContainer = memo(function PaneSplitContainer({
   );
 
   if (isMobile) {
-    const focusedPane = activePaneId ? findPane(split, activePaneId) : null;
+    const panes = collectPaneLeaves(split);
+    const paneById = new Map(panes.map((pane) => [pane.id, pane]));
     return (
-      <PaneTree
-        node={focusedPane ?? firstPane(split)}
-        containerId={containerId}
-        environmentId={environmentId}
-        isActive={isActive}
-        activeDragId={activeDragId}
-        dragOverPaneId={dragOverPaneId}
+      <MobilePaneSwitcher
+        panes={panes.map((pane) => {
+          const activeTab = pane.tabs.find((tab) => tab.id === pane.activeTabId);
+          return {
+            id: pane.id,
+            label: activeTab?.displayTitle ?? activeTab?.type ?? "Empty pane",
+          };
+        })}
+        activePaneId={activePaneId}
+        onSelect={(paneId) => setActivePane(paneId, environmentId)}
+        renderPane={(paneId, paneIsActive) => (
+          <PaneTree
+            node={paneById.get(paneId)!}
+            containerId={containerId}
+            environmentId={environmentId}
+            isActive={isActive && paneIsActive}
+            activeDragId={activeDragId}
+            dragOverPaneId={dragOverPaneId}
+          />
+        )}
       />
     );
   }

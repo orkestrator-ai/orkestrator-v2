@@ -19,7 +19,7 @@ import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIco
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { getGatewayTokenValidationError } from "@/lib/gateway-token";
-import { writeText } from "@/lib/native/clipboard";
+import { useTimedCopyFeedback } from "@/hooks";
 import type {
   ClaudeMode,
   ClaudeNativeBackend,
@@ -116,7 +116,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [showApiKey, setShowApiKey] = useState(false);
   const [showGithubToken, setShowGithubToken] = useState(false);
   const [showGatewayToken, setShowGatewayToken] = useState(false);
-  const [gatewayTokenCopied, setGatewayTokenCopied] = useState(false);
+  const { copied: gatewayTokenCopied, copy: copyGatewayToken } = useTimedCopyFeedback();
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
@@ -1011,22 +1011,14 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     ? getGatewayTokenValidationError(gatewayToken)
     : null;
 
-  useEffect(() => {
-    if (!gatewayTokenCopied) return;
-
-    const timeoutId = window.setTimeout(() => setGatewayTokenCopied(false), 1200);
-    return () => window.clearTimeout(timeoutId);
-  }, [gatewayTokenCopied]);
-
   const handleCopyGatewayToken = useCallback(async () => {
     try {
-      await writeText(gatewayToken);
-      setGatewayTokenCopied(true);
+      await copyGatewayToken(gatewayToken);
     } catch (error) {
       console.error("[settings] Failed to copy gateway token:", error);
       toast.error("Failed to copy gateway token");
     }
-  }, [gatewayToken]);
+  }, [copyGatewayToken, gatewayToken]);
 
   const renderWebClient = () => {
     const statusLabel = isLoadingWebClientStatus

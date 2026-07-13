@@ -13,8 +13,16 @@ export type BackendOptions = {
   host?: string;
   fallbackHost?: string;
   port?: number;
+  controlHost?: string;
+  controlPort?: number;
   unsafeAllowNonTailscaleBind: boolean;
 };
+
+export function assertSupportedPlatform(platform: NodeJS.Platform = process.platform): void {
+  if (platform === "win32") {
+    throw new Error("Orkestrator does not support Windows. Use macOS or Linux.");
+  }
+}
 
 function valueAfter(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
@@ -29,9 +37,18 @@ export function defaultDataDir(
   env: NodeJS.ProcessEnv = process.env,
   home: string = os.homedir(),
 ): string {
+  assertSupportedPlatform(platform);
   if (platform === "darwin") return path.join(home, "Library", "Application Support", APP_SLUG);
-  if (platform === "win32") return path.join(env.APPDATA ?? home, APP_SLUG);
   return path.join(env.XDG_CONFIG_HOME ?? path.join(home, ".config"), APP_SLUG);
+}
+
+function parsePortOption(value: string | undefined, optionName: string): number | undefined {
+  if (value === undefined) return undefined;
+  const port = Number.parseInt(value, 10);
+  if (!Number.isInteger(port) || String(port) !== value.trim() || port < 0 || port > 65535) {
+    throw new Error(`Invalid ${optionName} value: ${value}`);
+  }
+  return port;
 }
 
 export function parseOptions(
@@ -42,13 +59,8 @@ export function parseOptions(
   const sourceRoot = path.resolve(path.dirname(fileURLToPath(sourceUrl)), "../../..");
   const appRoot = path.resolve(valueAfter(args, "--app-root") ?? env.ORKESTRATOR_APP_ROOT ?? sourceRoot);
   const portValue = valueAfter(args, "--port") ?? env.ORKESTRATOR_GATEWAY_PORT;
-  let port: number | undefined;
-  if (portValue !== undefined) {
-    port = Number.parseInt(portValue, 10);
-    if (!Number.isInteger(port) || String(port) !== portValue.trim() || port < 0 || port > 65535) {
-      throw new Error(`Invalid --port value: ${portValue}`);
-    }
-  }
+  const port = parsePortOption(portValue, "--port");
+  const controlPort = parsePortOption(valueAfter(args, "--control-port"), "--control-port");
   return {
     dataDir: path.resolve(valueAfter(args, "--data-dir") ?? env.ORKESTRATOR_DATA_DIR ?? defaultDataDir(process.platform, env)),
     appRoot,
@@ -58,6 +70,8 @@ export function parseOptions(
     host: valueAfter(args, "--host"),
     fallbackHost: valueAfter(args, "--fallback-host"),
     port,
+    controlHost: valueAfter(args, "--control-host"),
+    controlPort,
     unsafeAllowNonTailscaleBind: args.includes("--unsafe-allow-non-tailscale-bind"),
   };
 }

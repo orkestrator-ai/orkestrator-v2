@@ -37,32 +37,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { formatBytes, formatRelativeTime } from "./docker-stats-format";
 
 interface DockerStatsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-}
-
-/** Format bytes to human readable string */
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
-}
-
-/** Format Unix timestamp to relative time */
-function formatRelativeTime(timestamp: number): string {
-  const now = Math.floor(Date.now() / 1000);
-  const diff = now - timestamp;
-
-  // Handle future timestamps (e.g., due to clock skew)
-  if (diff < 0) return "just now";
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
 }
 
 export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps) {

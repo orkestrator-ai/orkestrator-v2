@@ -95,6 +95,7 @@ export function FullscreenSettingsLayout({
             size="icon"
             className="h-10 w-10 text-muted-foreground hover:text-foreground md:h-7 md:w-7"
             onClick={() => onOpenChange(false)}
+            aria-label="Close settings"
           >
             <X className="h-4 w-4" />
           </Button>

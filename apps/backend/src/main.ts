@@ -4,8 +4,9 @@ import process from "node:process";
 import { OrkestratorBackend } from "./core/index.js";
 import { fixPath } from "./core/fix-path.js";
 import { OrkestratorGateway } from "./gateway.js";
-import { parseOptions } from "./options.js";
+import { assertSupportedPlatform, parseOptions } from "./options.js";
 
+assertSupportedPlatform();
 fixPath();
 const options = parseOptions(process.argv.slice(2));
 await mkdir(options.dataDir, { recursive: true });
@@ -27,6 +28,8 @@ gateway = new OrkestratorGateway({
   bindAddress: options.host,
   fallbackBindAddress: options.fallbackHost,
   port: options.port,
+  controlBindAddress: options.controlHost,
+  controlPort: options.controlPort,
   unsafeAllowNonTailscaleBind: options.unsafeAllowNonTailscaleBind,
 });
 
@@ -43,6 +46,8 @@ process.stdout.write(`${JSON.stringify({
   port: info.port,
   url: info.url,
   authFile: info.authFile,
+  browserUrl: info.browserUrl,
+  browserError: info.browserError,
 })}\n`);
 
 let stopping = false;

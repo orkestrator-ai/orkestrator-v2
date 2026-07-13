@@ -2,6 +2,10 @@ import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 
+if (process.platform === "win32") {
+  throw new Error("Orkestrator desktop development supports macOS and Linux only.");
+}
+
 const DEV_URL = "http://127.0.0.1:1420";
 const packageRoot = path.resolve(import.meta.dir, "..");
 const repositoryRoot = path.resolve(packageRoot, "../..");

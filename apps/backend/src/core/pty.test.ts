@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { spawnPty } from "./pty.js";
+import { isPtyPlatformSupported, spawnPty } from "./pty.js";
 
 describe("Bun PTY adapter", () => {
+  test("documents the supported desktop platforms", () => {
+    expect(isPtyPlatformSupported("darwin")).toBe(true);
+    expect(isPtyPlatformSupported("linux")).toBe(true);
+    expect(isPtyPlatformSupported("win32")).toBe(false);
+  });
+
   test("supports terminal input and resize without crossing a native-addon fd boundary", async () => {
     if (process.platform === "win32") return;
 

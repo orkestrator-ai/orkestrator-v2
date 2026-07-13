@@ -1,5 +1,5 @@
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { createServer, request as httpRequest, type IncomingHttpHeaders } from "node:http";
+import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, mock, test } from "bun:test";
@@ -12,6 +12,7 @@ import {
 
 const tempDirs: string[] = [];
 const gateways: OrkestratorGateway[] = [];
+const auxiliaryServers: Server[] = [];
 
 async function requestUrl(
   url: string,
@@ -88,6 +89,10 @@ async function startGateway(options: Partial<ConstructorParameters<typeof Orkest
 
 afterEach(async () => {
   await Promise.all(gateways.splice(0).map((gateway) => gateway.stop().catch(() => undefined)));
+  await Promise.all(auxiliaryServers.splice(0).map((server) => new Promise<void>((resolve) => {
+    server.closeAllConnections();
+    server.close(() => resolve());
+  })));
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -201,6 +206,48 @@ describe("remote gateway", () => {
       logger,
     });
     await expect(invalidPort.start()).rejects.toThrow("Invalid gateway port");
+  });
+
+  test("keeps a loopback control listener separate from the browser listener", async () => {
+    const { info } = await startGateway({
+      controlBindAddress: "127.0.0.1",
+      controlPort: 0,
+    });
+
+    expect(info.browserUrl).toBeTruthy();
+    expect(info.url).not.toBe(info.browserUrl);
+    const headers = { authorization: `Bearer ${info.token}` };
+    const controlResponse = await requestUrl(info.url, { headers });
+    const browserResponse = await requestUrl(info.browserUrl!, { headers });
+    expect(controlResponse.status).toBe(200);
+    expect(browserResponse.status).toBe(200);
+  });
+
+  test("keeps desktop control available when the browser port is occupied", async () => {
+    const occupied = createServer((_request, response) => response.end("occupied"));
+    auxiliaryServers.push(occupied);
+    await new Promise<void>((resolve) => occupied.listen(0, "127.0.0.1", resolve));
+    const occupiedAddress = occupied.address();
+    if (!occupiedAddress || typeof occupiedAddress === "string") throw new Error("Expected TCP address");
+
+    const { info } = await startGateway({
+      port: occupiedAddress.port,
+      controlBindAddress: "127.0.0.1",
+      controlPort: 0,
+    });
+
+    expect(info.browserUrl).toBeUndefined();
+    expect(info.browserError).toContain(`port ${occupiedAddress.port}`);
+    const response = await requestUrl(info.url, {
+      headers: { authorization: `Bearer ${info.token}` },
+    });
+    expect(response.status).toBe(200);
+  });
+
+  test("rejects a non-loopback control listener", async () => {
+    await expect(startGateway({ controlBindAddress: "0.0.0.0" })).rejects.toThrow(
+      "Control listener must use a loopback address",
+    );
   });
 
   test("requires authentication before invoking backend commands", async () => {

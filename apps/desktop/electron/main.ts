@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
+import { BackendProcess, getBrowserGatewayStatus, type BackendHttpClient } from "./backend-process.js";
 import { APP_SLUG, PRODUCT_NAME } from "./app-constants.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
@@ -19,13 +19,7 @@ let backend: BackendHttpClient | null = null;
 const backendProcess = new BackendProcess();
 
 function getSharedBackendStatus() {
-  const info = backendProcess.getInfo();
-  return {
-    enabled: true,
-    running: info !== null,
-    url: info?.url ?? null,
-    error: null,
-  };
+  return getBrowserGatewayStatus(backendProcess.getInfo());
 }
 
 function emitToRenderers(event: string, payload: unknown): void {

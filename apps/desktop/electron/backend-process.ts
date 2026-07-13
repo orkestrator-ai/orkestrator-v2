@@ -9,7 +9,18 @@ export type GatewayStartInfo = {
   port: number;
   url: string;
   authFile: string;
+  browserUrl?: string;
+  browserError?: string;
 };
+
+export function getBrowserGatewayStatus(info: GatewayStartInfo | null) {
+  return {
+    enabled: true,
+    running: Boolean(info?.browserUrl),
+    url: info?.browserUrl ?? null,
+    error: info?.browserError ?? null,
+  };
+}
 
 type ReadyMessage = GatewayStartInfo & { type: "orkestrator-backend-ready" };
 
@@ -139,6 +150,7 @@ export class BackendProcess {
       ? path.join(options.appRoot, "apps", "backend", "src", "main.ts")
       : path.join(options.resourceRoot, "backend", "main.js");
     const args = [entry, "--port", String(options.gatewayPort ?? 34121),
+      "--control-host", "127.0.0.1", "--control-port", "0",
       "--data-dir", options.dataDir, "--app-root", options.appRoot, "--resource-root", options.resourceRoot,
       "--renderer-root", options.isDev ? path.join(options.appRoot, "apps", "web", "dist") : path.join(options.resourceRoot, "web")];
     if (options.gatewayHost) {

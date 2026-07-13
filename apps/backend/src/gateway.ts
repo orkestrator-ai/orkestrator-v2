@@ -32,6 +32,8 @@ export interface GatewayStartInfo {
   url: string;
   token: string;
   authFile: string;
+  browserUrl?: string;
+  browserError?: string;
 }
 
 export interface OrkestratorGatewayOptions {
@@ -42,6 +44,8 @@ export interface OrkestratorGatewayOptions {
   bindAddress?: string;
   fallbackBindAddress?: string;
   port?: number;
+  controlBindAddress?: string;
+  controlPort?: number;
   env?: NodeJS.ProcessEnv;
   interfaces?: NetworkInterfaceMap;
   logger?: Pick<Console, "debug" | "error" | "info" | "warn">;
@@ -457,11 +461,13 @@ export class OrkestratorGateway {
   private readonly bindAddress?: string;
   private readonly fallbackBindAddress?: string;
   private readonly port?: number;
+  private readonly controlBindAddress?: string;
+  private readonly controlPort?: number;
   private readonly env: NodeJS.ProcessEnv;
   private readonly interfaces?: NetworkInterfaceMap;
   private readonly logger: Pick<Console, "debug" | "error" | "info" | "warn">;
   private readonly unsafeAllowNonTailscaleBind: boolean;
-  private server: Server | null = null;
+  private servers = new Set<Server>();
   private token = "";
   private authFile = "";
   private clients = new Set<ServerResponse>();
@@ -478,6 +484,8 @@ export class OrkestratorGateway {
     this.bindAddress = options.bindAddress;
     this.fallbackBindAddress = options.fallbackBindAddress;
     this.port = options.port;
+    this.controlBindAddress = options.controlBindAddress;
+    this.controlPort = options.controlPort;
     this.env = options.env ?? process.env;
     this.interfaces = options.interfaces;
     this.logger = options.logger ?? console;
@@ -495,7 +503,7 @@ export class OrkestratorGateway {
       ?? this.env.ORKESTRATOR_GATEWAY_HOST
       ?? tailscaleBindAddress
       ?? this.fallbackBindAddress;
-    if (!bindAddress) {
+    if (!bindAddress && !this.controlBindAddress) {
       this.logger.warn("[RemoteGateway] No Tailscale address found; gateway not started");
       return null;
     }
@@ -506,8 +514,8 @@ export class OrkestratorGateway {
     if (usingFallback) {
       this.logger.warn(`[RemoteGateway] No Tailscale address found; falling back to ${this.fallbackBindAddress}`);
     }
-    const safeLoopbackFallback = usingFallback && isLoopbackAddress(bindAddress);
-    if (!this.unsafeAllowNonTailscaleBind && !safeLoopbackFallback && !isTailscaleAddress(bindAddress)) {
+    const safeLoopbackFallback = usingFallback && bindAddress !== undefined && isLoopbackAddress(bindAddress);
+    if (bindAddress && !this.unsafeAllowNonTailscaleBind && !safeLoopbackFallback && !isTailscaleAddress(bindAddress)) {
       throw new Error(`Refusing to bind gateway to non-Tailscale address: ${bindAddress}`);
     }
 
@@ -516,7 +524,46 @@ export class OrkestratorGateway {
     this.token = auth.token;
     this.authFile = auth.authFile;
 
-    this.server = createServer((request, response) => {
+    let controlListener: { bindAddress: string; port: number; url: string } | null = null;
+    if (this.controlBindAddress) {
+      if (!isLoopbackAddress(this.controlBindAddress)) {
+        throw new Error(`Control listener must use a loopback address: ${this.controlBindAddress}`);
+      }
+      controlListener = await this.listen(this.controlBindAddress, this.controlPort ?? 0);
+      this.logger.info(`[BackendControl] Listening on ${controlListener.url}`);
+    }
+
+    let browserListener: { bindAddress: string; port: number; url: string } | null = null;
+    let browserError: string | undefined;
+    if (bindAddress) {
+      try {
+        browserListener = await this.listen(bindAddress, port);
+        this.logger.info(`[RemoteGateway] Listening on ${browserListener.url}`);
+      } catch (error) {
+        if (!controlListener) throw error;
+        browserError = error instanceof Error ? error.message : String(error);
+        this.logger.error(`[RemoteGateway] Browser listener unavailable: ${browserError}`);
+      }
+    } else {
+      browserError = "No Tailscale address was found";
+      this.logger.warn(`[RemoteGateway] ${browserError}; desktop control listener remains available`);
+    }
+
+    const primaryListener = controlListener ?? browserListener;
+    if (!primaryListener) return null;
+    this.logger.info(`[RemoteGateway] Auth token stored at ${this.authFile}`);
+
+    return {
+      ...primaryListener,
+      token: this.token,
+      authFile: this.authFile,
+      browserUrl: browserListener?.url,
+      browserError,
+    };
+  }
+
+  private async listen(bindAddress: string, port: number): Promise<{ bindAddress: string; port: number; url: string }> {
+    const server = createServer((request, response) => {
       this.handle(request, response).catch((error: unknown) => {
         this.logger.error("[RemoteGateway] Request failed:", error);
         if (!response.headersSent) {
@@ -526,26 +573,32 @@ export class OrkestratorGateway {
         }
       });
     });
-    this.server.on("connection", (socket) => {
+    server.on("connection", (socket) => {
       this.sockets.add(socket);
       socket.once("close", () => this.sockets.delete(socket));
     });
 
-    await new Promise<void>((resolve, reject) => {
-      this.server?.once("error", reject);
-      this.server?.listen(port, bindAddress, () => {
-        this.server?.off("error", reject);
-        resolve();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(port, bindAddress, () => {
+          server.off("error", reject);
+          resolve();
+        });
       });
-    });
+    } catch (error) {
+      server.close();
+      throw error;
+    }
 
-    const address = this.server.address();
+    this.servers.add(server);
+    const address = server.address();
     const resolvedPort = typeof address === "object" && address ? address.port : port;
-    const url = `http://${formatHostForUrl(bindAddress)}:${resolvedPort}/`;
-    this.logger.info(`[RemoteGateway] Listening on ${url}`);
-    this.logger.info(`[RemoteGateway] Auth token stored at ${this.authFile}`);
-
-    return { bindAddress, port: resolvedPort, url, token: this.token, authFile: this.authFile };
+    return {
+      bindAddress,
+      port: resolvedPort,
+      url: `http://${formatHostForUrl(bindAddress)}:${resolvedPort}/`,
+    };
   }
 
   async getTokenSettings(): Promise<GatewayTokenSettings> {
@@ -597,18 +650,20 @@ export class OrkestratorGateway {
       proxyRequest.destroy(new Error("Remote gateway stopped"));
     }
     this.proxyRequests.clear();
-    const server = this.server;
-    if (!server) return;
-    await new Promise<void>((resolve, reject) => {
+    const servers = [...this.servers];
+    if (servers.length === 0) return;
+    // Destroy active sockets before awaiting close callbacks. A streaming
+    // response can otherwise keep a listener's close callback pending forever.
+    for (const socket of this.sockets) socket.destroy();
+    await Promise.all(servers.map((server) => new Promise<void>((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());
       // Explicitly disabling remote access must also revoke active keep-alive,
       // static-file, and streaming proxy connections. `server.close()` alone
       // waits indefinitely for active responses to finish.
       server.closeAllConnections();
-      for (const socket of this.sockets) socket.destroy();
-    });
+    })));
     this.sockets.clear();
-    this.server = null;
+    this.servers.clear();
   }
 
   emit(event: string, payload: unknown): void {

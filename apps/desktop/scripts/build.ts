@@ -3,6 +3,10 @@ import { rmSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
+if (process.platform === "win32") {
+  throw new Error("Orkestrator desktop builds support macOS and Linux only.");
+}
+
 const root = path.resolve(import.meta.dir, "..");
 
 function run(command: string, args: string[]): void {

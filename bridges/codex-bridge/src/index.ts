@@ -1602,6 +1602,76 @@ async function buildTranscriptSubagentParts(
   }));
 }
 
+type TodoListThreadItem = Extract<ThreadItem, { type: "todo_list" }>;
+
+function cloneTodoListItem(item: TodoListThreadItem): TodoListThreadItem {
+  // SDK stream events may reuse or mutate their payload objects. Keep each
+  // timeline snapshot independent so a later update cannot rewrite history.
+  return structuredClone(item);
+}
+
+function todoListStateMatches(
+  previous: TodoListThreadItem,
+  next: TodoListThreadItem,
+): boolean {
+  return JSON.stringify(previous.items) === JSON.stringify(next.items);
+}
+
+function findLatestCurrentItemKey(
+  session: SessionState,
+  itemId: string,
+): string | undefined {
+  for (let index = session.currentItemOrder.length - 1; index >= 0; index -= 1) {
+    const key = session.currentItemOrder[index];
+    if (key && session.currentItems.get(key)?.id === itemId) {
+      return key;
+    }
+  }
+  return undefined;
+}
+
+function recordCurrentItem(session: SessionState, item: ThreadItem): void {
+  if (item.type !== "todo_list") {
+    if (!session.currentItems.has(item.id)) {
+      session.currentItemOrder.push(item.id);
+    }
+    session.currentItems.set(item.id, item);
+    return;
+  }
+
+  const previousKey = findLatestCurrentItemKey(session, item.id);
+  const previous = previousKey
+    ? session.currentItems.get(previousKey)
+    : undefined;
+  const nextSnapshot = cloneTodoListItem(item);
+
+  if (!previousKey || previous?.type !== "todo_list") {
+    session.currentItemOrder.push(item.id);
+    session.currentItems.set(item.id, nextSnapshot);
+    return;
+  }
+
+  // A todo_list commonly starts as an empty shell and is then populated. That
+  // shell was never a meaningful visible state, so update it in place. Likewise,
+  // started/updated/completed events with identical items are one snapshot.
+  const isInitialEmptyShell = previousKey === item.id && previous.items.length === 0;
+  if (isInitialEmptyShell || todoListStateMatches(previous, item)) {
+    session.currentItems.set(previousKey, nextSnapshot);
+    return;
+  }
+
+  // Codex reuses one item id for every update_plan call in a turn. Store changed
+  // states under timeline-only keys so each update remains where it occurred.
+  let snapshotIndex = 2;
+  let snapshotKey = `${item.id}:snapshot:${snapshotIndex}`;
+  while (session.currentItems.has(snapshotKey)) {
+    snapshotIndex += 1;
+    snapshotKey = `${item.id}:snapshot:${snapshotIndex}`;
+  }
+  session.currentItemOrder.push(snapshotKey);
+  session.currentItems.set(snapshotKey, nextSnapshot);
+}
+
 async function rebuildAssistantMessage(
   session: SessionState,
   options: { receivedAt?: string } = {},
@@ -1845,10 +1915,7 @@ async function processCodexStream(
         return;
       }
       const receivedAt = new Date().toISOString();
-      if (!session.currentItems.has(event.item.id)) {
-        session.currentItemOrder.push(event.item.id);
-      }
-      session.currentItems.set(event.item.id, event.item);
+      recordCurrentItem(session, event.item);
       const message = await rebuildAssistantMessage(session, { receivedAt });
       emit(message
         ? { type: "message.updated", sessionId: session.id, data: { message } }
@@ -2062,6 +2129,8 @@ export const __testing = {
   FALLBACK_MODELS,
   EXPIRED_SESSION_RETENTION_MS,
   expiredSessions: expiredSessions as Map<string, any>,
+  emitForTesting: emit,
+  getSubscriberCountForTesting: () => subscribers.size,
   rebuildAssistantMessage: rebuildAssistantMessage as (
     session: any,
     options?: { receivedAt?: string },
@@ -2077,9 +2146,24 @@ export const __testing = {
   setFreshThreadFactoryForTesting: (factory: ((session: SessionState) => Thread) | null) => {
     freshThreadFactoryForTesting = factory;
   },
+  startSseKeepaliveForTesting: startSseKeepalive,
   sessions: sessions as Map<string, any>,
   writePersistedBridgeCache,
 };
+
+function startSseKeepalive(
+  writeSSE: (event: { event: string; data: string }) => Promise<void>,
+  intervalMs = 30_000,
+): ReturnType<typeof setInterval> {
+  return setInterval(() => {
+    void writeSSE({
+      event: "keepalive",
+      data: JSON.stringify({ timestamp: new Date().toISOString() }),
+    }).catch((error) => {
+      console.error("[codex-bridge] Failed to write SSE keepalive:", error);
+    });
+  }, intervalMs);
+}
 
 app.use(
   "*",
@@ -2389,13 +2473,10 @@ app.get("/event/subscribe", (c) => {
     };
 
     subscribers.add(listener);
-    const keepalive = setInterval(async () => {
+    const keepalive = startSseKeepalive(async (event) => {
       if (!open) return;
-      await stream.writeSSE({
-        event: "keepalive",
-        data: JSON.stringify({ timestamp: new Date().toISOString() }),
-      });
-    }, 30_000);
+      await stream.writeSSE(event);
+    });
 
     try {
       await new Promise<void>((resolve) => {

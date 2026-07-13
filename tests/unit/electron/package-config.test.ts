@@ -19,6 +19,7 @@ describe("Electron packaging configuration", () => {
     const packageJson = await readJson<{
       main: string;
       scripts: Record<string, string>;
+      devDependencies: Record<string, string>;
       build: {
         directories: { buildResources: string; output: string };
         files: string[];
@@ -34,6 +35,7 @@ describe("Electron packaging configuration", () => {
     expect(packageJson.scripts.build).toContain("turbo");
     expect(packageJson.scripts.package).toContain("bun run build:all");
     expect(packageJson.scripts.package).toContain("electron-builder");
+    expect(packageJson.devDependencies.electron).toBeDefined();
     expect(packageJson.build.directories).toMatchObject({ buildResources: "apps/desktop/electron/resources", output: "release" });
     expect(packageJson.build.mac.icon).toBe("icon.icns");
     expect(packageJson.build.win.icon).toBe("icon.ico");

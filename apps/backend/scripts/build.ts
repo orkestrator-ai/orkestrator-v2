@@ -2,7 +2,6 @@ import { cp, mkdir, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
-const repositoryRoot = path.resolve(packageRoot, "../..");
 const output = path.join(packageRoot, "dist");
 
 await rm(output, { recursive: true, force: true });
@@ -25,12 +24,12 @@ async function copyResolvedPackage(source: string, destination: string): Promise
 }
 
 await copyResolvedPackage(
-  path.join(repositoryRoot, "node_modules/node-pty"),
+  path.join(packageRoot, "node_modules/node-pty"),
   path.join(output, "node_modules/node-pty"),
 );
 
 // Sharp is bundled, but selects its platform-native @img packages dynamically.
-const sharpRoot = await realpath(path.join(repositoryRoot, "node_modules/sharp"));
+const sharpRoot = await realpath(path.join(packageRoot, "node_modules/sharp"));
 await copyResolvedPackage(
   path.join(path.dirname(sharpRoot), "@img"),
   path.join(output, "node_modules/@img"),

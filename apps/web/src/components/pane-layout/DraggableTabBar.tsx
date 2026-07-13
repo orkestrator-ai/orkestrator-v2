@@ -177,7 +177,7 @@ export function DraggableTabBar({
     <>
       <div
         className={cn(
-          "flex min-h-[40px] items-center gap-0.5 overflow-x-auto bg-zinc-900/80 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:min-h-[32px]",
+          "flex min-h-[40px] items-center gap-0.5 overflow-x-auto bg-background [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:min-h-[32px]",
           isDropTarget && "bg-primary/10",
         )}
       >

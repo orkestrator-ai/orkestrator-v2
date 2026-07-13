@@ -69,6 +69,7 @@ let currentSelectedEnvironmentId: string | null = selectedEnvironment.id;
 let currentSelectedProjectId: string | null = selectedProject.id;
 let currentProjectBoardTab: "kanban" | "linear" | "features" = "kanban";
 let currentChanges: unknown[] = [];
+let currentFilesPanelOpen = false;
 
 function selectState<TState, TResult>(
   state: TState,
@@ -247,7 +248,7 @@ mock.module("@/stores", () => ({
   }) => T) =>
     selectState(
       {
-        isOpen: false,
+        isOpen: currentFilesPanelOpen,
         togglePanel: toggleFilesPanelMock,
         changes: currentChanges,
       },
@@ -366,6 +367,7 @@ beforeEach(() => {
   currentSelectedProjectId = selectedProject.id;
   currentProjectBoardTab = "kanban";
   currentChanges = [];
+  currentFilesPanelOpen = false;
 });
 
 afterEach(() => {
@@ -450,12 +452,33 @@ describe("ActionBar grid presentation", () => {
     ]);
   });
 
+  test("uses an accent state for the selected mobile board control", () => {
+    currentSelectedEnvironmentId = null;
+    currentProjectBoardTab = "linear";
+    render(<ActionBar presentation="grid" />);
+
+    const linear = screen.getByRole("button", { name: "Linear pipeline" });
+    const kanban = screen.getByRole("button", { name: "Kanban board" });
+    expect(linear.getAttribute("aria-pressed")).toBe("true");
+    expect(linear.className).toContain("bg-primary/15");
+    expect(kanban.getAttribute("aria-pressed")).toBe("false");
+  });
+
   test("toggles the file panel from the mobile grid", () => {
     render(<ActionBar presentation="grid" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Show file panel" }));
 
     expect(toggleFilesPanelMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("uses an accent state when the file panel is selected", () => {
+    currentFilesPanelOpen = true;
+    render(<ActionBar presentation="grid" />);
+
+    const hideFiles = screen.getByRole("button", { name: "Hide file panel" });
+    expect(hideFiles.getAttribute("aria-pressed")).toBe("true");
+    expect(hideFiles.className).toContain("bg-primary/15");
   });
 });
 
@@ -665,7 +688,9 @@ describe("ActionBar workflow tabs", () => {
 
     render(<ActionBar />);
 
-    expect(screen.getByRole("tab", { name: "Linear" }).getAttribute("aria-selected")).toBe("true");
+    const linearTab = screen.getByRole("tab", { name: "Linear" });
+    expect(linearTab.getAttribute("aria-selected")).toBe("true");
+    expect(linearTab.className).toContain("data-[state=active]:!bg-primary/15");
     expect(screen.getByRole("tab", { name: "Kanban" }).getAttribute("aria-selected")).toBe("false");
     expect(screen.getByRole("tab", { name: "Features" }).getAttribute("aria-selected")).toBe("false");
   });

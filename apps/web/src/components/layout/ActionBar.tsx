@@ -1344,8 +1344,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 <Button
                   variant="ghost"
                   size="icon"
+                  className={cn(
+                    projectBoardTab === "kanban" &&
+                      "bg-primary/15 text-blue-300 ring-1 ring-inset ring-primary/50 hover:bg-primary/20 hover:text-blue-200",
+                  )}
                   onClick={() => setProjectBoardTab("kanban")}
                   aria-label="Kanban board"
+                  aria-pressed={projectBoardTab === "kanban"}
                   disabled={!isProjectBoardView}
                 >
                   <Columns3 className="h-4 w-4" />
@@ -1354,8 +1359,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 <Button
                   variant="ghost"
                   size="icon"
+                  className={cn(
+                    projectBoardTab === "linear" &&
+                      "bg-primary/15 text-blue-300 ring-1 ring-inset ring-primary/50 hover:bg-primary/20 hover:text-blue-200",
+                  )}
                   onClick={() => setProjectBoardTab("linear")}
                   aria-label="Linear pipeline"
+                  aria-pressed={projectBoardTab === "linear"}
                   disabled={!isProjectBoardView}
                 >
                   <Workflow className="h-4 w-4" />
@@ -1364,8 +1374,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 <Button
                   variant="ghost"
                   size="icon"
+                  className={cn(
+                    projectBoardTab === "features" &&
+                      "bg-primary/15 text-blue-300 ring-1 ring-inset ring-primary/50 hover:bg-primary/20 hover:text-blue-200",
+                  )}
                   onClick={() => setProjectBoardTab("features")}
                   aria-label="Features"
+                  aria-pressed={projectBoardTab === "features"}
                   disabled={!isProjectBoardView}
                 >
                   <ListChecks className="h-4 w-4" />
@@ -1390,9 +1405,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   onValueChange={(value) => setProjectBoardTab(value as ProjectBoardTab)}
                 >
                   <TabsList className="h-8 bg-zinc-900/80">
-                    <TabsTrigger value="kanban" className="px-2 text-xs data-[state=active]:!bg-zinc-800">Kanban</TabsTrigger>
-                    <TabsTrigger value="linear" className="px-2 text-xs data-[state=active]:!bg-zinc-800">Linear</TabsTrigger>
-                    <TabsTrigger value="features" className="px-2 text-xs data-[state=active]:!bg-zinc-800">Features</TabsTrigger>
+                    <TabsTrigger value="kanban" className="px-2 text-xs data-[state=active]:!bg-primary/15 data-[state=active]:!text-blue-300 data-[state=active]:ring-1 data-[state=active]:ring-inset data-[state=active]:ring-primary/50">Kanban</TabsTrigger>
+                    <TabsTrigger value="linear" className="px-2 text-xs data-[state=active]:!bg-primary/15 data-[state=active]:!text-blue-300 data-[state=active]:ring-1 data-[state=active]:ring-inset data-[state=active]:ring-primary/50">Linear</TabsTrigger>
+                    <TabsTrigger value="features" className="px-2 text-xs data-[state=active]:!bg-primary/15 data-[state=active]:!text-blue-300 data-[state=active]:ring-1 data-[state=active]:ring-inset data-[state=active]:ring-primary/50">Features</TabsTrigger>
                   </TabsList>
                 </Tabs>
               </>
@@ -1416,11 +1431,16 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 }
               >
                   <Button
-                    variant={isGrid ? "ghost" : filesPanelOpen ? "secondary" : "ghost"}
+                    variant="ghost"
                     size="icon"
-                    className="relative h-8 w-8"
+                    className={cn(
+                      "relative h-8 w-8",
+                      filesPanelOpen &&
+                        "bg-primary/15 text-blue-300 ring-1 ring-inset ring-primary/50 hover:bg-primary/20 hover:text-blue-200",
+                    )}
                     onClick={toggleFilesPanel}
                     aria-label={`${filesPanelOpen ? "Hide" : "Show"} file panel`}
+                    aria-pressed={filesPanelOpen}
                     disabled={!selectedEnvironment}
                   >
                     <FolderTree className="h-4 w-4" />

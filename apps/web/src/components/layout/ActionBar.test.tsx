@@ -34,6 +34,7 @@ const toastSuccessMock = mock(() => {});
 const toastErrorMock = mock(() => {});
 const setProjectBoardTabMock = mock((_tab: string) => {});
 const setProjectBoardNotesOpenMock = mock((_open: boolean) => {});
+const toggleFilesPanelMock = mock(() => {});
 const originalConsoleError = console.error;
 const originalConsoleLog = console.log;
 let writeTextMock: ReturnType<typeof mock>;
@@ -247,7 +248,7 @@ mock.module("@/stores", () => ({
     selectState(
       {
         isOpen: false,
-        togglePanel: () => {},
+        togglePanel: toggleFilesPanelMock,
         changes: currentChanges,
       },
       selector,
@@ -353,6 +354,7 @@ beforeEach(() => {
   toastErrorMock.mockReset();
   setProjectBoardTabMock.mockReset();
   setProjectBoardNotesOpenMock.mockReset();
+  toggleFilesPanelMock.mockReset();
   writeTextMock = mock(async () => {});
   Object.defineProperty(navigator, "clipboard", {
     value: { writeText: writeTextMock },
@@ -429,6 +431,31 @@ describe("ActionBar grid presentation", () => {
     expect(label?.textContent).toBe("Show files");
     expect(dot?.classList.contains("rounded-full")).toBe(true);
     expect(dot?.classList.contains("absolute")).toBe(false);
+  });
+
+  test("dispatches mobile project-board actions", () => {
+    currentSelectedEnvironmentId = null;
+    render(<ActionBar presentation="grid" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Project notes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kanban board" }));
+    fireEvent.click(screen.getByRole("button", { name: "Linear pipeline" }));
+    fireEvent.click(screen.getByRole("button", { name: "Features" }));
+
+    expect(setProjectBoardNotesOpenMock).toHaveBeenCalledWith(true);
+    expect(setProjectBoardTabMock.mock.calls.map(([tab]) => tab)).toEqual([
+      "kanban",
+      "linear",
+      "features",
+    ]);
+  });
+
+  test("toggles the file panel from the mobile grid", () => {
+    render(<ActionBar presentation="grid" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show file panel" }));
+
+    expect(toggleFilesPanelMock).toHaveBeenCalledTimes(1);
   });
 });
 

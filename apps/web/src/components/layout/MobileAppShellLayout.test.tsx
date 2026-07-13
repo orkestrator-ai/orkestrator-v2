@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createPortal } from "react-dom";
 import { MobileAppShellLayout } from "./MobileAppShellLayout";
 
 afterEach(cleanup);
@@ -40,6 +41,53 @@ describe("MobileAppShellLayout", () => {
     expect(screen.queryByRole("dialog", { name: "Tools" })).toBeNull();
   });
 
+  test("closes tools for a portaled context-menu action and restores trigger focus", async () => {
+    renderLayout({
+      actionBar: createPortal(
+        <div data-slot="context-menu-item" role="menuitem" tabIndex={0}>Claude Native</div>,
+        document.body,
+      ),
+    });
+
+    const toolsButton = screen.getByRole("button", { name: "Open tools" });
+    fireEvent.click(toolsButton);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Claude Native" }));
+
+    expect(screen.queryByRole("dialog", { name: "Tools" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(toolsButton));
+  });
+
+  test("keeps tools open when a nested control consumes Escape", () => {
+    renderLayout({
+      actionBar: (
+        <button
+          type="button"
+          onKeyDown={(event) => event.preventDefault()}
+        >
+          Nested control
+        </button>
+      ),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open tools" }));
+    fireEvent.keyDown(screen.getByRole("button", { name: "Nested control" }), { key: "Escape" });
+
+    expect(screen.getByRole("dialog", { name: "Tools" })).toBeTruthy();
+  });
+
+  test("closes tools from the backdrop and restores trigger focus", async () => {
+    const { container } = renderLayout();
+    const toolsButton = screen.getByRole("button", { name: "Open tools" });
+    fireEvent.click(toolsButton);
+
+    const backdrop = container.querySelector("button.fixed.inset-0");
+    expect(backdrop).toBeTruthy();
+    fireEvent.click(backdrop!);
+
+    expect(screen.queryByRole("dialog", { name: "Tools" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(toolsButton));
+  });
+
   test("opens and closes the project drawer while keeping workspace content mounted", () => {
     renderLayout();
     expect(screen.getByText("Workspace")).toBeTruthy();
@@ -67,6 +115,19 @@ describe("MobileAppShellLayout", () => {
     fireEvent.click(menuButton);
     expect(menuButton.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
+  });
+
+  test("closes the project drawer from its backdrop and restores trigger focus", async () => {
+    const { container } = renderLayout();
+    const menuButton = screen.getByRole("button", { name: "Open projects and environments" });
+    fireEvent.click(menuButton);
+
+    const backdrop = container.querySelector("#mobile-projects-drawer > button.absolute.inset-0");
+    expect(backdrop).toBeTruthy();
+    fireEvent.click(backdrop!);
+
+    expect(screen.queryByRole("dialog", { name: "Projects and environments" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(menuButton));
   });
 
   test("closes the drawer when project or environment selection changes", () => {

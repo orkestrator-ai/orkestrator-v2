@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { Menu, Wrench, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -30,17 +30,47 @@ export function MobileAppShellLayout({
 }: MobileAppShellLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const sidebarTriggerRef = useRef<HTMLButtonElement>(null);
+  const toolsTriggerRef = useRef<HTMLButtonElement>(null);
+  const restoreSidebarFocusRef = useRef(false);
+  const restoreToolsFocusRef = useRef(false);
+
+  const closeSidebar = () => {
+    restoreSidebarFocusRef.current = true;
+    setSidebarOpen(false);
+  };
+
+  const closeTools = () => {
+    restoreToolsFocusRef.current = true;
+    setToolsOpen(false);
+  };
 
   useEffect(() => {
+    restoreSidebarFocusRef.current = false;
+    restoreToolsFocusRef.current = false;
     setSidebarOpen(false);
     setToolsOpen(false);
   }, [selectedEnvironmentId, selectedProjectId]);
 
   useEffect(() => {
+    if (!sidebarOpen && restoreSidebarFocusRef.current) {
+      restoreSidebarFocusRef.current = false;
+      sidebarTriggerRef.current?.focus();
+    }
+  }, [sidebarOpen]);
+
+  useEffect(() => {
+    if (!toolsOpen && restoreToolsFocusRef.current) {
+      restoreToolsFocusRef.current = false;
+      toolsTriggerRef.current?.focus();
+    }
+  }, [toolsOpen]);
+
+  useEffect(() => {
     if (!toolsOpen) return;
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setToolsOpen(false);
+      if (event.key === "Escape" && !event.defaultPrevented) closeTools();
     };
 
     window.addEventListener("keydown", handleKeyDown);
@@ -56,6 +86,7 @@ export function MobileAppShellLayout({
         style={{ WebkitAppRegion: "drag" } as CSSProperties}
       >
         <Button
+          ref={sidebarTriggerRef}
           variant="ghost"
           size="icon"
           className="absolute left-1.5 h-9 w-9"
@@ -75,6 +106,7 @@ export function MobileAppShellLayout({
           {title}
         </span>
         <Button
+          ref={toolsTriggerRef}
           variant={toolsOpen ? "secondary" : "ghost"}
           size="icon"
           className="absolute right-1.5 h-9 w-9"
@@ -94,7 +126,7 @@ export function MobileAppShellLayout({
             type="button"
             className="fixed inset-0 z-40 cursor-default bg-transparent"
             style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
-            onClick={() => setToolsOpen(false)}
+            onClick={closeTools}
             aria-label="Close tools"
           />
         )}
@@ -113,7 +145,9 @@ export function MobileAppShellLayout({
           style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
           onMouseDown={(event) => event.stopPropagation()}
           onClickCapture={(event) => {
-            if ((event.target as Element).closest("button")) setToolsOpen(false);
+            if ((event.target as Element).closest("button, [data-slot='context-menu-item']")) {
+              closeTools();
+            }
           }}
         >
           {actionBar}
@@ -135,7 +169,7 @@ export function MobileAppShellLayout({
             <button
               type="button"
               className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-              onClick={() => setSidebarOpen(false)}
+              onClick={closeSidebar}
               aria-label="Close projects and environments"
             />
             <aside className="mobile-sidebar relative h-full w-[min(88vw,22rem)] border-r border-border bg-[#18191c] shadow-2xl">
@@ -143,7 +177,7 @@ export function MobileAppShellLayout({
                 variant="ghost"
                 size="icon"
                 className="absolute right-2 top-1 z-10 h-10 w-10"
-                onClick={() => setSidebarOpen(false)}
+                onClick={closeSidebar}
                 aria-label="Close projects and environments"
               >
                 <X className="h-4 w-4" />

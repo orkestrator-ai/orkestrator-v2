@@ -52,7 +52,7 @@ export function FullscreenSettingsLayout({
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      if (e.key === "Escape" && !e.defaultPrevented) {
         onOpenChange(false);
       }
     };

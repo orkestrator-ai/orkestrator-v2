@@ -48,6 +48,10 @@ function renderWithFileTabs(
   );
 }
 
+function renderWithoutFileTabs(children: ReactNode) {
+  return render(<TerminalProvider>{children}</TerminalProvider>);
+}
+
 beforeEach(() => {
   useFilesPanelStore.setState({
     isOpen: true,
@@ -105,5 +109,65 @@ describe("mobile files panel", () => {
 
     expect(createFileTab).toHaveBeenCalledWith("src/App.tsx");
     expect(useFilesPanelStore.getState().isOpen).toBe(true);
+  });
+
+  test("keeps the files panel open after opening a diff on desktop", () => {
+    setMobileViewport(false);
+    const createFileTab = mock(() => undefined);
+    renderWithFileTabs(<ChangesView />, createFileTab);
+
+    fireEvent.click(screen.getByTitle("src/App.tsx"));
+
+    expect(createFileTab).toHaveBeenCalledWith("src/App.tsx", {
+      isDiff: true,
+      gitStatus: "M",
+    });
+    expect(useFilesPanelStore.getState().isOpen).toBe(true);
+  });
+
+  test("does not close when no file-tab handler is registered", () => {
+    setMobileViewport(true);
+    renderWithoutFileTabs(
+      <>
+        <AllFilesView />
+        <ChangesView />
+      </>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "App.tsx" }));
+    fireEvent.click(screen.getByTitle("src/App.tsx"));
+
+    expect(useFilesPanelStore.getState().isOpen).toBe(true);
+  });
+
+  test("renders loading states for both views", () => {
+    useFilesPanelStore.setState({ isLoadingTree: true, isLoadingChanges: true });
+    renderWithoutFileTabs(
+      <>
+        <AllFilesView />
+        <ChangesView />
+      </>,
+    );
+
+    expect(screen.getByText("Loading files...")).toBeTruthy();
+    expect(screen.getByText("Loading changes...")).toBeTruthy();
+  });
+
+  test("renders empty states for both views", () => {
+    useFilesPanelStore.setState({
+      fileTree: [],
+      changes: [],
+      isLoadingTree: false,
+      isLoadingChanges: false,
+    });
+    renderWithoutFileTabs(
+      <>
+        <AllFilesView />
+        <ChangesView />
+      </>,
+    );
+
+    expect(screen.getByText("No files found")).toBeTruthy();
+    expect(screen.getByText("No changes")).toBeTruthy();
   });
 });

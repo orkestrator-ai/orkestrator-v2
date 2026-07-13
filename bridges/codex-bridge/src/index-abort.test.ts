@@ -344,6 +344,106 @@ describe("codex bridge abort handling", () => {
     expect(session.status).toBe("idle");
   });
 
+  test("runPrompt appends changed todo lists at their stream positions", async () => {
+    const streams: ReturnType<typeof createStreamController>[] = [];
+    const session = createSession({
+      thread: {
+        runStreamed: async () => {
+          const stream = createStreamController();
+          streams.push(stream);
+          return { events: stream.events() };
+        },
+      },
+    });
+
+    const promptRun = __testing.runPrompt(session, "work through the tasks");
+    await waitUntil(() => streams.length === 1);
+
+    streams[0]!.push({
+      type: "item.started",
+      item: { id: "todo", type: "todo_list", items: [] },
+    });
+    streams[0]!.push({
+      type: "item.updated",
+      item: {
+        id: "todo",
+        type: "todo_list",
+        items: [
+          { text: "Inspect the code", completed: false },
+          { text: "Add coverage", completed: false },
+        ],
+      },
+    });
+    streams[0]!.push({
+      type: "item.completed",
+      item: {
+        id: "todo",
+        type: "todo_list",
+        items: [
+          { text: "Inspect the code", completed: false },
+          { text: "Add coverage", completed: false },
+        ],
+      },
+    });
+    streams[0]!.push({
+      type: "item.completed",
+      item: { id: "reasoning", type: "reasoning", text: "Inspection finished" },
+    });
+    streams[0]!.push({
+      type: "item.updated",
+      item: {
+        id: "todo",
+        type: "todo_list",
+        items: [
+          { text: "Inspect the code", completed: true },
+          { text: "Add coverage", completed: false },
+        ],
+      },
+    });
+    streams[0]!.push({
+      type: "item.completed",
+      item: {
+        id: "command",
+        type: "command_execution",
+        command: "bun test",
+        aggregated_output: "pass",
+        status: "completed",
+        exit_code: 0,
+      },
+    });
+    streams[0]!.push({
+      type: "item.updated",
+      item: {
+        id: "todo",
+        type: "todo_list",
+        items: [
+          { text: "Inspect the code", completed: true },
+          { text: "Add coverage", completed: true },
+        ],
+      },
+    });
+    streams[0]!.push({ type: "turn.completed", usage: {} });
+    await promptRun;
+
+    const assistantMessage = session.messages.find(
+      (message: { role: string }) => message.role === "assistant",
+    );
+    expect(assistantMessage?.parts.map(
+      (part: { type: string; toolName?: string }) => part.toolName ?? part.type,
+    )).toEqual(["todo_list", "thinking", "todo_list", "bash", "todo_list"]);
+    expect(
+      assistantMessage?.parts
+        .filter((part: { toolName?: string }) => part.toolName === "todo_list")
+        .map((part: { toolArgs?: { todos?: Array<{ status: string }> } }) =>
+          part.toolArgs?.todos?.map((todo) => todo.status)
+        ),
+    ).toEqual([
+      ["pending", "pending"],
+      ["completed", "pending"],
+      ["completed", "completed"],
+    ]);
+  });
+
   test("runPrompt finalizes on turn.completed even if the event stream remains open", async () => {
     const streams: ReturnType<typeof createStreamController>[] = [];
     const session = createSession({

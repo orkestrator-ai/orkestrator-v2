@@ -1654,7 +1654,8 @@ function recordCurrentItem(session: SessionState, item: ThreadItem): void {
   // A todo_list commonly starts as an empty shell and is then populated. That
   // shell was never a meaningful visible state, so update it in place. Likewise,
   // started/updated/completed events with identical items are one snapshot.
-  if (previous.items.length === 0 || todoListStateMatches(previous, item)) {
+  const isInitialEmptyShell = previousKey === item.id && previous.items.length === 0;
+  if (isInitialEmptyShell || todoListStateMatches(previous, item)) {
     session.currentItems.set(previousKey, nextSnapshot);
     return;
   }
@@ -2128,6 +2129,8 @@ export const __testing = {
   FALLBACK_MODELS,
   EXPIRED_SESSION_RETENTION_MS,
   expiredSessions: expiredSessions as Map<string, any>,
+  emitForTesting: emit,
+  getSubscriberCountForTesting: () => subscribers.size,
   rebuildAssistantMessage: rebuildAssistantMessage as (
     session: any,
     options?: { receivedAt?: string },
@@ -2143,9 +2146,24 @@ export const __testing = {
   setFreshThreadFactoryForTesting: (factory: ((session: SessionState) => Thread) | null) => {
     freshThreadFactoryForTesting = factory;
   },
+  startSseKeepaliveForTesting: startSseKeepalive,
   sessions: sessions as Map<string, any>,
   writePersistedBridgeCache,
 };
+
+function startSseKeepalive(
+  writeSSE: (event: { event: string; data: string }) => Promise<void>,
+  intervalMs = 30_000,
+): ReturnType<typeof setInterval> {
+  return setInterval(() => {
+    void writeSSE({
+      event: "keepalive",
+      data: JSON.stringify({ timestamp: new Date().toISOString() }),
+    }).catch((error) => {
+      console.error("[codex-bridge] Failed to write SSE keepalive:", error);
+    });
+  }, intervalMs);
+}
 
 app.use(
   "*",
@@ -2455,13 +2473,10 @@ app.get("/event/subscribe", (c) => {
     };
 
     subscribers.add(listener);
-    const keepalive = setInterval(async () => {
+    const keepalive = startSseKeepalive(async (event) => {
       if (!open) return;
-      await stream.writeSSE({
-        event: "keepalive",
-        data: JSON.stringify({ timestamp: new Date().toISOString() }),
-      });
-    }, 30_000);
+      await stream.writeSSE(event);
+    });
 
     try {
       await new Promise<void>((resolve) => {

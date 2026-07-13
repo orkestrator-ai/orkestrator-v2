@@ -444,6 +444,122 @@ describe("codex bridge abort handling", () => {
     ]);
   });
 
+  test("runPrompt keeps todo snapshots independent when the SDK mutates an emitted item", async () => {
+    const streams: ReturnType<typeof createStreamController>[] = [];
+    const session = createSession({
+      thread: {
+        runStreamed: async () => {
+          const stream = createStreamController();
+          streams.push(stream);
+          return { events: stream.events() };
+        },
+      },
+    });
+    const todoItem = {
+      id: "mutable-todo",
+      type: "todo_list" as const,
+      items: [{ text: "Keep the original state", completed: false }],
+    };
+
+    const promptRun = __testing.runPrompt(session, "track a mutable todo");
+    await waitUntil(() => streams.length === 1);
+    streams[0]!.push({ type: "item.updated", item: todoItem });
+    await waitUntil(() => {
+      const assistant = session.messages.find(
+        (message: { role: string }) => message.role === "assistant",
+      );
+      return assistant?.parts[0]?.toolArgs?.todos?.[0]?.status === "pending";
+    });
+
+    todoItem.items[0]!.completed = true;
+    streams[0]!.push({
+      type: "item.completed",
+      item: { id: "reasoning", type: "reasoning", text: "Trigger a rebuild" },
+    });
+    streams[0]!.push({ type: "turn.completed", usage: {} });
+    await promptRun;
+
+    const assistantMessage = session.messages.find(
+      (message: { role: string }) => message.role === "assistant",
+    );
+    expect(assistantMessage?.parts[0]?.toolArgs?.todos).toEqual([
+      { content: "Keep the original state", status: "pending" },
+    ]);
+  });
+
+  test("runPrompt preserves a meaningful empty todo state before repopulation", async () => {
+    const streams: ReturnType<typeof createStreamController>[] = [];
+    const session = createSession({
+      thread: {
+        runStreamed: async () => {
+          const stream = createStreamController();
+          streams.push(stream);
+          return { events: stream.events() };
+        },
+      },
+    });
+
+    const promptRun = __testing.runPrompt(session, "replace the plan");
+    await waitUntil(() => streams.length === 1);
+    streams[0]!.push({
+      type: "item.started",
+      item: { id: "todo", type: "todo_list", items: [] },
+    });
+    streams[0]!.push({
+      type: "item.updated",
+      item: {
+        id: "todo",
+        type: "todo_list",
+        items: [{ text: "Original task", completed: false }],
+      },
+    });
+    streams[0]!.push({
+      type: "item.completed",
+      item: { id: "reasoning", type: "reasoning", text: "Replace the plan" },
+    });
+    streams[0]!.push({
+      type: "item.updated",
+      item: { id: "todo", type: "todo_list", items: [] },
+    });
+    streams[0]!.push({
+      type: "item.completed",
+      item: {
+        id: "command",
+        type: "command_execution",
+        command: "inspect replacement",
+        aggregated_output: "done",
+        status: "completed",
+        exit_code: 0,
+      },
+    });
+    streams[0]!.push({
+      type: "item.updated",
+      item: {
+        id: "todo",
+        type: "todo_list",
+        items: [{ text: "Replacement task", completed: false }],
+      },
+    });
+    streams[0]!.push({ type: "turn.completed", usage: {} });
+    await promptRun;
+
+    const assistantMessage = session.messages.find(
+      (message: { role: string }) => message.role === "assistant",
+    );
+    expect(assistantMessage?.parts.map(
+      (part: { type: string; toolName?: string }) => part.toolName ?? part.type,
+    )).toEqual(["todo_list", "thinking", "todo_list", "bash", "todo_list"]);
+    expect(
+      assistantMessage?.parts
+        .filter((part: { toolName?: string }) => part.toolName === "todo_list")
+        .map((part: { toolArgs?: { todos?: unknown[] } }) => part.toolArgs?.todos),
+    ).toEqual([
+      [{ content: "Original task", status: "pending" }],
+      [],
+      [{ content: "Replacement task", status: "pending" }],
+    ]);
+  });
+
   test("runPrompt finalizes on turn.completed even if the event stream remains open", async () => {
     const streams: ReturnType<typeof createStreamController>[] = [];
     const session = createSession({
@@ -661,6 +777,99 @@ describe("codex bridge abort handling", () => {
     expect(observedInput).toBe("/goal finish the release notes");
     expect(observedInput).not.toContain("Orkestrator plan mode");
     expect(session.status).toBe("idle");
+  });
+
+  test("built-in help and models commands respond locally without starting Codex", async () => {
+    await withBridgeEnv(async ({ cwd }) => {
+      mkdirSync(join(cwd, ".codex", "prompts"), { recursive: true });
+      writeFileSync(
+        join(cwd, ".codex", "prompts", "review.md"),
+        "---\ndescription: Review this branch\n---\nReview the branch\n",
+      );
+      let runCount = 0;
+      const session = createSession({
+        thread: {
+          runStreamed: async () => {
+            runCount += 1;
+            return { events: (async function* () {})() };
+          },
+        },
+      });
+
+      await __testing.runPrompt(session, "/help");
+      await __testing.runPrompt(session, "/models");
+
+      const assistantMessages = session.messages.filter(
+        (message: { role: string }) => message.role === "assistant",
+      );
+      expect(runCount).toBe(0);
+      expect(assistantMessages[0]?.content).toContain("Available Codex slash commands:");
+      expect(assistantMessages[0]?.content).toContain("/review: Review this branch");
+      expect(assistantMessages[1]?.content).toContain("Available Codex models:");
+    });
+  });
+
+  test("prompt templates expand arguments and inline command success and failure output", async () => {
+    await withBridgeEnv(async ({ cwd }) => {
+      mkdirSync(join(cwd, ".codex", "prompts"), { recursive: true });
+      writeFileSync(
+        join(cwd, ".codex", "prompts", "inspect.md"),
+        [
+          "Target: $ARGUMENTS",
+          "Success: !`printf inline-success`",
+          "Failure: !`printf inline-failure >&2; exit 1`",
+          "",
+        ].join("\n"),
+      );
+      let observedInput = "";
+      const session = createSession({
+        thread: {
+          runStreamed: async (input: string) => {
+            observedInput = input;
+            return { events: (async function* () {})() };
+          },
+        },
+      });
+
+      await __testing.runPrompt(session, "/inspect src/index.ts");
+
+      expect(observedInput).toContain("Target: src/index.ts");
+      expect(observedInput).toContain("Success: inline-success");
+      expect(observedInput).toContain("Failure: inline-failure");
+    });
+  });
+
+  test("plain and unknown slash commands take the expected prompt paths", async () => {
+    await withBridgeEnv(async ({ cwd }) => {
+      mkdirSync(join(cwd, ".codex", "prompts"), { recursive: true });
+      writeFileSync(join(cwd, ".codex", "prompts", "plain.md"), "Plain $ARGUMENTS\n");
+      const observedInputs: string[] = [];
+      const session = createSession({
+        thread: {
+          runStreamed: async (input: string) => {
+            observedInputs.push(input);
+            return { events: (async function* () {})() };
+          },
+        },
+      });
+
+      await __testing.runPrompt(session, "/plain value");
+      await __testing.runPrompt(session, "/unknown value");
+
+      expect(observedInputs).toEqual(["Plain value\n", "/unknown value"]);
+    });
+  });
+
+  test("help explains when no prompt commands are installed", async () => {
+    await withBridgeEnv(async () => {
+      const session = createSession();
+
+      await __testing.runPrompt(session, "/help");
+
+      expect(session.messages.at(-1)?.content).toContain(
+        "No Codex prompt commands were discovered in this environment.",
+      );
+    });
   });
 
   test("marks generated plan-mode assistant responses as plan reviews", async () => {
@@ -989,6 +1198,190 @@ describe("codex bridge abort handling", () => {
     expect(session.currentTurnId).toBe("newer-turn");
   });
 
+  test("prompt route records current async setup failures and clears accepted turn state", async () => {
+    const originalConsoleError = console.error;
+    console.error = () => {};
+    __testing.setBeforePromptExecutionForTesting(() => {
+      throw new Error("runtime setup failed");
+    });
+    const session = createSession({ id: "failed-route-session" });
+    __testing.sessions.set(session.id, session);
+
+    try {
+      const response = await app.request("/session/failed-route-session/prompt", {
+        method: "POST",
+        body: JSON.stringify({ prompt: "first prompt" }),
+        headers: { "Content-Type": "application/json" },
+      });
+
+      expect(response.status).toBe(202);
+      await waitUntil(() => session.status === "error");
+      expect(session.error).toBe("runtime setup failed");
+      expect(session.currentTurnId).toBeUndefined();
+      expect(session.currentTurnStartedAt).toBeUndefined();
+      expect(session.abortController).toBeUndefined();
+      expect(session.pendingAttachments).toEqual([]);
+    } finally {
+      console.error = originalConsoleError;
+      __testing.setBeforePromptExecutionForTesting(null);
+    }
+  });
+
+  for (const [method, path] of [
+    ["POST", "/session/missing/config"],
+    ["GET", "/session/missing/messages"],
+    ["GET", "/session/missing/status"],
+    ["POST", "/session/missing/prompt"],
+    ["POST", "/session/missing/abort"],
+    ["DELETE", "/session/missing"],
+  ] as const) {
+    test(`${method} ${path} returns not found`, async () => {
+      const response = await app.request(path, { method });
+
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "Session not found" });
+    });
+  }
+
+  test("resume rejects missing and blank thread ids", async () => {
+    for (const body of [{}, { threadId: "   " }]) {
+      const response = await app.request("/session/resume", {
+        method: "POST",
+        body: JSON.stringify(body),
+        headers: { "Content-Type": "application/json" },
+      });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "threadId is required" });
+    }
+  });
+
+  test("config rejects updates while a session is running", async () => {
+    const session = createSession({ id: "running-config", status: "running" });
+    __testing.sessions.set(session.id, session);
+
+    const response = await app.request("/session/running-config/config", {
+      method: "POST",
+      body: JSON.stringify({ mode: "plan" }),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "Cannot update settings while session is running",
+    });
+    expect(session.conversationMode).toBe("build");
+  });
+
+  test("messages route rebuilds the current assistant message while running", async () => {
+    const assistantMessage = {
+      id: "assistant-running",
+      role: "assistant",
+      content: "",
+      parts: [],
+      createdAt: "2026-04-15T10:00:00.000Z",
+    };
+    const session = createSession({
+      id: "running-messages",
+      status: "running",
+      currentAssistantMessageId: assistantMessage.id,
+      currentItems: new Map([
+        ["answer", { id: "answer", type: "agent_message", text: "Latest streamed text" }],
+      ]),
+      currentItemOrder: ["answer"],
+      messages: [assistantMessage],
+    });
+    __testing.sessions.set(session.id, session);
+
+    const response = await app.request("/session/running-messages/messages");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      messages: [{
+        id: "assistant-running",
+        content: "Latest streamed text",
+        parts: [{ type: "text", content: "Latest streamed text" }],
+      }],
+    });
+  });
+
+  test("prompt route filters malformed attachments and accepts the valid image", async () => {
+    let observedInput: unknown;
+    const session = createSession({
+      id: "attachment-session",
+      thread: {
+        runStreamed: async (input: unknown) => {
+          observedInput = input;
+          return { events: (async function* () {})() };
+        },
+      },
+    });
+    __testing.sessions.set(session.id, session);
+
+    const response = await app.request("/session/attachment-session/prompt", {
+      method: "POST",
+      body: JSON.stringify({
+        prompt: "",
+        attachments: [
+          null,
+          {},
+          { type: "file", path: "/tmp/not-an-image.txt" },
+          { type: "image", path: 42 },
+          {
+            type: "image",
+            path: "/tmp/valid.png",
+            filename: "valid.png",
+            dataUrl: "data:image/png;base64,AA==",
+          },
+        ],
+      }),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    expect(response.status).toBe(202);
+    await waitUntil(() => session.status === "idle");
+    expect(observedInput).toEqual([
+      { type: "local_image", path: "/tmp/valid.png" },
+    ]);
+    expect(session.messages[0]?.parts).toEqual([
+      {
+        type: "file",
+        content: "valid.png",
+        fileUrl: "data:image/png;base64,AA==",
+      },
+    ]);
+
+    const invalidOnlyResponse = await app.request("/session/attachment-session/prompt", {
+      method: "POST",
+      body: JSON.stringify({
+        prompt: "",
+        attachments: [{ type: "file", path: "/tmp/not-an-image.txt" }],
+      }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(invalidOnlyResponse.status).toBe(400);
+    expect(await invalidOnlyResponse.json()).toEqual({
+      error: "Prompt or image attachment is required",
+    });
+  });
+
+  test("delete aborts and removes an active session", async () => {
+    const abortController = new AbortController();
+    const session = createSession({
+      id: "active-delete",
+      status: "running",
+      abortController,
+    });
+    __testing.sessions.set(session.id, session);
+
+    const response = await app.request("/session/active-delete", { method: "DELETE" });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "deleted" });
+    expect(abortController.signal.aborted).toBe(true);
+    expect(__testing.sessions.has(session.id)).toBe(false);
+  });
+
   test("idle cleanup compacts sessions that can be restored by the same session id", async () => {
     compactStaleSession("stale-session");
 
@@ -1187,6 +1580,80 @@ describe("codex bridge abort handling", () => {
       .toBeUndefined();
   });
 
+  test("session discovery falls back to archived transcripts and hydration skips invalid records", async () => {
+    await withBridgeEnv(async ({ codexHome, cwd }) => {
+      const archivedDir = join(codexHome, "archived_sessions");
+      mkdirSync(archivedDir, { recursive: true });
+      writeFileSync(
+        join(archivedDir, "archived-thread.jsonl"),
+        [
+          JSON.stringify({
+            type: "session_meta",
+            payload: {
+              id: "archived-thread",
+              cwd,
+              timestamp: "2026-04-15T09:00:00.000Z",
+            },
+          }),
+          "not-json",
+          JSON.stringify({ type: "response_item", payload: { type: "message", role: "tool" } }),
+          JSON.stringify({
+            type: "response_item",
+            timestamp: "2026-04-15T09:01:00.000Z",
+            payload: {
+              type: "message",
+              role: "user",
+              content: [{
+                type: "input_text",
+                text: "# AGENTS.md instructions for /tmp/untrusted",
+              }],
+            },
+          }),
+          JSON.stringify({
+            type: "response_item",
+            timestamp: "2026-04-15T09:02:00.000Z",
+            payload: {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "Real archived prompt" }],
+            },
+          }),
+          JSON.stringify({
+            type: "response_item",
+            timestamp: "2026-04-15T09:03:00.000Z",
+            payload: {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "Real archived answer" }],
+            },
+          }),
+          "",
+        ].join("\n"),
+      );
+
+      const listResponse = await app.request("/session/list");
+      expect(listResponse.status).toBe(200);
+      expect(await listResponse.json()).toMatchObject({
+        sessions: [{
+          id: "archived-thread",
+          updatedAt: "2026-04-15T09:00:00.000Z",
+        }],
+      });
+
+      const resumeResponse = await app.request("/session/resume", {
+        method: "POST",
+        body: JSON.stringify({ threadId: "archived-thread" }),
+        headers: { "Content-Type": "application/json" },
+      });
+      expect(resumeResponse.status).toBe(201);
+      const resumeBody = await resumeResponse.json();
+      expect(resumeBody.messages.map((message: { content: string }) => message.content)).toEqual([
+        "Real archived prompt",
+        "Real archived answer",
+      ]);
+    });
+  });
+
   test("session create, list, and resume routes cover persisted sessions", async () => {
     await withBridgeEnv(async ({ codexHome, cwd }) => {
       writePersistedThread(codexHome, cwd, "thread-1");
@@ -1239,7 +1706,7 @@ describe("codex bridge abort handling", () => {
     });
   });
 
-  test("event subscription route sends an initial connected event", async () => {
+  test("event subscription route delivers updates and removes aborted subscribers", async () => {
     const controller = new AbortController();
     const response = await app.request("/event/subscribe", {
       signal: controller.signal,
@@ -1256,9 +1723,62 @@ describe("codex bridge abort handling", () => {
       expect(firstChunk.done).toBe(false);
       expect(text).toContain("event: connected");
       expect(text).toContain('"status":"connected"');
+      await waitUntil(() => __testing.getSubscriberCountForTesting() === 1);
+
+      __testing.emitForTesting({
+        type: "session.idle",
+        sessionId: "event-session",
+        data: { title: "Finished" },
+      });
+      const updateChunk = await reader!.read();
+      const updateText = new TextDecoder().decode(updateChunk.value);
+      expect(updateText).toContain("event: session.idle");
+      expect(updateText).toContain('"sessionId":"event-session"');
+      expect(updateText).toContain('"title":"Finished"');
     } finally {
       controller.abort();
       await reader?.cancel().catch(() => {});
+      await waitUntil(() => __testing.getSubscriberCountForTesting() === 0);
     }
+  });
+
+  test("SSE keepalive scheduler writes timestamped keepalive events", async () => {
+    const events: Array<{ event: string; data: string }> = [];
+    const timer = __testing.startSseKeepaliveForTesting(async (event) => {
+      events.push(event);
+    }, 1);
+
+    try {
+      await waitUntil(() => events.length > 0);
+    } finally {
+      clearInterval(timer);
+    }
+
+    expect(events[0]?.event).toBe("keepalive");
+    expect(JSON.parse(events[0]!.data)).toEqual({
+      timestamp: expect.any(String),
+    });
+  });
+
+  test("SSE keepalive scheduler contains write failures", async () => {
+    const errors: unknown[][] = [];
+    const originalConsoleError = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
+    const timer = __testing.startSseKeepaliveForTesting(
+      async () => Promise.reject(new Error("stream closed")),
+      1,
+    );
+
+    try {
+      await waitUntil(() => errors.length > 0);
+    } finally {
+      clearInterval(timer);
+      console.error = originalConsoleError;
+    }
+
+    expect(errors[0]?.[0]).toBe("[codex-bridge] Failed to write SSE keepalive:");
+    expect(errors[0]?.[1]).toBeInstanceOf(Error);
   });
 });

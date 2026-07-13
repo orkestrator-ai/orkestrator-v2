@@ -1,12 +1,10 @@
-import { chmodSync, existsSync, promises as fs, statSync } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import * as pty from "node-pty";
-import type { IPty } from "node-pty";
 import type { Environment, EnvironmentStatus, EnvironmentType, PortMapping, PrState, SessionStatus, SessionType } from "./models.js";
+import { spawnPty, type PtyProcess } from "./pty.js";
 import {
   APP_SLUG,
   CLAUDE_BRIDGE_PORT,
@@ -68,13 +66,11 @@ export type CommandContext = {
 
 type CommandHandler = (args: JsonRecord, context: CommandContext) => Promise<unknown> | unknown;
 
-const nodeRequire = createRequire(import.meta.url);
-
 type TerminalSessionConfig =
   | { kind: "container"; containerId: string; cols: number; rows: number; user?: string }
   | { kind: "local"; environmentId: string; cols: number; rows: number };
 
-const terminalProcesses = new Map<string, IPty>();
+const terminalProcesses = new Map<string, PtyProcess>();
 const terminalSessionConfigs = new Map<string, TerminalSessionConfig>();
 const terminalOutputBuffers = new Map<string, string>();
 const localServerProcesses = new Map<string, ChildProcessWithoutNullStreams>();
@@ -726,39 +722,6 @@ function terminalEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEn
   };
 }
 
-function ensureNodePtySpawnHelperExecutable(): void {
-  if (process.platform !== "darwin") return;
-
-  let packageRoot: string;
-  try {
-    packageRoot = path.dirname(nodeRequire.resolve("node-pty/package.json"));
-  } catch {
-    return;
-  }
-
-  // When packaged, node-pty lives inside app.asar but its native binaries are
-  // unpacked to app.asar.unpacked (see asarUnpack in package.json). The asar
-  // path is a read-only virtual file, so chmod must target the unpacked copy —
-  // this also matches the path node-pty itself spawns (it does the same swap).
-  packageRoot = packageRoot.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
-
-  const candidates = [
-    path.join(packageRoot, "build", "Release", "spawn-helper"),
-    path.join(packageRoot, "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper"),
-  ];
-
-  for (const helperPath of candidates) {
-    try {
-      if (!existsSync(helperPath)) continue;
-      const stat = statSync(helperPath);
-      if ((stat.mode & 0o111) !== 0) continue;
-      chmodSync(helperPath, stat.mode | 0o755);
-    } catch {
-      // Best-effort: never let a chmod failure block terminal startup.
-    }
-  }
-}
-
 function resolveLocalShellPath(): string {
   const configuredShell = process.env.SHELL?.trim();
   if (configuredShell && path.isAbsolute(configuredShell) && existsSync(configuredShell)) {
@@ -797,7 +760,7 @@ function spawnTerminalProcess(
   options: { cwd?: string; cols: number; rows: number; env?: NodeJS.ProcessEnv },
   emit: BackendEmit,
   hooks: { onData?: (data: string) => void; onExit?: () => void } = {},
-): IPty {
+): PtyProcess {
   const existing = terminalProcesses.get(id);
   if (existing) {
     if (isSetupTerminalSessionId(id)) {
@@ -809,7 +772,6 @@ function spawnTerminalProcess(
     return existing;
   }
 
-  ensureNodePtySpawnHelperExecutable();
   if (isSetupTerminalSessionId(id)) {
     logSetupTerminal("spawning PTY", {
       sessionId: id,
@@ -821,8 +783,7 @@ function spawnTerminalProcess(
     });
   }
 
-  const terminalProcess = pty.spawn(command, args, {
-    name: "xterm-256color",
+  const terminalProcess = spawnPty(command, args, {
     cols: options.cols,
     rows: options.rows,
     cwd: options.cwd,

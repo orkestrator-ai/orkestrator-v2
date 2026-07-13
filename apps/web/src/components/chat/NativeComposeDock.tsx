@@ -20,7 +20,7 @@ export function NativeComposeDock({
     <div
       data-testid="compose-dock"
       className={cn(
-        "absolute inset-x-0 z-20 px-4 transition-[top,transform] duration-300 ease-out motion-reduce:transition-none",
+        "absolute inset-x-0 z-20 px-2 transition-[top,transform] duration-300 ease-out motion-reduce:transition-none sm:px-4",
         centered ? "top-1/2 -translate-y-1/2" : "top-full -translate-y-full",
       )}
     >
@@ -33,11 +33,11 @@ export function NativeComposeDock({
               : "max-h-0 -translate-y-2 opacity-0",
           )}
         >
-          <h2 className="text-2xl font-bold text-white">{title}</h2>
+          <h2 className="text-xl font-bold text-white sm:text-2xl">{title}</h2>
         </div>
 
         {topAccessory && !centered ? (
-          <div className="pointer-events-auto mx-auto mb-1 flex w-[min(calc(100%_-_2rem),56rem)] justify-end">
+          <div className="pointer-events-auto mx-auto mb-1 flex w-full max-w-[56rem] justify-end sm:w-[min(calc(100%_-_2rem),56rem)]">
             {topAccessory}
           </div>
         ) : null}

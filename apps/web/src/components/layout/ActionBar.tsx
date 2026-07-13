@@ -681,11 +681,11 @@ export function ActionBar() {
 
   return (
     <>
-      <div className="flex h-12 shrink-0 items-center border-b border-border/80 bg-[#212124]">
+      <div data-mobile-toolbar className="flex h-14 shrink-0 items-center border-b border-border/80 bg-[#212124] md:h-12">
         {/* Scrollable toolbar area */}
         <div
           ref={scrollContainerRef}
-          className={`flex min-w-0 flex-1 items-center gap-2 overflow-x-auto px-4 [&::-webkit-scrollbar]:hidden ${isDragging ? "cursor-grabbing select-none" : ""}`}
+          className={`flex min-w-0 flex-1 items-center gap-2 overflow-x-auto px-2 md:px-4 [&::-webkit-scrollbar]:hidden ${isDragging ? "cursor-grabbing select-none" : ""}`}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}

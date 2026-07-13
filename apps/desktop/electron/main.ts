@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
+import { BackendProcess, getBrowserGatewayStatus, type BackendHttpClient } from "./backend-process.js";
 import { APP_SLUG, PRODUCT_NAME } from "./app-constants.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
@@ -17,12 +17,10 @@ app.setPath("userData", path.join(app.getPath("appData"), APP_SLUG));
 let mainWindow: BrowserWindow | null = null;
 let backend: BackendHttpClient | null = null;
 const backendProcess = new BackendProcess();
-const standaloneWebAccessStatus = {
-  enabled: false,
-  running: false,
-  url: null,
-  error: "Remote web access is managed by the standalone backend service.",
-} as const;
+
+function getSharedBackendStatus() {
+  return getBrowserGatewayStatus(backendProcess.getInfo());
+}
 
 function emitToRenderers(event: string, payload: unknown): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -90,8 +88,8 @@ function registerIpc(): void {
     dialogApi: dialog,
     appApi: app,
     nativeImageApi: nativeImage,
-    getWebClientStatus: () => standaloneWebAccessStatus,
-    setWebClientEnabled: async () => standaloneWebAccessStatus,
+    getWebClientStatus: getSharedBackendStatus,
+    setWebClientEnabled: async () => getSharedBackendStatus(),
     getGatewayTokenSettings: () => {
       if (!backend) throw new Error("Backend is not initialized");
       return backend.getTokenSettings();

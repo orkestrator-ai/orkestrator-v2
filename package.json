@@ -12,7 +12,9 @@
   "main": "apps/desktop/dist/electron/main.js",
   "scripts": {
     "dev": "turbo --cwd . run dev --filter=@orkestrator/desktop --cache-dir .turbo",
+    "dev:web": "turbo run dev:web --cwd . --filter=@orkestrator/web --filter=@orkestrator/backend --cache-dir .turbo",
     "dev:renderer": "turbo --cwd . run dev --filter=@orkestrator/web --cache-dir .turbo",
+    "start:web": "turbo run start:web --cwd . --filter=@orkestrator/backend --cache-dir .turbo",
     "build": "turbo --cwd . run build --filter=@orkestrator/desktop --cache-dir .turbo",
     "build:desktop": "turbo --cwd . run build --filter=@orkestrator/desktop --cache-dir .turbo",
     "build:backend": "turbo --cwd . run build --filter=@orkestrator/backend --cache-dir .turbo",
@@ -44,9 +46,6 @@
       "apps/desktop/dist/**",
       "package.json"
     ],
-    "asarUnpack": [
-      "**/node_modules/node-pty/**"
-    ],
     "extraResources": [
       {
         "from": "apps/web/dist",
@@ -63,15 +62,8 @@
         ]
       },
       {
-        "from": "apps/backend/dist/node_modules/node-pty",
-        "to": "backend/node_modules/node-pty",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
         "from": "apps/backend/dist/node_modules/@img",
-        "to": "backend/node_modules/@img",
+        "to": "backend/vendor/@img",
         "filter": [
           "**/*"
         ]
@@ -108,9 +100,6 @@
       "target": [
         "dmg"
       ]
-    },
-    "win": {
-      "icon": "icon.ico"
     },
     "linux": {
       "icon": "icons"

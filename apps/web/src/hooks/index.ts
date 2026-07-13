@@ -15,3 +15,5 @@ export type { PastedImageAttachment } from "./useNativeComposeBarPaste";
 export { useElapsedTimer } from "./useElapsedTimer";
 export { useFileSearch } from "./useFileSearch";
 export { useFileMentions } from "./useFileMentions";
+export { useMediaQuery } from "./useMediaQuery";
+export { useTimedCopyFeedback } from "./useTimedCopyFeedback";

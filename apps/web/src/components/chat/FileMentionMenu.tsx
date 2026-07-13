@@ -45,7 +45,7 @@ export function FileMentionMenu({
         role="listbox"
         aria-label="File and folder suggestions"
         className={cn(
-          "absolute z-50 max-h-96 w-96 overflow-y-auto rounded-xl border border-zinc-700/70 bg-zinc-900/95 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm",
+          "absolute z-50 max-h-96 w-full min-w-0 overflow-y-auto rounded-xl border border-zinc-700/70 bg-zinc-900/95 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm sm:w-96",
           "animate-in fade-in-0 zoom-in-95"
         )}
         style={{ bottom: "100%", left: 0, marginBottom: "4px" }}
@@ -63,7 +63,7 @@ export function FileMentionMenu({
       role="listbox"
       aria-label="File and folder suggestions"
       className={cn(
-        "absolute z-50 max-h-96 w-96 overflow-y-auto rounded-xl border border-zinc-700/70 bg-zinc-900/95 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm",
+        "absolute z-50 max-h-96 w-full min-w-0 overflow-y-auto rounded-xl border border-zinc-700/70 bg-zinc-900/95 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm sm:w-96",
         "animate-in fade-in-0 zoom-in-95"
       )}
       style={{ bottom: "100%", left: 0, marginBottom: "4px" }}

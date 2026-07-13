@@ -397,7 +397,7 @@ export function CodexComposeBar({
   return (
     <div
       className={cn(
-        "mx-auto w-[min(calc(100%_-_2rem),56rem)] shrink-0 rounded-2xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20",
+        "mx-auto w-[calc(100%_-_0.75rem)] shrink-0 rounded-2xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20 sm:w-[min(calc(100%_-_2rem),56rem)]",
         layout === "bottom" ? "mb-4 mt-2" : "my-0",
       )}
     >
@@ -513,7 +513,7 @@ export function CodexComposeBar({
         />
       </div>
 
-      <div className="flex items-center gap-1 pt-1">
+      <div className="flex items-center gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&>*]:shrink-0 [&::-webkit-scrollbar]:hidden">
         <div className="relative" ref={attachmentMenuRef}>
           <button
             type="button"
@@ -623,7 +623,7 @@ export function CodexComposeBar({
               <span>{reasoningDisplayLabel}</span>
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="min-w-[340px]">
+          <DropdownMenuContent align="start" className="w-[calc(100vw-1rem)] sm:min-w-[340px] sm:w-auto">
             {availableReasoningOptions.map((option) => (
               <DropdownMenuItem
                 key={option.effort}

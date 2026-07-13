@@ -10,11 +10,8 @@ await mkdir(output, { recursive: true });
 const result = await Bun.build({
   entrypoints: [path.join(packageRoot, "src/main.ts")],
   outdir: output,
-  // The packaged desktop service runs with Electron's Node runtime so native
-  // addons such as node-pty use Electron's supported Node-API implementation.
-  target: "node",
+  target: "bun",
   sourcemap: "external",
-  external: ["node-pty"],
 });
 if (!result.success) {
   for (const log of result.logs) console.error(log);
@@ -24,11 +21,6 @@ if (!result.success) {
 async function copyResolvedPackage(source: string, destination: string): Promise<void> {
   await cp(await realpath(source), destination, { recursive: true, dereference: true });
 }
-
-await copyResolvedPackage(
-  path.join(packageRoot, "node_modules/node-pty"),
-  path.join(output, "node_modules/node-pty"),
-);
 
 // Sharp is bundled, but selects its platform-native @img packages dynamically.
 const sharpRoot = await realpath(path.join(packageRoot, "node_modules/sharp"));

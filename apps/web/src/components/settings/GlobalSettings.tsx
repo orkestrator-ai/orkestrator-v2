@@ -14,11 +14,12 @@ import {
 } from "@/components/ui/select";
 import { useConfigStore } from "@/stores";
 import * as backend from "@/lib/backend";
-import { Loader2, Eye, EyeOff, Key, Github, CheckCircle2, XCircle, AlertCircle, Code2, Check, Terminal, Bot, FolderOpen, ExternalLink, Globe2, WifiOff } from "lucide-react";
+import { Loader2, Eye, EyeOff, Key, Github, CheckCircle2, XCircle, AlertCircle, Code2, Check, Terminal, Bot, FolderOpen, ExternalLink, Globe2, WifiOff, Copy } from "lucide-react";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { getGatewayTokenValidationError } from "@/lib/gateway-token";
+import { useTimedCopyFeedback } from "@/hooks";
 import type {
   ClaudeMode,
   ClaudeNativeBackend,
@@ -50,7 +51,6 @@ interface GlobalSettingsProps {
 export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsProps) {
   const { config, setConfig } = useConfigStore();
   const global = config.global;
-  const isRemoteClient = window.orkestratorGateway?.enabled === true;
 
   const [cpuCores, setCpuCores] = useState(global.containerResources.cpuCores);
   const [memoryGb, setMemoryGb] = useState(global.containerResources.memoryGb);
@@ -116,6 +116,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [showApiKey, setShowApiKey] = useState(false);
   const [showGithubToken, setShowGithubToken] = useState(false);
   const [showGatewayToken, setShowGatewayToken] = useState(false);
+  const { copied: gatewayTokenCopied, copy: copyGatewayToken } = useTimedCopyFeedback();
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
@@ -198,11 +199,11 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   }, []);
 
   useEffect(() => {
-    if (activeSection === "web-client" && isRemoteClient) void refreshWebClientStatus();
+    if (activeSection === "web-client") void refreshWebClientStatus();
     return () => {
       webClientStatusRequestRef.current += 1;
     };
-  }, [activeSection, isRemoteClient, refreshWebClientStatus]);
+  }, [activeSection, refreshWebClientStatus]);
 
   // Fetch log directory path once on mount
   useEffect(() => {
@@ -234,12 +235,12 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       terminalScrollback !== (global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK) ||
       experimentalCodexRawEventLogging !== (global.experimentalCodexRawEventLogging ?? true) ||
       debugLogging !== (global.debugLogging ?? false) ||
-      (isRemoteClient && gatewayToken !== savedGatewayToken);
+      gatewayToken !== savedGatewayToken;
     setHasChanges(changed);
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, gatewayToken, savedGatewayToken, global, isRemoteClient]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, gatewayToken, savedGatewayToken, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -370,7 +371,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       const newConfig = await backend.updateGlobalConfig(newGlobal);
       setConfig(newConfig);
 
-      if (isRemoteClient && gatewayTokenSettings?.editable && gatewayToken !== savedGatewayToken) {
+      if (gatewayTokenSettings?.editable && gatewayToken !== savedGatewayToken) {
         const nextGatewayTokenSettings = await backend.setGatewayToken(gatewayToken);
         setGatewayTokenSettings(nextGatewayTokenSettings);
         setGatewayToken(nextGatewayTokenSettings.token);
@@ -451,7 +452,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
           </h3>
           <p className="text-xs text-muted-foreground mt-1">Editor for "Open in Editor" (Cmd+O)</p>
         </div>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <button
             type="button"
             onClick={() => setPreferredEditor("vscode")}
@@ -497,7 +498,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
           </h3>
           <p className="text-xs text-muted-foreground mt-1">Agent to launch in new environments</p>
         </div>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <button
             type="button"
             onClick={() => setDefaultAgent("claude")}
@@ -605,7 +606,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   ) => (
     <div className="max-w-2xl space-y-4">
       <p className="text-sm text-muted-foreground">{description}</p>
-      <div className="grid grid-cols-2 gap-3 max-w-xs">
+      <div className="grid max-w-xs grid-cols-1 gap-3 sm:grid-cols-2">
         <button
           type="button"
           onClick={() => setMode("terminal")}
@@ -680,7 +681,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
           settings can override this; the most specific override wins.
         </p>
       </div>
-      <div className="grid grid-cols-2 gap-3 max-w-md">
+      <div className="grid max-w-md grid-cols-1 gap-3 sm:grid-cols-2">
         {([
           {
             value: "sdk",
@@ -1010,26 +1011,16 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     ? getGatewayTokenValidationError(gatewayToken)
     : null;
 
-  const renderWebClient = () => {
-    if (!isRemoteClient) {
-      return (
-        <div className="max-w-2xl space-y-4">
-          <div>
-            <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <Globe2 className="h-4 w-4" />
-              Remote web access
-            </h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Remote access is provided by the standalone backend service, independently of the desktop app.
-            </p>
-          </div>
-          <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-4 text-xs leading-relaxed text-muted-foreground">
-            Build the renderer and backend, then run <code className="font-mono text-foreground">bun run --cwd apps/backend start</code> on a machine connected to your Tailscale network. The service logs its URL and the path to its protected token file.
-          </div>
-        </div>
-      );
+  const handleCopyGatewayToken = useCallback(async () => {
+    try {
+      await copyGatewayToken(gatewayToken);
+    } catch (error) {
+      console.error("[settings] Failed to copy gateway token:", error);
+      toast.error("Failed to copy gateway token");
     }
+  }, [copyGatewayToken, gatewayToken]);
 
+  const renderWebClient = () => {
     const statusLabel = isLoadingWebClientStatus
       ? "Checking"
       : webClientStatus?.running
@@ -1044,7 +1035,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
             Web client
           </h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            Open Orkestrator from another browser on your Tailscale network.
+            This backend serves both the Electron app and authenticated browser clients.
           </p>
         </div>
 
@@ -1067,24 +1058,38 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
                 value={gatewayToken}
                 onChange={(event) => setGatewayToken(event.target.value)}
                 placeholder={isLoadingGatewayToken ? "Loading gateway token…" : "Gateway token"}
-                className="pr-10 font-mono text-xs"
+                className="pr-20 font-mono text-xs"
                 disabled={isLoadingGatewayToken || !gatewayTokenSettings?.editable || isSaving}
                 aria-describedby="gateway-token-description"
                 aria-invalid={gatewayTokenValidationError ? true : undefined}
                 autoComplete="off"
                 spellCheck={false}
               />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2"
-                onClick={() => setShowGatewayToken((visible) => !visible)}
-                disabled={isLoadingGatewayToken || !gatewayToken}
-                aria-label={showGatewayToken ? "Hide gateway token" : "Show gateway token"}
-              >
-                {showGatewayToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </Button>
+              <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => setShowGatewayToken((visible) => !visible)}
+                  disabled={isLoadingGatewayToken || !gatewayToken}
+                  aria-label={showGatewayToken ? "Hide gateway token" : "Show gateway token"}
+                >
+                  {showGatewayToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => void handleCopyGatewayToken()}
+                  disabled={isLoadingGatewayToken || !gatewayToken}
+                  aria-label={gatewayTokenCopied ? "Gateway token copied" : "Copy gateway token"}
+                  title={gatewayTokenCopied ? "Copied" : "Copy token"}
+                >
+                  {gatewayTokenCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
             </div>
 
             {gatewayTokenValidationError && (
@@ -1148,7 +1153,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         </div>
 
         <p className="text-xs leading-relaxed text-muted-foreground/70">
-          Access is limited to Tailscale addresses. Changing the token keeps this browser signed in, but other browsers must use the new token on their next sign-in.
+          The backend uses a Tailscale address when available and otherwise falls back to this machine only. Changing the token keeps this browser signed in, but other browsers must use the new token on their next sign-in.
         </p>
       </div>
     );

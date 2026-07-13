@@ -8,20 +8,25 @@ import { Sidebar } from "./Sidebar";
 import { ActionBar } from "./ActionBar";
 import { OpenFileDialog } from "./OpenFileDialog";
 import { FilesPanel } from "@/components/files-panel";
-import { useConfigStore, useFilesPanelStore } from "@/stores";
+import { useConfigStore, useFilesPanelStore, useUIStore } from "@/stores";
+import { useMediaQuery } from "@/hooks";
 import {
   DEFAULT_TERMINAL_APPEARANCE,
   resolveTerminalBackgroundColor,
 } from "@/constants/terminal";
 import { getCurrentWindow } from "@/lib/native/window";
 import { cn } from "@/lib/utils";
+import { MobileAppShellLayout } from "./MobileAppShellLayout";
 
 interface AppShellProps {
   children?: React.ReactNode;
 }
 
 export function AppShell({ children }: AppShellProps) {
+  const isMobile = useMediaQuery("(max-width: 767px)");
   const { isOpen: filesPanelOpen } = useFilesPanelStore();
+  const selectedProjectId = useUIStore((state) => state.selectedProjectId);
+  const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const terminalAppearance =
     useConfigStore((state) => state.config.global.terminalAppearance) ??
     DEFAULT_TERMINAL_APPEARANCE;
@@ -51,20 +56,34 @@ export function AppShell({ children }: AppShellProps) {
   };
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden">
+    <div className="flex h-dvh w-screen flex-col overflow-hidden">
       <OpenFileDialog />
-      {/* Custom title bar - replaces macOS title bar (Overlay mode) */}
-      <div
-        className="flex h-7 w-full shrink-0 items-center justify-center bg-black"
-        data-backend-drag-region
-        onMouseDown={handleTitleBarMouseDown}
-        style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
-      >
-        <span className="text-xs font-medium text-muted-foreground" data-backend-drag-region>
-          Orkestrator AI
-        </span>
-      </div>
-      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+      {isMobile ? (
+        <MobileAppShellLayout
+          selectedProjectId={selectedProjectId}
+          selectedEnvironmentId={selectedEnvironmentId}
+          filesPanelOpen={filesPanelOpen}
+          centralPanelStyle={centralPanelThemeVars}
+          actionBar={<ActionBar />}
+          sidebar={<Sidebar />}
+          filesPanel={<FilesPanel />}
+          onTitleBarMouseDown={handleTitleBarMouseDown}
+        >
+          {children}
+        </MobileAppShellLayout>
+      ) : (
+        <>
+          <div
+            className="relative flex h-7 w-full shrink-0 items-center justify-center bg-black"
+            data-backend-drag-region
+            onMouseDown={handleTitleBarMouseDown}
+            style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
+          >
+            <span className="text-xs font-medium text-muted-foreground" data-backend-drag-region>
+              Orkestrator AI
+            </span>
+          </div>
+          <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
         {/* Sidebar Panel */}
         <ResizablePanel defaultSize={28} minSize="280px" maxSize="400px">
           <Sidebar />
@@ -92,7 +111,9 @@ export function AppShell({ children }: AppShellProps) {
             </ResizablePanel>
           </>
         )}
-      </ResizablePanelGroup>
+          </ResizablePanelGroup>
+        </>
+      )}
     </div>
   );
 }

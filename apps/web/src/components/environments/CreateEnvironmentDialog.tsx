@@ -380,7 +380,7 @@ export function CreateEnvironmentDialog({
           {/* Environment Type Selector */}
           <div className="space-y-2">
             <Label>Environment Type</Label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <button
                 type="button"
                 onClick={() => setEnvironmentType("containerized")}
@@ -451,7 +451,7 @@ export function CreateEnvironmentDialog({
             {environmentType === "containerized" && (
               <div className="space-y-2">
                 <Label>Network Access</Label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <button
                     type="button"
                     onClick={() => setNetworkAccessMode("restricted")}
@@ -498,7 +498,7 @@ export function CreateEnvironmentDialog({
           </div>
 
           {/* Startup + mode row */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {/* Launch Agent Toggle */}
             <div className="space-y-2">
               <Label className="text-sm">Container Startup</Label>
@@ -530,7 +530,7 @@ export function CreateEnvironmentDialog({
                     ? "OpenCode Mode"
                     : "Codex Mode"}
               </Label>
-              <div className="grid grid-cols-2 gap-2 w-full">
+              <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
                 <>
                   <button
                     type="button"
@@ -602,7 +602,7 @@ export function CreateEnvironmentDialog({
             !launchAgent && "opacity-50"
           )}>
             <Label className="text-sm">Default Agent</Label>
-            <div className="grid grid-cols-3 gap-2 w-full">
+            <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-3">
               <button
                 type="button"
                 onClick={() => setAgentType("claude")}

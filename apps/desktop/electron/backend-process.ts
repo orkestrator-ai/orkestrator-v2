@@ -9,7 +9,18 @@ export type GatewayStartInfo = {
   port: number;
   url: string;
   authFile: string;
+  browserUrl?: string;
+  browserError?: string;
 };
+
+export function getBrowserGatewayStatus(info: GatewayStartInfo | null) {
+  return {
+    enabled: true,
+    running: Boolean(info?.browserUrl),
+    url: info?.browserUrl ?? null,
+    error: info?.browserError ?? null,
+  };
+}
 
 type ReadyMessage = GatewayStartInfo & { type: "orkestrator-backend-ready" };
 
@@ -106,6 +117,10 @@ export class BackendProcess {
     resourceRoot: string;
     dataDir: string;
     rendererDevServerUrl?: string;
+    gatewayHost?: string;
+    gatewayPort?: number;
+    fallbackGatewayHost?: string;
+    unsafeAllowNonTailscaleBind?: boolean;
     onEvent: (event: string, payload: unknown) => void;
     onUnexpectedExit?: (error: Error) => void;
   }): Promise<BackendHttpClient> {
@@ -123,34 +138,40 @@ export class BackendProcess {
     resourceRoot: string;
     dataDir: string;
     rendererDevServerUrl?: string;
+    gatewayHost?: string;
+    gatewayPort?: number;
+    fallbackGatewayHost?: string;
+    unsafeAllowNonTailscaleBind?: boolean;
     onEvent: (event: string, payload: unknown) => void;
     onUnexpectedExit?: (error: Error) => void;
   }): Promise<BackendHttpClient> {
-    // Bun currently loads node-pty but does not complete its macOS spawn-helper
-    // handshake, leaving local terminals alive without any input or output.
-    // In packaged builds, run the backend with Electron's Node runtime instead;
-    // electron-builder also rebuilds the vendored native addons for this ABI.
-    const runtime = options.isDev ? "bun" : process.execPath;
+    const bun = options.isDev ? "bun" : path.join(options.resourceRoot, "bin", "bun");
     const entry = options.isDev
       ? path.join(options.appRoot, "apps", "backend", "src", "main.ts")
       : path.join(options.resourceRoot, "backend", "main.js");
-    const args = [entry, "--host", "127.0.0.1", "--port", "0", "--unsafe-allow-non-tailscale-bind",
+    const args = [entry, "--port", String(options.gatewayPort ?? 34121),
+      "--control-host", "127.0.0.1", "--control-port", "0",
       "--data-dir", options.dataDir, "--app-root", options.appRoot, "--resource-root", options.resourceRoot,
       "--renderer-root", options.isDev ? path.join(options.appRoot, "apps", "web", "dist") : path.join(options.resourceRoot, "web")];
+    if (options.gatewayHost) {
+      args.push("--host", options.gatewayHost);
+    } else {
+      args.push("--fallback-host", options.fallbackGatewayHost ?? "127.0.0.1");
+    }
+    if (options.unsafeAllowNonTailscaleBind) args.push("--unsafe-allow-non-tailscale-bind");
     if (options.rendererDevServerUrl) args.push("--renderer-dev-server-url", options.rendererDevServerUrl);
 
     // Isolate desktop startup from any remote-service configuration in the parent shell.
     const env: NodeJS.ProcessEnv = { ...process.env, ORKESTRATOR_GATEWAY_DISABLED: "0" };
     if (!options.isDev) {
-      env.ELECTRON_RUN_AS_NODE = "1";
-      env.NODE_PATH = [path.join(options.resourceRoot, "backend", "node_modules"), env.NODE_PATH]
+      env.NODE_PATH = [path.join(options.resourceRoot, "backend", "vendor"), env.NODE_PATH]
         .filter(Boolean)
         .join(path.delimiter);
     }
     delete env.ORKESTRATOR_GATEWAY_HOST;
     delete env.ORKESTRATOR_GATEWAY_PORT;
     delete env.ORKESTRATOR_GATEWAY_TOKEN;
-    const child = spawn(runtime, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(bun, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     this.child = child;
     child.stderr?.on("data", (chunk) => process.stderr.write(`[Backend] ${chunk}`));
 

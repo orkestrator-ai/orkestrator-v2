@@ -25,7 +25,7 @@ describe("Electron packaging configuration", () => {
         files: string[];
         extraResources: Array<{ from: string; to: string; filter: string[] }>;
         mac: { icon: string };
-        win: { icon: string };
+        win?: { icon: string };
         linux: { icon: string };
       };
     }>("package.json");
@@ -38,14 +38,12 @@ describe("Electron packaging configuration", () => {
     expect(packageJson.devDependencies.electron).toBeDefined();
     expect(packageJson.build.directories).toMatchObject({ buildResources: "apps/desktop/electron/resources", output: "release" });
     expect(packageJson.build.mac.icon).toBe("icon.icns");
-    expect(packageJson.build.win.icon).toBe("icon.ico");
+    expect(packageJson.build.win).toBeUndefined();
     expect(packageJson.build.linux.icon).toBe("icons");
     expect(packageJson.build.files).toEqual(expect.arrayContaining(["apps/desktop/dist/**", "package.json"]));
     expect(packageJson.build.extraResources).toEqual(expect.arrayContaining([
       expect.objectContaining({ from: "apps/web/dist", to: "web" }),
       expect.objectContaining({ from: "apps/backend/dist", to: "backend" }),
-      expect.objectContaining({ from: "apps/backend/dist/node_modules/node-pty", to: "backend/node_modules/node-pty" }),
-      expect.objectContaining({ from: "apps/backend/dist/node_modules/@img", to: "backend/node_modules/@img" }),
       expect.objectContaining({ from: "bridges/claude-bridge", to: "claude-bridge" }),
       expect.objectContaining({ from: "bridges/codex-bridge", to: "codex-bridge" }),
       expect.objectContaining({ from: "binaries", to: "bin" }),
@@ -55,14 +53,12 @@ describe("Electron packaging configuration", () => {
     expect(electronTsconfig.include).toEqual(["electron/**/*.ts"]);
   });
 
-  test("keeps valid platform icon resources available to electron-builder", async () => {
+  test("keeps valid macOS and Linux icon resources available to electron-builder", async () => {
     const macIcon = await readResource("icon.icns");
-    const windowsIcon = await readResource("icon.ico");
     const sourcePng = await readResource("icon.png");
     const linuxIcon = await readResource("icons/512x512.png");
 
     expect(macIcon.subarray(0, 4).toString("ascii")).toBe("icns");
-    expect([...windowsIcon.subarray(0, 4)]).toEqual([0x00, 0x00, 0x01, 0x00]);
     expectPngSignature(sourcePng);
     expectPngSignature(linuxIcon);
     expect(sourcePng.equals(linuxIcon)).toBe(true);

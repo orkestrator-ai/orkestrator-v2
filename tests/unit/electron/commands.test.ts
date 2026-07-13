@@ -67,7 +67,7 @@ const ptySpawn = mock((command: string, args: string[], options: Record<string, 
   return ptyProcess;
 });
 
-mock.module("node-pty", () => ({ spawn: ptySpawn }));
+mock.module("../../../apps/backend/src/core/pty", () => ({ spawnPty: ptySpawn }));
 
 const { createCommandRegistry, resolveBrowserOpenCommand } = await import("../../../apps/backend/src/core/commands");
 
@@ -3352,7 +3352,6 @@ exit 0
     expect(spawnCall?.[0]).toBe(expectedLocalShellPath());
     expect(spawnCall?.[1]).toEqual(["-l"]);
     expect(spawnCall?.[2]).toMatchObject({
-      name: "xterm-256color",
       cols: 132,
       rows: 43,
       cwd: worktreePath,
@@ -3665,7 +3664,6 @@ exit 0
     expect(spawnCall?.[0]).toBe("docker");
     expect(spawnCall?.[1]).toEqual(["exec", "-it", "--user", "node", "container-1", "zsh", "-l"]);
     expect(spawnCall?.[2]).toMatchObject({
-      name: "xterm-256color",
       cols: 100,
       rows: 32,
     });

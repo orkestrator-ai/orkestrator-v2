@@ -1,8 +1,10 @@
 import { memo, useCallback, useRef, useEffect } from "react";
 import { type Layout } from "react-resizable-panels";
+import { useMediaQuery } from "@/hooks";
 import { usePaneLayoutStore } from "@/stores";
-import type { PaneSplit } from "@/types/paneLayout";
+import { isPaneLeaf, type PaneLeaf, type PaneNode, type PaneSplit } from "@/types/paneLayout";
 import { PaneTree } from "./PaneTree";
+import { MobilePaneSwitcher } from "./MobilePaneSwitcher";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -11,6 +13,11 @@ import {
 
 /** Debounce delay for store updates during resize operations (ms) */
 const RESIZE_DEBOUNCE_MS = 100;
+
+export function collectPaneLeaves(node: PaneNode): PaneLeaf[] {
+  if (isPaneLeaf(node)) return [node];
+  return [...collectPaneLeaves(node.children[0]), ...collectPaneLeaves(node.children[1])];
+}
 
 interface PaneSplitContainerProps {
   split: PaneSplit;
@@ -31,9 +38,14 @@ export const PaneSplitContainer = memo(function PaneSplitContainer({
   activeDragId,
   dragOverPaneId,
 }: PaneSplitContainerProps) {
+  const isMobile = useMediaQuery("(max-width: 767px)");
   // Use a selector to only get the updateSizes function - this prevents re-renders
   // when other parts of the store change
   const updateSizes = usePaneLayoutStore((state) => state.updateSizes);
+  const setActivePane = usePaneLayoutStore((state) => state.setActivePane);
+  const activePaneId = usePaneLayoutStore(
+    (state) => state.environments.get(environmentId)?.activePaneId,
+  );
   const debounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track the split.id to detect changes during debounce
   const splitIdRef = useRef(split.id);
@@ -82,6 +94,34 @@ export const PaneSplitContainer = memo(function PaneSplitContainer({
     },
     [environmentId, split.id, firstPanelId, secondPanelId, updateSizes]
   );
+
+  if (isMobile) {
+    const panes = collectPaneLeaves(split);
+    const paneById = new Map(panes.map((pane) => [pane.id, pane]));
+    return (
+      <MobilePaneSwitcher
+        panes={panes.map((pane) => {
+          const activeTab = pane.tabs.find((tab) => tab.id === pane.activeTabId);
+          return {
+            id: pane.id,
+            label: activeTab?.displayTitle ?? activeTab?.type ?? "Empty pane",
+          };
+        })}
+        activePaneId={activePaneId}
+        onSelect={(paneId) => setActivePane(paneId, environmentId)}
+        renderPane={(paneId, paneIsActive) => (
+          <PaneTree
+            node={paneById.get(paneId)!}
+            containerId={containerId}
+            environmentId={environmentId}
+            isActive={isActive && paneIsActive}
+            activeDragId={activeDragId}
+            dragOverPaneId={dragOverPaneId}
+          />
+        )}
+      />
+    );
+  }
 
   return (
     <ResizablePanelGroup

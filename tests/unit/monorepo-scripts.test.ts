@@ -6,12 +6,9 @@ const root = path.resolve(import.meta.dir, "../..");
 const read = (relativePath: string) => readFileSync(path.join(root, relativePath), "utf8");
 
 describe("monorepo orchestration scripts", () => {
-  test("backend build bundles the entrypoint and vendors dynamic native dependencies", () => {
+  test("backend build bundles the entrypoint and vendors Sharp's dynamic native dependencies", () => {
     const source = read("apps/backend/scripts/build.ts");
     expect(source).toContain('entrypoints: [path.join(packageRoot, "src/main.ts")]');
-    expect(source).toContain('target: "node"');
-    expect(source).toContain('external: ["node-pty"]');
-    expect(source).toContain('path.join(output, "node_modules/node-pty")');
     expect(source).toContain('path.join(output, "node_modules/@img")');
     expect(source).toContain("if (!result.success)");
   });
@@ -25,6 +22,18 @@ describe("monorepo orchestration scripts", () => {
     expect(dev).toContain('process.on("SIGINT"');
     expect(dev).toContain("Timed out waiting for");
     expect(dev).toContain('electron.on("exit"');
+    expect(build).toContain('process.platform === "win32"');
+    expect(dev).toContain('process.platform === "win32"');
+  });
+
+  test("desktop packaging and PTY dependencies match the macOS/Linux Bun-only support policy", () => {
+    const rootPackage = JSON.parse(read("package.json")) as { build?: Record<string, unknown> };
+    const backendPackage = JSON.parse(read("apps/backend/package.json")) as { dependencies?: Record<string, string> };
+    const pty = read("apps/backend/src/core/pty.ts");
+    expect(rootPackage.build).not.toHaveProperty("win");
+    expect(backendPackage.dependencies).not.toHaveProperty("node-pty");
+    expect(pty).toContain("Bun.Terminal");
+    expect(pty).toContain('platform !== "win32"');
   });
 
   test("Claude vendoring dereferences the SDK and includes optional platform packages", () => {

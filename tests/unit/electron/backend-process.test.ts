@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { BackendHttpClient, BackendProcess } from "../../../apps/desktop/electron/backend-process";
+import {
+  BackendHttpClient,
+  BackendProcess,
+  getBrowserGatewayStatus,
+} from "../../../apps/desktop/electron/backend-process";
 
 const directories: string[] = [];
 const processes: BackendProcess[] = [];
@@ -16,6 +20,29 @@ afterEach(async () => {
 });
 
 describe("Electron backend process supervisor", () => {
+  test("reports browser availability independently from the desktop control listener", () => {
+    expect(getBrowserGatewayStatus(null)).toEqual({
+      enabled: true,
+      running: false,
+      url: null,
+      error: null,
+    });
+    expect(getBrowserGatewayStatus({
+      bindAddress: "127.0.0.1",
+      port: 1234,
+      url: "http://127.0.0.1:1234/",
+      authFile: "/tmp/auth.json",
+      browserError: "address unavailable",
+    })).toMatchObject({ running: false, url: null, error: "address unavailable" });
+    expect(getBrowserGatewayStatus({
+      bindAddress: "127.0.0.1",
+      port: 1234,
+      url: "http://127.0.0.1:1234/",
+      authFile: "/tmp/auth.json",
+      browserUrl: "http://100.80.1.2:34121/",
+    })).toMatchObject({ running: true, url: "http://100.80.1.2:34121/", error: null });
+  });
+
   test("HTTP client covers commands, settings, errors, and event delivery", async () => {
     globalThis.fetch = Bun.fetch;
     const server = createServer(async (request, response) => {
@@ -61,7 +88,7 @@ describe("Electron backend process supervisor", () => {
     }));
   });
 
-  test("launches the standalone service and invokes it through HTTP", async () => {
+  test("launches one service for both the Electron bridge and browser clients", async () => {
     // The shared DOM test setup installs a browser fetch with CORS enforcement;
     // Electron's main process uses the native server-side fetch implementation.
     globalThis.fetch = Bun.fetch;
@@ -76,13 +103,31 @@ describe("Electron backend process supervisor", () => {
       appRoot: root,
       resourceRoot: root,
       dataDir,
+      gatewayHost: "127.0.0.1",
+      gatewayPort: 0,
+      unsafeAllowNonTailscaleBind: true,
       onEvent: () => undefined,
     });
 
-    expect(backendProcess.getInfo()?.bindAddress).toBe("127.0.0.1");
+    const info = backendProcess.getInfo();
+    expect(info?.bindAddress).toBe("127.0.0.1");
+    expect(info?.browserUrl).toBeTruthy();
+    expect(info?.url).not.toBe(info?.browserUrl);
     await expect(client.invoke("greet", { name: "Electron" })).resolves.toBe(
       "Hello, Electron! You've been greeted from the Orkestrator backend!",
     );
+
+    if (!info) throw new Error("Expected shared backend start information");
+    const auth = JSON.parse(await readFile(info.authFile, "utf8")) as { token: string };
+    const browserResponse = await Bun.fetch(new URL("/__orkestrator/invoke", info.browserUrl), {
+      method: "POST",
+      headers: { authorization: `Bearer ${auth.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ command: "greet", args: { name: "Browser" } }),
+    });
+    expect(browserResponse.status).toBe(200);
+    expect(await browserResponse.json()).toEqual({
+      result: "Hello, Browser! You've been greeted from the Orkestrator backend!",
+    });
   });
 
   test("shares concurrent startup and clears stale state when the child exits", async () => {
@@ -98,6 +143,9 @@ describe("Electron backend process supervisor", () => {
       appRoot: root,
       resourceRoot: root,
       dataDir,
+      gatewayHost: "127.0.0.1",
+      gatewayPort: 0,
+      unsafeAllowNonTailscaleBind: true,
       onEvent: () => undefined,
       onUnexpectedExit,
     };
@@ -118,7 +166,7 @@ describe("Electron backend process supervisor", () => {
     expect(onUnexpectedExit).toHaveBeenCalledTimes(1);
   });
 
-  test("rotates the private HTTP credential without losing command access", async () => {
+  test("rotates the shared HTTP credential without losing command access", async () => {
     globalThis.fetch = Bun.fetch;
     const root = path.resolve(import.meta.dir, "../../..");
     const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
@@ -130,6 +178,9 @@ describe("Electron backend process supervisor", () => {
       appRoot: root,
       resourceRoot: root,
       dataDir,
+      gatewayHost: "127.0.0.1",
+      gatewayPort: 0,
+      unsafeAllowNonTailscaleBind: true,
       onEvent: () => undefined,
     });
 
@@ -152,6 +203,9 @@ describe("Electron backend process supervisor", () => {
       appRoot: missingRoot,
       resourceRoot: missingRoot,
       dataDir,
+      gatewayHost: "127.0.0.1",
+      gatewayPort: 0,
+      unsafeAllowNonTailscaleBind: true,
       onEvent: () => undefined,
     })).rejects.toThrow("Backend service exited");
     expect(backendProcess.getInfo()).toBeNull();

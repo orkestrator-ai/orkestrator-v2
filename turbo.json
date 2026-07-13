@@ -20,6 +20,17 @@
     "dev": {
       "cache": false,
       "persistent": true
+    },
+    "dev:web": {
+      "cache": false,
+      "persistent": true,
+      "passThroughEnv": ["ORKESTRATOR_*", "VITE_DEV_HOST"]
+    },
+    "start:web": {
+      "dependsOn": ["build", "@orkestrator/web#build"],
+      "cache": false,
+      "persistent": true,
+      "passThroughEnv": ["ORKESTRATOR_*"]
     }
   }
 }

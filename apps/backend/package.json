@@ -9,14 +9,15 @@
   "scripts": {
     "build": "bun scripts/build.ts",
     "dev": "bun --watch src/main.ts",
+    "dev:web": "bun --watch src/main.ts --port 34121 --fallback-host 127.0.0.1 --renderer-dev-server-url http://127.0.0.1:1420",
     "start": "bun dist/main.js",
+    "start:web": "bun dist/main.js --fallback-host 127.0.0.1",
     "test": "bun test src tests",
     "test:workspace": "bun test src tests",
     "typecheck": "bunx tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@orkestrator/protocol": "workspace:*",
-    "node-pty": "^1.1.0",
     "sharp": "^0.35.1"
   }
 }

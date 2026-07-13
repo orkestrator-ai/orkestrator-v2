@@ -570,7 +570,7 @@ export function EnvironmentSettingsDialog({
             {/* Default Agent */}
             <div className="space-y-3">
               <Label className="text-sm">Default Agent</Label>
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 {([
                   { value: "global", label: `Global (${config.global.defaultAgent === "claude" ? "Claude" : config.global.defaultAgent === "codex" ? "Codex" : "OpenCode"})`, icon: <Bot className="h-4 w-4" /> },
                   { value: "claude", label: "Claude", icon: <ClaudeIcon className="h-4 w-4" /> },
@@ -600,7 +600,7 @@ export function EnvironmentSettingsDialog({
             {/* Claude Mode */}
             <div className="space-y-3">
               <Label className="text-sm">Claude Mode</Label>
-              <div className="grid grid-cols-3 gap-2 max-w-md">
+              <div className="grid max-w-md grid-cols-1 gap-2 sm:grid-cols-3">
                 {([
                   { value: "global", label: `Global (${config.global.claudeMode === "native" ? "Native" : "Terminal"})`, icon: <Bot className="h-3.5 w-3.5" /> },
                   { value: "terminal", label: "Terminal", icon: <Terminal className="h-3.5 w-3.5" /> },
@@ -629,7 +629,7 @@ export function EnvironmentSettingsDialog({
             {/* Claude Native backend (only meaningful when resolved mode is Native) */}
             <div className="space-y-3">
               <Label className="text-sm">Claude Native backend</Label>
-              <div className="grid grid-cols-3 gap-2 max-w-md">
+              <div className="grid max-w-md grid-cols-1 gap-2 sm:grid-cols-3">
                 {([
                   {
                     value: "default",
@@ -670,7 +670,7 @@ export function EnvironmentSettingsDialog({
             {/* OpenCode Mode */}
             <div className="space-y-3">
               <Label className="text-sm">OpenCode Mode</Label>
-              <div className="grid grid-cols-3 gap-2 max-w-md">
+              <div className="grid max-w-md grid-cols-1 gap-2 sm:grid-cols-3">
                 {([
                   { value: "global", label: `Global (${(config.global.opencodeMode || "terminal") === "native" ? "Native" : "Terminal"})`, icon: <Bot className="h-3.5 w-3.5" /> },
                   { value: "terminal", label: "Terminal", icon: <Terminal className="h-3.5 w-3.5" /> },
@@ -699,7 +699,7 @@ export function EnvironmentSettingsDialog({
             {/* Codex Mode */}
             <div className="space-y-3">
               <Label className="text-sm">Codex Mode</Label>
-              <div className="grid grid-cols-3 gap-2 max-w-md">
+              <div className="grid max-w-md grid-cols-1 gap-2 sm:grid-cols-3">
                 {([
                   { value: "global", label: `Global (${(config.global.codexMode || "native") === "native" ? "Native" : "Terminal"})`, icon: <Bot className="h-3.5 w-3.5" /> },
                   { value: "terminal", label: "Terminal", icon: <Terminal className="h-3.5 w-3.5" /> },
@@ -813,7 +813,7 @@ export function EnvironmentSettingsDialog({
       case "extensions":
         return (
           <div className="max-w-2xl space-y-4">
-            <div className="grid grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6">
               <div className="space-y-2">
                 <div className="flex items-center gap-2"><Server className="h-4 w-4 text-muted-foreground" /><Label>MCP Servers</Label></div>
                 {isLoadingExtensions ? (

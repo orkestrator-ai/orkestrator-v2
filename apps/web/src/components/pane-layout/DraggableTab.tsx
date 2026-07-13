@@ -196,7 +196,7 @@ export function DraggableTab({
       {...attributes}
       {...listeners}
       className={cn(
-        "group relative flex items-center gap-1.5 px-3 text-xs cursor-grab active:cursor-grabbing select-none self-stretch",
+        "group relative flex shrink-0 items-center gap-1.5 px-3 text-xs cursor-grab active:cursor-grabbing select-none self-stretch",
         isActive
           ? "bg-background text-foreground"
           : "bg-zinc-800/85 text-muted-foreground hover:bg-zinc-800 hover:text-foreground",
@@ -222,7 +222,7 @@ export function DraggableTab({
       )}
       {canClose && (
         <button
-          className="ml-1 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity"
+          className="ml-1 flex h-7 w-7 items-center justify-center opacity-100 transition-opacity hover:text-red-400 md:h-auto md:w-auto md:opacity-0 md:group-hover:opacity-100"
           onClick={handleClose}
           onMouseDown={(e) => e.stopPropagation()}
         >

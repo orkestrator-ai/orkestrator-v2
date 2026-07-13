@@ -6,11 +6,9 @@ const root = path.resolve(import.meta.dir, "../..");
 const read = (relativePath: string) => readFileSync(path.join(root, relativePath), "utf8");
 
 describe("monorepo orchestration scripts", () => {
-  test("backend build bundles the entrypoint and vendors dynamic native dependencies", () => {
+  test("backend build bundles the entrypoint and vendors Sharp's dynamic native dependencies", () => {
     const source = read("apps/backend/scripts/build.ts");
     expect(source).toContain('entrypoints: [path.join(packageRoot, "src/main.ts")]');
-    expect(source).toContain('external: ["node-pty"]');
-    expect(source).toContain('path.join(output, "node_modules/node-pty")');
     expect(source).toContain('path.join(output, "node_modules/@img")');
     expect(source).toContain("if (!result.success)");
   });

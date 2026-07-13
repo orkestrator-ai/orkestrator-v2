@@ -6,6 +6,7 @@
   "scripts": {
     "build": "bunx tsc && bunx vite build",
     "dev": "bunx vite --host 127.0.0.1",
+    "dev:web": "bunx vite --host 127.0.0.1",
     "preview": "bunx vite preview",
     "test": "bun test src",
     "test:workspace": "bun test src",

@@ -31,7 +31,7 @@ A desktop application for managing isolated Docker-based development environment
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) - JavaScript runtime and package manager
+- [Bun](https://bun.sh) 1.3.14 or newer - JavaScript runtime, package manager, and native PTY provider
 - [Docker](https://docker.com) - Container runtime
 - [Tailscale](https://tailscale.com) - Optional, required for remote browser access through the gateway
 
@@ -77,16 +77,25 @@ bun run dev
 - Use "Create PR" to run `gh pr create` interactively
 - After PR creation, the button becomes "View PR"
 
-### Standalone Backend And Remote Web Access
+### Shared Backend And Web Access
 
-The backend is a standalone Bun service in `apps/backend`. Electron launches a private loopback instance and talks to it over authenticated HTTP/SSE; it no longer owns Docker, terminal, storage, or agent state itself. The same backend artifact can run without Electron and serve the React app to a browser over Tailscale.
+The backend is a standalone-capable Bun service in `apps/backend` and is the authoritative owner of Docker, terminal, storage, and agent state. There are two supported launch modes:
 
-Build the renderer and backend, then start the service on a machine connected to your tailnet:
+- `bun run dev` starts Electron, and Electron supervises one backend instance. That same instance serves the Electron renderer and authenticated web clients. It binds to Tailscale on port `34121` when available and otherwise falls back to local-only access at `127.0.0.1:34121`.
+- `bun run start:web` builds and starts the backend without Electron. The backend serves the built React app directly to authenticated browsers.
+
+For local web development with Vite and the backend in one Turbo invocation:
 
 ```bash
-bun run build:renderer
-bun run build:backend
-bun run --cwd apps/backend start
+bun run dev:web
+```
+
+Open the backend URL printed in the logs (normally `http://127.0.0.1:34121/` without Tailscale), not the internal Vite URL on port `1420`.
+
+To build and start the standalone service on a machine connected to your tailnet:
+
+```bash
+bun run start:web
 ```
 
 By default the service detects and binds to the first Tailscale address on port `34121`. For a local-only development instance, bind explicitly:
@@ -155,16 +164,16 @@ packages/       Shared cross-runtime contracts and validation
 bridges/        Claude and Codex native-mode bridge services
 ```
 
-The web application is independently built. Electron loads that build as its renderer, while the standalone backend serves the same build to authenticated browsers over Tailscale.
+The web application is independently built. Electron loads it as its renderer while the Electron-supervised backend serves the same renderer to authenticated browsers. The same backend can instead run standalone without Electron.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ Electron shell / web browser: React + Zustand + xterm   │
+│ Electron shell and/or web browsers: React + Zustand     │
 │             HTTP commands + server-sent events          │
 ├─────────────────────────────────────────────────────────┤
-│ Standalone Bun backend service                          │
+│ One Bun backend service (Electron-supervised or standalone) │
 │ Docker · PTY sessions · agent bridges · JSON storage    │
 ├─────────────────────────────────────────────────────────┤
 │                    Docker Containers                     │

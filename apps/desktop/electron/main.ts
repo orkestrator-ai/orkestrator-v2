@@ -17,12 +17,16 @@ app.setPath("userData", path.join(app.getPath("appData"), APP_SLUG));
 let mainWindow: BrowserWindow | null = null;
 let backend: BackendHttpClient | null = null;
 const backendProcess = new BackendProcess();
-const standaloneWebAccessStatus = {
-  enabled: false,
-  running: false,
-  url: null,
-  error: "Remote web access is managed by the standalone backend service.",
-} as const;
+
+function getSharedBackendStatus() {
+  const info = backendProcess.getInfo();
+  return {
+    enabled: true,
+    running: info !== null,
+    url: info?.url ?? null,
+    error: null,
+  };
+}
 
 function emitToRenderers(event: string, payload: unknown): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -90,8 +94,8 @@ function registerIpc(): void {
     dialogApi: dialog,
     appApi: app,
     nativeImageApi: nativeImage,
-    getWebClientStatus: () => standaloneWebAccessStatus,
-    setWebClientEnabled: async () => standaloneWebAccessStatus,
+    getWebClientStatus: getSharedBackendStatus,
+    setWebClientEnabled: async () => getSharedBackendStatus(),
     getGatewayTokenSettings: () => {
       if (!backend) throw new Error("Backend is not initialized");
       return backend.getTokenSettings();

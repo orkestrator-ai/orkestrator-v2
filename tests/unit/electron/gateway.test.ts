@@ -157,6 +157,31 @@ describe("remote gateway", () => {
     });
     expect(await noTailscale.start()).toBeNull();
 
+    const loopbackFallback = new OrkestratorGateway({
+      backend: { invoke: mock(async () => null) },
+      dataDir,
+      rendererRoot,
+      fallbackBindAddress: "127.0.0.1",
+      port: 0,
+      interfaces: { en0: [{ address: "192.168.1.20", family: "IPv4", internal: false, netmask: "255.255.255.0", cidr: null, mac: "00:00:00:00:00:00" }] },
+      env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
+      logger,
+    });
+    gateways.push(loopbackFallback);
+    await expect(loopbackFallback.start()).resolves.toMatchObject({ bindAddress: "127.0.0.1" });
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("falling back to 127.0.0.1"));
+
+    const unsafeFallback = new OrkestratorGateway({
+      backend: { invoke: mock(async () => null) },
+      dataDir,
+      rendererRoot,
+      fallbackBindAddress: "0.0.0.0",
+      interfaces: {},
+      env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
+      logger,
+    });
+    await expect(unsafeFallback.start()).rejects.toThrow("Refusing to bind gateway to non-Tailscale address");
+
     const unsafeBind = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
       dataDir,

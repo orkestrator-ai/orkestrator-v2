@@ -23,6 +23,7 @@ describe("standalone backend options", () => {
       "--renderer-root", "/tmp/web",
       "--renderer-dev-server-url", "http://127.0.0.1:1420",
       "--host", "127.0.0.1",
+      "--fallback-host", "127.0.0.2",
       "--port", "0",
       "--unsafe-allow-non-tailscale-bind",
     ], {});
@@ -34,6 +35,7 @@ describe("standalone backend options", () => {
       rendererRoot: "/tmp/web",
       rendererDevServerUrl: "http://127.0.0.1:1420",
       host: "127.0.0.1",
+      fallbackHost: "127.0.0.2",
       port: 0,
       unsafeAllowNonTailscaleBind: true,
     });
@@ -43,5 +45,6 @@ describe("standalone backend options", () => {
     expect(() => parseOptions(["--port", "3oops"], {})).toThrow("Invalid --port value");
     expect(() => parseOptions(["--port", "65536"], {})).toThrow("Invalid --port value");
     expect(() => parseOptions(["--host", "--port", "1"], {})).toThrow("Missing value for --host");
+    expect(() => parseOptions(["--fallback-host", "--port", "1"], {})).toThrow("Missing value for --fallback-host");
   });
 });

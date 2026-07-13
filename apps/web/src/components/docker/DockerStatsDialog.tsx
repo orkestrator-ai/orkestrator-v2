@@ -278,7 +278,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                 </Button>
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
                 <div className="text-xs text-muted-foreground uppercase tracking-wide">CPU</div>
                 <div className="text-lg font-semibold mt-1">{stats.cpuUsagePercent}% <span className="text-xs font-normal text-muted-foreground">({stats.cpus} cores)</span></div>
@@ -295,7 +295,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                 <Progress value={stats.diskTotal > 0 ? (stats.diskUsed / stats.diskTotal) * 100 : 0} className="mt-2 h-1" />
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700"><div className="text-lg font-semibold">{stats.containersRunning}</div><div className="text-xs text-muted-foreground">Running</div></div>
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700"><div className="text-lg font-semibold">{stats.containersTotal}</div><div className="text-xs text-muted-foreground">Containers</div></div>
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700"><div className="text-lg font-semibold">{stats.imagesTotal}</div><div className="text-xs text-muted-foreground">Images</div></div>

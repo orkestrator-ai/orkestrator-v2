@@ -11,6 +11,7 @@ export type BackendOptions = {
   rendererRoot: string;
   rendererDevServerUrl?: string;
   host?: string;
+  fallbackHost?: string;
   port?: number;
   unsafeAllowNonTailscaleBind: boolean;
 };
@@ -55,6 +56,7 @@ export function parseOptions(
     rendererRoot: path.resolve(valueAfter(args, "--renderer-root") ?? env.ORKESTRATOR_RENDERER_ROOT ?? path.join(appRoot, "apps", "web", "dist")),
     rendererDevServerUrl: valueAfter(args, "--renderer-dev-server-url") ?? env.ORKESTRATOR_RENDERER_DEV_SERVER_URL,
     host: valueAfter(args, "--host"),
+    fallbackHost: valueAfter(args, "--fallback-host"),
     port,
     unsafeAllowNonTailscaleBind: args.includes("--unsafe-allow-non-tailscale-bind"),
   };

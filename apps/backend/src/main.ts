@@ -25,6 +25,7 @@ gateway = new OrkestratorGateway({
   rendererRoot: options.rendererRoot,
   rendererDevServerUrl: options.rendererDevServerUrl,
   bindAddress: options.host,
+  fallbackBindAddress: options.fallbackHost,
   port: options.port,
   unsafeAllowNonTailscaleBind: options.unsafeAllowNonTailscaleBind,
 });

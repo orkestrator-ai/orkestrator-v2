@@ -541,7 +541,7 @@ export function HierarchicalSidebar() {
   return (
     <div className="flex h-full flex-col">
       {/* Header - switches between normal and multi-select mode */}
-      <div className="flex h-12 items-center justify-between border-b border-border/80 bg-[#212124] pl-3 pr-2">
+      <div data-sidebar-header className="flex h-12 items-center justify-between border-b border-border/80 bg-[#212124] pl-3 pr-2">
         {isMultiSelectMode ? (
           <>
             <span className="text-sm font-medium text-foreground">

@@ -24,11 +24,11 @@ interface VirtualizedMessageListProps<TMessage> {
 }
 
 function FooterWrapper({ children }: { children: ReactNode }) {
-  return <div className="min-w-[320px]">{children}</div>;
+  return <div className="min-w-0">{children}</div>;
 }
 
 function EmptyPlaceholderWrapper({ children }: { children: ReactNode }) {
-  return <div className="min-w-[320px]">{children}</div>;
+  return <div className="min-w-0">{children}</div>;
 }
 
 // Stable module-level component references for Virtuoso.

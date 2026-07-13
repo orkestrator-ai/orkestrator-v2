@@ -106,6 +106,10 @@ export class BackendProcess {
     resourceRoot: string;
     dataDir: string;
     rendererDevServerUrl?: string;
+    gatewayHost?: string;
+    gatewayPort?: number;
+    fallbackGatewayHost?: string;
+    unsafeAllowNonTailscaleBind?: boolean;
     onEvent: (event: string, payload: unknown) => void;
     onUnexpectedExit?: (error: Error) => void;
   }): Promise<BackendHttpClient> {
@@ -123,6 +127,10 @@ export class BackendProcess {
     resourceRoot: string;
     dataDir: string;
     rendererDevServerUrl?: string;
+    gatewayHost?: string;
+    gatewayPort?: number;
+    fallbackGatewayHost?: string;
+    unsafeAllowNonTailscaleBind?: boolean;
     onEvent: (event: string, payload: unknown) => void;
     onUnexpectedExit?: (error: Error) => void;
   }): Promise<BackendHttpClient> {
@@ -130,9 +138,15 @@ export class BackendProcess {
     const entry = options.isDev
       ? path.join(options.appRoot, "apps", "backend", "src", "main.ts")
       : path.join(options.resourceRoot, "backend", "main.js");
-    const args = [entry, "--host", "127.0.0.1", "--port", "0", "--unsafe-allow-non-tailscale-bind",
+    const args = [entry, "--port", String(options.gatewayPort ?? 34121),
       "--data-dir", options.dataDir, "--app-root", options.appRoot, "--resource-root", options.resourceRoot,
       "--renderer-root", options.isDev ? path.join(options.appRoot, "apps", "web", "dist") : path.join(options.resourceRoot, "web")];
+    if (options.gatewayHost) {
+      args.push("--host", options.gatewayHost);
+    } else {
+      args.push("--fallback-host", options.fallbackGatewayHost ?? "127.0.0.1");
+    }
+    if (options.unsafeAllowNonTailscaleBind) args.push("--unsafe-allow-non-tailscale-bind");
     if (options.rendererDevServerUrl) args.push("--renderer-dev-server-url", options.rendererDevServerUrl);
 
     // Isolate desktop startup from any remote-service configuration in the parent shell.

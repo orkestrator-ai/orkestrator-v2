@@ -40,6 +40,7 @@ export interface OrkestratorGatewayOptions {
   rendererRoot: string;
   rendererDevServerUrl?: string;
   bindAddress?: string;
+  fallbackBindAddress?: string;
   port?: number;
   env?: NodeJS.ProcessEnv;
   interfaces?: NetworkInterfaceMap;
@@ -105,6 +106,10 @@ export function selectTailscaleBindAddress(interfaces: NetworkInterfaceMap = net
 
 function formatHostForUrl(address: string): string {
   return address.includes(":") ? `[${address}]` : address;
+}
+
+function isLoopbackAddress(address: string): boolean {
+  return address === "127.0.0.1" || address === "::1";
 }
 
 function mimeType(filePath: string): string {
@@ -450,6 +455,7 @@ export class OrkestratorGateway {
   private readonly rendererRoot: string;
   private readonly rendererDevServerUrl?: string;
   private readonly bindAddress?: string;
+  private readonly fallbackBindAddress?: string;
   private readonly port?: number;
   private readonly env: NodeJS.ProcessEnv;
   private readonly interfaces?: NetworkInterfaceMap;
@@ -470,6 +476,7 @@ export class OrkestratorGateway {
     this.rendererRoot = options.rendererRoot;
     this.rendererDevServerUrl = options.rendererDevServerUrl;
     this.bindAddress = options.bindAddress;
+    this.fallbackBindAddress = options.fallbackBindAddress;
     this.port = options.port;
     this.env = options.env ?? process.env;
     this.interfaces = options.interfaces;
@@ -483,12 +490,24 @@ export class OrkestratorGateway {
       return null;
     }
 
-    const bindAddress = this.bindAddress ?? this.env.ORKESTRATOR_GATEWAY_HOST ?? selectTailscaleBindAddress(this.interfaces);
+    const tailscaleBindAddress = selectTailscaleBindAddress(this.interfaces);
+    const bindAddress = this.bindAddress
+      ?? this.env.ORKESTRATOR_GATEWAY_HOST
+      ?? tailscaleBindAddress
+      ?? this.fallbackBindAddress;
     if (!bindAddress) {
       this.logger.warn("[RemoteGateway] No Tailscale address found; gateway not started");
       return null;
     }
-    if (!this.unsafeAllowNonTailscaleBind && !isTailscaleAddress(bindAddress)) {
+    const usingFallback = !this.bindAddress
+      && !this.env.ORKESTRATOR_GATEWAY_HOST
+      && !tailscaleBindAddress
+      && this.fallbackBindAddress === bindAddress;
+    if (usingFallback) {
+      this.logger.warn(`[RemoteGateway] No Tailscale address found; falling back to ${this.fallbackBindAddress}`);
+    }
+    const safeLoopbackFallback = usingFallback && isLoopbackAddress(bindAddress);
+    if (!this.unsafeAllowNonTailscaleBind && !safeLoopbackFallback && !isTailscaleAddress(bindAddress)) {
       throw new Error(`Refusing to bind gateway to non-Tailscale address: ${bindAddress}`);
     }
 

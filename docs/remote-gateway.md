@@ -1,8 +1,8 @@
 # Standalone Backend And Remote Gateway
 
-The standalone backend lets you use Orkestrator from a normal browser on the same Tailscale network as the backend host. It is designed for trusted tailnets, not for public internet exposure.
+The shared backend lets you use Orkestrator from Electron and normal browsers against one authoritative process. It is designed for trusted tailnets, not for public internet exposure.
 
-The service serves the React app, owns long-running backend state, accepts renderer commands, streams backend events, and proxies loopback services on the backend host. Electron starts a bundled loopback instance and connects through the same HTTP API; a remote installation does not require Electron.
+The service serves the React app, owns long-running backend state, accepts renderer commands, streams backend events, and proxies loopback services on the backend host. Electron starts and supervises this service; its Tailscale URL can be used by browser clients at the same time. The identical backend can also run standalone without Electron.
 
 ## Requirements
 
@@ -15,12 +15,24 @@ The service refuses non-Tailscale bind addresses by default. The explicit unsafe
 
 ## Starting And Connecting
 
-1. Build and start the backend:
+1. Choose a launch mode.
+
+   Electron plus browser access from the same backend:
 
    ```bash
-   bun run build:renderer
-   bun run build:backend
-   bun run --cwd apps/backend start
+   bun run dev
+   ```
+
+   Local web development in one Turbo invocation:
+
+   ```bash
+   bun run dev:web
+   ```
+
+   Production-style standalone backend and built renderer:
+
+   ```bash
+   bun run start:web
    ```
 
 2. Check the service logs for the gateway URL and token file:
@@ -53,8 +65,8 @@ The gateway supports these environment variables:
 
 Without `ORKESTRATOR_GATEWAY_TOKEN`, the app creates or reuses:
 
-- macOS: `~/Library/Application Support/orkestrator-ai/gateway-auth.json`
-- Linux: `~/.config/orkestrator-ai/gateway-auth.json`
+- macOS: `~/Library/Application Support/orkestrator-v2/gateway-auth.json`
+- Linux: `~/.config/orkestrator-v2/gateway-auth.json`
 
 Delete that file and restart the app to rotate a generated token.
 
@@ -124,7 +136,7 @@ Traffic is plain HTTP because it is expected to travel over Tailscale. Do not bi
 
 - Native desktop APIs are limited in remote browser mode. File dialogs return `null`, image clipboard read/write is unavailable, and window drag/close behavior depends on the browser.
 - The gateway proxies HTTP loopback services. Services that require a different protocol or direct socket access need a separate access path.
-- A backend started by Electron follows the desktop app lifecycle. A backend started with `apps/backend` remains independent of Electron.
+- A backend started by Electron follows the desktop app lifecycle. A backend started with `bun run start:web` remains independent of Electron.
 - Apps that set `Secure` cookies over plain HTTP may not persist those cookies in the browser.
 
 ## Troubleshooting

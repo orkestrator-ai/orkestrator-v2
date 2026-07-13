@@ -75,6 +75,8 @@ body {
   -moz-osx-font-smoothing: grayscale;
   height: 100%;
   overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: manipulation;
 }
 
 #root {
@@ -159,4 +161,36 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   @apply bg-muted-foreground;
+}
+
+@media (max-width: 767px) {
+  /* Keep form controls at 16px so mobile browsers do not zoom on focus. */
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+
+  [data-slot="dropdown-menu-content"],
+  [data-slot="context-menu-content"] {
+    max-width: calc(100vw - 1rem);
+  }
+
+  [data-slot="dropdown-menu-item"],
+  [data-slot="context-menu-item"] {
+    min-height: 2.75rem;
+  }
+
+  [data-mobile-toolbar] button {
+    min-height: 2.5rem;
+    min-width: 2.5rem;
+  }
+
+  .mobile-sidebar [data-sidebar-header] {
+    padding-right: 3.25rem;
+  }
+
+  .xterm {
+    padding: 2px;
+  }
 }

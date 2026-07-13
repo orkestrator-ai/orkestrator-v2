@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
+import { mockWriteText } from "../../mocks/clipboard";
 
 const mockUpdateGlobalConfig = mock(async (globalConfig: unknown) => ({
   version: "1.0",
@@ -74,6 +75,8 @@ describe("GlobalSettings", () => {
     mockTestDomainResolution.mockClear();
     mockToastSuccess.mockClear();
     mockToastError.mockClear();
+    mockWriteText.mockReset();
+    mockWriteText.mockImplementation(async () => {});
     mockGetWebClientStatus.mockImplementation(async () => ({
       enabled: true,
       running: true,
@@ -159,16 +162,16 @@ describe("GlobalSettings", () => {
     });
   });
 
-  test("explains standalone remote access without exposing obsolete desktop controls", () => {
+  test("shows the shared backend status and credentials in Electron", async () => {
     window.orkestratorGateway = undefined;
     render(<GlobalSettings activeSection="web-client" />);
 
-    expect(screen.getByText("Remote web access")).toBeTruthy();
-    expect(screen.getByText(/standalone backend service/)).toBeTruthy();
+    expect(screen.getByText("Web client")).toBeTruthy();
+    expect(screen.getByText(/serves both the Electron app/)).toBeTruthy();
     expect(screen.queryByRole("switch", { name: "Allow web access" })).toBeNull();
-    expect(screen.queryByLabelText("Gateway token")).toBeNull();
-    expect(mockGetWebClientStatus).not.toHaveBeenCalled();
-    expect(mockGetGatewayTokenSettings).not.toHaveBeenCalled();
+    expect(await screen.findByLabelText("Gateway token")).toBeTruthy();
+    expect(mockGetWebClientStatus).toHaveBeenCalledTimes(1);
+    expect(mockGetGatewayTokenSettings).toHaveBeenCalledTimes(1);
   });
 
   test("displays, reveals, edits, and saves the gateway token", async () => {
@@ -185,6 +188,18 @@ describe("GlobalSettings", () => {
     fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(mockSetGatewayToken).toHaveBeenCalledWith("replacement-token-123456"));
+  });
+
+  test("copies the gateway token", async () => {
+    render(<GlobalSettings activeSection="web-client" />);
+    await screen.findByDisplayValue("gateway-token-123456");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy gateway token" }));
+
+    await waitFor(() => {
+      expect(mockWriteText).toHaveBeenCalledWith("gateway-token-123456");
+    });
+    expect(screen.getByRole("button", { name: "Gateway token copied" })).toBeTruthy();
   });
 
   test("shows an environment-managed gateway token as read-only", async () => {

@@ -16,6 +16,7 @@ export interface BrowserGatewayOptions {
   token?: string;
   replaceExisting?: boolean;
   onTokenChanged?: (token: string) => void;
+  eventReconnectDelayMs?: number;
 }
 
 function normalizedBaseUrl(value: string | undefined): string | undefined {
@@ -24,7 +25,7 @@ function normalizedBaseUrl(value: string | undefined): string | undefined {
 
 function parseEventBlock(block: string): string | null {
   const data = block
-    .split("\n")
+    .split(/\r?\n/)
     .filter((line) => line.startsWith("data:"))
     .map((line) => line.slice(5).trimStart())
     .join("\n");
@@ -64,7 +65,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       ensureEventStream();
-    }, EVENT_RECONNECT_DELAY_MS);
+    }, options.eventReconnectDelayMs ?? EVENT_RECONNECT_DELAY_MS);
   };
 
   const connectFetchEventStream = () => {
@@ -88,13 +89,13 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         let buffer = "";
         while (!controller.signal.aborted) {
           const { done, value } = await reader.read();
-          buffer += decoder.decode(value, { stream: !done }).replaceAll("\r\n", "\n");
-          let boundary = buffer.indexOf("\n\n");
-          while (boundary >= 0) {
-            const data = parseEventBlock(buffer.slice(0, boundary));
-            buffer = buffer.slice(boundary + 2);
+          buffer += decoder.decode(value, { stream: !done });
+          let boundary = /\r?\n\r?\n/.exec(buffer);
+          while (boundary) {
+            const data = parseEventBlock(buffer.slice(0, boundary.index));
+            buffer = buffer.slice(boundary.index + boundary[0].length);
             if (data) dispatchMessage(data);
-            boundary = buffer.indexOf("\n\n");
+            boundary = /\r?\n\r?\n/.exec(buffer);
           }
           if (done) break;
         }

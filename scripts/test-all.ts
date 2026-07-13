@@ -14,6 +14,7 @@ run("turbo", [
   "run", "test:workspace",
   "--filter=@orkestrator/web",
   "--filter=@orkestrator/backend",
+  "--filter=@orkestrator/web-public",
   "--cache-dir", ".turbo",
 ]);
 run("bun", ["test", "tests"]);

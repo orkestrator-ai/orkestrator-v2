@@ -151,7 +151,7 @@ bun run start:web-public
 
 The script is equivalent to starting the built backend with `--tailscale-serve --allowed-origins https://orkestrator.dev`. Use the explicit backend command instead when deploying the public client on another origin.
 
-`--tailscale-serve` makes the backend bind its browser listener to `127.0.0.1`, run `tailscale serve --bg --yes --https=443` against that listener, and replace `browserUrl` in its ready message with the resulting HTTPS origin. On graceful shutdown, it removes the HTTPS listener it configured. Use `--tailscale-serve-port <port>` when port 443 is already assigned to another Serve target.
+`--tailscale-serve` makes the backend bind its browser listener to `127.0.0.1`, run `tailscale serve --bg --yes --https=443` against that listener, and replace `browserUrl` in its ready message with the resulting HTTPS origin. If `--host` is supplied, it must be exactly `127.0.0.1`. Before changing Serve, the backend checks the selected HTTPS port and refuses to overwrite a listener that already exists; choose an unused port with `--tailscale-serve-port <port>` instead. On graceful shutdown, it removes only the HTTPS listener it configured.
 
 Tailscale reports an address similar to `https://workstation.example-tailnet.ts.net`. Enter that origin and the gateway token in the public client. Tailnet ACLs still control which devices can reach the Serve endpoint, and the Orkestrator token remains required. Do not use Tailscale Funnel for this workflow.
 

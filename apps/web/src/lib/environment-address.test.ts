@@ -64,6 +64,18 @@ describe("getEnvironmentPortAddress", () => {
     );
   });
 
+  test("uses the configured direct backend for public-client port proxies", () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+    const environment = makeEnvironment({ entryPort: 3000, hostEntryPort: 49152 });
+
+    expect(getEnvironmentPortAddress(environment)).toBe(
+      "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/49152/",
+    );
+  });
+
   test("returns null for host port 0 when the renderer is served remotely", () => {
     window.orkestratorGateway = { enabled: true };
     const environment = makeEnvironment({ entryPort: 3000, hostEntryPort: 0 });

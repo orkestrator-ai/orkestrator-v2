@@ -5,7 +5,7 @@ import { OrkestratorBackend } from "./core/index.js";
 import { fixPath } from "./core/fix-path.js";
 import { OrkestratorGateway } from "./gateway.js";
 import { assertSupportedPlatform, parseOptions } from "./options.js";
-import { TailscaleServeManager } from "./tailscale-serve.js";
+import { getTailscaleServeTargetPort, TailscaleServeManager } from "./tailscale-serve.js";
 
 assertSupportedPlatform();
 fixPath();
@@ -14,10 +14,8 @@ if (
   options.tailscaleServe
   && options.host
   && options.host !== "127.0.0.1"
-  && options.host !== "localhost"
-  && options.host !== "::1"
 ) {
-  throw new Error("--tailscale-serve requires --host to be a loopback address");
+  throw new Error("--tailscale-serve requires --host 127.0.0.1");
 }
 await mkdir(options.dataDir, { recursive: true });
 
@@ -57,16 +55,10 @@ if (options.tailscaleServe) {
     await gateway.stop();
     throw new Error("Tailscale Serve requires an available browser listener");
   }
-  const target = new URL(browserUrl);
-  if (target.hostname !== "127.0.0.1" && target.hostname !== "localhost" && target.hostname !== "[::1]") {
-    await gateway.stop();
-    throw new Error("Tailscale Serve requires the backend browser listener to bind to loopback");
-  }
-
   tailscaleServe = new TailscaleServeManager(options.tailscaleExecutable);
   try {
     const tailscaleUrl = await tailscaleServe.start(
-      Number.parseInt(target.port, 10),
+      getTailscaleServeTargetPort(browserUrl),
       options.tailscaleServePort,
     );
     console.info(`[TailscaleServe] Available at ${tailscaleUrl}`);

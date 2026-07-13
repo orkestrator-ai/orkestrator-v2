@@ -4,6 +4,7 @@ const ADDRESS_KEY = "orkestrator.public.backend-address";
 const SESSION_TOKEN_KEY = "orkestrator.public.gateway-token";
 const REMEMBERED_TOKEN_KEY = "orkestrator.public.remembered-gateway-token";
 export const SKIP_AUTO_CONNECT_KEY = "orkestrator.public.skip-auto-connect";
+export const DEFAULT_BACKEND_CONNECTION_TIMEOUT_MS = 10_000;
 
 export interface SavedConnection {
   address: string;
@@ -35,8 +36,11 @@ export function normalizeBackendAddress(value: string): string {
   return url.origin;
 }
 
-export function insecureBackendWarning(address: string): string | null {
-  if (window.location.protocol !== "https:") return null;
+export function insecureBackendWarning(
+  address: string,
+  pageProtocol = window.location.protocol,
+): string | null {
+  if (pageProtocol !== "https:") return null;
   try {
     if (new URL(normalizeBackendAddress(address)).protocol === "http:") {
       return "This hosted page is HTTPS. Most browsers will block a direct HTTP backend; use tailnet HTTPS.";
@@ -77,27 +81,56 @@ export function updateSavedToken(token: string, rememberToken: boolean): void {
   if (rememberToken) localStorage.setItem(REMEMBERED_TOKEN_KEY, token);
 }
 
-export async function checkBackendConnection(address: string, token: string): Promise<string> {
+export async function checkBackendConnection(
+  address: string,
+  token: string,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<string> {
   const normalizedAddress = normalizeBackendAddress(address);
   const tokenError = getGatewayTokenValidationError(token);
   if (tokenError) throw new Error(tokenError);
   const normalizedToken = normalizeGatewayToken(token);
 
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs ?? DEFAULT_BACKEND_CONNECTION_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("Connection timeout must be a positive number of milliseconds.");
+  }
+  const timeout = setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), timeoutMs);
+  const abortFromCaller = () => controller.abort(options.signal?.reason);
+  if (options.signal?.aborted) abortFromCaller();
+  else options.signal?.addEventListener("abort", abortFromCaller, { once: true });
+
   let response: Response;
+  let payload: { ok?: boolean; error?: string };
   try {
     response = await fetch(`${normalizedAddress}/__orkestrator/status`, {
       method: "GET",
       mode: "cors",
       credentials: "omit",
       headers: { authorization: `Bearer ${normalizedToken}` },
+      signal: controller.signal,
     });
+    try {
+      payload = await response.json() as { ok?: boolean; error?: string };
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
+      payload = {};
+    }
   } catch {
+    if (options.signal?.aborted) throw new Error("Connection check cancelled.");
+    if (controller.signal.aborted) {
+      const seconds = timeoutMs / 1_000;
+      throw new Error(`The backend did not respond within ${seconds} second${seconds === 1 ? "" : "s"}.`);
+    }
     throw new Error(
       "Could not reach the backend. Check its HTTPS address, Tailscale connection, and allowed origin setting.",
     );
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", abortFromCaller);
   }
 
-  const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
   if (response.status === 401) throw new Error("The gateway token was rejected.");
   if (response.status === 403) {
     throw new Error(payload.error === "Origin not allowed"

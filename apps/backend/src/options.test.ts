@@ -78,6 +78,33 @@ describe("standalone backend options", () => {
     });
   });
 
+  test("reads allowed origins from the environment and lets CLI values take precedence", () => {
+    expect(parseOptions([], {
+      ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS: " https://one.example, ,https://*.example.net ",
+    }).allowedOrigins).toEqual(["https://one.example", "https://*.example.net"]);
+
+    expect(parseOptions([
+      "--allowed-origins", "https://cli.example",
+      "--tailscale-serve-port", "9443",
+      "--tailscale-bin", "/cli/tailscale",
+    ], {
+      ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS: "https://env.example",
+      ORKESTRATOR_TAILSCALE_SERVE_PORT: "8443",
+      ORKESTRATOR_TAILSCALE_BIN: "/env/tailscale",
+    })).toMatchObject({
+      allowedOrigins: ["https://cli.example"],
+      tailscaleServePort: 9443,
+      tailscaleExecutable: "/cli/tailscale",
+    });
+  });
+
+  test("only enables environment-managed Tailscale Serve for the explicit value 1", () => {
+    expect(parseOptions([], { ORKESTRATOR_TAILSCALE_SERVE: "0" }).tailscaleServe).toBe(false);
+    expect(parseOptions([], { ORKESTRATOR_TAILSCALE_SERVE: "true" }).tailscaleServe).toBe(false);
+    expect(parseOptions([], { ORKESTRATOR_TAILSCALE_SERVE: "1" }).tailscaleServe).toBe(true);
+    expect(parseOptions(["--tailscale-serve"], {}).tailscaleServe).toBe(true);
+  });
+
   test("explicitly supports macOS and Linux only", () => {
     expect(() => assertSupportedPlatform("darwin")).not.toThrow();
     expect(() => assertSupportedPlatform("linux")).not.toThrow();

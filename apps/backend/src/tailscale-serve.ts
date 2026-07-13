@@ -31,6 +31,31 @@ export function extractTailscaleServeUrl(output: string): string | null {
   return null;
 }
 
+export function getTailscaleServeTargetPort(browserUrl: string): number {
+  const target = new URL(browserUrl);
+  if (target.protocol !== "http:" || target.hostname !== "127.0.0.1") {
+    throw new Error("Tailscale Serve requires the backend browser listener to use http://127.0.0.1");
+  }
+
+  const port = target.port ? Number.parseInt(target.port, 10) : 80;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid backend browser listener port: ${target.port || "default"}`);
+  }
+  return port;
+}
+
+function hasConfiguredPort(output: string, port: number): boolean {
+  let status: unknown;
+  try {
+    status = JSON.parse(output);
+  } catch {
+    throw new Error("Tailscale Serve returned invalid status JSON");
+  }
+  if (!status || typeof status !== "object" || Array.isArray(status)) return false;
+  const tcp = (status as { TCP?: unknown }).TCP;
+  return Boolean(tcp && typeof tcp === "object" && !Array.isArray(tcp) && String(port) in tcp);
+}
+
 function commandError(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
   const stderr = (error as Error & { stderr?: string }).stderr?.trim();
@@ -46,6 +71,25 @@ export class TailscaleServeManager {
   ) {}
 
   async start(targetPort: number, httpsPort = 443): Promise<string> {
+    if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
+      throw new Error(`Invalid Tailscale Serve target port: ${targetPort}`);
+    }
+    if (!Number.isInteger(httpsPort) || httpsPort < 1 || httpsPort > 65535) {
+      throw new Error(`Invalid Tailscale Serve HTTPS port: ${httpsPort}`);
+    }
+
+    let existingStatus: { stdout: string; stderr: string };
+    try {
+      existingStatus = await this.run(this.executable, ["serve", "status", "--json"]);
+    } catch (error) {
+      throw new Error(`Unable to inspect Tailscale Serve configuration: ${commandError(error)}`);
+    }
+    if (hasConfiguredPort(existingStatus.stdout, httpsPort)) {
+      throw new Error(
+        `Refusing to replace the existing Tailscale Serve configuration on HTTPS port ${httpsPort}`,
+      );
+    }
+
     const args = [
       "serve",
       "--bg",
@@ -81,7 +125,7 @@ export class TailscaleServeManager {
   async stop(): Promise<void> {
     const httpsPort = this.activeHttpsPort;
     if (httpsPort === null) return;
-    this.activeHttpsPort = null;
     await this.run(this.executable, ["serve", `--https=${httpsPort}`, "off"]);
+    this.activeHttpsPort = null;
   }
 }

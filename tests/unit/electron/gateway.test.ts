@@ -442,6 +442,68 @@ describe("remote gateway", () => {
     expect(rejected.status).toBe(403);
     expect(rejected.json()).toEqual({ error: "Origin not allowed" });
     expect(rejected.headers["access-control-allow-origin"]).toBeUndefined();
+
+    const unauthenticated = await requestUrl(endpoint, {
+      headers: { origin: "https://orkestrator.example" },
+    });
+    expect(unauthenticated.status).toBe(401);
+    expect(unauthenticated.headers["access-control-allow-origin"]).toBe("https://orkestrator.example");
+
+    const wrongMethod = await requestUrl(endpoint, {
+      method: "POST",
+      headers: {
+        origin: "https://orkestrator.example",
+        authorization: `Bearer ${info.token}`,
+      },
+    });
+    expect(wrongMethod.status).toBe(405);
+    expect(wrongMethod.headers["access-control-allow-origin"]).toBe("https://orkestrator.example");
+
+    const sameHost = await requestUrl(endpoint, {
+      headers: {
+        origin: new URL(info.url).origin,
+        authorization: `Bearer ${info.token}`,
+      },
+    });
+    expect(sameHost.status).toBe(200);
+
+    const malformed = await requestUrl(endpoint, {
+      headers: {
+        origin: "not an origin",
+        authorization: `Bearer ${info.token}`,
+      },
+    });
+    expect(malformed.status).toBe(403);
+  });
+
+  test("reads CORS origins from the environment and honors wildcard ports", async () => {
+    const { info } = await startGateway({
+      env: {
+        ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456",
+        ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS: "https://*.preview.example:8443",
+      },
+    });
+    const endpoint = `${info.url}__orkestrator/status`;
+
+    const allowed = await requestUrl(endpoint, {
+      headers: {
+        origin: "https://branch.preview.example:8443",
+        authorization: `Bearer ${info.token}`,
+      },
+    });
+    expect(allowed.status).toBe(200);
+    expect(allowed.headers["access-control-allow-origin"]).toBe("https://branch.preview.example:8443");
+
+    for (const origin of [
+      "https://preview.example:8443",
+      "https://branch.preview.example:9443",
+      "http://branch.preview.example:8443",
+    ]) {
+      const rejected = await requestUrl(endpoint, {
+        headers: { origin, authorization: `Bearer ${info.token}` },
+      });
+      expect(rejected.status).toBe(403);
+    }
   });
 
   test("sets and clears the auth cookie through login and logout", async () => {

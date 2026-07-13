@@ -88,7 +88,7 @@ class FetchEventSource {
     let type = "message";
     let lastEventId = "";
     const data: string[] = [];
-    for (const line of block.split("\n")) {
+    for (const line of block.split(/\r?\n/)) {
       if (line.startsWith("event:")) type = line.slice(6).trimStart();
       else if (line.startsWith("id:")) lastEventId = line.slice(3).trimStart();
       else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
@@ -115,12 +115,12 @@ class FetchEventSource {
       let buffer = "";
       while (!this.controller.signal.aborted) {
         const { done, value } = await reader.read();
-        buffer += decoder.decode(value, { stream: !done }).replaceAll("\r\n", "\n");
-        let boundary = buffer.indexOf("\n\n");
-        while (boundary >= 0) {
-          this.dispatchBlock(buffer.slice(0, boundary));
-          buffer = buffer.slice(boundary + 2);
-          boundary = buffer.indexOf("\n\n");
+        buffer += decoder.decode(value, { stream: !done });
+        let boundary = /\r?\n\r?\n/.exec(buffer);
+        while (boundary) {
+          this.dispatchBlock(buffer.slice(0, boundary.index));
+          buffer = buffer.slice(boundary.index + boundary[0].length);
+          boundary = /\r?\n\r?\n/.exec(buffer);
         }
         if (done) break;
       }

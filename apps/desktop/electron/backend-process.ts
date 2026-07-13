@@ -22,6 +22,27 @@ export function getBrowserGatewayStatus(info: GatewayStartInfo | null) {
   };
 }
 
+export function createBackendProcessEnvironment(
+  parentEnv: NodeJS.ProcessEnv,
+  isDev: boolean,
+  resourceRoot: string,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...parentEnv, ORKESTRATOR_GATEWAY_DISABLED: "0" };
+  if (!isDev) {
+    env.NODE_PATH = [path.join(resourceRoot, "backend", "vendor"), env.NODE_PATH]
+      .filter(Boolean)
+      .join(path.delimiter);
+  }
+  delete env.ORKESTRATOR_GATEWAY_HOST;
+  delete env.ORKESTRATOR_GATEWAY_PORT;
+  delete env.ORKESTRATOR_GATEWAY_TOKEN;
+  delete env.ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS;
+  delete env.ORKESTRATOR_TAILSCALE_SERVE;
+  delete env.ORKESTRATOR_TAILSCALE_SERVE_PORT;
+  delete env.ORKESTRATOR_TAILSCALE_BIN;
+  return env;
+}
+
 type ReadyMessage = GatewayStartInfo & { type: "orkestrator-backend-ready" };
 
 export class BackendHttpClient {
@@ -162,18 +183,7 @@ export class BackendProcess {
     if (options.rendererDevServerUrl) args.push("--renderer-dev-server-url", options.rendererDevServerUrl);
 
     // Isolate desktop startup from any remote-service configuration in the parent shell.
-    const env: NodeJS.ProcessEnv = { ...process.env, ORKESTRATOR_GATEWAY_DISABLED: "0" };
-    if (!options.isDev) {
-      env.NODE_PATH = [path.join(options.resourceRoot, "backend", "vendor"), env.NODE_PATH]
-        .filter(Boolean)
-        .join(path.delimiter);
-    }
-    delete env.ORKESTRATOR_GATEWAY_HOST;
-    delete env.ORKESTRATOR_GATEWAY_PORT;
-    delete env.ORKESTRATOR_GATEWAY_TOKEN;
-    delete env.ORKESTRATOR_TAILSCALE_SERVE;
-    delete env.ORKESTRATOR_TAILSCALE_SERVE_PORT;
-    delete env.ORKESTRATOR_TAILSCALE_BIN;
+    const env = createBackendProcessEnvironment(process.env, options.isDev, options.resourceRoot);
     const child = spawn(bun, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     this.child = child;
     child.stderr?.on("data", (chunk) => process.stderr.write(`[Backend] ${chunk}`));

@@ -112,6 +112,10 @@ printf '%s\\n' "$*" >> "$TAILSCALE_TEST_LOG"
 case " $* " in
   *" off "*) exit 0 ;;
 esac
+if [ "$*" = "serve status --json" ]; then
+  printf '{}\\n'
+  exit 0
+fi
 printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
 `);
     await chmod(executable, 0o755);
@@ -129,5 +133,20 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
     const calls = await readFile(logFile, "utf8");
     expect(calls).toContain("serve --bg --yes --https=443 http://127.0.0.1:");
     expect(calls).toContain("serve --https=443 off");
+  });
+
+  test("rejects Tailscale Serve with a non-IPv4-loopback listener", async () => {
+    const child = Bun.spawn([
+      process.execPath,
+      path.join(root, "apps/backend/dist/main.js"),
+      "--tailscale-serve",
+      "--host", "::1",
+    ], { stdout: "pipe", stderr: "pipe", env: process.env });
+    processes.push(child);
+
+    await expect(child.exited).resolves.not.toBe(0);
+    expect(await new Response(child.stderr).text()).toContain(
+      "--tailscale-serve requires --host 127.0.0.1",
+    );
   });
 });

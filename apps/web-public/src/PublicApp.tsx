@@ -23,6 +23,7 @@ const OrkestratorApp = lazy(() => import("@/App"));
 export function PublicApp() {
   const initialConnection = useRef(loadSavedConnection());
   const autoConnectStarted = useRef(false);
+  const connectionController = useRef<AbortController | null>(null);
   const [address, setAddress] = useState(initialConnection.current.address);
   const [token, setToken] = useState(initialConnection.current.token);
   const [rememberToken, setRememberToken] = useState(initialConnection.current.rememberToken);
@@ -35,10 +36,15 @@ export function PublicApp() {
   const [activeConnection, setActiveConnection] = useState<ActiveConnection | null>(null);
 
   const connect = async (connection: SavedConnection) => {
+    connectionController.current?.abort();
+    const controller = new AbortController();
+    connectionController.current = controller;
     setConnecting(true);
     setError(null);
     try {
-      const normalizedAddress = await checkBackendConnection(connection.address, connection.token);
+      const normalizedAddress = await checkBackendConnection(connection.address, connection.token, {
+        signal: controller.signal,
+      });
       const normalizedConnection = {
         ...connection,
         address: normalizedAddress,
@@ -56,9 +62,13 @@ export function PublicApp() {
       setToken(normalizedConnection.token);
       setActiveConnection(normalizedConnection);
     } catch (caught) {
+      if (connectionController.current !== controller) return;
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setConnecting(false);
+      if (connectionController.current === controller) {
+        connectionController.current = null;
+        setConnecting(false);
+      }
     }
   };
 
@@ -72,6 +82,11 @@ export function PublicApp() {
     if (initialConnection.current.address && initialConnection.current.token) {
       void connect(initialConnection.current);
     }
+    return () => {
+      autoConnectStarted.current = false;
+      connectionController.current?.abort();
+      connectionController.current = null;
+    };
   }, []);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -80,6 +95,8 @@ export function PublicApp() {
   };
 
   const handleForget = () => {
+    connectionController.current?.abort();
+    connectionController.current = null;
     forgetConnection();
     setAddress("");
     setToken("");

@@ -50,5 +50,6 @@ describe("monorepo orchestration scripts", () => {
     expect(workspaceRun).toBeGreaterThan(-1);
     expect(rootRun).toBeGreaterThan(workspaceRun);
     expect(source).toContain("process.exit(result.status ?? 1)");
+    expect(source).toContain('"--filter=@orkestrator/web-public"');
   });
 });

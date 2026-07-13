@@ -32,6 +32,7 @@ describe("DraggableTabBar", () => {
     const tabBar = container.querySelector(".overflow-x-auto");
     expect(tabBar?.className).toContain("min-h-[40px]");
     expect(tabBar?.className).toContain("md:min-h-[32px]");
+    expect(tabBar?.className).toContain("bg-background");
     fireEvent.click(screen.getByText("Terminal 1"));
     expect(onTabSelect).toHaveBeenCalledWith("terminal");
   });

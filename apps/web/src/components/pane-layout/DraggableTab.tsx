@@ -208,9 +208,15 @@ export function DraggableTab({
       onFocus={isFileTab ? fileTooltip.show : undefined}
       onBlur={isFileTab ? fileTooltip.hide : undefined}
     >
-      {/* Blue focus indicator line at top */}
-      {isFocused && (
-        <div className="absolute top-0 left-0 right-0 h-0.5 bg-primary" />
+      {/* Keep the active tab identifiable when it shares the pane background. */}
+      {isActive && (
+        <div
+          aria-hidden="true"
+          className={cn(
+            "absolute inset-x-0 top-0 h-0.5 bg-primary",
+            !isFocused && "opacity-60",
+          )}
+        />
       )}
       {icon}
       {titleElement}

@@ -220,6 +220,24 @@ describe("DraggableTab tooltip and context menu structure", () => {
     expect(screen.getByText("Terminal 1").getAttribute("data-slot")).toBeNull();
   });
 
+  test("marks an active tab with an accent even when its pane is not focused", () => {
+    const { container } = render(
+      <DraggableTab
+        tab={{ id: "tab-terminal", type: "plain" }}
+        paneId="pane-1"
+        index={0}
+        isActive
+        isFocused={false}
+        canClose={false}
+        onSelect={() => {}}
+      />,
+    );
+
+    const indicator = container.querySelector("[aria-hidden='true'].bg-primary");
+    expect(indicator).toBeTruthy();
+    expect(indicator?.className).toContain("opacity-60");
+  });
+
   test("renders a close button that calls onClose without selecting the tab", () => {
     const onClose = mock(() => {});
     const onSelect = mock(() => {});

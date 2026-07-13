@@ -223,7 +223,7 @@ describe("remote gateway", () => {
     expect(browserResponse.status).toBe(200);
   });
 
-  test("keeps desktop control available when the browser port is occupied", async () => {
+  test("keeps desktop control available and selects another browser port when the preferred port is occupied", async () => {
     const occupied = createServer((_request, response) => response.end("occupied"));
     auxiliaryServers.push(occupied);
     await new Promise<void>((resolve) => occupied.listen(0, "127.0.0.1", resolve));
@@ -236,12 +236,18 @@ describe("remote gateway", () => {
       controlPort: 0,
     });
 
-    expect(info.browserUrl).toBeUndefined();
-    expect(info.browserError).toContain(`port ${occupiedAddress.port}`);
+    expect(info.browserUrl).toBeTruthy();
+    expect(info.browserError).toBeUndefined();
+    expect(new URL(info.browserUrl!).port).not.toBe(String(occupiedAddress.port));
+    const headers = { authorization: `Bearer ${info.token}` };
     const response = await requestUrl(info.url, {
-      headers: { authorization: `Bearer ${info.token}` },
+      headers,
+    });
+    const browserResponse = await requestUrl(info.browserUrl!, {
+      headers,
     });
     expect(response.status).toBe(200);
+    expect(browserResponse.status).toBe(200);
   });
 
   test("rejects a non-loopback control listener", async () => {

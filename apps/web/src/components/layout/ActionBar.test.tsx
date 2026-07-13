@@ -65,6 +65,7 @@ const selectedProject: Project = {
 
 let currentEnvironment: Environment = selectedEnvironment;
 let currentSelectedEnvironmentId: string | null = selectedEnvironment.id;
+let currentSelectedProjectId: string | null = selectedProject.id;
 let currentProjectBoardTab: "kanban" | "linear" | "features" = "kanban";
 let currentChanges: unknown[] = [];
 
@@ -263,7 +264,7 @@ mock.module("@/stores", () => ({
     ),
   useUIStore: <T,>(selector?: (state: {
     selectedEnvironmentId: string | null;
-    selectedProjectId: string;
+    selectedProjectId: string | null;
     projectBoardTab: "kanban" | "linear" | "features";
     setProjectBoardTab: (tab: "kanban" | "linear" | "features") => void;
     setProjectBoardNotesOpen: (open: boolean) => void;
@@ -271,7 +272,7 @@ mock.module("@/stores", () => ({
     selectState(
       {
         selectedEnvironmentId: currentSelectedEnvironmentId,
-        selectedProjectId: selectedProject.id,
+        selectedProjectId: currentSelectedProjectId,
         projectBoardTab: currentProjectBoardTab,
         setProjectBoardTab: setProjectBoardTabMock,
         setProjectBoardNotesOpen: setProjectBoardNotesOpenMock,
@@ -360,6 +361,7 @@ beforeEach(() => {
   });
   currentEnvironment = { ...selectedEnvironment };
   currentSelectedEnvironmentId = currentEnvironment.id;
+  currentSelectedProjectId = selectedProject.id;
   currentProjectBoardTab = "kanban";
   currentChanges = [];
 });
@@ -367,6 +369,67 @@ beforeEach(() => {
 afterEach(() => {
   console.error = originalConsoleError;
   console.log = originalConsoleLog;
+});
+
+describe("ActionBar grid presentation", () => {
+  test("renders mobile tools as two columns with labels after their icons", () => {
+    const { container } = render(<ActionBar presentation="grid" />);
+
+    const toolbar = container.querySelector("[data-presentation='grid']");
+    expect(toolbar).toBeTruthy();
+    expect(toolbar?.querySelectorAll(".grid-cols-2").length).toBeGreaterThanOrEqual(2);
+
+    const globalSettings = screen.getByRole("button", { name: "Global settings" });
+    const claude = screen.getByRole("button", { name: "New tab with Claude" });
+    expect(globalSettings.lastElementChild?.textContent).toBe("Global settings");
+    expect(claude.lastElementChild?.textContent).toBe("New Claude tab");
+  });
+
+  test("keeps project and environment tools visible but disabled in the empty state", () => {
+    currentSelectedProjectId = null;
+    currentSelectedEnvironmentId = null;
+    render(<ActionBar presentation="grid" />);
+
+    expect(screen.getByRole("button", { name: "Global settings" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByRole("button", { name: "Repository settings" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "New terminal tab" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Kanban board" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Show file panel" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  test("uses one visual variant for every mobile tool and shortens environment settings", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar presentation="grid" />);
+
+    const environmentSettings = screen.getByRole("button", { name: "Environment settings" });
+    const createPr = screen.getByRole("button", { name: "Create PR" });
+    const projectNotes = screen.getByRole("button", { name: "Project notes" });
+    const kanban = screen.getByRole("button", { name: "Kanban board" });
+
+    expect(environmentSettings.textContent).toContain("Env. settings");
+    expect(createPr.getAttribute("data-variant")).toBe("ghost");
+    expect(projectNotes.getAttribute("data-variant")).toBe("ghost");
+    expect(kanban.getAttribute("data-variant")).toBe("ghost");
+  });
+
+  test("places the mobile file-change dot inline after the Show files label", () => {
+    currentChanges = [{}];
+    render(<ActionBar presentation="grid" />);
+
+    const showFiles = screen.getByRole("button", { name: "Show file panel" });
+    const labelGroup = showFiles.querySelector("span.flex");
+    const label = labelGroup?.firstElementChild;
+    const dot = labelGroup?.lastElementChild;
+
+    expect(label?.textContent).toBe("Show files");
+    expect(dot?.classList.contains("rounded-full")).toBe(true);
+    expect(dot?.classList.contains("absolute")).toBe(false);
+  });
 });
 
 describe("ActionBar copy URL", () => {

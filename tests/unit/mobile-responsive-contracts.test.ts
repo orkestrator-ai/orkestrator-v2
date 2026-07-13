@@ -18,7 +18,7 @@ describe("mobile responsive layout contracts", () => {
     ["apps/web/src/components/environments/CreateEnvironmentDialog.tsx", "grid-cols-1 gap-2 sm:grid-cols-2"],
     ["apps/web/src/components/environments/EnvironmentSettingsDialog.tsx", "grid-cols-2 gap-2 sm:grid-cols-4"],
     ["apps/web/src/components/kanban/KanbanBoard.tsx", "snap-x snap-mandatory", "sm:w-[320px]"],
-    ["apps/web/src/components/layout/ActionBar.tsx", "data-mobile-toolbar", "md:h-12"],
+    ["apps/web/src/components/layout/ActionBar.tsx", "data-mobile-toolbar", "grid-cols-2", "md:h-12"],
     ["apps/web/src/components/pane-layout/DraggableTab.tsx", "md:opacity-0", "h-7 w-7"],
     ["apps/web/src/components/pane-layout/DraggableTabBar.tsx", "overflow-x-auto", "md:min-h-[32px]"],
     ["apps/web/src/components/ui/alert-dialog.tsx", "max-h-[calc(100dvh-1rem)]", "overflow-y-auto"],

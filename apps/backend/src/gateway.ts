@@ -55,6 +55,7 @@ export interface OrkestratorGatewayOptions {
 const AUTH_COOKIE = "orkestrator_gateway_auth";
 const API_PREFIX = "/__orkestrator";
 const DEFAULT_GATEWAY_PORT = 34121;
+const GATEWAY_PORT_FALLBACK_ATTEMPTS = 20;
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const KEEPALIVE_MS = 25_000;
 
@@ -68,6 +69,11 @@ function parsePort(value: string | undefined, fallback: number): number {
     throw new Error(`Invalid gateway port: ${value}`);
   }
   return port;
+}
+
+function isAddressInUseError(error: unknown): boolean {
+  return error instanceof Error
+    && (error as NodeJS.ErrnoException).code === "EADDRINUSE";
 }
 
 function parseIPv4(address: string): number[] | null {
@@ -537,7 +543,7 @@ export class OrkestratorGateway {
     let browserError: string | undefined;
     if (bindAddress) {
       try {
-        browserListener = await this.listen(bindAddress, port);
+        browserListener = await this.listenWithPortFallback(bindAddress, port);
         this.logger.info(`[RemoteGateway] Listening on ${browserListener.url}`);
       } catch (error) {
         if (!controlListener) throw error;
@@ -560,6 +566,36 @@ export class OrkestratorGateway {
       browserUrl: browserListener?.url,
       browserError,
     };
+  }
+
+  private async listenWithPortFallback(
+    bindAddress: string,
+    preferredPort: number,
+  ): Promise<{ bindAddress: string; port: number; url: string }> {
+    if (preferredPort === 0) return this.listen(bindAddress, preferredPort);
+
+    for (let offset = 0; offset <= GATEWAY_PORT_FALLBACK_ATTEMPTS; offset += 1) {
+      const candidatePort = preferredPort + offset;
+      if (candidatePort > 65535) break;
+
+      try {
+        const listener = await this.listen(bindAddress, candidatePort);
+        if (candidatePort !== preferredPort) {
+          this.logger.warn(
+            `[RemoteGateway] Port ${preferredPort} was in use; listening on ${candidatePort} instead`,
+          );
+        }
+        return listener;
+      } catch (error) {
+        if (!isAddressInUseError(error)) throw error;
+      }
+    }
+
+    const listener = await this.listen(bindAddress, 0);
+    this.logger.warn(
+      `[RemoteGateway] Port ${preferredPort} and nearby ports were in use; listening on ${listener.port} instead`,
+    );
+    return listener;
   }
 
   private async listen(bindAddress: string, port: number): Promise<{ bindAddress: string; port: number; url: string }> {

@@ -31,6 +31,12 @@
       "cache": false,
       "persistent": true,
       "passThroughEnv": ["ORKESTRATOR_*"]
+    },
+    "start:web-public": {
+      "dependsOn": ["build"],
+      "cache": false,
+      "persistent": true,
+      "passThroughEnv": ["ORKESTRATOR_*"]
     }
   }
 }

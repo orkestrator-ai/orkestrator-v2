@@ -120,7 +120,7 @@ export class BackendProcess {
     gatewayHost?: string;
     gatewayPort?: number;
     fallbackGatewayHost?: string;
-    unsafeAllowNonTailscaleBind?: boolean;
+    allowNonTailscaleBind?: boolean;
     onEvent: (event: string, payload: unknown) => void;
     onUnexpectedExit?: (error: Error) => void;
   }): Promise<BackendHttpClient> {
@@ -141,7 +141,7 @@ export class BackendProcess {
     gatewayHost?: string;
     gatewayPort?: number;
     fallbackGatewayHost?: string;
-    unsafeAllowNonTailscaleBind?: boolean;
+    allowNonTailscaleBind?: boolean;
     onEvent: (event: string, payload: unknown) => void;
     onUnexpectedExit?: (error: Error) => void;
   }): Promise<BackendHttpClient> {
@@ -158,7 +158,7 @@ export class BackendProcess {
     } else {
       args.push("--fallback-host", options.fallbackGatewayHost ?? "127.0.0.1");
     }
-    if (options.unsafeAllowNonTailscaleBind) args.push("--unsafe-allow-non-tailscale-bind");
+    if (options.allowNonTailscaleBind) args.push("--allow-non-tailscale-bind");
     if (options.rendererDevServerUrl) args.push("--renderer-dev-server-url", options.rendererDevServerUrl);
 
     // Isolate desktop startup from any remote-service configuration in the parent shell.
@@ -171,6 +171,9 @@ export class BackendProcess {
     delete env.ORKESTRATOR_GATEWAY_HOST;
     delete env.ORKESTRATOR_GATEWAY_PORT;
     delete env.ORKESTRATOR_GATEWAY_TOKEN;
+    delete env.ORKESTRATOR_TAILSCALE_SERVE;
+    delete env.ORKESTRATOR_TAILSCALE_SERVE_PORT;
+    delete env.ORKESTRATOR_TAILSCALE_BIN;
     const child = spawn(bun, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     this.child = child;
     child.stderr?.on("data", (chunk) => process.stderr.write(`[Backend] ${chunk}`));

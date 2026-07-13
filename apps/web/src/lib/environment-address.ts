@@ -1,4 +1,5 @@
 import type { Environment } from "@/types";
+import { getGatewayBaseUrl } from "@/lib/gateway-url";
 
 export function getEnvironmentPortAddress(environment: Environment | null | undefined): string | null {
   if (
@@ -13,7 +14,7 @@ export function getEnvironmentPortAddress(environment: Environment | null | unde
 
   if (typeof window !== "undefined" && window.orkestratorGateway?.enabled) {
     if (environment.hostEntryPort <= 0) return null;
-    return `${window.location.origin}/__orkestrator/proxy/loopback/${environment.hostEntryPort}/`;
+    return `${getGatewayBaseUrl()}/__orkestrator/proxy/loopback/${environment.hostEntryPort}/`;
   }
 
   return `localhost:${environment.hostEntryPort}`;

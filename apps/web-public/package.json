@@ -1,0 +1,30 @@
+{
+  "name": "@orkestrator/web-public",
+  "version": "2.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bunx tsc && bunx vite build",
+    "dev": "bunx vite --host 127.0.0.1 --port 1422",
+    "preview": "bunx vite preview --port 4422",
+    "test": "bun test src",
+    "test:workspace": "bun test src",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "@orkestrator/protocol": "workspace:*",
+    "@orkestrator/web": "workspace:*",
+    "lucide-react": "^0.562.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.18",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "tailwindcss": "^4.1.18",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4"
+  }
+}

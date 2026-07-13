@@ -49,7 +49,8 @@ export interface OrkestratorGatewayOptions {
   env?: NodeJS.ProcessEnv;
   interfaces?: NetworkInterfaceMap;
   logger?: Pick<Console, "debug" | "error" | "info" | "warn">;
-  unsafeAllowNonTailscaleBind?: boolean;
+  allowNonTailscaleBind?: boolean;
+  allowedOrigins?: string[];
 }
 
 const AUTH_COOKIE = "orkestrator_gateway_auth";
@@ -58,6 +59,8 @@ const DEFAULT_GATEWAY_PORT = 34121;
 const GATEWAY_PORT_FALLBACK_ATTEMPTS = 20;
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const KEEPALIVE_MS = 25_000;
+const CORS_ALLOWED_METHODS = "GET, POST, PUT, OPTIONS";
+const CORS_ALLOWED_HEADERS = "Authorization, Content-Type";
 
 class InvalidRequestBodyError extends Error {}
 class RequestBodyTooLargeError extends Error {}
@@ -120,6 +123,26 @@ function formatHostForUrl(address: string): string {
 
 function isLoopbackAddress(address: string): boolean {
   return address === "127.0.0.1" || address === "::1";
+}
+
+function parseAllowedOrigins(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((origin) => origin.trim().replace(/\/$/, ""))
+    .filter(Boolean);
+}
+
+function originMatchesRule(origin: URL, rule: string): boolean {
+  if (rule === "*") return true;
+  if (origin.origin === rule) return true;
+
+  const wildcard = /^(https?):\/\/\*\.([^/:]+)(?::(\d+))?$/.exec(rule);
+  if (!wildcard) return false;
+  const [, protocol, hostname, port] = wildcard;
+  return origin.protocol === `${protocol}:`
+    && origin.hostname.endsWith(`.${hostname}`)
+    && origin.hostname !== hostname
+    && (port === undefined || origin.port === port);
 }
 
 function mimeType(filePath: string): string {
@@ -456,6 +479,13 @@ function sanitizeProxyResponseHeaders(headers: IncomingHttpHeaders, target: URL,
   }
   delete sanitized.connection;
   delete sanitized["transfer-encoding"];
+  // CORS is owned by the gateway. A proxied loopback service must not be able
+  // to weaken or replace the origin policy selected for the public client.
+  for (const header of Object.keys(sanitized)) {
+    if (header.toLowerCase().startsWith("access-control-")) {
+      delete sanitized[header];
+    }
+  }
   return sanitized;
 }
 
@@ -472,7 +502,8 @@ export class OrkestratorGateway {
   private readonly env: NodeJS.ProcessEnv;
   private readonly interfaces?: NetworkInterfaceMap;
   private readonly logger: Pick<Console, "debug" | "error" | "info" | "warn">;
-  private readonly unsafeAllowNonTailscaleBind: boolean;
+  private readonly allowNonTailscaleBind: boolean;
+  private readonly allowedOrigins: string[];
   private servers = new Set<Server>();
   private token = "";
   private authFile = "";
@@ -495,7 +526,12 @@ export class OrkestratorGateway {
     this.env = options.env ?? process.env;
     this.interfaces = options.interfaces;
     this.logger = options.logger ?? console;
-    this.unsafeAllowNonTailscaleBind = options.unsafeAllowNonTailscaleBind ?? false;
+    this.allowNonTailscaleBind = options.allowNonTailscaleBind ?? false;
+    this.allowedOrigins = (
+      options.allowedOrigins ?? parseAllowedOrigins(this.env.ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS)
+    )
+      .map((origin) => origin.trim().replace(/\/$/, ""))
+      .filter(Boolean);
   }
 
   async start(): Promise<GatewayStartInfo | null> {
@@ -521,7 +557,7 @@ export class OrkestratorGateway {
       this.logger.warn(`[RemoteGateway] No Tailscale address found; falling back to ${this.fallbackBindAddress}`);
     }
     const safeLoopbackFallback = usingFallback && bindAddress !== undefined && isLoopbackAddress(bindAddress);
-    if (bindAddress && !this.unsafeAllowNonTailscaleBind && !safeLoopbackFallback && !isTailscaleAddress(bindAddress)) {
+    if (bindAddress && !this.allowNonTailscaleBind && !safeLoopbackFallback && !isTailscaleAddress(bindAddress)) {
       throw new Error(`Refusing to bind gateway to non-Tailscale address: ${bindAddress}`);
     }
 
@@ -715,8 +751,62 @@ export class OrkestratorGateway {
     return tokenMatches(this.token, token);
   }
 
+  private isOriginAllowed(request: IncomingMessage, originValue: string): boolean {
+    let origin: URL;
+    try {
+      origin = new URL(originValue);
+    } catch {
+      return false;
+    }
+
+    // Keep the existing renderer served by the backend working without extra
+    // configuration, including when TLS is terminated by Tailscale Serve.
+    if (request.headers.host && origin.host === request.headers.host) return true;
+    return this.allowedOrigins.some((rule) => originMatchesRule(origin, rule));
+  }
+
+  private applyCorsHeaders(request: IncomingMessage, response: ServerResponse): boolean {
+    const origin = request.headers.origin;
+    if (!origin) return true;
+    if (!this.isOriginAllowed(request, origin)) return false;
+
+    response.setHeader("access-control-allow-origin", origin);
+    response.setHeader("vary", "Origin");
+    return true;
+  }
+
+  private handleCorsPreflight(request: IncomingMessage, response: ServerResponse): void {
+    const origin = request.headers.origin;
+    if (!origin || !this.isOriginAllowed(request, origin)) {
+      jsonResponse(response, 403, { error: "Origin not allowed" });
+      return;
+    }
+
+    response.writeHead(204, {
+      "access-control-allow-origin": origin,
+      "access-control-allow-methods": CORS_ALLOWED_METHODS,
+      "access-control-allow-headers": CORS_ALLOWED_HEADERS,
+      "access-control-max-age": "600",
+      ...(request.headers["access-control-request-private-network"] === "true"
+        ? { "access-control-allow-private-network": "true" }
+        : {}),
+      vary: "Origin, Access-Control-Request-Private-Network",
+    });
+    response.end();
+  }
+
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://orkestrator.local");
+
+    if (request.method === "OPTIONS" && url.pathname.startsWith(`${API_PREFIX}/`)) {
+      this.handleCorsPreflight(request, response);
+      return;
+    }
+
+    if (url.pathname.startsWith(`${API_PREFIX}/`) && !this.applyCorsHeaders(request, response)) {
+      jsonResponse(response, 403, { error: "Origin not allowed" });
+      return;
+    }
 
     if (url.pathname === `${API_PREFIX}/login`) {
       await this.handleLogin(request, response);
@@ -744,6 +834,16 @@ export class OrkestratorGateway {
 
     if (url.pathname === `${API_PREFIX}/gateway-settings`) {
       await this.handleGatewaySettings(request, response);
+      return;
+    }
+
+    if (url.pathname === `${API_PREFIX}/status`) {
+      if (request.method !== "GET") {
+        response.writeHead(405, { allow: "GET" });
+        response.end();
+        return;
+      }
+      jsonResponse(response, 200, { ok: true });
       return;
     }
 

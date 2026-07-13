@@ -9,6 +9,7 @@ A desktop application for managing isolated Docker-based development environment
 - **Embedded Terminal**: Full xterm.js terminal with ANSI color support
 - **GitHub Integration**: Create and view pull requests directly from the UI
 - **Remote Web Gateway**: Access the app from another browser on your Tailscale network
+- **Static Public Client**: Deploy `apps/web-public` to Vercel and connect the browser directly to a tailnet backend
 - **Configuration**: Global and per-repository settings for SSH keys, resource limits, and branches
 - **Security**: Network firewall restricts outbound traffic to approved domains only
 
@@ -102,7 +103,7 @@ bun run start:web
 By default the service detects and binds to the first Tailscale address on port `34121`. For a local-only development instance, bind explicitly:
 
 ```bash
-bun run --cwd apps/backend start --host 127.0.0.1 --port 34121 --unsafe-allow-non-tailscale-bind
+bun run --cwd apps/backend start --host 127.0.0.1 --port 34121 --allow-non-tailscale-bind
 ```
 
 By default the gateway listens on port `34121`. Look for a startup log like:
@@ -113,6 +114,14 @@ By default the gateway listens on port `34121`. Look for a startup log like:
 ```
 
 Open the logged URL from another browser on the same tailnet, then enter the token from the host machine. See [Standalone Backend and Remote Gateway](docs/remote-gateway.md) for service flags, environment variables, security notes, and troubleshooting.
+
+To deploy a static frontend separately, use `apps/web-public`. Vercel only delivers its asset bundle; the browser connects directly to the selected HTTPS backend on the user's local or Tailscale network. The backend traffic is never routed through Vercel. See the public-client section in [Standalone Backend and Remote Gateway](docs/remote-gateway.md#vercel-hosted-public-client).
+
+The standalone backend can configure the tailnet-only HTTPS listener itself. The convenience script assumes the public client is hosted at `https://orkestrator.dev`:
+
+```bash
+bun run start:web-public
+```
 
 ### Configuration
 

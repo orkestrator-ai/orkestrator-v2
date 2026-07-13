@@ -105,7 +105,7 @@ describe("Electron backend process supervisor", () => {
       dataDir,
       gatewayHost: "127.0.0.1",
       gatewayPort: 0,
-      unsafeAllowNonTailscaleBind: true,
+      allowNonTailscaleBind: true,
       onEvent: () => undefined,
     });
 
@@ -145,7 +145,7 @@ describe("Electron backend process supervisor", () => {
       dataDir,
       gatewayHost: "127.0.0.1",
       gatewayPort: 0,
-      unsafeAllowNonTailscaleBind: true,
+      allowNonTailscaleBind: true,
       onEvent: () => undefined,
       onUnexpectedExit,
     };
@@ -180,7 +180,7 @@ describe("Electron backend process supervisor", () => {
       dataDir,
       gatewayHost: "127.0.0.1",
       gatewayPort: 0,
-      unsafeAllowNonTailscaleBind: true,
+      allowNonTailscaleBind: true,
       onEvent: () => undefined,
     });
 
@@ -205,7 +205,7 @@ describe("Electron backend process supervisor", () => {
       dataDir,
       gatewayHost: "127.0.0.1",
       gatewayPort: 0,
-      unsafeAllowNonTailscaleBind: true,
+      allowNonTailscaleBind: true,
       onEvent: () => undefined,
     })).rejects.toThrow("Backend service exited");
     expect(backendProcess.getInfo()).toBeNull();

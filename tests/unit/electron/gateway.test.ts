@@ -105,7 +105,7 @@ async function startGateway(options: Partial<ConstructorParameters<typeof Orkest
     port: 0,
     env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
     logger: createLogger(),
-    unsafeAllowNonTailscaleBind: true,
+    allowNonTailscaleBind: true,
     ...options,
   });
   gateways.push(gateway);
@@ -165,7 +165,7 @@ describe("remote gateway", () => {
     expect(JSON.parse(await readFile(generated.authFile, "utf8"))).toEqual({ token: repaired.token });
   });
 
-  test("honors startup guardrails for disabled, missing, invalid, and unsafe binds", async () => {
+  test("honors startup guardrails for disabled, missing, invalid, and non-Tailscale binds", async () => {
     const dataDir = await createTempDir("ork-gateway-guard-");
     const rendererRoot = await createRendererRoot(dataDir);
     const logger = createLogger();
@@ -203,7 +203,7 @@ describe("remote gateway", () => {
     await expect(loopbackFallback.start()).resolves.toMatchObject({ bindAddress: "127.0.0.1" });
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("falling back to 127.0.0.1"));
 
-    const unsafeFallback = new OrkestratorGateway({
+    const nonTailscaleFallback = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
       dataDir,
       rendererRoot,
@@ -212,9 +212,9 @@ describe("remote gateway", () => {
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
       logger,
     });
-    await expect(unsafeFallback.start()).rejects.toThrow("Refusing to bind gateway to non-Tailscale address");
+    await expect(nonTailscaleFallback.start()).rejects.toThrow("Refusing to bind gateway to non-Tailscale address");
 
-    const unsafeBind = new OrkestratorGateway({
+    const nonTailscaleBind = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
       dataDir,
       rendererRoot,
@@ -222,7 +222,7 @@ describe("remote gateway", () => {
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
       logger,
     });
-    await expect(unsafeBind.start()).rejects.toThrow("Refusing to bind gateway to non-Tailscale address");
+    await expect(nonTailscaleBind.start()).rejects.toThrow("Refusing to bind gateway to non-Tailscale address");
 
     const invalidPort = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
@@ -334,7 +334,7 @@ describe("remote gateway", () => {
       port: 0,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
       logger: { debug: mock(() => undefined), error: mock(() => undefined), info: mock(() => undefined), warn: mock(() => undefined) },
-      unsafeAllowNonTailscaleBind: true,
+      allowNonTailscaleBind: true,
     });
     gateways.push(gateway);
     const info = await gateway.start();
@@ -394,6 +394,54 @@ describe("remote gateway", () => {
     });
     expect(backendError.status).toBe(500);
     expect(backendError.json()).toEqual({ error: "backend failed" });
+  });
+
+  test("allows configured public client origins without proxying browser traffic", async () => {
+    const { info } = await startGateway({
+      allowedOrigins: ["https://orkestrator.example", "https://*.vercel.app"],
+    });
+    const endpoint = `${info.url}__orkestrator/status`;
+
+    const preflight = await requestUrl(endpoint, {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://orkestrator.example",
+        "access-control-request-method": "GET",
+        "access-control-request-headers": "authorization",
+        "access-control-request-private-network": "true",
+      },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers["access-control-allow-origin"]).toBe("https://orkestrator.example");
+    expect(preflight.headers["access-control-allow-private-network"]).toBe("true");
+
+    const connected = await requestUrl(endpoint, {
+      headers: {
+        origin: "https://orkestrator.example",
+        authorization: `Bearer ${info.token}`,
+      },
+    });
+    expect(connected.status).toBe(200);
+    expect(connected.json()).toEqual({ ok: true });
+    expect(connected.headers["access-control-allow-origin"]).toBe("https://orkestrator.example");
+
+    const preview = await requestUrl(endpoint, {
+      headers: {
+        origin: "https://orkestrator-git-main-team.vercel.app",
+        authorization: `Bearer ${info.token}`,
+      },
+    });
+    expect(preview.status).toBe(200);
+
+    const rejected = await requestUrl(endpoint, {
+      headers: {
+        origin: "https://untrusted.example",
+        authorization: `Bearer ${info.token}`,
+      },
+    });
+    expect(rejected.status).toBe(403);
+    expect(rejected.json()).toEqual({ error: "Origin not allowed" });
+    expect(rejected.headers["access-control-allow-origin"]).toBeUndefined();
   });
 
   test("sets and clears the auth cookie through login and logout", async () => {
@@ -706,7 +754,7 @@ describe("remote gateway", () => {
       port: 0,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
       logger: { debug: mock(() => undefined), error: mock(() => undefined), info: mock(() => undefined), warn: mock(() => undefined) },
-      unsafeAllowNonTailscaleBind: true,
+      allowNonTailscaleBind: true,
     });
     gateways.push(gateway);
     const info = await gateway.start();
@@ -803,7 +851,7 @@ describe("remote gateway", () => {
       port: 0,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
       logger: { debug: mock(() => undefined), error: mock(() => undefined), info: mock(() => undefined), warn: mock(() => undefined) },
-      unsafeAllowNonTailscaleBind: true,
+      allowNonTailscaleBind: true,
     });
     gateways.push(gateway);
     const info = await gateway.start();

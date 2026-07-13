@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, waitFor } from "@testing-library/react";
 import { useRef } from "react";
 import { mockReadImage } from "../../mocks/clipboard";
 
@@ -18,7 +18,9 @@ mock.module("sonner", () => ({
   },
 }));
 
-import { useNativeComposeBarPaste } from "../../../apps/web/src/hooks/useNativeComposeBarPaste";
+const { useNativeComposeBarPaste } = await import(
+  "../../../apps/web/src/hooks/useNativeComposeBarPaste"
+);
 
 if (typeof globalThis.ImageData === "undefined") {
   (globalThis as Record<string, unknown>).ImageData = class ImageData {
@@ -180,8 +182,9 @@ describe("useNativeComposeBarPaste", () => {
   });
 
   test("shows an error toast when the encoded image exceeds the size limit", async () => {
-    HTMLCanvasElement.prototype.toDataURL = (() =>
-      `data:image/png;base64,${"A".repeat(12 * 1024 * 1024)}`) as typeof HTMLCanvasElement.prototype.toDataURL;
+    const oversizedToDataURL = mock(() =>
+      `data:image/png;base64,${"A".repeat(12 * 1024 * 1024)}`);
+    HTMLCanvasElement.prototype.toDataURL = oversizedToDataURL as typeof HTMLCanvasElement.prototype.toDataURL;
 
     const { getByTestId } = render(<HookHarness containerId="container-1" />);
     const input = getByTestId("compose-input") as HTMLTextAreaElement;
@@ -191,15 +194,17 @@ describe("useNativeComposeBarPaste", () => {
       new Event("paste", { bubbles: true, cancelable: true }),
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(toastError).toHaveBeenCalledWith(
-      "Image too large",
-      expect.objectContaining({
-        description: expect.stringContaining("Maximum is 8MB."),
-      }),
-    );
+    expect(oversizedToDataURL).toHaveBeenCalledTimes(1);
     expect(mockWriteContainerFile).not.toHaveBeenCalled();
     expect(onAttach).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(toastError).toHaveBeenCalledWith(
+        "Image too large",
+        expect.objectContaining({
+          description: expect.stringContaining("Maximum is 8MB."),
+        }),
+      );
+    });
   });
 
   test("logs unexpected write failures without emitting an attachment", async () => {

@@ -67,6 +67,33 @@ async function createRendererRoot(dataDir: string, index = "<div id=\"root\"></d
   return rendererRoot;
 }
 
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
+async function occupyContiguousPorts(count: number): Promise<{ start: number; servers: Server[] }> {
+  for (let start = 42_000; start <= 62_000 - count; start += count) {
+    const servers: Server[] = [];
+    try {
+      for (let offset = 0; offset < count; offset += 1) {
+        const server = createServer((_request, response) => response.end("occupied"));
+        await new Promise<void>((resolve, reject) => {
+          server.once("error", reject);
+          server.listen(start + offset, "127.0.0.1", () => {
+            server.off("error", reject);
+            resolve();
+          });
+        });
+        servers.push(server);
+      }
+      return { start, servers };
+    } catch {
+      await Promise.all(servers.map(closeServer));
+    }
+  }
+  throw new Error(`Unable to reserve ${count} contiguous test ports`);
+}
+
 async function startGateway(options: Partial<ConstructorParameters<typeof OrkestratorGateway>[0]> = {}) {
   const dataDir = options.dataDir ?? await createTempDir("ork-gateway-");
   const rendererRoot = options.rendererRoot ?? await createRendererRoot(dataDir);
@@ -223,7 +250,7 @@ describe("remote gateway", () => {
     expect(browserResponse.status).toBe(200);
   });
 
-  test("keeps desktop control available when the browser port is occupied", async () => {
+  test("keeps desktop control available and selects another browser port when the preferred port is occupied", async () => {
     const occupied = createServer((_request, response) => response.end("occupied"));
     auxiliaryServers.push(occupied);
     await new Promise<void>((resolve) => occupied.listen(0, "127.0.0.1", resolve));
@@ -236,12 +263,52 @@ describe("remote gateway", () => {
       controlPort: 0,
     });
 
-    expect(info.browserUrl).toBeUndefined();
-    expect(info.browserError).toContain(`port ${occupiedAddress.port}`);
+    expect(info.browserUrl).toBeTruthy();
+    expect(info.browserError).toBeUndefined();
+    expect(new URL(info.browserUrl!).port).not.toBe(String(occupiedAddress.port));
+    const headers = { authorization: `Bearer ${info.token}` };
     const response = await requestUrl(info.url, {
-      headers: { authorization: `Bearer ${info.token}` },
+      headers,
+    });
+    const browserResponse = await requestUrl(info.browserUrl!, {
+      headers,
     });
     expect(response.status).toBe(200);
+    expect(browserResponse.status).toBe(200);
+  });
+
+  test("uses an ephemeral browser port after every nearby fallback port is occupied", async () => {
+    const occupied = await occupyContiguousPorts(21);
+    auxiliaryServers.push(...occupied.servers);
+    const logger = createLogger();
+
+    const { info } = await startGateway({ port: occupied.start, logger });
+    const selectedPort = Number(new URL(info.browserUrl!).port);
+
+    expect(selectedPort < occupied.start || selectedPort > occupied.start + 20).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("nearby ports were in use"));
+  });
+
+  test("falls back to an ephemeral port when port 65535 is occupied", async () => {
+    const occupied = createServer((_request, response) => response.end("occupied"));
+    try {
+      await new Promise<void>((resolve, reject) => {
+        occupied.once("error", reject);
+        occupied.listen(65_535, "127.0.0.1", () => {
+          occupied.off("error", reject);
+          resolve();
+        });
+      });
+      auxiliaryServers.push(occupied);
+    } catch (error) {
+      if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "EADDRINUSE") {
+        throw error;
+      }
+    }
+
+    const { info } = await startGateway({ port: 65_535 });
+
+    expect(new URL(info.browserUrl!).port).not.toBe("65535");
   });
 
   test("rejects a non-loopback control listener", async () => {

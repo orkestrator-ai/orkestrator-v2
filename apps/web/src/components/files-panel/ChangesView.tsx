@@ -2,14 +2,18 @@ import { useFilesPanelStore } from "@/stores";
 import { useTerminalContext } from "@/contexts";
 import { ChangedFileItem } from "./ChangedFileItem";
 import { Loader2, GitBranch } from "lucide-react";
+import { useMediaQuery } from "@/hooks";
 
 export function ChangesView() {
-  const { changes, isLoadingChanges } = useFilesPanelStore();
+  const { changes, isLoadingChanges, closePanel } = useFilesPanelStore();
   const { createFileTab } = useTerminalContext();
+  const isMobile = useMediaQuery("(max-width: 767px)");
 
   const handleFileClick = (path: string, status: string) => {
+    if (!createFileTab) return;
     // Open in diff mode when clicking from Changes view
-    createFileTab?.(path, { isDiff: true, gitStatus: status });
+    createFileTab(path, { isDiff: true, gitStatus: status });
+    if (isMobile) closePanel();
   };
 
   if (isLoadingChanges) {

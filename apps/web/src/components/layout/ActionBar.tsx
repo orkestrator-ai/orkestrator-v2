@@ -28,7 +28,31 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { GitPullRequest, GitMerge, GitPullRequestClosed, ExternalLink, Loader2, SlidersHorizontal, Plus, Shield, Code2, FolderTree, Container, Eye, Upload, Play, Trash2, AlertTriangle, FolderGit2, FilePlus2, Copy, StickyNote } from "lucide-react";
+import {
+  AlertTriangle,
+  Code2,
+  Columns3,
+  Container,
+  Copy,
+  ExternalLink,
+  Eye,
+  FilePlus2,
+  FolderGit2,
+  FolderTree,
+  GitMerge,
+  GitPullRequest,
+  GitPullRequestClosed,
+  ListChecks,
+  Loader2,
+  Play,
+  Plus,
+  Shield,
+  SlidersHorizontal,
+  StickyNote,
+  Trash2,
+  Upload,
+  Workflow,
+} from "lucide-react";
 import { toast } from "sonner";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon, DockerIcon } from "@/components/icons/AgentIcons";
 import { useUIStore, useEnvironmentStore, useProjectStore, useConfigStore, useFilesPanelStore, type ProjectBoardTab } from "@/stores";
@@ -48,6 +72,7 @@ import { DockerStatsDialog } from "@/components/docker";
 import * as backend from "@/lib/backend";
 import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
 import { getEnvironmentPortAddress } from "@/lib/environment-address";
+import { cn } from "@/lib/utils";
 
 function isEditableShortcutTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
@@ -149,7 +174,12 @@ function ToolbarTooltipTrigger({
   );
 }
 
-export function ActionBar() {
+interface ActionBarProps {
+  presentation?: "bar" | "grid";
+}
+
+export function ActionBar({ presentation = "bar" }: ActionBarProps) {
+  const isGrid = presentation === "grid";
   const { selectedEnvironmentId, selectedProjectId, projectBoardTab, setProjectBoardTab, setProjectBoardNotesOpen } = useUIStore();
   const { getEnvironmentById, updateEnvironment, isWorkspaceReady, isSetupScriptsRunning, setEnvironmentPR } = useEnvironmentStore(
     useShallow((state) => ({
@@ -681,27 +711,49 @@ export function ActionBar() {
 
   return (
     <>
-      <div data-mobile-toolbar className="flex h-14 shrink-0 items-center border-b border-border/80 bg-[#212124] md:h-12">
+      <div
+        data-mobile-toolbar
+        data-presentation={presentation}
+        className={cn(
+          "bg-[#212124]",
+          isGrid
+            ? "max-h-[calc(100dvh-4rem)] overflow-y-auto rounded-xl border border-border/80 shadow-2xl shadow-black/50 [&_button]:h-11 [&_button]:w-full [&_button]:justify-start [&_button]:gap-2 [&_button]:rounded-lg [&_button]:px-3"
+            : "flex h-14 shrink-0 items-center border-b border-border/80 md:h-12",
+        )}
+      >
         {/* Scrollable toolbar area */}
         <div
           ref={scrollContainerRef}
-          className={`flex min-w-0 flex-1 items-center gap-2 overflow-x-auto px-2 md:px-4 [&::-webkit-scrollbar]:hidden ${isDragging ? "cursor-grabbing select-none" : ""}`}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseLeave}
+          className={cn(
+            isGrid
+              ? "grid min-w-0 grid-cols-2 gap-2 p-2"
+              : "flex min-w-0 flex-1 items-center gap-2 overflow-x-auto px-2 md:px-4 [&::-webkit-scrollbar]:hidden",
+            isDragging && !isGrid && "cursor-grabbing select-none",
+          )}
+          onMouseDown={isGrid ? undefined : handleMouseDown}
+          onMouseMove={isGrid ? undefined : handleMouseMove}
+          onMouseUp={isGrid ? undefined : handleMouseUp}
+          onMouseLeave={isGrid ? undefined : handleMouseLeave}
           style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
         >
           {/* Left side: Controls */}
-          <div className="flex shrink-0 items-center gap-2">
+          <div
+            className={cn(
+              isGrid
+                ? "col-span-2 grid grid-cols-2 gap-2"
+                : "flex shrink-0 items-center gap-2",
+            )}
+          >
           <ToolbarTooltipTrigger tooltip="Global settings">
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8"
                 onClick={() => setGlobalSettingsOpen(true)}
+                aria-label="Global settings"
               >
                 <SlidersHorizontal className="h-4 w-4" />
+                {isGrid && <span className="truncate text-xs">Global settings</span>}
               </Button>
           </ToolbarTooltipTrigger>
 
@@ -711,41 +763,49 @@ export function ActionBar() {
                 size="icon"
                 className="h-8 w-8"
                 onClick={() => setDockerStatsOpen(true)}
+                aria-label="Docker configuration"
               >
                 <DockerIcon className="h-4 w-4" />
+                {isGrid && <span className="truncate text-xs">Docker</span>}
               </Button>
           </ToolbarTooltipTrigger>
 
-          {repoName && (
-            <ToolbarTooltipTrigger tooltip="Repository settings">
+          {(isGrid || repoName) && (
+            <ToolbarTooltipTrigger tooltip={selectedProject ? "Repository settings" : "Select a project first"}>
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
                   onClick={() => setRepoSettingsOpen(true)}
+                  aria-label="Repository settings"
+                  disabled={!selectedProject}
                 >
                   <FolderGit2 className="h-4 w-4" />
+                  {isGrid && <span className="truncate text-xs">Repository settings</span>}
                 </Button>
             </ToolbarTooltipTrigger>
           )}
 
-          {selectedEnvironment && (
-            <ToolbarTooltipTrigger tooltip="Environment settings">
+          {(isGrid || selectedEnvironment) && (
+            <ToolbarTooltipTrigger tooltip={selectedEnvironment ? "Environment settings" : "Select an environment first"}>
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
                   onClick={() => setEnvSettingsOpen(true)}
+                  aria-label="Environment settings"
+                  disabled={!selectedEnvironment}
                 >
                   <Container className="h-4 w-4" />
+                  {isGrid && <span className="truncate text-xs">Env. settings</span>}
                 </Button>
             </ToolbarTooltipTrigger>
           )}
 
           {/* Terminal tab buttons */}
-          {selectedEnvironment && (
+          {(isGrid || selectedEnvironment) && (
             <>
-              <div className="mx-2 h-4 w-px bg-border" />
+              <div className={cn("mx-2 h-4 w-px bg-border", isGrid && "hidden")} />
               <ToolbarTooltipTrigger
                 tooltip={
                   <>
@@ -759,9 +819,11 @@ export function ActionBar() {
                     size="icon"
                     className="h-8 w-8"
                     onClick={() => createTab?.("plain")}
-                    disabled={!canCreateTab}
+                    disabled={!selectedEnvironment || !canCreateTab}
+                    aria-label="New terminal tab"
                   >
                     <Plus className="h-4 w-4" />
+                    {isGrid && <span className="truncate text-xs">New terminal</span>}
                   </Button>
               </ToolbarTooltipTrigger>
 
@@ -778,9 +840,11 @@ export function ActionBar() {
                     size="icon"
                     className="h-8 w-8"
                     onClick={() => createTab?.("root")}
-                    disabled={!canCreateTab}
+                    disabled={!selectedEnvironment || !canCreateTab}
+                    aria-label="New root terminal"
                   >
                     <Shield className="h-4 w-4" />
+                    {isGrid && <span className="truncate text-xs">Root terminal</span>}
                   </Button>
               </ToolbarTooltipTrigger>
 
@@ -798,9 +862,11 @@ export function ActionBar() {
                     size="icon"
                     className="h-8 w-8"
                     onClick={() => handleCreateAgentTab("claude")}
-                    disabled={!canCreateTab}
+                    disabled={!selectedEnvironment || !canCreateTab}
+                    aria-label="New tab with Claude"
                   >
                     <ClaudeIcon className="h-4 w-4" />
+                    {isGrid && <span className="truncate text-xs">New Claude tab</span>}
                   </Button>
                 </ToolbarContextMenuTrigger>
                 <ContextMenuContent>
@@ -833,9 +899,11 @@ export function ActionBar() {
                     size="icon"
                     className="h-8 w-8"
                     onClick={() => handleCreateAgentTab("opencode")}
-                    disabled={!canCreateTab}
+                    disabled={!selectedEnvironment || !canCreateTab}
+                    aria-label="New tab with OpenCode"
                   >
                     <OpenCodeIcon className="h-4 w-4" />
+                    {isGrid && <span className="truncate text-xs">New OpenCode tab</span>}
                   </Button>
                 </ToolbarContextMenuTrigger>
                 <ContextMenuContent>
@@ -864,9 +932,11 @@ export function ActionBar() {
                     size="icon"
                     className="h-8 w-8"
                     onClick={() => handleCreateAgentTab("codex")}
-                    disabled={!canCreateTab}
+                    disabled={!selectedEnvironment || !canCreateTab}
+                    aria-label="New tab with Codex"
                   >
                     <CodexIcon className="h-4 w-4" />
+                    {isGrid && <span className="truncate text-xs">New Codex tab</span>}
                   </Button>
                 </ToolbarContextMenuTrigger>
                 <ContextMenuContent>
@@ -896,9 +966,11 @@ export function ActionBar() {
                     size="icon"
                     className="h-8 w-8"
                     onClick={() => handleReview()}
-                    disabled={!canCreateTab}
+                    disabled={!selectedEnvironment || !canCreateTab}
+                    aria-label="Code review"
                   >
                     <Eye className="h-4 w-4" />
+                    {isGrid && <span className="truncate text-xs">Code review</span>}
                   </Button>
                 </ToolbarContextMenuTrigger>
                 <ContextMenuContent>
@@ -940,12 +1012,15 @@ export function ActionBar() {
                     className={`h-8 w-8 ${!canRunCommands ? "opacity-50 cursor-not-allowed" : ""}`}
                     onClick={handleRunButtonClick}
                     aria-disabled={!canRunCommands}
+                    aria-label="Run commands"
+                    disabled={!selectedEnvironment}
                   >
                     {isLoadingRunCommands || setupRunning ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
                       <Play className="h-4 w-4" />
                     )}
+                    {isGrid && <span className="truncate text-xs">Run commands</span>}
                   </Button>
                 </ToolbarContextMenuTrigger>
                 <ContextMenuContent>
@@ -979,7 +1054,7 @@ export function ActionBar() {
                   </ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>
-              <div className="mx-2 h-4 w-px bg-border" />
+              <div className={cn("mx-2 h-4 w-px bg-border", isGrid && "hidden")} />
 
               <ToolbarTooltipTrigger
                 tooltip={
@@ -995,11 +1070,17 @@ export function ActionBar() {
                     className="h-8 w-8"
                     onClick={handleOpenInEditor}
                     disabled={!canOpenEditor || isOpeningEditor}
+                    aria-label={`Open in ${config.global.preferredEditor === "cursor" ? "Cursor" : "VS Code"}`}
                   >
                     {isOpeningEditor ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
                       <Code2 className="h-4 w-4" />
+                    )}
+                    {isGrid && (
+                      <span className="truncate text-xs">
+                        Open in {config.global.preferredEditor === "cursor" ? "Cursor" : "VS Code"}
+                      </span>
                     )}
                   </Button>
               </ToolbarTooltipTrigger>
@@ -1024,14 +1105,19 @@ export function ActionBar() {
                     aria-label={environmentPortAddress ? "Copy URL" : "No mapped URL"}
                   >
                     <Copy className="h-4 w-4" />
+                    {isGrid && (
+                      <span className="truncate text-xs">
+                        {environmentPortAddress ? "Copy URL" : "No mapped URL"}
+                      </span>
+                    )}
                   </Button>
               </ToolbarTooltipTrigger>
 
-              <div className="mx-2 h-4 w-px bg-border" />
+              <div className={cn("mx-2 h-4 w-px bg-border", isGrid && "hidden")} />
             </>
           )}
 
-          {selectedEnvironment && !hasPR && (
+          {(isGrid || selectedEnvironment) && !hasPR && (
             <ContextMenu>
               <ToolbarContextMenuTrigger
                 tooltip={
@@ -1043,14 +1129,14 @@ export function ActionBar() {
                 }
               >
                 <Button
-                  variant="default"
+                  variant={isGrid ? "ghost" : "default"}
                   size="sm"
                   className="gap-2"
                   onClick={() => handleCreatePR()}
                   disabled={!isRunning || !canCreateTab}
                 >
                   <GitPullRequest className="h-4 w-4" />
-                  Create PR
+                  <span className={cn(isGrid && "truncate text-xs")}>Create PR</span>
                 </Button>
               </ToolbarContextMenuTrigger>
               <ContextMenuContent>
@@ -1082,7 +1168,7 @@ export function ActionBar() {
                 }
               >
                   <Button
-                    variant={isPRFinished ? "secondary" : "outline"}
+                    variant={isGrid ? "ghost" : isPRFinished ? "secondary" : "outline"}
                     size="sm"
                     className="gap-2"
                     onClick={viewPR}
@@ -1094,7 +1180,9 @@ export function ActionBar() {
                     ) : (
                       <ExternalLink className="h-4 w-4" />
                     )}
-                    {isPRMerged ? "PR Merged" : isPRClosed ? "PR Closed" : "View PR"}
+                    <span className={cn(isGrid && "truncate text-xs")}>
+                      {isPRMerged ? "PR Merged" : isPRClosed ? "PR Closed" : "View PR"}
+                    </span>
                   </Button>
               </ToolbarTooltipTrigger>
 
@@ -1109,21 +1197,24 @@ export function ActionBar() {
                   }
                 >
                     <Button
-                      variant="default"
+                      variant={isGrid ? "ghost" : "default"}
                       size="sm"
-                      className="gap-2 bg-green-600 text-white hover:bg-green-700"
+                      className={cn(
+                        "gap-2",
+                        !isGrid && "bg-green-600 text-white hover:bg-green-700",
+                      )}
                       onClick={() => !isMerging && setMergeDialogOpen(true)}
                       disabled={!isRunning || isMerging}
                     >
                       {isMerging ? (
                         <>
                           <Loader2 className="h-4 w-4 animate-spin" />
-                          Merging...
+                          <span className={cn(isGrid && "truncate text-xs")}>Merging...</span>
                         </>
                       ) : (
                         <>
                           <GitMerge className="h-4 w-4" />
-                          Merge PR
+                          <span className={cn(isGrid && "truncate text-xs")}>Merge PR</span>
                         </>
                       )}
                     </Button>
@@ -1142,14 +1233,14 @@ export function ActionBar() {
                     }
                   >
                     <Button
-                      variant="destructive"
+                      variant={isGrid ? "ghost" : "destructive"}
                       size="sm"
                       className="gap-2"
                       onClick={() => handleResolveConflicts()}
                       disabled={!isRunning || !canCreateTab}
                     >
                       <AlertTriangle className="h-4 w-4" />
-                      Resolve
+                      <span className={cn(isGrid && "truncate text-xs")}>Resolve</span>
                     </Button>
                   </ToolbarContextMenuTrigger>
                   <ContextMenuContent>
@@ -1174,13 +1265,13 @@ export function ActionBar() {
                   tooltip={`Delete this environment (PR is ${isPRMerged ? "merged" : "closed"})`}
                 >
                     <Button
-                      variant="destructive"
+                      variant={isGrid ? "ghost" : "destructive"}
                       size="sm"
                       className="gap-2"
                       onClick={() => setCleanupDialogOpen(true)}
                     >
                       <Trash2 className="h-4 w-4" />
-                      Clean Up
+                      <span className={cn(isGrid && "truncate text-xs")}>Clean Up</span>
                     </Button>
                 </ToolbarTooltipTrigger>
               )}
@@ -1197,14 +1288,14 @@ export function ActionBar() {
                     }
                   >
                     <Button
-                      variant="default"
+                      variant={isGrid ? "ghost" : "default"}
                       size="sm"
                       className="gap-2"
                       onClick={() => handlePushChanges()}
                       disabled={!isRunning || !canCreateTab}
                     >
                       <Upload className="h-4 w-4" />
-                      Push Changes
+                      <span className={cn(isGrid && "truncate text-xs")}>Push Changes</span>
                     </Button>
                   </ToolbarContextMenuTrigger>
                   <ContextMenuContent>
@@ -1228,11 +1319,60 @@ export function ActionBar() {
         </div>
 
           {/* Spacer to push right side content to the end */}
-          <div className="min-w-4 flex-1" />
+          <div className={cn("min-w-4 flex-1", isGrid && "hidden")} />
 
           {/* Right side: Board tabs, repo name, and Files toggle */}
-          <div className="flex shrink-0 items-center gap-2">
-            {isProjectBoardView ? (
+          <div
+            className={cn(
+              isGrid
+                ? "col-span-2 grid grid-cols-2 gap-2"
+                : "flex shrink-0 items-center gap-2",
+            )}
+          >
+            {isGrid ? (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setProjectBoardNotesOpen(true)}
+                  aria-label="Project notes"
+                  disabled={!isProjectBoardView || projectBoardTab !== "kanban"}
+                >
+                  <StickyNote className="h-4 w-4" />
+                  <span className="truncate text-xs">Project notes</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setProjectBoardTab("kanban")}
+                  aria-label="Kanban board"
+                  disabled={!isProjectBoardView}
+                >
+                  <Columns3 className="h-4 w-4" />
+                  <span className="truncate text-xs">Kanban board</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setProjectBoardTab("linear")}
+                  aria-label="Linear pipeline"
+                  disabled={!isProjectBoardView}
+                >
+                  <Workflow className="h-4 w-4" />
+                  <span className="truncate text-xs">Linear pipeline</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setProjectBoardTab("features")}
+                  aria-label="Features"
+                  disabled={!isProjectBoardView}
+                >
+                  <ListChecks className="h-4 w-4" />
+                  <span className="truncate text-xs">Features</span>
+                </Button>
+              </>
+            ) : isProjectBoardView ? (
               <>
                 {projectBoardTab === "kanban" && (
                   <Button
@@ -1256,17 +1396,17 @@ export function ActionBar() {
                   </TabsList>
                 </Tabs>
               </>
-            ) : repoName ? (
+            ) : repoName && !isGrid ? (
               <span className="whitespace-nowrap text-sm font-medium text-foreground">
                 {repoName}
               </span>
-            ) : (
+            ) : !isGrid ? (
               <span className="whitespace-nowrap text-sm text-muted-foreground">
                 Select an environment to get started
               </span>
-            )}
+            ) : null}
 
-            {selectedEnvironment && (
+            {(isGrid || selectedEnvironment) && (
               <ToolbarTooltipTrigger
                 tooltip={
                   <>
@@ -1276,15 +1416,29 @@ export function ActionBar() {
                 }
               >
                   <Button
-                    variant={filesPanelOpen ? "secondary" : "ghost"}
+                    variant={isGrid ? "ghost" : filesPanelOpen ? "secondary" : "ghost"}
                     size="icon"
                     className="relative h-8 w-8"
                     onClick={toggleFilesPanel}
+                    aria-label={`${filesPanelOpen ? "Hide" : "Show"} file panel`}
+                    disabled={!selectedEnvironment}
                   >
                     <FolderTree className="h-4 w-4" />
-                    {changes.length > 0 && !filesPanelOpen && (
+                    {isGrid ? (
+                      <span className="flex min-w-0 items-center gap-1.5 text-xs">
+                        <span className="truncate">
+                          {filesPanelOpen ? "Hide files" : "Show files"}
+                        </span>
+                        {changes.length > 0 && !filesPanelOpen && (
+                          <span
+                            className="h-2 w-2 shrink-0 rounded-full bg-primary"
+                            aria-hidden="true"
+                          />
+                        )}
+                      </span>
+                    ) : changes.length > 0 && !filesPanelOpen ? (
                       <span className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-primary" />
-                    )}
+                    ) : null}
                   </Button>
               </ToolbarTooltipTrigger>
             )}

@@ -2,13 +2,17 @@ import { useFilesPanelStore } from "@/stores";
 import { useTerminalContext } from "@/contexts";
 import { FileTreeNode } from "./FileTreeNode";
 import { Loader2, FolderTree } from "lucide-react";
+import { useMediaQuery } from "@/hooks";
 
 export function AllFilesView() {
-  const { fileTree, isLoadingTree } = useFilesPanelStore();
+  const { fileTree, isLoadingTree, closePanel } = useFilesPanelStore();
   const { createFileTab } = useTerminalContext();
+  const isMobile = useMediaQuery("(max-width: 767px)");
 
   const handleFileClick = (path: string) => {
-    createFileTab?.(path);
+    if (!createFileTab) return;
+    createFileTab(path);
+    if (isMobile) closePanel();
   };
 
   if (isLoadingTree) {

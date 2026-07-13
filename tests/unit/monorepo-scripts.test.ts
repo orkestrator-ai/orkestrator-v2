@@ -9,6 +9,7 @@ describe("monorepo orchestration scripts", () => {
   test("backend build bundles the entrypoint and vendors dynamic native dependencies", () => {
     const source = read("apps/backend/scripts/build.ts");
     expect(source).toContain('entrypoints: [path.join(packageRoot, "src/main.ts")]');
+    expect(source).toContain('target: "node"');
     expect(source).toContain('external: ["node-pty"]');
     expect(source).toContain('path.join(output, "node_modules/node-pty")');
     expect(source).toContain('path.join(output, "node_modules/@img")');

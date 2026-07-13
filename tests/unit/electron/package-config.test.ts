@@ -44,6 +44,8 @@ describe("Electron packaging configuration", () => {
     expect(packageJson.build.extraResources).toEqual(expect.arrayContaining([
       expect.objectContaining({ from: "apps/web/dist", to: "web" }),
       expect.objectContaining({ from: "apps/backend/dist", to: "backend" }),
+      expect.objectContaining({ from: "apps/backend/dist/node_modules/node-pty", to: "backend/node_modules/node-pty" }),
+      expect.objectContaining({ from: "apps/backend/dist/node_modules/@img", to: "backend/node_modules/@img" }),
       expect.objectContaining({ from: "bridges/claude-bridge", to: "claude-bridge" }),
       expect.objectContaining({ from: "bridges/codex-bridge", to: "codex-bridge" }),
       expect.objectContaining({ from: "binaries", to: "bin" }),

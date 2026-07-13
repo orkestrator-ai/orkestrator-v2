@@ -10,7 +10,9 @@ await mkdir(output, { recursive: true });
 const result = await Bun.build({
   entrypoints: [path.join(packageRoot, "src/main.ts")],
   outdir: output,
-  target: "bun",
+  // The packaged desktop service runs with Electron's Node runtime so native
+  // addons such as node-pty use Electron's supported Node-API implementation.
+  target: "node",
   sourcemap: "external",
   external: ["node-pty"],
 });

@@ -126,7 +126,11 @@ export class BackendProcess {
     onEvent: (event: string, payload: unknown) => void;
     onUnexpectedExit?: (error: Error) => void;
   }): Promise<BackendHttpClient> {
-    const bun = options.isDev ? "bun" : path.join(options.resourceRoot, "bin", "bun");
+    // Bun currently loads node-pty but does not complete its macOS spawn-helper
+    // handshake, leaving local terminals alive without any input or output.
+    // In packaged builds, run the backend with Electron's Node runtime instead;
+    // electron-builder also rebuilds the vendored native addons for this ABI.
+    const runtime = options.isDev ? "bun" : process.execPath;
     const entry = options.isDev
       ? path.join(options.appRoot, "apps", "backend", "src", "main.ts")
       : path.join(options.resourceRoot, "backend", "main.js");
@@ -138,14 +142,15 @@ export class BackendProcess {
     // Isolate desktop startup from any remote-service configuration in the parent shell.
     const env: NodeJS.ProcessEnv = { ...process.env, ORKESTRATOR_GATEWAY_DISABLED: "0" };
     if (!options.isDev) {
-      env.NODE_PATH = [path.join(options.resourceRoot, "backend", "vendor"), env.NODE_PATH]
+      env.ELECTRON_RUN_AS_NODE = "1";
+      env.NODE_PATH = [path.join(options.resourceRoot, "backend", "node_modules"), env.NODE_PATH]
         .filter(Boolean)
         .join(path.delimiter);
     }
     delete env.ORKESTRATOR_GATEWAY_HOST;
     delete env.ORKESTRATOR_GATEWAY_PORT;
     delete env.ORKESTRATOR_GATEWAY_TOKEN;
-    const child = spawn(bun, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(runtime, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     this.child = child;
     child.stderr?.on("data", (chunk) => process.stderr.write(`[Backend] ${chunk}`));
 

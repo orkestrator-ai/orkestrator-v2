@@ -83,7 +83,10 @@ export function parseOptions(
     port,
     controlHost: valueAfter(args, "--control-host"),
     controlPort,
-    allowNonTailscaleBind: args.includes("--allow-non-tailscale-bind"),
+    // "--unsafe-allow-non-tailscale-bind" is the pre-rename spelling; unknown
+    // flags are ignored, so dropping it would strand existing service units.
+    allowNonTailscaleBind: args.includes("--allow-non-tailscale-bind")
+      || args.includes("--unsafe-allow-non-tailscale-bind"),
     allowedOrigins: (valueAfter(args, "--allowed-origins") ?? env.ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS)
       ?.split(",")
       .map((origin) => origin.trim())

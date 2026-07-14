@@ -155,7 +155,7 @@ The script is equivalent to starting the built backend with `--tailscale-serve -
 
 Tailscale reports an address similar to `https://workstation.example-tailnet.ts.net`. Enter that origin and the gateway token in the public client. Tailnet ACLs still control which devices can reach the Serve endpoint, and the Orkestrator token remains required. Do not use Tailscale Funnel for this workflow.
 
-The Serve CLI can still be managed separately if preferred. In that case, start the backend with `--host 127.0.0.1 --allow-non-tailscale-bind` and point an externally managed Serve listener at the backend port.
+The Serve CLI can still be managed separately if preferred. In that case, start the backend with `--host 127.0.0.1 --allow-non-tailscale-bind` and point an externally managed Serve listener at the backend port. The previous spelling of that flag, `--unsafe-allow-non-tailscale-bind`, is still accepted so existing service configurations keep working.
 
 For Vercel, import the repository and set the project Root Directory to `apps/web-public`. The package's `vercel.json` builds the workspace-aware Vite app and serves `dist`. Use the stable production/custom domain in `ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS`; wildcard `https://*.vercel.app` is supported for preview deployments but grants every Vercel subdomain permission to attempt authenticated requests.
 

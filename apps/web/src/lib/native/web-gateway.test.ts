@@ -110,11 +110,8 @@ describe("web gateway browser API", () => {
       });
       return new Response(JSON.stringify({ result: ["project-1"] }), { status: 200 });
     }) as unknown as typeof fetch;
-    window.orkestratorGateway = {
-      enabled: true,
-      baseUrl: "https://workstation.tailnet.ts.net",
-    };
 
+    // No window.orkestratorGateway: the API must target its own configured base URL.
     const api = createBrowserGatewayApi({
       baseUrl: "https://workstation.tailnet.ts.net",
       token: "direct-token-123456",
@@ -187,10 +184,6 @@ describe("web gateway browser API", () => {
         },
       }), { status: 200 });
     }) as unknown as typeof fetch;
-    window.orkestratorGateway = {
-      enabled: true,
-      baseUrl: "https://workstation.tailnet.ts.net",
-    };
     const api = createBrowserGatewayApi({
       baseUrl: "https://workstation.tailnet.ts.net",
       token: "direct-token-123456",
@@ -224,10 +217,6 @@ describe("web gateway browser API", () => {
         },
       }), { status: 200 });
     }) as unknown as typeof fetch;
-    window.orkestratorGateway = {
-      enabled: true,
-      baseUrl: "https://workstation.tailnet.ts.net",
-    };
     const api = createBrowserGatewayApi({
       baseUrl: "https://workstation.tailnet.ts.net",
       token: "direct-token-123456",
@@ -303,10 +292,6 @@ describe("web gateway browser API", () => {
       }
       return new Response(JSON.stringify({ result: "ok" }), { status: 200 });
     }) as unknown as typeof fetch;
-    window.orkestratorGateway = {
-      enabled: true,
-      baseUrl: "https://workstation.tailnet.ts.net",
-    };
     const api = createBrowserGatewayApi({
       baseUrl: "https://workstation.tailnet.ts.net",
       token: "direct-token-123456",
@@ -363,12 +348,23 @@ describe("web gateway browser API", () => {
     source.onmessage?.({
       data: JSON.stringify({ event: "other", payload: "out" }),
     } as MessageEvent);
+    source.onmessage?.({ data: "not json" } as MessageEvent);
     source.onmessage?.({
       data: JSON.stringify({ event: "menu-zoom", payload: "in" }),
     } as MessageEvent);
 
     expect(callback).toHaveBeenCalledTimes(1);
     expect(callback).toHaveBeenCalledWith("in");
+
+    const warning = mock(() => undefined);
+    const originalWarn = console.warn;
+    console.warn = warning;
+    try {
+      source.onerror?.();
+      expect(warning).toHaveBeenCalledWith("[RemoteGateway] Event stream disconnected");
+    } finally {
+      console.warn = originalWarn;
+    }
 
     unsubscribe();
 

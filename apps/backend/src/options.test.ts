@@ -51,6 +51,11 @@ describe("standalone backend options", () => {
     });
   });
 
+  test("accepts the deprecated --unsafe-allow-non-tailscale-bind spelling", () => {
+    expect(parseOptions([], {}).allowNonTailscaleBind).toBe(false);
+    expect(parseOptions(["--unsafe-allow-non-tailscale-bind"], {}).allowNonTailscaleBind).toBe(true);
+  });
+
   test("rejects malformed, out-of-range, and missing option values", () => {
     expect(() => parseOptions(["--port", "3oops"], {})).toThrow("Invalid --port value");
     expect(() => parseOptions(["--port", "65536"], {})).toThrow("Invalid --port value");

@@ -31,6 +31,15 @@ describe("public client deployment configuration", () => {
     const headers = config.headers.flatMap((entry) => entry.headers);
     expect(headers).toContainEqual({ key: "Referrer-Policy", value: "no-referrer" });
     expect(headers).toContainEqual({ key: "X-Content-Type-Options", value: "nosniff" });
+
+    const csp = headers.find((header) => header.key === "Content-Security-Policy")?.value;
+    if (!csp) throw new Error("Expected a Content-Security-Policy header");
+    expect(csp).toContain("default-src 'self'");
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("object-src 'none'");
+    // The user picks the backend origin at runtime, so connect-src must allow HTTPS broadly.
+    expect(csp).toContain("connect-src 'self' https: wss:");
     expect(read("index.html")).toContain('<script type="module" src="/src/main.tsx"></script>');
   });
 });

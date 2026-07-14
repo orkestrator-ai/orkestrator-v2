@@ -476,6 +476,35 @@ describe("remote gateway", () => {
     expect(malformed.status).toBe(403);
   });
 
+  test("supports allow-all and trailing-slash origin rules", async () => {
+    const wildcard = await startGateway({ allowedOrigins: ["*"] });
+    const anyOrigin = await requestUrl(`${wildcard.info.url}__orkestrator/status`, {
+      headers: {
+        origin: "https://anything.example",
+        authorization: `Bearer ${wildcard.info.token}`,
+      },
+    });
+    expect(anyOrigin.status).toBe(200);
+    expect(anyOrigin.headers["access-control-allow-origin"]).toBe("https://anything.example");
+
+    const trailing = await startGateway({ allowedOrigins: ["https://trailing.example/"] });
+    const normalized = await requestUrl(`${trailing.info.url}__orkestrator/status`, {
+      headers: {
+        origin: "https://trailing.example",
+        authorization: `Bearer ${trailing.info.token}`,
+      },
+    });
+    expect(normalized.status).toBe(200);
+
+    const rejected = await requestUrl(`${trailing.info.url}__orkestrator/status`, {
+      headers: {
+        origin: "https://other.example",
+        authorization: `Bearer ${trailing.info.token}`,
+      },
+    });
+    expect(rejected.status).toBe(403);
+  });
+
   test("reads CORS origins from the environment and honors wildcard ports", async () => {
     const { info } = await startGateway({
       env: {
@@ -852,6 +881,8 @@ describe("remote gateway", () => {
       }
       response.writeHead(200, {
         "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "Access-Control-Allow-Credentials": "true",
         "set-cookie": [
           "app_session=abc123; Path=/; HttpOnly",
           "orkestrator_gateway_auth=evil; Path=/",
@@ -874,6 +905,9 @@ describe("remote gateway", () => {
       expect(cookieResponse.headers["set-cookie"]).toEqual([
         `app_session=abc123; Path=${proxyPrefix}/; HttpOnly`,
       ]);
+      // A proxied service must not be able to inject its own CORS policy.
+      expect(cookieResponse.headers["access-control-allow-origin"]).toBeUndefined();
+      expect(cookieResponse.headers["access-control-allow-credentials"]).toBeUndefined();
 
       const relativeRedirect = await requestUrl(`${info.url}${proxyPrefix}/relative`, {
         headers: { authorization: `Bearer ${info.token}` },

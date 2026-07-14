@@ -93,6 +93,46 @@ describe("direct gateway authentication transport", () => {
     expect(values).toEqual(["first", "second"]);
   });
 
+  test("emits open and default message events, then restores browser globals on clear", async () => {
+    const encoder = new TextEncoder();
+    const seenAuthorization: Array<string | null> = [];
+    const mockedFetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seenAuthorization.push(new Headers(init?.headers).get("authorization"));
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode("id: 42\ndata: hello\n\n"));
+          controller.close();
+        },
+      }), { status: 200 });
+    }) as unknown as typeof fetch;
+    globalThis.fetch = mockedFetch;
+    const stubEventSource = class {} as unknown as typeof EventSource;
+    globalThis.EventSource = stubEventSource;
+
+    configureDirectGatewayTransport("https://workstation.example", "gateway-token-123456");
+    expect(globalThis.EventSource).not.toBe(stubEventSource);
+
+    const opened = mock(() => undefined);
+    const source = new EventSource("https://workstation.example/__orkestrator/events");
+    source.onopen = opened;
+    const message = await new Promise<MessageEvent>((resolve) => {
+      source.onmessage = (event) => resolve(event);
+    });
+    source.close();
+
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(message.data).toBe("hello");
+    expect(message.lastEventId).toBe("42");
+    expect(message.origin).toBe("https://workstation.example");
+    expect(source.readyState).toBe(EventSource.CLOSED);
+
+    clearDirectGatewayTransport();
+    expect(globalThis.EventSource).toBe(stubEventSource);
+    // The restored fetch (a bound copy of the mock) no longer injects credentials.
+    await fetch("https://workstation.example/__orkestrator/status");
+    expect(seenAuthorization).toEqual(["Bearer gateway-token-123456", null]);
+  });
+
   test("dispatches an error for rejected event streams and supports listener removal", async () => {
     globalThis.fetch = mock(async () => new Response(null, { status: 503 })) as unknown as typeof fetch;
     globalThis.EventSource = class {} as unknown as typeof EventSource;

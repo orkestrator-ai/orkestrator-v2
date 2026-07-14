@@ -38,6 +38,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   let streamAbortController: AbortController | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let bearerToken = options.token?.trim() || undefined;
+  const baseUrl = normalizedBaseUrl(options.baseUrl);
+  const apiUrl = (pathname: string): string =>
+    baseUrl ? `${baseUrl}${pathname}` : resolveGatewayApiUrl(pathname);
 
   const requestHeaders = (headers?: Record<string, string>): Record<string, string> | undefined => {
     const result = { ...headers };
@@ -45,7 +48,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     return Object.keys(result).length > 0 ? result : undefined;
   };
 
-  const credentials = bearerToken || options.baseUrl ? "omit" as const : "same-origin" as const;
+  const credentials = bearerToken || baseUrl ? "omit" as const : "same-origin" as const;
 
   const dispatchMessage = (data: string) => {
     let parsed: { event?: unknown; payload?: unknown };
@@ -75,7 +78,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
 
     void (async () => {
       try {
-        const response = await fetch(resolveGatewayApiUrl(`${GATEWAY_PREFIX}/events`), {
+        const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/events`), {
           credentials,
           headers: requestHeaders(),
           signal: controller.signal,
@@ -112,12 +115,12 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
 
   const ensureEventStream = () => {
     if (eventSource || streamAbortController || listeners.size === 0) return;
-    if (bearerToken || options.baseUrl) {
+    if (bearerToken || baseUrl) {
       connectFetchEventStream();
       return;
     }
 
-    eventSource = new EventSource(resolveGatewayApiUrl(`${GATEWAY_PREFIX}/events`), {
+    eventSource = new EventSource(apiUrl(`${GATEWAY_PREFIX}/events`), {
       withCredentials: true,
     });
     eventSource.onmessage = (message) => dispatchMessage(message.data);
@@ -144,7 +147,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
 
   return {
     async invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
-      const response = await fetch(resolveGatewayApiUrl(`${GATEWAY_PREFIX}/invoke`), {
+      const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/invoke`), {
         method: "POST",
         credentials,
         headers: requestHeaders({ "content-type": "application/json" }),
@@ -192,7 +195,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         return Promise.resolve({
           enabled: true,
           running: true,
-          url: `${getGatewayBaseUrl()}/`,
+          url: `${baseUrl ?? getGatewayBaseUrl()}/`,
           error: null,
         });
       },
@@ -200,14 +203,14 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         return Promise.reject(new Error("Web client controls are only available in the desktop app"));
       },
       async getTokenSettings(): Promise<GatewayTokenSettings> {
-        const response = await fetch(resolveGatewayApiUrl(`${GATEWAY_PREFIX}/gateway-settings`), {
+        const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/gateway-settings`), {
           credentials,
           headers: requestHeaders(),
         });
         return readGatewayResponse<GatewayTokenSettings>(response, "Gateway settings request failed");
       },
       async setToken(token: string): Promise<GatewayTokenSettings> {
-        const response = await fetch(resolveGatewayApiUrl(`${GATEWAY_PREFIX}/gateway-settings`), {
+        const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/gateway-settings`), {
           method: "PUT",
           credentials,
           headers: requestHeaders({ "content-type": "application/json" }),

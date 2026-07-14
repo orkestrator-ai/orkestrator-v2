@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -32,8 +32,10 @@ export function AddProjectDialog({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isValidUrl, setIsValidUrl] = useState<boolean | null>(null);
+  const validationRequestRef = useRef(0);
 
   const resetForm = useCallback(() => {
+    validationRequestRef.current += 1;
     setGitUrl("");
     setLocalPath("");
     setError(null);
@@ -50,16 +52,27 @@ export function AddProjectDialog({
     [onOpenChange, resetForm]
   );
 
-  const handleGitUrlChange = useCallback(
+  const setAndValidateGitUrl = useCallback(
     async (value: string) => {
+      const validationRequest = ++validationRequestRef.current;
       setGitUrl(value);
       setError(null);
 
-      if (value.trim()) {
-        const valid = await validateGitUrl(value);
-        setIsValidUrl(valid);
-      } else {
+      if (!value.trim()) {
         setIsValidUrl(null);
+        return;
+      }
+
+      try {
+        const valid = await validateGitUrl(value);
+        if (validationRequest === validationRequestRef.current) {
+          setIsValidUrl(valid);
+        }
+      } catch (err) {
+        if (validationRequest === validationRequestRef.current) {
+          setIsValidUrl(false);
+          setError(err instanceof Error ? err.message : "Failed to validate Git URL");
+        }
       }
     },
     [validateGitUrl]
@@ -76,7 +89,11 @@ export function AddProjectDialog({
 
       // Browser clients cannot open a server-side directory picker. In that
       // case, use the path entered by the user and let the backend inspect it.
-      const repositoryPath = typeof selected === "string" ? selected : localPath.trim();
+      const repositoryPath = typeof selected === "string"
+        ? selected
+        : window.orkestratorGateway?.enabled
+          ? localPath.trim()
+          : "";
       if (!repositoryPath) return;
 
       setLocalPath(repositoryPath);
@@ -85,10 +102,7 @@ export function AddProjectDialog({
       try {
         const remoteUrl = await getGitRemoteUrl(repositoryPath);
         if (remoteUrl) {
-          setGitUrl(remoteUrl);
-          setError(null);
-          const valid = await validateGitUrl(remoteUrl);
-          setIsValidUrl(valid);
+          await setAndValidateGitUrl(remoteUrl);
         }
       } catch (err) {
         // Silently ignore - directory may not be a git repo
@@ -97,7 +111,7 @@ export function AddProjectDialog({
     } catch (err) {
       console.error("Failed to open directory picker:", err);
     }
-  }, [localPath, validateGitUrl]);
+  }, [localPath, setAndValidateGitUrl]);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -150,7 +164,7 @@ export function AddProjectDialog({
               type="text"
               placeholder="git@github.com:user/repo.git or https://..."
               value={gitUrl}
-              onChange={(e) => handleGitUrlChange(e.target.value)}
+              onChange={(e) => void setAndValidateGitUrl(e.target.value)}
               className={cn(
                 isValidUrl === false && "border-destructive",
                 isValidUrl === true && "border-green-500"

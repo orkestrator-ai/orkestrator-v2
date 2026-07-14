@@ -131,4 +131,21 @@ describe("PublicApp connection form", () => {
     view.unmount();
     expect(aborted).toBe(true);
   });
+
+  test("switches and forgets saved servers through the mounted browser connection API", async () => {
+    saveConnection({ address: "https://one.example", token: "gateway-token-one-123456" });
+    saveConnection({ address: "https://two.example", token: "gateway-token-two-123456" });
+    globalThis.fetch = mock(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })) as unknown as typeof fetch;
+    render(<PublicApp />);
+    await screen.findByText("Main app stub");
+
+    const api = window.orkestrator?.connections;
+    const one = (await api?.list())?.connections.find((connection) => connection.address === "https://one.example");
+    expect(one).toBeTruthy();
+    await api?.use(one?.id ?? "missing");
+    expect(loadSavedConnection()).toEqual({ address: "https://one.example", token: "gateway-token-one-123456" });
+    const afterForget = await api?.forget(one?.id ?? "missing");
+    expect(afterForget?.connections.some((connection) => connection.address === "https://one.example")).toBe(false);
+    expect(loadSavedConnection()).toEqual({ address: "", token: "" });
+  });
 });

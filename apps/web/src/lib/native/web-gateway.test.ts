@@ -47,6 +47,20 @@ afterEach(() => {
 });
 
 describe("web gateway browser API", () => {
+  test("passes through an optional server-connections API", async () => {
+    const connectionList = { activeConnectionId: "remote-1", connections: [] };
+    const connections = {
+      list: mock(async () => connectionList),
+      connect: mock(async () => connectionList),
+      use: mock(async () => connectionList),
+      forget: mock(async () => connectionList),
+    };
+    const api = createBrowserGatewayApi({ connections });
+    expect(api.connections).toBe(connections);
+    await expect(api.connections?.list()).resolves.toBe(connectionList);
+    expect(createBrowserGatewayApi().connections).toBeUndefined();
+  });
+
   test("installs only when the Electron preload API is absent", () => {
     const existingApi = { invoke: mock(async () => null) } as unknown as Window["orkestrator"];
     const fakeWindow: TestGatewayWindow = {

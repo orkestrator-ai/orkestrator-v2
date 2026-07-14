@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   LOCAL_CONNECTION_ID,
+  parseStoredDesktopConnections,
   type ConnectToRemoteInput,
   type ConnectionList,
   type StoredDesktopConnection,
@@ -26,6 +27,7 @@ export type ConnectionManagerOptions = {
   localBackend: LocalBackend;
   secureStorage: SecureStorage;
   platform?: NodeJS.Platform;
+  connectionTimeoutMs?: number;
   onEvent: (event: string, payload: unknown) => void;
 };
 
@@ -66,27 +68,36 @@ export class ConnectionManager {
   private readonly secureStorage: SecureStorage;
   private readonly platform: NodeJS.Platform;
   private readonly onEvent: (event: string, payload: unknown) => void;
+  private readonly connectionTimeoutMs: number;
   private stored: StoredDesktopConnections = { activeConnectionId: LOCAL_CONNECTION_ID, connections: [] };
   private activeRemote: { record: StoredDesktopConnection; client: BackendHttpClient; token: string } | null = null;
   private secureStorageAvailable = false;
+  private mutationQueue: Promise<unknown> = Promise.resolve();
 
   constructor(options: ConnectionManagerOptions) {
     this.localBackend = options.localBackend;
     this.secureStorage = options.secureStorage;
     this.platform = options.platform ?? process.platform;
+    this.connectionTimeoutMs = options.connectionTimeoutMs ?? CONNECTION_TIMEOUT_MS;
+    if (!Number.isFinite(this.connectionTimeoutMs) || this.connectionTimeoutMs <= 0) {
+      throw new Error("Connection timeout must be a positive number of milliseconds.");
+    }
     this.onEvent = options.onEvent;
   }
 
   async initialize(): Promise<void> {
     this.secureStorageAvailable = await this.detectSecureStorage();
-    this.stored = await this.localBackend.invoke<StoredDesktopConnections>("get_desktop_connections");
+    this.stored = parseStoredDesktopConnections(
+      await this.localBackend.invoke<StoredDesktopConnections>("get_desktop_connections"),
+    );
     if (this.stored.activeConnectionId === LOCAL_CONNECTION_ID) return;
     try {
       await this.activateRemote(this.stored.activeConnectionId, false);
     } catch (error) {
       console.warn("[Connections] Could not restore the previous remote connection; using Local:", error);
-      this.stored.activeConnectionId = LOCAL_CONNECTION_ID;
-      await this.persist();
+      const fallback = { ...this.stored, activeConnectionId: LOCAL_CONNECTION_ID };
+      await this.persist(fallback);
+      this.stored = fallback;
     }
   }
 
@@ -118,53 +129,69 @@ export class ConnectionManager {
   }
 
   async connect(input: ConnectToRemoteInput): Promise<ConnectionList> {
-    const address = normalizeRemoteAddress(input.address);
-    const token = normalizeGatewayToken(input.token);
-    this.secureStorageAvailable = await this.detectSecureStorage();
+    return this.enqueueMutation(async () => {
+      const address = normalizeRemoteAddress(input.address);
+      const token = normalizeGatewayToken(input.token);
+      this.secureStorageAvailable = await this.detectSecureStorage();
 
-    const client = new BackendHttpClient(address, token);
-    await this.checkRemote(address, token);
-    const encryptedToken = this.secureStorageAvailable
-      ? (await this.secureStorage.encryptStringAsync(token)).toString("base64")
-      : "";
-    const now = new Date().toISOString();
-    const existing = this.stored.connections.find((connection) => connection.address === address);
-    const record: StoredDesktopConnection = {
-      id: existing?.id ?? randomUUID(),
-      name: connectionName(address),
-      address,
-      encryptedToken,
-      lastConnectedAt: now,
-    };
-    this.stored.connections = [record, ...this.stored.connections.filter((connection) => connection.id !== record.id)];
-    this.stored.activeConnectionId = record.id;
-    await this.persist();
-    this.setActiveRemote(record, client, token);
-    return this.getList();
+      const client = new BackendHttpClient(address, token);
+      await this.checkRemote(address, token);
+      const encryptedToken = this.secureStorageAvailable
+        ? (await this.secureStorage.encryptStringAsync(token)).toString("base64")
+        : "";
+      const existing = this.stored.connections.find((connection) => connection.address === address);
+      const record: StoredDesktopConnection = {
+        id: existing?.id ?? randomUUID(),
+        name: connectionName(address),
+        address,
+        encryptedToken,
+        lastConnectedAt: new Date().toISOString(),
+      };
+      const candidate: StoredDesktopConnections = {
+        activeConnectionId: record.id,
+        connections: [record, ...this.stored.connections.filter((connection) => connection.id !== record.id)],
+      };
+      await this.persist(candidate);
+      this.stored = candidate;
+      this.setActiveRemote(record, client, token);
+      return this.getList();
+    });
   }
 
   async use(connectionId: string): Promise<ConnectionList> {
-    if (connectionId === LOCAL_CONNECTION_ID) {
-      this.activeRemote?.client.stopListening();
-      this.activeRemote = null;
-      this.stored.activeConnectionId = LOCAL_CONNECTION_ID;
-      await this.persist();
+    return this.enqueueMutation(async () => {
+      if (connectionId === LOCAL_CONNECTION_ID) {
+        const candidate = { ...this.stored, activeConnectionId: LOCAL_CONNECTION_ID };
+        await this.persist(candidate);
+        this.stored = candidate;
+        this.activeRemote?.client.stopListening();
+        this.activeRemote = null;
+        return this.getList();
+      }
+      await this.activateRemote(connectionId, true);
       return this.getList();
-    }
-    await this.activateRemote(connectionId, true);
-    return this.getList();
+    });
   }
 
   async forget(connectionId: string): Promise<ConnectionList> {
-    if (connectionId === LOCAL_CONNECTION_ID) throw new Error("The Local connection cannot be removed.");
-    if (this.activeRemote?.record.id === connectionId) {
-      this.activeRemote.client.stopListening();
-      this.activeRemote = null;
-      this.stored.activeConnectionId = LOCAL_CONNECTION_ID;
-    }
-    this.stored.connections = this.stored.connections.filter((connection) => connection.id !== connectionId);
-    await this.persist();
-    return this.getList();
+    return this.enqueueMutation(async () => {
+      if (connectionId === LOCAL_CONNECTION_ID) throw new Error("The Local connection cannot be removed.");
+      if (!this.stored.connections.some((connection) => connection.id === connectionId)) {
+        throw new Error("That saved connection no longer exists.");
+      }
+      const forgettingActive = this.activeRemote?.record.id === connectionId;
+      const candidate: StoredDesktopConnections = {
+        activeConnectionId: forgettingActive ? LOCAL_CONNECTION_ID : this.stored.activeConnectionId,
+        connections: this.stored.connections.filter((connection) => connection.id !== connectionId),
+      };
+      await this.persist(candidate);
+      this.stored = candidate;
+      if (forgettingActive) {
+        this.activeRemote?.client.stopListening();
+        this.activeRemote = null;
+      }
+      return this.getList();
+    });
   }
 
   invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -205,16 +232,31 @@ export class ConnectionManager {
   }
 
   async setGatewayToken(token: string): Promise<GatewayTokenSettings> {
-    const settings = await this.currentBackend().setToken(token);
-    if (this.activeRemote) {
-      this.activeRemote.token = settings.token;
+    return this.enqueueMutation(async () => {
+      const target = this.activeRemote;
+      const settings = await (target?.client ?? this.localBackend).setToken(token);
+      if (!target) return settings;
+
+      target.token = settings.token;
       this.secureStorageAvailable = await this.detectSecureStorage();
-      this.activeRemote.record.encryptedToken = this.secureStorageAvailable
-        ? (await this.secureStorage.encryptStringAsync(settings.token)).toString("base64")
-        : "";
-      await this.persist();
-    }
-    return settings;
+      let encryptedToken = "";
+      try {
+        encryptedToken = this.secureStorageAvailable
+          ? (await this.secureStorage.encryptStringAsync(settings.token)).toString("base64")
+          : "";
+        const record = { ...target.record, encryptedToken };
+        const candidate = this.replaceStoredRecord(record);
+        await this.persist(candidate);
+        this.stored = candidate;
+        target.record = record;
+      } catch (error) {
+        const sessionRecord = { ...target.record, encryptedToken: "" };
+        this.stored = this.replaceStoredRecord(sessionRecord);
+        target.record = sessionRecord;
+        throw error;
+      }
+      return settings;
+    });
   }
 
   setToken(token: string): Promise<GatewayTokenSettings> {
@@ -226,23 +268,28 @@ export class ConnectionManager {
   }
 
   private async activateRemote(connectionId: string, updateLastConnected: boolean): Promise<void> {
-    const record = this.stored.connections.find((connection) => connection.id === connectionId);
-    if (!record) throw new Error("That saved connection no longer exists.");
-    if (!record.encryptedToken) throw new Error("Enter the gateway token to reconnect to this server.");
+    const storedRecord = this.stored.connections.find((connection) => connection.id === connectionId);
+    if (!storedRecord) throw new Error("That saved connection no longer exists.");
+    if (!storedRecord.encryptedToken) throw new Error("Enter the gateway token to reconnect to this server.");
     this.secureStorageAvailable = await this.detectSecureStorage();
     if (!this.secureStorageAvailable) {
       throw new Error("Secure credential storage is unavailable. Enter the gateway token again.");
     }
-    const decrypted = await this.secureStorage.decryptStringAsync(Buffer.from(record.encryptedToken, "base64"));
+    const decrypted = await this.secureStorage.decryptStringAsync(Buffer.from(storedRecord.encryptedToken, "base64"));
     const token = normalizeGatewayToken(decrypted.result);
-    const client = new BackendHttpClient(record.address, token);
-    await this.checkRemote(record.address, token);
+    const client = new BackendHttpClient(storedRecord.address, token);
+    await this.checkRemote(storedRecord.address, token);
+    const record = { ...storedRecord };
     if (decrypted.shouldReEncrypt) {
       record.encryptedToken = (await this.secureStorage.encryptStringAsync(token)).toString("base64");
     }
     if (updateLastConnected) record.lastConnectedAt = new Date().toISOString();
-    this.stored.activeConnectionId = record.id;
-    await this.persist();
+    const candidate: StoredDesktopConnections = {
+      activeConnectionId: record.id,
+      connections: this.stored.connections.map((connection) => connection.id === record.id ? record : connection),
+    };
+    await this.persist(candidate);
+    this.stored = candidate;
     this.setActiveRemote(record, client, token);
   }
 
@@ -261,7 +308,7 @@ export class ConnectionManager {
 
   private async checkRemote(address: string, token: string): Promise<void> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), CONNECTION_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), this.connectionTimeoutMs);
     try {
       const response = await fetch(new URL("/__orkestrator/status", address), {
         headers: { authorization: `Bearer ${token}` },
@@ -274,7 +321,8 @@ export class ConnectionManager {
       }
     } catch (error) {
       if (controller.signal.aborted) {
-        throw new Error("The backend did not respond within 10 seconds.");
+        const seconds = this.connectionTimeoutMs / 1_000;
+        throw new Error(`The backend did not respond within ${seconds} second${seconds === 1 ? "" : "s"}.`);
       }
       if (error instanceof TypeError) {
         throw new Error("Could not reach the backend. Check its HTTPS address and Tailscale connection.");
@@ -285,7 +333,22 @@ export class ConnectionManager {
     }
   }
 
-  private async persist(): Promise<void> {
-    await this.localBackend.invoke("save_desktop_connections", { desktopConnections: this.stored });
+  private replaceStoredRecord(record: StoredDesktopConnection): StoredDesktopConnections {
+    return {
+      activeConnectionId: record.id,
+      connections: this.stored.connections.map((connection) => connection.id === record.id ? record : connection),
+    };
+  }
+
+  private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.mutationQueue.then(operation, operation);
+    this.mutationQueue = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private async persist(stored: StoredDesktopConnections): Promise<void> {
+    await this.localBackend.invoke("save_desktop_connections", {
+      desktopConnections: parseStoredDesktopConnections(stored),
+    });
   }
 }

@@ -8,6 +8,7 @@ import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
 import { createMainWindow } from "./window.js";
 import { ConnectionManager } from "./connection-manager.js";
+import { installRemoteGatewayRequestAuth } from "./remote-gateway-request-auth.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -64,46 +65,6 @@ function createMenu(): void {
     },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
-}
-
-function installRemoteGatewayRequestAuth(): void {
-  const filter = { urls: ["http://*/*", "https://*/*"] };
-  session.defaultSession.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
-    const authorization = connectionManager?.getRendererRequestAuthorization(details.url);
-    if (!authorization) {
-      callback({ requestHeaders: details.requestHeaders });
-      return;
-    }
-    const requestHeaders = Object.fromEntries(
-      Object.entries(details.requestHeaders).filter(([name]) => {
-        const normalized = name.toLowerCase();
-        return normalized !== "authorization" && normalized !== "origin";
-      }),
-    );
-    callback({
-      requestHeaders: {
-        ...requestHeaders,
-        Authorization: authorization,
-        Origin: "https://orkestrator.dev",
-      },
-    });
-  });
-  session.defaultSession.webRequest.onHeadersReceived(filter, (details, callback) => {
-    const authorization = connectionManager?.getRendererRequestAuthorization(details.url);
-    if (!authorization) {
-      callback({ responseHeaders: details.responseHeaders });
-      return;
-    }
-    const responseHeaders = Object.fromEntries(
-      Object.entries(details.responseHeaders ?? {}).filter(([name]) => name.toLowerCase() !== "access-control-allow-origin"),
-    );
-    callback({
-      responseHeaders: {
-        ...responseHeaders,
-        "Access-Control-Allow-Origin": ["*"],
-      },
-    });
-  });
 }
 
 async function createWindow(): Promise<void> {
@@ -183,7 +144,10 @@ app.whenReady().then(async () => {
   await backend.invoke("get_config");
 
   createMenu();
-  installRemoteGatewayRequestAuth();
+  installRemoteGatewayRequestAuth(
+    session.defaultSession.webRequest,
+    (url) => connectionManager?.getRendererRequestAuthorization(url) ?? null,
+  );
   registerIpc();
   await createWindow();
 

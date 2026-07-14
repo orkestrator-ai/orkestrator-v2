@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { parseStoredDesktopConnections } from "@orkestrator/protocol/connections";
 import type { Environment, EnvironmentStatus, EnvironmentType, PortMapping, PrState, SessionStatus, SessionType } from "./models.js";
 import { spawnPty, type PtyProcess } from "./pty.js";
 import {
@@ -1941,10 +1942,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("save_config", ({ config }, { storage }) => storage.saveConfig(config as never));
   register("get_desktop_connections", (_args, { storage }) => storage.getDesktopConnections());
   register("save_desktop_connections", ({ desktopConnections }, { storage }) => {
-    if (!desktopConnections || typeof desktopConnections !== "object" || Array.isArray(desktopConnections)) {
-      throw new Error("Expected desktopConnections to be an object");
-    }
-    return storage.saveDesktopConnections(desktopConnections as never);
+    return storage.saveDesktopConnections(parseStoredDesktopConnections(desktopConnections));
   });
   register("get_global_config", async (_args, { storage }) => (await storage.loadConfig()).global);
   register("update_global_config", ({ global }, { storage }) => storage.updateGlobalConfig(global as never));
@@ -2081,9 +2079,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       environmentType: asEnvironmentType(environmentType),
       entryPort: repoConfig.entryPort,
     });
-    const config = await storage.loadConfig();
-    config.repositories[project.id] = { ...repoConfig, lastEnvironmentType: env.environmentType };
-    await storage.saveConfig(config);
+    await storage.updateRepositoryConfig(project.id, { ...repoConfig, lastEnvironmentType: env.environmentType });
     return storage.addEnvironment(env);
   });
   register("delete_environment", async ({ environmentId }, { storage }) => {

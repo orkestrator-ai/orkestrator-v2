@@ -1,5 +1,9 @@
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
-import type { ConnectToRemoteInput, ConnectionList } from "@orkestrator/protocol/connections";
+import {
+  parseConnectionList,
+  type ConnectToRemoteInput,
+  type ConnectionList,
+} from "@orkestrator/protocol/connections";
 
 type EventCallback<T> = (payload: T) => void;
 
@@ -7,6 +11,25 @@ export type IpcRendererLike = {
   invoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T>;
   on(channel: string, listener: (event: unknown, name: string, payload: unknown) => void): void;
 };
+
+export function exposeActiveConnectionGateway(
+  contextBridge: { exposeInMainWorld(key: string, value: unknown): void },
+  ipcRenderer: { sendSync(channel: string): unknown },
+): boolean {
+  let connectionList: ConnectionList;
+  try {
+    connectionList = parseConnectionList(ipcRenderer.sendSync("orkestrator:connections:list-sync"));
+  } catch {
+    return false;
+  }
+  const activeConnection = connectionList.connections.find((connection) => connection.active);
+  if (activeConnection?.kind !== "remote" || !activeConnection.address) return false;
+  contextBridge.exposeInMainWorld("orkestratorGateway", {
+    enabled: true,
+    baseUrl: activeConnection.address,
+  });
+  return true;
+}
 
 export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
   const listeners = new Map<string, Set<EventCallback<unknown>>>();

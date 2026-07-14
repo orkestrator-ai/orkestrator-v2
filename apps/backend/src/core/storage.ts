@@ -1,6 +1,10 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import {
+  parseStoredDesktopConnections,
+  type StoredDesktopConnections,
+} from "@orkestrator/protocol/connections";
 import type {
   AppConfig,
   Environment,
@@ -346,6 +350,7 @@ export class StorageService {
   private readonly dataDir: string;
   private writeQueue = Promise.resolve();
   private environmentMutationQueue: Promise<unknown> = Promise.resolve();
+  private configMutationQueue: Promise<unknown> = Promise.resolve();
   private featurePlanMutation: Promise<unknown> = Promise.resolve();
 
   constructor(dataDir: string) {
@@ -462,6 +467,55 @@ export class StorageService {
     const next = this.environmentMutationQueue.then(run, run);
     this.environmentMutationQueue = next.then(() => undefined, () => undefined);
     return next;
+  }
+
+  private enqueueConfigMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireConfigMutationLock();
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.configMutationQueue.then(run, run);
+    this.configMutationQueue = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private async acquireConfigMutationLock(): Promise<() => Promise<void>> {
+    const lockPath = `${this.configFile()}.lock`;
+    const token = randomUUID();
+    const deadline = Date.now() + 20_000;
+    await fs.mkdir(path.dirname(lockPath), { recursive: true });
+
+    while (true) {
+      try {
+        const handle = await fs.open(lockPath, "wx", 0o600);
+        try {
+          await handle.writeFile(token, "utf8");
+        } catch (error) {
+          await handle.close();
+          await fs.rm(lockPath, { force: true });
+          throw error;
+        }
+        return async () => {
+          await handle.close();
+          const currentToken = await fs.readFile(lockPath, "utf8").catch(() => null);
+          if (currentToken === token) await fs.rm(lockPath, { force: true });
+        };
+      } catch (error) {
+        const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+        if (code !== "EEXIST") throw error;
+        const stat = await fs.stat(lockPath).catch(() => null);
+        if (stat && Date.now() - stat.mtimeMs > 15_000) {
+          await fs.rm(lockPath, { force: true });
+          continue;
+        }
+        if (Date.now() >= deadline) throw new Error("Timed out waiting for configuration storage lock");
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
   }
 
   private async acquireEnvironmentMutationLock(): Promise<() => Promise<void>> {
@@ -708,20 +762,27 @@ export class StorageService {
   }
 
   async saveConfig(config: AppConfig): Promise<void> {
-    await this.saveJson(this.configFile(), config);
+    await this.enqueueConfigMutation(() => this.saveJson(this.configFile(), config));
   }
 
-  async getDesktopConnections(): Promise<import("@orkestrator/protocol/connections").StoredDesktopConnections> {
+  async getDesktopConnections(): Promise<StoredDesktopConnections> {
     const config = await this.loadConfig();
-    return config.desktopConnections ?? { activeConnectionId: "local", connections: [] };
+    if (config.desktopConnections === undefined) return { activeConnectionId: "local", connections: [] };
+    try {
+      return parseStoredDesktopConnections(config.desktopConnections);
+    } catch {
+      console.warn("[Storage] Ignoring malformed desktop connection settings.");
+      return { activeConnectionId: "local", connections: [] };
+    }
   }
 
-  async saveDesktopConnections(
-    desktopConnections: import("@orkestrator/protocol/connections").StoredDesktopConnections,
-  ): Promise<void> {
-    const config = await this.loadConfig();
-    config.desktopConnections = desktopConnections;
-    await this.saveConfig(config);
+  async saveDesktopConnections(desktopConnections: StoredDesktopConnections): Promise<void> {
+    const validated = parseStoredDesktopConnections(desktopConnections);
+    await this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      config.desktopConnections = validated;
+      await this.saveJson(this.configFile(), config);
+    });
   }
 
   async getRepositoryConfig(projectId: string): Promise<RepositoryConfig> {
@@ -730,17 +791,21 @@ export class StorageService {
   }
 
   async updateRepositoryConfig(projectId: string, repoConfig: RepositoryConfig): Promise<AppConfig> {
-    const config = await this.loadConfig();
-    config.repositories[projectId] = { ...defaultRepositoryConfig(), ...repoConfig };
-    await this.saveConfig(config);
-    return config;
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      config.repositories[projectId] = { ...defaultRepositoryConfig(), ...repoConfig };
+      await this.saveJson(this.configFile(), config);
+      return config;
+    });
   }
 
   async updateGlobalConfig(globalConfig: AppConfig["global"]): Promise<AppConfig> {
-    const config = await this.loadConfig();
-    config.global = globalConfig;
-    await this.saveConfig(config);
-    return config;
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      config.global = globalConfig;
+      await this.saveJson(this.configFile(), config);
+      return config;
+    });
   }
 
   async createSession(environmentId: string, containerId: string, tabId: string, sessionType: SessionType): Promise<Session> {

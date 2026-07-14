@@ -5,6 +5,7 @@ type Handler = (event: unknown, ...args: unknown[]) => unknown;
 
 function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } | null; window?: unknown } = {}) {
   const handlers = new Map<string, Handler>();
+  const syncHandlers = new Map<string, (event: { returnValue: unknown }, ...args: unknown[]) => void>();
   const backend = options.backend === undefined
     ? { invoke: mock(async (_command: string, args: Record<string, unknown>) => ({ ok: true, args })) }
     : options.backend;
@@ -50,6 +51,7 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
     getMainWindow: () => window as never,
     ipc: {
       handle: (channel, listener) => handlers.set(channel, listener),
+      on: (channel, listener) => syncHandlers.set(channel, listener),
     },
     clipboardApi,
     dialogApi: dialogApi as never,
@@ -71,7 +73,15 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
     return Promise.resolve().then(() => handler({}, ...args));
   };
 
-  return { invoke, handlers, backend, window, clipboardApi, clipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled, getGatewayTokenSettings, setGatewayToken, listConnections, connectToRemote, useConnection, forgetConnection };
+  const invokeSync = (channel: string, ...args: unknown[]) => {
+    const handler = syncHandlers.get(channel);
+    if (!handler) throw new Error(`missing sync handler: ${channel}`);
+    const event = { returnValue: undefined as unknown };
+    handler(event, ...args);
+    return event.returnValue;
+  };
+
+  return { invoke, invokeSync, handlers, syncHandlers, backend, window, clipboardApi, clipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled, getGatewayTokenSettings, setGatewayToken, listConnections, connectToRemote, useConnection, forgetConnection };
 }
 
 describe("main IPC registration", () => {
@@ -136,6 +146,7 @@ describe("main IPC registration", () => {
     await expect(harness.invoke("orkestrator:connections:list")).resolves.toMatchObject({
       activeConnectionId: "local",
     });
+    expect(harness.invokeSync("orkestrator:connections:list-sync")).toMatchObject({ activeConnectionId: "local" });
     await harness.invoke("orkestrator:connections:connect", { address: "https://desk.example", token: "gateway-token-123456" });
     expect(harness.connectToRemote).toHaveBeenCalledWith({
       address: "https://desk.example",

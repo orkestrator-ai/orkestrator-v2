@@ -3,7 +3,21 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import type { ConnectionList } from "@orkestrator/protocol/connections";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 
-function installConnections(list: ConnectionList, connect = mock(async () => list)) {
+const originalReload = window.location.reload;
+
+function installConnections(
+  list: ConnectionList,
+  overrides: Partial<{
+    list: () => Promise<ConnectionList>;
+    connect: (input: { address: string; token: string }) => Promise<ConnectionList>;
+    use: (connectionId: string) => Promise<ConnectionList>;
+    forget: (connectionId: string) => Promise<ConnectionList>;
+  }> = {},
+) {
+  const listConnections = mock(overrides.list ?? (async () => list));
+  const connect = mock(overrides.connect ?? (async () => list));
+  const use = mock(overrides.use ?? (async () => list));
+  const forget = mock(overrides.forget ?? (async () => list));
   window.orkestrator = {
     invoke: mock(async () => undefined) as unknown as NonNullable<Window["orkestrator"]>["invoke"],
     listen: mock(() => () => undefined),
@@ -15,20 +29,21 @@ function installConnections(list: ConnectionList, connect = mock(async () => lis
     },
     dialog: { open: mock(async () => null) },
     connections: {
-      list: mock(async () => list),
+      list: listConnections,
       connect,
-      use: mock(async () => list),
-      forget: mock(async () => list),
+      use,
+      forget,
     },
     process: { exit: mock(async () => undefined) },
     window: { startDragging: mock(async () => undefined) },
   };
-  return { connect };
+  return { list: listConnections, connect, use, forget };
 }
 
 afterEach(() => {
   cleanup();
   delete window.orkestrator;
+  window.location.reload = originalReload;
 });
 
 describe("server connection switcher", () => {
@@ -72,7 +87,7 @@ describe("server connection switcher", () => {
     const connect = mock(async () => { throw new Error("The gateway token was rejected."); });
     installConnections({ activeConnectionId: "local", connections: [
       { id: "local", name: "Local", address: null, kind: "local", active: true, requiresToken: false },
-    ] }, connect);
+    ] }, { connect });
     render(<ServerConnectionSwitcher />);
 
     fireEvent.pointerDown(await screen.findByRole("button", { name: "Connected server: Local" }), { button: 0, ctrlKey: false, pointerType: "mouse" });
@@ -83,5 +98,77 @@ describe("server connection switcher", () => {
 
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("token was rejected"));
     expect(connect).toHaveBeenCalledWith({ address: "https://desk.example", token: "gateway-token-123456" });
+  });
+
+  test("falls back to the Projects label without a connections API", () => {
+    render(<ServerConnectionSwitcher />);
+    expect(screen.getByText("Projects")).toBeTruthy();
+  });
+
+  test("switches to a saved server and reloads after the backend confirms", async () => {
+    const list = {
+      activeConnectionId: "local",
+      connections: [
+        { id: "local", name: "Local", address: null, kind: "local" as const, active: true, requiresToken: false },
+        { id: "remote-1", name: "Desk", address: "https://desk.example", kind: "remote" as const, active: false, requiresToken: false },
+      ],
+    };
+    const { use } = installConnections(list);
+    const reload = mock(() => undefined);
+    window.location.reload = reload as unknown as typeof window.location.reload;
+    render(<ServerConnectionSwitcher />);
+
+    fireEvent.pointerDown(await screen.findByRole("button", { name: "Connected server: Local" }), { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(await screen.findByText("Desk"));
+    await waitFor(() => expect(use).toHaveBeenCalledWith("remote-1"));
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  test("recovers when switching a saved server fails", async () => {
+    const list = {
+      activeConnectionId: "local",
+      connections: [
+        { id: "local", name: "Local", address: null, kind: "local" as const, active: true, requiresToken: false },
+        { id: "remote-1", name: "Desk", address: "https://desk.example", kind: "remote" as const, active: false, requiresToken: false },
+      ],
+    };
+    const use = mock(async () => { throw new Error("server unavailable"); });
+    installConnections(list, { use });
+    const reload = mock(() => undefined);
+    window.location.reload = reload as unknown as typeof window.location.reload;
+    render(<ServerConnectionSwitcher />);
+
+    fireEvent.pointerDown(await screen.findByRole("button", { name: "Connected server: Local" }), { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(await screen.findByText("Desk"));
+    await waitFor(() => expect(use).toHaveBeenCalledWith("remote-1"));
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  test("reloads after successfully creating a connection", async () => {
+    const list = { activeConnectionId: "local", connections: [
+      { id: "local", name: "Local", address: null, kind: "local" as const, active: true, requiresToken: false },
+    ] };
+    const { connect } = installConnections(list);
+    const reload = mock(() => undefined);
+    window.location.reload = reload as unknown as typeof window.location.reload;
+    render(<ServerConnectionSwitcher />);
+
+    fireEvent.pointerDown(await screen.findByRole("button", { name: "Connected server: Local" }), { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(await screen.findByText("New connection"));
+    fireEvent.change(screen.getByLabelText("Tailscale address"), { target: { value: "https://desk.example" } });
+    fireEvent.change(screen.getByLabelText("Gateway token"), { target: { value: "gateway-token-123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    await waitFor(() => expect(connect).toHaveBeenCalledTimes(1));
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  test("handles an initial connection-list failure without crashing", async () => {
+    const list = { activeConnectionId: "local", connections: [] };
+    const listConnections = mock(async () => { throw new Error("storage unavailable"); });
+    installConnections(list, { list: listConnections });
+    render(<ServerConnectionSwitcher />);
+    await waitFor(() => expect(listConnections).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "Connected server: Loading" })).toBeTruthy();
   });
 });

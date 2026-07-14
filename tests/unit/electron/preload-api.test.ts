@@ -1,5 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createOrkestratorElectronApi, type IpcRendererLike } from "../../../apps/desktop/electron/preload-api";
+import {
+  createOrkestratorElectronApi,
+  exposeActiveConnectionGateway,
+  type IpcRendererLike,
+} from "../../../apps/desktop/electron/preload-api";
 
 function createIpcMock() {
   const listeners = new Map<string, (event: unknown, name: string, payload: unknown) => void>();
@@ -19,6 +23,33 @@ function createIpcMock() {
 }
 
 describe("preload API factory", () => {
+  test("exposes the active remote gateway from the synchronous bootstrap snapshot", () => {
+    const exposeInMainWorld = mock(() => undefined);
+    const sendSync = mock(() => ({
+      activeConnectionId: "remote-1",
+      connections: [
+        { id: "local", name: "Local", address: null, kind: "local", active: false, requiresToken: false },
+        { id: "remote-1", name: "Desk", address: "https://desk.example", kind: "remote", active: true, requiresToken: false },
+      ],
+    }));
+    expect(exposeActiveConnectionGateway({ exposeInMainWorld }, { sendSync })).toBe(true);
+    expect(sendSync).toHaveBeenCalledWith("orkestrator:connections:list-sync");
+    expect(exposeInMainWorld).toHaveBeenCalledWith("orkestratorGateway", {
+      enabled: true,
+      baseUrl: "https://desk.example",
+    });
+  });
+
+  test("does not expose a gateway for Local or malformed bootstrap snapshots", () => {
+    const exposeInMainWorld = mock(() => undefined);
+    expect(exposeActiveConnectionGateway({ exposeInMainWorld }, { sendSync: () => ({
+      activeConnectionId: "local",
+      connections: [{ id: "local", name: "Local", address: null, kind: "local", active: true, requiresToken: false }],
+    }) })).toBe(false);
+    expect(exposeActiveConnectionGateway({ exposeInMainWorld }, { sendSync: () => ({ activeConnectionId: "local" }) })).toBe(false);
+    expect(exposeInMainWorld).not.toHaveBeenCalled();
+  });
+
   test("routes backend commands through the invoke IPC channel", async () => {
     const { ipc, invoke } = createIpcMock();
     const api = createOrkestratorElectronApi(ipc);

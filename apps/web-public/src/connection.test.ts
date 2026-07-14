@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   checkBackendConnection,
+  forgetBrowserConnection,
   forgetConnection,
   insecureBackendWarning,
   listBrowserConnections,
@@ -110,6 +111,60 @@ describe("saved public connection", () => {
       token: "gateway-token-one-123456",
     });
     expect(listBrowserConnections().activeConnectionId).toBe(oneId);
+  });
+
+  test("forgets active and inactive recent servers with their tokens", () => {
+    saveConnection({ address: "https://one.example", token: "gateway-token-one-123456" });
+    saveConnection({ address: "https://two.example", token: "gateway-token-two-123456" });
+    const connections = listBrowserConnections().connections;
+    const oneId = connections.find((connection) => connection.address === "https://one.example")?.id ?? "";
+    const twoId = connections.find((connection) => connection.address === "https://two.example")?.id ?? "";
+
+    expect(forgetBrowserConnection(oneId).connections.map((connection) => connection.id)).toEqual([twoId]);
+    expect(loadSavedConnection().address).toBe("https://two.example");
+    expect(forgetBrowserConnection(twoId)).toMatchObject({ activeConnectionId: "", connections: [] });
+    expect(loadSavedConnection()).toEqual({ address: "", token: "" });
+  });
+
+  test("rejects missing selections and selections whose tab token expired", () => {
+    saveConnection({ address: "https://one.example", token });
+    const id = listBrowserConnections().activeConnectionId;
+    expect(() => selectBrowserConnection("missing")).toThrow("no longer exists");
+    sessionStorage.clear();
+    expect(() => selectBrowserConnection(id)).toThrow("Enter the gateway token");
+  });
+
+  test("filters malformed storage records and non-string tokens", () => {
+    localStorage.setItem("orkestrator.public.connections", JSON.stringify([
+      null,
+      { id: "wrong-id", name: "Wrong", address: "https://wrong.example", lastConnectedAt: "now" },
+      { id: "remote:javascript:alert(1)", name: "Unsafe", address: "javascript:alert(1)", lastConnectedAt: "now" },
+      { id: "remote:https://valid.example", name: "Valid", address: "https://valid.example", lastConnectedAt: "now" },
+    ]));
+    localStorage.setItem("orkestrator.public.backend-address", "https://valid.example");
+    sessionStorage.setItem("orkestrator.public.gateway-tokens", JSON.stringify({
+      "remote:https://valid.example": { nested: "not-a-token" },
+    }));
+
+    expect(listBrowserConnections().connections).toHaveLength(1);
+    expect(listBrowserConnections().connections[0]).toMatchObject({ name: "Valid", requiresToken: true });
+    expect(loadSavedConnection().token).toBe("");
+  });
+
+  test("deduplicates, orders, and bounds recent server history", () => {
+    for (let index = 0; index < 25; index += 1) {
+      saveConnection({ address: `https://server-${index}.example`, token });
+    }
+    saveConnection({ address: "https://server-10.example", token });
+    const recent = listBrowserConnections().connections;
+    expect(recent).toHaveLength(20);
+    expect(recent[0]?.address).toBe("https://server-10.example");
+    expect(recent.filter((connection) => connection.address === "https://server-10.example")).toHaveLength(1);
+  });
+
+  test("does not create an orphan token entry without an active address", () => {
+    updateSavedToken(token);
+    expect(sessionStorage.getItem("orkestrator.public.gateway-tokens")).toBeNull();
   });
 });
 

@@ -7,6 +7,7 @@ const CONNECTIONS_KEY = "orkestrator.public.connections";
 const LEGACY_SESSION_TOKEN_KEY = "orkestrator.public.gateway-token";
 const LEGACY_REMEMBERED_TOKEN_KEY = "orkestrator.public.remembered-gateway-token";
 export const DEFAULT_BACKEND_CONNECTION_TIMEOUT_MS = 10_000;
+const MAX_RECENT_CONNECTIONS = 20;
 
 export interface SavedConnection {
   address: string;
@@ -27,9 +28,10 @@ function connectionId(address: string): string {
 function loadSessionTokens(): Record<string, string> {
   try {
     const parsed = JSON.parse(sessionStorage.getItem(SESSION_TOKENS_KEY) ?? "{}") as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, string>
-      : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+    );
   } catch {
     return {};
   }
@@ -39,13 +41,20 @@ function loadRecentConnections(): RecentConnection[] {
   try {
     const parsed = JSON.parse(localStorage.getItem(CONNECTIONS_KEY) ?? "[]") as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((entry): entry is RecentConnection => (
-      !!entry && typeof entry === "object"
-      && typeof (entry as RecentConnection).id === "string"
-      && typeof (entry as RecentConnection).name === "string"
-      && typeof (entry as RecentConnection).address === "string"
-      && typeof (entry as RecentConnection).lastConnectedAt === "string"
-    ));
+    return parsed.flatMap((entry): RecentConnection[] => {
+      if (!entry || typeof entry !== "object"
+        || typeof (entry as RecentConnection).id !== "string"
+        || typeof (entry as RecentConnection).name !== "string"
+        || typeof (entry as RecentConnection).address !== "string"
+        || typeof (entry as RecentConnection).lastConnectedAt !== "string") return [];
+      try {
+        const address = normalizeBackendAddress((entry as RecentConnection).address);
+        if ((entry as RecentConnection).id !== connectionId(address)) return [];
+        return [{ ...(entry as RecentConnection), address }];
+      } catch {
+        return [];
+      }
+    }).slice(0, MAX_RECENT_CONNECTIONS);
   } catch {
     return [];
   }
@@ -119,7 +128,7 @@ export function saveConnection(connection: SavedConnection): void {
   localStorage.setItem(CONNECTIONS_KEY, JSON.stringify([
     recent,
     ...loadRecentConnections().filter((entry) => entry.id !== id),
-  ]));
+  ].slice(0, MAX_RECENT_CONNECTIONS)));
   saveSessionTokens({ ...loadSessionTokens(), [id]: connection.token });
 }
 
@@ -135,6 +144,7 @@ export function forgetConnection(): void {
 
 export function updateSavedToken(token: string): void {
   const address = localStorage.getItem(ADDRESS_KEY) ?? "";
+  if (!address) return;
   saveSessionTokens({ ...loadSessionTokens(), [connectionId(address)]: token });
 }
 

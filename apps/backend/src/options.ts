@@ -1,8 +1,11 @@
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { APP_SLUG } from "./core/constants.js";
+
+export const MACOS_TAILSCALE_APP_CLI = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
 
 export type BackendOptions = {
   dataDir: string;
@@ -44,6 +47,16 @@ export function defaultDataDir(
   assertSupportedPlatform(platform);
   if (platform === "darwin") return path.join(home, "Library", "Application Support", APP_SLUG);
   return path.join(env.XDG_CONFIG_HOME ?? path.join(home, ".config"), APP_SLUG);
+}
+
+export function defaultTailscaleExecutable(
+  platform: NodeJS.Platform = process.platform,
+  fileExists: (candidate: string) => boolean = existsSync,
+): string {
+  if (platform === "darwin" && fileExists(MACOS_TAILSCALE_APP_CLI)) {
+    return MACOS_TAILSCALE_APP_CLI;
+  }
+  return "tailscale";
 }
 
 function parsePortOption(value: string | undefined, optionName: string): number | undefined {
@@ -96,6 +109,6 @@ export function parseOptions(
     tailscaleServePort,
     tailscaleExecutable: valueAfter(args, "--tailscale-bin")
       ?? env.ORKESTRATOR_TAILSCALE_BIN
-      ?? "tailscale",
+      ?? defaultTailscaleExecutable(),
   };
 }

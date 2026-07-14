@@ -62,7 +62,7 @@ The gateway supports these environment variables:
 | `ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS` | unset | Comma-separated browser origins allowed to call the gateway directly. Supports entries such as `https://orkestrator.example` and `https://*.vercel.app`. |
 | `ORKESTRATOR_TAILSCALE_SERVE=1` | unset | Makes the backend own a tailnet-only HTTPS listener through `tailscale serve`. The browser listener binds to loopback automatically. |
 | `ORKESTRATOR_TAILSCALE_SERVE_PORT` | `443` | HTTPS port configured by backend-managed Tailscale Serve. |
-| `ORKESTRATOR_TAILSCALE_BIN` | `tailscale` | Overrides the Tailscale CLI executable path. |
+| `ORKESTRATOR_TAILSCALE_BIN` | `tailscale`, or the bundled macOS app CLI when present | Overrides the Tailscale CLI executable path. |
 | `ORKESTRATOR_DATA_DIR` | platform application-data directory | Stores projects, environments, configuration, and gateway authentication. |
 | `ORKESTRATOR_APP_ROOT` | detected repository/application root | Root used for application assets and development binaries. |
 | `ORKESTRATOR_RESOURCE_ROOT` | application root | Root containing packaged bridges and binaries. |
@@ -149,7 +149,7 @@ An HTTPS page cannot call the gateway's default plain-HTTP tailnet address in no
 bun run start:web-public
 ```
 
-The script is equivalent to starting the built backend with `--tailscale-serve --allowed-origins https://orkestrator.dev`. Use the explicit backend command instead when deploying the public client on another origin.
+The script is equivalent to starting the built backend with `--tailscale-serve --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev`. Use the explicit backend command instead when deploying the public client on another origin.
 
 `--tailscale-serve` makes the backend bind its browser listener to `127.0.0.1`, run `tailscale serve --bg --yes --https=443` against that listener, and replace `browserUrl` in its ready message with the resulting HTTPS origin. If `--host` is supplied, it must be exactly `127.0.0.1`. Before changing Serve, the backend checks the selected HTTPS port and refuses to overwrite a listener that already exists; choose an unused port with `--tailscale-serve-port <port>` instead. On graceful shutdown, it removes only the HTTPS listener it configured.
 

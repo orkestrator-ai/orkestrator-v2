@@ -398,32 +398,36 @@ describe("remote gateway", () => {
 
   test("allows configured public client origins without proxying browser traffic", async () => {
     const { info } = await startGateway({
-      allowedOrigins: ["https://orkestrator.example", "https://*.vercel.app"],
+      allowedOrigins: [
+        "https://orkestrator.dev",
+        "https://www.orkestrator.dev",
+        "https://*.vercel.app",
+      ],
     });
     const endpoint = `${info.url}__orkestrator/status`;
 
     const preflight = await requestUrl(endpoint, {
       method: "OPTIONS",
       headers: {
-        origin: "https://orkestrator.example",
+        origin: "https://orkestrator.dev",
         "access-control-request-method": "GET",
         "access-control-request-headers": "authorization",
         "access-control-request-private-network": "true",
       },
     });
     expect(preflight.status).toBe(204);
-    expect(preflight.headers["access-control-allow-origin"]).toBe("https://orkestrator.example");
+    expect(preflight.headers["access-control-allow-origin"]).toBe("https://orkestrator.dev");
     expect(preflight.headers["access-control-allow-private-network"]).toBe("true");
 
     const connected = await requestUrl(endpoint, {
       headers: {
-        origin: "https://orkestrator.example",
+        origin: "https://www.orkestrator.dev",
         authorization: `Bearer ${info.token}`,
       },
     });
     expect(connected.status).toBe(200);
     expect(connected.json()).toEqual({ ok: true });
-    expect(connected.headers["access-control-allow-origin"]).toBe("https://orkestrator.example");
+    expect(connected.headers["access-control-allow-origin"]).toBe("https://www.orkestrator.dev");
 
     const preview = await requestUrl(endpoint, {
       headers: {
@@ -444,20 +448,20 @@ describe("remote gateway", () => {
     expect(rejected.headers["access-control-allow-origin"]).toBeUndefined();
 
     const unauthenticated = await requestUrl(endpoint, {
-      headers: { origin: "https://orkestrator.example" },
+      headers: { origin: "https://www.orkestrator.dev" },
     });
     expect(unauthenticated.status).toBe(401);
-    expect(unauthenticated.headers["access-control-allow-origin"]).toBe("https://orkestrator.example");
+    expect(unauthenticated.headers["access-control-allow-origin"]).toBe("https://www.orkestrator.dev");
 
     const wrongMethod = await requestUrl(endpoint, {
       method: "POST",
       headers: {
-        origin: "https://orkestrator.example",
+        origin: "https://www.orkestrator.dev",
         authorization: `Bearer ${info.token}`,
       },
     });
     expect(wrongMethod.status).toBe(405);
-    expect(wrongMethod.headers["access-control-allow-origin"]).toBe("https://orkestrator.example");
+    expect(wrongMethod.headers["access-control-allow-origin"]).toBe("https://www.orkestrator.dev");
 
     const sameHost = await requestUrl(endpoint, {
       headers: {

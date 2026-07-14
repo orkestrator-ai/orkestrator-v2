@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
-import { assertSupportedPlatform, defaultDataDir, parseOptions } from "./options.js";
+import {
+  assertSupportedPlatform,
+  defaultDataDir,
+  defaultTailscaleExecutable,
+  MACOS_TAILSCALE_APP_CLI,
+  parseOptions,
+} from "./options.js";
 
 describe("standalone backend options", () => {
   test("uses platform-specific default data directories", () => {
@@ -11,6 +17,14 @@ describe("standalone backend options", () => {
     expect(defaultDataDir("linux", { XDG_CONFIG_HOME: "/config" }, "/home/test")).toBe(
       "/config/orkestrator-v2",
     );
+  });
+
+  test("uses the Tailscale CLI bundled with the macOS app when available", () => {
+    expect(defaultTailscaleExecutable("darwin", (candidate) => candidate === MACOS_TAILSCALE_APP_CLI)).toBe(
+      MACOS_TAILSCALE_APP_CLI,
+    );
+    expect(defaultTailscaleExecutable("darwin", () => false)).toBe("tailscale");
+    expect(defaultTailscaleExecutable("linux", () => true)).toBe("tailscale");
   });
 
   test("parses explicit paths, ephemeral ports, and development options", () => {

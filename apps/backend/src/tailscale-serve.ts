@@ -14,6 +14,9 @@ const defaultRunner: TailscaleCommandRunner = async (command, args) => {
     encoding: "utf8",
     timeout: COMMAND_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
+    // The macOS app bundle uses this flag to select CLI behavior when it is
+    // launched from a non-interactive child process.
+    env: { ...process.env, TAILSCALE_BE_CLI: process.env.TAILSCALE_BE_CLI ?? "true" },
   });
   return { stdout: result.stdout, stderr: result.stderr };
 };

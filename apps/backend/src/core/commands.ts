@@ -1939,6 +1939,13 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
 
   register("get_config", (_args, { storage }) => storage.loadConfig());
   register("save_config", ({ config }, { storage }) => storage.saveConfig(config as never));
+  register("get_desktop_connections", (_args, { storage }) => storage.getDesktopConnections());
+  register("save_desktop_connections", ({ desktopConnections }, { storage }) => {
+    if (!desktopConnections || typeof desktopConnections !== "object" || Array.isArray(desktopConnections)) {
+      throw new Error("Expected desktopConnections to be an object");
+    }
+    return storage.saveDesktopConnections(desktopConnections as never);
+  });
   register("get_global_config", async (_args, { storage }) => (await storage.loadConfig()).global);
   register("update_global_config", ({ global }, { storage }) => storage.updateGlobalConfig(global as never));
   register("get_repository_config", ({ projectId }, { storage }) => storage.getRepositoryConfig(asString(projectId, "projectId")));

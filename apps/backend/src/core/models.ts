@@ -94,6 +94,7 @@ export interface RepositoryConfig {
 
 export interface AppConfig {
   version: string;
+  desktopConnections?: import("@orkestrator/protocol/connections").StoredDesktopConnections;
   global: {
     containerResources: { cpuCores: number; memoryGb: number };
     envFilePatterns: string[];

@@ -711,6 +711,19 @@ export class StorageService {
     await this.saveJson(this.configFile(), config);
   }
 
+  async getDesktopConnections(): Promise<import("@orkestrator/protocol/connections").StoredDesktopConnections> {
+    const config = await this.loadConfig();
+    return config.desktopConnections ?? { activeConnectionId: "local", connections: [] };
+  }
+
+  async saveDesktopConnections(
+    desktopConnections: import("@orkestrator/protocol/connections").StoredDesktopConnections,
+  ): Promise<void> {
+    const config = await this.loadConfig();
+    config.desktopConnections = desktopConnections;
+    await this.saveConfig(config);
+  }
+
   async getRepositoryConfig(projectId: string): Promise<RepositoryConfig> {
     const config = await this.loadConfig();
     return config.repositories[projectId] ?? defaultRepositoryConfig();

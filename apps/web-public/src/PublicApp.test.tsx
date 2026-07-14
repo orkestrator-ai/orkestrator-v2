@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, tes
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { clearDirectGatewayTransport } from "@/lib/native/gateway-auth-transport";
 import { PublicApp } from "./PublicApp";
-import { loadSavedConnection, saveConnection, SKIP_AUTO_CONNECT_KEY } from "./connection";
+import { loadSavedConnection, saveConnection } from "./connection";
 
 // The real @/App pulls in the entire renderer; the stub keeps the connected
 // state observable without booting it. No other web-public suite imports @/App.
@@ -56,7 +56,7 @@ describe("PublicApp connection form", () => {
     expect(loadSavedConnection().address).toBe("");
   });
 
-  test("connects, installs the direct gateway, and switches backends through the chip", async () => {
+  test("connects, installs the direct gateway, and exposes connection switching", async () => {
     globalThis.fetch = mock(async () =>
       new Response(JSON.stringify({ ok: true }), { status: 200 })
     ) as unknown as typeof fetch;
@@ -74,19 +74,17 @@ describe("PublicApp connection form", () => {
     expect(loadSavedConnection()).toEqual({
       address: "https://workstation.example",
       token,
-      rememberToken: false,
     });
     expect(window.orkestratorGateway).toEqual({
       enabled: true,
       baseUrl: "https://workstation.example",
     });
     expect(typeof window.orkestrator?.invoke).toBe("function");
-
-    const chip = screen.getByTitle("Connected directly to https://workstation.example");
-    expect(chip.textContent).toContain("workstation.example");
-    fireEvent.click(chip);
-    expect(sessionStorage.getItem(SKIP_AUTO_CONNECT_KEY)).toBe("1");
-    expect(reload).toHaveBeenCalledTimes(1);
+    expect((await window.orkestrator?.connections?.list())?.connections[0]).toMatchObject({
+      name: "workstation.example",
+      active: true,
+    });
+    expect(reload).not.toHaveBeenCalled();
   });
 
   test("warns when this HTTPS page targets a plain-HTTP backend", () => {
@@ -104,8 +102,8 @@ describe("PublicApp connection form", () => {
   });
 
   test("reveals the token and forgets saved browser credentials", () => {
-    saveConnection({ address: "https://workstation.example", token, rememberToken: true });
-    sessionStorage.setItem(SKIP_AUTO_CONNECT_KEY, "1");
+    saveConnection({ address: "https://workstation.example", token });
+    sessionStorage.clear();
     render(<PublicApp />);
 
     const tokenInput = screen.getByLabelText("Gateway token");
@@ -114,12 +112,12 @@ describe("PublicApp connection form", () => {
     expect(tokenInput.getAttribute("type")).toBe("text");
     fireEvent.click(screen.getByRole("button", { name: "Forget saved connection" }));
 
-    expect(loadSavedConnection()).toEqual({ address: "", token: "", rememberToken: false });
+    expect(loadSavedConnection()).toEqual({ address: "", token: "" });
     expect(screen.queryByRole("button", { name: "Forget saved connection" })).toBeNull();
   });
 
   test("aborts an automatic connection check when unmounted", async () => {
-    saveConnection({ address: "https://workstation.example", token, rememberToken: false });
+    saveConnection({ address: "https://workstation.example", token });
     let aborted = false;
     globalThis.fetch = mock((_input, init) => new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => {

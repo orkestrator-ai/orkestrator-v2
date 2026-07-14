@@ -36,6 +36,14 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
   const gatewayTokenSettings = { token: "test-token-123456", editable: true, source: "file" as const };
   const getGatewayTokenSettings = mock(async () => gatewayTokenSettings);
   const setGatewayToken = mock(async (token: string) => ({ ...gatewayTokenSettings, token }));
+  const connectionList = {
+    activeConnectionId: "local",
+    connections: [{ id: "local", name: "Local", address: null, kind: "local" as const, active: true, requiresToken: false }],
+  };
+  const listConnections = mock(() => connectionList);
+  const connectToRemote = mock(async () => connectionList);
+  const useConnection = mock(async () => connectionList);
+  const forgetConnection = mock(async () => connectionList);
 
   registerMainIpc({
     getBackend: () => backend,
@@ -51,6 +59,10 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
     setWebClientEnabled,
     getGatewayTokenSettings,
     setGatewayToken,
+    listConnections,
+    connectToRemote,
+    useConnection,
+    forgetConnection,
   });
 
   const invoke = (channel: string, ...args: unknown[]) => {
@@ -59,7 +71,7 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
     return Promise.resolve().then(() => handler({}, ...args));
   };
 
-  return { invoke, handlers, backend, window, clipboardApi, clipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled, getGatewayTokenSettings, setGatewayToken };
+  return { invoke, handlers, backend, window, clipboardApi, clipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled, getGatewayTokenSettings, setGatewayToken, listConnections, connectToRemote, useConnection, forgetConnection };
 }
 
 describe("main IPC registration", () => {
@@ -117,6 +129,30 @@ describe("main IPC registration", () => {
     await expect(harness.invoke("orkestrator:web-client:set-token", 42)).rejects.toThrow(
       "Expected token to be a string",
     );
+  });
+
+  test("lists, creates, selects, and forgets server connections", async () => {
+    const harness = createHarness();
+    await expect(harness.invoke("orkestrator:connections:list")).resolves.toMatchObject({
+      activeConnectionId: "local",
+    });
+    await harness.invoke("orkestrator:connections:connect", { address: "https://desk.example", token: "gateway-token-123456" });
+    expect(harness.connectToRemote).toHaveBeenCalledWith({
+      address: "https://desk.example",
+      token: "gateway-token-123456",
+    });
+    await harness.invoke("orkestrator:connections:use", "remote-1");
+    expect(harness.useConnection).toHaveBeenCalledWith("remote-1");
+    await harness.invoke("orkestrator:connections:forget", "remote-1");
+    expect(harness.forgetConnection).toHaveBeenCalledWith("remote-1");
+  });
+
+  test("validates connection IPC input", async () => {
+    const harness = createHarness();
+    await expect(harness.invoke("orkestrator:connections:connect", null)).rejects.toThrow("connection details");
+    await expect(harness.invoke("orkestrator:connections:connect", { address: 42, token: "token" })).rejects.toThrow("address and gateway token");
+    await expect(harness.invoke("orkestrator:connections:use", 42)).rejects.toThrow("connection ID");
+    await expect(harness.invoke("orkestrator:connections:forget", null)).rejects.toThrow("connection ID");
   });
 
   test("forwards asynchronous web client status results and failures", async () => {

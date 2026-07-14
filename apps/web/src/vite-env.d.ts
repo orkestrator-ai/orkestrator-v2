@@ -29,6 +29,12 @@ interface Window {
       getTokenSettings(): Promise<import("./types/webClient").GatewayTokenSettings>;
       setToken(token: string): Promise<import("./types/webClient").GatewayTokenSettings>;
     };
+    connections?: {
+      list(): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      connect(input: import("@orkestrator/protocol/connections").ConnectToRemoteInput): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      use(connectionId: string): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      forget(connectionId: string): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+    };
     process: {
       exit(code?: number): Promise<void>;
     };

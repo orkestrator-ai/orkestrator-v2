@@ -1,4 +1,5 @@
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
+import type { ConnectToRemoteInput, ConnectionList } from "@orkestrator/protocol/connections";
 
 type EventCallback<T> = (payload: T) => void;
 
@@ -64,6 +65,21 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       },
       setToken(token: string): Promise<GatewayTokenSettings> {
         return ipcRenderer.invoke("orkestrator:web-client:set-token", token);
+      },
+    },
+
+    connections: {
+      list(): Promise<ConnectionList> {
+        return ipcRenderer.invoke("orkestrator:connections:list");
+      },
+      connect(input: ConnectToRemoteInput): Promise<ConnectionList> {
+        return ipcRenderer.invoke("orkestrator:connections:connect", input);
+      },
+      use(connectionId: string): Promise<ConnectionList> {
+        return ipcRenderer.invoke("orkestrator:connections:use", connectionId);
+      },
+      forget(connectionId: string): Promise<ConnectionList> {
+        return ipcRenderer.invoke("orkestrator:connections:forget", connectionId);
       },
     },
 

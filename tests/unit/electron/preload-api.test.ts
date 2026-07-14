@@ -71,6 +71,13 @@ describe("preload API factory", () => {
       channel: "orkestrator:web-client:set-token",
       args: ["replacement-token-123456"],
     });
+    await expect(api.connections.list()).resolves.toEqual({ channel: "orkestrator:connections:list", args: [] });
+    await expect(api.connections.connect({ address: "https://desk.example", token: "gateway-token-123456" })).resolves.toEqual({
+      channel: "orkestrator:connections:connect",
+      args: [{ address: "https://desk.example", token: "gateway-token-123456" }],
+    });
+    await expect(api.connections.use("remote-1")).resolves.toEqual({ channel: "orkestrator:connections:use", args: ["remote-1"] });
+    await expect(api.connections.forget("remote-1")).resolves.toEqual({ channel: "orkestrator:connections:forget", args: ["remote-1"] });
     await expect(api.process.exit(7)).resolves.toEqual({ channel: "orkestrator:process:exit", args: [7] });
     await expect(api.window.startDragging()).resolves.toEqual({ channel: "orkestrator:window:start-dragging", args: [] });
   });

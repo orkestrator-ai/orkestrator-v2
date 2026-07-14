@@ -4,6 +4,7 @@ import path from "node:path";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
 const read = (name: string) => readFileSync(path.join(packageRoot, name), "utf8");
+const readSharedWeb = (name: string) => readFileSync(path.join(packageRoot, "../web", name), "utf8");
 
 describe("public client deployment configuration", () => {
   test("builds and tests as an isolated Bun workspace", () => {
@@ -18,6 +19,7 @@ describe("public client deployment configuration", () => {
     expect(tsconfig.compilerOptions.paths).toBeDefined();
     expect(read("vite.config.ts")).toContain('"@": path.resolve(__dirname, "../web/src")');
     expect(read("bunfig.toml")).toContain('preload = ["../../tests/setup.ts"]');
+    expect(readSharedWeb("src/index.css")).toContain('@source "./"');
   });
 
   test("serves the SPA without proxying backend traffic and applies browser hardening headers", () => {

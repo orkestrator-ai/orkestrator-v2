@@ -105,7 +105,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     global.experimentalCodexRawEventLogging ?? true
   );
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
+  const [webClientEnabled, setWebClientEnabled] = useState(global.webClientEnabled ?? true);
   const [webClientStatus, setWebClientStatus] = useState<WebClientStatus | null>(null);
+  const [webClientApplyError, setWebClientApplyError] = useState<string | null>(null);
   const [gatewayTokenSettings, setGatewayTokenSettings] = useState<GatewayTokenSettings | null>(null);
   const [gatewayToken, setGatewayToken] = useState("");
   const [savedGatewayToken, setSavedGatewayToken] = useState("");
@@ -153,6 +155,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     );
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
+    setWebClientEnabled(global.webClientEnabled ?? true);
   }, [global]);
 
   const refreshWebClientStatus = useCallback(async () => {
@@ -163,7 +166,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
     const statusRequest = backend.getWebClientStatus()
       .then((status) => {
-        if (requestId === webClientStatusRequestRef.current) setWebClientStatus(status);
+        if (requestId === webClientStatusRequestRef.current) {
+          setWebClientStatus(status);
+          setWebClientApplyError(null);
+        }
       })
       .catch((error: unknown) => {
         if (requestId === webClientStatusRequestRef.current) {
@@ -235,12 +241,14 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       terminalScrollback !== (global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK) ||
       experimentalCodexRawEventLogging !== (global.experimentalCodexRawEventLogging ?? true) ||
       debugLogging !== (global.debugLogging ?? false) ||
+      webClientEnabled !== (global.webClientEnabled ?? true) ||
+      webClientApplyError !== null ||
       gatewayToken !== savedGatewayToken;
     setHasChanges(changed);
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, gatewayToken, savedGatewayToken, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, webClientApplyError, gatewayToken, savedGatewayToken, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -362,7 +370,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         terminalScrollback,
         experimentalCodexRawEventLogging,
         debugLogging,
-        webClientEnabled: global.webClientEnabled ?? true,
+        webClientEnabled,
       };
 
       if (anthropicApiKey) newGlobal.anthropicApiKey = anthropicApiKey;
@@ -370,6 +378,24 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
       const newConfig = await backend.updateGlobalConfig(newGlobal);
       setConfig(newConfig);
+
+      if (!window.orkestratorGateway?.enabled) {
+        try {
+          const nextWebClientStatus = await backend.setWebClientEnabled(webClientEnabled);
+          setWebClientStatus(nextWebClientStatus);
+          setWebClientApplyError(null);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          setWebClientApplyError(message);
+          setWebClientStatus((status) => ({
+            enabled: webClientEnabled,
+            running: status?.running ?? false,
+            url: status?.url ?? null,
+            error: message,
+          }));
+          throw error;
+        }
+      }
 
       if (gatewayTokenSettings?.editable && gatewayToken !== savedGatewayToken) {
         const nextGatewayTokenSettings = await backend.setGatewayToken(gatewayToken);
@@ -433,6 +459,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     );
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
+    setWebClientEnabled(global.webClientEnabled ?? true);
+    setWebClientApplyError(null);
     setGatewayToken(savedGatewayToken);
     setDomainErrors([]);
     setColorError(null);
@@ -1021,11 +1049,15 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   }, [copyGatewayToken, gatewayToken]);
 
   const renderWebClient = () => {
+    const isRemoteClient = window.orkestratorGateway?.enabled === true;
+    const hasPendingAccessChange = webClientEnabled !== (global.webClientEnabled ?? true);
     const statusLabel = isLoadingWebClientStatus
       ? "Checking"
       : webClientStatus?.running
         ? "Running"
-        : "Unavailable";
+        : webClientStatus?.enabled
+          ? "Unavailable"
+          : "Off";
 
     return (
       <div className="max-w-2xl space-y-6">
@@ -1035,12 +1067,35 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
             Web client
           </h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            This backend serves both the Electron app and authenticated browser clients.
+            Connect from orkestrator.dev through a private Tailscale HTTPS address.
           </p>
         </div>
 
         <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/50">
-          <div className="space-y-2 p-4">
+          <div className="flex items-center justify-between gap-6 p-4">
+            <div className="min-w-0 space-y-1">
+              <Label htmlFor="web-client-enabled" className="text-sm font-medium">
+                Allow web access
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                {isRemoteClient
+                  ? "This setting can only be changed in the Electron app."
+                  : "Publishes this backend to your tailnet with Tailscale Serve."}
+              </p>
+            </div>
+            <Switch
+              id="web-client-enabled"
+              aria-label="Allow web access"
+              checked={webClientEnabled}
+              disabled={isRemoteClient || isSaving}
+              onCheckedChange={(enabled) => {
+                setWebClientEnabled(enabled);
+                setWebClientApplyError(null);
+              }}
+            />
+          </div>
+
+          <div className="space-y-2 border-t border-zinc-800 p-4">
             <div className="space-y-1">
               <Label htmlFor="gateway-token" className="flex items-center gap-2 text-sm font-medium">
                 <Key className="h-3.5 w-3.5" />
@@ -1129,11 +1184,17 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
                 <span className="text-xs font-medium text-foreground">{statusLabel}</span>
               </div>
 
-              {webClientStatus?.running && webClientStatus.url && (
+              {webClientStatus?.running && webClientStatus.url && !hasPendingAccessChange && (
                 <a
                   href={webClientStatus.url}
                   target="_blank"
                   rel="noopener noreferrer"
+                  onClick={(event) => {
+                    if (!isRemoteClient) {
+                      event.preventDefault();
+                      void backend.openInBrowser(webClientStatus.url!);
+                    }
+                  }}
                   className="flex min-w-0 items-center gap-1.5 font-mono text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   title={webClientStatus.url}
                 >
@@ -1143,7 +1204,12 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
               )}
             </div>
 
-            {webClientStatus?.error && (
+            {hasPendingAccessChange && (
+              <p className="mt-2 text-xs text-amber-400/90">
+                Save changes to {webClientEnabled ? "start" : "stop"} web access.
+              </p>
+            )}
+            {!hasPendingAccessChange && webClientStatus?.error && (
               <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-400/90">
                 <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
                 {webClientStatus.error}
@@ -1153,7 +1219,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         </div>
 
         <p className="text-xs leading-relaxed text-muted-foreground/70">
-          The backend uses a Tailscale address when available and otherwise falls back to this machine only. Changing the token keeps this browser signed in, but other browsers must use the new token on their next sign-in.
+          When enabled, enter the HTTPS address shown above and this gateway token at www.orkestrator.dev. Both devices must be on the same tailnet.
         </p>
       </div>
     );

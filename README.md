@@ -85,45 +85,47 @@ bun run dev
 
 Both the machine running Orkestrator and the device with the browser must be signed in to the same [Tailscale](https://tailscale.com) network. The hosted client also requires a tailnet-only HTTPS address; a plain `http://100.x.y.z:34121` gateway URL will be blocked by the browser as mixed content.
 
-1. Make sure Tailscale is connected on both devices. Close the Electron app or any other Orkestrator backend that is using the same data directory.
-2. From the repository root, start the backend configured for `orkestrator.dev`:
-
-   ```bash
-   bun run start:web-public
-   ```
-
-   On macOS, Orkestrator automatically detects the CLI bundled with `/Applications/Tailscale.app`. If Tailscale is installed somewhere else, provide its executable explicitly:
-
-   ```bash
-   ORKESTRATOR_TAILSCALE_BIN="/custom/path/to/tailscale" bun run start:web-public
-   ```
-
-   With the standalone macOS Tailscale client, you can instead install its [command-line integration](https://tailscale.com/docs/reference/tailscale-cli?tab=macos) from **Tailscale > Settings > CLI integration** and then use the shorter command on future runs.
-
-   Keep this process running while using the web client. It builds the backend, allows requests from both `https://orkestrator.dev` and `https://www.orkestrator.dev`, and publishes the local service through Tailscale Serve. Do not use Tailscale Funnel; the backend is intended to remain private to your tailnet.
-
-3. Copy these two values from the startup output:
-
-   - The HTTPS address shown by `[TailscaleServe] Available at`, such as `https://workstation.example-tailnet.ts.net`
-   - The token in the `gateway-auth.json` file shown by `[RemoteGateway] Auth token stored at`
-
-   On macOS, print only the token value with:
-
-   ```bash
-   bun -e 'console.log((await Bun.file(process.env.HOME + "/Library/Application Support/orkestrator-v2/gateway-auth.json").json()).token)'
-   ```
-
-   On Linux, the default file is `~/.config/orkestrator-v2/gateway-auth.json`. If the startup log shows a different path, read that file instead. Keep the token private; it grants access to the local Orkestrator backend.
-
+1. Make sure Tailscale is connected on both devices.
+2. In the Electron app, open **Settings > Web client**, enable **Allow web access**, and save. The app keeps its existing backend running, allows the hosted Orkestrator origins, and publishes it through Tailscale Serve.
+3. Copy the HTTPS backend address and gateway token shown in that settings panel.
 4. Open [`https://www.orkestrator.dev`](https://www.orkestrator.dev) from a browser on the same tailnet.
 5. Enter the HTTPS address as the **Backend address** and the token as the **Gateway token**, then select **Connect directly**. Use the origin only—do not add a path, query string, or token to the URL.
+
+For a standalone backend without Electron, run:
+
+```bash
+bun run start:web-public
+```
+
+On macOS, Orkestrator automatically detects the CLI bundled with `/Applications/Tailscale.app`. If Tailscale is installed somewhere else, provide its executable explicitly:
+
+```bash
+ORKESTRATOR_TAILSCALE_BIN="/custom/path/to/tailscale" bun run start:web-public
+```
+
+With the standalone macOS Tailscale client, you can instead install its [command-line integration](https://tailscale.com/docs/reference/tailscale-cli?tab=macos) from **Tailscale > Settings > CLI integration** and then use the shorter command on future runs.
+
+Keep this process running while using the web client. It builds the backend, allows requests from both `https://orkestrator.dev` and `https://www.orkestrator.dev`, and publishes the local service through Tailscale Serve. Do not run it alongside Electron with the same data directory. Do not use Tailscale Funnel; the backend is intended to remain private to your tailnet.
+
+For the standalone command, copy these two values from the startup output:
+
+- The HTTPS address shown by `[TailscaleServe] Available at`, such as `https://workstation.example-tailnet.ts.net`
+- The token in the `gateway-auth.json` file shown by `[RemoteGateway] Auth token stored at`
+
+On macOS, print only the token value with:
+
+```bash
+bun -e 'console.log((await Bun.file(process.env.HOME + "/Library/Application Support/orkestrator-v2/gateway-auth.json").json()).token)'
+```
+
+On Linux, the default file is `~/.config/orkestrator-v2/gateway-auth.json`. If the startup log shows a different path, read that file instead. Keep the token private; it grants access to the local Orkestrator backend.
 
 The backend address is remembered in the browser. The token lasts for the current browser tab unless you enable **Remember token**. Once connected, use the connection indicator at the bottom of the page to change or forget the backend.
 
 If the connection fails:
 
 - **Could not reach the backend:** Confirm the backend process is still running, both devices are on the same tailnet, and the address starts with `https://`.
-- **Site is not in the backend's allowed origins:** Start it with `bun run start:web-public`, which allows both the apex and `www` Orkestrator origins.
+- **Site is not in the backend's allowed origins:** Enable web access in Electron settings, or start the standalone backend with `bun run start:web-public`; both allow the apex and `www` Orkestrator origins.
 - **Gateway token was rejected:** Reopen the current `gateway-auth.json` file and copy its `token` value without quotes or extra whitespace.
 - **`Executable not found in $PATH: "tailscale"`:** Install Tailscale's CLI integration or set `ORKESTRATOR_TAILSCALE_BIN` to the executable's absolute path.
 - **Tailscale Serve fails to start:** Confirm the Tailscale app is connected and that HTTPS/Serve is enabled for the tailnet. The first Serve setup may require approval from a tailnet administrator.

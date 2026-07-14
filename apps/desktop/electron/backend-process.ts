@@ -2,7 +2,12 @@ import { createInterface } from "node:readline";
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { GatewayTokenSettings } from "@orkestrator/protocol/web-client";
+import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
+
+export const HOSTED_WEB_CLIENT_ORIGINS = [
+  "https://orkestrator.dev",
+  "https://www.orkestrator.dev",
+] as const;
 
 export type GatewayStartInfo = {
   bindAddress: string;
@@ -71,6 +76,14 @@ export class BackendHttpClient {
     return settings;
   }
 
+  async getWebClientStatus(): Promise<WebClientStatus> {
+    return this.webClientAccess("GET");
+  }
+
+  async setWebClientEnabled(enabled: boolean): Promise<WebClientStatus> {
+    return this.webClientAccess("PUT", { enabled });
+  }
+
   listen(onEvent: (event: string, payload: unknown) => void): void {
     this.abortEvents?.abort();
     const controller = new AbortController();
@@ -124,6 +137,17 @@ export class BackendHttpClient {
     if (!response.ok) throw new Error(payload.error ?? `Backend settings request failed with HTTP ${response.status}`);
     return payload;
   }
+
+  private async webClientAccess(method: "GET" | "PUT", body?: { enabled: boolean }): Promise<WebClientStatus> {
+    const response = await fetch(new URL("/__orkestrator/web-client-access", this.baseUrl), {
+      method,
+      headers: { authorization: `Bearer ${this.token}`, ...(body ? { "content-type": "application/json" } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const payload = await response.json() as WebClientStatus & { error?: string };
+    if (!response.ok) throw new Error(payload.error ?? `Backend web client request failed with HTTP ${response.status}`);
+    return payload;
+  }
 }
 
 export class BackendProcess {
@@ -142,6 +166,8 @@ export class BackendProcess {
     gatewayPort?: number;
     fallbackGatewayHost?: string;
     allowNonTailscaleBind?: boolean;
+    desktopWebClient?: boolean;
+    tailscaleExecutable?: string;
     onEvent: (event: string, payload: unknown) => void;
     onUnexpectedExit?: (error: Error) => void;
   }): Promise<BackendHttpClient> {
@@ -163,6 +189,8 @@ export class BackendProcess {
     gatewayPort?: number;
     fallbackGatewayHost?: string;
     allowNonTailscaleBind?: boolean;
+    desktopWebClient?: boolean;
+    tailscaleExecutable?: string;
     onEvent: (event: string, payload: unknown) => void;
     onUnexpectedExit?: (error: Error) => void;
   }): Promise<BackendHttpClient> {
@@ -174,7 +202,15 @@ export class BackendProcess {
       "--control-host", "127.0.0.1", "--control-port", "0",
       "--data-dir", options.dataDir, "--app-root", options.appRoot, "--resource-root", options.resourceRoot,
       "--renderer-root", options.isDev ? path.join(options.appRoot, "apps", "web", "dist") : path.join(options.resourceRoot, "web")];
-    if (options.gatewayHost) {
+    if (options.desktopWebClient) {
+      args.push(
+        "--desktop-web-client",
+        "--host", "127.0.0.1",
+        "--allow-non-tailscale-bind",
+        "--allowed-origins", HOSTED_WEB_CLIENT_ORIGINS.join(","),
+      );
+      if (options.tailscaleExecutable) args.push("--tailscale-bin", options.tailscaleExecutable);
+    } else if (options.gatewayHost) {
       args.push("--host", options.gatewayHost);
     } else {
       args.push("--fallback-host", options.fallbackGatewayHost ?? "127.0.0.1");

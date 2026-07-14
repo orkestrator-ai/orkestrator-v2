@@ -119,6 +119,26 @@ describe("main IPC registration", () => {
     );
   });
 
+  test("forwards asynchronous web client status results and failures", async () => {
+    const harness = createHarness();
+    harness.getWebClientStatus.mockImplementationOnce(() => Promise.resolve({
+      enabled: false,
+      running: false,
+      url: null,
+      error: null,
+    }) as never);
+    await expect(harness.invoke("orkestrator:web-client:get-status")).resolves.toMatchObject({
+      enabled: false,
+    });
+
+    harness.getWebClientStatus.mockImplementationOnce(() => Promise.reject(
+      new Error("status unavailable"),
+    ) as never);
+    await expect(harness.invoke("orkestrator:web-client:get-status")).rejects.toThrow(
+      "status unavailable",
+    );
+  });
+
   test("throws for backend commands before the backend is initialized", async () => {
     const harness = createHarness({ backend: null });
 

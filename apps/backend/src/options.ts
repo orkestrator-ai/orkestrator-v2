@@ -21,6 +21,7 @@ export type BackendOptions = {
   allowNonTailscaleBind: boolean;
   allowedOrigins?: string[];
   tailscaleServe: boolean;
+  desktopWebClient: boolean;
   tailscaleServePort: number;
   tailscaleExecutable: string;
 };
@@ -106,6 +107,7 @@ export function parseOptions(
       .filter(Boolean),
     tailscaleServe: args.includes("--tailscale-serve")
       || env.ORKESTRATOR_TAILSCALE_SERVE === "1",
+    desktopWebClient: args.includes("--desktop-web-client"),
     tailscaleServePort,
     tailscaleExecutable: valueAfter(args, "--tailscale-bin")
       ?? env.ORKESTRATOR_TAILSCALE_BIN

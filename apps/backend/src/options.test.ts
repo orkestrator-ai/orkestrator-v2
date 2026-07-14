@@ -122,6 +122,8 @@ describe("standalone backend options", () => {
     expect(parseOptions([], { ORKESTRATOR_TAILSCALE_SERVE: "true" }).tailscaleServe).toBe(false);
     expect(parseOptions([], { ORKESTRATOR_TAILSCALE_SERVE: "1" }).tailscaleServe).toBe(true);
     expect(parseOptions(["--tailscale-serve"], {}).tailscaleServe).toBe(true);
+    expect(parseOptions(["--desktop-web-client"], {}).desktopWebClient).toBe(true);
+    expect(parseOptions([], {}).desktopWebClient).toBe(false);
   });
 
   test("explicitly supports macOS and Linux only", () => {

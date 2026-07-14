@@ -167,11 +167,68 @@ describe("GlobalSettings", () => {
     render(<GlobalSettings activeSection="web-client" />);
 
     expect(screen.getByText("Web client")).toBeTruthy();
-    expect(screen.getByText(/serves both the Electron app/)).toBeTruthy();
-    expect(screen.queryByRole("switch", { name: "Allow web access" })).toBeNull();
+    expect(screen.getByText(/Connect from orkestrator.dev/)).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Allow web access" })).toBeTruthy();
     expect(await screen.findByLabelText("Gateway token")).toBeTruthy();
     expect(mockGetWebClientStatus).toHaveBeenCalledTimes(1);
     expect(mockGetGatewayTokenSettings).toHaveBeenCalledTimes(1);
+  });
+
+  test("persists and applies Electron web access changes", async () => {
+    window.orkestratorGateway = undefined;
+    const { container } = render(<GlobalSettings activeSection="web-client" />);
+    await screen.findByText("Running");
+
+    fireEvent.click(screen.getByRole("switch", { name: "Allow web access" }));
+    expect(screen.getByText("Save changes to stop web access.")).toBeTruthy();
+    fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(expect.objectContaining({ webClientEnabled: false }));
+      expect(mockSetWebClientEnabled).toHaveBeenCalledWith(false);
+    });
+  });
+
+  test("keeps a failed Electron web access transition retryable after config persistence", async () => {
+    window.orkestratorGateway = undefined;
+    mockSetWebClientEnabled.mockRejectedValueOnce(new Error("control request failed"));
+    const { container } = render(<GlobalSettings activeSection="web-client" />);
+    await screen.findByText("Running");
+
+    fireEvent.click(screen.getByRole("switch", { name: "Allow web access" }));
+    fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to save settings",
+      { description: "control request failed" },
+    ));
+    expect(screen.getByText("control request failed")).toBeTruthy();
+    const saveButton = within(container).getByRole("button", { name: "Save Changes" }) as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(false);
+
+    fireEvent.click(saveButton);
+    await waitFor(() => expect(mockSetWebClientEnabled).toHaveBeenCalledTimes(2));
+    expect(mockSetWebClientEnabled).toHaveBeenLastCalledWith(false);
+    await waitFor(() => expect(saveButton.disabled).toBe(true));
+  });
+
+  test("renders the authoritative disabled status as Off", async () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: { ...state.config.global, webClientEnabled: false },
+      },
+    }));
+    mockGetWebClientStatus.mockResolvedValueOnce({
+      enabled: false,
+      running: false,
+      url: null,
+      error: null,
+    });
+
+    render(<GlobalSettings activeSection="web-client" />);
+    expect(await screen.findByText("Off")).toBeTruthy();
+    expect(screen.queryByRole("link")).toBeNull();
   });
 
   test("displays, reveals, edits, and saves the gateway token", async () => {
@@ -272,7 +329,7 @@ describe("GlobalSettings", () => {
     console.error = originalConsoleError;
   });
 
-  test("saves a token without calling the removed desktop lifecycle control", async () => {
+  test("does not let a remote client change the desktop web access lifecycle", async () => {
     render(<GlobalSettings activeSection="web-client" />);
     const input = await screen.findByLabelText("Gateway token") as HTMLInputElement;
 
@@ -318,12 +375,12 @@ describe("GlobalSettings", () => {
     expect(await screen.findByText("IPC unavailable")).toBeTruthy();
   });
 
-  test("shows credential controls but no lifecycle toggle in a remote browser", async () => {
+  test("shows a disabled lifecycle toggle in a remote browser", async () => {
     render(<GlobalSettings activeSection="web-client" />);
     await screen.findByText("Running");
 
     expect(screen.getByLabelText("Gateway token")).toBeTruthy();
-    expect(screen.queryByRole("switch", { name: "Allow web access" })).toBeNull();
+    expect((screen.getByRole("switch", { name: "Allow web access" }) as HTMLButtonElement).disabled).toBe(true);
     expect(mockSetWebClientEnabled).not.toHaveBeenCalled();
   });
 
@@ -334,6 +391,15 @@ describe("GlobalSettings", () => {
     expect(link.href).toBe("http://100.88.12.3:34121/");
     expect(link.target).toBe("_blank");
     expect(mockOpenInBrowser).not.toHaveBeenCalled();
+  });
+
+  test("opens the managed HTTPS address in the system browser from Electron", async () => {
+    window.orkestratorGateway = undefined;
+    render(<GlobalSettings activeSection="web-client" />);
+    const link = await screen.findByRole("link", { name: /100\.88\.12\.3/ });
+
+    fireEvent.click(link);
+    expect(mockOpenInBrowser).toHaveBeenCalledWith("http://100.88.12.3:34121/");
   });
 
   test("renders every settings section", () => {

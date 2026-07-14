@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -32,8 +32,10 @@ export function AddProjectDialog({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isValidUrl, setIsValidUrl] = useState<boolean | null>(null);
+  const validationRequestRef = useRef(0);
 
   const resetForm = useCallback(() => {
+    validationRequestRef.current += 1;
     setGitUrl("");
     setLocalPath("");
     setError(null);
@@ -50,16 +52,27 @@ export function AddProjectDialog({
     [onOpenChange, resetForm]
   );
 
-  const handleGitUrlChange = useCallback(
+  const setAndValidateGitUrl = useCallback(
     async (value: string) => {
+      const validationRequest = ++validationRequestRef.current;
       setGitUrl(value);
       setError(null);
 
-      if (value.trim()) {
-        const valid = await validateGitUrl(value);
-        setIsValidUrl(valid);
-      } else {
+      if (!value.trim()) {
         setIsValidUrl(null);
+        return;
+      }
+
+      try {
+        const valid = await validateGitUrl(value);
+        if (validationRequest === validationRequestRef.current) {
+          setIsValidUrl(valid);
+        }
+      } catch (err) {
+        if (validationRequest === validationRequestRef.current) {
+          setIsValidUrl(false);
+          setError(err instanceof Error ? err.message : "Failed to validate Git URL");
+        }
       }
     },
     [validateGitUrl]
@@ -71,28 +84,34 @@ export function AddProjectDialog({
         directory: true,
         multiple: false,
         title: "Select Repository Directory",
+        defaultPath: localPath.trim() || undefined,
       });
 
-      if (selected && typeof selected === "string") {
-        setLocalPath(selected);
+      // Browser clients cannot open a server-side directory picker. In that
+      // case, use the path entered by the user and let the backend inspect it.
+      const repositoryPath = typeof selected === "string"
+        ? selected
+        : window.orkestratorGateway?.enabled
+          ? localPath.trim()
+          : "";
+      if (!repositoryPath) return;
 
-        // Try to get the git remote URL from the selected directory
-        try {
-          const remoteUrl = await getGitRemoteUrl(selected);
-          if (remoteUrl) {
-            setGitUrl(remoteUrl);
-            const valid = await validateGitUrl(remoteUrl);
-            setIsValidUrl(valid);
-          }
-        } catch (err) {
-          // Silently ignore - directory may not be a git repo
-          console.debug("Could not get git remote URL:", err);
+      setLocalPath(repositoryPath);
+
+      // Try to get the git remote URL from the selected or entered directory.
+      try {
+        const remoteUrl = await getGitRemoteUrl(repositoryPath);
+        if (remoteUrl) {
+          await setAndValidateGitUrl(remoteUrl);
         }
+      } catch (err) {
+        // Silently ignore - directory may not be a git repo
+        console.debug("Could not get git remote URL:", err);
       }
     } catch (err) {
       console.error("Failed to open directory picker:", err);
     }
-  }, [validateGitUrl]);
+  }, [localPath, setAndValidateGitUrl]);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -125,7 +144,7 @@ export function AddProjectDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="sm:max-w-6xl">
         <DialogHeader>
           <DialogTitle>Add Project</DialogTitle>
           <DialogDescription>
@@ -145,7 +164,7 @@ export function AddProjectDialog({
               type="text"
               placeholder="git@github.com:user/repo.git or https://..."
               value={gitUrl}
-              onChange={(e) => handleGitUrlChange(e.target.value)}
+              onChange={(e) => void setAndValidateGitUrl(e.target.value)}
               className={cn(
                 isValidUrl === false && "border-destructive",
                 isValidUrl === true && "border-green-500"
@@ -180,6 +199,7 @@ export function AddProjectDialog({
                 size="icon"
                 onClick={handleBrowse}
                 disabled={isLoading}
+                aria-label="Select or detect repository directory"
               >
                 <FolderOpen className="h-4 w-4" />
               </Button>

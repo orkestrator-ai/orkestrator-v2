@@ -104,6 +104,26 @@
         "vite": "^7.0.4",
       },
     },
+    "apps/web-public": {
+      "name": "@orkestrator/web-public",
+      "version": "2.3.0",
+      "dependencies": {
+        "@orkestrator/protocol": "workspace:*",
+        "@orkestrator/web": "workspace:*",
+        "lucide-react": "^0.562.0",
+        "react": "^19.1.0",
+        "react-dom": "^19.1.0",
+      },
+      "devDependencies": {
+        "@tailwindcss/vite": "^4.1.18",
+        "@types/react": "^19.1.8",
+        "@types/react-dom": "^19.1.6",
+        "@vitejs/plugin-react": "^4.6.0",
+        "tailwindcss": "^4.1.18",
+        "typescript": "~5.8.3",
+        "vite": "^7.0.4",
+      },
+    },
     "bridges/claude-bridge": {
       "name": "claude-bridge",
       "version": "1.0.0",
@@ -396,6 +416,8 @@
     "@orkestrator/protocol": ["@orkestrator/protocol@workspace:packages/protocol"],
 
     "@orkestrator/web": ["@orkestrator/web@workspace:apps/web"],
+
+    "@orkestrator/web-public": ["@orkestrator/web-public@workspace:apps/web-public"],
 
     "@peculiar/asn1-schema": ["@peculiar/asn1-schema@2.8.0", "", { "dependencies": { "@peculiar/utils": "^2.0.2", "asn1js": "^3.0.10", "tslib": "^2.8.1" } }, "sha512-7YT0U/ze0tF2QOBbE15gKZwy5tvgGyLRiRHLzhlbOpf7BT032oBSd0haZqXn5W6l26WLlu3dyxzjM+2638/z2Q=="],
 

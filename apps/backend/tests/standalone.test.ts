@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -12,7 +12,10 @@ afterAll(async () => {
   await Promise.all(temporaryDirectories.map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-async function startBackend(): Promise<{
+async function startBackend(
+  extraArgs: string[] = [],
+  extraEnv: Record<string, string> = {},
+): Promise<{
   url: string;
   token: string;
   readyMessage: Record<string, unknown>;
@@ -28,12 +31,17 @@ async function startBackend(): Promise<{
     path.join(root, "apps/backend/dist/main.js"),
     "--host", "127.0.0.1",
     "--port", "0",
-    "--unsafe-allow-non-tailscale-bind",
+    "--allow-non-tailscale-bind",
     "--data-dir", dataDir,
     "--app-root", root,
     "--resource-root", root,
     "--renderer-root", rendererRoot,
-  ], { stdout: "pipe", stderr: "pipe" });
+    ...extraArgs,
+  ], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, ...extraEnv },
+  });
   processes.push(child);
 
   const reader = child.stdout.getReader();
@@ -92,5 +100,106 @@ describe("standalone backend service", () => {
     const { child } = await startBackend();
     child.kill("SIGTERM");
     await expect(child.exited).resolves.toBe(0);
+  });
+
+  test("can own a Tailscale Serve listener and publish its HTTPS URL", async () => {
+    const testDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-tailscale-test-"));
+    temporaryDirectories.push(testDir);
+    const executable = path.join(testDir, "tailscale");
+    const logFile = path.join(testDir, "calls.log");
+    await writeFile(executable, `#!/bin/sh
+printf '%s\\n' "$*" >> "$TAILSCALE_TEST_LOG"
+case " $* " in
+  *" off "*) exit 0 ;;
+esac
+if [ "$*" = "serve status --json" ]; then
+  printf '{}\\n'
+  exit 0
+fi
+printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
+`);
+    await chmod(executable, 0o755);
+
+    const { child, readyMessage } = await startBackend(
+      ["--tailscale-serve", "--tailscale-bin", executable],
+      { TAILSCALE_TEST_LOG: logFile },
+    );
+
+    expect(readyMessage.browserUrl).toBe("https://workstation.example.ts.net/");
+    expect(readyMessage.bindAddress).toBe("127.0.0.1");
+    child.kill("SIGTERM");
+    await expect(child.exited).resolves.toBe(0);
+
+    const calls = await readFile(logFile, "utf8");
+    expect(calls).toContain("serve --bg --yes --https=443 http://127.0.0.1:");
+    expect(calls).toContain("serve --https=443 off");
+  });
+
+  test("exits without a leftover listener when environment-managed Serve setup fails", async () => {
+    const testDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-tailscale-fail-"));
+    temporaryDirectories.push(testDir);
+    const executable = path.join(testDir, "tailscale");
+    const logFile = path.join(testDir, "calls.log");
+    await writeFile(executable, `#!/bin/sh
+printf '%s\\n' "$*" >> "$TAILSCALE_TEST_LOG"
+if [ "$*" = "serve status --json" ]; then
+  printf '{}\\n'
+  exit 0
+fi
+echo 'Tailscale HTTPS is not enabled for this tailnet' >&2
+exit 1
+`);
+    await chmod(executable, 0o755);
+
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-standalone-test-"));
+    temporaryDirectories.push(dataDir);
+    const rendererRoot = path.join(dataDir, "renderer");
+    await mkdir(rendererRoot);
+    await writeFile(path.join(rendererRoot, "index.html"), "<!doctype html><title>Orkestrator</title>");
+
+    const child = Bun.spawn([
+      process.execPath,
+      path.join(root, "apps/backend/dist/main.js"),
+      "--port", "0",
+      "--data-dir", dataDir,
+      "--app-root", root,
+      "--resource-root", root,
+      "--renderer-root", rendererRoot,
+    ], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        ORKESTRATOR_TAILSCALE_SERVE: "1",
+        ORKESTRATOR_TAILSCALE_BIN: executable,
+        TAILSCALE_TEST_LOG: logFile,
+      },
+    });
+    processes.push(child);
+
+    await expect(child.exited).resolves.not.toBe(0);
+    expect(await new Response(child.stderr).text()).toContain(
+      "Unable to configure Tailscale Serve: Tailscale HTTPS is not enabled for this tailnet",
+    );
+    const calls = await readFile(logFile, "utf8");
+    expect(calls).toContain("serve status --json");
+    expect(calls).toContain("serve --bg --yes --https=443 http://127.0.0.1:");
+    // Configuration never succeeded, so shutdown must not remove anyone's listener.
+    expect(calls).not.toContain("off");
+  });
+
+  test("rejects Tailscale Serve with a non-IPv4-loopback listener", async () => {
+    const child = Bun.spawn([
+      process.execPath,
+      path.join(root, "apps/backend/dist/main.js"),
+      "--tailscale-serve",
+      "--host", "::1",
+    ], { stdout: "pipe", stderr: "pipe", env: process.env });
+    processes.push(child);
+
+    await expect(child.exited).resolves.not.toBe(0);
+    expect(await new Response(child.stderr).text()).toContain(
+      "--tailscale-serve requires --host 127.0.0.1",
+    );
   });
 });

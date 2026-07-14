@@ -1,11 +1,34 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
+import { getGatewayBaseUrl, resolveGatewayApiUrl, resolveGatewayLoopbackBaseUrl } from "./gateway-url";
 
 afterEach(() => {
   delete window.orkestratorGateway;
 });
 
 describe("resolveGatewayLoopbackBaseUrl", () => {
+  test("uses and normalizes a configured direct gateway base URL", () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+
+    expect(getGatewayBaseUrl()).toBe("https://workstation.tailnet.ts.net");
+    expect(resolveGatewayApiUrl("__orkestrator/status")).toBe(
+      "https://workstation.tailnet.ts.net/__orkestrator/status",
+    );
+    expect(resolveGatewayApiUrl("/__orkestrator/status")).toBe(
+      "https://workstation.tailnet.ts.net/__orkestrator/status",
+    );
+    expect(resolveGatewayLoopbackBaseUrl("http://127.0.0.1:4000/api/")).toBe(
+      "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/4000/api",
+    );
+  });
+
+  test("uses same-origin URLs when no direct base URL is configured", () => {
+    expect(getGatewayBaseUrl()).toBe(window.location.origin);
+    expect(resolveGatewayApiUrl("__orkestrator/status")).toBe("/__orkestrator/status");
+  });
+
   test("leaves loopback URLs unchanged outside the remote gateway", () => {
     expect(resolveGatewayLoopbackBaseUrl("http://127.0.0.1:4000")).toBe("http://127.0.0.1:4000");
   });

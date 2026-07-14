@@ -3,6 +3,8 @@
 interface Window {
   orkestratorGateway?: {
     enabled: boolean;
+    /** Backend origin used when the renderer was loaded from a separate host. */
+    baseUrl?: string;
   };
   orkestrator?: {
     invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T>;

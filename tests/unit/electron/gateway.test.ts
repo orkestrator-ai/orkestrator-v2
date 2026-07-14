@@ -105,7 +105,7 @@ async function startGateway(options: Partial<ConstructorParameters<typeof Orkest
     port: 0,
     env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
     logger: createLogger(),
-    unsafeAllowNonTailscaleBind: true,
+    allowNonTailscaleBind: true,
     ...options,
   });
   gateways.push(gateway);
@@ -165,7 +165,7 @@ describe("remote gateway", () => {
     expect(JSON.parse(await readFile(generated.authFile, "utf8"))).toEqual({ token: repaired.token });
   });
 
-  test("honors startup guardrails for disabled, missing, invalid, and unsafe binds", async () => {
+  test("honors startup guardrails for disabled, missing, invalid, and non-Tailscale binds", async () => {
     const dataDir = await createTempDir("ork-gateway-guard-");
     const rendererRoot = await createRendererRoot(dataDir);
     const logger = createLogger();
@@ -203,7 +203,7 @@ describe("remote gateway", () => {
     await expect(loopbackFallback.start()).resolves.toMatchObject({ bindAddress: "127.0.0.1" });
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("falling back to 127.0.0.1"));
 
-    const unsafeFallback = new OrkestratorGateway({
+    const nonTailscaleFallback = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
       dataDir,
       rendererRoot,
@@ -212,9 +212,9 @@ describe("remote gateway", () => {
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
       logger,
     });
-    await expect(unsafeFallback.start()).rejects.toThrow("Refusing to bind gateway to non-Tailscale address");
+    await expect(nonTailscaleFallback.start()).rejects.toThrow("Refusing to bind gateway to non-Tailscale address");
 
-    const unsafeBind = new OrkestratorGateway({
+    const nonTailscaleBind = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
       dataDir,
       rendererRoot,
@@ -222,7 +222,7 @@ describe("remote gateway", () => {
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
       logger,
     });
-    await expect(unsafeBind.start()).rejects.toThrow("Refusing to bind gateway to non-Tailscale address");
+    await expect(nonTailscaleBind.start()).rejects.toThrow("Refusing to bind gateway to non-Tailscale address");
 
     const invalidPort = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
@@ -334,7 +334,7 @@ describe("remote gateway", () => {
       port: 0,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
       logger: { debug: mock(() => undefined), error: mock(() => undefined), info: mock(() => undefined), warn: mock(() => undefined) },
-      unsafeAllowNonTailscaleBind: true,
+      allowNonTailscaleBind: true,
     });
     gateways.push(gateway);
     const info = await gateway.start();
@@ -394,6 +394,145 @@ describe("remote gateway", () => {
     });
     expect(backendError.status).toBe(500);
     expect(backendError.json()).toEqual({ error: "backend failed" });
+  });
+
+  test("allows configured public client origins without proxying browser traffic", async () => {
+    const { info } = await startGateway({
+      allowedOrigins: ["https://orkestrator.example", "https://*.vercel.app"],
+    });
+    const endpoint = `${info.url}__orkestrator/status`;
+
+    const preflight = await requestUrl(endpoint, {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://orkestrator.example",
+        "access-control-request-method": "GET",
+        "access-control-request-headers": "authorization",
+        "access-control-request-private-network": "true",
+      },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers["access-control-allow-origin"]).toBe("https://orkestrator.example");
+    expect(preflight.headers["access-control-allow-private-network"]).toBe("true");
+
+    const connected = await requestUrl(endpoint, {
+      headers: {
+        origin: "https://orkestrator.example",
+        authorization: `Bearer ${info.token}`,
+      },
+    });
+    expect(connected.status).toBe(200);
+    expect(connected.json()).toEqual({ ok: true });
+    expect(connected.headers["access-control-allow-origin"]).toBe("https://orkestrator.example");
+
+    const preview = await requestUrl(endpoint, {
+      headers: {
+        origin: "https://orkestrator-git-main-team.vercel.app",
+        authorization: `Bearer ${info.token}`,
+      },
+    });
+    expect(preview.status).toBe(200);
+
+    const rejected = await requestUrl(endpoint, {
+      headers: {
+        origin: "https://untrusted.example",
+        authorization: `Bearer ${info.token}`,
+      },
+    });
+    expect(rejected.status).toBe(403);
+    expect(rejected.json()).toEqual({ error: "Origin not allowed" });
+    expect(rejected.headers["access-control-allow-origin"]).toBeUndefined();
+
+    const unauthenticated = await requestUrl(endpoint, {
+      headers: { origin: "https://orkestrator.example" },
+    });
+    expect(unauthenticated.status).toBe(401);
+    expect(unauthenticated.headers["access-control-allow-origin"]).toBe("https://orkestrator.example");
+
+    const wrongMethod = await requestUrl(endpoint, {
+      method: "POST",
+      headers: {
+        origin: "https://orkestrator.example",
+        authorization: `Bearer ${info.token}`,
+      },
+    });
+    expect(wrongMethod.status).toBe(405);
+    expect(wrongMethod.headers["access-control-allow-origin"]).toBe("https://orkestrator.example");
+
+    const sameHost = await requestUrl(endpoint, {
+      headers: {
+        origin: new URL(info.url).origin,
+        authorization: `Bearer ${info.token}`,
+      },
+    });
+    expect(sameHost.status).toBe(200);
+
+    const malformed = await requestUrl(endpoint, {
+      headers: {
+        origin: "not an origin",
+        authorization: `Bearer ${info.token}`,
+      },
+    });
+    expect(malformed.status).toBe(403);
+  });
+
+  test("supports allow-all and trailing-slash origin rules", async () => {
+    const wildcard = await startGateway({ allowedOrigins: ["*"] });
+    const anyOrigin = await requestUrl(`${wildcard.info.url}__orkestrator/status`, {
+      headers: {
+        origin: "https://anything.example",
+        authorization: `Bearer ${wildcard.info.token}`,
+      },
+    });
+    expect(anyOrigin.status).toBe(200);
+    expect(anyOrigin.headers["access-control-allow-origin"]).toBe("https://anything.example");
+
+    const trailing = await startGateway({ allowedOrigins: ["https://trailing.example/"] });
+    const normalized = await requestUrl(`${trailing.info.url}__orkestrator/status`, {
+      headers: {
+        origin: "https://trailing.example",
+        authorization: `Bearer ${trailing.info.token}`,
+      },
+    });
+    expect(normalized.status).toBe(200);
+
+    const rejected = await requestUrl(`${trailing.info.url}__orkestrator/status`, {
+      headers: {
+        origin: "https://other.example",
+        authorization: `Bearer ${trailing.info.token}`,
+      },
+    });
+    expect(rejected.status).toBe(403);
+  });
+
+  test("reads CORS origins from the environment and honors wildcard ports", async () => {
+    const { info } = await startGateway({
+      env: {
+        ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456",
+        ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS: "https://*.preview.example:8443",
+      },
+    });
+    const endpoint = `${info.url}__orkestrator/status`;
+
+    const allowed = await requestUrl(endpoint, {
+      headers: {
+        origin: "https://branch.preview.example:8443",
+        authorization: `Bearer ${info.token}`,
+      },
+    });
+    expect(allowed.status).toBe(200);
+    expect(allowed.headers["access-control-allow-origin"]).toBe("https://branch.preview.example:8443");
+
+    for (const origin of [
+      "https://preview.example:8443",
+      "https://branch.preview.example:9443",
+      "http://branch.preview.example:8443",
+    ]) {
+      const rejected = await requestUrl(endpoint, {
+        headers: { origin, authorization: `Bearer ${info.token}` },
+      });
+      expect(rejected.status).toBe(403);
+    }
   });
 
   test("sets and clears the auth cookie through login and logout", async () => {
@@ -706,7 +845,7 @@ describe("remote gateway", () => {
       port: 0,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
       logger: { debug: mock(() => undefined), error: mock(() => undefined), info: mock(() => undefined), warn: mock(() => undefined) },
-      unsafeAllowNonTailscaleBind: true,
+      allowNonTailscaleBind: true,
     });
     gateways.push(gateway);
     const info = await gateway.start();
@@ -742,6 +881,8 @@ describe("remote gateway", () => {
       }
       response.writeHead(200, {
         "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "Access-Control-Allow-Credentials": "true",
         "set-cookie": [
           "app_session=abc123; Path=/; HttpOnly",
           "orkestrator_gateway_auth=evil; Path=/",
@@ -764,6 +905,9 @@ describe("remote gateway", () => {
       expect(cookieResponse.headers["set-cookie"]).toEqual([
         `app_session=abc123; Path=${proxyPrefix}/; HttpOnly`,
       ]);
+      // A proxied service must not be able to inject its own CORS policy.
+      expect(cookieResponse.headers["access-control-allow-origin"]).toBeUndefined();
+      expect(cookieResponse.headers["access-control-allow-credentials"]).toBeUndefined();
 
       const relativeRedirect = await requestUrl(`${info.url}${proxyPrefix}/relative`, {
         headers: { authorization: `Bearer ${info.token}` },
@@ -803,7 +947,7 @@ describe("remote gateway", () => {
       port: 0,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
       logger: { debug: mock(() => undefined), error: mock(() => undefined), info: mock(() => undefined), warn: mock(() => undefined) },
-      unsafeAllowNonTailscaleBind: true,
+      allowNonTailscaleBind: true,
     });
     gateways.push(gateway);
     const info = await gateway.start();

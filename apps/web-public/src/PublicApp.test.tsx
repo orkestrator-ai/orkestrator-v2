@@ -1,0 +1,136 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { clearDirectGatewayTransport } from "@/lib/native/gateway-auth-transport";
+import { PublicApp } from "./PublicApp";
+import { loadSavedConnection, saveConnection, SKIP_AUTO_CONNECT_KEY } from "./connection";
+
+// The real @/App pulls in the entire renderer; the stub keeps the connected
+// state observable without booting it. No other web-public suite imports @/App.
+mock.module("@/App", () => ({ default: () => <div>Main app stub</div> }));
+
+const originalFetch = globalThis.fetch;
+const originalEventSource = globalThis.EventSource;
+const originalReload = window.location.reload;
+const originalUrl = window.location.href;
+const token = "gateway-token-123456";
+const pageWindow = window as unknown as { happyDOM: { setURL(url: string): void } };
+
+beforeAll(() => {
+  // The connection screen is deployed on an HTTPS origin; several branches
+  // (gateway install, insecure-backend warning) are gated on that protocol.
+  pageWindow.happyDOM.setURL("https://public.example/");
+});
+
+afterAll(() => {
+  pageWindow.happyDOM.setURL(originalUrl);
+});
+
+beforeEach(() => {
+  localStorage.clear();
+  sessionStorage.clear();
+});
+
+afterEach(() => {
+  cleanup();
+  clearDirectGatewayTransport();
+  globalThis.fetch = originalFetch;
+  globalThis.EventSource = originalEventSource;
+  window.location.reload = originalReload;
+  delete window.orkestrator;
+  delete window.orkestratorGateway;
+});
+
+describe("PublicApp connection form", () => {
+  test("submits credentials and restores the form after a rejected token", async () => {
+    globalThis.fetch = mock(async () => new Response("{}", { status: 401 })) as unknown as typeof fetch;
+    render(<PublicApp />);
+
+    fireEvent.change(screen.getByLabelText("Backend address"), {
+      target: { value: "https://workstation.example" },
+    });
+    fireEvent.change(screen.getByLabelText("Gateway token"), { target: { value: token } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect directly" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain("token was rejected");
+    expect((screen.getByRole("button", { name: "Connect directly" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(loadSavedConnection().address).toBe("");
+  });
+
+  test("connects, installs the direct gateway, and switches backends through the chip", async () => {
+    globalThis.fetch = mock(async () =>
+      new Response(JSON.stringify({ ok: true }), { status: 200 })
+    ) as unknown as typeof fetch;
+    const reload = mock(() => undefined);
+    window.location.reload = reload as unknown as typeof window.location.reload;
+    render(<PublicApp />);
+
+    fireEvent.change(screen.getByLabelText("Backend address"), {
+      target: { value: "https://workstation.example/" },
+    });
+    fireEvent.change(screen.getByLabelText("Gateway token"), { target: { value: ` ${token} ` } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect directly" }));
+
+    await screen.findByText("Main app stub");
+    expect(loadSavedConnection()).toEqual({
+      address: "https://workstation.example",
+      token,
+      rememberToken: false,
+    });
+    expect(window.orkestratorGateway).toEqual({
+      enabled: true,
+      baseUrl: "https://workstation.example",
+    });
+    expect(typeof window.orkestrator?.invoke).toBe("function");
+
+    const chip = screen.getByTitle("Connected directly to https://workstation.example");
+    expect(chip.textContent).toContain("workstation.example");
+    fireEvent.click(chip);
+    expect(sessionStorage.getItem(SKIP_AUTO_CONNECT_KEY)).toBe("1");
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  test("warns when this HTTPS page targets a plain-HTTP backend", () => {
+    render(<PublicApp />);
+
+    fireEvent.change(screen.getByLabelText("Backend address"), {
+      target: { value: "http://127.0.0.1:34121" },
+    });
+    expect(screen.getByText(/Most browsers will block/).id).toBe("backend-warning");
+
+    fireEvent.change(screen.getByLabelText("Backend address"), {
+      target: { value: "https://workstation.example" },
+    });
+    expect(screen.queryByText(/Most browsers will block/)).toBeNull();
+  });
+
+  test("reveals the token and forgets saved browser credentials", () => {
+    saveConnection({ address: "https://workstation.example", token, rememberToken: true });
+    sessionStorage.setItem(SKIP_AUTO_CONNECT_KEY, "1");
+    render(<PublicApp />);
+
+    const tokenInput = screen.getByLabelText("Gateway token");
+    expect(tokenInput.getAttribute("type")).toBe("password");
+    fireEvent.click(screen.getByRole("button", { name: "Show gateway token" }));
+    expect(tokenInput.getAttribute("type")).toBe("text");
+    fireEvent.click(screen.getByRole("button", { name: "Forget saved connection" }));
+
+    expect(loadSavedConnection()).toEqual({ address: "", token: "", rememberToken: false });
+    expect(screen.queryByRole("button", { name: "Forget saved connection" })).toBeNull();
+  });
+
+  test("aborts an automatic connection check when unmounted", async () => {
+    saveConnection({ address: "https://workstation.example", token, rememberToken: false });
+    let aborted = false;
+    globalThis.fetch = mock((_input, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        aborted = true;
+        reject(init.signal?.reason);
+      }, { once: true });
+    })) as unknown as typeof fetch;
+
+    const view = render(<PublicApp />);
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    view.unmount();
+    expect(aborted).toBe(true);
+  });
+});

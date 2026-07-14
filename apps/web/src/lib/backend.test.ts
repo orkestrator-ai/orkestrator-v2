@@ -178,6 +178,21 @@ describe("backend web client wrappers", () => {
     });
   });
 
+  test("reports the configured direct backend origin in public-client mode", async () => {
+    window.orkestrator = undefined;
+    window.orkestratorGateway = {
+      enabled: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+
+    await expect(getWebClientStatus()).resolves.toEqual({
+      enabled: true,
+      running: true,
+      url: "https://workstation.tailnet.ts.net/",
+      error: null,
+    });
+  });
+
   test("rejects status and mutations outside Electron or gateway mode", async () => {
     window.orkestrator = undefined;
     window.orkestratorGateway = undefined;

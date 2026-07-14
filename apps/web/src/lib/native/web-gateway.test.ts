@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { createBrowserGatewayApi, installBrowserGatewayApi } from "./web-gateway";
+import {
+  clearDirectGatewayTransport,
+  configureDirectGatewayTransport,
+} from "./gateway-auth-transport";
 
 const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
@@ -34,6 +38,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearDirectGatewayTransport();
   globalThis.fetch = originalFetch;
   globalThis.EventSource = originalEventSource;
   delete window.orkestrator;
@@ -60,6 +65,19 @@ describe("web gateway browser API", () => {
 
     expect(fakeWindow.orkestratorGateway).toEqual({ enabled: true });
     expect(typeof (fakeWindow.orkestrator as Window["orkestrator"])?.invoke).toBe("function");
+
+    installBrowserGatewayApi(
+      fakeWindow as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">,
+      {
+        baseUrl: "https://workstation.tailnet.ts.net/",
+        token: "direct-token-123456",
+        replaceExisting: true,
+      },
+    );
+    expect(fakeWindow.orkestratorGateway).toEqual({
+      enabled: true,
+      baseUrl: "https://workstation.tailnet.ts.net",
+    });
   });
 
   test("invokes backend commands through the gateway", async () => {
@@ -77,6 +95,147 @@ describe("web gateway browser API", () => {
     const api = createBrowserGatewayApi();
 
     await expect(api.invoke("get_projects", { projectId: "project-1" })).resolves.toEqual({ ok: true });
+  });
+
+  test("connects directly to a configured backend with bearer authentication", async () => {
+    globalThis.fetch = mock(async (input, init) => {
+      expect(input).toBe("https://workstation.tailnet.ts.net/__orkestrator/invoke");
+      expect(init).toMatchObject({
+        method: "POST",
+        credentials: "omit",
+        headers: {
+          authorization: "Bearer direct-token-123456",
+          "content-type": "application/json",
+        },
+      });
+      return new Response(JSON.stringify({ result: ["project-1"] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    // No window.orkestratorGateway: the API must target its own configured base URL.
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+    });
+
+    await expect(api.invoke("get_projects")).resolves.toEqual(["project-1"]);
+    await expect(api.webClient.getStatus()).resolves.toMatchObject({
+      url: "https://workstation.tailnet.ts.net/",
+    });
+  });
+
+  test("authenticates proxied loopback fetches and named event streams", async () => {
+    const requests: Array<{ url: string; authorization: string | null }> = [];
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    globalThis.fetch = mock(async (input, init) => {
+      const headers = new Headers(init?.headers);
+      requests.push({ url: String(input), authorization: headers.get("authorization") });
+      if (String(input).endsWith("/event/subscribe")) {
+        return new Response(
+          'event: message.updated\ndata: {"sessionId":"session-1"}\n\n',
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    configureDirectGatewayTransport(
+      "https://workstation.tailnet.ts.net",
+      "direct-token-123456",
+    );
+
+    await fetch(
+      "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/7777/global/health",
+    );
+    await fetch("https://example.com/not-the-gateway");
+
+    const eventData = await new Promise<string>((resolve) => {
+      const source = new globalThis.EventSource(
+        "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/7777/event/subscribe",
+      );
+      source.addEventListener("message.updated", (event) => {
+        resolve((event as MessageEvent).data as string);
+        source.close();
+      });
+    });
+
+    expect(eventData).toBe('{"sessionId":"session-1"}');
+    expect(requests).toEqual([
+      {
+        url: "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/7777/global/health",
+        authorization: "Bearer direct-token-123456",
+      },
+      { url: "https://example.com/not-the-gateway", authorization: null },
+      {
+        url: "https://workstation.tailnet.ts.net/__orkestrator/proxy/loopback/7777/event/subscribe",
+        authorization: "Bearer direct-token-123456",
+      },
+    ]);
+  });
+
+  test("parses direct gateway CRLF event streams and aborts them when idle", async () => {
+    const encoder = new TextEncoder();
+    let requestSignal: AbortSignal | undefined;
+    globalThis.fetch = mock(async (_input, init) => {
+      requestSignal = init?.signal ?? undefined;
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode("data: not-json\r\n\r"));
+          controller.enqueue(encoder.encode("\ndata: {\"event\":\"changed\",\"payload\":{\"ok\":true}}\r\n\r\n"));
+        },
+      }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+    });
+    const callback = mock(() => undefined);
+
+    const unsubscribe = api.listen("changed", callback);
+    await new Promise<void>((resolve) => {
+      const poll = () => callback.mock.calls.length > 0 ? resolve() : setTimeout(poll, 1);
+      poll();
+    });
+    expect(callback).toHaveBeenCalledWith({ ok: true });
+    expect(requestSignal?.aborted).toBe(false);
+
+    unsubscribe();
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  test("reconnects a direct event stream while listeners remain", async () => {
+    const encoder = new TextEncoder();
+    const warning = mock(() => undefined);
+    const originalWarn = console.warn;
+    console.warn = warning;
+    let attempt = 0;
+    globalThis.fetch = mock(async () => {
+      attempt += 1;
+      if (attempt === 1) return new Response(null, { status: 503 });
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: {"event":"changed","payload":"reconnected"}\n\n'));
+        },
+      }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+      eventReconnectDelayMs: 0,
+    });
+
+    try {
+      const payload = await new Promise<string>((resolve) => {
+        const unsubscribe = api.listen<string>("changed", (value) => {
+          unsubscribe();
+          resolve(value);
+        });
+      });
+      expect(payload).toBe("reconnected");
+      expect(attempt).toBe(2);
+      expect(warning).toHaveBeenCalledTimes(1);
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   test("throws gateway invoke errors from non-ok responses", async () => {
@@ -119,6 +278,36 @@ describe("web gateway browser API", () => {
     ]);
   });
 
+  test("uses a rotated direct token for later requests and reports the change", async () => {
+    const authorization: Array<string | null> = [];
+    const onTokenChanged = mock(() => undefined);
+    globalThis.fetch = mock(async (input, init) => {
+      authorization.push(new Headers(init?.headers).get("authorization"));
+      if (String(input).endsWith("/gateway-settings")) {
+        return new Response(JSON.stringify({
+          token: "replacement-token-123456",
+          editable: true,
+          source: "file",
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ result: "ok" }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+      onTokenChanged,
+    });
+
+    await api.webClient.setToken("replacement-token-123456");
+    await api.invoke("get_projects");
+
+    expect(authorization).toEqual([
+      "Bearer direct-token-123456",
+      "Bearer replacement-token-123456",
+    ]);
+    expect(onTokenChanged).toHaveBeenCalledWith("replacement-token-123456");
+  });
+
   test("reports browser gateway status and rejects desktop-only lifecycle controls", async () => {
     const api = createBrowserGatewayApi();
 
@@ -159,12 +348,23 @@ describe("web gateway browser API", () => {
     source.onmessage?.({
       data: JSON.stringify({ event: "other", payload: "out" }),
     } as MessageEvent);
+    source.onmessage?.({ data: "not json" } as MessageEvent);
     source.onmessage?.({
       data: JSON.stringify({ event: "menu-zoom", payload: "in" }),
     } as MessageEvent);
 
     expect(callback).toHaveBeenCalledTimes(1);
     expect(callback).toHaveBeenCalledWith("in");
+
+    const warning = mock(() => undefined);
+    const originalWarn = console.warn;
+    console.warn = warning;
+    try {
+      source.onerror?.();
+      expect(warning).toHaveBeenCalledWith("[RemoteGateway] Event stream disconnected");
+    } finally {
+      console.warn = originalWarn;
+    }
 
     unsubscribe();
 

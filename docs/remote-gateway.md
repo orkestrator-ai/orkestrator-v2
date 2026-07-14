@@ -59,6 +59,10 @@ The gateway supports these environment variables:
 | `ORKESTRATOR_GATEWAY_HOST` | first detected Tailscale address | Overrides the bind address. The address must still be a Tailscale address. |
 | `ORKESTRATOR_GATEWAY_PORT` | `34121` | Overrides the gateway port. |
 | `ORKESTRATOR_GATEWAY_TOKEN` | generated token in `gateway-auth.json` | Sets the login token. Must be at least 16 characters. |
+| `ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS` | unset | Comma-separated browser origins allowed to call the gateway directly. Supports entries such as `https://orkestrator.example` and `https://*.vercel.app`. |
+| `ORKESTRATOR_TAILSCALE_SERVE=1` | unset | Makes the backend own a tailnet-only HTTPS listener through `tailscale serve`. The browser listener binds to loopback automatically. |
+| `ORKESTRATOR_TAILSCALE_SERVE_PORT` | `443` | HTTPS port configured by backend-managed Tailscale Serve. |
+| `ORKESTRATOR_TAILSCALE_BIN` | `tailscale` | Overrides the Tailscale CLI executable path. |
 | `ORKESTRATOR_DATA_DIR` | platform application-data directory | Stores projects, environments, configuration, and gateway authentication. |
 | `ORKESTRATOR_APP_ROOT` | detected repository/application root | Root used for application assets and development binaries. |
 | `ORKESTRATOR_RESOURCE_ROOT` | application root | Root containing packaged bridges and binaries. |
@@ -79,6 +83,7 @@ The gateway reserves the `/__orkestrator` path prefix.
 | --- | --- |
 | `/__orkestrator/login` | Token login form and login POST endpoint. |
 | `/__orkestrator/logout` | Clears the gateway auth cookie. |
+| `/__orkestrator/status` | Small authenticated connection check used by the public client. |
 | `/__orkestrator/invoke` | Authenticated backend command bridge used by the browser renderer. |
 | `/__orkestrator/events` | Server-sent event stream for backend events. |
 | `/__orkestrator/proxy/loopback/<port>/...` | Authenticated proxy to `http://127.0.0.1:<port>/...` on the desktop host. |
@@ -133,6 +138,35 @@ These rules allow proxied apps to keep their own sessions without receiving or r
 
 Traffic is plain HTTP because it is expected to travel over Tailscale. Do not bind the gateway to a public interface or expose it through a public reverse proxy.
 
+## Vercel-hosted public client
+
+`apps/web-public` is a static Vite deployment of the renderer with a backend connection screen. Vercel serves the initial HTML, CSS, JavaScript, fonts, and images only. After that, the browser sends authenticated commands, event streams, and loopback-proxy requests directly to the backend origin selected by the user. There is no Vercel function, rewrite, or relay in the backend traffic path.
+
+An HTTPS page cannot call the gateway's default plain-HTTP tailnet address in normal browsers. The backend can own a Tailscale Serve listener and publish its tailnet-only HTTPS origin:
+
+```bash
+# Builds the backend, allows https://orkestrator.dev, and enables Tailscale Serve.
+bun run start:web-public
+```
+
+The script is equivalent to starting the built backend with `--tailscale-serve --allowed-origins https://orkestrator.dev`. Use the explicit backend command instead when deploying the public client on another origin.
+
+`--tailscale-serve` makes the backend bind its browser listener to `127.0.0.1`, run `tailscale serve --bg --yes --https=443` against that listener, and replace `browserUrl` in its ready message with the resulting HTTPS origin. If `--host` is supplied, it must be exactly `127.0.0.1`. Before changing Serve, the backend checks the selected HTTPS port and refuses to overwrite a listener that already exists; choose an unused port with `--tailscale-serve-port <port>` instead. On graceful shutdown, it removes only the HTTPS listener it configured.
+
+Tailscale reports an address similar to `https://workstation.example-tailnet.ts.net`. Enter that origin and the gateway token in the public client. Tailnet ACLs still control which devices can reach the Serve endpoint, and the Orkestrator token remains required. Do not use Tailscale Funnel for this workflow.
+
+The Serve CLI can still be managed separately if preferred. In that case, start the backend with `--host 127.0.0.1 --allow-non-tailscale-bind` and point an externally managed Serve listener at the backend port. The previous spelling of that flag, `--unsafe-allow-non-tailscale-bind`, is still accepted so existing service configurations keep working.
+
+For Vercel, import the repository and set the project Root Directory to `apps/web-public`. The package's `vercel.json` builds the workspace-aware Vite app and serves `dist`. Use the stable production/custom domain in `ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS`; wildcard `https://*.vercel.app` is supported for preview deployments but grants every Vercel subdomain permission to attempt authenticated requests.
+
+For local development:
+
+```bash
+bun run dev:web-public
+```
+
+The connection selector keeps the backend address in local storage. The gateway token is session-only by default; the user must explicitly choose “Remember token” to persist it in local storage.
+
 ## Limitations
 
 - Native desktop APIs are limited in remote browser mode. File dialogs return `null`, image clipboard read/write is unavailable, and window drag/close behavior depends on the browser.
@@ -155,6 +189,8 @@ The token is missing or wrong. Open the login route again, or clear the `orkestr
 Check whether another process is using the configured port. Either stop that process or set `ORKESTRATOR_GATEWAY_PORT` to a free port.
 
 When Electron owns the backend, a port conflict disables browser access and is shown in Web Client settings, but the desktop app continues through its independent loopback control listener. A standalone backend still exits because it has no separate desktop control channel.
+
+When `--tailscale-serve` is enabled, also confirm that the `tailscale` CLI is installed, its daemon is connected, and HTTPS is enabled for the tailnet. The first Serve setup may require tailnet administrator approval. The backend exits instead of advertising a loopback-only URL when Serve configuration fails.
 
 ### A proxied environment URL returns a 502
 

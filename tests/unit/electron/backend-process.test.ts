@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   BackendHttpClient,
   BackendProcess,
+  createBackendProcessEnvironment,
   getBrowserGatewayStatus,
 } from "../../../apps/desktop/electron/backend-process";
 
@@ -20,6 +21,33 @@ afterEach(async () => {
 });
 
 describe("Electron backend process supervisor", () => {
+  test("isolates the child from remote gateway and Tailscale Serve shell settings", () => {
+    const parent = {
+      PATH: "/bin",
+      NODE_PATH: "/existing",
+      ORKESTRATOR_GATEWAY_HOST: "100.64.0.1",
+      ORKESTRATOR_GATEWAY_PORT: "9999",
+      ORKESTRATOR_GATEWAY_TOKEN: "not-forwarded",
+      ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS: "https://untrusted.example",
+      ORKESTRATOR_TAILSCALE_SERVE: "1",
+      ORKESTRATOR_TAILSCALE_SERVE_PORT: "8443",
+      ORKESTRATOR_TAILSCALE_BIN: "/tmp/tailscale",
+    };
+
+    const development = createBackendProcessEnvironment(parent, true, "/resources");
+    expect(development).toEqual({
+      PATH: "/bin",
+      NODE_PATH: "/existing",
+      ORKESTRATOR_GATEWAY_DISABLED: "0",
+    });
+    expect(parent.ORKESTRATOR_GATEWAY_TOKEN).toBe("not-forwarded");
+
+    const production = createBackendProcessEnvironment(parent, false, "/resources");
+    expect(production.NODE_PATH).toBe(
+      [path.join("/resources", "backend", "vendor"), "/existing"].join(path.delimiter),
+    );
+  });
+
   test("reports browser availability independently from the desktop control listener", () => {
     expect(getBrowserGatewayStatus(null)).toEqual({
       enabled: true,
@@ -105,7 +133,7 @@ describe("Electron backend process supervisor", () => {
       dataDir,
       gatewayHost: "127.0.0.1",
       gatewayPort: 0,
-      unsafeAllowNonTailscaleBind: true,
+      allowNonTailscaleBind: true,
       onEvent: () => undefined,
     });
 
@@ -145,7 +173,7 @@ describe("Electron backend process supervisor", () => {
       dataDir,
       gatewayHost: "127.0.0.1",
       gatewayPort: 0,
-      unsafeAllowNonTailscaleBind: true,
+      allowNonTailscaleBind: true,
       onEvent: () => undefined,
       onUnexpectedExit,
     };
@@ -180,7 +208,7 @@ describe("Electron backend process supervisor", () => {
       dataDir,
       gatewayHost: "127.0.0.1",
       gatewayPort: 0,
-      unsafeAllowNonTailscaleBind: true,
+      allowNonTailscaleBind: true,
       onEvent: () => undefined,
     });
 
@@ -205,7 +233,7 @@ describe("Electron backend process supervisor", () => {
       dataDir,
       gatewayHost: "127.0.0.1",
       gatewayPort: 0,
-      unsafeAllowNonTailscaleBind: true,
+      allowNonTailscaleBind: true,
       onEvent: () => undefined,
     })).rejects.toThrow("Backend service exited");
     expect(backendProcess.getInfo()).toBeNull();

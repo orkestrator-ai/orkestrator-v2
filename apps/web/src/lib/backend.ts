@@ -1,4 +1,5 @@
 import { invoke } from "@/lib/native/backend";
+import { getGatewayBaseUrl } from "@/lib/gateway-url";
 import type {
   Project,
   Environment,
@@ -243,7 +244,7 @@ export async function getWebClientStatus(): Promise<WebClientStatus> {
     return {
       enabled: true,
       running: true,
-      url: `${window.location.origin}/`,
+      url: `${getGatewayBaseUrl()}/`,
       error: null,
     };
   }

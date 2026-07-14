@@ -5,13 +5,22 @@ import { OrkestratorBackend } from "./core/index.js";
 import { fixPath } from "./core/fix-path.js";
 import { OrkestratorGateway } from "./gateway.js";
 import { assertSupportedPlatform, parseOptions } from "./options.js";
+import { getTailscaleServeTargetPort, TailscaleServeManager } from "./tailscale-serve.js";
 
 assertSupportedPlatform();
 fixPath();
 const options = parseOptions(process.argv.slice(2));
+if (
+  options.tailscaleServe
+  && options.host
+  && options.host !== "127.0.0.1"
+) {
+  throw new Error("--tailscale-serve requires --host 127.0.0.1");
+}
 await mkdir(options.dataDir, { recursive: true });
 
 let gateway: OrkestratorGateway;
+let tailscaleServe: TailscaleServeManager | null = null;
 const backend = new OrkestratorBackend({
   dataDir: options.dataDir,
   appRoot: options.appRoot,
@@ -25,17 +34,40 @@ gateway = new OrkestratorGateway({
   dataDir: options.dataDir,
   rendererRoot: options.rendererRoot,
   rendererDevServerUrl: options.rendererDevServerUrl,
-  bindAddress: options.host,
+  bindAddress: options.tailscaleServe ? (options.host ?? "127.0.0.1") : options.host,
   fallbackBindAddress: options.fallbackHost,
   port: options.port,
   controlBindAddress: options.controlHost,
   controlPort: options.controlPort,
-  unsafeAllowNonTailscaleBind: options.unsafeAllowNonTailscaleBind,
+  allowNonTailscaleBind: options.allowNonTailscaleBind || options.tailscaleServe,
+  allowedOrigins: options.allowedOrigins,
 });
 
-const info = await gateway.start();
-if (!info) {
-  throw new Error("No Tailscale address was found. Pass --host with a Tailscale address, or use --host 127.0.0.1 --unsafe-allow-non-tailscale-bind for local development.");
+const gatewayInfo = await gateway.start();
+if (!gatewayInfo) {
+  throw new Error("No Tailscale address was found. Pass --host with a Tailscale address, or use --host 127.0.0.1 --allow-non-tailscale-bind for local development.");
+}
+
+let info = gatewayInfo;
+if (options.tailscaleServe) {
+  const browserUrl = gatewayInfo.browserUrl;
+  if (!browserUrl) {
+    await gateway.stop();
+    throw new Error("Tailscale Serve requires an available browser listener");
+  }
+  tailscaleServe = new TailscaleServeManager(options.tailscaleExecutable);
+  try {
+    const tailscaleUrl = await tailscaleServe.start(
+      getTailscaleServeTargetPort(browserUrl),
+      options.tailscaleServePort,
+    );
+    console.info(`[TailscaleServe] Available at ${tailscaleUrl}`);
+    info = { ...gatewayInfo, browserUrl: tailscaleUrl };
+  } catch (error) {
+    await tailscaleServe.stop().catch(() => undefined);
+    await gateway.stop();
+    throw error;
+  }
 }
 
 // Machine-readable startup contract used by the Electron supervisor and service managers.
@@ -54,6 +86,11 @@ let stopping = false;
 async function stop(signal: NodeJS.Signals): Promise<void> {
   if (stopping) return;
   stopping = true;
+  if (tailscaleServe) {
+    await tailscaleServe.stop().catch((error: unknown) => {
+      console.warn(`[TailscaleServe] Failed to remove Serve configuration: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
   await gateway.stop();
   process.exit(signal === "SIGINT" ? 130 : 0);
 }

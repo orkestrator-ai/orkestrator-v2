@@ -15,7 +15,11 @@ export type BackendOptions = {
   port?: number;
   controlHost?: string;
   controlPort?: number;
-  unsafeAllowNonTailscaleBind: boolean;
+  allowNonTailscaleBind: boolean;
+  allowedOrigins?: string[];
+  tailscaleServe: boolean;
+  tailscaleServePort: number;
+  tailscaleExecutable: string;
 };
 
 export function assertSupportedPlatform(platform: NodeJS.Platform = process.platform): void {
@@ -61,6 +65,13 @@ export function parseOptions(
   const portValue = valueAfter(args, "--port") ?? env.ORKESTRATOR_GATEWAY_PORT;
   const port = parsePortOption(portValue, "--port");
   const controlPort = parsePortOption(valueAfter(args, "--control-port"), "--control-port");
+  const tailscaleServePort = parsePortOption(
+    valueAfter(args, "--tailscale-serve-port") ?? env.ORKESTRATOR_TAILSCALE_SERVE_PORT,
+    "--tailscale-serve-port",
+  ) ?? 443;
+  if (tailscaleServePort === 0) {
+    throw new Error("Invalid --tailscale-serve-port value: 0");
+  }
   return {
     dataDir: path.resolve(valueAfter(args, "--data-dir") ?? env.ORKESTRATOR_DATA_DIR ?? defaultDataDir(process.platform, env)),
     appRoot,
@@ -72,6 +83,19 @@ export function parseOptions(
     port,
     controlHost: valueAfter(args, "--control-host"),
     controlPort,
-    unsafeAllowNonTailscaleBind: args.includes("--unsafe-allow-non-tailscale-bind"),
+    // "--unsafe-allow-non-tailscale-bind" is the pre-rename spelling; unknown
+    // flags are ignored, so dropping it would strand existing service units.
+    allowNonTailscaleBind: args.includes("--allow-non-tailscale-bind")
+      || args.includes("--unsafe-allow-non-tailscale-bind"),
+    allowedOrigins: (valueAfter(args, "--allowed-origins") ?? env.ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS)
+      ?.split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+    tailscaleServe: args.includes("--tailscale-serve")
+      || env.ORKESTRATOR_TAILSCALE_SERVE === "1",
+    tailscaleServePort,
+    tailscaleExecutable: valueAfter(args, "--tailscale-bin")
+      ?? env.ORKESTRATOR_TAILSCALE_BIN
+      ?? "tailscale",
   };
 }

@@ -203,7 +203,7 @@ describe("useGlobalActivityMonitor tmux activity", () => {
     });
   });
 
-  test("keeps waiting activity above working when another tmux tab is busy", async () => {
+  test("keeps working activity above waiting when another tmux tab is busy", async () => {
     const waitingKey = createClaudeTmuxStateKey("env-tmux", "tab-waiting");
     const busyKey = createClaudeTmuxStateKey("env-tmux", "tab-busy");
     render(<MonitorHarness />);
@@ -224,7 +224,7 @@ describe("useGlobalActivityMonitor tmux activity", () => {
 
     await waitFor(() => {
       expect(useAgentActivityStore.getState().getContainerState("env-tmux"))
-        .toBe("waiting");
+        .toBe("working");
     });
   });
 
@@ -400,6 +400,150 @@ describe("useGlobalActivityMonitor native agent activity", () => {
 
     expect(useAgentActivityStore.getState().getContainerState("env-claude"))
       .toBe("waiting");
+  });
+
+  test("keeps each native environment working while any tab is still loading", async () => {
+    const claudeWorkingKey = createClaudeSessionKey(
+      "env-claude",
+      "tab-working",
+    );
+    const claudeIdleKey = createClaudeSessionKey("env-claude", "tab-idle");
+    const openCodeWorkingKey = createOpenCodeSessionKey(
+      "env-opencode",
+      "tab-working",
+    );
+    const openCodeIdleKey = createOpenCodeSessionKey(
+      "env-opencode",
+      "tab-idle",
+    );
+    const codexWorkingKey = createCodexSessionKey("env-codex", "tab-working");
+    const codexIdleKey = createCodexSessionKey("env-codex", "tab-idle");
+    render(<MonitorHarness />);
+
+    act(() => {
+      useClaudeStore.setState({
+        clients: new Map([["env-claude", {} as any]]),
+        sessions: new Map([
+          [
+            claudeWorkingKey,
+            { sessionId: "claude-working", isLoading: true } as any,
+          ],
+          [
+            claudeIdleKey,
+            { sessionId: "claude-idle", isLoading: false } as any,
+          ],
+        ]),
+      });
+      useOpenCodeStore.setState({
+        clients: new Map([["env-opencode", {} as any]]),
+        sessions: new Map([
+          [
+            openCodeWorkingKey,
+            { sessionId: "opencode-working", isLoading: true } as any,
+          ],
+          [
+            openCodeIdleKey,
+            { sessionId: "opencode-idle", isLoading: false } as any,
+          ],
+        ]),
+      });
+      useCodexStore.setState({
+        clients: new Map([["env-codex", {} as any]]),
+        sessions: new Map([
+          [
+            codexWorkingKey,
+            { sessionId: "codex-working", isLoading: true } as any,
+          ],
+          [
+            codexIdleKey,
+            { sessionId: "codex-idle", isLoading: false } as any,
+          ],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-claude"))
+        .toBe("working");
+      expect(useAgentActivityStore.getState().getContainerState("env-opencode"))
+        .toBe("working");
+      expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("working");
+    });
+
+    act(() => {
+      useClaudeStore.setState({
+        sessions: new Map([
+          [
+            claudeWorkingKey,
+            { sessionId: "claude-working", isLoading: false } as any,
+          ],
+          [
+            claudeIdleKey,
+            { sessionId: "claude-idle", isLoading: false } as any,
+          ],
+        ]),
+      });
+      useOpenCodeStore.setState({
+        sessions: new Map([
+          [
+            openCodeWorkingKey,
+            { sessionId: "opencode-working", isLoading: false } as any,
+          ],
+          [
+            openCodeIdleKey,
+            { sessionId: "opencode-idle", isLoading: false } as any,
+          ],
+        ]),
+      });
+      useCodexStore.setState({
+        sessions: new Map([
+          [
+            codexWorkingKey,
+            { sessionId: "codex-working", isLoading: false } as any,
+          ],
+          [
+            codexIdleKey,
+            { sessionId: "codex-idle", isLoading: false } as any,
+          ],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-claude"))
+        .toBe("idle");
+      expect(useAgentActivityStore.getState().getContainerState("env-opencode"))
+        .toBe("idle");
+      expect(useAgentActivityStore.getState().getContainerState("env-codex"))
+        .toBe("idle");
+    });
+  });
+
+  test("does not let an idle agent type overwrite another working agent type", async () => {
+    const claudeKey = createClaudeSessionKey("env-shared", "tab-claude");
+    const codexKey = createCodexSessionKey("env-shared", "tab-codex");
+    render(<MonitorHarness />);
+
+    act(() => {
+      useCodexStore.setState({
+        clients: new Map([["env-shared", {} as any]]),
+        sessions: new Map([
+          [codexKey, { sessionId: "codex-working", isLoading: true } as any],
+        ]),
+      });
+      useClaudeStore.setState({
+        clients: new Map([["env-shared", {} as any]]),
+        sessions: new Map([
+          [claudeKey, { sessionId: "claude-idle", isLoading: false } as any],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState("env-shared"))
+        .toBe("working");
+    });
   });
 
   test("derives OpenCode waiting from pending permissions and Codex working from loading", async () => {

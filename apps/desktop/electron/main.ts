@@ -2,6 +2,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage } fro
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
+import { createBackendWebClientControls, registerBackendShutdown } from "./backend-lifecycle.js";
 import { APP_SLUG, PRODUCT_NAME } from "./app-constants.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
@@ -76,6 +77,7 @@ async function createWindow(): Promise<void> {
 }
 
 function registerIpc(): void {
+  const webClientControls = createBackendWebClientControls(() => backend);
   registerMainIpc({
     getBackend: () => backend,
     getMainWindow: () => mainWindow,
@@ -84,22 +86,7 @@ function registerIpc(): void {
     dialogApi: dialog,
     appApi: app,
     nativeImageApi: nativeImage,
-    getWebClientStatus: () => {
-      if (!backend) throw new Error("Backend is not initialized");
-      return backend.getWebClientStatus();
-    },
-    setWebClientEnabled: (enabled) => {
-      if (!backend) throw new Error("Backend is not initialized");
-      return backend.setWebClientEnabled(enabled);
-    },
-    getGatewayTokenSettings: () => {
-      if (!backend) throw new Error("Backend is not initialized");
-      return backend.getTokenSettings();
-    },
-    setGatewayToken: (token) => {
-      if (!backend) throw new Error("Backend is not initialized");
-      return backend.setToken(token);
-    },
+    ...webClientControls,
   });
 }
 
@@ -141,6 +128,4 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
-  backendProcess.stop();
-});
+registerBackendShutdown(app, backendProcess);

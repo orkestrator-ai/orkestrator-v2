@@ -107,6 +107,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
   const [webClientEnabled, setWebClientEnabled] = useState(global.webClientEnabled ?? true);
   const [webClientStatus, setWebClientStatus] = useState<WebClientStatus | null>(null);
+  const [webClientApplyError, setWebClientApplyError] = useState<string | null>(null);
   const [gatewayTokenSettings, setGatewayTokenSettings] = useState<GatewayTokenSettings | null>(null);
   const [gatewayToken, setGatewayToken] = useState("");
   const [savedGatewayToken, setSavedGatewayToken] = useState("");
@@ -165,7 +166,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
     const statusRequest = backend.getWebClientStatus()
       .then((status) => {
-        if (requestId === webClientStatusRequestRef.current) setWebClientStatus(status);
+        if (requestId === webClientStatusRequestRef.current) {
+          setWebClientStatus(status);
+          setWebClientApplyError(null);
+        }
       })
       .catch((error: unknown) => {
         if (requestId === webClientStatusRequestRef.current) {
@@ -238,12 +242,13 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       experimentalCodexRawEventLogging !== (global.experimentalCodexRawEventLogging ?? true) ||
       debugLogging !== (global.debugLogging ?? false) ||
       webClientEnabled !== (global.webClientEnabled ?? true) ||
+      webClientApplyError !== null ||
       gatewayToken !== savedGatewayToken;
     setHasChanges(changed);
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, gatewayToken, savedGatewayToken, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, webClientApplyError, gatewayToken, savedGatewayToken, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -375,8 +380,21 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       setConfig(newConfig);
 
       if (!window.orkestratorGateway?.enabled) {
-        const nextWebClientStatus = await backend.setWebClientEnabled(webClientEnabled);
-        setWebClientStatus(nextWebClientStatus);
+        try {
+          const nextWebClientStatus = await backend.setWebClientEnabled(webClientEnabled);
+          setWebClientStatus(nextWebClientStatus);
+          setWebClientApplyError(null);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          setWebClientApplyError(message);
+          setWebClientStatus((status) => ({
+            enabled: webClientEnabled,
+            running: status?.running ?? false,
+            url: status?.url ?? null,
+            error: message,
+          }));
+          throw error;
+        }
       }
 
       if (gatewayTokenSettings?.editable && gatewayToken !== savedGatewayToken) {
@@ -442,6 +460,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
     setWebClientEnabled(global.webClientEnabled ?? true);
+    setWebClientApplyError(null);
     setGatewayToken(savedGatewayToken);
     setDomainErrors([]);
     setColorError(null);
@@ -1069,7 +1088,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
               aria-label="Allow web access"
               checked={webClientEnabled}
               disabled={isRemoteClient || isSaving}
-              onCheckedChange={setWebClientEnabled}
+              onCheckedChange={(enabled) => {
+                setWebClientEnabled(enabled);
+                setWebClientApplyError(null);
+              }}
             />
           </div>
 

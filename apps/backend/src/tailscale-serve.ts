@@ -47,16 +47,46 @@ export function getTailscaleServeTargetPort(browserUrl: string): number {
   return port;
 }
 
-function hasConfiguredPort(output: string, port: number): boolean {
+type ServeStatus = {
+  TCP?: Record<string, unknown>;
+  Web?: Record<string, {
+    Handlers?: Record<string, { Proxy?: unknown }>;
+  }>;
+};
+
+function parseServeStatus(output: string): ServeStatus {
   let status: unknown;
   try {
     status = JSON.parse(output);
   } catch {
     throw new Error("Tailscale Serve returned invalid status JSON");
   }
-  if (!status || typeof status !== "object" || Array.isArray(status)) return false;
-  const tcp = (status as { TCP?: unknown }).TCP;
+  if (!status || typeof status !== "object" || Array.isArray(status)) return {};
+  return status as ServeStatus;
+}
+
+function configuredPort(status: ServeStatus, port: number): boolean {
+  const tcp = status.TCP;
   return Boolean(tcp && typeof tcp === "object" && !Array.isArray(tcp) && String(port) in tcp);
+}
+
+function expectedProxyTarget(targetPort: number): string {
+  return `http://127.0.0.1:${targetPort}`;
+}
+
+function ownedServeUrl(status: ServeStatus, targetPort: number, httpsPort: number): string | null {
+  const expectedTarget = expectedProxyTarget(targetPort);
+  for (const [hostPort, server] of Object.entries(status.Web ?? {})) {
+    const separator = hostPort.lastIndexOf(":");
+    if (separator < 0 || Number.parseInt(hostPort.slice(separator + 1), 10) !== httpsPort) continue;
+    if (server?.Handlers?.["/"]?.Proxy !== expectedTarget) continue;
+    try {
+      return `${new URL(`https://${hostPort}`).origin}/`;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 function commandError(error: unknown): string {
@@ -73,7 +103,11 @@ export class TailscaleServeManager {
     private readonly run: TailscaleCommandRunner = defaultRunner,
   ) {}
 
-  async start(targetPort: number, httpsPort = 443): Promise<string> {
+  async start(
+    targetPort: number,
+    httpsPort = 443,
+    options: { adoptExisting?: boolean } = {},
+  ): Promise<string> {
     if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
       throw new Error(`Invalid Tailscale Serve target port: ${targetPort}`);
     }
@@ -87,7 +121,13 @@ export class TailscaleServeManager {
     } catch (error) {
       throw new Error(`Unable to inspect Tailscale Serve configuration: ${commandError(error)}`);
     }
-    if (hasConfiguredPort(existingStatus.stdout, httpsPort)) {
+    const status = parseServeStatus(existingStatus.stdout);
+    if (configuredPort(status, httpsPort)) {
+      const existingUrl = ownedServeUrl(status, targetPort, httpsPort);
+      if (options.adoptExisting && existingUrl) {
+        this.activeHttpsPort = httpsPort;
+        return existingUrl;
+      }
       throw new Error(
         `Refusing to replace the existing Tailscale Serve configuration on HTTPS port ${httpsPort}`,
       );
@@ -130,5 +170,24 @@ export class TailscaleServeManager {
     if (httpsPort === null) return;
     await this.run(this.executable, ["serve", `--https=${httpsPort}`, "off"]);
     this.activeHttpsPort = null;
+  }
+
+  async stopOwned(targetPort: number, httpsPort = 443): Promise<boolean> {
+    let existingStatus: { stdout: string; stderr: string };
+    try {
+      existingStatus = await this.run(this.executable, ["serve", "status", "--json"]);
+    } catch (error) {
+      throw new Error(`Unable to inspect Tailscale Serve configuration: ${commandError(error)}`);
+    }
+    const status = parseServeStatus(existingStatus.stdout);
+    if (!configuredPort(status, httpsPort)) return false;
+    if (!ownedServeUrl(status, targetPort, httpsPort)) {
+      throw new Error(
+        `Refusing to remove a changed Tailscale Serve configuration on HTTPS port ${httpsPort}`,
+      );
+    }
+    await this.run(this.executable, ["serve", `--https=${httpsPort}`, "off"]);
+    if (this.activeHttpsPort === httpsPort) this.activeHttpsPort = null;
+    return true;
   }
 }

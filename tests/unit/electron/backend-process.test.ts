@@ -3,6 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { defaultConfig } from "../../../apps/backend/src/core/storage";
 import {
   BackendHttpClient,
   BackendProcess,
@@ -14,9 +15,35 @@ const directories: string[] = [];
 const processes: BackendProcess[] = [];
 const browserFetch = globalThis.fetch;
 
+async function waitForWebClientStatus(
+  client: BackendHttpClient,
+  predicate: (status: Awaited<ReturnType<BackendHttpClient["getWebClientStatus"]>>) => boolean,
+  timeoutMs = 8_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  let status = await client.getWebClientStatus();
+  while (!predicate(status) && Date.now() < deadline) {
+    await Bun.sleep(25);
+    status = await client.getWebClientStatus();
+  }
+  return status;
+}
+
 afterEach(async () => {
   globalThis.fetch = browserFetch;
-  for (const backend of processes.splice(0)) backend.stop();
+  await Promise.all(processes.splice(0).map(async (backend) => {
+    const child = (backend as unknown as {
+      child: { once(event: "exit", listener: () => void): void } | null;
+    }).child;
+    const exited = child
+      ? new Promise<void>((resolve) => {
+          child.once("exit", resolve);
+          setTimeout(resolve, 2_000);
+        })
+      : Promise.resolve();
+    backend.stop();
+    await exited;
+  }));
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -130,6 +157,18 @@ describe("Electron backend process supervisor", () => {
     }));
   });
 
+  test("HTTP client surfaces web access HTTP and malformed-response failures", async () => {
+    const client = new BackendHttpClient("http://127.0.0.1:34121/", "test-token-123456");
+    globalThis.fetch = mock(async () => new Response(
+      JSON.stringify({ error: "lifecycle unavailable" }),
+      { status: 503, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+    await expect(client.getWebClientStatus()).rejects.toThrow("lifecycle unavailable");
+
+    globalThis.fetch = mock(async () => new Response("not json", { status: 200 })) as typeof fetch;
+    await expect(client.setWebClientEnabled(true)).rejects.toThrow();
+  });
+
   test("launches one service for both the Electron bridge and browser clients", async () => {
     // The shared DOM test setup installs a browser fetch with CORS enforcement;
     // Electron's main process uses the native server-side fetch implementation.
@@ -204,8 +243,8 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
       onEvent: () => undefined,
     });
 
-    expect(backendProcess.getInfo()?.browserUrl).toBe("https://workstation.example.ts.net/");
-    await expect(client.getWebClientStatus()).resolves.toMatchObject({
+    expect(backendProcess.getInfo()?.browserUrl).toBeUndefined();
+    await expect(waitForWebClientStatus(client, (status) => status.running)).resolves.toMatchObject({
       enabled: true,
       running: true,
       url: "https://workstation.example.ts.net/",
@@ -216,6 +255,194 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
       url: null,
     });
     await expect(client.invoke("greet", { name: "Electron" })).resolves.toContain("Hello, Electron!");
+  });
+
+  test("reports backend readiness before slow managed Serve initialization finishes", async () => {
+    globalThis.fetch = Bun.fetch;
+    const root = path.resolve(import.meta.dir, "../../..");
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
+    const toolsDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-tailscale-"));
+    directories.push(dataDir, toolsDir);
+    const executable = path.join(toolsDir, "tailscale");
+    await writeFile(executable, `#!/bin/sh
+if [ "$*" = "serve status --json" ]; then
+  sleep 5
+  printf '{}\\n'
+  exit 0
+fi
+case " $* " in
+  *" off "*) exit 0 ;;
+esac
+printf 'Available within your tailnet:\\nhttps://slow.example.ts.net\\n'
+`);
+    await chmod(executable, 0o755);
+
+    const backendProcess = new BackendProcess();
+    processes.push(backendProcess);
+    const startedAt = Date.now();
+    const client = await backendProcess.start({
+      isDev: true,
+      appRoot: root,
+      resourceRoot: root,
+      dataDir,
+      gatewayPort: 0,
+      desktopWebClient: true,
+      tailscaleExecutable: executable,
+      onEvent: () => undefined,
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(4_000);
+    await expect(client.invoke("greet", { name: "ready" })).resolves.toContain("Hello, ready!");
+    await expect(waitForWebClientStatus(client, (status) => status.running)).resolves.toMatchObject({
+      running: true,
+      url: "https://slow.example.ts.net/",
+    });
+  }, 12_000);
+
+  test("honors a persisted disabled setting without invoking Tailscale", async () => {
+    globalThis.fetch = Bun.fetch;
+    const root = path.resolve(import.meta.dir, "../../..");
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
+    const toolsDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-tailscale-"));
+    directories.push(dataDir, toolsDir);
+    const config = defaultConfig();
+    config.global.webClientEnabled = false;
+    await writeFile(path.join(dataDir, "config.json"), JSON.stringify(config));
+    const executable = path.join(toolsDir, "tailscale");
+    const callsPath = path.join(toolsDir, "calls");
+    await writeFile(executable, `#!/bin/sh
+printf '%s\\n' "$*" >> "$(dirname "$0")/calls"
+exit 1
+`);
+    await chmod(executable, 0o755);
+
+    const backendProcess = new BackendProcess();
+    processes.push(backendProcess);
+    const client = await backendProcess.start({
+      isDev: true,
+      appRoot: root,
+      resourceRoot: root,
+      dataDir,
+      gatewayPort: 0,
+      desktopWebClient: true,
+      tailscaleExecutable: executable,
+      onEvent: () => undefined,
+    });
+
+    await expect(client.setWebClientEnabled(false)).resolves.toMatchObject({
+      enabled: false,
+      running: false,
+      error: null,
+    });
+    await expect(readFile(callsPath, "utf8")).rejects.toThrow();
+  });
+
+  test("keeps backend commands available when managed Serve initialization fails", async () => {
+    globalThis.fetch = Bun.fetch;
+    const root = path.resolve(import.meta.dir, "../../..");
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
+    directories.push(dataDir);
+    const backendProcess = new BackendProcess();
+    processes.push(backendProcess);
+    const client = await backendProcess.start({
+      isDev: true,
+      appRoot: root,
+      resourceRoot: root,
+      dataDir,
+      gatewayPort: 0,
+      desktopWebClient: true,
+      tailscaleExecutable: path.join(dataDir, "missing-tailscale"),
+      onEvent: () => undefined,
+    });
+
+    await expect(waitForWebClientStatus(client, (status) => Boolean(status.error))).resolves.toMatchObject({
+      enabled: true,
+      running: false,
+    });
+    await expect(client.invoke("greet", { name: "still-ready" })).resolves.toContain("Hello, still-ready!");
+  });
+
+  test("adopts and removes an owned Serve route after an ungraceful backend restart", async () => {
+    globalThis.fetch = Bun.fetch;
+    const root = path.resolve(import.meta.dir, "../../..");
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
+    const toolsDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-tailscale-"));
+    directories.push(dataDir, toolsDir);
+    const executable = path.join(toolsDir, "tailscale");
+    const serveState = path.join(toolsDir, "serve-target");
+    await writeFile(executable, `#!/bin/sh
+STATE="$(dirname "$0")/serve-target"
+if [ "$*" = "serve status --json" ]; then
+  if [ -f "$STATE" ]; then
+    target="$(cat "$STATE")"
+    printf '{"TCP":{"443":{"HTTPS":true}},"Web":{"workstation.example.ts.net:443":{"Handlers":{"/":{"Proxy":"%s"}}}}}\\n' "$target"
+  else
+    printf '{}\\n'
+  fi
+  exit 0
+fi
+case " $* " in
+  *" off "*) rm -f "$STATE"; exit 0 ;;
+esac
+for last do :; done
+printf '%s' "$last" > "$STATE"
+printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
+`);
+    await chmod(executable, 0o755);
+
+    const portReservation = createServer();
+    await new Promise<void>((resolve) => portReservation.listen(0, "127.0.0.1", resolve));
+    const reservedAddress = portReservation.address();
+    if (!reservedAddress || typeof reservedAddress === "string") throw new Error("Expected TCP address");
+    const gatewayPort = reservedAddress.port;
+    await new Promise<void>((resolve) => portReservation.close(() => resolve()));
+
+    const firstProcess = new BackendProcess();
+    processes.push(firstProcess);
+    const firstClient = await firstProcess.start({
+      isDev: true,
+      appRoot: root,
+      resourceRoot: root,
+      dataDir,
+      gatewayPort,
+      desktopWebClient: true,
+      tailscaleExecutable: executable,
+      onEvent: () => undefined,
+    });
+    await expect(waitForWebClientStatus(firstClient, (status) => status.running)).resolves.toMatchObject({
+      running: true,
+    });
+    expect(await readFile(serveState, "utf8")).toMatch(/^http:\/\/127\.0\.0\.1:/);
+
+    const child = (firstProcess as unknown as { child: { kill(signal: string): boolean } }).child;
+    child.kill("SIGKILL");
+    const stoppedDeadline = Date.now() + 5_000;
+    while (firstProcess.getInfo() !== null && Date.now() < stoppedDeadline) await Bun.sleep(10);
+    expect(firstProcess.getInfo()).toBeNull();
+
+    const secondProcess = new BackendProcess();
+    processes.push(secondProcess);
+    const secondClient = await secondProcess.start({
+      isDev: true,
+      appRoot: root,
+      resourceRoot: root,
+      dataDir,
+      gatewayPort,
+      desktopWebClient: true,
+      tailscaleExecutable: executable,
+      onEvent: () => undefined,
+    });
+    await expect(waitForWebClientStatus(secondClient, (status) => status.running)).resolves.toMatchObject({
+      running: true,
+      url: "https://workstation.example.ts.net/",
+    });
+    await expect(secondClient.setWebClientEnabled(false)).resolves.toMatchObject({
+      enabled: false,
+      running: false,
+      error: null,
+    });
+    await expect(readFile(serveState, "utf8")).rejects.toThrow();
+    await expect(readFile(path.join(dataDir, "managed-web-client.json"), "utf8")).rejects.toThrow();
   });
 
   test("shares concurrent startup and clears stale state when the child exits", async () => {

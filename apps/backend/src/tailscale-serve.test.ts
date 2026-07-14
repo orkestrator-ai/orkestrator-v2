@@ -76,6 +76,89 @@ describe("Tailscale Serve manager", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  test("adopts and removes an existing listener only when its proxy target matches", async () => {
+    const calls: string[][] = [];
+    const run = mock(async (_command: string, args: string[]) => {
+      calls.push(args);
+      if (args.at(-1) === "--json") {
+        return {
+          stdout: JSON.stringify({
+            TCP: { "443": { HTTPS: true } },
+            Web: {
+              "workstation.example.ts.net:443": {
+                Handlers: { "/": { Proxy: "http://127.0.0.1:34121" } },
+              },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      return { stdout: "", stderr: "" };
+    }) as TailscaleCommandRunner;
+    const manager = new TailscaleServeManager("tailscale", run);
+
+    await expect(manager.start(34121, 443, { adoptExisting: true })).resolves.toBe(
+      "https://workstation.example.ts.net/",
+    );
+    await manager.stop();
+
+    expect(calls).toEqual([
+      ["serve", "status", "--json"],
+      ["serve", "--https=443", "off"],
+    ]);
+  });
+
+  test("does not adopt or remove a listener whose proxy target changed", async () => {
+    const run = mock(async () => ({
+      stdout: JSON.stringify({
+        TCP: { "443": { HTTPS: true } },
+        Web: {
+          "workstation.example.ts.net:443": {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:9999" } },
+          },
+        },
+      }),
+      stderr: "",
+    })) as TailscaleCommandRunner;
+    const manager = new TailscaleServeManager("tailscale", run);
+
+    await expect(manager.start(34121, 443, { adoptExisting: true })).rejects.toThrow(
+      "Refusing to replace",
+    );
+    await expect(manager.stopOwned(34121, 443)).rejects.toThrow(
+      "Refusing to remove a changed",
+    );
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  test("removes a matching persisted listener and no-ops when it is absent", async () => {
+    let configured = true;
+    const run = mock(async (_command: string, args: string[]) => {
+      if (args.at(-1) === "--json") {
+        return {
+          stdout: configured
+            ? JSON.stringify({
+                TCP: { "8443": { HTTPS: true } },
+                Web: {
+                  "workstation.example.ts.net:8443": {
+                    Handlers: { "/": { Proxy: "http://127.0.0.1:41234" } },
+                  },
+                },
+              })
+            : "{}",
+          stderr: "",
+        };
+      }
+      configured = false;
+      return { stdout: "", stderr: "" };
+    }) as TailscaleCommandRunner;
+    const manager = new TailscaleServeManager("tailscale", run);
+
+    await expect(manager.stopOwned(41234, 8443)).resolves.toBe(true);
+    await expect(manager.stopOwned(41234, 8443)).resolves.toBe(false);
+    expect(run).toHaveBeenCalledWith("tailscale", ["serve", "--https=8443", "off"]);
+  });
+
   test("allows unrelated existing listeners", async () => {
     const run = mock(async (_command: string, args: string[]) => {
       if (args.at(-1) === "--json") {

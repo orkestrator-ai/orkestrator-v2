@@ -189,6 +189,48 @@ describe("GlobalSettings", () => {
     });
   });
 
+  test("keeps a failed Electron web access transition retryable after config persistence", async () => {
+    window.orkestratorGateway = undefined;
+    mockSetWebClientEnabled.mockRejectedValueOnce(new Error("control request failed"));
+    const { container } = render(<GlobalSettings activeSection="web-client" />);
+    await screen.findByText("Running");
+
+    fireEvent.click(screen.getByRole("switch", { name: "Allow web access" }));
+    fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to save settings",
+      { description: "control request failed" },
+    ));
+    expect(screen.getByText("control request failed")).toBeTruthy();
+    const saveButton = within(container).getByRole("button", { name: "Save Changes" }) as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(false);
+
+    fireEvent.click(saveButton);
+    await waitFor(() => expect(mockSetWebClientEnabled).toHaveBeenCalledTimes(2));
+    expect(mockSetWebClientEnabled).toHaveBeenLastCalledWith(false);
+    await waitFor(() => expect(saveButton.disabled).toBe(true));
+  });
+
+  test("renders the authoritative disabled status as Off", async () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: { ...state.config.global, webClientEnabled: false },
+      },
+    }));
+    mockGetWebClientStatus.mockResolvedValueOnce({
+      enabled: false,
+      running: false,
+      url: null,
+      error: null,
+    });
+
+    render(<GlobalSettings activeSection="web-client" />);
+    expect(await screen.findByText("Off")).toBeTruthy();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
   test("displays, reveals, edits, and saves the gateway token", async () => {
     const { container } = render(<GlobalSettings activeSection="web-client" />);
     const input = await screen.findByLabelText("Gateway token") as HTMLInputElement;

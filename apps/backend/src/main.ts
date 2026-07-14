@@ -24,7 +24,7 @@ await mkdir(options.dataDir, { recursive: true });
 let gateway: OrkestratorGateway;
 let tailscaleServe: TailscaleServeManager | null = null;
 const managedWebClient = options.desktopWebClient
-  ? createManagedWebClient(options.tailscaleExecutable, options.tailscaleServePort)
+  ? createManagedWebClient(options.tailscaleExecutable, options.dataDir, options.tailscaleServePort)
   : null;
 const backend = new OrkestratorBackend({
   dataDir: options.dataDir,
@@ -60,11 +60,18 @@ let info = gatewayInfo;
 if (managedWebClient) {
   managedWebClient.setBrowserListenerUrl(gatewayInfo.browserUrl);
   const config = await backend.invoke<{ global?: { webClientEnabled?: boolean } }>("get_config");
-  const status = await managedWebClient.setEnabled(config.global?.webClientEnabled ?? true);
+  void managedWebClient.setEnabled(config.global?.webClientEnabled ?? true).catch((error: unknown) => {
+    console.error(
+      `[TailscaleServe] Failed to initialize desktop web access: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
   info = {
     ...gatewayInfo,
-    browserUrl: status.url ?? undefined,
-    browserError: status.error ?? undefined,
+    // The browser listener itself is loopback-only. Its public HTTPS URL is
+    // authoritative in ManagedWebClient and may become available after this
+    // backend readiness message has already been emitted.
+    browserUrl: undefined,
+    browserError: undefined,
   };
 } else if (options.tailscaleServe) {
   const browserUrl = gatewayInfo.browserUrl;

@@ -38,6 +38,7 @@ import { RepositorySettings } from "@/components/settings/RepositorySettings";
 import { renameEnvironmentFromPrompt, updateEnvironmentAgentSettings } from "@/lib/backend";
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import type { Environment, Project } from "@/types";
+import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 
 export type SidebarReorderResult =
   | { type: "project"; ids: string[] }
@@ -579,7 +580,7 @@ export function HierarchicalSidebar() {
           </>
         ) : (
           <>
-            <span className="text-sm font-medium text-foreground">Projects</span>
+            <ServerConnectionSwitcher />
             <Button
               variant="ghost"
               size="icon"

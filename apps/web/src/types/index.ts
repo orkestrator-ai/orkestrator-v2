@@ -300,6 +300,7 @@ export interface RepositoryConfig {
 
 export interface AppConfig {
   version: string;
+  desktopConnections?: import("@orkestrator/protocol/connections").StoredDesktopConnections;
   global: GlobalConfig;
   repositories: Record<string, RepositoryConfig>;
 }

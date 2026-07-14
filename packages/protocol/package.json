@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./connections": "./src/connections.ts",
     "./gateway-token": "./src/gateway-token.ts",
     "./web-client": "./src/web-client.ts"
   },

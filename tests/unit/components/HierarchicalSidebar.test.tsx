@@ -191,6 +191,29 @@ describe("HierarchicalSidebar", () => {
     HTMLCanvasElement.prototype.toDataURL = originalToDataURL;
   });
 
+  test("renders the active server switcher in the sidebar header", async () => {
+    const originalApi = window.orkestrator;
+    window.orkestrator = {
+      ...(originalApi ?? {}),
+      connections: {
+        list: mock(async () => ({
+          activeConnectionId: "local",
+          connections: [{ id: "local", name: "Local", address: null, kind: "local" as const, active: true, requiresToken: false }],
+        })),
+        connect: mock(async () => ({ activeConnectionId: "local", connections: [] })),
+        use: mock(async () => ({ activeConnectionId: "local", connections: [] })),
+        forget: mock(async () => ({ activeConnectionId: "local", connections: [] })),
+      },
+    } as Window["orkestrator"];
+    try {
+      render(<HierarchicalSidebar />);
+      expect(await screen.findByRole("button", { name: "Connected server: Local" })).toBeTruthy();
+    } finally {
+      cleanup();
+      window.orkestrator = originalApi;
+    }
+  });
+
   test("propagates initial prompt image attachments into launch options", async () => {
     render(<HierarchicalSidebar />);
 

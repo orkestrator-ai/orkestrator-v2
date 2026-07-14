@@ -5,18 +5,29 @@ import orkLogo from "../../../logos/ork-logo.png";
 import {
   checkBackendConnection,
   forgetConnection,
+  forgetBrowserConnection,
   insecureBackendWarning,
+  listBrowserConnections,
   loadSavedConnection,
   normalizeBackendAddress,
   saveConnection,
-  SKIP_AUTO_CONNECT_KEY,
+  selectBrowserConnection,
   updateSavedToken,
   type SavedConnection,
 } from "./connection";
 
-interface ActiveConnection extends SavedConnection {
-  address: string;
-}
+interface ActiveConnection extends SavedConnection { address: string }
+
+const browserConnections: NonNullable<Window["orkestrator"]>["connections"] = {
+  list: async () => listBrowserConnections(),
+  async connect(input) {
+    const normalizedAddress = await checkBackendConnection(input.address, input.token);
+    saveConnection({ address: normalizedAddress, token: input.token.trim() });
+    return listBrowserConnections();
+  },
+  use: async (connectionId) => selectBrowserConnection(connectionId),
+  forget: async (connectionId) => forgetBrowserConnection(connectionId),
+};
 
 const OrkestratorApp = lazy(() => import("@/App"));
 
@@ -26,7 +37,6 @@ export function PublicApp() {
   const connectionController = useRef<AbortController | null>(null);
   const [address, setAddress] = useState(initialConnection.current.address);
   const [token, setToken] = useState(initialConnection.current.token);
-  const [rememberToken, setRememberToken] = useState(initialConnection.current.rememberToken);
   const [showToken, setShowToken] = useState(false);
   const [hasSavedConnection, setHasSavedConnection] = useState(
     Boolean(initialConnection.current.address || initialConnection.current.token),
@@ -56,7 +66,8 @@ export function PublicApp() {
         baseUrl: normalizedAddress,
         token: normalizedConnection.token,
         replaceExisting: true,
-        onTokenChanged: (nextToken) => updateSavedToken(nextToken, connection.rememberToken),
+        onTokenChanged: (nextToken) => updateSavedToken(nextToken),
+        connections: browserConnections,
       });
       setAddress(normalizedAddress);
       setToken(normalizedConnection.token);
@@ -75,10 +86,6 @@ export function PublicApp() {
   useEffect(() => {
     if (autoConnectStarted.current) return;
     autoConnectStarted.current = true;
-    if (sessionStorage.getItem(SKIP_AUTO_CONNECT_KEY)) {
-      sessionStorage.removeItem(SKIP_AUTO_CONNECT_KEY);
-      return;
-    }
     if (initialConnection.current.address && initialConnection.current.token) {
       void connect(initialConnection.current);
     }
@@ -91,7 +98,7 @@ export function PublicApp() {
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    void connect({ address, token, rememberToken });
+    void connect({ address, token });
   };
 
   const handleForget = () => {
@@ -100,33 +107,15 @@ export function PublicApp() {
     forgetConnection();
     setAddress("");
     setToken("");
-    setRememberToken(false);
     setHasSavedConnection(false);
     setError(null);
   };
 
-  const handleChangeBackend = () => {
-    sessionStorage.setItem(SKIP_AUTO_CONNECT_KEY, "1");
-    window.location.reload();
-  };
-
   if (activeConnection) {
     return (
-      <>
-        <Suspense fallback={<div className="public-app-loading"><Loader2 className="spin" /> Loading Orkestrator…</div>}>
-          <OrkestratorApp />
-        </Suspense>
-        <button
-          type="button"
-          className="public-connection-chip"
-          onClick={handleChangeBackend}
-          title={`Connected directly to ${activeConnection.address}`}
-        >
-          <span aria-hidden="true" />
-          <span className="public-connection-chip__address">{new URL(activeConnection.address).host}</span>
-          <span className="public-connection-chip__action">Change</span>
-        </button>
-      </>
+      <Suspense fallback={<div className="public-app-loading"><Loader2 className="spin" /> Loading Orkestrator…</div>}>
+        <OrkestratorApp />
+      </Suspense>
     );
   }
 
@@ -181,7 +170,7 @@ export function PublicApp() {
             <span className="connect-form-icon"><LockKeyhole aria-hidden="true" /></span>
             <div>
               <h2>Connect to a backend</h2>
-              <p>The address and token stay in this browser.</p>
+              <p>The address is remembered. The token lasts for this tab.</p>
             </div>
           </div>
 
@@ -236,16 +225,6 @@ export function PublicApp() {
                 {showToken ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
               </button>
             </div>
-
-            <label className="remember-choice">
-              <input
-                type="checkbox"
-                checked={rememberToken}
-                onChange={(event) => setRememberToken(event.target.checked)}
-                disabled={connecting}
-              />
-              <span><b>Remember token</b><small>Otherwise it lasts for this browser tab.</small></span>
-            </label>
 
             {error && <div className="connect-error" role="alert">{error}</div>}
 

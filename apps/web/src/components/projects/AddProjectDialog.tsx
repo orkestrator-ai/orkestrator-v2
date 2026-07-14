@@ -71,28 +71,33 @@ export function AddProjectDialog({
         directory: true,
         multiple: false,
         title: "Select Repository Directory",
+        defaultPath: localPath.trim() || undefined,
       });
 
-      if (selected && typeof selected === "string") {
-        setLocalPath(selected);
+      // Browser clients cannot open a server-side directory picker. In that
+      // case, use the path entered by the user and let the backend inspect it.
+      const repositoryPath = typeof selected === "string" ? selected : localPath.trim();
+      if (!repositoryPath) return;
 
-        // Try to get the git remote URL from the selected directory
-        try {
-          const remoteUrl = await getGitRemoteUrl(selected);
-          if (remoteUrl) {
-            setGitUrl(remoteUrl);
-            const valid = await validateGitUrl(remoteUrl);
-            setIsValidUrl(valid);
-          }
-        } catch (err) {
-          // Silently ignore - directory may not be a git repo
-          console.debug("Could not get git remote URL:", err);
+      setLocalPath(repositoryPath);
+
+      // Try to get the git remote URL from the selected or entered directory.
+      try {
+        const remoteUrl = await getGitRemoteUrl(repositoryPath);
+        if (remoteUrl) {
+          setGitUrl(remoteUrl);
+          setError(null);
+          const valid = await validateGitUrl(remoteUrl);
+          setIsValidUrl(valid);
         }
+      } catch (err) {
+        // Silently ignore - directory may not be a git repo
+        console.debug("Could not get git remote URL:", err);
       }
     } catch (err) {
       console.error("Failed to open directory picker:", err);
     }
-  }, [validateGitUrl]);
+  }, [localPath, validateGitUrl]);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -125,7 +130,7 @@ export function AddProjectDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="sm:max-w-6xl">
         <DialogHeader>
           <DialogTitle>Add Project</DialogTitle>
           <DialogDescription>
@@ -180,6 +185,7 @@ export function AddProjectDialog({
                 size="icon"
                 onClick={handleBrowse}
                 disabled={isLoading}
+                aria-label="Select or detect repository directory"
               >
                 <FolderOpen className="h-4 w-4" />
               </Button>

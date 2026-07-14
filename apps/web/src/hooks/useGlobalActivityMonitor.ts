@@ -170,7 +170,7 @@ export function useGlobalActivityMonitor(): void {
   const activitySources = useRef<ActivitySourcesByEnvironment>(new Map());
 
   // Track active pollers and listeners for container environments
-  const activePollers = useRef(new Set<string>());
+  const activePollers = useRef(new Map<string, symbol>());
   const activeListeners = useRef(new Map<string, UnlistenFn>());
 
   // ── Terminal mode: poll ALL running container environments ──────────
@@ -190,7 +190,8 @@ export function useGlobalActivityMonitor(): void {
       const cid = env.containerId!;
       if (activePollers.current.has(cid)) continue;
 
-      activePollers.current.add(cid);
+      const registration = Symbol(cid);
+      activePollers.current.set(cid, registration);
       const eventName = `claude-state-${cid}`;
 
       listen<ClaudeStateEvent>(eventName, (event) => {
@@ -200,6 +201,10 @@ export function useGlobalActivityMonitor(): void {
         }
       })
         .then((unlisten) => {
+          if (activePollers.current.get(cid) !== registration) {
+            unlisten();
+            return;
+          }
           activeListeners.current.set(cid, unlisten);
           backend.startClaudeStatePolling(cid).catch((e) => {
             console.warn(
@@ -215,12 +220,14 @@ export function useGlobalActivityMonitor(): void {
             eventName,
             e
           );
-          activePollers.current.delete(cid);
+          if (activePollers.current.get(cid) === registration) {
+            activePollers.current.delete(cid);
+          }
         });
     }
 
     // Stop polling for containers that are no longer running
-    for (const cid of activePollers.current) {
+    for (const cid of activePollers.current.keys()) {
       if (!currentContainerIds.has(cid)) {
         activePollers.current.delete(cid);
         const unlisten = activeListeners.current.get(cid);

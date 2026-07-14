@@ -1,6 +1,6 @@
 {
   "name": "orkestrator-ai",
-  "version": "2.3.5",
+  "version": "2.3.7",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.3.14",

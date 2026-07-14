@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { BackendProcess, getBrowserGatewayStatus, type BackendHttpClient } from "./backend-process.js";
+import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
 import { APP_SLUG, PRODUCT_NAME } from "./app-constants.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
@@ -17,10 +17,6 @@ app.setPath("userData", path.join(app.getPath("appData"), APP_SLUG));
 let mainWindow: BrowserWindow | null = null;
 let backend: BackendHttpClient | null = null;
 const backendProcess = new BackendProcess();
-
-function getSharedBackendStatus() {
-  return getBrowserGatewayStatus(backendProcess.getInfo());
-}
 
 function emitToRenderers(event: string, payload: unknown): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -88,8 +84,14 @@ function registerIpc(): void {
     dialogApi: dialog,
     appApi: app,
     nativeImageApi: nativeImage,
-    getWebClientStatus: getSharedBackendStatus,
-    setWebClientEnabled: async () => getSharedBackendStatus(),
+    getWebClientStatus: () => {
+      if (!backend) throw new Error("Backend is not initialized");
+      return backend.getWebClientStatus();
+    },
+    setWebClientEnabled: (enabled) => {
+      if (!backend) throw new Error("Backend is not initialized");
+      return backend.setWebClientEnabled(enabled);
+    },
     getGatewayTokenSettings: () => {
       if (!backend) throw new Error("Backend is not initialized");
       return backend.getTokenSettings();
@@ -114,6 +116,7 @@ app.whenReady().then(async () => {
     appRoot,
     resourceRoot,
     rendererDevServerUrl: isDev ? process.env.VITE_DEV_SERVER_URL : undefined,
+    desktopWebClient: true,
     onEvent: emitToRenderers,
     onUnexpectedExit: (error) => {
       dialog.showErrorBox(

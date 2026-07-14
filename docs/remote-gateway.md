@@ -144,6 +144,10 @@ Traffic is plain HTTP because it is expected to travel over Tailscale. Do not bi
 
 An HTTPS page cannot call the gateway's default plain-HTTP tailnet address in normal browsers. The backend can own a Tailscale Serve listener and publish its tailnet-only HTTPS origin:
 
+In Electron, open **Settings > Web client**, enable **Allow web access**, and save. Electron keeps its loopback backend control listener active while the backend creates a separate Tailscale Serve HTTPS endpoint for browser access. Disabling the setting removes that Serve endpoint without stopping Electron, terminals, or agent sessions. The settings panel shows the HTTPS origin and gateway token to enter at `www.orkestrator.dev`.
+
+For a standalone backend, use:
+
 ```bash
 # Builds the backend, allows https://orkestrator.dev, and enables Tailscale Serve.
 bun run start:web-public
@@ -152,6 +156,8 @@ bun run start:web-public
 The script is equivalent to starting the built backend with `--tailscale-serve --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev`. Use the explicit backend command instead when deploying the public client on another origin.
 
 `--tailscale-serve` makes the backend bind its browser listener to `127.0.0.1`, run `tailscale serve --bg --yes --https=443` against that listener, and replace `browserUrl` in its ready message with the resulting HTTPS origin. If `--host` is supplied, it must be exactly `127.0.0.1`. Before changing Serve, the backend checks the selected HTTPS port and refuses to overwrite a listener that already exists; choose an unused port with `--tailscale-serve-port <port>` instead. On graceful shutdown, it removes only the HTTPS listener it configured.
+
+Electron uses the same mechanism in managed mode. Its saved `webClientEnabled` setting controls the Serve endpoint at startup and can be changed while the app is running. Failure to connect Tailscale or configure Serve is reported in settings and does not stop the desktop backend.
 
 Tailscale reports an address similar to `https://workstation.example-tailnet.ts.net`. Enter that origin and the gateway token in the public client. Tailnet ACLs still control which devices can reach the Serve endpoint, and the Orkestrator token remains required. Do not use Tailscale Funnel for this workflow.
 

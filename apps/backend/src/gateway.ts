@@ -12,7 +12,7 @@ import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 import type { Socket } from "node:net";
 import path from "node:path";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import type { GatewayTokenSettings } from "@orkestrator/protocol/web-client";
+import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import {
   GatewayTokenValidationError,
   gatewayTokenCookieHeader,
@@ -51,6 +51,10 @@ export interface OrkestratorGatewayOptions {
   logger?: Pick<Console, "debug" | "error" | "info" | "warn">;
   allowNonTailscaleBind?: boolean;
   allowedOrigins?: string[];
+  webClientControl?: {
+    getStatus(): WebClientStatus;
+    setEnabled(enabled: boolean): Promise<WebClientStatus>;
+  };
 }
 
 const AUTH_COOKIE = "orkestrator_gateway_auth";
@@ -503,6 +507,7 @@ export class OrkestratorGateway {
   private readonly interfaces?: NetworkInterfaceMap;
   private readonly logger: Pick<Console, "debug" | "error" | "info" | "warn">;
   private readonly allowNonTailscaleBind: boolean;
+  private readonly webClientControl: OrkestratorGatewayOptions["webClientControl"];
   private readonly allowedOrigins: string[];
   private servers = new Set<Server>();
   private token = "";
@@ -527,6 +532,7 @@ export class OrkestratorGateway {
     this.interfaces = options.interfaces;
     this.logger = options.logger ?? console;
     this.allowNonTailscaleBind = options.allowNonTailscaleBind ?? false;
+    this.webClientControl = options.webClientControl;
     this.allowedOrigins = (
       options.allowedOrigins ?? parseAllowedOrigins(this.env.ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS)
     )
@@ -571,7 +577,7 @@ export class OrkestratorGateway {
       if (!isLoopbackAddress(this.controlBindAddress)) {
         throw new Error(`Control listener must use a loopback address: ${this.controlBindAddress}`);
       }
-      controlListener = await this.listen(this.controlBindAddress, this.controlPort ?? 0);
+      controlListener = await this.listen(this.controlBindAddress, this.controlPort ?? 0, "control");
       this.logger.info(`[BackendControl] Listening on ${controlListener.url}`);
     }
 
@@ -608,14 +614,14 @@ export class OrkestratorGateway {
     bindAddress: string,
     preferredPort: number,
   ): Promise<{ bindAddress: string; port: number; url: string }> {
-    if (preferredPort === 0) return this.listen(bindAddress, preferredPort);
+    if (preferredPort === 0) return this.listen(bindAddress, preferredPort, "browser");
 
     for (let offset = 0; offset <= GATEWAY_PORT_FALLBACK_ATTEMPTS; offset += 1) {
       const candidatePort = preferredPort + offset;
       if (candidatePort > 65535) break;
 
       try {
-        const listener = await this.listen(bindAddress, candidatePort);
+        const listener = await this.listen(bindAddress, candidatePort, "browser");
         if (candidatePort !== preferredPort) {
           this.logger.warn(
             `[RemoteGateway] Port ${preferredPort} was in use; listening on ${candidatePort} instead`,
@@ -627,16 +633,20 @@ export class OrkestratorGateway {
       }
     }
 
-    const listener = await this.listen(bindAddress, 0);
+    const listener = await this.listen(bindAddress, 0, "browser");
     this.logger.warn(
       `[RemoteGateway] Port ${preferredPort} and nearby ports were in use; listening on ${listener.port} instead`,
     );
     return listener;
   }
 
-  private async listen(bindAddress: string, port: number): Promise<{ bindAddress: string; port: number; url: string }> {
+  private async listen(
+    bindAddress: string,
+    port: number,
+    listenerKind: "control" | "browser",
+  ): Promise<{ bindAddress: string; port: number; url: string }> {
     const server = createServer((request, response) => {
-      this.handle(request, response).catch((error: unknown) => {
+      this.handle(request, response, listenerKind).catch((error: unknown) => {
         this.logger.error("[RemoteGateway] Request failed:", error);
         if (!response.headersSent) {
           jsonResponse(response, 500, { error: error instanceof Error ? error.message : String(error) });
@@ -795,7 +805,11 @@ export class OrkestratorGateway {
     response.end();
   }
 
-  private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  private async handle(
+    request: IncomingMessage,
+    response: ServerResponse,
+    listenerKind: "control" | "browser",
+  ): Promise<void> {
     const url = new URL(request.url ?? "/", "http://orkestrator.local");
 
     if (request.method === "OPTIONS" && url.pathname.startsWith(`${API_PREFIX}/`)) {
@@ -834,6 +848,15 @@ export class OrkestratorGateway {
 
     if (url.pathname === `${API_PREFIX}/gateway-settings`) {
       await this.handleGatewaySettings(request, response);
+      return;
+    }
+
+    if (url.pathname === `${API_PREFIX}/web-client-access`) {
+      if (listenerKind !== "control" || !this.webClientControl) {
+        jsonResponse(response, 404, { error: "Not found" });
+        return;
+      }
+      await this.handleWebClientAccess(request, response);
       return;
     }
 
@@ -906,6 +929,42 @@ export class OrkestratorGateway {
       this.logger.error("[RemoteGateway] Failed to persist gateway token:", error);
       jsonResponse(response, 500, { error: "Unable to persist gateway token" });
     }
+  }
+
+  private async handleWebClientAccess(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (!this.webClientControl) {
+      jsonResponse(response, 404, { error: "Not found" });
+      return;
+    }
+    if (request.method === "GET") {
+      jsonResponse(response, 200, this.webClientControl.getStatus());
+      return;
+    }
+    if (request.method !== "PUT") {
+      response.writeHead(405, { allow: "GET, PUT" });
+      response.end();
+      return;
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      body = await readJsonBody(request);
+    } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) {
+        jsonResponse(response, 413, { error: error.message });
+        return;
+      }
+      if (error instanceof InvalidRequestBodyError) {
+        jsonResponse(response, 400, { error: error.message });
+        return;
+      }
+      throw error;
+    }
+    if (typeof body.enabled !== "boolean") {
+      jsonResponse(response, 400, { error: "Expected enabled to be a boolean" });
+      return;
+    }
+    jsonResponse(response, 200, await this.webClientControl.setEnabled(body.enabled));
   }
 
   private async handleLogin(request: IncomingMessage, response: ServerResponse): Promise<void> {

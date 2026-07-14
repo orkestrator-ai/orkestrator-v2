@@ -250,6 +250,41 @@ describe("remote gateway", () => {
     expect(browserResponse.status).toBe(200);
   });
 
+  test("allows only the authenticated control listener to manage Electron web access", async () => {
+    const getStatus = mock(() => ({ enabled: false, running: false, url: null, error: null }));
+    const setEnabled = mock(async (enabled: boolean) => ({
+      enabled,
+      running: enabled,
+      url: enabled ? "https://workstation.example.ts.net/" : null,
+      error: null,
+    }));
+    const { info } = await startGateway({
+      controlBindAddress: "127.0.0.1",
+      controlPort: 0,
+      webClientControl: { getStatus, setEnabled },
+    });
+    const path = "__orkestrator/web-client-access";
+    const headers = { authorization: `Bearer ${info.token}` };
+
+    const initial = await requestUrl(`${info.url}${path}`, { headers });
+    expect(initial.status).toBe(200);
+    expect(initial.json()).toMatchObject({ enabled: false, running: false });
+
+    const enabled = await requestUrl(`${info.url}${path}`, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(enabled.status).toBe(200);
+    expect(enabled.json()).toMatchObject({ enabled: true, running: true });
+    expect(setEnabled).toHaveBeenCalledWith(true);
+
+    const browserAttempt = await requestUrl(`${info.browserUrl}${path}`, { headers });
+    expect(browserAttempt.status).toBe(404);
+    const unauthenticated = await requestUrl(`${info.url}${path}`);
+    expect(unauthenticated.status).toBe(401);
+  });
+
   test("keeps desktop control available and selects another browser port when the preferred port is occupied", async () => {
     const occupied = createServer((_request, response) => response.end("occupied"));
     auxiliaryServers.push(occupied);

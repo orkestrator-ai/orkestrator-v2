@@ -36,7 +36,7 @@ export type MainIpcDependencies = {
   dialogApi: DialogLike;
   appApi: AppLike;
   nativeImageApi: NativeImageLike;
-  getWebClientStatus: () => WebClientStatus;
+  getWebClientStatus: () => WebClientStatus | Promise<WebClientStatus>;
   setWebClientEnabled: (enabled: boolean) => Promise<WebClientStatus>;
   getGatewayTokenSettings: () => Promise<GatewayTokenSettings>;
   setGatewayToken: (token: string) => Promise<GatewayTokenSettings>;

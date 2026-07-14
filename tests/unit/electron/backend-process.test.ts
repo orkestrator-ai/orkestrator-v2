@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -93,6 +93,14 @@ describe("Electron backend process supervisor", () => {
           ? (body.token as string)
           : "initial-client-token-123456";
         response.end(JSON.stringify({ token, editable: true, source: "file" }));
+      } else if (request.url === "/__orkestrator/web-client-access") {
+        const enabled = request.method === "PUT" ? body.enabled === true : false;
+        response.end(JSON.stringify({
+          enabled,
+          running: enabled,
+          url: enabled ? "https://workstation.example.ts.net/" : null,
+          error: null,
+        }));
       }
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -105,6 +113,12 @@ describe("Electron backend process supervisor", () => {
     await expect(client.getTokenSettings()).resolves.toMatchObject({ token: "initial-client-token-123456" });
     await expect(client.setToken("changed-client-token-123456")).resolves.toMatchObject({
       token: "changed-client-token-123456",
+    });
+    await expect(client.getWebClientStatus()).resolves.toMatchObject({ enabled: false, running: false });
+    await expect(client.setWebClientEnabled(true)).resolves.toMatchObject({
+      enabled: true,
+      running: true,
+      url: "https://workstation.example.ts.net/",
     });
     const received = new Promise((resolve) => client.listen((event, payload) => resolve({ event, payload })));
     await expect(received).resolves.toEqual({ event: "changed", payload: { ok: true } });
@@ -156,6 +170,52 @@ describe("Electron backend process supervisor", () => {
     expect(await browserResponse.json()).toEqual({
       result: "Hello, Browser! You've been greeted from the Orkestrator backend!",
     });
+  });
+
+  test("manages hosted web access without stopping the Electron backend", async () => {
+    globalThis.fetch = Bun.fetch;
+    const root = path.resolve(import.meta.dir, "../../..");
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
+    const toolsDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-tailscale-"));
+    directories.push(dataDir, toolsDir);
+    const executable = path.join(toolsDir, "tailscale");
+    await writeFile(executable, `#!/bin/sh
+if [ "$*" = "serve status --json" ]; then
+  printf '{}\\n'
+  exit 0
+fi
+case " $* " in
+  *" off "*) exit 0 ;;
+esac
+printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
+`);
+    await chmod(executable, 0o755);
+
+    const backendProcess = new BackendProcess();
+    processes.push(backendProcess);
+    const client = await backendProcess.start({
+      isDev: true,
+      appRoot: root,
+      resourceRoot: root,
+      dataDir,
+      gatewayPort: 0,
+      desktopWebClient: true,
+      tailscaleExecutable: executable,
+      onEvent: () => undefined,
+    });
+
+    expect(backendProcess.getInfo()?.browserUrl).toBe("https://workstation.example.ts.net/");
+    await expect(client.getWebClientStatus()).resolves.toMatchObject({
+      enabled: true,
+      running: true,
+      url: "https://workstation.example.ts.net/",
+    });
+    await expect(client.setWebClientEnabled(false)).resolves.toMatchObject({
+      enabled: false,
+      running: false,
+      url: null,
+    });
+    await expect(client.invoke("greet", { name: "Electron" })).resolves.toContain("Hello, Electron!");
   });
 
   test("shares concurrent startup and clears stale state when the child exits", async () => {

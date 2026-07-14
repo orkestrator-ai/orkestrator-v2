@@ -29,7 +29,19 @@ case "$ARCH" in
 esac
 
 # Platform
-PLATFORM="darwin"
+OS=$(uname -s)
+case "$OS" in
+    Darwin)
+        PLATFORM="darwin"
+        ;;
+    Linux)
+        PLATFORM="linux"
+        ;;
+    *)
+        echo "Unsupported platform: $OS"
+        exit 1
+        ;;
+esac
 
 # Download URL
 BUN_FILENAME="bun-${PLATFORM}-${BUN_ARCH}"

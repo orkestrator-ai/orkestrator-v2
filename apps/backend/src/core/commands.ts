@@ -1114,7 +1114,13 @@ async function spawnSetupTerminal(
     spawnTerminalProcess(
       sessionId,
       shellPath,
-      ["-lc", setupCommand],
+      // Use an interactive login shell (-i) so PATH entries that tool installers
+      // (bun, nvm, etc.) append to ~/.bashrc are available. The standard Debian
+      // ~/.bashrc returns early for non-interactive shells (case $- in *i*)),
+      // so a plain `-lc` login shell never sees those exports and `bun` etc. are
+      // "command not found". This mirrors what fix-path.ts does when recovering
+      // the login-shell PATH.
+      ["-ilc", setupCommand],
       {
         cwd: environment.worktreePath,
         cols: 80,

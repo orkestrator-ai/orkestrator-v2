@@ -1,6 +1,13 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/*
+ * This stylesheet is also compiled by apps/web-public. Tailwind otherwise uses
+ * that consuming Vite app as its automatic source root and misses the shared
+ * renderer's utility classes, leaving the connected app effectively unstyled.
+ */
+@source "./";
+
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* FiraCode Nerd Font for terminal */

@@ -7,12 +7,33 @@ if (process.platform === "win32") {
   throw new Error("Orkestrator desktop builds support macOS and Linux only.");
 }
 
-const root = path.resolve(import.meta.dir, "..");
+const packageRoot = path.resolve(import.meta.dir, "..");
+const output = path.join(packageRoot, "dist");
 
 function run(command: string, args: string[]): void {
-  const result = spawnSync(command, args, { cwd: root, stdio: "inherit", env: process.env });
+  const result = spawnSync(command, args, { cwd: packageRoot, stdio: "inherit", env: process.env });
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-rmSync(path.join(root, "dist"), { recursive: true, force: true });
-run("bunx", ["tsc", "-p", "tsconfig.electron.json"]);
+run("bunx", ["tsc", "--noEmit", "-p", "tsconfig.electron.json"]);
+rmSync(output, { recursive: true, force: true });
+
+const result = await Bun.build({
+  entrypoints: [
+    path.join(packageRoot, "electron/main.ts"),
+    path.join(packageRoot, "electron/preload.ts"),
+  ],
+  outdir: path.join(output, "electron"),
+  target: "node",
+  format: "esm",
+  external: ["electron"],
+  sourcemap: "external",
+});
+if (!result.success) {
+  for (const log of result.logs) console.error(log);
+  process.exit(1);
+}
+
+for (const artifact of result.outputs) {
+  console.log(`${path.relative(packageRoot, artifact.path)} ${artifact.size} bytes`);
+}

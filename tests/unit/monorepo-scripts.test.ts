@@ -17,7 +17,13 @@ describe("monorepo orchestration scripts", () => {
     const build = read("apps/desktop/scripts/build.ts");
     const dev = read("apps/desktop/scripts/dev.ts");
     expect(build).toContain("result.status !== 0");
-    expect(build).toContain('rmSync(path.join(root, "dist")');
+    expect(build).toContain('run("bunx", ["tsc", "--noEmit"');
+    expect(build).toContain("const result = await Bun.build");
+    expect(build).toContain('path.join(packageRoot, "electron/main.ts")');
+    expect(build).toContain('path.join(packageRoot, "electron/preload.ts")');
+    expect(build).toContain('external: ["electron"]');
+    expect(build).toContain('target: "node"');
+    expect(build).toContain("rmSync(output");
     expect(dev).toContain("vite.kill()");
     expect(dev).toContain('process.on("SIGINT"');
     expect(dev).toContain("Timed out waiting for");

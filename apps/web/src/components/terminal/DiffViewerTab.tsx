@@ -325,7 +325,7 @@ function DiffHeader({
   statusText,
 }: DiffHeaderProps) {
   return (
-    <div className="flex items-center justify-between border-b border-border bg-[#252526] px-4 py-2">
+    <div className="flex items-center justify-between border-b border-border bg-background px-4 py-2">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         {statusIcon}
         <span className="truncate font-mono">{filePath}</span>
@@ -346,18 +346,30 @@ function DiffHeader({
         <Button
           variant="ghost"
           size="sm"
-          className={cn("h-7 px-2", diffMode === "side-by-side" && "bg-accent")}
+          className={cn(
+            "h-7 px-2",
+            diffMode === "side-by-side" &&
+              "bg-primary/15 text-blue-300 ring-1 ring-inset ring-primary/50 hover:bg-primary/20 hover:text-blue-200",
+          )}
           onClick={() => onDiffModeChange("side-by-side")}
           title="Side by side"
+          aria-label="Side by side"
+          aria-pressed={diffMode === "side-by-side"}
         >
           <Columns className="h-3.5 w-3.5" />
         </Button>
         <Button
           variant="ghost"
           size="sm"
-          className={cn("h-7 px-2", diffMode === "inline" && "bg-accent")}
+          className={cn(
+            "h-7 px-2",
+            diffMode === "inline" &&
+              "bg-primary/15 text-blue-300 ring-1 ring-inset ring-primary/50 hover:bg-primary/20 hover:text-blue-200",
+          )}
           onClick={() => onDiffModeChange("inline")}
           title="Inline"
+          aria-label="Inline"
+          aria-pressed={diffMode === "inline"}
         >
           <AlignJustify className="h-3.5 w-3.5" />
         </Button>

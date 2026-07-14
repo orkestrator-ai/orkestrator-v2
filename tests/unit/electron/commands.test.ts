@@ -206,6 +206,7 @@ function createContext(
   };
   const updates: Array<Record<string, unknown>> = [];
   const emitted: Array<{ event: string; payload: unknown }> = [];
+  let desktopConnections = { activeConnectionId: "local", connections: [] as Array<Record<string, unknown>> };
   const context = {
     appRoot: "",
     resourceRoot: "",
@@ -218,6 +219,14 @@ function createContext(
       loadConfig: mock(async () => config),
       saveConfig: mock(async (nextConfig: typeof config) => {
         Object.assign(config, nextConfig);
+      }),
+      updateRepositoryConfig: mock(async (projectId: string, nextConfig: RepositoryConfig) => {
+        config.repositories[projectId as "project-1"] = nextConfig;
+        return config;
+      }),
+      getDesktopConnections: mock(async () => desktopConnections),
+      saveDesktopConnections: mock(async (nextConnections: typeof desktopConnections) => {
+        desktopConnections = nextConnections;
       }),
       getEnvironment: mock(async (environmentId: string) => environments.find((environment) => environment.id === environmentId) ?? null),
       getEnvironmentsByProject: mock(async (projectId: string) => environments.filter((environment) => environment.projectId === projectId)),
@@ -518,6 +527,28 @@ afterAll(async () => {
 });
 
 describe("Electron backend command registry", () => {
+  test("loads, validates, and saves desktop connection records", async () => {
+    const commands = createCommandRegistry();
+    const { context } = createContext([]);
+    await expect(commands.get("get_desktop_connections")?.({}, context)).resolves.toEqual({
+      activeConnectionId: "local",
+      connections: [],
+    });
+    const remote = {
+      activeConnectionId: "remote-1",
+      connections: [{
+        id: "remote-1",
+        name: "desk.example",
+        address: "https://desk.example",
+        encryptedToken: "encrypted",
+        lastConnectedAt: "2026-07-14T00:00:00.000Z",
+      }],
+    };
+    await commands.get("save_desktop_connections")?.({ desktopConnections: remote }, context);
+    await expect(commands.get("get_desktop_connections")?.({}, context)).resolves.toEqual(remote);
+    expect(() => commands.get("save_desktop_connections")?.({ desktopConnections: { activeConnectionId: "local" } }, context)).toThrow("connections");
+  });
+
   test("registers every command exposed by the typed frontend wrapper", async () => {
     const source = await fs.readFile(path.join(process.cwd(), "apps", "web", "src", "lib", "backend.ts"), "utf8");
     const exposedCommands = Array.from(source.matchAll(/invoke(?:<[^>]+>)?\("([^"]+)"/g), (match) => match[1]);

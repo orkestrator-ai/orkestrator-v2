@@ -1,5 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createOrkestratorElectronApi, type IpcRendererLike } from "../../../apps/desktop/electron/preload-api";
+import {
+  createOrkestratorElectronApi,
+  exposeActiveConnectionGateway,
+  type IpcRendererLike,
+} from "../../../apps/desktop/electron/preload-api";
 
 function createIpcMock() {
   const listeners = new Map<string, (event: unknown, name: string, payload: unknown) => void>();
@@ -19,6 +23,33 @@ function createIpcMock() {
 }
 
 describe("preload API factory", () => {
+  test("exposes the active remote gateway from the synchronous bootstrap snapshot", () => {
+    const exposeInMainWorld = mock(() => undefined);
+    const sendSync = mock(() => ({
+      activeConnectionId: "remote-1",
+      connections: [
+        { id: "local", name: "Local", address: null, kind: "local", active: false, requiresToken: false },
+        { id: "remote-1", name: "Desk", address: "https://desk.example", kind: "remote", active: true, requiresToken: false },
+      ],
+    }));
+    expect(exposeActiveConnectionGateway({ exposeInMainWorld }, { sendSync })).toBe(true);
+    expect(sendSync).toHaveBeenCalledWith("orkestrator:connections:list-sync");
+    expect(exposeInMainWorld).toHaveBeenCalledWith("orkestratorGateway", {
+      enabled: true,
+      baseUrl: "https://desk.example",
+    });
+  });
+
+  test("does not expose a gateway for Local or malformed bootstrap snapshots", () => {
+    const exposeInMainWorld = mock(() => undefined);
+    expect(exposeActiveConnectionGateway({ exposeInMainWorld }, { sendSync: () => ({
+      activeConnectionId: "local",
+      connections: [{ id: "local", name: "Local", address: null, kind: "local", active: true, requiresToken: false }],
+    }) })).toBe(false);
+    expect(exposeActiveConnectionGateway({ exposeInMainWorld }, { sendSync: () => ({ activeConnectionId: "local" }) })).toBe(false);
+    expect(exposeInMainWorld).not.toHaveBeenCalled();
+  });
+
   test("routes backend commands through the invoke IPC channel", async () => {
     const { ipc, invoke } = createIpcMock();
     const api = createOrkestratorElectronApi(ipc);
@@ -71,6 +102,13 @@ describe("preload API factory", () => {
       channel: "orkestrator:web-client:set-token",
       args: ["replacement-token-123456"],
     });
+    await expect(api.connections.list()).resolves.toEqual({ channel: "orkestrator:connections:list", args: [] });
+    await expect(api.connections.connect({ address: "https://desk.example", token: "gateway-token-123456" })).resolves.toEqual({
+      channel: "orkestrator:connections:connect",
+      args: [{ address: "https://desk.example", token: "gateway-token-123456" }],
+    });
+    await expect(api.connections.use("remote-1")).resolves.toEqual({ channel: "orkestrator:connections:use", args: ["remote-1"] });
+    await expect(api.connections.forget("remote-1")).resolves.toEqual({ channel: "orkestrator:connections:forget", args: ["remote-1"] });
     await expect(api.process.exit(7)).resolves.toEqual({ channel: "orkestrator:process:exit", args: [7] });
     await expect(api.window.startDragging()).resolves.toEqual({ channel: "orkestrator:window:start-dragging", args: [] });
   });

@@ -71,6 +71,68 @@ afterEach(async () => {
 });
 
 describe("Electron StorageService", () => {
+  test("round-trips validated desktop connections and recovers malformed persisted data", async () => {
+    const dataDir = await createTempDir("ork-storage-connections-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await expect(storage.getDesktopConnections()).resolves.toEqual({ activeConnectionId: "local", connections: [] });
+
+    const connections = {
+      activeConnectionId: "remote-1",
+      connections: [{
+        id: "remote-1",
+        name: "desk.example",
+        address: "https://desk.example",
+        encryptedToken: "encrypted-token",
+        lastConnectedAt: "2026-07-14T00:00:00.000Z",
+      }],
+    };
+    await storage.saveDesktopConnections(connections);
+    await expect(storage.getDesktopConnections()).resolves.toEqual(connections);
+    await expect(storage.saveDesktopConnections({ activeConnectionId: "local", connections: null } as never)).rejects.toThrow("connections");
+
+    const malformed = defaultConfig();
+    malformed.desktopConnections = { activeConnectionId: "remote-1" } as never;
+    await storage.saveConfig(malformed);
+    const originalWarn = console.warn;
+    console.warn = mock(() => undefined) as typeof console.warn;
+    try {
+      await expect(storage.getDesktopConnections()).resolves.toEqual({ activeConnectionId: "local", connections: [] });
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("preserves concurrent desktop, repository, and global configuration mutations", async () => {
+    const dataDir = await createTempDir("ork-storage-config-lock-");
+    const first = new StorageService(dataDir);
+    const second = new StorageService(dataDir);
+    await Promise.all([first.init(), second.init()]);
+    await first.saveConfig(defaultConfig());
+
+    const global = { ...defaultConfig().global, defaultAgent: "codex" as const };
+    const desktopConnections = {
+      activeConnectionId: "remote-1",
+      connections: [{
+        id: "remote-1",
+        name: "desk.example",
+        address: "https://desk.example",
+        encryptedToken: "encrypted-token",
+        lastConnectedAt: "2026-07-14T00:00:00.000Z",
+      }],
+    };
+    await Promise.all([
+      first.saveDesktopConnections(desktopConnections),
+      second.updateGlobalConfig(global),
+      first.updateRepositoryConfig("project-1", { defaultBranch: "develop", prBaseBranch: "develop" }),
+    ]);
+
+    const config = await second.loadConfig();
+    expect(config.desktopConnections).toEqual(desktopConnections);
+    expect(config.global.defaultAgent).toBe("codex");
+    expect(config.repositories["project-1"]).toMatchObject({ defaultBranch: "develop", prBaseBranch: "develop" });
+  });
+
   test("sanitizes names, extracts repository names, and rejects non-record updates", () => {
     expect(sanitizeEnvironmentName("  My Feature/🚀  ")).toBe("my-feature");
     expect(sanitizeEnvironmentName("🚀")).toBe("env");

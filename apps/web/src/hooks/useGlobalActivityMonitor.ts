@@ -9,7 +9,7 @@
  * Terminal mode (containers): manages claude-state polling lifecycle
  * Native mode (Claude/OpenCode/Codex): derives activity from session stores
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type MutableRefObject } from "react";
 import { listen, type UnlistenFn } from "@/lib/native/events";
 import * as backend from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores";
@@ -42,8 +42,8 @@ function mergeActivityState(
   current: AgentActivityState | undefined,
   next: AgentActivityState
 ): AgentActivityState {
-  if (current === "waiting" || next === "waiting") return "waiting";
   if (current === "working" || next === "working") return "working";
+  if (current === "waiting" || next === "waiting") return "waiting";
   return "idle";
 }
 
@@ -51,6 +51,53 @@ type ClaudeTmuxTabs = ReturnType<typeof useClaudeTmuxStore.getState>["tabs"];
 type SetContainerState = ReturnType<
   typeof useAgentActivityStore.getState
 >["setContainerState"];
+type ActivitySource = "claude" | "claude-tmux" | "opencode" | "codex";
+type ActivitySourcesByEnvironment = Map<
+  string,
+  Map<ActivitySource, AgentActivityState>
+>;
+
+function setEnvironmentSourceActivity(
+  activitySources: MutableRefObject<ActivitySourcesByEnvironment>,
+  environmentId: string,
+  source: ActivitySource,
+  sourceState: AgentActivityState,
+  setContainerState: SetContainerState,
+): void {
+  let environmentSources = activitySources.current.get(environmentId);
+  if (!environmentSources) {
+    environmentSources = new Map();
+    activitySources.current.set(environmentId, environmentSources);
+  }
+  environmentSources.set(source, sourceState);
+
+  let desiredState: AgentActivityState = "idle";
+  for (const state of environmentSources.values()) {
+    desiredState = mergeActivityState(desiredState, state);
+  }
+
+  const currentState =
+    useAgentActivityStore.getState().containerStates[environmentId];
+  if (currentState !== desiredState) {
+    setContainerState(environmentId, desiredState);
+  }
+}
+
+function getSessionEnvironmentIds(
+  sessions: Map<string, unknown>,
+  previousSessions?: Map<string, unknown>,
+): Set<string> {
+  const environmentIds = new Set<string>();
+  for (const sourceSessions of previousSessions
+    ? [previousSessions, sessions]
+    : [sessions]) {
+    for (const sessionKey of sourceSessions.keys()) {
+      const environmentId = extractEnvironmentId(sessionKey);
+      if (environmentId) environmentIds.add(environmentId);
+    }
+  }
+  return environmentIds;
+}
 
 function getClaudeTmuxTabEnvironmentId(
   stateKey: string,
@@ -77,6 +124,7 @@ function getClaudeTmuxTabActivityState(
 function syncClaudeTmuxActivityState(
   tabs: ClaudeTmuxTabs,
   previousTabs: ClaudeTmuxTabs | undefined,
+  activitySources: MutableRefObject<ActivitySourcesByEnvironment>,
   setContainerState: SetContainerState,
 ): void {
   const desiredByEnvironment = new Map<string, AgentActivityState>();
@@ -106,20 +154,23 @@ function syncClaudeTmuxActivityState(
 
   for (const envId of seenEnvironmentIds) {
     const desiredState = desiredByEnvironment.get(envId) ?? "idle";
-    const currentState =
-      useAgentActivityStore.getState().containerStates[envId];
-    if (currentState !== desiredState) {
-      setContainerState(envId, desiredState);
-    }
+    setEnvironmentSourceActivity(
+      activitySources,
+      envId,
+      "claude-tmux",
+      desiredState,
+      setContainerState,
+    );
   }
 }
 
 export function useGlobalActivityMonitor(): void {
   const environments = useEnvironmentStore((s) => s.environments);
   const setContainerState = useAgentActivityStore((s) => s.setContainerState);
+  const activitySources = useRef<ActivitySourcesByEnvironment>(new Map());
 
   // Track active pollers and listeners for container environments
-  const activePollers = useRef(new Set<string>());
+  const activePollers = useRef(new Map<string, symbol>());
   const activeListeners = useRef(new Map<string, UnlistenFn>());
 
   // ── Terminal mode: poll ALL running container environments ──────────
@@ -139,7 +190,8 @@ export function useGlobalActivityMonitor(): void {
       const cid = env.containerId!;
       if (activePollers.current.has(cid)) continue;
 
-      activePollers.current.add(cid);
+      const registration = Symbol(cid);
+      activePollers.current.set(cid, registration);
       const eventName = `claude-state-${cid}`;
 
       listen<ClaudeStateEvent>(eventName, (event) => {
@@ -149,6 +201,10 @@ export function useGlobalActivityMonitor(): void {
         }
       })
         .then((unlisten) => {
+          if (activePollers.current.get(cid) !== registration) {
+            unlisten();
+            return;
+          }
           activeListeners.current.set(cid, unlisten);
           backend.startClaudeStatePolling(cid).catch((e) => {
             console.warn(
@@ -164,12 +220,14 @@ export function useGlobalActivityMonitor(): void {
             eventName,
             e
           );
-          activePollers.current.delete(cid);
+          if (activePollers.current.get(cid) === registration) {
+            activePollers.current.delete(cid);
+          }
         });
     }
 
     // Stop polling for containers that are no longer running
-    for (const cid of activePollers.current) {
+    for (const cid of activePollers.current.keys()) {
       if (!currentContainerIds.has(cid)) {
         activePollers.current.delete(cid);
         const unlisten = activeListeners.current.get(cid);
@@ -208,42 +266,73 @@ export function useGlobalActivityMonitor(): void {
   // When disconnected, preserve the last-known state to avoid flashing
   // the sidebar icon to idle during transient SSE reconnections.
   useEffect(() => {
-    const unsubscribe = useClaudeStore.subscribe((state, prevState) => {
+    const syncActivity = (
+      state: ReturnType<typeof useClaudeStore.getState>,
+      prevState?: ReturnType<typeof useClaudeStore.getState>,
+    ) => {
       // Quick bailout: skip if nothing relevant changed
       if (
+        prevState &&
         state.sessions === prevState.sessions &&
-        state.pendingQuestions === prevState.pendingQuestions
+        state.pendingQuestions === prevState.pendingQuestions &&
+        state.clients === prevState.clients
       ) {
         return;
       }
 
-      for (const [sessionKey, session] of state.sessions) {
-        const envId = extractEnvironmentId(sessionKey);
-        if (!envId) continue;
-
+      const environmentIds = getSessionEnvironmentIds(
+        state.sessions,
+        prevState?.sessions,
+      );
+      for (const envId of environmentIds) {
+        const hasCurrentSessions = Array.from(state.sessions.keys()).some(
+          (sessionKey) => extractEnvironmentId(sessionKey) === envId,
+        );
         // Only derive state when connected (client exists). When the
         // client is absent the SSE connection is down — preserve the
-        // last-known activity state to avoid flashing idle.
-        if (!state.clients.has(envId)) continue;
+        // last-known activity state to avoid flashing idle. A removed
+        // session is authoritative, though, so clear that source.
+        if (!state.clients.has(envId)) {
+          if (!hasCurrentSessions) {
+            setEnvironmentSourceActivity(
+              activitySources,
+              envId,
+              "claude",
+              "idle",
+              setContainerState,
+            );
+          }
+          continue;
+        }
 
-        let desiredState: AgentActivityState;
-        if (session.isLoading) {
-          desiredState = "working";
-        } else {
+        let desiredState: AgentActivityState = "idle";
+        for (const [sessionKey, session] of state.sessions) {
+          if (extractEnvironmentId(sessionKey) !== envId) continue;
+
           // Check for pending questions for this specific session
           const hasPendingQuestions = Array.from(
             state.pendingQuestions.values()
           ).some((q) => q.sessionId === session.sessionId);
-          desiredState = hasPendingQuestions ? "waiting" : "idle";
+          const sessionState: AgentActivityState = session.isLoading
+            ? "working"
+            : hasPendingQuestions
+              ? "waiting"
+              : "idle";
+          desiredState = mergeActivityState(desiredState, sessionState);
         }
 
-        const currentState =
-          useAgentActivityStore.getState().containerStates[envId];
-        if (currentState !== desiredState) {
-          setContainerState(envId, desiredState);
-        }
+        setEnvironmentSourceActivity(
+          activitySources,
+          envId,
+          "claude",
+          desiredState,
+          setContainerState,
+        );
       }
-    });
+    };
+
+    syncActivity(useClaudeStore.getState());
+    const unsubscribe = useClaudeStore.subscribe(syncActivity);
 
     return unsubscribe;
   }, [setContainerState]);
@@ -256,6 +345,7 @@ export function useGlobalActivityMonitor(): void {
     syncClaudeTmuxActivityState(
       useClaudeTmuxStore.getState().tabs,
       undefined,
+      activitySources,
       setContainerState,
     );
 
@@ -267,6 +357,7 @@ export function useGlobalActivityMonitor(): void {
       syncClaudeTmuxActivityState(
         state.tabs,
         prevState.tabs,
+        activitySources,
         setContainerState,
       );
     });
@@ -276,42 +367,71 @@ export function useGlobalActivityMonitor(): void {
 
   // ── Native OpenCode mode: derive activity from session store ───────
   useEffect(() => {
-    const unsubscribe = useOpenCodeStore.subscribe((state, prevState) => {
+    const syncActivity = (
+      state: ReturnType<typeof useOpenCodeStore.getState>,
+      prevState?: ReturnType<typeof useOpenCodeStore.getState>,
+    ) => {
       if (
+        prevState &&
         state.sessions === prevState.sessions &&
         state.pendingQuestions === prevState.pendingQuestions &&
-        state.pendingPermissions === prevState.pendingPermissions
+        state.pendingPermissions === prevState.pendingPermissions &&
+        state.clients === prevState.clients
       ) {
         return;
       }
 
-      for (const [sessionKey, session] of state.sessions) {
-        const envId = extractEnvironmentId(sessionKey);
-        if (!envId) continue;
+      const environmentIds = getSessionEnvironmentIds(
+        state.sessions,
+        prevState?.sessions,
+      );
+      for (const envId of environmentIds) {
+        const hasCurrentSessions = Array.from(state.sessions.keys()).some(
+          (sessionKey) => extractEnvironmentId(sessionKey) === envId,
+        );
+        if (!state.clients.has(envId)) {
+          if (!hasCurrentSessions) {
+            setEnvironmentSourceActivity(
+              activitySources,
+              envId,
+              "opencode",
+              "idle",
+              setContainerState,
+            );
+          }
+          continue;
+        }
 
-        if (!state.clients.has(envId)) continue;
+        let desiredState: AgentActivityState = "idle";
+        for (const [sessionKey, session] of state.sessions) {
+          if (extractEnvironmentId(sessionKey) !== envId) continue;
 
-        let desiredState: AgentActivityState;
-        if (session.isLoading) {
-          desiredState = "working";
-        } else {
           const hasPendingQuestions = Array.from(
             state.pendingQuestions.values()
           ).some((q) => q.sessionID === session.sessionId);
           const hasPendingPermissions = Array.from(
             state.pendingPermissions.values()
           ).some((p) => p.sessionID === session.sessionId);
-          desiredState =
-            hasPendingQuestions || hasPendingPermissions ? "waiting" : "idle";
+          const sessionState: AgentActivityState = session.isLoading
+            ? "working"
+            : hasPendingQuestions || hasPendingPermissions
+              ? "waiting"
+              : "idle";
+          desiredState = mergeActivityState(desiredState, sessionState);
         }
 
-        const currentState =
-          useAgentActivityStore.getState().containerStates[envId];
-        if (currentState !== desiredState) {
-          setContainerState(envId, desiredState);
-        }
+        setEnvironmentSourceActivity(
+          activitySources,
+          envId,
+          "opencode",
+          desiredState,
+          setContainerState,
+        );
       }
-    });
+    };
+
+    syncActivity(useOpenCodeStore.getState());
+    const unsubscribe = useOpenCodeStore.subscribe(syncActivity);
 
     return unsubscribe;
   }, [setContainerState]);
@@ -321,28 +441,60 @@ export function useGlobalActivityMonitor(): void {
   // background environments. The last-known state is preserved until
   // the component remounts and reconnects.
   useEffect(() => {
-    const unsubscribe = useCodexStore.subscribe((state, prevState) => {
-      if (state.sessions === prevState.sessions) {
+    const syncActivity = (
+      state: ReturnType<typeof useCodexStore.getState>,
+      prevState?: ReturnType<typeof useCodexStore.getState>,
+    ) => {
+      if (
+        prevState &&
+        state.sessions === prevState.sessions &&
+        state.clients === prevState.clients
+      ) {
         return;
       }
 
-      for (const [sessionKey, session] of state.sessions) {
-        const envId = extractEnvironmentId(sessionKey);
-        if (!envId) continue;
-
-        if (!state.clients.has(envId)) continue;
-
-        const desiredState: AgentActivityState = session.isLoading
-          ? "working"
-          : "idle";
-
-        const currentState =
-          useAgentActivityStore.getState().containerStates[envId];
-        if (currentState !== desiredState) {
-          setContainerState(envId, desiredState);
+      const environmentIds = getSessionEnvironmentIds(
+        state.sessions,
+        prevState?.sessions,
+      );
+      for (const envId of environmentIds) {
+        const hasCurrentSessions = Array.from(state.sessions.keys()).some(
+          (sessionKey) => extractEnvironmentId(sessionKey) === envId,
+        );
+        if (!state.clients.has(envId)) {
+          if (!hasCurrentSessions) {
+            setEnvironmentSourceActivity(
+              activitySources,
+              envId,
+              "codex",
+              "idle",
+              setContainerState,
+            );
+          }
+          continue;
         }
+
+        let desiredState: AgentActivityState = "idle";
+        for (const [sessionKey, session] of state.sessions) {
+          if (extractEnvironmentId(sessionKey) !== envId) continue;
+          desiredState = mergeActivityState(
+            desiredState,
+            session.isLoading ? "working" : "idle",
+          );
+        }
+
+        setEnvironmentSourceActivity(
+          activitySources,
+          envId,
+          "codex",
+          desiredState,
+          setContainerState,
+        );
       }
-    });
+    };
+
+    syncActivity(useCodexStore.getState());
+    const unsubscribe = useCodexStore.subscribe(syncActivity);
 
     return unsubscribe;
   }, [setContainerState]);

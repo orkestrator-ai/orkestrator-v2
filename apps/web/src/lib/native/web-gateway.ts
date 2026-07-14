@@ -17,6 +17,7 @@ export interface BrowserGatewayOptions {
   replaceExisting?: boolean;
   onTokenChanged?: (token: string) => void;
   eventReconnectDelayMs?: number;
+  connections?: NonNullable<Window["orkestrator"]>["connections"];
 }
 
 function normalizedBaseUrl(value: string | undefined): string | undefined {
@@ -189,6 +190,8 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         return Promise.resolve(null);
       },
     },
+
+    ...(options.connections ? { connections: options.connections } : {}),
 
     webClient: {
       getStatus(): Promise<WebClientStatus> {

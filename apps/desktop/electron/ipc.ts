@@ -1,5 +1,6 @@
 import type { BrowserWindow, OpenDialogOptions } from "electron";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
+import type { ConnectToRemoteInput, ConnectionList } from "@orkestrator/protocol/connections";
 
 type BackendInvoker = {
   invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
@@ -7,6 +8,7 @@ type BackendInvoker = {
 
 type IpcMainLike = {
   handle(channel: string, listener: (event: unknown, ...args: unknown[]) => unknown): void;
+  on?(channel: string, listener: (event: { returnValue: unknown }, ...args: unknown[]) => void): void;
 };
 
 type ClipboardLike = {
@@ -40,6 +42,10 @@ export type MainIpcDependencies = {
   setWebClientEnabled: (enabled: boolean) => Promise<WebClientStatus>;
   getGatewayTokenSettings: () => Promise<GatewayTokenSettings>;
   setGatewayToken: (token: string) => Promise<GatewayTokenSettings>;
+  listConnections: () => ConnectionList | Promise<ConnectionList>;
+  connectToRemote: (input: ConnectToRemoteInput) => Promise<ConnectionList>;
+  useConnection: (connectionId: string) => Promise<ConnectionList>;
+  forgetConnection: (connectionId: string) => Promise<ConnectionList>;
 };
 
 export function registerMainIpc({
@@ -54,6 +60,10 @@ export function registerMainIpc({
   setWebClientEnabled,
   getGatewayTokenSettings,
   setGatewayToken,
+  listConnections,
+  connectToRemote,
+  useConnection,
+  forgetConnection,
 }: MainIpcDependencies): void {
   ipc.handle("orkestrator:invoke", async (_event, command: unknown, args?: unknown) => {
     const backend = getBackend();
@@ -111,6 +121,29 @@ export function registerMainIpc({
   ipc.handle("orkestrator:web-client:set-token", (_event, token: unknown) => {
     if (typeof token !== "string") throw new Error("Expected token to be a string");
     return setGatewayToken(token);
+  });
+
+  ipc.handle("orkestrator:connections:list", () => listConnections());
+  ipc.on?.("orkestrator:connections:list-sync", (event) => {
+    event.returnValue = listConnections();
+  });
+  ipc.handle("orkestrator:connections:connect", (_event, input: unknown) => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new Error("Expected connection details");
+    }
+    const { address, token } = input as { address?: unknown; token?: unknown };
+    if (typeof address !== "string" || typeof token !== "string") {
+      throw new Error("Expected an address and gateway token");
+    }
+    return connectToRemote({ address, token });
+  });
+  ipc.handle("orkestrator:connections:use", (_event, connectionId: unknown) => {
+    if (typeof connectionId !== "string") throw new Error("Expected a connection ID");
+    return useConnection(connectionId);
+  });
+  ipc.handle("orkestrator:connections:forget", (_event, connectionId: unknown) => {
+    if (typeof connectionId !== "string") throw new Error("Expected a connection ID");
+    return forgetConnection(connectionId);
   });
 
   ipc.handle("orkestrator:process:exit", (_event, code?: unknown) => {

@@ -1,15 +1,67 @@
 import { getGatewayTokenValidationError, normalizeGatewayToken } from "@orkestrator/protocol/gateway-token";
+import type { ConnectionList, ConnectionSummary } from "@orkestrator/protocol/connections";
 
 const ADDRESS_KEY = "orkestrator.public.backend-address";
-const SESSION_TOKEN_KEY = "orkestrator.public.gateway-token";
-const REMEMBERED_TOKEN_KEY = "orkestrator.public.remembered-gateway-token";
-export const SKIP_AUTO_CONNECT_KEY = "orkestrator.public.skip-auto-connect";
+const SESSION_TOKENS_KEY = "orkestrator.public.gateway-tokens";
+const CONNECTIONS_KEY = "orkestrator.public.connections";
+const LEGACY_SESSION_TOKEN_KEY = "orkestrator.public.gateway-token";
+const LEGACY_REMEMBERED_TOKEN_KEY = "orkestrator.public.remembered-gateway-token";
 export const DEFAULT_BACKEND_CONNECTION_TIMEOUT_MS = 10_000;
+const MAX_RECENT_CONNECTIONS = 20;
 
 export interface SavedConnection {
   address: string;
   token: string;
-  rememberToken: boolean;
+}
+
+interface RecentConnection {
+  id: string;
+  name: string;
+  address: string;
+  lastConnectedAt: string;
+}
+
+function connectionId(address: string): string {
+  return `remote:${address}`;
+}
+
+function loadSessionTokens(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(SESSION_TOKENS_KEY) ?? "{}") as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function loadRecentConnections(): RecentConnection[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CONNECTIONS_KEY) ?? "[]") as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((entry): RecentConnection[] => {
+      if (!entry || typeof entry !== "object"
+        || typeof (entry as RecentConnection).id !== "string"
+        || typeof (entry as RecentConnection).name !== "string"
+        || typeof (entry as RecentConnection).address !== "string"
+        || typeof (entry as RecentConnection).lastConnectedAt !== "string") return [];
+      try {
+        const address = normalizeBackendAddress((entry as RecentConnection).address);
+        if ((entry as RecentConnection).id !== connectionId(address)) return [];
+        return [{ ...(entry as RecentConnection), address }];
+      } catch {
+        return [];
+      }
+    }).slice(0, MAX_RECENT_CONNECTIONS);
+  } catch {
+    return [];
+  }
+}
+
+function saveSessionTokens(tokens: Record<string, string>): void {
+  sessionStorage.setItem(SESSION_TOKENS_KEY, JSON.stringify(tokens));
 }
 
 export function normalizeBackendAddress(value: string): string {
@@ -52,33 +104,84 @@ export function insecureBackendWarning(
 }
 
 export function loadSavedConnection(): SavedConnection {
-  const rememberedToken = localStorage.getItem(REMEMBERED_TOKEN_KEY) ?? "";
+  const address = localStorage.getItem(ADDRESS_KEY) ?? "";
+  const tokens = loadSessionTokens();
+  const legacySessionToken = sessionStorage.getItem(LEGACY_SESSION_TOKEN_KEY) ?? "";
+  if (address && legacySessionToken && !tokens[connectionId(address)]) {
+    tokens[connectionId(address)] = legacySessionToken;
+    saveSessionTokens(tokens);
+  }
+  sessionStorage.removeItem(LEGACY_SESSION_TOKEN_KEY);
+  localStorage.removeItem(LEGACY_REMEMBERED_TOKEN_KEY);
   return {
-    address: localStorage.getItem(ADDRESS_KEY) ?? "",
-    token: sessionStorage.getItem(SESSION_TOKEN_KEY) ?? rememberedToken,
-    rememberToken: rememberedToken.length > 0,
+    address,
+    token: tokens[connectionId(address)] ?? "",
   };
 }
 
 export function saveConnection(connection: SavedConnection): void {
-  localStorage.setItem(ADDRESS_KEY, connection.address);
-  sessionStorage.setItem(SESSION_TOKEN_KEY, connection.token);
-  if (connection.rememberToken) {
-    localStorage.setItem(REMEMBERED_TOKEN_KEY, connection.token);
-  } else {
-    localStorage.removeItem(REMEMBERED_TOKEN_KEY);
-  }
+  const address = normalizeBackendAddress(connection.address);
+  const id = connectionId(address);
+  const now = new Date().toISOString();
+  const recent: RecentConnection = { id, name: new URL(address).hostname, address, lastConnectedAt: now };
+  localStorage.setItem(ADDRESS_KEY, address);
+  localStorage.setItem(CONNECTIONS_KEY, JSON.stringify([
+    recent,
+    ...loadRecentConnections().filter((entry) => entry.id !== id),
+  ].slice(0, MAX_RECENT_CONNECTIONS)));
+  saveSessionTokens({ ...loadSessionTokens(), [id]: connection.token });
 }
 
 export function forgetConnection(): void {
+  const address = localStorage.getItem(ADDRESS_KEY) ?? "";
+  const id = connectionId(address);
   localStorage.removeItem(ADDRESS_KEY);
-  localStorage.removeItem(REMEMBERED_TOKEN_KEY);
-  sessionStorage.removeItem(SESSION_TOKEN_KEY);
+  localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(loadRecentConnections().filter((entry) => entry.id !== id)));
+  const tokens = loadSessionTokens();
+  delete tokens[id];
+  saveSessionTokens(tokens);
 }
 
-export function updateSavedToken(token: string, rememberToken: boolean): void {
-  sessionStorage.setItem(SESSION_TOKEN_KEY, token);
-  if (rememberToken) localStorage.setItem(REMEMBERED_TOKEN_KEY, token);
+export function updateSavedToken(token: string): void {
+  const address = localStorage.getItem(ADDRESS_KEY) ?? "";
+  if (!address) return;
+  saveSessionTokens({ ...loadSessionTokens(), [connectionId(address)]: token });
+}
+
+export function listBrowserConnections(): ConnectionList {
+  const activeAddress = localStorage.getItem(ADDRESS_KEY) ?? "";
+  const activeConnectionId = activeAddress ? connectionId(activeAddress) : "";
+  const tokens = loadSessionTokens();
+  return {
+    activeConnectionId,
+    credentialStorage: "session-only",
+    connections: loadRecentConnections().map<ConnectionSummary>((connection) => ({
+      ...connection,
+      kind: "remote",
+      active: connection.id === activeConnectionId,
+      requiresToken: !tokens[connection.id],
+    })),
+  };
+}
+
+export function selectBrowserConnection(id: string): ConnectionList {
+  const connection = loadRecentConnections().find((entry) => entry.id === id);
+  if (!connection) throw new Error("That saved connection no longer exists.");
+  if (!loadSessionTokens()[id]) throw new Error("Enter the gateway token to reconnect to this server.");
+  localStorage.setItem(ADDRESS_KEY, connection.address);
+  return listBrowserConnections();
+}
+
+export function forgetBrowserConnection(id: string): ConnectionList {
+  const connections = loadRecentConnections().filter((entry) => entry.id !== id);
+  localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(connections));
+  const tokens = loadSessionTokens();
+  delete tokens[id];
+  saveSessionTokens(tokens);
+  if (localStorage.getItem(ADDRESS_KEY) && connectionId(localStorage.getItem(ADDRESS_KEY) ?? "") === id) {
+    localStorage.removeItem(ADDRESS_KEY);
+  }
+  return listBrowserConnections();
 }
 
 export async function checkBackendConnection(

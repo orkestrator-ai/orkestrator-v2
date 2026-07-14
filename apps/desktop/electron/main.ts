@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, safeStorage, session } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
@@ -7,6 +7,8 @@ import { APP_SLUG, PRODUCT_NAME } from "./app-constants.js";
 import { registerMainIpc } from "./ipc.js";
 import { resolveRuntimeRoots } from "./paths.js";
 import { createMainWindow } from "./window.js";
+import { ConnectionManager } from "./connection-manager.js";
+import { installRemoteGatewayRequestAuth } from "./remote-gateway-request-auth.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,6 +19,7 @@ app.setPath("userData", path.join(app.getPath("appData"), APP_SLUG));
 
 let mainWindow: BrowserWindow | null = null;
 let backend: BackendHttpClient | null = null;
+let connectionManager: ConnectionManager | null = null;
 const backendProcess = new BackendProcess();
 
 function emitToRenderers(event: string, payload: unknown): void {
@@ -77,15 +80,31 @@ async function createWindow(): Promise<void> {
 }
 
 function registerIpc(): void {
-  const webClientControls = createBackendWebClientControls(() => backend);
+  const webClientControls = createBackendWebClientControls(() => connectionManager);
   registerMainIpc({
-    getBackend: () => backend,
+    getBackend: () => connectionManager,
     getMainWindow: () => mainWindow,
     ipc: ipcMain,
     clipboardApi: clipboard,
     dialogApi: dialog,
     appApi: app,
     nativeImageApi: nativeImage,
+    listConnections: () => {
+      if (!connectionManager) throw new Error("Connections are not initialized");
+      return connectionManager.getList();
+    },
+    connectToRemote: (input) => {
+      if (!connectionManager) throw new Error("Connections are not initialized");
+      return connectionManager.connect(input);
+    },
+    useConnection: (connectionId) => {
+      if (!connectionManager) throw new Error("Connections are not initialized");
+      return connectionManager.use(connectionId);
+    },
+    forgetConnection: (connectionId) => {
+      if (!connectionManager) throw new Error("Connections are not initialized");
+      return connectionManager.forget(connectionId);
+    },
     ...webClientControls,
   });
 }
@@ -104,7 +123,10 @@ app.whenReady().then(async () => {
     resourceRoot,
     rendererDevServerUrl: isDev ? process.env.VITE_DEV_SERVER_URL : undefined,
     desktopWebClient: true,
-    onEvent: emitToRenderers,
+    onEvent: (event, payload) => {
+      if (connectionManager) connectionManager.handleLocalEvent(event, payload);
+      else emitToRenderers(event, payload);
+    },
     onUnexpectedExit: (error) => {
       dialog.showErrorBox(
         `${PRODUCT_NAME} backend stopped`,
@@ -113,9 +135,19 @@ app.whenReady().then(async () => {
       app.quit();
     },
   });
+  connectionManager = new ConnectionManager({
+    localBackend: backend,
+    secureStorage: safeStorage,
+    onEvent: emitToRenderers,
+  });
+  await connectionManager.initialize();
   await backend.invoke("get_config");
 
   createMenu();
+  installRemoteGatewayRequestAuth(
+    session.defaultSession.webRequest,
+    (url) => connectionManager?.getRendererRequestAuthorization(url) ?? null,
+  );
   registerIpc();
   await createWindow();
 

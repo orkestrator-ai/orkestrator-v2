@@ -351,7 +351,7 @@ export function FileViewerTab({
       style={{ backgroundColor: terminalAppearance.backgroundColor }}
     >
       {/* File path header - shows which file is being viewed */}
-      <div className="flex items-center gap-2 border-b border-border bg-[#252526] px-4 py-2 text-xs text-muted-foreground">
+      <div className="flex items-center gap-2 border-b border-border bg-background px-4 py-2 text-xs text-muted-foreground">
         {isImage ? <ImageIcon className="h-3 w-3" /> : <FileCode className="h-3 w-3" />}
         <span className="font-mono truncate">{filePath}</span>
         {isSaving && (

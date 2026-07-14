@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { parseStoredDesktopConnections } from "@orkestrator/protocol/connections";
 import type { Environment, EnvironmentStatus, EnvironmentType, PortMapping, PrState, SessionStatus, SessionType } from "./models.js";
 import { spawnPty, type PtyProcess } from "./pty.js";
 import {
@@ -1114,7 +1115,13 @@ async function spawnSetupTerminal(
     spawnTerminalProcess(
       sessionId,
       shellPath,
-      ["-lc", setupCommand],
+      // Use an interactive login shell (-i) so PATH entries that tool installers
+      // (bun, nvm, etc.) append to ~/.bashrc are available. The standard Debian
+      // ~/.bashrc returns early for non-interactive shells (case $- in *i*)),
+      // so a plain `-lc` login shell never sees those exports and `bun` etc. are
+      // "command not found". This mirrors what fix-path.ts does when recovering
+      // the login-shell PATH.
+      ["-ilc", setupCommand],
       {
         cwd: environment.worktreePath,
         cols: 80,
@@ -1939,6 +1946,10 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
 
   register("get_config", (_args, { storage }) => storage.loadConfig());
   register("save_config", ({ config }, { storage }) => storage.saveConfig(config as never));
+  register("get_desktop_connections", (_args, { storage }) => storage.getDesktopConnections());
+  register("save_desktop_connections", ({ desktopConnections }, { storage }) => {
+    return storage.saveDesktopConnections(parseStoredDesktopConnections(desktopConnections));
+  });
   register("get_global_config", async (_args, { storage }) => (await storage.loadConfig()).global);
   register("update_global_config", ({ global }, { storage }) => storage.updateGlobalConfig(global as never));
   register("get_repository_config", ({ projectId }, { storage }) => storage.getRepositoryConfig(asString(projectId, "projectId")));
@@ -2074,9 +2085,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       environmentType: asEnvironmentType(environmentType),
       entryPort: repoConfig.entryPort,
     });
-    const config = await storage.loadConfig();
-    config.repositories[project.id] = { ...repoConfig, lastEnvironmentType: env.environmentType };
-    await storage.saveConfig(config);
+    await storage.updateRepositoryConfig(project.id, { ...repoConfig, lastEnvironmentType: env.environmentType });
     return storage.addEnvironment(env);
   });
   register("delete_environment", async ({ environmentId }, { storage }) => {

@@ -267,6 +267,8 @@ export interface GlobalConfig {
   debugLogging?: boolean;
   /** Serve the app to authenticated browsers on the host's Tailscale network */
   webClientEnabled?: boolean;
+  /** Custom template for action-bar code reviews; omitted to use the built-in prompt */
+  reviewPrompt?: string;
 }
 
 export type { GatewayTokenSettings, WebClientStatus } from "./webClient.js";

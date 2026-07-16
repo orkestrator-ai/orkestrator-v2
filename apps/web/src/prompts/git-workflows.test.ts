@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
+  DEFAULT_REVIEW_PROMPT_TEMPLATE,
+  REVIEW_PROMPT_TARGET_BRANCH_TOKEN,
   createReviewPrompt,
   createPRPrompt,
   createPushChangesPrompt,
   createResolveConflictsPrompt,
 } from "./git-workflows";
+import { REVIEW_PROMPT_MAX_LENGTH } from "@orkestrator/protocol/review-prompt";
 
 // --- createReviewPrompt ---
 
@@ -113,6 +116,43 @@ describe("createReviewPrompt", () => {
     expect(result).toContain("git diff origin/develop...HEAD");
     expect(result).toContain("Base ref: origin/develop...HEAD");
     expect(result).not.toContain("origin/main...HEAD");
+  });
+
+  test("resolves target-branch tokens in a custom prompt", () => {
+    const customPrompt = `Review origin/${REVIEW_PROMPT_TARGET_BRANCH_TOKEN}...HEAD\nTarget: ${REVIEW_PROMPT_TARGET_BRANCH_TOKEN}`;
+
+    expect(createReviewPrompt("release/v2", customPrompt)).toBe(
+      "Review origin/release/v2...HEAD\nTarget: release/v2",
+    );
+  });
+
+  test("falls back to the built-in template for an empty custom prompt", () => {
+    expect(createReviewPrompt("main", "   ")).toBe(
+      DEFAULT_REVIEW_PROMPT_TEMPLATE.replaceAll(
+        REVIEW_PROMPT_TARGET_BRANCH_TOKEN,
+        "main",
+      ),
+    );
+  });
+
+  test("leaves a custom prompt without a target-branch token unchanged", () => {
+    expect(createReviewPrompt("main", "Review only the public API.")).toBe(
+      "Review only the public API.",
+    );
+  });
+
+  test("falls back safely for malformed and oversized persisted prompts", () => {
+    const expected = createReviewPrompt("main");
+    for (const malformed of [null, 123, {}, [], "x".repeat(REVIEW_PROMPT_MAX_LENGTH + 1)]) {
+      expect(createReviewPrompt("main", malformed)).toBe(expected);
+    }
+  });
+
+  test("treats replacement-pattern characters in branch names literally", () => {
+    const targetBranch = "release/$&/$`/$'/🚀";
+    expect(createReviewPrompt(targetBranch, "{{targetBranch}} -> {{targetBranch}}")).toBe(
+      `${targetBranch} -> ${targetBranch}`,
+    );
   });
 });
 

@@ -5,6 +5,10 @@ import {
   parseStoredDesktopConnections,
   type StoredDesktopConnections,
 } from "@orkestrator/protocol/connections";
+import {
+  getReviewPromptValidationError,
+  parseReviewPrompt,
+} from "@orkestrator/protocol/review-prompt";
 import type {
   AppConfig,
   Environment,
@@ -174,6 +178,37 @@ function asOptionalNumber(value: unknown): number | undefined {
 
 function asOptionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function validateConfigReviewPrompt(value: unknown): AppConfig {
+  if (!isRecord(value) || !isRecord(value.global)) {
+    throw new Error("Expected config.global to be an object.");
+  }
+  parseReviewPrompt(value.global.reviewPrompt);
+  return value as unknown as AppConfig;
+}
+
+function validateGlobalReviewPrompt(value: unknown): AppConfig["global"] {
+  if (!isRecord(value)) {
+    throw new Error("Expected global config to be an object.");
+  }
+  parseReviewPrompt(value.reviewPrompt);
+  return value as unknown as AppConfig["global"];
+}
+
+function sanitizePersistedReviewPrompt(config: AppConfig): AppConfig {
+  const global = config && isRecord(config.global)
+    ? config.global as unknown as JsonRecord
+    : null;
+  if (!global || getReviewPromptValidationError(global.reviewPrompt) === null) {
+    return config;
+  }
+
+  const { reviewPrompt: _invalidReviewPrompt, ...sanitizedGlobal } = global;
+  return {
+    ...config,
+    global: sanitizedGlobal as unknown as AppConfig["global"],
+  };
 }
 
 function slugify(value: string, fallback: string, maxLength = 0): string {
@@ -764,11 +799,13 @@ export class StorageService {
   }
 
   async loadConfig(): Promise<AppConfig> {
-    return this.loadJson<AppConfig>(this.configFile(), defaultConfig);
+    const config = await this.loadJson<AppConfig>(this.configFile(), defaultConfig);
+    return sanitizePersistedReviewPrompt(config);
   }
 
   async saveConfig(config: AppConfig): Promise<void> {
-    await this.enqueueConfigMutation(() => this.saveJson(this.configFile(), config));
+    const validated = validateConfigReviewPrompt(config);
+    await this.enqueueConfigMutation(() => this.saveJson(this.configFile(), validated));
   }
 
   async getDesktopConnections(): Promise<StoredDesktopConnections> {
@@ -806,9 +843,10 @@ export class StorageService {
   }
 
   async updateGlobalConfig(globalConfig: AppConfig["global"]): Promise<AppConfig> {
+    const validated = validateGlobalReviewPrompt(globalConfig);
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadConfig();
-      config.global = globalConfig;
+      config.global = validated;
       await this.saveJson(this.configFile(), config);
       return config;
     });

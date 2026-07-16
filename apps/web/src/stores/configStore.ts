@@ -112,12 +112,18 @@ export const useConfigStore = create<ConfigState>()((set, get) => ({
   setConfig: (config) => set({ config }),
 
   updateGlobalConfig: (updates) =>
-    set((state) => ({
-      config: {
-        ...state.config,
-        global: { ...state.config.global, ...updates },
-      },
-    })),
+    set((state) => {
+      const global = { ...state.config.global, ...updates };
+      if ("reviewPrompt" in updates && updates.reviewPrompt === undefined) {
+        delete global.reviewPrompt;
+      }
+      return {
+        config: {
+          ...state.config,
+          global,
+        },
+      };
+    }),
 
   setRepositoryConfig: (repoId, repoConfig) =>
     set((state) => ({

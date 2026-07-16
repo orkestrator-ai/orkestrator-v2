@@ -1,6 +1,6 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, safeStorage, session } from "electron";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
 import { createBackendWebClientControls, registerBackendShutdown } from "./backend-lifecycle.js";
 import { APP_SLUG, PRODUCT_NAME } from "./app-constants.js";
@@ -105,6 +105,9 @@ function registerIpc(): void {
       if (!connectionManager) throw new Error("Connections are not initialized");
       return connectionManager.forget(connectionId);
     },
+    trustedRendererUrl: isDev
+      ? process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:1420"
+      : pathToFileURL(path.join(process.resourcesPath, "web", "index.html")).href,
     ...webClientControls,
   });
 }

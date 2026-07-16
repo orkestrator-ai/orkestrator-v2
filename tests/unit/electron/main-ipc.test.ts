@@ -1,11 +1,13 @@
 import { describe, expect, mock, test } from "bun:test";
 import { registerMainIpc } from "../../../apps/desktop/electron/ipc";
 
-type Handler = (event: unknown, ...args: unknown[]) => unknown;
+type IpcEvent = { senderFrame: { url: string } | null };
+type Handler = (event: IpcEvent, ...args: unknown[]) => unknown;
 
 function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } | null; window?: unknown } = {}) {
+  const trustedRendererUrl = "file:///app/web/index.html";
   const handlers = new Map<string, Handler>();
-  const syncHandlers = new Map<string, (event: { returnValue: unknown }, ...args: unknown[]) => void>();
+  const syncHandlers = new Map<string, (event: IpcEvent & { returnValue: unknown }, ...args: unknown[]) => void>();
   const backend = options.backend === undefined
     ? { invoke: mock(async (_command: string, args: Record<string, unknown>) => ({ ok: true, args })) }
     : options.backend;
@@ -65,23 +67,33 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
     connectToRemote,
     useConnection,
     forgetConnection,
+    trustedRendererUrl,
   });
 
-  const invoke = (channel: string, ...args: unknown[]) => {
+  const invokeFrom = (senderUrl: string, channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
     if (!handler) throw new Error(`missing handler: ${channel}`);
-    return Promise.resolve().then(() => handler({}, ...args));
+    return Promise.resolve().then(() =>
+      handler({ senderFrame: { url: senderUrl } }, ...args),
+    );
   };
+  const invoke = (channel: string, ...args: unknown[]) =>
+    invokeFrom(trustedRendererUrl, channel, ...args);
 
-  const invokeSync = (channel: string, ...args: unknown[]) => {
+  const invokeSyncFrom = (senderUrl: string, channel: string, ...args: unknown[]) => {
     const handler = syncHandlers.get(channel);
     if (!handler) throw new Error(`missing sync handler: ${channel}`);
-    const event = { returnValue: undefined as unknown };
+    const event = {
+      senderFrame: { url: senderUrl },
+      returnValue: undefined as unknown,
+    };
     handler(event, ...args);
     return event.returnValue;
   };
+  const invokeSync = (channel: string, ...args: unknown[]) =>
+    invokeSyncFrom(trustedRendererUrl, channel, ...args);
 
-  return { invoke, invokeSync, handlers, syncHandlers, backend, window, clipboardApi, clipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled, getGatewayTokenSettings, setGatewayToken, listConnections, connectToRemote, useConnection, forgetConnection };
+  return { invoke, invokeFrom, invokeSync, invokeSyncFrom, handlers, syncHandlers, backend, window, clipboardApi, clipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled, getGatewayTokenSettings, setGatewayToken, listConnections, connectToRemote, useConnection, forgetConnection };
 }
 
 describe("main IPC registration", () => {
@@ -200,6 +212,34 @@ describe("main IPC registration", () => {
     );
     await harness.invoke("orkestrator:invoke", "get_projects", ["invalid"]);
     expect(harness.backend?.invoke).toHaveBeenCalledWith("get_projects", {});
+  });
+
+  test("rejects privileged IPC from untrusted and detached renderer frames", async () => {
+    const harness = createHarness();
+
+    await expect(
+      harness.invokeFrom(
+        "https://malicious.example/collect",
+        "orkestrator:invoke",
+        "get_projects",
+        {},
+      ),
+    ).rejects.toThrow("Blocked IPC request from an untrusted renderer");
+    expect(harness.backend?.invoke).not.toHaveBeenCalled();
+
+    const invokeHandler = harness.handlers.get("orkestrator:clipboard:read-text");
+    await expect(
+      Promise.resolve().then(() => invokeHandler?.({ senderFrame: null })),
+    ).rejects.toThrow("Blocked IPC request from an untrusted renderer");
+    expect(harness.clipboardApi.readText).not.toHaveBeenCalled();
+
+    expect(
+      harness.invokeSyncFrom(
+        "https://malicious.example/collect",
+        "orkestrator:connections:list-sync",
+      ),
+    ).toBeNull();
+    expect(harness.listConnections).not.toHaveBeenCalled();
   });
 
   test("maps dialog options through the main window and supports canceled dialogs", async () => {

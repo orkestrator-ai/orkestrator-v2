@@ -1,14 +1,19 @@
 import type { BrowserWindow, OpenDialogOptions } from "electron";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import type { ConnectToRemoteInput, ConnectionList } from "@orkestrator/protocol/connections";
+import { isTrustedRendererUrl } from "./window.js";
 
 type BackendInvoker = {
   invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
 };
 
+type IpcEventLike = {
+  senderFrame?: { url: string } | null;
+};
+
 type IpcMainLike = {
-  handle(channel: string, listener: (event: unknown, ...args: unknown[]) => unknown): void;
-  on?(channel: string, listener: (event: { returnValue: unknown }, ...args: unknown[]) => void): void;
+  handle(channel: string, listener: (event: IpcEventLike, ...args: unknown[]) => unknown): void;
+  on?(channel: string, listener: (event: IpcEventLike & { returnValue: unknown }, ...args: unknown[]) => void): void;
 };
 
 type ClipboardLike = {
@@ -46,6 +51,7 @@ export type MainIpcDependencies = {
   connectToRemote: (input: ConnectToRemoteInput) => Promise<ConnectionList>;
   useConnection: (connectionId: string) => Promise<ConnectionList>;
   forgetConnection: (connectionId: string) => Promise<ConnectionList>;
+  trustedRendererUrl: string;
 };
 
 export function registerMainIpc({
@@ -64,8 +70,32 @@ export function registerMainIpc({
   connectToRemote,
   useConnection,
   forgetConnection,
+  trustedRendererUrl,
 }: MainIpcDependencies): void {
-  ipc.handle("orkestrator:invoke", async (_event, command: unknown, args?: unknown) => {
+  const isTrustedSender = (event: IpcEventLike): boolean =>
+    isTrustedRendererUrl(event.senderFrame?.url ?? "", trustedRendererUrl);
+  const assertTrustedSender = (event: IpcEventLike): void => {
+    if (!isTrustedSender(event)) {
+      throw new Error("Blocked IPC request from an untrusted renderer");
+    }
+  };
+  const handle: IpcMainLike["handle"] = (channel, listener) => {
+    ipc.handle(channel, (event, ...args) => {
+      assertTrustedSender(event);
+      return listener(event, ...args);
+    });
+  };
+  const on: NonNullable<IpcMainLike["on"]> = (channel, listener) => {
+    ipc.on?.(channel, (event, ...args) => {
+      if (!isTrustedSender(event)) {
+        event.returnValue = null;
+        return;
+      }
+      listener(event, ...args);
+    });
+  };
+
+  handle("orkestrator:invoke", async (_event, command: unknown, args?: unknown) => {
     const backend = getBackend();
     if (!backend) throw new Error("Backend is not initialized");
     if (typeof command !== "string") throw new Error("Expected command to be a string");
@@ -73,11 +103,11 @@ export function registerMainIpc({
     return backend.invoke(command, safeArgs);
   });
 
-  ipc.handle("orkestrator:clipboard:read-text", () => clipboardApi.readText());
-  ipc.handle("orkestrator:clipboard:write-text", (_event, text: unknown) => {
+  handle("orkestrator:clipboard:read-text", () => clipboardApi.readText());
+  handle("orkestrator:clipboard:write-text", (_event, text: unknown) => {
     clipboardApi.writeText(typeof text === "string" ? text : "");
   });
-  ipc.handle("orkestrator:clipboard:read-image", () => {
+  handle("orkestrator:clipboard:read-image", () => {
     const image = clipboardApi.readImage();
     if (image.isEmpty()) return null;
     const size = image.getSize();
@@ -87,11 +117,11 @@ export function registerMainIpc({
       dataUrl: image.toDataURL(),
     };
   });
-  ipc.handle("orkestrator:clipboard:write-image", (_event, dataUrl: unknown) => {
+  handle("orkestrator:clipboard:write-image", (_event, dataUrl: unknown) => {
     clipboardApi.writeImage(nativeImageApi.createFromDataURL(typeof dataUrl === "string" ? dataUrl : ""));
   });
 
-  ipc.handle("orkestrator:dialog:open", async (_event, options?: unknown) => {
+  handle("orkestrator:dialog:open", async (_event, options?: unknown) => {
     const typedOptions = options && typeof options === "object" && !Array.isArray(options)
       ? options as { directory?: boolean; multiple?: boolean; title?: string; defaultPath?: string }
       : {};
@@ -112,22 +142,22 @@ export function registerMainIpc({
     return typedOptions.multiple ? result.filePaths : result.filePaths[0] ?? null;
   });
 
-  ipc.handle("orkestrator:web-client:get-status", () => getWebClientStatus());
-  ipc.handle("orkestrator:web-client:set-enabled", (_event, enabled: unknown) => {
+  handle("orkestrator:web-client:get-status", () => getWebClientStatus());
+  handle("orkestrator:web-client:set-enabled", (_event, enabled: unknown) => {
     if (typeof enabled !== "boolean") throw new Error("Expected enabled to be a boolean");
     return setWebClientEnabled(enabled);
   });
-  ipc.handle("orkestrator:web-client:get-token-settings", () => getGatewayTokenSettings());
-  ipc.handle("orkestrator:web-client:set-token", (_event, token: unknown) => {
+  handle("orkestrator:web-client:get-token-settings", () => getGatewayTokenSettings());
+  handle("orkestrator:web-client:set-token", (_event, token: unknown) => {
     if (typeof token !== "string") throw new Error("Expected token to be a string");
     return setGatewayToken(token);
   });
 
-  ipc.handle("orkestrator:connections:list", () => listConnections());
-  ipc.on?.("orkestrator:connections:list-sync", (event) => {
+  handle("orkestrator:connections:list", () => listConnections());
+  on("orkestrator:connections:list-sync", (event) => {
     event.returnValue = listConnections();
   });
-  ipc.handle("orkestrator:connections:connect", (_event, input: unknown) => {
+  handle("orkestrator:connections:connect", (_event, input: unknown) => {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       throw new Error("Expected connection details");
     }
@@ -137,18 +167,18 @@ export function registerMainIpc({
     }
     return connectToRemote({ address, token });
   });
-  ipc.handle("orkestrator:connections:use", (_event, connectionId: unknown) => {
+  handle("orkestrator:connections:use", (_event, connectionId: unknown) => {
     if (typeof connectionId !== "string") throw new Error("Expected a connection ID");
     return useConnection(connectionId);
   });
-  ipc.handle("orkestrator:connections:forget", (_event, connectionId: unknown) => {
+  handle("orkestrator:connections:forget", (_event, connectionId: unknown) => {
     if (typeof connectionId !== "string") throw new Error("Expected a connection ID");
     return forgetConnection(connectionId);
   });
 
-  ipc.handle("orkestrator:process:exit", (_event, code?: unknown) => {
+  handle("orkestrator:process:exit", (_event, code?: unknown) => {
     appApi.exit(typeof code === "number" ? code : 0);
   });
 
-  ipc.handle("orkestrator:window:start-dragging", () => undefined);
+  handle("orkestrator:window:start-dragging", () => undefined);
 }

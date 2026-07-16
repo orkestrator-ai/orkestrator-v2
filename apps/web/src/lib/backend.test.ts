@@ -15,6 +15,7 @@ afterAll(() => {
 const wrapperModulePath = "./backend.ts?wrapper-test";
 const originalOrkestrator = window.orkestrator;
 const originalGateway = window.orkestratorGateway;
+const originalWindowOpen = window.open;
 const backendWrappers = await import(wrapperModulePath) as typeof import("./backend");
 const {
   connectLinear,
@@ -29,6 +30,7 @@ const {
   getGatewayTokenSettings,
   getWebClientStatus,
   postLinearCompletionComment,
+  openInBrowser,
   runEnvironmentSetup,
   setWebClientEnabled,
   setGatewayToken,
@@ -38,6 +40,7 @@ const {
 afterEach(() => {
   window.orkestrator = originalOrkestrator;
   window.orkestratorGateway = originalGateway;
+  window.open = originalWindowOpen;
 });
 
 describe("backend setup wrappers", () => {
@@ -212,6 +215,38 @@ describe("backend command wrapper coverage", () => {
     );
     window.orkestrator = originalOrkestrator;
     window.orkestratorGateway = originalGateway;
+  });
+
+  test("prefers the native browser opener when Electron also exposes gateway metadata", async () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      desktop: true,
+      baseUrl: "https://workstation.tailnet.ts.net",
+    };
+
+    await openInBrowser("https://example.com/docs");
+
+    expect(invokeMock).toHaveBeenCalledWith("open_in_browser", {
+      url: "https://example.com/docs",
+    });
+  });
+
+  test("opens browser-gateway links in a client-side tab", async () => {
+    const windowOpen = mock(() => null);
+    window.open = windowOpen as typeof window.open;
+    window.orkestratorGateway = {
+      enabled: true,
+      baseUrl: "https://workstation.tailnet.ts.net",
+    };
+
+    await openInBrowser("https://example.com/docs");
+
+    expect(windowOpen).toHaveBeenCalledWith(
+      "https://example.com/docs",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    expect(invokeMock).not.toHaveBeenCalled();
   });
 
   test("every exported command wrapper reaches the native invoke boundary", async () => {

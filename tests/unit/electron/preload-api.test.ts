@@ -36,6 +36,7 @@ describe("preload API factory", () => {
     expect(sendSync).toHaveBeenCalledWith("orkestrator:connections:list-sync");
     expect(exposeInMainWorld).toHaveBeenCalledWith("orkestratorGateway", {
       enabled: true,
+      desktop: true,
       baseUrl: "https://desk.example",
     });
   });

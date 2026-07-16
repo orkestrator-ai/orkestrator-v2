@@ -1,11 +1,16 @@
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, mock, test } from "bun:test";
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions } from "electron";
 import { PRODUCT_NAME } from "../../../apps/backend/src/core/constants";
-import { createMainWindow } from "../../../apps/desktop/electron/window";
+import {
+  createMainWindow,
+  isTrustedRendererUrl,
+} from "../../../apps/desktop/electron/window";
 
 function createHarness() {
   const windows: FakeBrowserWindow[] = [];
+  const webContentsListeners = new Map<string, (event: any) => void>();
   const menu = {
     buildFromTemplate: mock((template: MenuItemConstructorOptions[]) => ({
       template,
@@ -15,7 +20,10 @@ function createHarness() {
 
   class FakeBrowserWindow {
     readonly webContents = {
-      on: mock(() => undefined),
+      on: mock((event: string, listener: (event: any) => void) => {
+        webContentsListeners.set(event, listener);
+      }),
+      setWindowOpenHandler: mock((_handler: () => { action: "deny" }) => undefined),
       openDevTools: mock(() => undefined),
     };
     readonly loadFile = mock(async (_filePath: string) => undefined);
@@ -26,10 +34,37 @@ function createHarness() {
     }
   }
 
-  return { FakeBrowserWindow, menu, windows };
+  return { FakeBrowserWindow, menu, webContentsListeners, windows };
 }
 
 describe("createMainWindow", () => {
+  test("matches only the configured renderer location", () => {
+    const trustedFileUrl = "file:///app/web/index.html";
+
+    expect(isTrustedRendererUrl(`${trustedFileUrl}#settings`, trustedFileUrl)).toBe(
+      true,
+    );
+    expect(
+      isTrustedRendererUrl(
+        "file://remote-host/app/web/index.html",
+        trustedFileUrl,
+      ),
+    ).toBe(false);
+    expect(isTrustedRendererUrl("not a URL", trustedFileUrl)).toBe(false);
+    expect(
+      isTrustedRendererUrl(
+        "http://127.0.0.1:5173/settings",
+        "http://127.0.0.1:5173",
+      ),
+    ).toBe(true);
+    expect(
+      isTrustedRendererUrl(
+        "http://127.0.0.1:5174/settings",
+        "http://127.0.0.1:5173",
+      ),
+    ).toBe(false);
+  });
+
   test("creates the production BrowserWindow, installs context menu support, and loads the renderer file", async () => {
     const harness = createHarness();
 
@@ -91,5 +126,65 @@ describe("createMainWindow", () => {
     });
 
     expect(harness.windows[0].loadURL).toHaveBeenCalledWith("http://127.0.0.1:1420");
+  });
+
+  test("blocks untrusted navigation and renderer-created windows", async () => {
+    const harness = createHarness();
+
+    await createMainWindow({
+      BrowserWindowCtor: harness.FakeBrowserWindow as never,
+      menu: harness.menu,
+      dirname: "/app/apps/desktop/dist/electron",
+      isDev: false,
+      appPath: "/app",
+    });
+
+    const onWillNavigate = harness.webContentsListeners.get("will-navigate");
+    expect(onWillNavigate).toBeTruthy();
+
+    const trustedNavigation = {
+      url: pathToFileURL(path.join("/app", "dist", "index.html")).href,
+      preventDefault: mock(() => undefined),
+    };
+    onWillNavigate?.(trustedNavigation);
+    expect(trustedNavigation.preventDefault).not.toHaveBeenCalled();
+
+    const untrustedNavigation = {
+      url: "https://malicious.example/collect",
+      preventDefault: mock(() => undefined),
+    };
+    onWillNavigate?.(untrustedNavigation);
+    expect(untrustedNavigation.preventDefault).toHaveBeenCalledTimes(1);
+
+    const openHandler = harness.windows[0].webContents.setWindowOpenHandler.mock.calls[0]?.[0];
+    expect(openHandler?.()).toEqual({ action: "deny" });
+  });
+
+  test("allows only the configured development origin", async () => {
+    const harness = createHarness();
+
+    await createMainWindow({
+      BrowserWindowCtor: harness.FakeBrowserWindow as never,
+      menu: harness.menu,
+      dirname: "/app/apps/desktop/dist/electron",
+      isDev: true,
+      appPath: "/app",
+      devServerUrl: "http://127.0.0.1:5173",
+    });
+
+    const onWillNavigate = harness.webContentsListeners.get("will-navigate");
+    const sameOriginNavigation = {
+      url: "http://127.0.0.1:5173/settings",
+      preventDefault: mock(() => undefined),
+    };
+    onWillNavigate?.(sameOriginNavigation);
+    expect(sameOriginNavigation.preventDefault).not.toHaveBeenCalled();
+
+    const differentOriginNavigation = {
+      url: "http://127.0.0.1:5174/",
+      preventDefault: mock(() => undefined),
+    };
+    onWillNavigate?.(differentOriginNavigation);
+    expect(differentOriginNavigation.preventDefault).toHaveBeenCalledTimes(1);
   });
 });

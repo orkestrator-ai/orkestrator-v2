@@ -324,7 +324,13 @@ export async function postLinearCompletionComment(
 // --- GitHub Commands ---
 
 export async function openInBrowser(url: string): Promise<void> {
-  if (window.orkestratorGateway?.enabled) {
+  // Browser clients open links locally. Electron marks gateway metadata as a
+  // desktop connection so a remote-backend session still uses the native
+  // system-browser command instead of a renderer-created window.
+  if (
+    window.orkestratorGateway?.enabled &&
+    !window.orkestratorGateway.desktop
+  ) {
     window.open(url, "_blank", "noopener,noreferrer");
     return;
   }

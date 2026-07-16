@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, test, expect, mock } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import { mockReadImage } from "../../mocks/clipboard";
-import { resolveAgentDefaults } from "../../../apps/web/src/components/environments/CreateEnvironmentDialog";
 
 const toastSuccessMock = mock(() => {});
 const toastErrorMock = mock(() => {});
@@ -14,7 +13,7 @@ mock.module("sonner", () => ({
   },
 }));
 
-const { CreateEnvironmentDialog } = await import("../../../apps/web/src/components/environments/CreateEnvironmentDialog");
+const { CreateEnvironmentDialog, resolveAgentDefaults } = await import("../../../apps/web/src/components/environments/CreateEnvironmentDialog");
 
 if (typeof globalThis.ImageData === "undefined") {
   (globalThis as Record<string, unknown>).ImageData = class ImageData {
@@ -135,6 +134,66 @@ describe("resolveAgentDefaults", () => {
     expect(result.claudeMode).toBe("native");
     expect(result.opencodeMode).toBe("native");
     expect(result.codexMode).toBe("terminal");
+  });
+
+  test("starts on the prompt tab and preserves values while moving between mobile sections", () => {
+    render(
+      <CreateEnvironmentDialog
+        open={true}
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />
+    );
+
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      "Prompt",
+      "Setup",
+      "Agent",
+      "Access",
+      "Ports",
+    ]);
+
+    const promptTab = screen.getByRole("tab", { name: "Prompt" });
+    const setupTab = screen.getByRole("tab", { name: "Setup" });
+    expect(promptTab.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByLabelText(/Initial Prompt/i).closest('[role="tabpanel"]')?.getAttribute("data-state")).toBe("active");
+
+    fireEvent.mouseDown(setupTab, { button: 0, ctrlKey: false });
+    expect(setupTab.getAttribute("aria-selected")).toBe("true");
+    fireEvent.change(screen.getByLabelText(/Environment Name/i), {
+      target: { value: "mobile-tabs" },
+    });
+
+    fireEvent.mouseDown(promptTab, { button: 0, ctrlKey: false });
+    fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
+      target: { value: "Keep this task" },
+    });
+    fireEvent.mouseDown(setupTab, { button: 0, ctrlKey: false });
+
+    expect((screen.getByLabelText(/Environment Name/i) as HTMLInputElement).value).toBe("mobile-tabs");
+    expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe("Keep this task");
+  });
+
+  test("hides container-only mobile tabs when local setup is selected", () => {
+    render(
+      <CreateEnvironmentDialog
+        open={true}
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />
+    );
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Setup" }), { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole("button", { name: /Local/ }));
+
+    expect(screen.queryByRole("tab", { name: "Access" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Ports" })).toBeNull();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Prompt",
+      "Setup",
+      "Agent",
+    ]);
   });
 
   test("submits codex terminal mode from the dialog", async () => {

@@ -570,8 +570,15 @@ export function ClaudeComposeBar({
         />
       </div>
 
-      {/* Bottom toolbar row */}
-      <div className="flex items-center gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&>*]:shrink-0 [&::-webkit-scrollbar]:hidden">
+      {/* Bottom toolbar */}
+      <div
+        data-native-compose-toolbar
+        className="flex flex-col gap-1 pt-1 sm:flex-row sm:items-center"
+      >
+        <div
+          data-native-compose-controls="primary"
+          className="flex w-full min-w-0 items-center gap-1 sm:w-auto"
+        >
         {/* Attachment button */}
         <div className="relative" ref={attachmentMenuRef}>
           <button
@@ -608,9 +615,9 @@ export function ClaudeComposeBar({
         {/* Model dropdown - minimal style */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors">
+            <button className="flex min-w-0 flex-1 items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground sm:flex-none">
               <ChevronDown className="w-3 h-3" />
-              <span className="max-w-[200px] truncate">{selectedModelName}</span>
+              <span className="min-w-0 max-w-full truncate sm:max-w-[200px]">{selectedModelName}</span>
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="max-h-[400px] overflow-y-auto min-w-[240px]">
@@ -706,6 +713,13 @@ export function ClaudeComposeBar({
           </DropdownMenuContent>
         </DropdownMenu>
 
+        </div>
+
+        <div
+          data-native-compose-controls="secondary"
+          className="flex w-full items-center gap-1 sm:ml-auto sm:w-auto"
+        >
+
         {/* Fast mode toggle — only shown when the selected model supports it. */}
         {selectedModelSupportsFastMode && (
           <button
@@ -733,7 +747,7 @@ export function ClaudeComposeBar({
         <ContextUsageWheel usage={contextUsage} className="ml-1" />
 
         {/* Spacer */}
-        <div className="flex-1" />
+        <div className="flex-1 sm:hidden" />
 
         {/* Queue indicator */}
         {queueLength > 0 && (
@@ -793,6 +807,7 @@ export function ClaudeComposeBar({
             <ArrowUp className="w-4 h-4" />
           </button>
         )}
+        </div>
       </div>
 
       <Dialog open={queueDialogOpen} onOpenChange={setQueueDialogOpen}>

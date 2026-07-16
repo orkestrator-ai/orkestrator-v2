@@ -484,6 +484,11 @@ export function OpenCodeComposeBar({
 
   // Capitalize mode for display
   const modeDisplayName = selectedMode === "plan" ? "Planning" : "Build";
+  const sendDisabled =
+    disabled ||
+    isSending ||
+    (attachments.length === 0 && !text.trim());
+  const showSendButton = !isLoading || !sendDisabled;
 
   return (
     <>
@@ -556,8 +561,15 @@ export function OpenCodeComposeBar({
           />
         </div>
 
-        {/* Bottom toolbar row */}
-        <div className="flex items-center gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&>*]:shrink-0 [&::-webkit-scrollbar]:hidden">
+        {/* Bottom toolbar */}
+        <div
+          data-native-compose-toolbar
+          className="flex flex-col gap-1 pt-1 sm:flex-row sm:items-center"
+        >
+          <div
+            data-native-compose-controls="primary"
+            className="flex w-full min-w-0 items-center gap-1 sm:w-auto"
+          >
           {/* Attachment button */}
           <div className="relative" ref={attachmentMenuRef}>
             <button
@@ -615,9 +627,9 @@ export function OpenCodeComposeBar({
           {/* Model dropdown - minimal style, grouped by provider */}
           <DropdownMenu onOpenChange={(open) => { if (!open) setModelSearch(""); }}>
             <DropdownMenuTrigger asChild>
-              <button className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors">
+              <button className="flex min-w-0 flex-1 items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground sm:flex-none">
                 <ChevronDown className="w-3 h-3" />
-                <span className="max-w-[200px] truncate">{selectedModelName}</span>
+                <span className="min-w-0 max-w-full truncate sm:max-w-[200px]">{selectedModelName}</span>
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-[calc(100vw-1rem)] sm:w-[320px]">
@@ -751,10 +763,17 @@ export function OpenCodeComposeBar({
             </DropdownMenu>
           )}
 
+          </div>
+
+          <div
+            data-native-compose-controls="secondary"
+            className="flex w-full items-center gap-1 sm:ml-auto sm:w-auto"
+          >
+
           <ContextUsageWheel usage={contextUsage} className="ml-1" />
 
           {/* Spacer */}
-          <div className="flex-1" />
+          <div className="flex-1 sm:hidden" />
 
           {/* Queue indicator */}
           {queueLength > 0 && (
@@ -798,24 +817,23 @@ export function OpenCodeComposeBar({
             </Button>
           )}
 
-          <button
-            onClick={handleSend}
-            disabled={
-              disabled ||
-              isSending ||
-              (attachments.length === 0 && !text.trim())
-            }
-            className={cn(
-              "w-8 h-8 rounded-full flex items-center justify-center transition-colors",
-              isLoading
-                ? "bg-primary/20 hover:bg-primary/30 text-primary"
-                : "bg-muted hover:bg-muted/80",
-              "disabled:opacity-50 disabled:cursor-not-allowed",
-            )}
-            title={isLoading ? "Add to queue" : "Send message"}
-          >
-            <ArrowUp className="w-4 h-4" />
-          </button>
+          {showSendButton && (
+            <button
+              onClick={handleSend}
+              disabled={sendDisabled}
+              className={cn(
+                "w-8 h-8 rounded-full flex items-center justify-center transition-colors",
+                isLoading
+                  ? "bg-primary/20 hover:bg-primary/30 text-primary"
+                  : "bg-muted hover:bg-muted/80",
+                "disabled:opacity-50 disabled:cursor-not-allowed",
+              )}
+              title={isLoading ? "Add to queue" : "Send message"}
+            >
+              <ArrowUp className="w-4 h-4" />
+            </button>
+          )}
+          </div>
         </div>
       </div>
 

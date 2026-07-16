@@ -201,8 +201,7 @@ export function SortableProjectGroup({
               </ContextMenuContent>
             </ContextMenu>
 
-            {/* Action buttons - shown on hover, replacing chevron */}
-            {/* Add button - shown on hover */}
+            {/* Add button - visible on compact layouts and revealed on desktop hover */}
             <Button
               type="button"
               variant="ghost"

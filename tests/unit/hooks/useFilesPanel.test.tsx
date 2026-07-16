@@ -20,6 +20,18 @@ const mockGetLocalGitStatus = mock<(worktreePath: string, targetBranch?: string)
 );
 const mockGetFileTree = mock<(containerId: string) => Promise<FileNode[]>>(() => Promise.resolve([]));
 const mockGetLocalFileTree = mock<(worktreePath: string) => Promise<FileNode[]>>(() => Promise.resolve([]));
+const mockRevertContainerFile = mock<(containerId: string, filePath: string, targetBranch: string) => Promise<string>>(
+  (_containerId, filePath) => Promise.resolve(filePath),
+);
+const mockDeleteContainerFile = mock<(containerId: string, filePath: string) => Promise<string>>(
+  (_containerId, filePath) => Promise.resolve(filePath),
+);
+const mockRevertLocalFile = mock<(worktreePath: string, filePath: string, targetBranch: string) => Promise<string>>(
+  (_worktreePath, filePath) => Promise.resolve(filePath),
+);
+const mockDeleteLocalFile = mock<(worktreePath: string, filePath: string) => Promise<string>>(
+  (_worktreePath, filePath) => Promise.resolve(filePath),
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -27,6 +39,10 @@ mock.module("@/lib/backend", () => ({
   getLocalGitStatus: mockGetLocalGitStatus,
   getFileTree: mockGetFileTree,
   getLocalFileTree: mockGetLocalFileTree,
+  revertContainerFile: mockRevertContainerFile,
+  deleteContainerFile: mockDeleteContainerFile,
+  revertLocalFile: mockRevertLocalFile,
+  deleteLocalFile: mockDeleteLocalFile,
 }));
 
 const { useFilesPanel } = await import("../../../apps/web/src/hooks/useFilesPanel");
@@ -123,10 +139,18 @@ describe("useFilesPanel", () => {
     mockGetLocalGitStatus.mockClear();
     mockGetFileTree.mockClear();
     mockGetLocalFileTree.mockClear();
+    mockRevertContainerFile.mockClear();
+    mockDeleteContainerFile.mockClear();
+    mockRevertLocalFile.mockClear();
+    mockDeleteLocalFile.mockClear();
     mockGetGitStatus.mockImplementation(() => Promise.resolve([]));
     mockGetLocalGitStatus.mockImplementation(() => Promise.resolve([]));
     mockGetFileTree.mockImplementation(() => Promise.resolve([]));
     mockGetLocalFileTree.mockImplementation(() => Promise.resolve([]));
+    mockRevertContainerFile.mockImplementation((_containerId, filePath) => Promise.resolve(filePath));
+    mockDeleteContainerFile.mockImplementation((_containerId, filePath) => Promise.resolve(filePath));
+    mockRevertLocalFile.mockImplementation((_worktreePath, filePath) => Promise.resolve(filePath));
+    mockDeleteLocalFile.mockImplementation((_worktreePath, filePath) => Promise.resolve(filePath));
   });
 
   afterEach(() => {
@@ -195,12 +219,15 @@ describe("useFilesPanel", () => {
     resetStores(environment);
     useFilesPanelStore.setState({ isOpen: true, activeTab: "all-files" });
     mockGetFileTree.mockImplementation(() => Promise.resolve(tree));
+    mockGetGitStatus.mockImplementation(() => Promise.resolve([change]));
 
     const { result } = renderHook(() => useFilesPanel());
 
     await waitFor(() => {
       expect(mockGetFileTree).toHaveBeenCalledWith("container-1");
       expect(useFilesPanelStore.getState().fileTree).toEqual(tree);
+      expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop");
+      expect(useFilesPanelStore.getState().changes).toEqual([change]);
     });
 
     expect(result.current.isAvailable).toBe(true);
@@ -424,6 +451,53 @@ describe("useFilesPanel", () => {
 
     expect(useFilesPanelStore.getState().fileTree).toEqual([]);
     expect(useFilesPanelStore.getState().isLoadingTree).toBe(false);
+  });
+
+  test("reverts local files against the comparison ref and refreshes both snapshots", async () => {
+    const environment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+      createdFromCommit: "abc123def456",
+    });
+    resetStores(environment);
+    const { result } = renderHook(() => useFilesPanel());
+
+    await act(async () => {
+      await result.current.revertFile("src/App.tsx");
+    });
+
+    expect(mockRevertLocalFile).toHaveBeenCalledWith(
+      "/tmp/worktree",
+      "src/App.tsx",
+      "abc123def456",
+    );
+    expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "abc123def456");
+    expect(mockGetLocalFileTree).toHaveBeenCalledWith("/tmp/worktree");
+    expect(result.current.fileActionPending).toBeNull();
+  });
+
+  test("deletes container files and refreshes both snapshots", async () => {
+    const environment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(environment);
+    const { result } = renderHook(() => useFilesPanel());
+
+    await act(async () => {
+      await result.current.deleteFile("src/App.tsx");
+    });
+
+    expect(mockDeleteContainerFile).toHaveBeenCalledWith("container-1", "src/App.tsx");
+    expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop");
+    expect(mockGetFileTree).toHaveBeenCalledWith("container-1");
+    expect(result.current.fileActionPending).toBeNull();
   });
 
   test("silent auto-refresh reloads the active tab without toggling loading state", async () => {

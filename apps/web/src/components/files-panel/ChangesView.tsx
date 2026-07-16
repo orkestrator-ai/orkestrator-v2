@@ -4,7 +4,12 @@ import { ChangedFileItem } from "./ChangedFileItem";
 import { Loader2, GitBranch } from "lucide-react";
 import { useMediaQuery } from "@/hooks";
 
-export function ChangesView() {
+interface ChangesViewProps {
+  onRevert?: (path: string) => void;
+  onDelete?: (path: string) => void;
+}
+
+export function ChangesView({ onRevert, onDelete }: ChangesViewProps = {}) {
   const { changes, isLoadingChanges, closePanel } = useFilesPanelStore();
   const { createFileTab } = useTerminalContext();
   const isMobile = useMediaQuery("(max-width: 767px)");
@@ -41,6 +46,8 @@ export function ChangesView() {
           key={change.path}
           change={change}
           onClick={(path) => handleFileClick(path, change.status)}
+          onRevert={onRevert}
+          onDelete={onDelete}
         />
       ))}
     </div>

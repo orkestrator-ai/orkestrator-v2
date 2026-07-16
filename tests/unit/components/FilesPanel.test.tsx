@@ -4,9 +4,14 @@ import { TerminalProvider } from "../../../apps/web/src/contexts/TerminalContext
 import { useFilesPanelStore } from "../../../apps/web/src/stores/filesPanelStore";
 import type { FileNode, GitFileChange } from "../../../apps/web/src/lib/backend";
 import * as realHooks from "@/hooks";
+import * as realContextMenu from "@/components/ui/context-menu";
+import type { ReactNode } from "react";
 
 const realHooksSnapshot = { ...realHooks };
+const realContextMenuSnapshot = { ...realContextMenu };
 const refreshMock = mock(() => {});
+const revertFileMock = mock(async () => {});
+const deleteFileMock = mock(async () => {});
 
 mock.module("@/hooks", () => ({
   ...realHooksSnapshot,
@@ -18,10 +23,27 @@ mock.module("@/hooks", () => ({
     containerId: "container-1",
     worktreePath: null,
     isLocalEnvironment: false,
+    revertFile: revertFileMock,
+    deleteFile: deleteFileMock,
+    fileActionPending: null,
   }),
 }));
 
+mock.module("@/components/ui/context-menu", () => ({
+  ContextMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
+  ContextMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  ContextMenuContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  ContextMenuItem: ({
+    children,
+    onSelect,
+  }: {
+    children: ReactNode;
+    onSelect?: () => void;
+  }) => <button onClick={onSelect}>{children}</button>,
+}));
+
 const { ChangedFileItem } = await import("../../../apps/web/src/components/files-panel/ChangedFileItem");
+const { FileTreeNode } = await import("../../../apps/web/src/components/files-panel/FileTreeNode");
 const { FilesPanelHeader } = await import("../../../apps/web/src/components/files-panel/FilesPanelHeader");
 const { FilesPanel } = await import("../../../apps/web/src/components/files-panel/FilesPanel");
 
@@ -65,6 +87,8 @@ describe("Files panel components", () => {
   afterEach(() => {
     cleanup();
     refreshMock.mockClear();
+    revertFileMock.mockClear();
+    deleteFileMock.mockClear();
     useFilesPanelStore.setState({
       isOpen: false,
       activeTab: "changes",
@@ -78,6 +102,7 @@ describe("Files panel components", () => {
 
   afterAll(() => {
     mock.module("@/hooks", () => realHooksSnapshot);
+    mock.module("@/components/ui/context-menu", () => realContextMenuSnapshot);
   });
 
   test("ChangedFileItem renders directory, filename, stats, and click target", () => {
@@ -93,6 +118,55 @@ describe("Files panel components", () => {
     expect(onClick).toHaveBeenCalledWith("src/components/Button.tsx");
   });
 
+  test("ChangedFileItem exposes revert and delete context actions", () => {
+    const onRevert = mock(() => {});
+    const onDelete = mock(() => {});
+    render(
+      <ChangedFileItem
+        change={change}
+        onRevert={onRevert}
+        onDelete={onDelete}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Revert" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete file" }));
+
+    expect(onRevert).toHaveBeenCalledWith("src/components/Button.tsx");
+    expect(onDelete).toHaveBeenCalledWith("src/components/Button.tsx");
+  });
+
+  test("all-files rows always expose delete and only changed files expose revert", () => {
+    const file: FileNode = { name: "App.tsx", path: "src/App.tsx", isDirectory: false };
+    const onRevert = mock(() => {});
+    const onDelete = mock(() => {});
+    const { rerender } = render(
+      <FileTreeNode
+        item={file}
+        depth={0}
+        changedPaths={new Set([file.path])}
+        onRevert={onRevert}
+        onDelete={onDelete}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Revert" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Delete file" })).toBeTruthy();
+
+    rerender(
+      <FileTreeNode
+        item={file}
+        depth={0}
+        changedPaths={new Set()}
+        onRevert={onRevert}
+        onDelete={onDelete}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Revert" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Delete file" })).toBeTruthy();
+  });
+
   test("FilesPanelHeader shows changed count and refresh loading state", () => {
     useFilesPanelStore.setState({
       activeTab: "changes",
@@ -101,7 +175,7 @@ describe("Files panel components", () => {
       isLoadingTree: false,
     });
 
-    render(<FilesPanelHeader />);
+    render(<FilesPanelHeader onRefresh={refreshMock} />);
 
     expect(screen.getByText("1")).toBeTruthy();
     const refreshButton = screen.getAllByRole("button").find((button) =>

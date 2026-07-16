@@ -7,13 +7,15 @@ import {
 } from "@/components/ui/tooltip";
 import { X, RefreshCw } from "lucide-react";
 import { useFilesPanelStore } from "@/stores";
-import { useFilesPanel } from "@/hooks";
 import type { FilesPanelTab } from "@/stores";
 
-export function FilesPanelHeader() {
+interface FilesPanelHeaderProps {
+  onRefresh: () => void;
+}
+
+export function FilesPanelHeader({ onRefresh }: FilesPanelHeaderProps) {
   const { activeTab, setActiveTab, changes, closePanel, isLoadingChanges, isLoadingTree } =
     useFilesPanelStore();
-  const { refresh } = useFilesPanel();
   const changesCount = changes.length;
   const isLoading = activeTab === "changes" ? isLoadingChanges : isLoadingTree;
 
@@ -47,7 +49,7 @@ export function FilesPanelHeader() {
               variant="ghost"
               size="icon"
               className="h-7 w-7"
-              onClick={refresh}
+              onClick={onRefresh}
               disabled={isLoading}
             >
               <RefreshCw

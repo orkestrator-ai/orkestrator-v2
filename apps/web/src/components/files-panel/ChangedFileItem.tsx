@@ -1,14 +1,23 @@
 import { cn } from "@/lib/utils";
 import { FileIcon } from "./FileIcon";
 import type { GitFileChange } from "@/lib/backend";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { RotateCcw, Trash2 } from "lucide-react";
 
 interface ChangedFileItemProps {
   change: GitFileChange;
   onClick?: (path: string) => void;
+  onRevert?: (path: string) => void;
+  onDelete?: (path: string) => void;
 }
 
-export function ChangedFileItem({ change, onClick }: ChangedFileItemProps) {
-  return (
+export function ChangedFileItem({ change, onClick, onRevert, onDelete }: ChangedFileItemProps) {
+  const item = (
     <button
       onClick={() => onClick?.(change.path)}
       title={change.path}
@@ -39,5 +48,27 @@ export function ChangedFileItem({ change, onClick }: ChangedFileItemProps) {
         )}
       </div>
     </button>
+  );
+
+  if (!onRevert && !onDelete) return item;
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{item}</ContextMenuTrigger>
+      <ContextMenuContent>
+        {onRevert && (
+          <ContextMenuItem onSelect={() => onRevert(change.path)}>
+            <RotateCcw />
+            Revert
+          </ContextMenuItem>
+        )}
+        {onDelete && (
+          <ContextMenuItem variant="destructive" onSelect={() => onDelete(change.path)}>
+            <Trash2 />
+            Delete file
+          </ContextMenuItem>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

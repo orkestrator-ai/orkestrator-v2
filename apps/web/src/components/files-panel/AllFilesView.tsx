@@ -1,13 +1,23 @@
+import { useMemo } from "react";
 import { useFilesPanelStore } from "@/stores";
 import { useTerminalContext } from "@/contexts";
 import { FileTreeNode } from "./FileTreeNode";
 import { Loader2, FolderTree } from "lucide-react";
 import { useMediaQuery } from "@/hooks";
 
-export function AllFilesView() {
-  const { fileTree, isLoadingTree, closePanel } = useFilesPanelStore();
+interface AllFilesViewProps {
+  onRevert?: (path: string) => void;
+  onDelete?: (path: string) => void;
+}
+
+export function AllFilesView({ onRevert, onDelete }: AllFilesViewProps = {}) {
+  const { fileTree, changes, isLoadingTree, closePanel } = useFilesPanelStore();
   const { createFileTab } = useTerminalContext();
   const isMobile = useMediaQuery("(max-width: 767px)");
+  const changedPaths = useMemo(
+    () => new Set(changes.map((change) => change.path)),
+    [changes],
+  );
 
   const handleFileClick = (path: string) => {
     if (!createFileTab) return;
@@ -41,6 +51,9 @@ export function AllFilesView() {
           item={node}
           depth={0}
           onFileClick={handleFileClick}
+          changedPaths={changedPaths}
+          onRevert={onRevert}
+          onDelete={onDelete}
         />
       ))}
     </div>

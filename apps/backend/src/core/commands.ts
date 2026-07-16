@@ -1778,6 +1778,47 @@ async function resolveLocalGitBase(worktreePath: string, targetBranch: string): 
   return remoteRef;
 }
 
+async function revertLocalFile(worktreePath: string, relativePath: string, targetBranch: string): Promise<string> {
+  const target = validateRelativeFilePath(relativePath, "filePath");
+  const base = await resolveLocalGitBase(worktreePath, targetBranch);
+  if (!await gitRefExists(worktreePath, base)) {
+    throw new Error(`Target ref not found: ${targetBranch}`);
+  }
+  const existsAtBase = await runCommand(
+    "git",
+    ["-C", worktreePath, "cat-file", "-e", `${base}:${target}`],
+    { timeoutMs: 10_000 },
+  ).then(() => true, () => false);
+
+  if (existsAtBase) {
+    await runCommand(
+      "git",
+      ["-C", worktreePath, "restore", `--source=${base}`, "--staged", "--worktree", "--", target],
+      { timeoutMs: 30_000 },
+    );
+  } else {
+    await runCommand(
+      "git",
+      ["-C", worktreePath, "rm", "-f", "--ignore-unmatch", "--", target],
+      { timeoutMs: 30_000 },
+    );
+    await fs.rm(path.join(worktreePath, target), { force: true });
+  }
+
+  return target;
+}
+
+async function deleteLocalFile(worktreePath: string, relativePath: string): Promise<string> {
+  const target = validateRelativeFilePath(relativePath, "filePath");
+  await runCommand(
+    "git",
+    ["-C", worktreePath, "rm", "-f", "--ignore-unmatch", "--", target],
+    { timeoutMs: 30_000 },
+  );
+  await fs.rm(path.join(worktreePath, target), { force: true });
+  return target;
+}
+
 function isGitShowMissingPathError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
@@ -2636,6 +2677,12 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   );
   register("read_file_base64", ({ filePath }) => readFileBase64(asString(filePath, "filePath")));
   register("write_local_file", ({ worktreePath, filePath, base64Data }) => writeFileBase64(asString(worktreePath, "worktreePath"), asString(filePath, "filePath"), asString(base64Data, "base64Data")));
+  register("revert_local_file", ({ worktreePath, filePath, targetBranch }) =>
+    revertLocalFile(asString(worktreePath, "worktreePath"), asString(filePath, "filePath"), asString(targetBranch, "targetBranch")),
+  );
+  register("delete_local_file", ({ worktreePath, filePath }) =>
+    deleteLocalFile(asString(worktreePath, "worktreePath"), asString(filePath, "filePath")),
+  );
 
   register("get_git_status", async ({ containerId, targetBranch }) => {
     const branch = quoteShell(asString(targetBranch, "targetBranch"));
@@ -2705,6 +2752,43 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       child.once("error", reject);
     });
     return fullPath;
+  });
+  register("revert_container_file", async ({ containerId, filePath, targetBranch }) => {
+    const id = asString(containerId, "containerId");
+    const target = validateRelativeFilePath(asString(filePath, "filePath"));
+    const branch = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
+    await dockerExec(id, `
+      cd /workspace
+      branch=${quoteShell(branch)}
+      target=${quoteShell(target)}
+      git fetch origin "$branch" >/dev/null 2>&1 || true
+      if git rev-parse --verify --quiet "origin/$branch^{commit}" >/dev/null; then
+        base="origin/$branch"
+      elif git rev-parse --verify --quiet "$branch^{commit}" >/dev/null; then
+        base="$branch"
+      else
+        echo "Target ref not found: $branch" >&2
+        exit 1
+      fi
+      if git cat-file -e "$base:$target" 2>/dev/null; then
+        git restore --source="$base" --staged --worktree -- "$target"
+      else
+        git rm -f --ignore-unmatch -- "$target"
+        rm -f -- "/workspace/$target"
+      fi
+    `);
+    return target;
+  });
+  register("delete_container_file", async ({ containerId, filePath }) => {
+    const id = asString(containerId, "containerId");
+    const target = validateRelativeFilePath(asString(filePath, "filePath"));
+    await dockerExec(id, `
+      cd /workspace
+      target=${quoteShell(target)}
+      git rm -f --ignore-unmatch -- "$target"
+      rm -f -- "/workspace/$target"
+    `);
+    return target;
   });
 
   register("detect_pr_local", async ({ environmentId, branch }, { storage }) => {

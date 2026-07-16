@@ -2469,6 +2469,75 @@ exit 0
     )).rejects.toThrow("Invalid filePath");
   });
 
+  test("reverts tracked and newly added local files to the target branch", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    await fs.writeFile(path.join(worktree, "tracked.txt"), "changed\n");
+    await fs.writeFile(path.join(worktree, "new file.txt"), "new\n");
+    await runGit(worktree, ["add", "tracked.txt", "new file.txt"]);
+    const commands = createCommandRegistry();
+    const context = createContext(createEnvironment()).context;
+
+    await expect(commands.get("revert_local_file")?.(
+      { worktreePath: worktree, filePath: "tracked.txt", targetBranch: "main" },
+      context,
+    )).resolves.toBe("tracked.txt");
+    await expect(commands.get("revert_local_file")?.(
+      { worktreePath: worktree, filePath: "new file.txt", targetBranch: "main" },
+      context,
+    )).resolves.toBe("new file.txt");
+
+    await expect(fs.readFile(path.join(worktree, "tracked.txt"), "utf8")).resolves.toBe("base\n");
+    expect(existsSync(path.join(worktree, "new file.txt"))).toBe(false);
+    expect(await gitOutput(worktree, ["status", "--porcelain"])).toBe("");
+  });
+
+  test("deletes local files and stages tracked deletions for the next commit", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    await fs.writeFile(path.join(worktree, "untracked.txt"), "untracked\n");
+    const commands = createCommandRegistry();
+    const context = createContext(createEnvironment()).context;
+
+    await expect(commands.get("delete_local_file")?.(
+      { worktreePath: worktree, filePath: "tracked.txt" },
+      context,
+    )).resolves.toBe("tracked.txt");
+    await expect(commands.get("delete_local_file")?.(
+      { worktreePath: worktree, filePath: "untracked.txt" },
+      context,
+    )).resolves.toBe("untracked.txt");
+
+    expect(existsSync(path.join(worktree, "tracked.txt"))).toBe(false);
+    expect(existsSync(path.join(worktree, "untracked.txt"))).toBe(false);
+    expect(await gitOutput(worktree, ["diff", "--cached", "--name-status"])).toBe("D\ttracked.txt");
+  });
+
+  test("rejects unsafe paths for local file mutations", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    const commands = createCommandRegistry();
+    const context = createContext(createEnvironment()).context;
+
+    await expect(commands.get("revert_local_file")?.(
+      { worktreePath: worktree, filePath: "../outside.txt", targetBranch: "main" },
+      context,
+    )).rejects.toThrow("Invalid filePath");
+    await expect(commands.get("delete_local_file")?.(
+      { worktreePath: worktree, filePath: "../outside.txt" },
+      context,
+    )).rejects.toThrow("Invalid filePath");
+  });
+
+  test("does not delete a local file when the revert target ref is missing", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    await fs.writeFile(path.join(worktree, "tracked.txt"), "changed\n");
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("revert_local_file")?.(
+      { worktreePath: worktree, filePath: "tracked.txt", targetBranch: "missing-branch" },
+      createContext(createEnvironment()).context,
+    )).rejects.toThrow("Target ref not found");
+    await expect(fs.readFile(path.join(worktree, "tracked.txt"), "utf8")).resolves.toBe("changed\n");
+  });
+
   test("rejects unsafe target branch names before running git", async () => {
     const { worktree } = await createGitWorktreeWithOrigin();
     const commands = createCommandRegistry();
@@ -2617,6 +2686,45 @@ exit 1
       expect(dockerExec).toContain("tail -c 1");
       expect(dockerExec).toContain("git diff --name-status origin/'main'");
     });
+  });
+
+  test("runs validated container file revert and delete commands", async () => {
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+exit 0
+`, async (logs) => {
+      await expect(commands.get("revert_container_file")?.(
+        { containerId: "container-1", filePath: "src/file name.ts", targetBranch: "main" },
+        context,
+      )).resolves.toBe("src/file name.ts");
+      await expect(commands.get("delete_container_file")?.(
+        { containerId: "container-1", filePath: "src/file name.ts" },
+        context,
+      )).resolves.toBe("src/file name.ts");
+
+      const dockerExec = await fs.readFile(logs.exec, "utf8");
+      expect(dockerExec).toContain("git restore --source=\"$base\" --staged --worktree -- \"$target\"");
+      expect(dockerExec).toContain("git rm -f --ignore-unmatch -- \"$target\"");
+      expect(dockerExec).toContain("rm -f -- \"/workspace/$target\"");
+    });
+
+    await expect(commands.get("revert_container_file")?.(
+      { containerId: "container-1", filePath: "../outside.ts", targetBranch: "main" },
+      context,
+    )).rejects.toThrow("Invalid file path");
+    await expect(commands.get("revert_container_file")?.(
+      { containerId: "container-1", filePath: "src/file.ts", targetBranch: "bad branch" },
+      context,
+    )).rejects.toThrow("Invalid target branch");
   });
 
   test("detects local PRs by listing all PRs for the environment branch", async () => {

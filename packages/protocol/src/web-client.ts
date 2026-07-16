@@ -4,6 +4,8 @@ export interface WebClientStatus {
   running: boolean;
   url: string | null;
   error: string | null;
+  /** Whether the current Tailscale Serve conflict can be explicitly reset. */
+  resetAvailable?: boolean;
 }
 
 /** Gateway credential settings exposed only to an authenticated client. */

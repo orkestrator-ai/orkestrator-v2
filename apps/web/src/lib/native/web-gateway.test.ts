@@ -7,6 +7,7 @@ import {
 
 const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
+const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 type TestGatewayWindow = {
   location: Pick<Location, "protocol">;
   orkestrator?: Window["orkestrator"];
@@ -41,6 +42,11 @@ afterEach(() => {
   clearDirectGatewayTransport();
   globalThis.fetch = originalFetch;
   globalThis.EventSource = originalEventSource;
+  if (originalClipboardDescriptor) {
+    Object.defineProperty(navigator, "clipboard", originalClipboardDescriptor);
+  } else {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+  }
   delete window.orkestrator;
   delete window.orkestratorGateway;
   mock.restore();
@@ -330,8 +336,10 @@ describe("web gateway browser API", () => {
       running: true,
       url: `${window.location.origin}/`,
       error: null,
+      resetAvailable: false,
     });
     await expect(api.webClient.setEnabled()).rejects.toThrow("only available in the desktop app");
+    await expect(api.webClient.resetServe()).rejects.toThrow("only available for the local desktop app");
   });
 
   test("surfaces JSON and non-JSON errors from gateway token requests", async () => {
@@ -386,11 +394,37 @@ describe("web gateway browser API", () => {
   });
 
   test("uses browser fallbacks for unavailable native-only APIs", async () => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
     const api = createBrowserGatewayApi();
 
+    await expect(api.clipboard.readText()).resolves.toBe("");
+    await expect(api.clipboard.writeText("copy me")).resolves.toBeUndefined();
     await expect(api.clipboard.readImage()).resolves.toBeNull();
     await expect(api.clipboard.writeImage("data:image/png;base64,AA==")).resolves.toBeUndefined();
     await expect(api.dialog.open()).resolves.toBeNull();
     await expect(api.window.startDragging()).resolves.toBeUndefined();
+  });
+
+  test("delegates text clipboard operations and closes the browser process", async () => {
+    const readText = mock(async () => "clipboard contents");
+    const writeText = mock(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { readText, writeText },
+    });
+    const originalClose = window.close;
+    const close = mock(() => undefined);
+    window.close = close;
+
+    try {
+      const api = createBrowserGatewayApi();
+      await expect(api.clipboard.readText()).resolves.toBe("clipboard contents");
+      await expect(api.clipboard.writeText("copy me")).resolves.toBeUndefined();
+      expect(writeText).toHaveBeenCalledWith("copy me");
+      await expect(api.process.exit()).resolves.toBeUndefined();
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      window.close = originalClose;
+    }
   });
 });

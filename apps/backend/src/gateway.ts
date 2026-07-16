@@ -51,6 +51,7 @@ export interface OrkestratorGatewayOptions {
   logger?: Pick<Console, "debug" | "error" | "info" | "warn">;
   allowNonTailscaleBind?: boolean;
   allowedOrigins?: string[];
+  keepaliveMs?: number;
   webClientControl?: {
     getStatus(): WebClientStatus;
     setEnabled(enabled: boolean): Promise<WebClientStatus>;
@@ -510,6 +511,7 @@ export class OrkestratorGateway {
   private readonly allowNonTailscaleBind: boolean;
   private readonly webClientControl: OrkestratorGatewayOptions["webClientControl"];
   private readonly allowedOrigins: string[];
+  private readonly keepaliveMs: number;
   private servers = new Set<Server>();
   private token = "";
   private authFile = "";
@@ -534,6 +536,7 @@ export class OrkestratorGateway {
     this.logger = options.logger ?? console;
     this.allowNonTailscaleBind = options.allowNonTailscaleBind ?? false;
     this.webClientControl = options.webClientControl;
+    this.keepaliveMs = options.keepaliveMs ?? KEEPALIVE_MS;
     this.allowedOrigins = (
       options.allowedOrigins ?? parseAllowedOrigins(this.env.ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS)
     )
@@ -1041,7 +1044,7 @@ export class OrkestratorGateway {
 
     this.keepalive ??= setInterval(() => {
       for (const client of this.clients) client.write(": keepalive\n\n");
-    }, KEEPALIVE_MS);
+    }, this.keepaliveMs);
     this.keepalive.unref?.();
 
     request.once("close", () => {
@@ -1072,6 +1075,21 @@ export class OrkestratorGateway {
 
   private async proxyToTarget(request: IncomingMessage, response: ServerResponse, target: URL, proxyPrefix?: string): Promise<void> {
     await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      const fail = (error: Error) => {
+        if (settled) return;
+        if (!response.headersSent) {
+          jsonResponse(response, 502, { error: error.message });
+        } else {
+          response.destroy(error);
+        }
+        finish();
+      };
       const proxyRequest = http.request({
         host: target.hostname,
         port: target.port,
@@ -1081,21 +1099,16 @@ export class OrkestratorGateway {
       }, (proxyResponse) => {
         response.writeHead(proxyResponse.statusCode ?? 502, sanitizeProxyResponseHeaders(proxyResponse.headers, target, proxyPrefix));
         proxyResponse.pipe(response);
-        proxyResponse.once("end", resolve);
+        proxyResponse.once("end", finish);
+        proxyResponse.once("error", fail);
+        proxyResponse.once("aborted", () => fail(new Error("Loopback proxy response was aborted")));
       });
       this.proxyRequests.add(proxyRequest);
       proxyRequest.once("close", () => {
         this.proxyRequests.delete(proxyRequest);
       });
 
-      proxyRequest.once("error", (error) => {
-        if (!response.headersSent) {
-          jsonResponse(response, 502, { error: error.message });
-        } else {
-          response.destroy(error);
-        }
-        resolve();
-      });
+      proxyRequest.once("error", fail);
 
       request.pipe(proxyRequest);
     });

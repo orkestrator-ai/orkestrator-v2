@@ -1,7 +1,11 @@
 import type { WebClientStatus } from "@orkestrator/protocol/web-client";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { getTailscaleServeTargetPort, TailscaleServeManager } from "./tailscale-serve.js";
+import {
+  getTailscaleServeTargetPort,
+  TailscaleServeConflictError,
+  TailscaleServeManager,
+} from "./tailscale-serve.js";
 
 type ServeManager = Pick<TailscaleServeManager, "start" | "stop"> &
   Partial<Pick<TailscaleServeManager, "clearHttpsPort" | "stopOwned">>;
@@ -71,6 +75,7 @@ export class ManagedWebClient {
   private enabled = false;
   private url: string | null = null;
   private error: string | null = null;
+  private resetAvailable = false;
   private browserListenerUrl: string | null = null;
   private transition: Promise<unknown> = Promise.resolve();
 
@@ -91,6 +96,7 @@ export class ManagedWebClient {
       running: this.url !== null,
       url: this.url,
       error: this.error,
+      resetAvailable: this.resetAvailable,
     };
   }
 
@@ -114,6 +120,7 @@ export class ManagedWebClient {
   private async applyEnabled(enabled: boolean): Promise<WebClientStatus> {
     this.enabled = enabled;
     this.error = null;
+    this.resetAvailable = false;
 
     if (!enabled) {
       try {
@@ -164,6 +171,7 @@ export class ManagedWebClient {
     } catch (error) {
       this.url = null;
       this.error = error instanceof Error ? error.message : String(error);
+      this.resetAvailable = error instanceof TailscaleServeConflictError && error.resetAvailable;
       this.logger.error("[TailscaleServe] Failed to enable web access:", error);
       // Serve can be configured successfully before URL discovery fails. In
       // that case, remove the listener so a retry is safe and deterministic.
@@ -181,15 +189,19 @@ export class ManagedWebClient {
     this.error = null;
     if (!this.serve.clearHttpsPort) {
       this.error = "Tailscale Serve reset is unavailable.";
+      this.resetAvailable = false;
       return this.getStatus();
     }
 
+    const retryAvailable = this.resetAvailable;
     try {
       await this.serve.clearHttpsPort(this.httpsPort);
       this.url = null;
       await this.ownershipStore.clear();
+      this.resetAvailable = false;
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
+      this.resetAvailable = retryAvailable;
       this.logger.error("[TailscaleServe] Failed to reset web access:", error);
       return this.getStatus();
     }

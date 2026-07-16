@@ -191,6 +191,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
             running: false,
             url: null,
             error: error instanceof Error ? error.message : String(error),
+            resetAvailable: false,
           });
         }
       })
@@ -405,6 +406,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
             running: status?.running ?? false,
             url: status?.url ?? null,
             error: message,
+            resetAvailable: status?.resetAvailable ?? false,
           }));
           throw error;
         }
@@ -1086,6 +1088,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         running: status?.running ?? false,
         url: status?.url ?? null,
         error: message,
+        resetAvailable: status?.resetAvailable ?? false,
       }));
       toast.error("Failed to reset Tailscale Serve", { description: message });
     } finally {
@@ -1098,9 +1101,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     const hasPendingAccessChange = webClientEnabled !== (global.webClientEnabled ?? true);
     const canResetTailscaleServe = !isRemoteClient
       && !hasPendingAccessChange
-      && webClientStatus?.error?.includes(
-        "Refusing to replace the existing Tailscale Serve configuration",
-      );
+      && webClientStatus?.resetAvailable === true;
     const statusLabel = isLoadingWebClientStatus
       ? "Checking"
       : webClientStatus?.running

@@ -200,6 +200,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
           running: true,
           url: `${baseUrl ?? getGatewayBaseUrl()}/`,
           error: null,
+          resetAvailable: false,
         });
       },
       setEnabled(): Promise<WebClientStatus> {

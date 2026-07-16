@@ -29,6 +29,8 @@ async function requestUrl(
     }, (response) => {
       const chunks: Buffer[] = [];
       response.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      response.on("aborted", () => reject(new Error("Response aborted")));
+      response.on("error", reject);
       response.on("end", () => {
         const body = Buffer.concat(chunks).toString("utf8");
         resolve({
@@ -357,6 +359,13 @@ describe("remote gateway", () => {
     });
     expect(failed.status).toBe(500);
     expect(failed.json()).toEqual({ error: "lifecycle unavailable" });
+
+    const resetFailed = await requestUrl(`${info.url}__orkestrator/web-client-access`, {
+      method: "DELETE",
+      headers,
+    });
+    expect(resetFailed.status).toBe(500);
+    expect(resetFailed.json()).toEqual({ error: "reset unavailable" });
 
     const status = await requestUrl(`${info.url}__orkestrator/status`, { headers });
     expect(status.status).toBe(200);
@@ -903,7 +912,7 @@ describe("remote gateway", () => {
   });
 
   test("delivers backend events to authenticated event streams", async () => {
-    const { gateway, info } = await startGateway();
+    const { gateway, info } = await startGateway({ keepaliveMs: 5 });
 
     const eventBody = await new Promise<string>((resolve, reject) => {
       const parsed = new URL(`${info.url}__orkestrator/events`);
@@ -916,7 +925,7 @@ describe("remote gateway", () => {
         let body = "";
         response.on("data", (chunk) => {
           body += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-          if (body.includes("\"event\":\"menu-zoom\"")) {
+          if (body.includes(": keepalive") && body.includes("\"event\":\"menu-zoom\"")) {
             response.destroy();
             resolve(body);
           }
@@ -931,7 +940,26 @@ describe("remote gateway", () => {
     });
 
     expect(eventBody).toContain(": connected");
+    expect(eventBody).toContain(": keepalive");
     expect(eventBody).toContain("menu-zoom");
+  });
+
+  test("terminates the downstream response when an upstream proxy aborts after headers", async () => {
+    const target = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.write("partial");
+      setTimeout(() => response.socket?.destroy(), 10);
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const targetAddress = target.address();
+    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+
+    const { info } = await startGateway();
+    await expect(requestUrl(
+      `${info.url}__orkestrator/proxy/loopback/${targetAddress.port}/aborted`,
+      { headers: { authorization: `Bearer ${info.token}` } },
+    )).rejects.toThrow("Response aborted");
   });
 
   test("proxies authenticated loopback requests without leaking gateway credentials", async () => {

@@ -121,6 +121,7 @@ if (typeof globalThis.ImageData === "undefined") {
 
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+const originalReload = window.location.reload;
 
 describe("HierarchicalSidebar", () => {
   beforeEach(() => {
@@ -184,6 +185,7 @@ describe("HierarchicalSidebar", () => {
 
   afterEach(() => {
     cleanup();
+    window.location.reload = originalReload;
   });
 
   afterAll(() => {
@@ -212,6 +214,22 @@ describe("HierarchicalSidebar", () => {
       cleanup();
       window.orkestrator = originalApi;
     }
+  });
+
+  test("reloads the workspace from the refresh button", () => {
+    const reload = mock(() => undefined);
+    window.location.reload = reload as unknown as typeof window.location.reload;
+
+    render(<HierarchicalSidebar />);
+
+    const refreshButton = screen.getByRole("button", {
+      name: "Refresh projects, environments, tabs, and layout",
+    });
+    const addProjectButton = screen.getByTitle("Add project");
+    expect(refreshButton.compareDocumentPosition(addProjectButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(refreshButton);
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 
   test("propagates initial prompt image attachments into launch options", async () => {

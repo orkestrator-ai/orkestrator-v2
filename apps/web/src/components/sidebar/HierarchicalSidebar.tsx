@@ -16,7 +16,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { Button } from "@/components/ui/button";
-import { Plus, FolderGit2, Square, Trash2, RotateCw } from "lucide-react";
+import { Plus, FolderGit2, Square, Trash2, RotateCw, RefreshCw } from "lucide-react";
 import { SortableProjectGroup } from "./SortableProjectGroup";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "@/components/environments/CreateEnvironmentDialog";
@@ -581,15 +581,27 @@ export function HierarchicalSidebar() {
         ) : (
           <>
             <ServerConnectionSwitcher />
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              onClick={() => setShowAddProjectDialog(true)}
-              title="Add project"
-            >
-              <Plus className="h-4 w-4" />
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => window.location.reload()}
+                title="Refresh projects, environments, tabs, and layout"
+                aria-label="Refresh projects, environments, tabs, and layout"
+              >
+                <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => setShowAddProjectDialog(true)}
+                title="Add project"
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+            </div>
           </>
         )}
       </div>

@@ -1281,6 +1281,50 @@ Running 1 Explore agent...
     expect(startSessionMock).not.toHaveBeenCalled();
   });
 
+  test("refresh requests replace the transcript with the latest backend snapshot", async () => {
+    seedPane();
+    mockRunningTmuxStatus();
+    let transcript = [
+      {
+        type: "assistant",
+        uuid: "stale-message",
+        message: { role: "assistant", content: "Stale client copy" },
+      },
+    ];
+    getTranscriptMock.mockImplementation(async () => transcript);
+
+    const { rerender } = render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+
+    await screen.findByText("Stale client copy");
+    transcript = [
+      {
+        type: "assistant",
+        uuid: "server-message",
+        message: { role: "assistant", content: "Updated by another client" },
+      },
+    ];
+
+    rerender(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+
+    await screen.findByText("Updated by another client");
+    expect(screen.queryByText("Stale client copy")).toBeNull();
+    expect(getStatusMock).toHaveBeenCalledTimes(2);
+  });
+
   test("hydrates backend busy state and pending hook prompts", async () => {
     getStatusMock.mockImplementation(async () => ({
       tab_id: "tab-1",

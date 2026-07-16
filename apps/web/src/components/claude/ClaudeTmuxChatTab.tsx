@@ -120,6 +120,7 @@ interface Props {
   isActive: boolean;
   initialPrompt?: string;
   isReviewTab?: boolean;
+  refreshRequestId?: number;
 }
 
 /**
@@ -302,6 +303,7 @@ export function ClaudeTmuxChatTab({
   isActive,
   initialPrompt,
   isReviewTab = false,
+  refreshRequestId = 0,
 }: Props) {
   const { environmentId, containerId } = data;
   const stateKey = useMemo(
@@ -322,6 +324,7 @@ export function ClaudeTmuxChatTab({
   const storeKey = scopedTabState ? stateKey : shouldUseLegacyTabState ? tabId : stateKey;
   const setRunning = useClaudeTmuxStore((s) => s.setRunning);
   const applyTranscriptLine = useClaudeTmuxStore((s) => s.applyTranscriptLine);
+  const replaceTranscript = useClaudeTmuxStore((s) => s.replaceTranscript);
   const addPendingApproval = useClaudeTmuxStore((s) => s.addPendingApproval);
   const removePendingApproval = useClaudeTmuxStore((s) => s.removePendingApproval);
   const addPendingQuestion = useClaudeTmuxStore((s) => s.addPendingQuestion);
@@ -534,6 +537,7 @@ export function ClaudeTmuxChatTab({
           if (status.session_id) {
             const lines = await getTranscript(tabId, environmentId);
             if (cancelled) return;
+            replaceTranscript(storeKey, lines);
             for (const line of lines) {
               if (
                 permissionModeEventVersionRef.current === permissionModeVersion &&
@@ -542,7 +546,6 @@ export function ClaudeTmuxChatTab({
               ) {
                 setPlanMode(line.permissionMode === "plan");
               }
-              applyTranscriptLine(storeKey, line);
             }
             const hooks = await getPendingHooks(tabId, environmentId);
             if (cancelled) return;
@@ -563,7 +566,20 @@ export function ClaudeTmuxChatTab({
                 });
               }
             }
+          } else {
+            replaceTranscript(storeKey, []);
+            replacePendingHooks(storeKey, pendingSnapshotFromHooks([]));
           }
+        } else if (refreshRequestId > 0) {
+          startedRef.current = false;
+          setRunning(storeKey, false, {
+            environmentId,
+            sessionId: null,
+            resumed: false,
+          });
+          setTabBusy(storeKey, false);
+          replaceTranscript(storeKey, []);
+          replacePendingHooks(storeKey, pendingSnapshotFromHooks([]));
         }
       } catch (e) {
         // A missing backend session is not fatal; the auto-start path below
@@ -584,8 +600,9 @@ export function ClaudeTmuxChatTab({
     storeKey,
     setRunning,
     setTabBusy,
-    applyTranscriptLine,
     addPendingPermission,
+    refreshRequestId,
+    replaceTranscript,
     replacePendingHooks,
   ]);
 

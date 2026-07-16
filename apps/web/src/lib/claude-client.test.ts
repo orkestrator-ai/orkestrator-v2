@@ -11,6 +11,7 @@ import {
   abortSession,
   deleteSession,
   getPendingQuestions,
+  getPendingPlanApprovals,
   answerQuestion,
   respondToPlanApproval,
   getMcpServers,
@@ -212,6 +213,13 @@ describe("claude-client", () => {
       const messages = await getSessionMessages(client, "s-1");
       expect(messages).toEqual([]);
     });
+
+    test("throws on non-404 error status when strict refresh is requested", async () => {
+      mockFetchStatus(500);
+      expect(
+        getSessionMessages(client, "s-1", { throwOnError: true }),
+      ).rejects.toThrow("HTTP 500");
+    });
   });
 
   describe("sendPrompt", () => {
@@ -296,6 +304,22 @@ describe("claude-client", () => {
     test("returns empty array on network error", async () => {
       mockFetchError();
       expect(await getPendingQuestions(client, "s-1")).toEqual([]);
+    });
+
+    test("can surface refresh failures to strict callers", async () => {
+      mockFetchStatus(500);
+      await expect(
+        getPendingQuestions(client, "s-1", { throwOnError: true }),
+      ).rejects.toThrow("HTTP 500");
+    });
+  });
+
+  describe("getPendingPlanApprovals", () => {
+    test("returns the authoritative approval snapshot", async () => {
+      const approvals = [{ id: "approval-1", sessionId: "s-1" }];
+      mockFetchJson({ approvals });
+
+      expect(await getPendingPlanApprovals(client, "s-1")).toEqual(approvals);
     });
   });
 

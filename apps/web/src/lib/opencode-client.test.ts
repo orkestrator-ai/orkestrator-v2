@@ -13,6 +13,7 @@ import {
   getPendingPermissions,
   getPendingQuestions,
   getSessionMessages,
+  getSessionStatus,
   listSessions,
   normalizeOpenCodeMessage,
   normalizeOpenCodePart,
@@ -616,6 +617,39 @@ describe("opencode-client getSessionMessages", () => {
     expect(part?.toolOutput).toBe(JSON.stringify(outputPayload, null, 2));
     expect(part?.toolError).toBe(JSON.stringify(errorPayload, null, 2));
   });
+
+  test("throws when a strict refresh cannot fetch messages", async () => {
+    const client = {
+      session: {
+        messages: async () => {
+          throw new Error("offline");
+        },
+      },
+    } as unknown as OpencodeClient;
+
+    expect(
+      getSessionMessages(client, "session-1", { throwOnError: true }),
+    ).rejects.toThrow("offline");
+  });
+});
+
+describe("opencode-client getSessionStatus", () => {
+  test("selects one session from the v2 status map", async () => {
+    const client = {
+      session: {
+        status: async () => ({
+          data: {
+            "session-1": { type: "busy" },
+            "session-2": { type: "idle" },
+          },
+        }),
+      },
+    } as unknown as OpencodeClient;
+
+    expect(await getSessionStatus(client, "session-1")).toBe("busy");
+    expect(await getSessionStatus(client, "session-2")).toBe("idle");
+    expect(await getSessionStatus(client, "missing")).toBeNull();
+  });
 });
 
 describe("opencode-client sendPrompt", () => {
@@ -1056,6 +1090,12 @@ describe("opencode-client events and pending requests", () => {
     } as unknown as OpencodeClient;
     expect(await getPendingQuestions(failed)).toEqual([]);
     expect(await getPendingPermissions(failed)).toEqual([]);
+    await expect(
+      getPendingQuestions(failed, { throwOnError: true }),
+    ).rejects.toThrow("question failed");
+    await expect(
+      getPendingPermissions(failed, { throwOnError: true }),
+    ).rejects.toThrow("permission failed");
   });
 
   test("replies to and rejects requests with the v2 SDK shape", async () => {

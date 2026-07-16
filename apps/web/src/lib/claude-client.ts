@@ -353,7 +353,8 @@ export class SessionNotFoundError extends Error {
  */
 export async function getSessionMessages(
   client: ClaudeClient,
-  sessionId: string
+  sessionId: string,
+  options: { throwOnError?: boolean } = {},
 ): Promise<ClaudeMessage[]> {
   console.debug("[claude-client] Fetching messages for session:", sessionId);
   const response = await fetch(`${client.baseUrl}/session/${sessionId}/messages`);
@@ -362,6 +363,9 @@ export async function getSessionMessages(
   }
   if (!response.ok) {
     console.debug("[claude-client] Failed to fetch messages, status:", response.status);
+    if (options.throwOnError) {
+      throw new Error(`Failed to get Claude session messages: HTTP ${response.status}`);
+    }
     return [];
   }
   const data = await response.json();
@@ -470,15 +474,53 @@ export async function deleteSession(
  */
 export async function getPendingQuestions(
   client: ClaudeClient,
-  sessionId: string
+  sessionId: string,
+  options: { throwOnError?: boolean } = {},
 ): Promise<ClaudeQuestionRequest[]> {
   try {
     const response = await fetch(`${client.baseUrl}/session/${sessionId}/questions`);
-    if (!response.ok) return [];
+    if (!response.ok) {
+      throw new Error(`Failed to get pending Claude questions: HTTP ${response.status}`);
+    }
     const data = await response.json();
     return data.questions || [];
   } catch (error) {
     console.error("[claude-client] Failed to get pending questions:", error);
+    if (options.throwOnError) {
+      throw error instanceof Error
+        ? error
+        : new Error("Failed to get pending Claude questions");
+    }
+    return [];
+  }
+}
+
+/**
+ * Get pending plan approval requests for a session.
+ */
+export async function getPendingPlanApprovals(
+  client: ClaudeClient,
+  sessionId: string,
+  options: { throwOnError?: boolean } = {},
+): Promise<ClaudePlanApprovalRequest[]> {
+  try {
+    const response = await fetch(
+      `${client.baseUrl}/session/${sessionId}/plan-approvals`,
+    );
+    if (!response.ok) {
+      throw new Error(
+        `Failed to get pending Claude plan approvals: HTTP ${response.status}`,
+      );
+    }
+    const data = await response.json();
+    return data.approvals || [];
+  } catch (error) {
+    console.error("[claude-client] Failed to get pending plan approvals:", error);
+    if (options.throwOnError) {
+      throw error instanceof Error
+        ? error
+        : new Error("Failed to get pending Claude plan approvals");
+    }
     return [];
   }
 }

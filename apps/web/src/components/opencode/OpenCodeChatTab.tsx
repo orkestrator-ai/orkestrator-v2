@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from "react";
+import { toast } from "sonner";
 import {
   Loader2,
   AlertCircle,
@@ -31,6 +32,7 @@ import {
   getModelsWithDefaults,
   createSession,
   getSessionMessages,
+  getSessionStatus,
   listSessions,
   getPendingPermissions,
   getPendingQuestions,
@@ -84,6 +86,7 @@ interface OpenCodeChatTabProps {
   /** Initial prompt to send after session creation */
   initialPrompt?: string;
   isReviewTab?: boolean;
+  refreshRequestId?: number;
 }
 
 type ConnectionState = "connecting" | "connected" | "error";
@@ -162,6 +165,7 @@ export function OpenCodeChatTab({
   isActive,
   initialPrompt,
   isReviewTab = false,
+  refreshRequestId = 0,
 }: OpenCodeChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
   // Initialize as "connected" if we already have a client and session from a previous init.
@@ -187,6 +191,8 @@ export function OpenCodeChatTab({
   const initialPromptSentRef = useRef(false);
   // Track when we are currently draining queued prompts
   const isProcessingQueueRef = useRef(false);
+  const lastHandledRefreshRequestIdRef = useRef(0);
+  const manualRefreshSequenceRef = useRef(0);
   // Ref to store handleSend for use in effects without causing re-runs
   const handleSendRef = useRef<
     ((
@@ -403,6 +409,10 @@ export function OpenCodeChatTab({
     async (
       sdkClient: ReturnType<typeof createClient>,
       sessionId: string,
+      options: {
+        throwOnError?: boolean;
+        shouldApply?: () => boolean;
+      } = {},
     ) => {
       const stateBeforeSync = useOpenCodeStore.getState();
       const existingQuestionIds = new Set<string>();
@@ -421,9 +431,10 @@ export function OpenCodeChatTab({
       }
 
       const [questions, permissions] = await Promise.all([
-        getPendingQuestions(sdkClient),
-        getPendingPermissions(sdkClient),
+        getPendingQuestions(sdkClient, { throwOnError: options.throwOnError }),
+        getPendingPermissions(sdkClient, { throwOnError: options.throwOnError }),
       ]);
+      if (options.shouldApply && !options.shouldApply()) return;
 
       const questionIds = new Set<string>();
       for (const question of questions) {
@@ -460,6 +471,62 @@ export function OpenCodeChatTab({
       removePendingQuestion,
     ],
   );
+
+  const refreshSessionFromServer = useCallback(async () => {
+    const stateBeforeRefresh = useOpenCodeStore.getState();
+    const activeClient = stateBeforeRefresh.clients.get(environmentId);
+    const activeSession = stateBeforeRefresh.sessions.get(sessionKey);
+    if (!activeClient || !activeSession?.sessionId) return;
+
+    const sessionId = activeSession.sessionId;
+    const requestSequence = ++manualRefreshSequenceRef.current;
+    const shouldApply = () => requestSequence === manualRefreshSequenceRef.current;
+    const [messages, status] = await Promise.all([
+      getSessionMessages(activeClient, sessionId, { throwOnError: true }),
+      getSessionStatus(activeClient, sessionId),
+    ]);
+    if (!shouldApply()) return;
+
+    setMessages(sessionKey, messages);
+    if (status) {
+      setSessionLoading(sessionKey, status !== "idle");
+    }
+    await syncPendingRequests(activeClient, sessionId, {
+      throwOnError: true,
+      shouldApply,
+    });
+  }, [
+    environmentId,
+    sessionKey,
+    setMessages,
+    setSessionLoading,
+    syncPendingRequests,
+  ]);
+
+  useEffect(() => {
+    if (
+      refreshRequestId <= lastHandledRefreshRequestIdRef.current ||
+      connectionState !== "connected" ||
+      !client ||
+      !session?.sessionId
+    ) {
+      return;
+    }
+
+    lastHandledRefreshRequestIdRef.current = refreshRequestId;
+    void refreshSessionFromServer().catch((error) => {
+      console.error("[OpenCodeChatTab] Manual refresh failed:", error);
+      toast.error("Failed to refresh OpenCode tab", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, [
+    client,
+    connectionState,
+    refreshRequestId,
+    refreshSessionFromServer,
+    session?.sessionId,
+  ]);
 
   // Initialize connection on mount.
   // Active tabs always initialize; inactive tabs initialize too when an

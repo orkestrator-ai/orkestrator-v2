@@ -1,10 +1,15 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import * as realSortable from "@dnd-kit/sortable";
+import * as realUtilities from "@dnd-kit/utilities";
 import type { TabInfo } from "@/types/paneLayout";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useClaudeStore, createClaudeSessionKey } from "@/stores/claudeStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useFileDirtyStore } from "@/stores";
+
+const realSortableSnapshot = { ...realSortable };
+const realUtilitiesSnapshot = { ...realUtilities };
 
 mock.module("@dnd-kit/sortable", () => ({
   useSortable: () => ({
@@ -24,6 +29,11 @@ mock.module("@dnd-kit/utilities", () => ({
 }));
 
 const { DraggableTab } = await import("./DraggableTab");
+
+afterAll(() => {
+  mock.module("@dnd-kit/sortable", () => realSortableSnapshot);
+  mock.module("@dnd-kit/utilities", () => realUtilitiesSnapshot);
+});
 
 function renderTab(tab: TabInfo, index = 0) {
   return render(
@@ -298,8 +308,34 @@ describe("DraggableTab tooltip and context menu structure", () => {
     expect(screen.getByText("Close all")).toBeDefined();
     expect(screen.getByText("Close others")).toBeDefined();
     expect(screen.getByText("Close to the right")).toBeDefined();
+    expect(screen.queryByText("Refresh")).toBeNull();
 
     fireEvent.click(screen.getByText("Close"));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("exposes Refresh for server-backed agent tabs", () => {
+    const onRefresh = mock(() => {});
+
+    render(
+      <DraggableTab
+        tab={{
+          id: "tab-claude",
+          type: "claude-native",
+          claudeNativeData: { environmentId: "env-1" },
+        }}
+        paneId="pane-1"
+        index={0}
+        isActive={false}
+        canClose
+        onSelect={() => {}}
+        onRefresh={onRefresh}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByText("Claude 1"));
+    fireEvent.click(screen.getByText("Refresh"));
+
+    expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 });

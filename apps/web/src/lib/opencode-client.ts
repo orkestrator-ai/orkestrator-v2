@@ -981,7 +981,8 @@ export async function createSession(
  */
 export async function getSessionMessages(
   client: OpencodeClient,
-  sessionId: string
+  sessionId: string,
+  options: { throwOnError?: boolean } = {},
 ): Promise<OpenCodeMessage[]> {
   try {
     const response = await client.session.messages({
@@ -997,8 +998,35 @@ export async function getSessionMessages(
     return messages;
   } catch (error) {
     console.error("[opencode-client] Failed to get messages:", error);
+    if (options.throwOnError) {
+      throw error instanceof Error
+        ? error
+        : new Error("Failed to get OpenCode session messages");
+    }
     return [];
   }
+}
+
+export type OpenCodeSessionStatus = "idle" | "busy" | "retry";
+
+/**
+ * Read the current server-side status for one session. The v2 SDK returns a
+ * map for every session, so callers select the session they own by ID.
+ */
+export async function getSessionStatus(
+  client: OpencodeClient,
+  sessionId: string,
+): Promise<OpenCodeSessionStatus | null> {
+  const response = await client.session.status();
+  const status = response.data?.[sessionId];
+  if (
+    status?.type !== "idle" &&
+    status?.type !== "busy" &&
+    status?.type !== "retry"
+  ) {
+    return null;
+  }
+  return status.type;
 }
 
 /** Attachment input for sendPrompt */
@@ -1219,13 +1247,21 @@ export async function abortSession(client: OpencodeClient, sessionId: string): P
 /**
  * Get pending question requests
  */
-export async function getPendingQuestions(client: OpencodeClient): Promise<QuestionRequest[]> {
+export async function getPendingQuestions(
+  client: OpencodeClient,
+  options: { throwOnError?: boolean } = {},
+): Promise<QuestionRequest[]> {
   try {
     const response = await client.question.list();
     if (!response.data) return [];
     return response.data as QuestionRequest[];
   } catch (error) {
     console.error("[opencode-client] Failed to get pending questions:", error);
+    if (options.throwOnError) {
+      throw error instanceof Error
+        ? error
+        : new Error("Failed to get pending OpenCode questions");
+    }
     return [];
   }
 }
@@ -1233,13 +1269,21 @@ export async function getPendingQuestions(client: OpencodeClient): Promise<Quest
 /**
  * Get pending permission requests
  */
-export async function getPendingPermissions(client: OpencodeClient): Promise<PermissionRequest[]> {
+export async function getPendingPermissions(
+  client: OpencodeClient,
+  options: { throwOnError?: boolean } = {},
+): Promise<PermissionRequest[]> {
   try {
     const response = await client.permission.list();
     if (!response.data) return [];
     return response.data as PermissionRequest[];
   } catch (error) {
     console.error("[opencode-client] Failed to get pending permissions:", error);
+    if (options.throwOnError) {
+      throw error instanceof Error
+        ? error
+        : new Error("Failed to get pending OpenCode permissions");
+    }
     return [];
   }
 }

@@ -512,6 +512,56 @@ describe("CodexChatTab", () => {
     expect(optimistic?.id).toMatch(/^optimistic-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 
+  test("refresh requests pull the latest transcript and session status", async () => {
+    const { rerender } = render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetSessionStatus).toHaveBeenCalled();
+      expect(mockGetSessionMessages).toHaveBeenCalled();
+    });
+    mockGetSessionStatus.mockReset();
+    mockGetSessionMessages.mockReset();
+
+    const serverMessage = createMessage(
+      "server-message",
+      "Updated by another client",
+    );
+    mockGetSessionStatus.mockResolvedValue({
+      status: "running",
+      title: "Server title",
+    });
+    mockGetSessionMessages.mockResolvedValue([serverMessage]);
+
+    rerender(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        messages: [serverMessage],
+        isLoading: true,
+        title: "Server title",
+      });
+    });
+    expect(mockGetSessionStatus).toHaveBeenCalledWith(
+      MOCK_CLIENT,
+      SESSION_ID,
+      { throwOnError: true },
+    );
+  });
+
   test("rehydrates the session id saved in a restored pane tab", async () => {
     const restoredSessionId = "restored-codex-session";
     useCodexStore.setState({ sessions: new Map() });

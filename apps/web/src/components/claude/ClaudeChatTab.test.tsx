@@ -4,7 +4,11 @@ import { createClaudeSessionKey, useClaudeStore } from "@/stores/claudeStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import type { ClaudeMessage as ClaudeMessageType } from "@/lib/claude-client";
+import type {
+  ClaudeMessage as ClaudeMessageType,
+  ClaudePlanApprovalRequest,
+  ClaudeQuestionRequest,
+} from "@/lib/claude-client";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 
 import * as realHooks from "@/hooks";
@@ -22,7 +26,17 @@ const mockGetModels = mock(async () => []);
 const mockGetSessionMessages = mock<
   (_client: unknown, _sessionId: string) => Promise<ClaudeMessageType[]>
 >(async () => []);
-const mockGetSession = mock(async () => null as null | { status: string });
+const mockGetSession = mock(async () => null as null | {
+  status: "idle" | "running" | "error";
+  title?: string;
+  error?: string;
+});
+const mockGetPendingQuestions = mock(
+  async (): Promise<ClaudeQuestionRequest[]> => [],
+);
+const mockGetPendingPlanApprovals = mock(
+  async (): Promise<ClaudePlanApprovalRequest[]> => [],
+);
 const mockCheckHealth = mock(async () => true);
 const mockSendPrompt = mock(async () => {});
 const mockAbortSession = mock(async () => true);
@@ -67,6 +81,8 @@ mock.module("@/lib/claude-client", () => ({
   createSession: mockCreateSession,
   getSession: mockGetSession,
   getSessionMessages: mockGetSessionMessages,
+  getPendingQuestions: mockGetPendingQuestions,
+  getPendingPlanApprovals: mockGetPendingPlanApprovals,
   sendPrompt: mockSendPrompt,
   abortSession: mockAbortSession,
   subscribeToEvents: mock(() => (async function* () {})()),
@@ -254,6 +270,10 @@ describe("ClaudeChatTab", () => {
     mockGetSessionMessages.mockImplementation(async () => []);
     mockGetSession.mockReset();
     mockGetSession.mockResolvedValue(null);
+    mockGetPendingQuestions.mockReset();
+    mockGetPendingQuestions.mockResolvedValue([]);
+    mockGetPendingPlanApprovals.mockReset();
+    mockGetPendingPlanApprovals.mockResolvedValue([]);
     mockCheckHealth.mockClear();
     mockSendPrompt.mockClear();
     mockAbortSession.mockClear();
@@ -286,6 +306,56 @@ describe("ClaudeChatTab", () => {
 
     expect(screen.getByText("Ready to build!")).toBeTruthy();
     expect(screen.queryByText("No messages yet. Start a conversation with Claude!")).toBeNull();
+  });
+
+  test("refresh requests replace the transcript and reconcile server state", async () => {
+    const { rerender } = render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+
+    await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+    mockGetSessionMessages.mockReset();
+    mockGetSession.mockReset();
+
+    const serverMessage: ClaudeMessageType = {
+      id: "server-message",
+      role: "assistant",
+      content: "Updated by another client",
+      parts: [{ type: "text", content: "Updated by another client" }],
+      timestamp: "2026-07-16T12:00:00.000Z",
+    };
+    mockGetSessionMessages.mockResolvedValue([serverMessage]);
+    mockGetSession.mockResolvedValue({ status: "running", title: "Server title" });
+    mockGetPendingQuestions.mockResolvedValue([
+      { id: "question-1", sessionId: "session-1", questions: [] },
+    ]);
+    mockGetPendingPlanApprovals.mockResolvedValue([
+      { id: "approval-1", sessionId: "session-1" },
+    ]);
+
+    rerender(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        messages: [serverMessage],
+        isLoading: true,
+        title: "Server title",
+      });
+      expect(useClaudeStore.getState().pendingQuestions.has("question-1")).toBe(true);
+      expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(true);
+    });
   });
 
   test("shows the scroll down accessory in the compose dock and scrolls to the bottom when clicked", () => {

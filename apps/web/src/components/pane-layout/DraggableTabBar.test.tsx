@@ -36,4 +36,39 @@ describe("DraggableTabBar", () => {
     fireEvent.click(screen.getByText("Terminal 1"));
     expect(onTabSelect).toHaveBeenCalledWith("terminal");
   });
+
+  test("requests server refreshes only for server-backed agent tabs", () => {
+    const onTabRefresh = mock(() => undefined);
+    const pane: PaneLeaf = {
+      kind: "leaf",
+      id: "pane",
+      activeTabId: "claude",
+      tabs: [
+        {
+          id: "claude",
+          type: "claude-native",
+          claudeNativeData: { environmentId: "environment" },
+        },
+        { id: "terminal", type: "plain" },
+      ],
+    };
+
+    render(
+      <DndContext>
+        <DraggableTabBar
+          pane={pane}
+          environmentId="environment"
+          onTabSelect={() => undefined}
+          onTabRefresh={onTabRefresh}
+        />
+      </DndContext>,
+    );
+
+    fireEvent.contextMenu(screen.getByText("Claude 1"));
+    fireEvent.click(screen.getByText("Refresh"));
+    expect(onTabRefresh).toHaveBeenCalledWith("claude");
+
+    fireEvent.contextMenu(screen.getByText("Terminal 2"));
+    expect(screen.queryByText("Refresh")).toBeNull();
+  });
 });

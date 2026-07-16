@@ -35,10 +35,21 @@ mock.module("@dnd-kit/core", () => ({
 }));
 
 mock.module("./DraggableTabBar", () => ({
-  DraggableTabBar: ({ onTabSelect }: { onTabSelect: (tabId: string) => void }) => (
-    <button type="button" onClick={() => onTabSelect("tab-2")}>
-      Select tab 2
-    </button>
+  DraggableTabBar: ({
+    onTabSelect,
+    onTabRefresh,
+  }: {
+    onTabSelect: (tabId: string) => void;
+    onTabRefresh?: (tabId: string) => void;
+  }) => (
+    <>
+      <button type="button" onClick={() => onTabSelect("tab-2")}>
+        Select tab 2
+      </button>
+      <button type="button" onClick={() => onTabRefresh?.("tab-claude")}>
+        Refresh Claude tab
+      </button>
+    </>
   ),
 }));
 
@@ -53,11 +64,17 @@ mock.module("@/components/claude/ClaudeChatTab", () => ({
   ClaudeChatTab: ({
     tabId,
     isReviewTab,
+    refreshRequestId,
   }: {
     tabId: string;
     isReviewTab?: boolean;
+    refreshRequestId?: number;
   }) => (
-    <div data-review-tab={String(Boolean(isReviewTab))} data-testid="claude-tab">
+    <div
+      data-refresh-request-id={refreshRequestId}
+      data-review-tab={String(Boolean(isReviewTab))}
+      data-testid="claude-tab"
+    >
       claude:{tabId}
     </div>
   ),
@@ -330,5 +347,33 @@ describe("PaneLeafContainer", () => {
     expect(screen.getByTestId("claude-tmux-tab").dataset.reviewTab).toBe("true");
     expect(screen.getByTestId("codex-tab").dataset.reviewTab).toBe("true");
     expect(screen.getByTestId("opencode-tab").dataset.reviewTab).toBe("true");
+  });
+
+  test("forwards a new refresh request to the selected agent tab", () => {
+    const claudePane = {
+      kind: "leaf" as const,
+      id: "pane-claude",
+      tabs: [
+        {
+          id: "tab-claude",
+          type: "claude-native" as const,
+          claudeNativeData: { environmentId: "env-visible" },
+        },
+      ],
+      activeTabId: "tab-claude",
+    };
+
+    render(
+      <PaneLeafContainer
+        pane={claudePane}
+        containerId="container-visible"
+        environmentId="env-visible"
+        isActive
+      />,
+    );
+
+    expect(screen.getByTestId("claude-tab").dataset.refreshRequestId).toBe("0");
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Claude tab" }));
+    expect(screen.getByTestId("claude-tab").dataset.refreshRequestId).toBe("1");
   });
 });

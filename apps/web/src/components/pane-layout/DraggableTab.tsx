@@ -43,6 +43,8 @@ interface DraggableTabProps {
   /** Whether this tab is focused (active tab in the focused pane) */
   isFocused?: boolean;
   onSelect: () => void;
+  /** Reload this tab from its authoritative server-side state. */
+  onRefresh?: () => void;
   onClose?: () => void;
   onCloseAll?: () => void;
   onCloseOthers?: () => void;
@@ -63,6 +65,7 @@ export function DraggableTab({
   isActive,
   isFocused = false,
   onSelect,
+  onRefresh,
   onClose,
   onCloseAll,
   onCloseOthers,
@@ -254,6 +257,12 @@ export function DraggableTab({
       )}
 
       <ContextMenuContent>
+        {onRefresh && (
+          <>
+            <ContextMenuItem onClick={onRefresh}>Refresh</ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
         <ContextMenuItem onClick={onClose} disabled={!canClose || !onClose}>
           Close
         </ContextMenuItem>

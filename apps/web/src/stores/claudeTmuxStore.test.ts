@@ -55,6 +55,29 @@ describe("applyTranscriptLine", () => {
     );
   });
 
+  test("replaceTranscript removes stale messages without clearing local drafts", () => {
+    const store = useClaudeTmuxStore.getState();
+    store.applyTranscriptLine("e", {
+      type: "assistant",
+      uuid: "stale",
+      message: { role: "assistant", content: "stale copy" },
+    });
+    store.setDraftText("e", "keep my draft");
+
+    store.replaceTranscript("e", [
+      {
+        type: "assistant",
+        uuid: "server",
+        message: { role: "assistant", content: "server copy" },
+      },
+    ]);
+
+    expect(useClaudeTmuxStore.getState().getTab("e").messages).toMatchObject([
+      { id: "server", content: "server copy" },
+    ]);
+    expect(useClaudeTmuxStore.getState().getDraftText("e")).toBe("keep my draft");
+  });
+
   test("assistant tool_use + later tool_result merge into prior assistant message", () => {
     const useLine: TranscriptLine = {
       type: "assistant",

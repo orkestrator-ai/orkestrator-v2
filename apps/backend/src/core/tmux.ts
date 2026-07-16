@@ -26,6 +26,8 @@ const HOOK_TIMEOUT_SECS = 600;
 const COMMAND_IDLE_TIMEOUT_MS = 8_000;
 const COMMAND_NO_HOOK_SETTLE_MS = 2_000;
 const COMMAND_AFTER_IDLE_SETTLE_MS = 400;
+const PERMISSION_MODE_SWITCH_TIMEOUT_MS = 1_500;
+const PERMISSION_MODE_POLL_MS = 100;
 const BACKUP_SENTINEL_NO_ORIGINAL = "__orkestrator_no_original__";
 const CLAUDE_SETTINGS_LOCAL_GIT_EXCLUDE_PATTERN = ".claude/settings.local.json";
 const RUNTIME_ROOT_PREFIX = "/tmp/orkestrator-v2-claude-tmux";
@@ -53,8 +55,9 @@ function asOptionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function asBoolean(value: unknown, fallback = false): boolean {
-  return typeof value === "boolean" ? value : fallback;
+function asBoolean(value: unknown, name: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`Expected ${name} to be a boolean`);
+  return value;
 }
 
 function asPositiveInt(value: unknown, name: string): number {
@@ -887,7 +890,27 @@ type TmuxStatus = {
   transcript_path: string | null;
   resumed: boolean;
   busy: boolean;
+  permission_mode: string;
 };
+
+function permissionModeFromTranscriptLine(line: unknown): string | undefined {
+  if (!line || typeof line !== "object") return undefined;
+  const record = line as Record<string, unknown>;
+  return record.type === "permission-mode" && typeof record.permissionMode === "string"
+    ? record.permissionMode
+    : undefined;
+}
+
+function permissionModeFromPane(snapshot: string): string | undefined {
+  const normalized = snapshot.toLowerCase().split("\n").slice(-6).join("\n");
+  if (normalized.includes("plan mode on")) return "plan";
+  if (normalized.includes("bypass permissions on")) return "bypassPermissions";
+  if (normalized.includes("accept edits on") || normalized.includes("edit automatically on")) return "acceptEdits";
+  if (normalized.includes("auto mode on")) return "auto";
+  if (normalized.includes("ask before edits on") || normalized.includes("manual mode on")) return "default";
+  if (normalized.includes("don't ask on") || normalized.includes("dont ask on")) return "dontAsk";
+  return undefined;
+}
 
 class TmuxSession {
   readonly sessionId: string;
@@ -904,6 +927,8 @@ class TmuxSession {
   private stopRequested = false;
   private transcriptPath: string | undefined;
   private busy = false;
+  private permissionMode = "bypassPermissions";
+  private readonly inputMutex = new AsyncMutex();
 
   constructor(
     readonly environmentId: string,
@@ -933,6 +958,7 @@ class TmuxSession {
       transcript_path: this.transcriptPath ?? null,
       resumed: this.resumed,
       busy: this.busy,
+      permission_mode: this.permissionMode,
     };
   }
 
@@ -958,7 +984,10 @@ class TmuxSession {
       const trimmed = raw.trim();
       if (!trimmed) continue;
       try {
-        lines.push(JSON.parse(trimmed));
+        const line = JSON.parse(trimmed);
+        lines.push(line);
+        const permissionMode = permissionModeFromTranscriptLine(line);
+        if (permissionMode) this.permissionMode = permissionMode;
       } catch {
         // Continue reading later lines.
       }
@@ -975,7 +1004,6 @@ class TmuxSession {
     initialPrompt: string | undefined,
     model: string | undefined,
     effort: string | undefined,
-    planMode: boolean,
   ): Promise<void> {
     await ensureSessionDirs(this.backend, this.sessionHookPaths);
 
@@ -1000,7 +1028,7 @@ class TmuxSession {
     const alive = await this.tmuxAlive();
     const launchedNew = !alive;
     if (launchedNew) {
-      const claudeCmd = this.claudeLaunchCommand(claudeCommand, helpText, model, effort, planMode);
+      const claudeCmd = this.claudeLaunchCommand(claudeCommand, helpText, model, effort);
       const wrapped = `${claudeCmd}; echo '[claude exited]'; exec bash`;
       const out = await this.backend.exec([
         this.tmuxCommand,
@@ -1064,7 +1092,6 @@ class TmuxSession {
     helpText: string,
     model: string | undefined,
     effort: string | undefined,
-    planMode: boolean,
   ): string {
     let command = shellArg(claudeCommand);
     if (model?.trim()) command += ` --model ${shellArg(model)}`;
@@ -1075,7 +1102,6 @@ class TmuxSession {
         console.warn("[tmux] claude CLI does not support --effort; launching without it");
       }
     }
-    if (planMode) command += " --permission-mode plan";
     command += " --dangerously-skip-permissions";
     command += this.resumed ? ` --resume ${this.sessionId}` : ` --session-id ${this.sessionId}`;
     return command;
@@ -1153,6 +1179,8 @@ class TmuxSession {
             try {
               const lines = await tail.readNew(this.backend);
               for (const line of lines) {
+                const permissionMode = permissionModeFromTranscriptLine(line);
+                if (permissionMode) this.setPermissionMode(permissionMode, context);
                 context.emit(CLAUDE_TMUX_EVENT, {
                   kind: "transcript-line",
                   tab_id: this.tabId,
@@ -1204,7 +1232,7 @@ class TmuxSession {
     return out.status === 0;
   }
 
-  async sendText(text: string): Promise<void> {
+  private async sendTextUnlocked(text: string): Promise<void> {
     if (!text) return;
     const bufferName = `claude-tmux-input-${this.tmuxSession}`;
     const load = await this.backend.exec([this.tmuxCommand, "load-buffer", "-b", bufferName, "-"], text);
@@ -1222,37 +1250,129 @@ class TmuxSession {
     if (paste.status !== 0) throw new Error(paste.stderr || "tmux paste-buffer failed");
   }
 
-  async sendLiteral(text: string): Promise<void> {
+  async sendText(text: string): Promise<void> {
+    await this.inputMutex.runExclusive(() => this.sendTextUnlocked(text));
+  }
+
+  private async sendLiteralUnlocked(text: string): Promise<void> {
     if (!text) return;
     const out = await this.backend.exec([this.tmuxCommand, "send-keys", "-t", this.tmuxSession, "-l", text]);
     if (out.status !== 0) throw new Error(out.stderr || "tmux send-keys failed");
   }
 
-  async sendKeys(keys: string[]): Promise<void> {
+  async sendLiteral(text: string): Promise<void> {
+    await this.inputMutex.runExclusive(() => this.sendLiteralUnlocked(text));
+  }
+
+  private async sendKeysUnlocked(keys: string[]): Promise<void> {
     const out = await this.backend.exec([this.tmuxCommand, "send-keys", "-t", this.tmuxSession, "--", ...keys]);
     if (out.status !== 0) throw new Error(out.stderr || "tmux send-keys failed");
   }
 
-  async submit(text: string): Promise<void> {
+  async sendKeys(keys: string[]): Promise<void> {
+    await this.inputMutex.runExclusive(() => this.sendKeysUnlocked(keys));
+  }
+
+  private async submitUnlocked(text: string): Promise<void> {
     if (text) {
-      await this.sendText(text);
+      await this.sendTextUnlocked(text);
       await delay(250);
     }
-    await this.sendKeys(["Enter"]);
+    await this.sendKeysUnlocked(["Enter"]);
+  }
+
+  async submit(text: string): Promise<void> {
+    await this.inputMutex.runExclusive(async () => {
+      await this.submitUnlocked(text);
+      if (text.trim()) {
+        // Hooks arrive asynchronously. Mark a submitted user turn busy before
+        // releasing the input lock so a queued mode switch cannot run in the
+        // gap between Enter and the UserPromptSubmit hook.
+        this.busy = true;
+      }
+    });
   }
 
   async switchModel(model: string): Promise<void> {
     const trimmed = model.trim();
     if (!trimmed) throw new Error("model id cannot be empty");
-    await this.submit(`/model ${trimmed}`);
-    await this.waitForCommandIdle();
+    await this.inputMutex.runExclusive(async () => {
+      await this.submitUnlocked(`/model ${trimmed}`);
+      await this.waitForCommandIdle();
+    });
   }
 
   async switchEffort(effort: string): Promise<void> {
     const trimmed = effort.trim();
     if (!trimmed) throw new Error("effort level cannot be empty");
-    await this.submit(`/effort ${trimmed}`);
-    await this.waitForCommandIdle();
+    await this.inputMutex.runExclusive(async () => {
+      await this.submitUnlocked(`/effort ${trimmed}`);
+      await this.waitForCommandIdle();
+    });
+  }
+
+  async switchPlanMode(planMode: boolean, context: CommandContext): Promise<string> {
+    return await this.inputMutex.runExclusive(async () => {
+      if (this.busy) throw new Error("Cannot switch Claude mode while a turn is running");
+      const targetMode = planMode ? "plan" : "bypassPermissions";
+      let observedMode = await this.capturePanePermissionMode();
+      if (observedMode) this.setPermissionMode(observedMode, context);
+      if (observedMode === targetMode) return targetMode;
+
+      // `/plan` enters Plan Mode directly. This avoids cycling forward from
+      // bypassPermissions into Auto Mode, which can open a first-use opt-in
+      // prompt and leave the backend unable to complete the transition.
+      if (observedMode !== "plan") {
+        await this.submitUnlocked("/plan");
+        observedMode = await this.waitForPanePermissionMode("plan");
+        this.setPermissionMode(observedMode, context);
+      }
+
+      if (targetMode === "plan") return targetMode;
+
+      // Bypass is the first optional mode after Plan in Claude's documented
+      // Shift+Tab cycle because tmux sessions launch with bypass enabled.
+      await this.sendKeysUnlocked(["BTab"]);
+      observedMode = await this.waitForPanePermissionMode("bypassPermissions");
+      this.setPermissionMode(observedMode, context);
+      return targetMode;
+    });
+  }
+
+  private async capturePanePermissionMode(): Promise<string | undefined> {
+    const snapshot = await this.capturePane();
+    if (paneHasClaudeExited(snapshot)) throw new Error("Claude exited before its mode could be changed");
+    if (paneHasSelectionPrompt(snapshot)) {
+      throw new Error("Finish the active Claude prompt before changing modes");
+    }
+    return permissionModeFromPane(snapshot);
+  }
+
+  private async waitForPanePermissionMode(targetMode: string): Promise<string> {
+    const deadline = Date.now() + PERMISSION_MODE_SWITCH_TIMEOUT_MS;
+    let lastObservedMode: string | undefined;
+    while (Date.now() < deadline) {
+      const observedMode = await this.capturePanePermissionMode();
+      if (observedMode) {
+        lastObservedMode = observedMode;
+        if (observedMode === targetMode) return observedMode;
+      }
+      await delay(PERMISSION_MODE_POLL_MS);
+    }
+    const observed = lastObservedMode ? `; observed ${lastObservedMode}` : "";
+    throw new Error(`Claude did not enter ${targetMode}${observed}`);
+  }
+
+  private setPermissionMode(permissionMode: string, context: CommandContext): void {
+    if (permissionMode === this.permissionMode) return;
+    this.permissionMode = permissionMode;
+    context.emit(CLAUDE_TMUX_EVENT, {
+      kind: "permission-mode-changed",
+      tab_id: this.tabId,
+      environment_id: this.environmentId,
+      session_id: this.sessionId,
+      permission_mode: permissionMode,
+    });
   }
 
   private async waitForCommandIdle(): Promise<void> {
@@ -1275,8 +1395,18 @@ class TmuxSession {
   }
 
   async interrupt(): Promise<void> {
-    await this.sendKeys(["Escape"]);
-    this.busy = false;
+    await this.inputMutex.runExclusive(async () => {
+      await this.sendKeysUnlocked(["Escape"]);
+      this.busy = false;
+    });
+  }
+
+  async writeInteractive(data: string): Promise<void> {
+    await this.inputMutex.runExclusive(() => sendInteractiveData(
+      data,
+      (literal) => this.sendLiteralUnlocked(literal),
+      (keys) => this.sendKeysUnlocked(keys),
+    ));
   }
 
   async capturePane(options: { ansi?: boolean; joinWrapped?: boolean } = {}): Promise<string> {
@@ -1489,7 +1619,7 @@ class InteractiveTmuxTerminalManager {
   }
 
   async write(id: string, data: string): Promise<void> {
-    await sendInteractiveData(this.require(id).tmux, data);
+    await this.require(id).tmux.writeInteractive(data);
   }
 
   async resize(id: string, cols: number, rows: number): Promise<void> {
@@ -1534,13 +1664,17 @@ const INTERACTIVE_KEY_SEQUENCES = new Map<string, string[]>([
   ["\x1b[4~", ["End"]],
 ]);
 
-async function sendInteractiveData(session: TmuxSession, data: string): Promise<void> {
+async function sendInteractiveData(
+  data: string,
+  sendLiteral: (literal: string) => Promise<void>,
+  sendKeys: (keys: string[]) => Promise<void>,
+): Promise<void> {
   let index = 0;
   let literal = "";
 
   const flushLiteral = async () => {
     if (!literal) return;
-    await session.sendLiteral(literal);
+    await sendLiteral(literal);
     literal = "";
   };
 
@@ -1548,7 +1682,7 @@ async function sendInteractiveData(session: TmuxSession, data: string): Promise<
     const matched = Array.from(INTERACTIVE_KEY_SEQUENCES.entries()).find(([sequence]) => data.startsWith(sequence, index));
     if (matched) {
       await flushLiteral();
-      await session.sendKeys(matched[1]);
+      await sendKeys(matched[1]);
       index += matched[0].length;
       continue;
     }
@@ -1558,28 +1692,28 @@ async function sendInteractiveData(session: TmuxSession, data: string): Promise<
       case "\r":
       case "\n":
         await flushLiteral();
-        await session.sendKeys(["Enter"]);
+        await sendKeys(["Enter"]);
         break;
       case "\x7f":
       case "\b":
         await flushLiteral();
-        await session.sendKeys(["BSpace"]);
+        await sendKeys(["BSpace"]);
         break;
       case "\t":
         await flushLiteral();
-        await session.sendKeys(["Tab"]);
+        await sendKeys(["Tab"]);
         break;
       case "\x03":
         await flushLiteral();
-        await session.sendKeys(["C-c"]);
+        await sendKeys(["C-c"]);
         break;
       case "\x04":
         await flushLiteral();
-        await session.sendKeys(["C-d"]);
+        await sendKeys(["C-d"]);
         break;
       case "\x1b":
         await flushLiteral();
-        await session.sendKeys(["Escape"]);
+        await sendKeys(["Escape"]);
         break;
       default:
         literal += char;
@@ -1637,7 +1771,7 @@ export function registerTmuxBackendCommands(register: RegisterCommand): void {
     claudeStatePolls.stop(asString(containerId, "containerId"));
   });
 
-  register("claude_tmux_start", async ({ tabId, environmentId, initialPrompt, model, effort, planMode, resumeSessionId }, context) => {
+  register("claude_tmux_start", async ({ tabId, environmentId, initialPrompt, model, effort, resumeSessionId }, context) => {
     const envId = asString(environmentId, "environmentId");
     const tab = asString(tabId, "tabId");
     const resumeId = asOptionalString(resumeSessionId);
@@ -1655,7 +1789,6 @@ export function registerTmuxBackendCommands(register: RegisterCommand): void {
         asOptionalString(initialPrompt),
         asOptionalString(model),
         asOptionalString(effort),
-        asBoolean(planMode),
       );
       return session.status(await session.tmuxAlive().catch(() => false));
     });
@@ -1703,6 +1836,12 @@ export function registerTmuxBackendCommands(register: RegisterCommand): void {
   );
   register("claude_tmux_switch_effort", ({ tabId, effort, environmentId }) =>
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).switchEffort(asString(effort, "effort")),
+  );
+  register("claude_tmux_switch_plan_mode", ({ tabId, planMode, environmentId }, context) =>
+    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).switchPlanMode(
+      asBoolean(planMode, "planMode"),
+      context,
+    ),
   );
   register("claude_tmux_capture_pane", ({ tabId, environmentId }) =>
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).capturePane(),

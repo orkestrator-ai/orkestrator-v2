@@ -44,7 +44,13 @@ function encodeCwd(cwd: string): string {
   return cwd.replace(/\/+$/, "").replaceAll("/", "-");
 }
 
-async function withFakeTmuxRuntime(run: (runtime: { worktree: string; home: string; log: string; environment: Environment }) => Promise<void>): Promise<void> {
+async function withFakeTmuxRuntime(run: (runtime: {
+  worktree: string;
+  home: string;
+  log: string;
+  alive: string;
+  environment: Environment;
+}) => Promise<void>): Promise<void> {
   const root = await createTempDir("ork-tmux-runtime-");
   const binDir = path.join(root, "bin");
   const worktree = path.join(root, "worktree");
@@ -57,13 +63,18 @@ async function withFakeTmuxRuntime(run: (runtime: { worktree: string; home: stri
   await fs.writeFile(path.join(binDir, "tmux"), `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_TMUX_LOG"
 command="$1"
+all_args="$*"
 session_name=''
+buffer_name=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -t|-s)
       shift
       session_name="$1"
-      break
+      ;;
+    -b)
+      shift
+      buffer_name="$1"
       ;;
   esac
   shift
@@ -75,15 +86,80 @@ case "$command" in
     ;;
   new-session)
     mkdir -p "$FAKE_TMUX_ALIVE"
-    [ -n "$session_name" ] && touch "$FAKE_TMUX_ALIVE/$session_name"
+    if [ -n "$session_name" ]; then
+      touch "$FAKE_TMUX_ALIVE/$session_name"
+      printf 'bypassPermissions' > "$FAKE_TMUX_ALIVE/$session_name.mode"
+    fi
     exit 0
     ;;
   kill-session)
-    [ -n "$session_name" ] && rm -f "$FAKE_TMUX_ALIVE/$session_name"
+    [ -n "$session_name" ] && rm -f "$FAKE_TMUX_ALIVE/$session_name" "$FAKE_TMUX_ALIVE/$session_name.mode"
     exit 0
     ;;
   capture-pane)
-    printf 'fake snapshot'
+    if [ -n "$session_name" ] && [ -f "$FAKE_TMUX_ALIVE/$session_name.fail-capture" ]; then
+      printf '%s\n' 'capture failed' >&2
+      exit 1
+    fi
+    if [ -n "$session_name" ] && [ -f "$FAKE_TMUX_ALIVE/$session_name.mode" ]; then
+      mode="$(cat "$FAKE_TMUX_ALIVE/$session_name.mode")"
+      case "$mode" in
+        plan) printf 'plan mode on' ;;
+        bypassPermissions) printf 'bypass permissions on' ;;
+        acceptEdits) printf 'edit automatically on' ;;
+        auto) printf 'auto mode on' ;;
+        default) printf 'ask before edits on' ;;
+        dontAsk) printf "don't ask on" ;;
+        selection)
+          printf '%s\n' '1. Yes' '2. No' 'Enter to confirm · Esc to cancel'
+          ;;
+        exited) printf '[claude exited]' ;;
+        *) printf 'fake snapshot' ;;
+      esac
+    else
+      printf 'fake snapshot'
+    fi
+    exit 0
+    ;;
+  load-buffer)
+    cat > "$FAKE_TMUX_ALIVE/buffer-$buffer_name"
+    exit 0
+    ;;
+  paste-buffer)
+    if [ -n "$session_name" ]; then
+      cat "$FAKE_TMUX_ALIVE/buffer-$buffer_name" > "$FAKE_TMUX_ALIVE/$session_name.input"
+    fi
+    exit 0
+    ;;
+  send-keys)
+    if [ -n "$session_name" ] && [ -f "$FAKE_TMUX_ALIVE/$session_name.fail-send" ]; then
+      printf '%s\n' 'send failed' >&2
+      exit 1
+    fi
+    case "$all_args" in
+      *BTab*)
+        mode_file="$FAKE_TMUX_ALIVE/$session_name.mode"
+        if [ "$(cat "$mode_file" 2>/dev/null)" = 'plan' ]; then
+          printf 'bypassPermissions' > "$mode_file"
+        elif [ -f "$FAKE_TMUX_ALIVE/$session_name.auto-prompt-on-btab" ]; then
+          printf 'selection' > "$mode_file"
+        else
+          printf 'plan' > "$mode_file"
+        fi
+        ;;
+      *Enter*)
+        input_file="$FAKE_TMUX_ALIVE/$session_name.input"
+        if [ "$(cat "$input_file" 2>/dev/null)" = '/plan' ]; then
+          if [ -f "$FAKE_TMUX_ALIVE/$session_name.delay-plan" ]; then
+            sleep 0.25
+          fi
+          if [ ! -f "$FAKE_TMUX_ALIVE/$session_name.ignore-plan" ]; then
+            printf 'plan' > "$FAKE_TMUX_ALIVE/$session_name.mode"
+          fi
+        fi
+        rm -f "$input_file"
+        ;;
+    esac
     exit 0
     ;;
   *)
@@ -114,7 +190,7 @@ exit 0
   process.env.FAKE_TMUX_ALIVE = alive;
 
   try {
-    await run({ worktree, home, log, environment: createEnvironment(worktree) });
+    await run({ worktree, home, log, alive, environment: createEnvironment(worktree) });
   } finally {
     if (originalPath === undefined) delete process.env.PATH;
     else process.env.PATH = originalPath;
@@ -191,6 +267,7 @@ describe("Electron tmux backend command registration", () => {
       "claude_tmux_submit",
       "claude_tmux_switch_model",
       "claude_tmux_switch_effort",
+      "claude_tmux_switch_plan_mode",
       "claude_tmux_capture_pane",
       "claude_tmux_resize",
       "claude_tmux_answer_pre_tool_use",
@@ -293,11 +370,52 @@ describe("Electron tmux backend command registration", () => {
       const status = await invoke(
         handlers,
         "claude_tmux_start",
-        { tabId: "tab-1", environmentId: environment.id, model: "sonnet", effort: "medium", planMode: true },
+        {
+          tabId: "tab-1",
+          environmentId: environment.id,
+          model: "sonnet",
+          effort: "medium",
+          // Legacy callers may still send this launch-time field. It must not
+          // override the invariant that Claude starts in bypass mode.
+          planMode: true,
+        },
         context,
       ) as { session_id: string; running: boolean };
       expect(status.running).toBe(true);
       expect(status.session_id).toBeTruthy();
+
+      const launchLog = await fs.readFile(log, "utf8");
+      expect(launchLog).toContain(" --dangerously-skip-permissions");
+      expect(launchLog).not.toContain("--permission-mode plan");
+
+      await expect(invoke(
+        handlers,
+        "claude_tmux_switch_plan_mode",
+        { tabId: "tab-1", environmentId: environment.id, planMode: true },
+        context,
+      )).resolves.toBe("plan");
+      await expect(invoke(
+        handlers,
+        "claude_tmux_status",
+        { tabId: "tab-1", environmentId: environment.id },
+        context,
+      )).resolves.toEqual(expect.objectContaining({ permission_mode: "plan" }));
+      await expect(invoke(
+        handlers,
+        "claude_tmux_switch_plan_mode",
+        { tabId: "tab-1", environmentId: environment.id, planMode: false },
+        context,
+      )).resolves.toBe("bypassPermissions");
+      await expect(invoke(
+        handlers,
+        "claude_tmux_status",
+        { tabId: "tab-1", environmentId: environment.id },
+        context,
+      )).resolves.toEqual(expect.objectContaining({ permission_mode: "bypassPermissions" }));
+
+      const switchedLog = await fs.readFile(log, "utf8");
+      expect(switchedLog).toContain("send-keys -t");
+      expect(switchedLog).toContain("-- BTab");
 
       const sessionRoot = path.join("/tmp", "orkestrator-v2-claude-tmux", environment.id, "sessions", status.session_id);
       const pendingDir = path.join(sessionRoot, "pending");
@@ -365,10 +483,256 @@ describe("Electron tmux backend command registration", () => {
     });
   });
 
+  test("validates planMode strictly without sending input for malformed requests", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, log }) => {
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-plan-validation", environmentId: environment.id },
+        context,
+      );
+      const before = await fs.readFile(log, "utf8");
+
+      for (const planMode of [undefined, null, "true", 0]) {
+        await expect(invoke(
+          handlers,
+          "claude_tmux_switch_plan_mode",
+          { tabId: "tab-plan-validation", environmentId: environment.id, planMode },
+          context,
+        )).rejects.toThrow("Expected planMode to be a boolean");
+      }
+
+      expect(await fs.readFile(log, "utf8")).toBe(before);
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-plan-validation", environmentId: environment.id },
+        context,
+      );
+    });
+  });
+
+  test("enters plan directly from every supported pane mode without triggering Auto opt-in", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, log, alive }) => {
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const status = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-plan-modes", environmentId: environment.id },
+        context,
+      ) as { tmux_session: string };
+      const modePath = path.join(alive, `${status.tmux_session}.mode`);
+      await fs.writeFile(path.join(alive, `${status.tmux_session}.auto-prompt-on-btab`), "");
+
+      for (const sourceMode of ["bypassPermissions", "default", "acceptEdits", "auto", "dontAsk"]) {
+        await fs.writeFile(modePath, sourceMode);
+        await expect(invoke(
+          handlers,
+          "claude_tmux_switch_plan_mode",
+          { tabId: "tab-plan-modes", environmentId: environment.id, planMode: true },
+          context,
+        )).resolves.toBe("plan");
+        await expect(fs.readFile(modePath, "utf8")).resolves.toBe("plan");
+      }
+
+      const beforeBuild = await fs.readFile(log, "utf8");
+      expect(beforeBuild).not.toContain("-- BTab");
+
+      await expect(invoke(
+        handlers,
+        "claude_tmux_switch_plan_mode",
+        { tabId: "tab-plan-modes", environmentId: environment.id, planMode: false },
+        context,
+      )).resolves.toBe("bypassPermissions");
+      await expect(fs.readFile(modePath, "utf8")).resolves.toBe("bypassPermissions");
+      expect(await fs.readFile(log, "utf8")).toContain("-- BTab");
+
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-plan-modes", environmentId: environment.id },
+        context,
+      );
+    });
+  });
+
+  test("reports prompt, exit, capture, send, and transition failures", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, alive }) => {
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const status = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-plan-errors", environmentId: environment.id },
+        context,
+      ) as { tmux_session: string };
+      const prefix = path.join(alive, status.tmux_session);
+      const modePath = `${prefix}.mode`;
+      const switchToPlan = () => invoke(
+        handlers,
+        "claude_tmux_switch_plan_mode",
+        { tabId: "tab-plan-errors", environmentId: environment.id, planMode: true },
+        context,
+      );
+
+      await fs.writeFile(modePath, "selection");
+      await expect(switchToPlan()).rejects.toThrow("Finish the active Claude prompt");
+
+      await fs.writeFile(modePath, "exited");
+      await expect(switchToPlan()).rejects.toThrow("Claude exited before its mode could be changed");
+
+      await fs.writeFile(modePath, "bypassPermissions");
+      await fs.writeFile(`${prefix}.fail-capture`, "");
+      await expect(switchToPlan()).rejects.toThrow("capture failed");
+      await fs.rm(`${prefix}.fail-capture`);
+
+      await fs.writeFile(`${prefix}.fail-send`, "");
+      await expect(switchToPlan()).rejects.toThrow("send failed");
+      await fs.rm(`${prefix}.fail-send`);
+      await fs.rm(`${prefix}.input`, { force: true });
+
+      await fs.writeFile(`${prefix}.ignore-plan`, "");
+      await expect(switchToPlan()).rejects.toThrow("Claude did not enter plan; observed bypassPermissions");
+      await fs.rm(`${prefix}.ignore-plan`);
+
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-plan-errors", environmentId: environment.id },
+        context,
+      );
+    });
+  });
+
+  test("serializes interactive input and interrupts behind a mode transition", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, alive, log }) => {
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const status = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-plan-lock", environmentId: environment.id },
+        context,
+      ) as { tmux_session: string };
+      await fs.writeFile(path.join(alive, `${status.tmux_session}.delay-plan`), "");
+      const terminalSessionId = await invoke(
+        handlers,
+        "claude_tmux_create_interactive_terminal",
+        { tabId: "tab-plan-lock", environmentId: environment.id, cols: 100, rows: 30 },
+        context,
+      ) as string;
+
+      const switching = invoke(
+        handlers,
+        "claude_tmux_switch_plan_mode",
+        { tabId: "tab-plan-lock", environmentId: environment.id, planMode: true },
+        context,
+      );
+      await waitFor(async () => (await fs.readFile(log, "utf8")).includes("-- Enter"));
+
+      const writing = invoke(
+        handlers,
+        "claude_tmux_write_interactive_terminal",
+        { terminalSessionId, data: "serialized-input" },
+        context,
+      );
+      const interrupting = invoke(
+        handlers,
+        "claude_tmux_interrupt",
+        { tabId: "tab-plan-lock", environmentId: environment.id },
+        context,
+      );
+
+      await delay(50);
+      const whileSwitching = await fs.readFile(log, "utf8");
+      expect(whileSwitching).not.toContain("-l serialized-input");
+      expect(whileSwitching).not.toContain("-- Escape");
+
+      await expect(switching).resolves.toBe("plan");
+      await expect(writing).resolves.toBeUndefined();
+      await expect(interrupting).resolves.toBeUndefined();
+      const after = await fs.readFile(log, "utf8");
+      expect(after.indexOf("-l serialized-input")).toBeGreaterThan(after.indexOf("-- Enter"));
+      expect(after.indexOf("-- Escape")).toBeGreaterThan(after.indexOf("-l serialized-input"));
+
+      const submitting = invoke(
+        handlers,
+        "claude_tmux_submit",
+        { tabId: "tab-plan-lock", environmentId: environment.id, text: "Run the checks" },
+        context,
+      );
+      const switchingDuringSubmit = invoke(
+        handlers,
+        "claude_tmux_switch_plan_mode",
+        { tabId: "tab-plan-lock", environmentId: environment.id, planMode: false },
+        context,
+      );
+      const switchingExpectation = expect(switchingDuringSubmit).rejects.toThrow(
+        "Cannot switch Claude mode while a turn is running",
+      );
+      await expect(submitting).resolves.toBeUndefined();
+      await switchingExpectation;
+      await invoke(
+        handlers,
+        "claude_tmux_interrupt",
+        { tabId: "tab-plan-lock", environmentId: environment.id },
+        context,
+      );
+
+      await invoke(
+        handlers,
+        "claude_tmux_detach_interactive_terminal",
+        { terminalSessionId },
+        context,
+      );
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-plan-lock", environmentId: environment.id },
+        context,
+      );
+    });
+  });
+
   test("marks a session busy after the backend submits an initial prompt", async () => {
     const handlers = createHandlers();
 
-    await withFakeTmuxRuntime(async ({ environment }) => {
+    await withFakeTmuxRuntime(async ({ environment, log }) => {
       const context = {
         storage: {
           getEnvironment: async () => environment,
@@ -400,6 +764,15 @@ describe("Electron tmux backend command registration", () => {
       }, 3_000);
 
       try {
+        const beforeSwitch = await fs.readFile(log, "utf8");
+        await expect(invoke(
+          handlers,
+          "claude_tmux_switch_plan_mode",
+          { tabId: "tab-initial", environmentId: environment.id, planMode: true },
+          context,
+        )).rejects.toThrow("Cannot switch Claude mode while a turn is running");
+        expect(await fs.readFile(log, "utf8")).toBe(beforeSwitch);
+
         await invoke(
           handlers,
           "claude_tmux_stop",
@@ -614,6 +987,22 @@ describe("Electron tmux backend command registration", () => {
         (item.payload as { kind?: string; line?: { message?: { content?: string } } }).kind === "transcript-line" &&
         (item.payload as { line?: { message?: { content?: string } } }).line?.message?.content === "Second message"
       ));
+
+      await fs.appendFile(
+        transcriptPath,
+        `${JSON.stringify({ type: "permission-mode", permissionMode: "plan" })}\n`,
+      );
+      await waitFor(() => emitted.some((item) =>
+        item.event === "claude-tmux:event" &&
+        (item.payload as { kind?: string; permission_mode?: string }).kind === "permission-mode-changed" &&
+        (item.payload as { permission_mode?: string }).permission_mode === "plan"
+      ));
+      await expect(invoke(
+        handlers,
+        "claude_tmux_status",
+        { tabId: "tab-tail", environmentId: environment.id },
+        context,
+      )).resolves.toEqual(expect.objectContaining({ permission_mode: "plan" }));
 
       await invoke(handlers, "claude_tmux_stop", { tabId: "tab-tail", environmentId: environment.id }, context);
     });

@@ -5,13 +5,16 @@
 // the rest of the suite is unaffected.
 
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { listen } from "@/lib/native/events";
 
 const calls: Array<{ cmd: string; args: unknown }> = [];
+let invokeResult: unknown;
+const listenMock = listen as ReturnType<typeof mock>;
 
 mock.module("@/lib/native/backend", () => ({
   invoke: mock(async (cmd: string, args?: unknown) => {
     calls.push({ cmd, args });
-    return undefined;
+    return invokeResult;
   }),
   Resource: class Resource {
     close() {
@@ -33,9 +36,13 @@ afterAll(() => {
 
 beforeEach(() => {
   calls.length = 0;
+  invokeResult = undefined;
+  listenMock.mockClear();
+  listenMock.mockImplementation(async () => () => undefined);
 });
 
 import {
+  CLAUDE_TMUX_EVENT,
   answerPreToolUse,
   capturePane,
   createInteractiveTerminal,
@@ -50,20 +57,23 @@ import {
   resizeInteractiveTerminal,
   sendKeys,
   sendText,
+  subscribe,
   startInteractiveTerminal,
   startSession,
   stopSession,
   submit,
   switchModel,
+  switchEffort,
+  switchPlanMode,
   writeInteractiveTerminal,
 } from "./claude-tmux-client";
 
 describe("claude-tmux-client invoke wrappers", () => {
-  test("startSession forwards tabId, environmentId, prompt/model/plan, and resume", async () => {
+  test("startSession forwards tabId, environmentId, prompt/model/effort, and resume", async () => {
     await startSession("tab-1", "env-1", {
       initialPrompt: "hi",
       model: "sonnet",
-      planMode: true,
+      effort: "high",
       resumeSessionId: "sess-resume",
     });
     expect(calls).toHaveLength(1);
@@ -73,7 +83,7 @@ describe("claude-tmux-client invoke wrappers", () => {
       environmentId: "env-1",
       initialPrompt: "hi",
       model: "sonnet",
-      planMode: true,
+      effort: "high",
       resumeSessionId: "sess-resume",
     });
   });
@@ -85,7 +95,7 @@ describe("claude-tmux-client invoke wrappers", () => {
       environmentId: "env-1",
       initialPrompt: undefined,
       model: undefined,
-      planMode: undefined,
+      effort: undefined,
       resumeSessionId: undefined,
     });
   });
@@ -100,6 +110,17 @@ describe("claude-tmux-client invoke wrappers", () => {
     await interruptSession("tab-1", "env-1");
     expect(calls[0]!.cmd).toBe("claude_tmux_interrupt");
     expect(calls[0]!.args).toEqual({ tabId: "tab-1", environmentId: "env-1" });
+  });
+
+  test("switchPlanMode invokes the live tmux mode command", async () => {
+    invokeResult = "plan";
+    await expect(switchPlanMode("tab-1", true, "env-1")).resolves.toBe("plan");
+    expect(calls[0]!.cmd).toBe("claude_tmux_switch_plan_mode");
+    expect(calls[0]!.args).toEqual({
+      tabId: "tab-1",
+      environmentId: "env-1",
+      planMode: true,
+    });
   });
 
   test("getStatus invokes the status command with tabId and environmentId", async () => {
@@ -145,6 +166,16 @@ describe("claude-tmux-client invoke wrappers", () => {
       tabId: "tab-1",
       environmentId: "env-1",
       model: "claude-opus-4-7",
+    });
+  });
+
+  test("switchEffort forwards the effort and environmentId", async () => {
+    await switchEffort("tab-1", "xhigh", "env-1");
+    expect(calls[0]!.cmd).toBe("claude_tmux_switch_effort");
+    expect(calls[0]!.args).toEqual({
+      tabId: "tab-1",
+      environmentId: "env-1",
+      effort: "xhigh",
     });
   });
 
@@ -239,5 +270,27 @@ describe("claude-tmux-client invoke wrappers", () => {
     await listPreviousSessions("env-1");
     expect(calls[0]!.cmd).toBe("claude_tmux_list_previous_sessions");
     expect(calls[0]!.args).toEqual({ environmentId: "env-1" });
+  });
+
+  test("subscribe unwraps native event payloads and returns the unlisten function", async () => {
+    const unlisten = mock(() => undefined);
+    listenMock.mockImplementationOnce(async () => unlisten);
+    const received: unknown[] = [];
+    const event = {
+      kind: "permission-mode-changed" as const,
+      tab_id: "tab-1",
+      environment_id: "env-1",
+      session_id: "session-1",
+      permission_mode: "plan",
+    };
+
+    const cleanup = await subscribe((payload) => received.push(payload));
+    expect(listenMock).toHaveBeenCalledWith(CLAUDE_TMUX_EVENT, expect.any(Function));
+    const listener = listenMock.mock.calls[0]![1] as (nativeEvent: { payload: typeof event }) => void;
+    listener({ payload: event });
+
+    expect(received).toEqual([event]);
+    cleanup();
+    expect(unlisten).toHaveBeenCalledTimes(1);
   });
 });

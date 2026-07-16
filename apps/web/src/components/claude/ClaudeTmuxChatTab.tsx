@@ -73,6 +73,7 @@ import {
   submit as submitToTmux,
   switchEffort,
   switchModel,
+  switchPlanMode,
   subscribe,
   type TmuxPendingHook,
   type TmuxEvent,
@@ -353,11 +354,13 @@ export function ClaudeTmuxChatTab({
   );
   const [modelSwitching, setModelSwitching] = useState(false);
   const [effortSwitching, setEffortSwitching] = useState(false);
+  const [modeSwitching, setModeSwitching] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
   const [promptControlBusy, setPromptControlBusy] = useState(false);
   const [backendHydrated, setBackendHydrated] = useState(false);
   const startedRef = useRef(false);
+  const permissionModeEventVersionRef = useRef(0);
   const isProcessingQueueRef = useRef(false);
   const submitPromptRef = useRef<
     ((
@@ -510,6 +513,7 @@ export function ClaudeTmuxChatTab({
     setBackendHydrated(false);
 
     const hydrate = async () => {
+      const permissionModeVersion = permissionModeEventVersionRef.current;
       try {
         const status = await getStatus(tabId, environmentId);
         if (cancelled) return;
@@ -522,11 +526,21 @@ export function ClaudeTmuxChatTab({
             resumed: status.resumed,
           });
           setTabBusy(storeKey, status.busy);
+          if (permissionModeEventVersionRef.current === permissionModeVersion) {
+            setPlanMode(status.permission_mode === "plan");
+          }
 
           if (status.session_id) {
             const lines = await getTranscript(tabId, environmentId);
             if (cancelled) return;
             for (const line of lines) {
+              if (
+                permissionModeEventVersionRef.current === permissionModeVersion &&
+                line.type === "permission-mode" &&
+                typeof line.permissionMode === "string"
+              ) {
+                setPlanMode(line.permissionMode === "plan");
+              }
               applyTranscriptLine(storeKey, line);
             }
             const hooks = await getPendingHooks(tabId, environmentId);
@@ -599,12 +613,22 @@ export function ClaudeTmuxChatTab({
             clearTabInitialPrompt(tabId, environmentId);
           }
           return;
+        case "permission-mode-changed":
+          permissionModeEventVersionRef.current += 1;
+          setPlanMode(ev.permission_mode === "plan");
+          return;
         case "stopped":
+          permissionModeEventVersionRef.current += 1;
           setRunning(storeKey, false, { sessionId: null });
+          setPlanMode(false);
           // No claude process means no in-flight turn.
           setTabBusy(storeKey, false);
           return;
         case "transcript-line":
+          if (ev.line.type === "permission-mode" && typeof ev.line.permissionMode === "string") {
+            permissionModeEventVersionRef.current += 1;
+            setPlanMode(ev.line.permissionMode === "plan");
+          }
           applyTranscriptLine(storeKey, ev.line);
           break;
         case "hook":
@@ -701,7 +725,6 @@ export function ClaudeTmuxChatTab({
         initialPrompt,
         model: selectedModelForLaunch(selectedModel),
         effort: effortOptions.length > 0 ? effectiveEffort : undefined,
-        planMode,
         resumeSessionId,
       })
         .catch((e) => {
@@ -717,7 +740,6 @@ export function ClaudeTmuxChatTab({
       selectedModel,
       effortOptions,
       effectiveEffort,
-      planMode,
     ],
   );
 
@@ -922,7 +944,7 @@ export function ClaudeTmuxChatTab({
   };
 
   const handleInterrupt = async () => {
-    if (!running) return;
+    if (!running || modeSwitching) return;
     setError(null);
     try {
       await interruptSession(tabId, environmentId);
@@ -1153,6 +1175,32 @@ export function ClaudeTmuxChatTab({
     }
   };
 
+  const handleSelectPlanMode = async (enabled: boolean) => {
+    if (
+      enabled === planMode ||
+      !running ||
+      sending ||
+      isThinking ||
+      modelSwitching ||
+      effortSwitching ||
+      modeSwitching
+    ) {
+      return;
+    }
+
+    setModeSwitching(true);
+    setError(null);
+    try {
+      const permissionMode = await switchPlanMode(tabId, enabled, environmentId);
+      permissionModeEventVersionRef.current += 1;
+      setPlanMode(permissionMode === "plan");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setModeSwitching(false);
+    }
+  };
+
   // Tick once a second while the spinner is visible so the elapsed counter
   // updates. Mirrors the native tab's behavior.
   useEffect(() => {
@@ -1201,12 +1249,12 @@ export function ClaudeTmuxChatTab({
               interactiveMode
                 ? "text-foreground bg-muted/40 hover:bg-muted/60"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
-              !running && "opacity-50 cursor-not-allowed",
+              (!running || modeSwitching) && "opacity-50 cursor-not-allowed",
             )}
             onClick={() => {
-              if (running) setInteractiveMode((v) => !v);
+              if (running && !modeSwitching) setInteractiveMode((v) => !v);
             }}
-            disabled={!running}
+            disabled={!running || modeSwitching}
             title={
               interactiveMode
                 ? "Switch back to the native tmux transcript view"
@@ -1234,7 +1282,7 @@ export function ClaudeTmuxChatTab({
             type="button"
             className="text-muted-foreground hover:text-foreground"
             onClick={handleInterrupt}
-            disabled={!running}
+            disabled={!running || modeSwitching}
             title="Interrupt the current Claude turn without closing tmux"
           >
             Interrupt
@@ -1459,7 +1507,7 @@ export function ClaudeTmuxChatTab({
               worktreePath={worktreePath}
               disabled={!running}
               busy={isThinking}
-              submitting={sending || modelSwitching || effortSwitching}
+              submitting={sending || modelSwitching || effortSwitching || modeSwitching}
               autoFocus={isActive}
               onSubmit={handleSubmit}
               onQueue={handleQueue}
@@ -1478,17 +1526,27 @@ export function ClaudeTmuxChatTab({
                 void handleSelectEffort(level);
               }}
               planMode={planMode}
-              onTogglePlanMode={setPlanMode}
+              onTogglePlanMode={(enabled) => {
+                void handleSelectPlanMode(enabled);
+              }}
               modelDisabled={
                 (hasStarted && !running) ||
                 sending ||
                 isThinking ||
                 modelSwitching ||
-                effortSwitching
+                effortSwitching ||
+                modeSwitching
               }
               modelSwitching={modelSwitching}
               effortSwitching={effortSwitching}
-              planLocked={hasStarted}
+              planLocked={
+                !running ||
+                sending ||
+                isThinking ||
+                modelSwitching ||
+                effortSwitching ||
+                modeSwitching
+              }
               layout={centerCompose ? "centered" : "bottom"}
             />
           </NativeComposeDock>
@@ -2731,8 +2789,8 @@ function TmuxComposeBar({
               className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-60"
               title={
                 planLocked
-                  ? "Plan mode is fixed for this tmux session"
-                  : "Select the launch mode for the next tmux session"
+                  ? "Wait for the Claude session to be idle before changing modes"
+                  : "Switch the running Claude session between build and plan mode"
               }
             >
               <ChevronDown className="w-3 h-3" />

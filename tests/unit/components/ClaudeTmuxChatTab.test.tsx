@@ -56,6 +56,7 @@ const startSessionMock = mock(async () => ({
   transcript_path: null,
   resumed: false,
   busy: false,
+  permission_mode: "bypassPermissions",
 }));
 const getStatusMock = mock(async () => null);
 const getTranscriptMock = mock(async () => []);
@@ -75,6 +76,9 @@ const replyHookMock = mock(async () => {});
 const submitMock = mock(async () => {});
 const switchModelMock = mock(async () => {});
 const switchEffortMock = mock(async () => {});
+const switchPlanModeMock = mock(async (_tabId: string, planMode: boolean, _environmentId?: string) =>
+  planMode ? "plan" : "bypassPermissions",
+);
 const answerPreToolUseMock = mock(async () => {});
 const listPreviousSessionsMock = mock(async () => [
   {
@@ -127,6 +131,8 @@ mock.module("@/lib/claude-tmux-client", () => ({
     switchModelMock(tabId, model, environmentId),
   switchEffort: (tabId: string, effort: string, environmentId?: string) =>
     switchEffortMock(tabId, effort, environmentId),
+  switchPlanMode: (tabId: string, planMode: boolean, environmentId?: string) =>
+    switchPlanModeMock(tabId, planMode, environmentId),
   replyHook: (
     tabId: string,
     eventKind: realTmuxClient.HookEventKind,
@@ -396,6 +402,7 @@ describe("ClaudeTmuxChatTab", () => {
     submitMock.mockClear();
     switchModelMock.mockClear();
     switchEffortMock.mockClear();
+    switchPlanModeMock.mockClear();
     answerPreToolUseMock.mockClear();
     listPreviousSessionsMock.mockClear();
     interactiveTerminalRenderMock.mockClear();
@@ -403,6 +410,9 @@ describe("ClaudeTmuxChatTab", () => {
     submitMock.mockImplementation(async () => {});
     switchModelMock.mockImplementation(async () => {});
     switchEffortMock.mockImplementation(async () => {});
+    switchPlanModeMock.mockImplementation(async (_tabId: string, planMode: boolean, _environmentId?: string) =>
+      planMode ? "plan" : "bypassPermissions",
+    );
     listPreviousSessionsMock.mockImplementation(async () => [
       {
         session_id: "resume-1",
@@ -514,7 +524,6 @@ describe("ClaudeTmuxChatTab", () => {
         initialPrompt: "Run the audit",
         model: "sonnet",
         effort: "high",
-        planMode: false,
         resumeSessionId: undefined,
       },
     ]);
@@ -1142,6 +1151,7 @@ Running 1 Explore agent...
       transcript_path: "/tmp/session-existing.jsonl",
       resumed: false,
       busy: false,
+      permission_mode: "plan",
     }));
     getTranscriptMock.mockImplementation(async () => [
       {
@@ -1178,6 +1188,7 @@ Running 1 Explore agent...
         "Final result: tests pass.",
       ]);
       expect(tab.busy).toBe(false);
+      expect(screen.getByRole("button", { name: "Plan" })).toBeTruthy();
     });
 
     expect(startSessionMock).not.toHaveBeenCalled();
@@ -1990,7 +2001,6 @@ Running 1 Explore agent...
         initialPrompt: undefined,
         model: "haiku",
         effort: undefined,
-        planMode: false,
         resumeSessionId: undefined,
       });
     });
@@ -2027,7 +2037,6 @@ Running 1 Explore agent...
         initialPrompt: undefined,
         model: "haiku",
         effort: undefined,
-        planMode: false,
         resumeSessionId: undefined,
       });
     });
@@ -2099,7 +2108,6 @@ Running 1 Explore agent...
         initialPrompt: undefined,
         model: undefined,
         effort: "high",
-        planMode: false,
         resumeSessionId: undefined,
       });
     });
@@ -2311,7 +2319,6 @@ Running 1 Explore agent...
         initialPrompt: undefined,
         model: "sonnet",
         effort: "max",
-        planMode: false,
         resumeSessionId: undefined,
       });
     });
@@ -2559,7 +2566,7 @@ Running 1 Explore agent...
     });
   });
 
-  test("keeps plan mode launch-only once the session is running", async () => {
+  test("switches the running tmux TUI between plan and build mode", async () => {
     useClaudeTmuxStore
       .getState()
       .setRunning("tab-1", true, {
@@ -2579,7 +2586,280 @@ Running 1 Explore agent...
       name: /Build/,
     }) as HTMLButtonElement;
 
-    expect(planButton.disabled).toBe(true);
+    expect(planButton.disabled).toBe(false);
+    fireEvent.pointerDown(planButton);
+    const planOption = await screen.findByRole("menuitem", { name: "Plan" });
+    await act(async () => {
+      fireEvent.click(planOption);
+    });
+
+    await waitFor(() => {
+      expect(switchPlanModeMock).toHaveBeenCalledWith("tab-1", true, "env-1");
+      expect(screen.getByRole("button", { name: "Plan" })).toBeTruthy();
+    });
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Plan" }));
+    const buildOption = await screen.findByRole("menuitem", { name: "Build" });
+    await act(async () => {
+      fireEvent.click(buildOption);
+    });
+
+    await waitFor(() => {
+      expect(switchPlanModeMock).toHaveBeenLastCalledWith("tab-1", false, "env-1");
+      expect(screen.getByRole("button", { name: "Build" })).toBeTruthy();
+    });
+  });
+
+  test("keeps build mode and restores controls when a mode switch fails", async () => {
+    switchPlanModeMock.mockImplementationOnce(async () => {
+      throw new Error("mode switch failed");
+    });
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Build" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Plan" }));
+
+    expect(await screen.findByText("Error: mode switch failed")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Build" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    expect(screen.getByRole("button", { name: "Terminal" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    expect(screen.getByRole("button", { name: "Interrupt" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+  });
+
+  test("disables compose and all competing input controls while mode switching", async () => {
+    let resolveSwitch!: (mode: string) => void;
+    switchPlanModeMock.mockImplementationOnce(
+      async () => await new Promise<string>((resolve) => {
+        resolveSwitch = resolve;
+      }),
+    );
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Build" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Plan" }));
+    await waitFor(() => expect(switchPlanModeMock).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByRole("button", { name: "Build" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByRole("button", { name: /Sonnet/ })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByRole("button", { name: "High" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByRole("button", { name: "Terminal" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByRole("button", { name: "Interrupt" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByPlaceholderText(/Ask Claude anything/)).toHaveProperty(
+      "disabled",
+      true,
+    );
+
+    await act(async () => {
+      resolveSwitch("plan");
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Plan" })).toHaveProperty(
+        "disabled",
+        false,
+      );
+      expect(screen.getByRole("button", { name: "Terminal" })).toHaveProperty(
+        "disabled",
+        false,
+      );
+      expect(screen.getByRole("button", { name: "Interrupt" })).toHaveProperty(
+        "disabled",
+        false,
+      );
+    });
+  });
+
+  test("uses the backend's returned permission mode instead of the requested toggle", async () => {
+    switchPlanModeMock.mockImplementationOnce(async () => "acceptEdits");
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Build" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Plan" }));
+
+    await waitFor(() => {
+      expect(switchPlanModeMock).toHaveBeenCalledWith("tab-1", true, "env-1");
+      expect(screen.getByRole("button", { name: "Build" })).toBeTruthy();
+    });
+  });
+
+  test("tracks permission events, transcript updates, and stopped sessions", async () => {
+    useClaudeTmuxStore
+      .getState()
+      .setRunning("tab-1", true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+    await waitFor(() => expect(subscribedHandler).not.toBeNull());
+
+    act(() => {
+      subscribedHandler?.({
+        kind: "permission-mode-changed",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        permission_mode: "plan",
+      });
+    });
+    expect(screen.getByRole("button", { name: "Plan" })).toBeTruthy();
+
+    act(() => {
+      subscribedHandler?.({
+        kind: "transcript-line",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        line: { type: "permission-mode", permissionMode: "acceptEdits" },
+      });
+    });
+    expect(screen.getByRole("button", { name: "Build" })).toBeTruthy();
+
+    act(() => {
+      subscribedHandler?.({
+        kind: "permission-mode-changed",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        permission_mode: "plan",
+      });
+      subscribedHandler?.({
+        kind: "stopped",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+      });
+    });
+    expect(screen.getByRole("button", { name: "Build" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByRole("button", { name: "Terminal" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByRole("button", { name: "Interrupt" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+  });
+
+  test("does not let stale hydration overwrite a live permission event", async () => {
+    let resolveTranscript!: (lines: realTmuxClient.TranscriptLine[]) => void;
+    getStatusMock.mockImplementationOnce(async () => ({
+      tab_id: "tab-1",
+      environment_id: "env-1",
+      session_id: "session-1",
+      tmux_session: "orkestrator-env1-tab1",
+      running: true,
+      transcript_path: "/tmp/session-1.jsonl",
+      resumed: false,
+      busy: false,
+      permission_mode: "bypassPermissions",
+    }));
+    getTranscriptMock.mockImplementationOnce(
+      async () => await new Promise<realTmuxClient.TranscriptLine[]>((resolve) => {
+        resolveTranscript = resolve;
+      }),
+    );
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+    await waitFor(() => {
+      expect(getTranscriptMock).toHaveBeenCalledTimes(1);
+      expect(subscribedHandler).not.toBeNull();
+    });
+
+    act(() => {
+      subscribedHandler?.({
+        kind: "permission-mode-changed",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        permission_mode: "plan",
+      });
+    });
+    await act(async () => {
+      resolveTranscript([
+        { type: "permission-mode", permissionMode: "bypassPermissions" },
+      ]);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(getPendingHooksMock).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "Plan" })).toBeTruthy();
   });
 
   test("starts a previous session from the resume picker", async () => {
@@ -2602,7 +2882,6 @@ Running 1 Explore agent...
         initialPrompt: undefined,
         model: "sonnet",
         effort: "high",
-        planMode: false,
         resumeSessionId: "resume-1",
       });
     });

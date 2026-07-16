@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import { mockWriteText } from "../../mocks/clipboard";
+import { REVIEW_PROMPT_MAX_LENGTH } from "../../../packages/protocol/src/review-prompt";
 
 const mockUpdateGlobalConfig = mock(async (globalConfig: unknown) => ({
   version: "1.0",
@@ -43,6 +44,7 @@ const mockSetGatewayToken = mock(async (token: string) => ({
 }));
 const mockOpenInBrowser = mock(async () => undefined);
 const mockTestDomainResolution = mock(async () => []);
+const mockRevealInFileManager = mock(async (_path: string) => {});
 const mockToastSuccess = mock(() => {});
 const mockToastError = mock(() => {});
 const actualBackend = await import("../../../apps/web/src/lib/backend");
@@ -59,7 +61,7 @@ mock.module("@/lib/backend", () => ({
   setGatewayToken: mockSetGatewayToken,
   openInBrowser: mockOpenInBrowser,
   testDomainResolution: mockTestDomainResolution,
-  revealInFileManager: mock(async () => {}),
+  revealInFileManager: mockRevealInFileManager,
 }));
 
 mock.module("sonner", () => ({
@@ -84,6 +86,7 @@ describe("GlobalSettings", () => {
     mockSetGatewayToken.mockClear();
     mockOpenInBrowser.mockClear();
     mockTestDomainResolution.mockClear();
+    mockRevealInFileManager.mockClear();
     mockToastSuccess.mockClear();
     mockToastError.mockClear();
     mockWriteText.mockReset();
@@ -601,6 +604,48 @@ describe("GlobalSettings", () => {
     expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  test("falls back to the built-in prompt for malformed persisted values", () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: { ...state.config.global, reviewPrompt: 123 as never },
+      },
+    }));
+
+    render(<GlobalSettings activeSection="review" />);
+
+    const prompt = screen.getByLabelText("Prompt template") as HTMLTextAreaElement;
+    expect(prompt.value).toContain("Security and instruction hierarchy");
+    expect(prompt.getAttribute("aria-invalid")).toBeNull();
+    expect(screen.getByText("Default")).toBeTruthy();
+  });
+
+  test("enforces the review prompt length boundary", async () => {
+    render(<GlobalSettings activeSection="review" />);
+    await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
+    const prompt = screen.getByLabelText("Prompt template") as HTMLTextAreaElement;
+
+    expect(prompt.maxLength).toBe(REVIEW_PROMPT_MAX_LENGTH);
+    fireEvent.change(prompt, {
+      target: { value: "x".repeat(REVIEW_PROMPT_MAX_LENGTH + 1) },
+    });
+
+    expect(screen.getByText("Review prompt must be 100,000 characters or fewer.")).toBeTruthy();
+    expect(prompt.getAttribute("aria-invalid")).toBe("true");
+    expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  test("reports custom prompts that do not use the target branch token", async () => {
+    render(<GlobalSettings activeSection="review" />);
+    await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
+    const prompt = screen.getByLabelText("Prompt template") as HTMLTextAreaElement;
+
+    fireEvent.change(prompt, { target: { value: "Review the current diff." } });
+
+    expect(screen.getByText("No dynamic target branch token")).toBeTruthy();
+    expect(screen.getByText(`24 / ${REVIEW_PROMPT_MAX_LENGTH.toLocaleString()} characters`)).toBeTruthy();
+  });
+
   test("saves non-default editor and agent selections", async () => {
     render(<GlobalSettings activeSection="general" />);
 
@@ -610,6 +655,89 @@ describe("GlobalSettings", () => {
 
     await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
       expect.objectContaining({ preferredEditor: "cursor", defaultAgent: "codex" }),
+    ));
+  });
+
+  test("saves container CPU and memory slider changes", async () => {
+    render(<GlobalSettings activeSection="container" />);
+    const [cpuSlider, memorySlider] = screen.getAllByRole("slider");
+
+    fireEvent.keyDown(cpuSlider!, { key: "ArrowRight" });
+    fireEvent.keyDown(memorySlider!, { key: "ArrowRight" });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        containerResources: { cpuCores: 3, memoryGb: 5 },
+      }),
+    ));
+  });
+
+  test("preserves the selected terminal font family while saving a size change", async () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          terminalAppearance: {
+            ...state.config.global.terminalAppearance,
+            fontFamily: "JetBrains Mono",
+          },
+        },
+      },
+    }));
+    render(<GlobalSettings activeSection="terminal" />);
+
+    expect(screen.getByRole("combobox").textContent).toContain("JetBrains Mono");
+    fireEvent.keyDown(screen.getAllByRole("slider")[0]!, { key: "ArrowRight" });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalAppearance: expect.objectContaining({
+          fontFamily: "JetBrains Mono",
+          fontSize: 15,
+        }),
+      }),
+    ));
+  });
+
+  test("reveals and saves API credentials", async () => {
+    const { rerender } = render(<GlobalSettings activeSection="claude" />);
+    const anthropicInput = screen.getByPlaceholderText("sk-ant-...") as HTMLInputElement;
+    expect(anthropicInput.type).toBe("password");
+    fireEvent.click(anthropicInput.parentElement!.querySelector("button")!);
+    expect(anthropicInput.type).toBe("text");
+    fireEvent.change(anthropicInput, { target: { value: "test-anthropic-key" } });
+
+    rerender(<GlobalSettings activeSection="general" />);
+    const githubInput = screen.getByPlaceholderText("ghp_...") as HTMLInputElement;
+    expect(githubInput.type).toBe("password");
+    fireEvent.click(githubInput.parentElement!.querySelector("button")!);
+    expect(githubInput.type).toBe("text");
+    fireEvent.change(githubInput, { target: { value: "test-github-token" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        anthropicApiKey: "test-anthropic-key",
+        githubToken: "test-github-token",
+      }),
+    ));
+  });
+
+  test("saves debug logging and opens its log directory", async () => {
+    mockGetLogDirectory.mockResolvedValueOnce("/tmp/orkestrator-logs");
+    render(<GlobalSettings activeSection="debug" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Disabled" }));
+    const logDirectory = await screen.findByRole("button", { name: "/tmp/orkestrator-logs" });
+    fireEvent.click(logDirectory);
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    expect(mockRevealInFileManager).toHaveBeenCalledWith("/tmp/orkestrator-logs");
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ debugLogging: true }),
     ));
   });
 

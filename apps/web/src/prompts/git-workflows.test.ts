@@ -7,6 +7,7 @@ import {
   createPushChangesPrompt,
   createResolveConflictsPrompt,
 } from "./git-workflows";
+import { REVIEW_PROMPT_MAX_LENGTH } from "@orkestrator/protocol/review-prompt";
 
 // --- createReviewPrompt ---
 
@@ -131,6 +132,26 @@ describe("createReviewPrompt", () => {
         REVIEW_PROMPT_TARGET_BRANCH_TOKEN,
         "main",
       ),
+    );
+  });
+
+  test("leaves a custom prompt without a target-branch token unchanged", () => {
+    expect(createReviewPrompt("main", "Review only the public API.")).toBe(
+      "Review only the public API.",
+    );
+  });
+
+  test("falls back safely for malformed and oversized persisted prompts", () => {
+    const expected = createReviewPrompt("main");
+    for (const malformed of [null, 123, {}, [], "x".repeat(REVIEW_PROMPT_MAX_LENGTH + 1)]) {
+      expect(createReviewPrompt("main", malformed)).toBe(expected);
+    }
+  });
+
+  test("treats replacement-pattern characters in branch names literally", () => {
+    const targetBranch = "release/$&/$`/$'/🚀";
+    expect(createReviewPrompt(targetBranch, "{{targetBranch}} -> {{targetBranch}}")).toBe(
+      `${targetBranch} -> ${targetBranch}`,
     );
   });
 });

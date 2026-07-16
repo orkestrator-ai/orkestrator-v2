@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { useConfigStore } from "./configStore";
 import { defaultConfig } from "../../../backend/src/core/storage";
 
@@ -41,5 +41,32 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
     expect(initialGlobal.defaultAgent).toBe(backendGlobal.defaultAgent);
     expect(initialGlobal.webClientEnabled).toBe(backendGlobal.webClientEnabled);
     expect(initialGlobal.reviewPrompt).toBe(backendGlobal.reviewPrompt);
+  });
+});
+
+describe("configStore review prompt updates", () => {
+  beforeEach(() => {
+    useConfigStore.setState({
+      config: structuredClone(useConfigStore.getInitialState().config),
+      isLoading: false,
+      error: null,
+    });
+  });
+
+  test("sets and removes a custom review prompt without changing sibling config", () => {
+    const originalAgent = useConfigStore.getState().config.global.defaultAgent;
+
+    useConfigStore.getState().updateGlobalConfig({
+      reviewPrompt: "Review {{targetBranch}}.",
+    });
+    expect(useConfigStore.getState().config.global.reviewPrompt).toBe(
+      "Review {{targetBranch}}.",
+    );
+
+    useConfigStore.getState().updateGlobalConfig({ reviewPrompt: undefined });
+    const global = useConfigStore.getState().config.global;
+    expect(global.reviewPrompt).toBeUndefined();
+    expect(Object.hasOwn(global, "reviewPrompt")).toBe(false);
+    expect(global.defaultAgent).toBe(originalAgent);
   });
 });

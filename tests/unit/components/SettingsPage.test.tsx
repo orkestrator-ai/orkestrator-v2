@@ -78,6 +78,37 @@ describe("SettingsPage", () => {
     expect(screen.getByTestId("active-settings-section").textContent).toBe("web-client");
   });
 
+  test("shows the loading state until the first config request completes", async () => {
+    let resolveConfig!: (config: ReturnType<typeof defaultConfig>) => void;
+    invokeMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveConfig = resolve as typeof resolveConfig;
+    }));
+
+    const { container } = render(<SettingsPage open onOpenChange={() => undefined} />);
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_config"));
+    expect(container.querySelector(".animate-spin")).toBeTruthy();
+    expect(screen.queryByTestId("active-settings-section")).toBeNull();
+
+    resolveConfig(defaultConfig());
+    expect(await screen.findByTestId("active-settings-section")).toBeTruthy();
+    expect(container.querySelector(".animate-spin")).toBeNull();
+  });
+
+  test("reuses a successful initial load when the page is reopened", async () => {
+    const { rerender } = render(<SettingsPage open onOpenChange={() => undefined} />);
+    await screen.findByTestId("active-settings-section");
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+
+    rerender(<SettingsPage open={false} onOpenChange={() => undefined} />);
+    rerender(<SettingsPage open onOpenChange={() => undefined} />);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("active-settings-section")).toBeTruthy();
+  });
+
   test("closes after a successful child save", async () => {
     const onOpenChange = mock(() => undefined);
     render(<SettingsPage open onOpenChange={onOpenChange} />);

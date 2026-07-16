@@ -30,7 +30,7 @@ The prompt is passed as `initialPrompt` on the new tab and sent automatically on
 
 ## Custom prompt setting
 
-The global **Settings → Review** page displays the built-in prompt as an editable template. Saving changed text stores it as `global.reviewPrompt`; choosing **Reset to default** and saving removes the override. Custom text replaces the complete action-bar prompt and applies only to newly opened review tabs. Automated build-pipeline reviews continue to use their ticket-aware prompt.
+The global **Settings → Review** page displays the built-in prompt as an editable template. Saving changed text stores it as `global.reviewPrompt`; choosing **Reset to default** and saving removes the override. Custom text replaces the complete action-bar prompt and applies only to newly opened review tabs. Automated build-pipeline reviews continue to use their ticket-aware prompt. Custom templates are limited to 100,000 characters; malformed, blank, or oversized persisted overrides are ignored in favor of the built-in prompt.
 
 The editor exposes `{{targetBranch}}` as a template token. `createReviewPrompt()` replaces every occurrence with the selected repository's `prBaseBranch` immediately before opening the review tab. Blank custom prompts fall back to the built-in template defensively, while the settings UI prevents saving one.
 

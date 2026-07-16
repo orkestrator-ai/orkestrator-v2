@@ -30,6 +30,10 @@ import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIco
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { getGatewayTokenValidationError } from "@/lib/gateway-token";
+import {
+  getReviewPromptValidationError,
+  REVIEW_PROMPT_MAX_LENGTH,
+} from "@orkestrator/protocol/review-prompt";
 import { useTimedCopyFeedback } from "@/hooks";
 import {
   DEFAULT_REVIEW_PROMPT_TEMPLATE,
@@ -57,6 +61,12 @@ import {
 
 // Domain validation regex
 const DOMAIN_REGEX = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
+
+function getSavedReviewPrompt(value: unknown): string {
+  return typeof value === "string" && getReviewPromptValidationError(value) === null
+    ? value
+    : DEFAULT_REVIEW_PROMPT_TEMPLATE;
+}
 
 interface GlobalSettingsProps {
   activeSection: string;
@@ -122,7 +132,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
   const [webClientEnabled, setWebClientEnabled] = useState(global.webClientEnabled ?? true);
   const [reviewPrompt, setReviewPrompt] = useState(
-    global.reviewPrompt ?? DEFAULT_REVIEW_PROMPT_TEMPLATE
+    getSavedReviewPrompt(global.reviewPrompt)
   );
   const [webClientStatus, setWebClientStatus] = useState<WebClientStatus | null>(null);
   const [webClientApplyError, setWebClientApplyError] = useState<string | null>(null);
@@ -176,7 +186,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
     setWebClientEnabled(global.webClientEnabled ?? true);
-    setReviewPrompt(global.reviewPrompt ?? DEFAULT_REVIEW_PROMPT_TEMPLATE);
+    setReviewPrompt(getSavedReviewPrompt(global.reviewPrompt));
   }, [global]);
 
   const refreshWebClientStatus = useCallback(async () => {
@@ -264,7 +274,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       experimentalCodexRawEventLogging !== (global.experimentalCodexRawEventLogging ?? true) ||
       debugLogging !== (global.debugLogging ?? false) ||
       webClientEnabled !== (global.webClientEnabled ?? true) ||
-      reviewPrompt !== (global.reviewPrompt ?? DEFAULT_REVIEW_PROMPT_TEMPLATE) ||
+      reviewPrompt !== getSavedReviewPrompt(global.reviewPrompt) ||
       webClientApplyError !== null ||
       gatewayToken !== savedGatewayToken;
     setHasChanges(changed);
@@ -488,7 +498,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
     setWebClientEnabled(global.webClientEnabled ?? true);
-    setReviewPrompt(global.reviewPrompt ?? DEFAULT_REVIEW_PROMPT_TEMPLATE);
+    setReviewPrompt(getSavedReviewPrompt(global.reviewPrompt));
     setWebClientApplyError(null);
     setGatewayToken(savedGatewayToken);
     setDomainErrors([]);
@@ -499,7 +509,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   // --- Section renderers ---
 
   const isUsingDefaultReviewPrompt = reviewPrompt === DEFAULT_REVIEW_PROMPT_TEMPLATE;
-  const reviewPromptIsEmpty = reviewPrompt.trim().length === 0;
+  const reviewPromptValidationError = getReviewPromptValidationError(reviewPrompt);
 
   const renderReview = () => (
     <div className="max-w-3xl space-y-5">
@@ -551,9 +561,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         <Textarea
           id="review-prompt"
           aria-describedby="review-prompt-description review-prompt-status"
-          aria-invalid={reviewPromptIsEmpty ? true : undefined}
+          aria-invalid={reviewPromptValidationError ? true : undefined}
           value={reviewPrompt}
           onChange={(event) => setReviewPrompt(event.target.value)}
+          maxLength={REVIEW_PROMPT_MAX_LENGTH}
           disabled={isSaving}
           spellCheck={false}
           className="h-[50vh] min-h-80 resize-y rounded-none border-0 bg-zinc-950 px-4 py-4 font-mono text-xs leading-5 shadow-none [field-sizing:fixed] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-500 sm:h-[min(60vh,40rem)] sm:min-h-[28rem]"
@@ -565,14 +576,14 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
           className="flex items-center justify-between gap-4 border-t border-zinc-800 bg-zinc-900/40 px-4 py-2 font-mono text-[10px] text-muted-foreground"
         >
           <span>{reviewPrompt.includes(REVIEW_PROMPT_TARGET_BRANCH_TOKEN) ? "Target branch token active" : "No dynamic target branch token"}</span>
-          <span>{reviewPrompt.length.toLocaleString()} characters</span>
+          <span>{reviewPrompt.length.toLocaleString()} / {REVIEW_PROMPT_MAX_LENGTH.toLocaleString()} characters</span>
         </div>
       </div>
 
-      {reviewPromptIsEmpty && (
+      {reviewPromptValidationError && (
         <p className="flex items-start gap-1.5 text-xs text-destructive">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          Review prompt cannot be empty. Enter a prompt or reset to the default.
+          {reviewPromptValidationError}
         </p>
       )}
 
@@ -1561,7 +1572,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         <Button variant="outline" onClick={handleReset} disabled={!hasChanges}>
           Reset
         </Button>
-        <Button onClick={handleSave} disabled={!hasChanges || isSaving || saveSuccess || domainErrors.length > 0 || !!colorError || !!gatewayTokenValidationError || reviewPromptIsEmpty}>
+        <Button onClick={handleSave} disabled={!hasChanges || isSaving || saveSuccess || domainErrors.length > 0 || !!colorError || !!gatewayTokenValidationError || !!reviewPromptValidationError}>
           {saveSuccess ? (
             <>
               <Check className="mr-2 h-4 w-4" />

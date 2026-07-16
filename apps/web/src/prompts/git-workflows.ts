@@ -4,6 +4,7 @@
  */
 
 import { buildReviewBody } from "./review-shared";
+import { getReviewPromptValidationError } from "@orkestrator/protocol/review-prompt";
 
 /** Token available in custom action-bar review prompt templates. */
 export const REVIEW_PROMPT_TARGET_BRANCH_TOKEN = "{{targetBranch}}";
@@ -92,8 +93,9 @@ export const DEFAULT_REVIEW_PROMPT_TEMPLATE = createDefaultReviewPrompt(
  * A saved custom template replaces the built-in workflow. Both templates may
  * use `{{targetBranch}}`, which is resolved when a review tab is created.
  */
-export function createReviewPrompt(targetBranch: string, customPrompt?: string): string {
-  const template = customPrompt?.trim()
+export function createReviewPrompt(targetBranch: string, customPrompt?: unknown): string {
+  const template = typeof customPrompt === "string"
+    && getReviewPromptValidationError(customPrompt) === null
     ? customPrompt
     : DEFAULT_REVIEW_PROMPT_TEMPLATE;
 

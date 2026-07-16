@@ -15,6 +15,7 @@
     "dev:web": "turbo run dev:web --cwd . --filter=@orkestrator/web --filter=@orkestrator/backend --cache-dir .turbo",
     "dev:web-public": "turbo --cwd . run dev --filter=@orkestrator/web-public --cache-dir .turbo",
     "dev:renderer": "turbo --cwd . run dev --filter=@orkestrator/web --cache-dir .turbo",
+    "dev:ios": "bun scripts/run-ios-simulator.ts",
     "start:web": "turbo run start:web --cwd . --filter=@orkestrator/backend --cache-dir .turbo",
     "start:web-public": "turbo run start:web-public --cwd . --filter=@orkestrator/backend --cache-dir .turbo",
     "build": "turbo --cwd . run build --filter=@orkestrator/desktop --cache-dir .turbo",
@@ -34,6 +35,7 @@
     "build:all": "bun run download:binaries && turbo --cwd . run build --cache-dir .turbo",
     "preview": "bun run --cwd apps/web preview",
     "test": "bun scripts/test-all.ts",
+    "test:ios": "bun scripts/test-ios.ts",
     "test:unit": "bun test tests/unit",
     "docker:build": "docker build -t orkestrator-v2:latest --no-cache -f docker/Dockerfile .",
     "package": "bun run build:all && bunx electron-builder && bun scripts/install-packaged-app.ts"

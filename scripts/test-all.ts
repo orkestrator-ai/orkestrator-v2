@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
@@ -18,3 +19,8 @@ run("turbo", [
   "--cache-dir", ".turbo",
 ]);
 run("bun", ["test", "tests"]);
+
+const xcodeDeveloperDirectory = process.env.DEVELOPER_DIR ?? "/Applications/Xcode.app/Contents/Developer";
+if (process.platform === "darwin" && existsSync(xcodeDeveloperDirectory)) {
+  run("bun", ["scripts/test-ios.ts"]);
+}

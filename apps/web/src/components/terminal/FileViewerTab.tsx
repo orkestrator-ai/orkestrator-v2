@@ -1,13 +1,13 @@
-import { useEffect, useState, useRef, useCallback } from "react";
-import Editor, { type OnMount, type OnChange, type BeforeMount } from "@monaco-editor/react";
-import type * as Monaco from "monaco-editor";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
 import { Loader2, AlertCircle, FileCode, Image as ImageIcon } from "lucide-react";
-import { toast } from "sonner";
 import { useConfigStore, useFileDirtyStore } from "@/stores";
 import { DEFAULT_TERMINAL_APPEARANCE } from "@/constants/terminal";
+import { useFileSave } from "@/hooks/useFileSave";
+import { MarkdownEditorTab } from "@/components/markdown/MarkdownEditorTab";
 import { DiffViewerTab } from "./DiffViewerTab";
+import { MonacoFileEditor } from "./MonacoFileEditor";
 import type { GitFileStatus } from "@/types/paneLayout";
 
 /** Image file extensions that should be rendered as images */
@@ -22,6 +22,8 @@ const IMAGE_EXTENSIONS = new Set([
   "bmp",
 ]);
 
+const MARKDOWN_EXTENSIONS = new Set(["md", "markdown"]);
+
 /** Get the file extension from a path */
 function getFileExtension(filePath: string): string {
   const lastDot = filePath.lastIndexOf(".");
@@ -32,6 +34,24 @@ function getFileExtension(filePath: string): string {
 /** Check if a file is an image based on extension */
 function isImageFile(filePath: string): boolean {
   return IMAGE_EXTENSIONS.has(getFileExtension(filePath));
+}
+
+/** Check if a file should use the rich Markdown editor. */
+export function isMarkdownFile(filePath: string): boolean {
+  return MARKDOWN_EXTENSIONS.has(getFileExtension(filePath));
+}
+
+export type FileViewerKind = "diff" | "image" | "markdown" | "text";
+
+export function getFileViewerKind(
+  filePath: string,
+  options: { showDiff: boolean; hasDiffData: boolean },
+): FileViewerKind {
+  const isImage = isImageFile(filePath);
+  if (options.showDiff && options.hasDiffData && !isImage) return "diff";
+  if (isImage) return "image";
+  if (isMarkdownFile(filePath)) return "markdown";
+  return "text";
 }
 
 /** Get the MIME type for an image extension, or undefined if not a known image type */
@@ -98,14 +118,27 @@ export function FileViewerTab({
   );
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
-
   // Dirty file tracking
-  const { setOriginalContent, setContent: setDirtyContent, markSaved, getContent: getDirtyContent, clearDirty } = useFileDirtyStore();
+  const setOriginalContent = useFileDirtyStore((state) => state.setOriginalContent);
+  const setDirtyContent = useFileDirtyStore((state) => state.setContent);
+  const clearDirty = useFileDirtyStore((state) => state.clearDirty);
+  const dirtyContent = useFileDirtyStore(
+    (state) => state.dirtyFiles.get(tabId)?.content,
+  );
 
   const isImage = isImageFile(filePath);
+  const isMarkdown = isMarkdownFile(filePath);
+  const viewerKind = getFileViewerKind(filePath, {
+    showDiff,
+    hasDiffData: Boolean(gitStatus && baseBranch),
+  });
+  const { saveFile, isSaving } = useFileSave({
+    tabId,
+    filePath,
+    containerId,
+    worktreePath,
+    isLocalEnvironment,
+  });
 
   // Clean up dirty state when tab is unmounted
   useEffect(() => {
@@ -191,106 +224,9 @@ export function FileViewerTab({
   // Note: isImage is derived from filePath, so it doesn't need to be in the dependency array
   }, [containerId, worktreePath, isLocalEnvironment, filePath, language, showDiff, tabId, setOriginalContent]);
 
-  // Save file to container or local environment
-  const handleSave = useCallback(async () => {
-    // Prevent concurrent saves
-    if (isSaving) return;
-
-    // Check for required identifiers based on environment type
-    if (isLocalEnvironment && !worktreePath) {
-      toast.error("Cannot save file", {
-        description: "No worktree path available",
-      });
-      return;
-    }
-
-    if (!isLocalEnvironment && !containerId) {
-      toast.error("Cannot save file", {
-        description: "No container ID available",
-      });
-      return;
-    }
-
-    const contentToSave = getDirtyContent(tabId);
-    if (contentToSave === null) return;
-
-    setIsSaving(true);
-    try {
-      // Convert content to base64 for Electron API (handles UTF-8)
-      // Process in chunks to avoid stack overflow with large files
-      const encoder = new TextEncoder();
-      const bytes = encoder.encode(contentToSave);
-      let binary = "";
-      const chunkSize = 8192;
-      for (let i = 0; i < bytes.length; i += chunkSize) {
-        const chunk = bytes.subarray(i, i + chunkSize);
-        binary += String.fromCharCode.apply(null, Array.from(chunk));
-      }
-      const base64Data = btoa(binary);
-
-      // Save to appropriate target based on environment type
-      if (isLocalEnvironment && worktreePath) {
-        await backend.writeLocalFile(worktreePath, filePath, base64Data);
-      } else if (containerId) {
-        await backend.writeContainerFile(containerId, filePath, base64Data);
-      }
-
-      // Update dirty state - file is now saved
-      markSaved(tabId, contentToSave);
-      setContent(contentToSave);
-    } catch (err) {
-      console.error("Failed to save file:", err);
-      toast.error("Failed to save file", {
-        description: err instanceof Error ? err.message : String(err),
-      });
-    } finally {
-      setIsSaving(false);
-    }
-  }, [tabId, containerId, worktreePath, isLocalEnvironment, filePath, getDirtyContent, markSaved, isSaving]);
-
-  // Disable linting/diagnostics before editor mounts
-  const handleEditorWillMount: BeforeMount = useCallback((monaco) => {
-    // Disable TypeScript/JavaScript diagnostics
-    monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
-      noSemanticValidation: true,
-      noSyntaxValidation: true,
-    });
-    monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
-      noSemanticValidation: true,
-      noSyntaxValidation: true,
-    });
-    // Disable JSON validation
-    monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
-      validate: false,
-    });
-  }, []);
-
-  // Handle editor mount - set up Cmd+S keybinding
-  const handleEditorMount: OnMount = useCallback(
-    (editor, monaco) => {
-      editorRef.current = editor;
-
-      // Add Cmd+S / Ctrl+S keybinding for save
-      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-        handleSave();
-      });
-    },
-    [handleSave]
-  );
-
-  // Handle editor content changes
-  const handleEditorChange: OnChange = useCallback(
-    (value) => {
-      if (value !== undefined) {
-        setDirtyContent(tabId, value);
-      }
-    },
-    [tabId, setDirtyContent]
-  );
-
   // If in diff mode and we have the required data, render DiffViewerTab
   // Image files can't be diffed in Monaco, so they fall through to the image preview
-  if (showDiff && gitStatus && baseBranch && !isImage) {
+  if (viewerKind === "diff" && gitStatus && baseBranch) {
     return (
       <DiffViewerTab
         filePath={filePath}
@@ -341,9 +277,22 @@ export function FileViewerTab({
     );
   }
 
+  if (isMarkdown && content !== null) {
+    return (
+      <MarkdownEditorTab
+        tabId={tabId}
+        filePath={filePath}
+        initialContent={content}
+        language={detectedLanguage}
+        isActive={isActive}
+        isSaving={isSaving}
+        onSave={saveFile}
+      />
+    );
+  }
+
   return (
     <div
-      ref={containerRef}
       className={cn(
         "absolute inset-0 flex flex-col",
         !isActive && "pointer-events-none opacity-0"
@@ -379,33 +328,11 @@ export function FileViewerTab({
       {/* Monaco Editor for text files */}
       {!isImage && (
         <div className="min-h-0 flex-1">
-          <Editor
-            height="100%"
+          <MonacoFileEditor
             language={detectedLanguage}
-            value={content ?? ""}
-            theme="vs-dark"
-            beforeMount={handleEditorWillMount}
-            onMount={handleEditorMount}
-            onChange={handleEditorChange}
-            options={{
-              lineNumbers: "on",
-              minimap: { enabled: true },
-              scrollBeyondLastLine: false,
-              fontSize: terminalAppearance.fontSize,
-              fontFamily: `"${terminalAppearance.fontFamily}", "Fira Code", monospace`,
-              wordWrap: "on",
-              automaticLayout: true,
-              renderWhitespace: "selection",
-              scrollbar: {
-                verticalScrollbarSize: 10,
-                horizontalScrollbarSize: 10,
-              },
-            }}
-            loading={
-              <div className="flex h-full items-center justify-center">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-              </div>
-            }
+            value={dirtyContent ?? content ?? ""}
+            onChange={(nextContent) => setDirtyContent(tabId, nextContent)}
+            onSave={saveFile}
           />
         </div>
       )}

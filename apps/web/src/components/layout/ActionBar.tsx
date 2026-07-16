@@ -1,5 +1,7 @@
 import {
   cloneElement,
+  createContext,
+  useContext,
   useState,
   useEffect,
   useCallback,
@@ -86,6 +88,8 @@ function isEditableShortcutTarget(target: EventTarget | null): boolean {
   return !!target.closest("input, textarea, select, [contenteditable='true'], .xterm");
 }
 
+const ToolbarTooltipsEnabledContext = createContext(true);
+
 function ToolbarContextMenuTrigger({
   children,
   tooltip,
@@ -102,6 +106,7 @@ function ToolbarContextMenuTrigger({
 
   const tooltipAnchorRef = useRef<HTMLElement | null>(null);
   const tooltipState = useHoverTooltip();
+  const tooltipsEnabled = useContext(ToolbarTooltipsEnabledContext);
   const child = children as ReactElement<TriggerProps>;
   const trigger = cloneElement(child, {
     "data-toolbar-custom-context-menu": "true",
@@ -112,11 +117,11 @@ function ToolbarContextMenuTrigger({
     },
     onFocus: (event: ReactFocusEvent<HTMLElement>) => {
       child.props.onFocus?.(event);
-      tooltipState.show();
+      if (tooltipsEnabled) tooltipState.show();
     },
     onMouseEnter: (event: ReactMouseEvent<HTMLElement>) => {
       child.props.onMouseEnter?.(event);
-      tooltipState.show();
+      if (tooltipsEnabled) tooltipState.show();
     },
     onMouseLeave: (event: ReactMouseEvent<HTMLElement>) => {
       child.props.onMouseLeave?.(event);
@@ -130,14 +135,16 @@ function ToolbarContextMenuTrigger({
   return (
     <>
       <ContextMenuTrigger className="contents">{trigger}</ContextMenuTrigger>
-      <HoverTooltipContent
-        anchorRef={tooltipAnchorRef}
-        open={tooltipState.open}
-        onMouseEnter={tooltipState.show}
-        onMouseLeave={tooltipState.hide}
-      >
-        {tooltip}
-      </HoverTooltipContent>
+      {tooltipsEnabled && (
+        <HoverTooltipContent
+          anchorRef={tooltipAnchorRef}
+          open={tooltipState.open}
+          onMouseEnter={tooltipState.show}
+          onMouseLeave={tooltipState.hide}
+        >
+          {tooltip}
+        </HoverTooltipContent>
+      )}
     </>
   );
 }
@@ -151,25 +158,28 @@ function ToolbarTooltipTrigger({
 }) {
   const tooltipAnchorRef = useRef<HTMLSpanElement | null>(null);
   const tooltipState = useHoverTooltip();
+  const tooltipsEnabled = useContext(ToolbarTooltipsEnabledContext);
 
   return (
     <span
       ref={tooltipAnchorRef}
       className="inline-flex"
       onBlur={tooltipState.hide}
-      onFocus={tooltipState.show}
-      onMouseEnter={tooltipState.show}
+      onFocus={tooltipsEnabled ? tooltipState.show : undefined}
+      onMouseEnter={tooltipsEnabled ? tooltipState.show : undefined}
       onMouseLeave={tooltipState.hide}
     >
       {children}
-      <HoverTooltipContent
-        anchorRef={tooltipAnchorRef}
-        open={tooltipState.open}
-        onMouseEnter={tooltipState.show}
-        onMouseLeave={tooltipState.hide}
-      >
-        {tooltip}
-      </HoverTooltipContent>
+      {tooltipsEnabled && (
+        <HoverTooltipContent
+          anchorRef={tooltipAnchorRef}
+          open={tooltipState.open}
+          onMouseEnter={tooltipState.show}
+          onMouseLeave={tooltipState.hide}
+        >
+          {tooltip}
+        </HoverTooltipContent>
+      )}
     </span>
   );
 }
@@ -711,16 +721,17 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
   return (
     <>
-      <div
-        data-mobile-toolbar
-        data-presentation={presentation}
-        className={cn(
-          "bg-[#212124]",
-          isGrid
-            ? "max-h-[calc(100dvh-4rem)] overflow-y-auto rounded-xl border border-border/80 shadow-2xl shadow-black/50 [&_button]:h-11 [&_button]:w-full [&_button]:justify-start [&_button]:gap-2 [&_button]:rounded-lg [&_button]:px-3"
-            : "flex h-14 shrink-0 items-center border-b border-border/80 md:h-12",
-        )}
-      >
+      <ToolbarTooltipsEnabledContext.Provider value={!isGrid}>
+        <div
+          data-mobile-toolbar
+          data-presentation={presentation}
+          className={cn(
+            "bg-[#212124]",
+            isGrid
+              ? "max-h-[calc(100dvh-4rem)] overflow-y-auto rounded-xl border border-border/80 shadow-2xl shadow-black/50 [&_button]:h-11 [&_button]:w-full [&_button]:justify-start [&_button]:gap-2 [&_button]:rounded-lg [&_button]:px-3"
+              : "flex h-14 shrink-0 items-center border-b border-border/80 md:h-12",
+          )}
+        >
         {/* Scrollable toolbar area */}
         <div
           ref={scrollContainerRef}
@@ -1464,7 +1475,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             )}
           </div>
         </div>
-      </div>
+        </div>
+      </ToolbarTooltipsEnabledContext.Provider>
 
       {/* Settings Dialogs */}
       <SettingsPage open={globalSettingsOpen} onOpenChange={setGlobalSettingsOpen} />

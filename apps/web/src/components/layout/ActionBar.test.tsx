@@ -376,6 +376,15 @@ afterEach(() => {
 });
 
 describe("ActionBar grid presentation", () => {
+  test("does not show tooltips when mobile toolbar controls receive focus", async () => {
+    render(<ActionBar presentation="grid" />);
+
+    fireEvent.focus(screen.getByRole("button", { name: "Docker configuration" }));
+    await new Promise((resolve) => setTimeout(resolve, 550));
+
+    expect(screen.queryByText("Docker configuration")).toBeNull();
+  });
+
   test("renders mobile tools as two columns with labels after their icons", () => {
     const { container } = render(<ActionBar presentation="grid" />);
 

@@ -15,6 +15,41 @@ interface MonacoFileEditorProps {
   onSave: () => void | Promise<unknown>;
 }
 
+type MonacoBeforeMountApi = Parameters<BeforeMount>[0];
+type MonacoMountedEditor = Parameters<OnMount>[0];
+type MonacoMountApi = Parameters<OnMount>[1];
+
+export function disableMonacoFileDiagnostics(monaco: MonacoBeforeMountApi): void {
+  monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+    noSemanticValidation: true,
+    noSyntaxValidation: true,
+  });
+  monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+    noSemanticValidation: true,
+    noSyntaxValidation: true,
+  });
+  monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
+    validate: false,
+  });
+}
+
+export function registerMonacoFileSaveCommand(
+  editor: MonacoMountedEditor,
+  monaco: MonacoMountApi,
+  getOnSave: () => MonacoFileEditorProps["onSave"],
+): void {
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+    void getOnSave()();
+  });
+}
+
+export function forwardMonacoFileChange(
+  nextValue: string | undefined,
+  onChange: MonacoFileEditorProps["onChange"],
+): void {
+  if (nextValue !== undefined) onChange(nextValue);
+}
+
 export function MonacoFileEditor({
   language,
   value,
@@ -30,30 +65,17 @@ export function MonacoFileEditor({
     onSaveRef.current = onSave;
   }, [onSave]);
 
-  const handleEditorWillMount: BeforeMount = useCallback((monaco) => {
-    monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
-      noSemanticValidation: true,
-      noSyntaxValidation: true,
-    });
-    monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
-      noSemanticValidation: true,
-      noSyntaxValidation: true,
-    });
-    monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
-      validate: false,
-    });
-  }, []);
+  const handleEditorWillMount: BeforeMount = useCallback(
+    disableMonacoFileDiagnostics,
+    [],
+  );
 
   const handleEditorMount: OnMount = useCallback((editor, monaco) => {
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-      void onSaveRef.current();
-    });
+    registerMonacoFileSaveCommand(editor, monaco, () => onSaveRef.current);
   }, []);
 
   const handleEditorChange: OnChange = useCallback((nextValue) => {
-    if (nextValue !== undefined) {
-      onChange(nextValue);
-    }
+    forwardMonacoFileChange(nextValue, onChange);
   }, [onChange]);
 
   return (

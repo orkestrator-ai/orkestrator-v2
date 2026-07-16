@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import * as backend from "@/lib/backend";
 import { useFileDirtyStore } from "@/stores";
@@ -35,9 +35,17 @@ export function useFileSave({
 }: UseFileSaveOptions): { saveFile: SaveFile; isSaving: boolean } {
   const [isSaving, setIsSaving] = useState(false);
   const savingRef = useRef(false);
+  const mountedRef = useRef(true);
   const getContent = useFileDirtyStore((state) => state.getContent);
   const setContent = useFileDirtyStore((state) => state.setContent);
-  const markSaved = useFileDirtyStore((state) => state.markSaved);
+  const setOriginalContent = useFileDirtyStore((state) => state.setOriginalContent);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const saveFile = useCallback<SaveFile>(async (contentOverride) => {
     if (savingRef.current) return false;
@@ -66,7 +74,7 @@ export function useFileSave({
     }
 
     savingRef.current = true;
-    setIsSaving(true);
+    if (mountedRef.current) setIsSaving(true);
 
     try {
       const base64Data = encodeUtf8AsBase64(contentToSave);
@@ -77,7 +85,12 @@ export function useFileSave({
         await backend.writeContainerFile(containerId, filePath, base64Data);
       }
 
-      markSaved(tabId, contentToSave);
+      // Advance the saved baseline without replacing edits made while the
+      // backend write was in flight. If the tab was closed, do not recreate
+      // its dirty-store entry after unmount cleanup removed it.
+      if (getContent(tabId) !== null) {
+        setOriginalContent(tabId, contentToSave);
+      }
       return true;
     } catch (error) {
       console.error("Failed to save file:", error);
@@ -87,15 +100,15 @@ export function useFileSave({
       return false;
     } finally {
       savingRef.current = false;
-      setIsSaving(false);
+      if (mountedRef.current) setIsSaving(false);
     }
   }, [
     containerId,
     filePath,
     getContent,
     isLocalEnvironment,
-    markSaved,
     setContent,
+    setOriginalContent,
     tabId,
     worktreePath,
   ]);

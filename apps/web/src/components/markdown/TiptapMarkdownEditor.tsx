@@ -70,6 +70,7 @@ export const TiptapMarkdownEditor = forwardRef<
     extensions: createMarkdownExtensions(),
     content: markdown,
     contentType: "markdown",
+    enableContentCheck: true,
     immediatelyRender: false,
     editorProps: {
       attributes: {

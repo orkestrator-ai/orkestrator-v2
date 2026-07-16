@@ -10,6 +10,7 @@ import {
   TiptapMarkdownEditor,
   type TiptapMarkdownEditorHandle,
 } from "./TiptapMarkdownEditor";
+import { assessMarkdownForRichEditing } from "./tiptap-extensions";
 
 type MarkdownEditorMode = "rendered" | "raw";
 
@@ -39,8 +40,15 @@ export function MarkdownEditorTab({
     (state) => state.dirtyFiles.get(tabId)?.content ?? initialContent,
   );
   const setContent = useFileDirtyStore((state) => state.setContent);
-  const [mode, setMode] = useState<MarkdownEditorMode>("rendered");
-  const [parseError, setParseError] = useState<string | null>(null);
+  const [initialAssessment] = useState(() =>
+    assessMarkdownForRichEditing(markdown),
+  );
+  const [mode, setMode] = useState<MarkdownEditorMode>(
+    initialAssessment.safe ? "rendered" : "raw",
+  );
+  const [parseError, setParseError] = useState<string | null>(
+    initialAssessment.reason,
+  );
   const editorRef = useRef<TiptapMarkdownEditorHandle>(null);
 
   const handleModeChange = useCallback((nextMode: string) => {
@@ -50,8 +58,17 @@ export function MarkdownEditorTab({
       editorRef.current?.flushPendingChanges();
     }
 
+    if (mode === "raw" && nextMode === "rendered") {
+      const assessment = assessMarkdownForRichEditing(markdown);
+      if (!assessment.safe) {
+        setParseError(assessment.reason);
+        return;
+      }
+      setParseError(null);
+    }
+
     setMode(nextMode);
-  }, [mode]);
+  }, [markdown, mode]);
 
   const handleParseError = useCallback((error: Error) => {
     setParseError(error.message || "This document could not be rendered safely.");

@@ -1,14 +1,18 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createElement, type ComponentProps } from "react";
+import type { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import { mockReadImage } from "../../mocks/clipboard";
 import { useClaudeOptionsStore, useConfigStore, useUIStore } from "@/stores";
 import type { Environment, Project } from "@/types";
 
+import * as realDndCore from "@dnd-kit/core";
 import * as realUseProjects from "@/hooks/useProjects";
 import * as realUseEnvironments from "@/hooks/useEnvironments";
 import * as realUseEnvironmentDiffStats from "@/hooks/useEnvironmentDiffStats";
 import * as realBackend from "@/lib/backend";
 
+const realDndCoreSnapshot = { ...realDndCore };
 const realUseProjectsSnapshot = { ...realUseProjects };
 const realUseEnvironmentsSnapshot = { ...realUseEnvironments };
 const realUseEnvironmentDiffStatsSnapshot = { ...realUseEnvironmentDiffStats };
@@ -55,6 +59,17 @@ const updateProjectMock = mock(async () => {});
 const reorderProjectsMock = mock(async () => {});
 let projectsValue: Project[] = [project];
 let environmentsValue: Environment[] = [];
+let projectsLoadingValue = false;
+type DndContextProps = ComponentProps<typeof realDndCore.DndContext>;
+let dndContextProps: DndContextProps | null = null;
+
+mock.module("@dnd-kit/core", () => ({
+  ...realDndCoreSnapshot,
+  DndContext: (props: DndContextProps) => {
+    dndContextProps = props;
+    return createElement(realDndCoreSnapshot.DndContext, props);
+  },
+}));
 
 mock.module("@/hooks/useProjects", () => ({
   useProjects: () => ({
@@ -64,7 +79,7 @@ mock.module("@/hooks/useProjects", () => ({
     updateProject: updateProjectMock,
     reorderProjects: reorderProjectsMock,
     validateGitUrl: mock(async () => true),
-    isLoading: false,
+    isLoading: projectsLoadingValue,
   }),
 }));
 
@@ -96,9 +111,11 @@ const {
   HierarchicalSidebar,
   deleteProjectAndEnvironments,
   resolveSidebarReorder,
+  resolveSidebarSelection,
 } = await import("../../../apps/web/src/components/sidebar/HierarchicalSidebar");
 
 afterAll(() => {
+  mock.module("@dnd-kit/core", () => realDndCoreSnapshot);
   mock.module("@/hooks/useProjects", () => realUseProjectsSnapshot);
   mock.module("@/hooks/useEnvironments", () => realUseEnvironmentsSnapshot);
   mock.module("@/hooks/useEnvironmentDiffStats", () => realUseEnvironmentDiffStatsSnapshot);
@@ -121,6 +138,7 @@ if (typeof globalThis.ImageData === "undefined") {
 
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+const originalReload = window.location.reload;
 
 describe("HierarchicalSidebar", () => {
   beforeEach(() => {
@@ -141,6 +159,8 @@ describe("HierarchicalSidebar", () => {
     reorderProjectsMock.mockClear();
     projectsValue = [project];
     environmentsValue = [];
+    projectsLoadingValue = false;
+    dndContextProps = null;
     mockReadImage.mockReset();
     mockReadImage.mockImplementation(async () => ({
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
@@ -184,6 +204,7 @@ describe("HierarchicalSidebar", () => {
 
   afterEach(() => {
     cleanup();
+    window.location.reload = originalReload;
   });
 
   afterAll(() => {
@@ -212,6 +233,51 @@ describe("HierarchicalSidebar", () => {
       cleanup();
       window.orkestrator = originalApi;
     }
+  });
+
+  test("reloads the workspace from the refresh button", () => {
+    const reload = mock(() => undefined);
+    window.location.reload = reload as unknown as typeof window.location.reload;
+
+    render(<HierarchicalSidebar />);
+
+    const refreshButton = screen.getByRole("button", {
+      name: "Refresh projects, environments, tabs, and layout",
+    });
+    const addProjectButton = screen.getByTitle("Add project");
+    expect(refreshButton.compareDocumentPosition(addProjectButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(refreshButton);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  test("renders distinct loading and empty project states", () => {
+    projectsValue = [];
+    projectsLoadingValue = true;
+    const loadingView = render(<HierarchicalSidebar />);
+    expect(screen.getByText("Loading projects...")).toBeTruthy();
+    expect(screen.queryByText("No projects yet")).toBeNull();
+
+    loadingView.unmount();
+    projectsLoadingValue = false;
+    render(<HierarchicalSidebar />);
+    expect(screen.getByText("No projects yet")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add your first project" })).toBeTruthy();
+  });
+
+  test("clears multi-selection only when Escape is pressed", () => {
+    environmentsValue = [
+      { ...createdEnvironment, id: "env-1", name: "Environment One" },
+      { ...createdEnvironment, id: "env-2", name: "Environment Two" },
+    ];
+    useUIStore.setState({ selectedEnvironmentIds: ["env-1", "env-2"] });
+    render(<HierarchicalSidebar />);
+
+    fireEvent.keyDown(window, { key: "Enter" });
+    expect(useUIStore.getState().selectedEnvironmentIds).toEqual(["env-1", "env-2"]);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useUIStore.getState().selectedEnvironmentIds).toEqual([]);
   });
 
   test("propagates initial prompt image attachments into launch options", async () => {
@@ -339,6 +405,82 @@ describe("HierarchicalSidebar", () => {
     }
   });
 
+  test("keeps the create dialog open when environment creation fails", async () => {
+    createEnvironmentMock.mockImplementationOnce(async () => {
+      throw new Error("create failed");
+    });
+    const originalConsoleError = console.error;
+    const consoleErrorMock = mock(() => undefined);
+    console.error = consoleErrorMock as typeof console.error;
+
+    try {
+      render(<HierarchicalSidebar />);
+      fireEvent.click(screen.getByTitle("Create environment"));
+      fireEvent.click(await screen.findByRole("button", { name: "Create Environment" }));
+
+      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
+        "Failed to create environment:", expect.any(Error),
+      ));
+      expect(screen.getByText("Create Ork (Environment)")).toBeTruthy();
+      expect(updateEnvironmentAgentSettingsMock).not.toHaveBeenCalled();
+      expect(startEnvironmentMock).not.toHaveBeenCalled();
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
+  test("does not select or start a partially configured environment", async () => {
+    updateEnvironmentAgentSettingsMock.mockImplementationOnce(async () => {
+      throw new Error("settings failed");
+    });
+    const originalConsoleError = console.error;
+    const consoleErrorMock = mock(() => undefined);
+    console.error = consoleErrorMock as typeof console.error;
+
+    try {
+      render(<HierarchicalSidebar />);
+      fireEvent.click(screen.getByTitle("Create environment"));
+      fireEvent.click(await screen.findByRole("button", { name: "Create Environment" }));
+
+      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
+        "Failed to create environment:", expect.any(Error),
+      ));
+      expect(createEnvironmentMock).toHaveBeenCalledTimes(1);
+      expect(updateEnvironmentMock).not.toHaveBeenCalled();
+      expect(startEnvironmentMock).not.toHaveBeenCalled();
+      expect(useUIStore.getState().selectedEnvironmentId).toBeNull();
+      expect(screen.getByText("Create Ork (Environment)")).toBeTruthy();
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
+  test("closes the dialog but skips prompt renaming when auto-start fails", async () => {
+    startEnvironmentMock.mockImplementationOnce(async () => {
+      throw new Error("start failed");
+    });
+    const originalConsoleError = console.error;
+    const consoleErrorMock = mock(() => undefined);
+    console.error = consoleErrorMock as typeof console.error;
+
+    try {
+      render(<HierarchicalSidebar />);
+      fireEvent.click(screen.getByTitle("Create environment"));
+      const prompt = await screen.findByLabelText(/Initial Prompt/i);
+      fireEvent.change(prompt, { target: { value: "Rename after startup" } });
+      fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
+        "Failed to auto-start environment:", expect.any(Error),
+      ));
+      expect(screen.queryByText("Create Ork (Environment)")).toBeNull();
+      expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
+      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-created");
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
   test("highlights the project header when the project is selected without an environment", () => {
     useUIStore.setState({ selectedProjectId: "project-1", selectedEnvironmentId: null });
 
@@ -397,6 +539,19 @@ describe("HierarchicalSidebar", () => {
     });
   });
 
+  test("reloads project environments after the environment store is reset", async () => {
+    environmentsValue = [{ ...createdEnvironment, id: "env-1" }];
+    const view = render(<HierarchicalSidebar />);
+    await waitFor(() => expect(loadEnvironmentsMock).toHaveBeenCalledWith("project-1"));
+    loadEnvironmentsMock.mockClear();
+
+    environmentsValue = [];
+    projectsValue = [...projectsValue];
+    view.rerender(<HierarchicalSidebar />);
+
+    await waitFor(() => expect(loadEnvironmentsMock).toHaveBeenCalledWith("project-1"));
+  });
+
   test("selects environment ranges, toggles members, and auto-starts an uninitialized local environment", async () => {
     environmentsValue = [
       { ...createdEnvironment, id: "env-1", name: "Environment One", order: 0 },
@@ -426,6 +581,35 @@ describe("HierarchicalSidebar", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Environment Three" }));
     await waitFor(() => expect(startEnvironmentMock).toHaveBeenCalledWith("env-3"));
+  });
+
+  test("reports an automatic local environment start failure", async () => {
+    environmentsValue = [{
+      ...createdEnvironment,
+      id: "env-local",
+      name: "Local Environment",
+      environmentType: "local",
+      containerId: null,
+      worktreePath: undefined,
+      status: "stopped",
+    }];
+    startEnvironmentMock.mockImplementationOnce(async () => {
+      throw new Error("start failed");
+    });
+    const originalConsoleError = console.error;
+    const consoleErrorMock = mock(() => undefined);
+    console.error = consoleErrorMock as typeof console.error;
+
+    try {
+      render(<HierarchicalSidebar />);
+      fireEvent.click(screen.getByRole("button", { name: "Local Environment" }));
+      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
+        "[HierarchicalSidebar] Failed to auto-start local environment:", expect.any(Error),
+      ));
+      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-local");
+    } finally {
+      console.error = originalConsoleError;
+    }
   });
 
   test("runs bulk stop, restart, and delete actions for eligible selected environments", async () => {
@@ -521,6 +705,93 @@ describe("HierarchicalSidebar", () => {
     });
   });
 
+  test("deletes a project through its confirmation dialog", async () => {
+    environmentsValue = [{ ...createdEnvironment, id: "env-1", name: "Environment One" }];
+    render(<HierarchicalSidebar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /Project One/i }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Project" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1");
+      expect(removeProjectMock).toHaveBeenCalledWith("project-1");
+    });
+  });
+
+  test("routes project and environment drag events and ignores cancelled drops", async () => {
+    const secondProject = { ...project, id: "project-2", name: "Project Two", order: 1 };
+    projectsValue = [project, secondProject];
+    environmentsValue = [
+      { ...createdEnvironment, id: "env-1", order: 0 },
+      { ...createdEnvironment, id: "env-2", order: 1 },
+    ];
+    render(<HierarchicalSidebar />);
+
+    act(() => {
+      currentDndContextProps().onDragStart?.({ active: { id: "project-1" } } as DragStartEvent);
+    });
+    await act(async () => {
+      currentDndContextProps().onDragEnd?.({
+        active: { id: "project-1" },
+        over: { id: "project-2" },
+      } as DragEndEvent);
+      await Promise.resolve();
+    });
+    expect(reorderProjectsMock).toHaveBeenCalledWith(["project-2", "project-1"]);
+
+    act(() => {
+      currentDndContextProps().onDragStart?.({ active: { id: "env-1" } } as DragStartEvent);
+    });
+    await act(async () => {
+      currentDndContextProps().onDragEnd?.({
+        active: { id: "env-1" },
+        over: { id: "env-2" },
+      } as DragEndEvent);
+      await Promise.resolve();
+    });
+    expect(reorderEnvironmentsMock).toHaveBeenCalledWith("project-1", ["env-2", "env-1"]);
+
+    reorderProjectsMock.mockClear();
+    reorderEnvironmentsMock.mockClear();
+    act(() => {
+      currentDndContextProps().onDragStart?.({ active: { id: "env-1" } } as DragStartEvent);
+    });
+    act(() => {
+      currentDndContextProps().onDragEnd?.({ active: { id: "env-1" }, over: null } as DragEndEvent);
+    });
+    expect(reorderProjectsMock).not.toHaveBeenCalled();
+    expect(reorderEnvironmentsMock).not.toHaveBeenCalled();
+  });
+
+  test("resolves every selection modifier and fallback branch", () => {
+    const orderedIds = ["env-1", "env-2", "env-3"];
+    expect(resolveSidebarSelection("missing", { shiftKey: true }, orderedIds, "env-1", [])).toEqual({
+      type: "toggle",
+      environmentId: "missing",
+    });
+    expect(resolveSidebarSelection("env-2", { shiftKey: true }, orderedIds, null, [])).toEqual({
+      type: "range",
+      ids: ["env-2"],
+    });
+    expect(resolveSidebarSelection("env-2", { shiftKey: true }, orderedIds, "missing", ["env-1"])).toEqual({
+      type: "range",
+      ids: ["env-2"],
+    });
+    expect(resolveSidebarSelection("env-1", { shiftKey: true, metaKey: true }, orderedIds, "env-3", [])).toEqual({
+      type: "range",
+      ids: ["env-1", "env-2", "env-3"],
+    });
+    expect(resolveSidebarSelection("env-2", { metaKey: true }, orderedIds, null, [])).toEqual({
+      type: "toggle",
+      environmentId: "env-2",
+    });
+    expect(resolveSidebarSelection("env-2", {}, orderedIds, null, [])).toEqual({
+      type: "single",
+      environmentId: "env-2",
+    });
+  });
+
   test("resolves project and same-project environment reorder operations", () => {
     const secondProject = { ...project, id: "project-2", name: "Project Two", order: 1 };
     expect(resolveSidebarReorder("project-1", "project-2", "project", [project, secondProject], [])).toEqual({
@@ -538,7 +809,11 @@ describe("HierarchicalSidebar", () => {
     });
     expect(resolveSidebarReorder("env-1", "env-3", "environment", [project], [first, second, other])).toBeNull();
     expect(resolveSidebarReorder("missing", "env-2", "environment", [project], [first, second])).toBeNull();
+    expect(resolveSidebarReorder("env-1", "missing", "environment", [project], [first, second])).toBeNull();
+    expect(resolveSidebarReorder("missing", "project-1", "project", [project], [])).toBeNull();
+    expect(resolveSidebarReorder("project-1", "missing", "project", [project], [])).toBeNull();
     expect(resolveSidebarReorder("project-1", "project-1", "project", [project], [])).toBeNull();
+    expect(resolveSidebarReorder("project-1", "project-2", null, [project], [])).toBeNull();
   });
 
   test("deletes a project only after every environment succeeds", async () => {
@@ -561,6 +836,45 @@ describe("HierarchicalSidebar", () => {
     expect(deleteEnvironmentMock).toHaveBeenCalledTimes(2);
     expect(removeProjectMock).not.toHaveBeenCalled();
   });
+
+  test("removes empty projects and propagates project removal failures", async () => {
+    await deleteProjectAndEnvironments("project-1", [], deleteEnvironmentMock, removeProjectMock);
+    expect(deleteEnvironmentMock).not.toHaveBeenCalled();
+    expect(removeProjectMock).toHaveBeenCalledWith("project-1");
+
+    removeProjectMock.mockClear();
+    removeProjectMock.mockImplementationOnce(async () => {
+      throw new Error("remove failed");
+    });
+    await expect(
+      deleteProjectAndEnvironments("project-1", [], deleteEnvironmentMock, removeProjectMock),
+    ).rejects.toThrow("remove failed");
+  });
+
+  test("reports every environment that fails before preserving the project", async () => {
+    const environments = [
+      { ...createdEnvironment, id: "env-1", name: "First" },
+      { ...createdEnvironment, id: "env-2", name: "Second" },
+    ];
+    deleteEnvironmentMock.mockImplementationOnce(async () => {
+      throw new Error("first failed");
+    });
+    deleteEnvironmentMock.mockImplementationOnce(async () => {
+      throw new Error("second failed");
+    });
+    const originalConsoleError = console.error;
+    console.error = mock(() => undefined) as typeof console.error;
+
+    try {
+      await expect(
+        deleteProjectAndEnvironments("project-1", environments, deleteEnvironmentMock, removeProjectMock),
+      ).rejects.toThrow("Failed to delete some environments: First, Second");
+      expect(deleteEnvironmentMock).toHaveBeenCalledTimes(2);
+      expect(removeProjectMock).not.toHaveBeenCalled();
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
 });
 
 // The selectable project header is the nearest ancestor div carrying the
@@ -574,4 +888,11 @@ function getProjectHeader(projectButton: HTMLElement): HTMLElement {
     throw new Error("Could not locate project header element");
   }
   return node;
+}
+
+function currentDndContextProps(): DndContextProps {
+  if (!dndContextProps) {
+    throw new Error("DndContext was not rendered");
+  }
+  return dndContextProps;
 }

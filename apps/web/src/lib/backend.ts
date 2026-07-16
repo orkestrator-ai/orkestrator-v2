@@ -259,6 +259,13 @@ export async function setWebClientEnabled(enabled: boolean): Promise<WebClientSt
   return window.orkestrator.webClient.setEnabled(enabled);
 }
 
+export async function resetWebClientServe(): Promise<WebClientStatus> {
+  if (!window.orkestrator?.webClient || window.orkestratorGateway?.enabled) {
+    throw new Error("Tailscale Serve reset is only available for the local desktop app");
+  }
+  return window.orkestrator.webClient.resetServe();
+}
+
 export async function getGatewayTokenSettings(): Promise<GatewayTokenSettings> {
   if (!window.orkestrator?.webClient) {
     throw new Error("Gateway token settings are unavailable");

@@ -9,6 +9,7 @@ describe("desktop backend lifecycle", () => {
     const backend = {
       getWebClientStatus: mock(async () => ({ enabled: true, running: false, url: null, error: null })),
       setWebClientEnabled: mock(async (enabled: boolean) => ({ enabled, running: enabled, url: null, error: null })),
+      resetWebClientServe: mock(async () => ({ enabled: true, running: true, url: null, error: null })),
       getTokenSettings: mock(async () => ({ token: "gateway-token-123456", editable: true, source: "file" as const })),
       setToken: mock(async (token: string) => ({ token, editable: true, source: "file" as const })),
     };
@@ -16,11 +17,13 @@ describe("desktop backend lifecycle", () => {
 
     await expect(controls.getWebClientStatus()).resolves.toMatchObject({ enabled: true });
     await expect(controls.setWebClientEnabled(false)).resolves.toMatchObject({ enabled: false });
+    await expect(controls.resetWebClientServe()).resolves.toMatchObject({ running: true });
     await expect(controls.getGatewayTokenSettings()).resolves.toMatchObject({ editable: true });
     await expect(controls.setGatewayToken("replacement-token-123456")).resolves.toMatchObject({
       token: "replacement-token-123456",
     });
     expect(backend.setWebClientEnabled).toHaveBeenCalledWith(false);
+    expect(backend.resetWebClientServe).toHaveBeenCalledTimes(1);
     expect(backend.setToken).toHaveBeenCalledWith("replacement-token-123456");
   });
 
@@ -32,6 +35,7 @@ describe("desktop backend lifecycle", () => {
     backend = {
       getWebClientStatus: async () => ({ enabled: false, running: false, url: null, error: null }),
       setWebClientEnabled: async (enabled) => ({ enabled, running: false, url: null, error: null }),
+      resetWebClientServe: async () => ({ enabled: true, running: true, url: null, error: null }),
       getTokenSettings: async () => ({ token: "gateway-token-123456", editable: true, source: "file" }),
       setToken: async (token) => ({ token, editable: true, source: "file" }),
     } as never;

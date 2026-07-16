@@ -258,10 +258,16 @@ describe("remote gateway", () => {
       url: enabled ? "https://workstation.example.ts.net/" : null,
       error: null,
     }));
+    const resetServe = mock(async () => ({
+      enabled: true,
+      running: true,
+      url: "https://workstation.example.ts.net/",
+      error: null,
+    }));
     const { info } = await startGateway({
       controlBindAddress: "127.0.0.1",
       controlPort: 0,
-      webClientControl: { getStatus, setEnabled },
+      webClientControl: { getStatus, setEnabled, resetServe },
     });
     const path = "__orkestrator/web-client-access";
     const headers = { authorization: `Bearer ${info.token}` };
@@ -278,6 +284,11 @@ describe("remote gateway", () => {
     expect(enabled.status).toBe(200);
     expect(enabled.json()).toMatchObject({ enabled: true, running: true });
     expect(setEnabled).toHaveBeenCalledWith(true);
+
+    const reset = await requestUrl(`${info.url}${path}`, { method: "DELETE", headers });
+    expect(reset.status).toBe(200);
+    expect(reset.json()).toMatchObject({ running: true });
+    expect(resetServe).toHaveBeenCalledTimes(1);
 
     const browserAttempt = await requestUrl(`${info.browserUrl}${path}`, { headers });
     expect(browserAttempt.status).toBe(404);
@@ -298,6 +309,7 @@ describe("remote gateway", () => {
       webClientControl: {
         getStatus: () => ({ enabled: false, running: false, url: null, error: null }),
         setEnabled,
+        resetServe: async () => ({ enabled: true, running: true, url: null, error: null }),
       },
     });
     const endpoint = `${info.url}__orkestrator/web-client-access`;
@@ -308,7 +320,7 @@ describe("remote gateway", () => {
 
     const wrongMethod = await requestUrl(endpoint, { method: "POST", headers });
     expect(wrongMethod.status).toBe(405);
-    expect(wrongMethod.headers.allow).toBe("GET, PUT");
+    expect(wrongMethod.headers.allow).toBe("GET, PUT, DELETE");
 
     for (const body of ["{", "[]", "{}", JSON.stringify({ enabled: "yes" })]) {
       const response = await requestUrl(endpoint, { method: "PUT", headers, body });
@@ -331,6 +343,7 @@ describe("remote gateway", () => {
       webClientControl: {
         getStatus: () => ({ enabled: true, running: false, url: null, error: null }),
         setEnabled: async () => { throw new Error("lifecycle unavailable"); },
+        resetServe: async () => { throw new Error("reset unavailable"); },
       },
     });
     const headers = {

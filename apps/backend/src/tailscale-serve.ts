@@ -172,6 +172,18 @@ export class TailscaleServeManager {
     this.activeHttpsPort = null;
   }
 
+  async clearHttpsPort(httpsPort = 443): Promise<void> {
+    if (!Number.isInteger(httpsPort) || httpsPort < 1 || httpsPort > 65535) {
+      throw new Error(`Invalid Tailscale Serve HTTPS port: ${httpsPort}`);
+    }
+    try {
+      await this.run(this.executable, ["serve", `--https=${httpsPort}`, "off"]);
+    } catch (error) {
+      throw new Error(`Unable to reset Tailscale Serve: ${commandError(error)}`);
+    }
+    if (this.activeHttpsPort === httpsPort) this.activeHttpsPort = null;
+  }
+
   async stopOwned(targetPort: number, httpsPort = 443): Promise<boolean> {
     let existingStatus: { stdout: string; stderr: string };
     try {

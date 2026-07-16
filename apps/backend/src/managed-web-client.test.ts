@@ -72,6 +72,53 @@ describe("managed Electron web client", () => {
     expect(start).toHaveBeenLastCalledWith(41234, 8443, { adoptExisting: false });
   });
 
+  test("clears a conflicting HTTPS listener and republishes web access", async () => {
+    const ownership = memoryOwnershipStore();
+    const start = mock(async () => "https://workstation.example.ts.net/");
+    start.mockImplementationOnce(async () => {
+      throw new Error("Refusing to replace the existing Tailscale Serve configuration");
+    });
+    const clearHttpsPort = mock(async () => undefined);
+    const client = new ManagedWebClient(
+      { start, stop: mock(async () => undefined), clearHttpsPort },
+      443,
+      { error: mock(() => undefined) },
+      ownership,
+    );
+    client.setBrowserListenerUrl("http://127.0.0.1:34121/");
+    await expect(client.setEnabled(true)).resolves.toMatchObject({
+      enabled: true,
+      running: false,
+      error: "Refusing to replace the existing Tailscale Serve configuration",
+    });
+
+    await expect(client.resetServe()).resolves.toEqual({
+      enabled: true,
+      running: true,
+      url: "https://workstation.example.ts.net/",
+      error: null,
+    });
+    expect(clearHttpsPort).toHaveBeenCalledWith(443);
+    expect(start).toHaveBeenCalledWith(34121, 443, { adoptExisting: false });
+    expect(ownership.current()).toEqual({ version: 1, targetPort: 34121, httpsPort: 443 });
+  });
+
+  test("reports a targeted reset failure without pretending web access stopped", async () => {
+    const client = new ManagedWebClient({
+      start: mock(async () => "https://workstation.example.ts.net/"),
+      stop: mock(async () => undefined),
+      clearHttpsPort: mock(async () => { throw new Error("permission denied"); }),
+    }, 443, { error: mock(() => undefined) });
+    client.setBrowserListenerUrl("http://127.0.0.1:34121/");
+    await client.setEnabled(true);
+
+    await expect(client.resetServe()).resolves.toMatchObject({
+      enabled: true,
+      running: true,
+      error: "permission denied",
+    });
+  });
+
   test("reports an unavailable browser listener without invoking Serve", async () => {
     const start = mock(async () => "https://unused.example/");
     const client = new ManagedWebClient({ start, stop: mock(async () => undefined) });

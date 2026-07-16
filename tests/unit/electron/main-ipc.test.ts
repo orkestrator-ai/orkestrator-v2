@@ -36,6 +36,7 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
     running: enabled,
     url: enabled ? webClientStatus.url : null,
   }));
+  const resetWebClientServe = mock(async () => webClientStatus);
   const gatewayTokenSettings = { token: "test-token-123456", editable: true, source: "file" as const };
   const getGatewayTokenSettings = mock(async () => gatewayTokenSettings);
   const setGatewayToken = mock(async (token: string) => ({ ...gatewayTokenSettings, token }));
@@ -61,6 +62,7 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
     nativeImageApi: nativeImage,
     getWebClientStatus,
     setWebClientEnabled,
+    resetWebClientServe,
     getGatewayTokenSettings,
     setGatewayToken,
     listConnections,
@@ -93,7 +95,7 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
   const invokeSync = (channel: string, ...args: unknown[]) =>
     invokeSyncFrom(trustedRendererUrl, channel, ...args);
 
-  return { invoke, invokeFrom, invokeSync, invokeSyncFrom, handlers, syncHandlers, backend, window, clipboardApi, clipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled, getGatewayTokenSettings, setGatewayToken, listConnections, connectToRemote, useConnection, forgetConnection };
+  return { invoke, invokeFrom, invokeSync, invokeSyncFrom, handlers, syncHandlers, backend, window, clipboardApi, clipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled, resetWebClientServe, getGatewayTokenSettings, setGatewayToken, listConnections, connectToRemote, useConnection, forgetConnection };
 }
 
 describe("main IPC registration", () => {
@@ -132,6 +134,10 @@ describe("main IPC registration", () => {
       running: false,
     });
     expect(harness.setWebClientEnabled).toHaveBeenCalledWith(false);
+    await expect(harness.invoke("orkestrator:web-client:reset-serve")).resolves.toMatchObject({
+      running: true,
+    });
+    expect(harness.resetWebClientServe).toHaveBeenCalledTimes(1);
     await expect(harness.invoke("orkestrator:web-client:get-token-settings")).resolves.toMatchObject({
       token: "test-token-123456",
       editable: true,

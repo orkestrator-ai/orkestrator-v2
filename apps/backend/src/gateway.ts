@@ -54,6 +54,7 @@ export interface OrkestratorGatewayOptions {
   webClientControl?: {
     getStatus(): WebClientStatus;
     setEnabled(enabled: boolean): Promise<WebClientStatus>;
+    resetServe(): Promise<WebClientStatus>;
   };
 }
 
@@ -63,7 +64,7 @@ const DEFAULT_GATEWAY_PORT = 34121;
 const GATEWAY_PORT_FALLBACK_ATTEMPTS = 20;
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const KEEPALIVE_MS = 25_000;
-const CORS_ALLOWED_METHODS = "GET, POST, PUT, OPTIONS";
+const CORS_ALLOWED_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
 const CORS_ALLOWED_HEADERS = "Authorization, Content-Type";
 
 class InvalidRequestBodyError extends Error {}
@@ -940,8 +941,12 @@ export class OrkestratorGateway {
       jsonResponse(response, 200, this.webClientControl.getStatus());
       return;
     }
+    if (request.method === "DELETE") {
+      jsonResponse(response, 200, await this.webClientControl.resetServe());
+      return;
+    }
     if (request.method !== "PUT") {
-      response.writeHead(405, { allow: "GET, PUT" });
+      response.writeHead(405, { allow: "GET, PUT, DELETE" });
       response.end();
       return;
     }

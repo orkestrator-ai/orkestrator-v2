@@ -46,6 +46,7 @@ function localBackendHarness(initial?: StoredDesktopConnections) {
       invoke,
       getWebClientStatus: mock(async () => ({ enabled: true, running: true, url: null, error: null })),
       setWebClientEnabled: mock(async () => ({ enabled: true, running: true, url: null, error: null })),
+      resetWebClientServe: mock(async () => ({ enabled: true, running: true, url: null, error: null })),
       getTokenSettings: mock(async () => ({ token, editable: true as const, source: "file" as const })),
       setToken: mock(async (nextToken: string) => ({ token: nextToken, editable: true as const, source: "file" as const })),
     },
@@ -381,6 +382,7 @@ describe("Electron connection manager", () => {
     expect(onEvent).toHaveBeenCalledWith("environment-updated", { id: "env-1" });
     await expect(manager.getWebClientStatus()).resolves.toMatchObject({ running: true });
     await expect(manager.setWebClientEnabled(false)).resolves.toMatchObject({ enabled: true });
+    await expect(manager.resetWebClientServe()).resolves.toMatchObject({ running: true });
     await expect(manager.getGatewayTokenSettings()).resolves.toMatchObject({ token });
     await expect(manager.setToken("replacement-token-123456")).resolves.toMatchObject({ token: "replacement-token-123456" });
     await expect(manager.forget("local")).rejects.toThrow("cannot be removed");

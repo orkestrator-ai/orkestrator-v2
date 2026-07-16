@@ -121,7 +121,7 @@ describe("Electron backend process supervisor", () => {
           : "initial-client-token-123456";
         response.end(JSON.stringify({ token, editable: true, source: "file" }));
       } else if (request.url === "/__orkestrator/web-client-access") {
-        const enabled = request.method === "PUT" ? body.enabled === true : false;
+        const enabled = request.method === "DELETE" || (request.method === "PUT" && body.enabled === true);
         response.end(JSON.stringify({
           enabled,
           running: enabled,
@@ -146,6 +146,10 @@ describe("Electron backend process supervisor", () => {
       enabled: true,
       running: true,
       url: "https://workstation.example.ts.net/",
+    });
+    await expect(client.resetWebClientServe()).resolves.toMatchObject({
+      enabled: true,
+      running: true,
     });
     const received = new Promise((resolve) => client.listen((event, payload) => resolve({ event, payload })));
     await expect(received).resolves.toEqual({ event: "changed", payload: { ok: true } });
@@ -245,6 +249,11 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
 
     expect(backendProcess.getInfo()?.browserUrl).toBeUndefined();
     await expect(waitForWebClientStatus(client, (status) => status.running)).resolves.toMatchObject({
+      enabled: true,
+      running: true,
+      url: "https://workstation.example.ts.net/",
+    });
+    await expect(client.resetWebClientServe()).resolves.toMatchObject({
       enabled: true,
       running: true,
       url: "https://workstation.example.ts.net/",

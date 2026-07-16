@@ -22,6 +22,12 @@ const mockSetWebClientEnabled = mock(async (enabled: boolean) => ({
   url: enabled ? "http://100.88.12.3:34121/" : null,
   error: null,
 }));
+const mockResetWebClientServe = mock(async () => ({
+  enabled: true,
+  running: true,
+  url: "https://workstation.example.ts.net/",
+  error: null,
+}));
 const mockGetGatewayTokenSettings = mock(async () => ({
   token: "gateway-token-123456",
   editable: true,
@@ -45,6 +51,7 @@ mock.module("@/lib/backend", () => ({
   propagateGithubTokenToContainers: mockPropagateGithubTokenToContainers,
   getWebClientStatus: mockGetWebClientStatus,
   setWebClientEnabled: mockSetWebClientEnabled,
+  resetWebClientServe: mockResetWebClientServe,
   getGatewayTokenSettings: mockGetGatewayTokenSettings,
   setGatewayToken: mockSetGatewayToken,
   openInBrowser: mockOpenInBrowser,
@@ -69,6 +76,7 @@ describe("GlobalSettings", () => {
     mockPropagateGithubTokenToContainers.mockClear();
     mockGetWebClientStatus.mockClear();
     mockSetWebClientEnabled.mockClear();
+    mockResetWebClientServe.mockClear();
     mockGetGatewayTokenSettings.mockClear();
     mockSetGatewayToken.mockClear();
     mockOpenInBrowser.mockClear();
@@ -87,6 +95,12 @@ describe("GlobalSettings", () => {
       enabled,
       running: enabled,
       url: enabled ? "http://100.88.12.3:34121/" : null,
+      error: null,
+    }));
+    mockResetWebClientServe.mockImplementation(async () => ({
+      enabled: true,
+      running: true,
+      url: "https://workstation.example.ts.net/",
       error: null,
     }));
     mockGetGatewayTokenSettings.mockImplementation(async () => ({
@@ -187,6 +201,40 @@ describe("GlobalSettings", () => {
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(expect.objectContaining({ webClientEnabled: false }));
       expect(mockSetWebClientEnabled).toHaveBeenCalledWith(false);
     });
+  });
+
+  test("copies the current web client URL", async () => {
+    render(<GlobalSettings activeSection="web-client" />);
+    await screen.findByText("Running");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy web client URL" }));
+
+    await waitFor(() => {
+      expect(mockWriteText).toHaveBeenCalledWith("http://100.88.12.3:34121/");
+    });
+    expect(screen.getByRole("button", { name: "Web client URL copied" })).toBeTruthy();
+  });
+
+  test("confirms and resets a conflicting Tailscale Serve listener", async () => {
+    window.orkestratorGateway = undefined;
+    mockGetWebClientStatus.mockResolvedValueOnce({
+      enabled: true,
+      running: false,
+      url: null,
+      error: "Refusing to replace the existing Tailscale Serve configuration on HTTPS port 443",
+    });
+    render(<GlobalSettings activeSection="web-client" />);
+
+    expect(await screen.findByText(/Refusing to replace/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Reset Tailscale Serve" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/removes the existing HTTPS listener on port 443/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Reset Tailscale Serve" }));
+
+    await waitFor(() => expect(mockResetWebClientServe).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText("Running")).toBeTruthy());
+    expect(mockToastSuccess).toHaveBeenCalledWith("Tailscale Serve reset");
   });
 
   test("keeps a failed Electron web access transition retryable after config persistence", async () => {

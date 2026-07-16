@@ -76,6 +76,27 @@ describe("Tailscale Serve manager", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  test("clears only the selected HTTPS listener for an explicit reset", async () => {
+    const run = mock(async () => ({ stdout: "", stderr: "" })) as TailscaleCommandRunner;
+    const manager = new TailscaleServeManager("tailscale", run);
+
+    await expect(manager.clearHttpsPort(443)).resolves.toBeUndefined();
+    expect(run).toHaveBeenCalledWith("tailscale", ["serve", "--https=443", "off"]);
+
+    await expect(manager.clearHttpsPort(0)).rejects.toThrow("Invalid Tailscale Serve HTTPS port");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  test("surfaces targeted reset failures", async () => {
+    const run = mock(async () => {
+      throw failure("reset failed", "permission denied");
+    }) as TailscaleCommandRunner;
+
+    await expect(new TailscaleServeManager("tailscale", run).clearHttpsPort()).rejects.toThrow(
+      "Unable to reset Tailscale Serve: permission denied",
+    );
+  });
+
   test("adopts and removes an existing listener only when its proxy target matches", async () => {
     const calls: string[][] = [];
     const run = mock(async (_command: string, args: string[]) => {

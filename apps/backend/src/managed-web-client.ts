@@ -4,7 +4,7 @@ import path from "node:path";
 import { getTailscaleServeTargetPort, TailscaleServeManager } from "./tailscale-serve.js";
 
 type ServeManager = Pick<TailscaleServeManager, "start" | "stop"> &
-  Partial<Pick<TailscaleServeManager, "stopOwned">>;
+  Partial<Pick<TailscaleServeManager, "clearHttpsPort" | "stopOwned">>;
 
 export type ManagedWebClientOwnership = {
   version: 1;
@@ -100,6 +100,12 @@ export class ManagedWebClient {
     return result;
   }
 
+  resetServe(): Promise<WebClientStatus> {
+    const result = this.transition.catch(() => undefined).then(() => this.applyResetServe());
+    this.transition = result;
+    return result;
+  }
+
   async shutdown(): Promise<void> {
     const status = await this.setEnabled(false);
     if (status.error) throw new Error(status.error);
@@ -169,6 +175,26 @@ export class ManagedWebClient {
       }
     }
     return this.getStatus();
+  }
+
+  private async applyResetServe(): Promise<WebClientStatus> {
+    this.error = null;
+    if (!this.serve.clearHttpsPort) {
+      this.error = "Tailscale Serve reset is unavailable.";
+      return this.getStatus();
+    }
+
+    try {
+      await this.serve.clearHttpsPort(this.httpsPort);
+      this.url = null;
+      await this.ownershipStore.clear();
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+      this.logger.error("[TailscaleServe] Failed to reset web access:", error);
+      return this.getStatus();
+    }
+
+    return this.enabled ? this.applyEnabled(true) : this.getStatus();
   }
 }
 

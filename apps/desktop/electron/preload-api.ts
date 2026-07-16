@@ -84,6 +84,9 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       setEnabled(enabled: boolean): Promise<WebClientStatus> {
         return ipcRenderer.invoke("orkestrator:web-client:set-enabled", enabled);
       },
+      resetServe(): Promise<WebClientStatus> {
+        return ipcRenderer.invoke("orkestrator:web-client:reset-serve");
+      },
       getTokenSettings(): Promise<GatewayTokenSettings> {
         return ipcRenderer.invoke("orkestrator:web-client:get-token-settings");
       },

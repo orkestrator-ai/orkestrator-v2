@@ -368,6 +368,14 @@ export function formatOpenCodeError(error: unknown): string {
   return `${headline}\n\n${detailLines.join("\n")}`;
 }
 
+function openCodeResponseError(operation: string, error: unknown): Error {
+  if (error === undefined || error === null) {
+    return new Error(operation);
+  }
+
+  return new Error(`${operation}: ${formatOpenCodeError(error)}`);
+}
+
 /** Structure for filediff metadata from the SDK */
 interface FileDiffMetadata {
   file?: string;
@@ -987,9 +995,19 @@ export async function getSessionMessages(
   try {
     const response = await client.session.messages({
       sessionID: sessionId,
+    }, {
+      throwOnError: options.throwOnError,
     });
 
-    if (!response.data) return [];
+    if (!response.data) {
+      if (options.throwOnError) {
+        throw openCodeResponseError(
+          "Failed to get OpenCode session messages",
+          response.error,
+        );
+      }
+      return [];
+    }
 
     const messages = response.data
       .map((msg) => normalizeOpenCodeMessage(msg))
@@ -1016,17 +1034,40 @@ export type OpenCodeSessionStatus = "idle" | "busy" | "retry";
 export async function getSessionStatus(
   client: OpencodeClient,
   sessionId: string,
+  options: { throwOnError?: boolean } = {},
 ): Promise<OpenCodeSessionStatus | null> {
-  const response = await client.session.status();
-  const status = response.data?.[sessionId];
-  if (
-    status?.type !== "idle" &&
-    status?.type !== "busy" &&
-    status?.type !== "retry"
-  ) {
+  try {
+    const response = await client.session.status(undefined, {
+      throwOnError: options.throwOnError,
+    });
+    if (!response.data) {
+      if (options.throwOnError) {
+        throw openCodeResponseError(
+          "Failed to get OpenCode session status",
+          response.error,
+        );
+      }
+      return null;
+    }
+
+    const status = response.data[sessionId];
+    if (
+      status?.type !== "idle" &&
+      status?.type !== "busy" &&
+      status?.type !== "retry"
+    ) {
+      return null;
+    }
+    return status.type;
+  } catch (error) {
+    console.error("[opencode-client] Failed to get session status:", error);
+    if (options.throwOnError) {
+      throw error instanceof Error
+        ? error
+        : new Error("Failed to get OpenCode session status");
+    }
     return null;
   }
-  return status.type;
 }
 
 /** Attachment input for sendPrompt */
@@ -1252,8 +1293,18 @@ export async function getPendingQuestions(
   options: { throwOnError?: boolean } = {},
 ): Promise<QuestionRequest[]> {
   try {
-    const response = await client.question.list();
-    if (!response.data) return [];
+    const response = await client.question.list(undefined, {
+      throwOnError: options.throwOnError,
+    });
+    if (!response.data) {
+      if (options.throwOnError) {
+        throw openCodeResponseError(
+          "Failed to get pending OpenCode questions",
+          response.error,
+        );
+      }
+      return [];
+    }
     return response.data as QuestionRequest[];
   } catch (error) {
     console.error("[opencode-client] Failed to get pending questions:", error);
@@ -1274,8 +1325,18 @@ export async function getPendingPermissions(
   options: { throwOnError?: boolean } = {},
 ): Promise<PermissionRequest[]> {
   try {
-    const response = await client.permission.list();
-    if (!response.data) return [];
+    const response = await client.permission.list(undefined, {
+      throwOnError: options.throwOnError,
+    });
+    if (!response.data) {
+      if (options.throwOnError) {
+        throw openCodeResponseError(
+          "Failed to get pending OpenCode permissions",
+          response.error,
+        );
+      }
+      return [];
+    }
     return response.data as PermissionRequest[];
   } catch (error) {
     console.error("[opencode-client] Failed to get pending permissions:", error);

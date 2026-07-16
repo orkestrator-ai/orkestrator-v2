@@ -631,6 +631,24 @@ describe("opencode-client getSessionMessages", () => {
       getSessionMessages(client, "session-1", { throwOnError: true }),
     ).rejects.toThrow("offline");
   });
+
+  test("treats resolved SDK error responses as failures for strict callers", async () => {
+    const messages = mock(
+      async (_input: unknown, _options?: { throwOnError?: boolean }) => ({
+        data: undefined,
+        error: { message: "bridge offline" },
+      }),
+    );
+    const client = {
+      session: { messages },
+    } as unknown as OpencodeClient;
+
+    expect(await getSessionMessages(client, "session-1")).toEqual([]);
+    await expect(
+      getSessionMessages(client, "session-1", { throwOnError: true }),
+    ).rejects.toThrow("bridge offline");
+    expect(messages.mock.calls[1]?.[1]).toEqual({ throwOnError: true });
+  });
 });
 
 describe("opencode-client getSessionStatus", () => {
@@ -641,6 +659,7 @@ describe("opencode-client getSessionStatus", () => {
           data: {
             "session-1": { type: "busy" },
             "session-2": { type: "idle" },
+            "session-3": { type: "retry" },
           },
         }),
       },
@@ -648,7 +667,35 @@ describe("opencode-client getSessionStatus", () => {
 
     expect(await getSessionStatus(client, "session-1")).toBe("busy");
     expect(await getSessionStatus(client, "session-2")).toBe("idle");
+    expect(await getSessionStatus(client, "session-3")).toBe("retry");
     expect(await getSessionStatus(client, "missing")).toBeNull();
+  });
+
+  test("surfaces resolved and thrown status failures only in strict mode", async () => {
+    const resolvedFailure = {
+      session: {
+        status: async () => ({
+          data: undefined,
+          error: { message: "status unavailable" },
+        }),
+      },
+    } as unknown as OpencodeClient;
+    expect(await getSessionStatus(resolvedFailure, "session-1")).toBeNull();
+    await expect(
+      getSessionStatus(resolvedFailure, "session-1", { throwOnError: true }),
+    ).rejects.toThrow("status unavailable");
+
+    const thrownFailure = {
+      session: {
+        status: async () => {
+          throw new Error("connection lost");
+        },
+      },
+    } as unknown as OpencodeClient;
+    expect(await getSessionStatus(thrownFailure, "session-1")).toBeNull();
+    await expect(
+      getSessionStatus(thrownFailure, "session-1", { throwOnError: true }),
+    ).rejects.toThrow("connection lost");
   });
 });
 
@@ -1096,6 +1143,29 @@ describe("opencode-client events and pending requests", () => {
     await expect(
       getPendingPermissions(failed, { throwOnError: true }),
     ).rejects.toThrow("permission failed");
+
+    const resolvedFailure = {
+      question: {
+        list: async () => ({
+          data: undefined,
+          error: { message: "question endpoint unavailable" },
+        }),
+      },
+      permission: {
+        list: async () => ({
+          data: undefined,
+          error: { message: "permission endpoint unavailable" },
+        }),
+      },
+    } as unknown as OpencodeClient;
+    expect(await getPendingQuestions(resolvedFailure)).toEqual([]);
+    expect(await getPendingPermissions(resolvedFailure)).toEqual([]);
+    await expect(
+      getPendingQuestions(resolvedFailure, { throwOnError: true }),
+    ).rejects.toThrow("question endpoint unavailable");
+    await expect(
+      getPendingPermissions(resolvedFailure, { throwOnError: true }),
+    ).rejects.toThrow("permission endpoint unavailable");
   });
 
   test("replies to and rejects requests with the v2 SDK shape", async () => {

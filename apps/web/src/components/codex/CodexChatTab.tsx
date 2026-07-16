@@ -290,16 +290,31 @@ export function CodexChatTab({
     async (
       activeClient = client,
       sessionId = session?.sessionId,
-      options: { throwOnError?: boolean } = {},
-    ) => {
-      if (!activeClient || !sessionId) return;
+      options: {
+        throwOnError?: boolean;
+        shouldApply?: () => boolean;
+      } = {},
+    ): Promise<boolean> => {
+      if (!activeClient || !sessionId) return false;
+      const sessionBeforeRequest = useCodexStore.getState().sessions.get(sessionKey);
       const requestId = refreshControllerRef.current.beginRequest();
       const messages = await getSessionMessages(activeClient, sessionId, options);
-      if (!refreshControllerRef.current.shouldApplyRequest(requestId)) {
-        return;
+      if (
+        !refreshControllerRef.current.shouldApplyRequest(requestId) ||
+        (options.shouldApply && !options.shouldApply())
+      ) {
+        return false;
+      }
+      const sessionAfterRequest = useCodexStore.getState().sessions.get(sessionKey);
+      if (
+        sessionAfterRequest?.sessionId !== sessionId ||
+        sessionAfterRequest !== sessionBeforeRequest
+      ) {
+        return false;
       }
       refreshControllerRef.current.markActivity();
       setMessages(sessionKey, messages);
+      return true;
     },
     [client, session?.sessionId, sessionKey, setMessages],
   );
@@ -1061,15 +1076,13 @@ export function CodexChatTab({
       return;
     }
 
+    const shouldApply = () =>
+      options?.manualRequestSequence === undefined ||
+      options.manualRequestSequence === manualRefreshSequenceRef.current;
     const status = await getSessionStatus(client, session.sessionId, {
       throwOnError: options?.throwOnError,
     });
-    if (
-      options?.manualRequestSequence !== undefined &&
-      options.manualRequestSequence !== manualRefreshSequenceRef.current
-    ) {
-      return;
-    }
+    if (!shouldApply()) return;
     if (!status) {
       if (options?.throwOnError) {
         throw new Error("The Codex session is no longer available on the server");
@@ -1087,6 +1100,7 @@ export function CodexChatTab({
       setSessionError(sessionKey, undefined);
       await refreshMessages(client, session.sessionId, {
         throwOnError: options?.throwOnError,
+        shouldApply,
       });
       return;
     }
@@ -1098,6 +1112,7 @@ export function CodexChatTab({
       setErrorMessage(error);
       await refreshMessages(client, session.sessionId, {
         throwOnError: options?.throwOnError,
+        shouldApply,
       });
       return;
     }
@@ -1106,6 +1121,7 @@ export function CodexChatTab({
     if (options?.forceRefreshMessages) {
       await refreshMessages(client, session.sessionId, {
         throwOnError: options.throwOnError,
+        shouldApply,
       });
     }
   }, [

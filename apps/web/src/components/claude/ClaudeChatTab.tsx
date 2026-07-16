@@ -208,13 +208,24 @@ export function ClaudeChatTab({
 
     const sessionId = activeSession.sessionId;
     const requestSequence = ++manualRefreshSequenceRef.current;
+    const stateBeforeAttempt = useClaudeStore.getState();
+    const sessionBeforeAttempt = stateBeforeAttempt.sessions.get(sessionKey);
+    if (
+      stateBeforeAttempt.clients.get(environmentId) !== activeClient ||
+      sessionBeforeAttempt?.sessionId !== sessionId
+    ) {
+      return;
+    }
+
+    const questionsBeforeAttempt = stateBeforeAttempt.pendingQuestions;
+    const approvalsBeforeAttempt = stateBeforeAttempt.pendingPlanApprovals;
     const existingQuestionIds = new Set(
-      Array.from(stateBeforeRefresh.pendingQuestions.values())
+      Array.from(questionsBeforeAttempt.values())
         .filter((question) => question.sessionId === sessionId)
         .map((question) => question.id),
     );
     const existingApprovalIds = new Set(
-      Array.from(stateBeforeRefresh.pendingPlanApprovals.values())
+      Array.from(approvalsBeforeAttempt.values())
         .filter((approval) => approval.sessionId === sessionId)
         .map((approval) => approval.id),
     );
@@ -229,6 +240,22 @@ export function ClaudeChatTab({
     if (requestSequence !== manualRefreshSequenceRef.current) return;
     if (!serverSession) {
       throw new Error("The Claude session is no longer available on the server");
+    }
+
+    const stateAfterAttempt = useClaudeStore.getState();
+    const sessionAfterAttempt = stateAfterAttempt.sessions.get(sessionKey);
+    if (
+      stateAfterAttempt.clients.get(environmentId) !== activeClient ||
+      sessionAfterAttempt?.sessionId !== sessionId
+    ) {
+      return;
+    }
+    const liveStateChanged =
+      sessionAfterAttempt !== sessionBeforeAttempt ||
+      stateAfterAttempt.pendingQuestions !== questionsBeforeAttempt ||
+      stateAfterAttempt.pendingPlanApprovals !== approvalsBeforeAttempt;
+    if (liveStateChanged) {
+      throw new Error("Claude session changed while refreshing; try again");
     }
 
     setMessages(sessionKey, messages);

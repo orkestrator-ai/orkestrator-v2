@@ -413,18 +413,20 @@ export function OpenCodeChatTab({
         throwOnError?: boolean;
         shouldApply?: () => boolean;
       } = {},
-    ) => {
+    ): Promise<boolean> => {
       const stateBeforeSync = useOpenCodeStore.getState();
+      const questionsBeforeSync = stateBeforeSync.pendingQuestions;
+      const permissionsBeforeSync = stateBeforeSync.pendingPermissions;
       const existingQuestionIds = new Set<string>();
       const existingPermissionIds = new Set<string>();
 
-      for (const existingQuestion of stateBeforeSync.pendingQuestions.values()) {
+      for (const existingQuestion of questionsBeforeSync.values()) {
         if (existingQuestion.sessionID === sessionId) {
           existingQuestionIds.add(existingQuestion.id);
         }
       }
 
-      for (const existingPermission of stateBeforeSync.pendingPermissions.values()) {
+      for (const existingPermission of permissionsBeforeSync.values()) {
         if (existingPermission.sessionID === sessionId) {
           existingPermissionIds.add(existingPermission.id);
         }
@@ -434,7 +436,20 @@ export function OpenCodeChatTab({
         getPendingQuestions(sdkClient, { throwOnError: options.throwOnError }),
         getPendingPermissions(sdkClient, { throwOnError: options.throwOnError }),
       ]);
-      if (options.shouldApply && !options.shouldApply()) return;
+      if (options.shouldApply && !options.shouldApply()) return false;
+
+      const stateAfterSync = useOpenCodeStore.getState();
+      const pendingStateChanged =
+        stateAfterSync.pendingQuestions !== questionsBeforeSync ||
+        stateAfterSync.pendingPermissions !== permissionsBeforeSync;
+      if (pendingStateChanged) {
+        if (options.throwOnError) {
+          throw new Error(
+            "OpenCode pending requests changed while refreshing; try again",
+          );
+        }
+        return false;
+      }
 
       const questionIds = new Set<string>();
       for (const question of questions) {
@@ -450,8 +465,6 @@ export function OpenCodeChatTab({
         addPendingPermission(permission);
       }
 
-      // Prune only items that existed before sync started.
-      // This avoids deleting requests that arrive via SSE during the sync window.
       for (const existingQuestionId of existingQuestionIds) {
         if (!questionIds.has(existingQuestionId)) {
           removePendingQuestion(existingQuestionId);
@@ -463,6 +476,8 @@ export function OpenCodeChatTab({
           removePendingPermission(existingPermissionId);
         }
       }
+
+      return true;
     },
     [
       addPendingPermission,
@@ -481,11 +496,32 @@ export function OpenCodeChatTab({
     const sessionId = activeSession.sessionId;
     const requestSequence = ++manualRefreshSequenceRef.current;
     const shouldApply = () => requestSequence === manualRefreshSequenceRef.current;
+    const stateBeforeAttempt = useOpenCodeStore.getState();
+    const sessionBeforeAttempt = stateBeforeAttempt.sessions.get(sessionKey);
+    if (
+      stateBeforeAttempt.clients.get(environmentId) !== activeClient ||
+      sessionBeforeAttempt?.sessionId !== sessionId
+    ) {
+      return;
+    }
+
     const [messages, status] = await Promise.all([
       getSessionMessages(activeClient, sessionId, { throwOnError: true }),
-      getSessionStatus(activeClient, sessionId),
+      getSessionStatus(activeClient, sessionId, { throwOnError: true }),
     ]);
     if (!shouldApply()) return;
+
+    const stateAfterAttempt = useOpenCodeStore.getState();
+    const sessionAfterAttempt = stateAfterAttempt.sessions.get(sessionKey);
+    if (
+      stateAfterAttempt.clients.get(environmentId) !== activeClient ||
+      sessionAfterAttempt?.sessionId !== sessionId
+    ) {
+      return;
+    }
+    if (sessionAfterAttempt !== sessionBeforeAttempt) {
+      throw new Error("OpenCode session changed while refreshing; try again");
+    }
 
     setMessages(sessionKey, messages);
     if (status) {

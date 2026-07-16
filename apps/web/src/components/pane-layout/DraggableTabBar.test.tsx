@@ -49,6 +49,21 @@ describe("DraggableTabBar", () => {
           type: "claude-native",
           claudeNativeData: { environmentId: "environment" },
         },
+        {
+          id: "codex",
+          type: "codex-native",
+          codexNativeData: { environmentId: "environment" },
+        },
+        {
+          id: "opencode",
+          type: "opencode-native",
+          openCodeNativeData: { environmentId: "environment" },
+        },
+        {
+          id: "tmux",
+          type: "claude-tmux",
+          claudeTmuxData: { environmentId: "environment" },
+        },
         { id: "terminal", type: "plain" },
       ],
     };
@@ -64,11 +79,19 @@ describe("DraggableTabBar", () => {
       </DndContext>,
     );
 
-    fireEvent.contextMenu(screen.getByText("Claude 1"));
-    fireEvent.click(screen.getByText("Refresh"));
-    expect(onTabRefresh).toHaveBeenCalledWith("claude");
+    for (const [label, tabId] of [
+      ["Claude 1", "claude"],
+      ["Codex 2", "codex"],
+      ["OpenCode 3", "opencode"],
+      ["Claude 4", "tmux"],
+    ] as const) {
+      fireEvent.contextMenu(screen.getByText(label));
+      fireEvent.click(screen.getByText("Refresh"));
+      expect(onTabRefresh).toHaveBeenLastCalledWith(tabId);
+    }
 
-    fireEvent.contextMenu(screen.getByText("Terminal 2"));
+    expect(onTabRefresh).toHaveBeenCalledTimes(4);
+    fireEvent.contextMenu(screen.getByText("Terminal 5"));
     expect(screen.queryByText("Refresh")).toBeNull();
   });
 });

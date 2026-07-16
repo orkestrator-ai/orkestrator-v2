@@ -130,7 +130,14 @@ describe("sortable sidebar items", () => {
     expect(screen.getByText("1").className).toContain("bg-zinc-800");
     expect(screen.getByTestId("sortable-context")).toBeTruthy();
 
-    fireEvent.click(screen.getByTitle("Create environment"));
+    const addEnvironmentButton = screen.getByTitle("Create environment");
+    expect(addEnvironmentButton.className).toContain("opacity-100");
+    expect(addEnvironmentButton.className).toContain("md:opacity-0");
+
+    fireEvent.mouseEnter(projectHeader);
+    expect(addEnvironmentButton.className).toContain("md:opacity-100");
+
+    fireEvent.click(addEnvironmentButton);
     expect(onCreateEnvironment).toHaveBeenCalled();
 
     fireEvent.click(projectButton);

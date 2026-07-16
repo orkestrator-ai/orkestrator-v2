@@ -208,8 +208,8 @@ export function SortableProjectGroup({
               variant="ghost"
               size="icon"
               className={cn(
-                "h-6 w-6 text-muted-foreground hover:text-foreground transition-opacity",
-                isHovered ? "opacity-100" : "opacity-0"
+                "h-6 w-6 text-muted-foreground opacity-100 transition-opacity hover:text-foreground md:opacity-0",
+                isHovered && "md:opacity-100"
               )}
               onClick={handleAddEnvironment}
               title="Create environment"

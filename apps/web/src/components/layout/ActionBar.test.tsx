@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createContext, useContext, useState } from "react";
 import * as realAlertDialog from "@/components/ui/alert-dialog";
 import * as realContextMenu from "@/components/ui/context-menu";
@@ -11,6 +11,7 @@ import * as realStores from "@/stores";
 import * as realHooks from "@/hooks";
 import * as realContexts from "@/contexts";
 import * as realBackend from "@/lib/backend";
+import * as realKanbanStore from "@/stores/kanbanStore";
 import * as realSonner from "sonner";
 import type { Environment, Project } from "@/types";
 
@@ -24,6 +25,7 @@ const realStoresSnapshot = { ...realStores };
 const realHooksSnapshot = { ...realHooks };
 const realContextsSnapshot = { ...realContexts };
 const realBackendSnapshot = { ...realBackend };
+const realKanbanStoreSnapshot = { ...realKanbanStore };
 const realSonnerSnapshot = { ...realSonner };
 
 const deleteEnvironmentMock = mock(async (_environmentId: string) => {});
@@ -33,7 +35,12 @@ const openInEditorMock = mock(async (_containerId: string, _editor: string) => {
 const openLocalInEditorMock = mock(async (_worktreePath: string, _editor: string) => {});
 const readContainerFileMock = mock(async (_containerId: string, _path: string) => ({ content: "{}" }));
 const readLocalFileMock = mock(async (_worktreePath: string, _path: string) => ({ content: "{}" }));
-const setEnvironmentPrBackendMock = mock(async () => {});
+const setEnvironmentPrBackendMock = mock(async (
+  _environmentId: string,
+  _prUrl: string,
+  _prState: string,
+  _hasMergeConflicts: boolean,
+) => {});
 const setEnvironmentPRStoreMock = mock(() => {});
 const createTabMock = mock((_agent: string, _options?: unknown) => {});
 const selectTabMock = mock((_index: number) => {});
@@ -43,8 +50,11 @@ const toastErrorMock = mock(() => {});
 const setProjectBoardTabMock = mock((_tab: string) => {});
 const setProjectBoardNotesOpenMock = mock((_open: boolean) => {});
 const toggleFilesPanelMock = mock(() => {});
+const addCommentMock = mock(async (_taskId: string, _body: string) => {});
+const updateTaskMock = mock(async (_taskId: string, _updates: unknown) => {});
 const originalConsoleError = console.error;
 const originalConsoleLog = console.log;
+const originalConsoleWarn = console.warn;
 let writeTextMock: ReturnType<typeof mock>;
 
 const selectedEnvironment: Environment = {
@@ -82,6 +92,10 @@ let currentReviewPrompt: string | undefined;
 let currentWorkspaceReady = false;
 let currentSetupScriptsRunning = false;
 let currentTabCount = 0;
+let currentTaskAssociation: {
+  task: { prMergeCommented?: boolean } | undefined;
+  taskId: string | undefined;
+} = { task: undefined, taskId: undefined };
 
 function selectState<TState, TResult>(
   state: TState,
@@ -103,9 +117,25 @@ const MockContextMenuState = createContext<{
   setOpen: (open: boolean) => void;
 } | null>(null);
 
+const MockAlertDialogState = createContext<{
+  onOpenChange?: (open: boolean) => void;
+} | null>(null);
+
 mock.module("@/components/ui/alert-dialog", () => ({
-  AlertDialog: ({ children, open }: { children: React.ReactNode; open?: boolean }) =>
-    open ? <div data-testid="alert-dialog-root">{children}</div> : null,
+  AlertDialog: ({
+    children,
+    open,
+    onOpenChange,
+  }: {
+    children: React.ReactNode;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+  }) =>
+    open ? (
+      <MockAlertDialogState.Provider value={{ onOpenChange }}>
+        <div data-testid="alert-dialog-root">{children}</div>
+      </MockAlertDialogState.Provider>
+    ) : null,
   AlertDialogAction: ({
     children,
     className,
@@ -119,11 +149,22 @@ mock.module("@/components/ui/alert-dialog", () => ({
   AlertDialogCancel: ({
     children,
     disabled,
-  }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button disabled={disabled} type="button">
-      {children}
-    </button>
-  ),
+    onClick,
+  }: React.ButtonHTMLAttributes<HTMLButtonElement>) => {
+    const state = useContext(MockAlertDialogState);
+    return (
+      <button
+        disabled={disabled}
+        onClick={(event) => {
+          onClick?.(event);
+          state?.onOpenChange?.(false);
+        }}
+        type="button"
+      >
+        {children}
+      </button>
+    );
+  },
   AlertDialogContent: ({
     children,
     className,
@@ -336,6 +377,16 @@ mock.module("@/lib/backend", () => ({
   setEnvironmentPr: setEnvironmentPrBackendMock,
 }));
 
+mock.module("@/stores/kanbanStore", () => ({
+  useKanbanStore: {
+    getState: () => ({
+      addComment: addCommentMock,
+      updateTask: updateTaskMock,
+    }),
+  },
+  findTaskForEnvironment: () => currentTaskAssociation,
+}));
+
 mock.module("sonner", () => ({
   toast: {
     success: toastSuccessMock,
@@ -356,6 +407,7 @@ afterAll(() => {
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/contexts", () => realContextsSnapshot);
   mock.module("@/lib/backend", () => realBackendSnapshot);
+  mock.module("@/stores/kanbanStore", () => realKanbanStoreSnapshot);
   mock.module("sonner", () => realSonnerSnapshot);
 });
 
@@ -363,6 +415,7 @@ beforeEach(() => {
   cleanup();
   console.error = mock(() => {}) as typeof console.error;
   console.log = mock(() => {}) as typeof console.log;
+  console.warn = mock(() => {}) as typeof console.warn;
   deleteEnvironmentMock.mockReset();
   mergePrMock.mockReset();
   mergePrLocalMock.mockReset();
@@ -380,6 +433,15 @@ beforeEach(() => {
   setProjectBoardTabMock.mockReset();
   setProjectBoardNotesOpenMock.mockReset();
   toggleFilesPanelMock.mockReset();
+  addCommentMock.mockReset();
+  updateTaskMock.mockReset();
+  openInEditorMock.mockImplementation(async () => {});
+  openLocalInEditorMock.mockImplementation(async () => {});
+  readContainerFileMock.mockImplementation(async () => ({ content: "{}" }));
+  readLocalFileMock.mockImplementation(async () => ({ content: "{}" }));
+  setEnvironmentPrBackendMock.mockImplementation(async () => {});
+  addCommentMock.mockImplementation(async () => {});
+  updateTaskMock.mockImplementation(async () => {});
   writeTextMock = mock(async () => {});
   Object.defineProperty(navigator, "clipboard", {
     value: { writeText: writeTextMock },
@@ -396,19 +458,63 @@ beforeEach(() => {
   currentWorkspaceReady = false;
   currentSetupScriptsRunning = false;
   currentTabCount = 0;
-  openInEditorMock.mockImplementation(async () => {});
-  openLocalInEditorMock.mockImplementation(async () => {});
-  readContainerFileMock.mockImplementation(async () => ({ content: "{}" }));
-  readLocalFileMock.mockImplementation(async () => ({ content: "{}" }));
-  setEnvironmentPrBackendMock.mockImplementation(async () => {});
+  currentTaskAssociation = { task: undefined, taskId: undefined };
 });
 
 afterEach(() => {
   console.error = originalConsoleError;
   console.log = originalConsoleLog;
+  console.warn = originalConsoleWarn;
 });
 
 describe("ActionBar grid presentation", () => {
+  test("does not show tooltips when mobile toolbar controls receive focus", async () => {
+    render(<ActionBar presentation="grid" />);
+
+    fireEvent.focus(screen.getByRole("button", { name: "Docker configuration" }));
+    await new Promise((resolve) => setTimeout(resolve, 550));
+
+    expect(screen.queryByText("Docker configuration")).toBeNull();
+  });
+
+  test("does not show regular or context-menu tooltips on mobile pointer hover", async () => {
+    render(<ActionBar presentation="grid" />);
+
+    const dockerButton = screen.getByRole("button", { name: "Docker configuration" });
+    const claudeButton = screen.getByRole("button", { name: "New tab with Claude" });
+    fireEvent.mouseEnter(dockerButton.parentElement!);
+    fireEvent.mouseEnter(claudeButton);
+    await new Promise((resolve) => setTimeout(resolve, 550));
+
+    expect(screen.queryByText("Docker configuration")).toBeNull();
+    expect(screen.queryByText("New Tab with Claude")).toBeNull();
+  });
+
+  test("keeps context-menu tooltips enabled in the desktop bar", async () => {
+    render(<ActionBar />);
+
+    const claudeButton = screen.getByRole("button", { name: "New tab with Claude" });
+    fireEvent.mouseEnter(claudeButton);
+
+    await waitFor(() => {
+      expect(screen.getByText("New Tab with Claude")).toBeTruthy();
+    });
+
+    fireEvent.mouseLeave(claudeButton);
+    await waitFor(() => {
+      expect(screen.queryByText("New Tab with Claude")).toBeNull();
+    });
+
+    fireEvent.focus(claudeButton);
+    await waitFor(() => {
+      expect(screen.getByText("New Tab with Claude")).toBeTruthy();
+    });
+    fireEvent.blur(claudeButton);
+    await waitFor(() => {
+      expect(screen.queryByText("New Tab with Claude")).toBeNull();
+    });
+  });
+
   test("renders mobile tools as two columns with labels after their icons", () => {
     const { container } = render(<ActionBar presentation="grid" />);
 
@@ -576,12 +682,46 @@ describe("ActionBar copy URL", () => {
     const { container } = render(
       <>
         <input aria-label="Message" />
+        <textarea aria-label="Description" />
+        <select aria-label="Agent"><option>Claude</option></select>
+        <div aria-label="Editable content" contentEditable />
+        <div contentEditable><span aria-label="Nested editable content">Nested</span></div>
         <div className="xterm" tabIndex={0} />
         <ActionBar />
       </>,
     );
 
+    const directlyEditable = screen.getByLabelText("Editable content");
+    Object.defineProperty(directlyEditable, "isContentEditable", {
+      configurable: true,
+      value: true,
+    });
+
     fireEvent.keyDown(screen.getByLabelText("Message"), {
+      key: "C",
+      code: "KeyC",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    fireEvent.keyDown(screen.getByLabelText("Description"), {
+      key: "C",
+      code: "KeyC",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    fireEvent.keyDown(screen.getByLabelText("Agent"), {
+      key: "C",
+      code: "KeyC",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    fireEvent.keyDown(directlyEditable, {
+      key: "C",
+      code: "KeyC",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    fireEvent.keyDown(screen.getByLabelText("Nested editable content"), {
       key: "C",
       code: "KeyC",
       ctrlKey: true,
@@ -669,7 +809,224 @@ describe("ActionBar copy URL", () => {
   });
 });
 
+describe("ActionBar editor and run commands", () => {
+  test("opens container and local environments in the configured editor", async () => {
+    const { rerender } = render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
+    await waitFor(() => {
+      expect(openInEditorMock).toHaveBeenCalledWith("container-1", "vscode");
+    });
+
+    currentEnvironment = {
+      ...selectedEnvironment,
+      environmentType: "local",
+      containerId: null,
+      worktreePath: "/tmp/feature-env",
+    };
+    rerender(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
+    await waitFor(() => {
+      expect(openLocalInEditorMock).toHaveBeenCalledWith("/tmp/feature-env", "vscode");
+    });
+  });
+
+  test("reports editor launch failures and clears the dialog", async () => {
+    openInEditorMock.mockRejectedValueOnce(new Error("editor unavailable"));
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
+
+    expect(await screen.findByText("Failed to Open Editor")).toBeTruthy();
+    expect(screen.getByText("editor unavailable")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "OK" }));
+    expect(screen.queryByText("Failed to Open Editor")).toBeNull();
+  });
+
+  test("loads and runs container commands from orkestrator-ai.json", async () => {
+    currentWorkspaceReady = true;
+    readContainerFileMock.mockImplementationOnce(async () => ({
+      content: JSON.stringify({ run: ["bun test", "bun run build"] }),
+    }));
+    render(<ActionBar />);
+
+    await waitFor(() => {
+      expect(readContainerFileMock).toHaveBeenCalledWith("container-1", "orkestrator-ai.json");
+      expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe("false");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run commands" }));
+
+    expect(createTabMock).toHaveBeenCalledWith("plain", {
+      initialCommands: ["bun test", "bun run build"],
+    });
+  });
+
+  test("loads run commands from a local worktree", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      environmentType: "local",
+      containerId: null,
+      worktreePath: "/tmp/feature-env",
+    };
+    currentWorkspaceReady = true;
+    readLocalFileMock.mockImplementationOnce(async () => ({
+      content: JSON.stringify({ run: ["bun test"] }),
+    }));
+    render(<ActionBar />);
+
+    await waitFor(() => {
+      expect(readLocalFileMock).toHaveBeenCalledWith("/tmp/feature-env", "orkestrator-ai.json");
+      expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe("false");
+    });
+  });
+
+  test("keeps run commands disabled for malformed configuration and read failures", async () => {
+    currentWorkspaceReady = true;
+    readContainerFileMock.mockImplementationOnce(async () => ({ content: "not json" }));
+    const { unmount } = render(<ActionBar />);
+
+    await waitFor(() => {
+      expect(readContainerFileMock).toHaveBeenCalledTimes(1);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run commands" }));
+    expect(createTabMock).not.toHaveBeenCalled();
+    unmount();
+
+    readContainerFileMock.mockRejectedValueOnce(new Error("read failed"));
+    render(<ActionBar />);
+    await waitFor(() => {
+      expect(console.error).toHaveBeenCalledWith(
+        "[ActionBar] Failed to read orkestrator-ai.json:",
+        expect.any(Error),
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run commands" }));
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("keeps run commands disabled when valid configuration has no commands", async () => {
+    currentWorkspaceReady = true;
+    readContainerFileMock.mockImplementationOnce(async () => ({
+      content: JSON.stringify({ run: [] }),
+    }));
+    render(<ActionBar />);
+
+    await waitFor(() => {
+      expect(readContainerFileMock).toHaveBeenCalledTimes(1);
+    });
+    const runButton = screen.getByRole("button", { name: "Run commands" });
+    expect(runButton.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(runButton);
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("creates an agent-authored run script from the context menu", () => {
+    render(<ActionBar />);
+
+    const runButton = screen.getByRole("button", { name: "Run commands" });
+    fireEvent.contextMenu(runButton);
+    fireEvent.click(screen.getByRole("button", { name: "Create Script with Claude" }));
+
+    expect(createTabMock).toHaveBeenCalledWith("claude", {
+      initialPrompt: expect.any(String),
+    });
+  });
+});
+
+describe("ActionBar toolbar interactions", () => {
+  test("supports drag scrolling and ends dragging on mouse up or leave", () => {
+    const { container } = render(<ActionBar />);
+    const toolbar = container.querySelector("[data-presentation='bar']")!;
+    const scroller = toolbar.firstElementChild as HTMLDivElement;
+    Object.defineProperty(scroller, "offsetLeft", { configurable: true, value: 10 });
+    scroller.scrollLeft = 50;
+
+    const mouseDown = createEvent.mouseDown(scroller, { button: 0 });
+    Object.defineProperty(mouseDown, "pageX", { configurable: true, value: 110 });
+    fireEvent(scroller, mouseDown);
+    expect(scroller.className).toContain("cursor-grabbing");
+    const mouseMove = createEvent.mouseMove(scroller);
+    Object.defineProperty(mouseMove, "pageX", { configurable: true, value: 130 });
+    fireEvent(scroller, mouseMove);
+    expect(scroller.scrollLeft).toBe(20);
+
+    fireEvent.mouseUp(scroller);
+    expect(scroller.className).not.toContain("cursor-grabbing");
+    const secondMouseDown = createEvent.mouseDown(scroller, { button: 0 });
+    Object.defineProperty(secondMouseDown, "pageX", { configurable: true, value: 110 });
+    fireEvent(scroller, secondMouseDown);
+    fireEvent.mouseLeave(scroller);
+    expect(scroller.className).not.toContain("cursor-grabbing");
+  });
+
+  test("suppresses native menus while preserving custom menus and non-HTML targets", () => {
+    const { container } = render(<ActionBar presentation="grid" />);
+    const globalSettings = screen.getByRole("button", { name: "Global settings" });
+    const globalSettingsIcon = globalSettings.querySelector("svg")!;
+    const claudeButton = screen.getByRole("button", { name: "New tab with Claude" });
+    const claudeLabel = Array.from(claudeButton.querySelectorAll("span")).find(
+      (element) => element.textContent === "New Claude tab",
+    )!;
+
+    expect(fireEvent.contextMenu(globalSettings)).toBe(false);
+    expect(fireEvent.contextMenu(globalSettingsIcon)).toBe(true);
+    fireEvent.contextMenu(claudeLabel);
+
+    expect(screen.getByRole("button", { name: "Claude Tmux" })).toBeTruthy();
+    expect(container.querySelector("[data-mobile-toolbar]")).toBeTruthy();
+  });
+
+  test("handles numeric, tab creation, close, and file-panel shortcuts", () => {
+    currentTabCount = 1;
+    render(<ActionBar />);
+
+    fireEvent.keyDown(window, { key: "3", code: "Digit3", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "4", code: "", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "t", code: "KeyT", metaKey: true });
+    fireEvent.keyDown(window, { key: "n", code: "KeyN", metaKey: true });
+    fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
+    fireEvent.keyDown(window, { key: "w", code: "KeyW", metaKey: true });
+    fireEvent.keyDown(window, { key: "e", code: "KeyE", metaKey: true });
+
+    expect(selectTabMock.mock.calls.map(([index]) => index)).toEqual([2, 3]);
+    expect(createTabMock).toHaveBeenCalledWith("plain");
+    expect(createTabMock).toHaveBeenCalledWith("claude");
+    expect(createTabMock).toHaveBeenCalledWith("opencode");
+    expect(closeActiveTabMock).toHaveBeenCalledTimes(1);
+    expect(toggleFilesPanelMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("runs commands and opens the editor from keyboard shortcuts", async () => {
+    currentWorkspaceReady = true;
+    readContainerFileMock.mockImplementationOnce(async () => ({
+      content: JSON.stringify({ run: ["bun test"] }),
+    }));
+    render(<ActionBar />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe("false");
+    });
+
+    fireEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true });
+    fireEvent.keyDown(window, { key: "o", code: "KeyO", metaKey: true });
+
+    expect(createTabMock).toHaveBeenCalledWith("plain", { initialCommands: ["bun test"] });
+    await waitFor(() => {
+      expect(openInEditorMock).toHaveBeenCalledWith("container-1", "vscode");
+    });
+  });
+});
+
 describe("ActionBar workflow tabs", () => {
+  test("shows the desktop empty-state guidance without a selected project", () => {
+    currentSelectedProjectId = null;
+    currentSelectedEnvironmentId = null;
+
+    render(<ActionBar />);
+
+    expect(screen.getByText("Select an environment to get started")).toBeTruthy();
+  });
+
   test("shows project board tabs in the top bar when no environment is selected", () => {
     currentSelectedEnvironmentId = null;
 
@@ -1114,6 +1471,93 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
   });
 });
 
+describe("ActionBar merge completion", () => {
+  test("merges a container PR, persists state, and comments on its task", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+    };
+    currentTaskAssociation = {
+      task: { prMergeCommented: false },
+      taskId: "task-1",
+    };
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
+
+    await waitFor(() => {
+      expect(mergePrMock).toHaveBeenCalledWith("container-1", "squash", true);
+      expect(setEnvironmentPrBackendMock).toHaveBeenCalledWith(
+        "env-1",
+        "https://github.com/org/repo/pull/1",
+        "merged",
+        false,
+      );
+      expect(setEnvironmentPRStoreMock).toHaveBeenCalledWith(
+        "env-1",
+        "https://github.com/org/repo/pull/1",
+        "merged",
+        false,
+      );
+      expect(addCommentMock).toHaveBeenCalledWith("task-1", "🎉 PR merged");
+      expect(updateTaskMock).toHaveBeenCalledWith("task-1", {
+        prState: "merged",
+        prMergeCommented: true,
+      });
+    });
+  });
+
+  test("merges a local PR through the environment-scoped backend", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      environmentType: "local",
+      containerId: null,
+      worktreePath: "/tmp/feature-env",
+      prState: "open",
+    };
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
+
+    await waitFor(() => {
+      expect(mergePrLocalMock).toHaveBeenCalledWith("env-1", "squash", true);
+    });
+    expect(mergePrMock).not.toHaveBeenCalled();
+  });
+
+  test("keeps a successful merge complete when state persistence and task comments fail", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+    };
+    currentTaskAssociation = {
+      task: { prMergeCommented: false },
+      taskId: "task-1",
+    };
+    setEnvironmentPrBackendMock.mockRejectedValueOnce(new Error("save failed"));
+    addCommentMock.mockRejectedValueOnce(new Error("comment failed"));
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
+
+    await waitFor(() => {
+      expect(console.warn).toHaveBeenCalledWith(
+        "[ActionBar] Failed to save merged state:",
+        expect.any(Error),
+      );
+      expect(console.warn).toHaveBeenCalledWith(
+        "[ActionBar] Failed to add PR merged comment:",
+        expect.any(Error),
+      );
+    });
+    expect(mergePrMock).toHaveBeenCalledTimes(1);
+    expect(updateTaskMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("ActionBar error dialogs", () => {
   test("keeps cleanup errors constrained and scrollable", async () => {
     deleteEnvironmentMock.mockRejectedValueOnce(new Error(longError("delete failed")));
@@ -1134,6 +1578,13 @@ describe("ActionBar error dialogs", () => {
     expect(errorAlert.className).toContain("whitespace-pre-wrap");
     expect(errorAlert.className).toContain("break-words");
     expect(errorAlert.className).toContain("[overflow-wrap:anywhere]");
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
+    expect(screen.queryByText(
+      (_content, element) =>
+        element?.textContent?.startsWith("Failed to delete environment:") ?? false,
+    )).toBeNull();
   });
 
   test("keeps merge errors constrained and scrollable", async () => {
@@ -1160,5 +1611,12 @@ describe("ActionBar error dialogs", () => {
     expect(errorAlert.className).toContain("whitespace-pre-wrap");
     expect(errorAlert.className).toContain("break-words");
     expect(errorAlert.className).toContain("[overflow-wrap:anywhere]");
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
+    expect(screen.queryByText(
+      (_content, element) =>
+        element?.textContent?.startsWith("Failed to merge PR:") ?? false,
+    )).toBeNull();
   });
 });

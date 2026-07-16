@@ -24,6 +24,13 @@ export type TmuxEvent =
       session_id: string;
     }
   | {
+      kind: "permission-mode-changed";
+      tab_id: string;
+      environment_id: string;
+      session_id: string;
+      permission_mode: string;
+    }
+  | {
       kind: "transcript-line";
       tab_id: string;
       environment_id: string;
@@ -122,6 +129,7 @@ export interface TmuxStatus {
   transcript_path: string | null;
   resumed: boolean;
   busy: boolean;
+  permission_mode: string;
 }
 
 /** Metadata about a previously-recorded session the user could resume. */
@@ -142,7 +150,6 @@ export async function startSession(
     initialPrompt?: string;
     model?: string;
     effort?: string;
-    planMode?: boolean;
     resumeSessionId?: string;
   },
 ): Promise<TmuxStatus> {
@@ -152,7 +159,6 @@ export async function startSession(
     initialPrompt: options?.initialPrompt,
     model: options?.model,
     effort: options?.effort,
-    planMode: options?.planMode,
     resumeSessionId: options?.resumeSessionId,
   });
 }
@@ -195,6 +201,18 @@ export async function switchEffort(
   environmentId: string,
 ): Promise<void> {
   await invoke("claude_tmux_switch_effort", { tabId, environmentId, effort });
+}
+
+export async function switchPlanMode(
+  tabId: string,
+  planMode: boolean,
+  environmentId: string,
+): Promise<string> {
+  return invoke<string>("claude_tmux_switch_plan_mode", {
+    tabId,
+    environmentId,
+    planMode,
+  });
 }
 
 export async function sendText(tabId: string, text: string, environmentId: string): Promise<void> {

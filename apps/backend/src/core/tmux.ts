@@ -26,6 +26,10 @@ const HOOK_TIMEOUT_SECS = 600;
 const COMMAND_IDLE_TIMEOUT_MS = 8_000;
 const COMMAND_NO_HOOK_SETTLE_MS = 2_000;
 const COMMAND_AFTER_IDLE_SETTLE_MS = 400;
+const PERMISSION_MODE_SWITCH_ATTEMPTS = 6;
+const PERMISSION_MODE_READY_TIMEOUT_MS = 10_000;
+const PERMISSION_MODE_SWITCH_TIMEOUT_MS = 1_500;
+const PERMISSION_MODE_POLL_MS = 100;
 const BACKUP_SENTINEL_NO_ORIGINAL = "__orkestrator_no_original__";
 const CLAUDE_SETTINGS_LOCAL_GIT_EXCLUDE_PATTERN = ".claude/settings.local.json";
 const RUNTIME_ROOT_PREFIX = "/tmp/orkestrator-v2-claude-tmux";
@@ -887,7 +891,25 @@ type TmuxStatus = {
   transcript_path: string | null;
   resumed: boolean;
   busy: boolean;
+  permission_mode: string;
 };
+
+function permissionModeFromTranscriptLine(line: unknown): string | undefined {
+  if (!line || typeof line !== "object") return undefined;
+  const record = line as Record<string, unknown>;
+  return record.type === "permission-mode" && typeof record.permissionMode === "string"
+    ? record.permissionMode
+    : undefined;
+}
+
+function permissionModeFromPane(snapshot: string): string | undefined {
+  const normalized = snapshot.toLowerCase().split("\n").slice(-6).join("\n");
+  if (normalized.includes("plan mode on")) return "plan";
+  if (normalized.includes("bypass permissions on")) return "bypassPermissions";
+  if (normalized.includes("accept edits on")) return "acceptEdits";
+  if (normalized.includes("auto mode on")) return "auto";
+  return undefined;
+}
 
 class TmuxSession {
   readonly sessionId: string;
@@ -904,6 +926,7 @@ class TmuxSession {
   private stopRequested = false;
   private transcriptPath: string | undefined;
   private busy = false;
+  private permissionMode = "bypassPermissions";
 
   constructor(
     readonly environmentId: string,
@@ -933,6 +956,7 @@ class TmuxSession {
       transcript_path: this.transcriptPath ?? null,
       resumed: this.resumed,
       busy: this.busy,
+      permission_mode: this.permissionMode,
     };
   }
 
@@ -958,7 +982,10 @@ class TmuxSession {
       const trimmed = raw.trim();
       if (!trimmed) continue;
       try {
-        lines.push(JSON.parse(trimmed));
+        const line = JSON.parse(trimmed);
+        lines.push(line);
+        const permissionMode = permissionModeFromTranscriptLine(line);
+        if (permissionMode) this.permissionMode = permissionMode;
       } catch {
         // Continue reading later lines.
       }
@@ -975,7 +1002,6 @@ class TmuxSession {
     initialPrompt: string | undefined,
     model: string | undefined,
     effort: string | undefined,
-    planMode: boolean,
   ): Promise<void> {
     await ensureSessionDirs(this.backend, this.sessionHookPaths);
 
@@ -1000,7 +1026,7 @@ class TmuxSession {
     const alive = await this.tmuxAlive();
     const launchedNew = !alive;
     if (launchedNew) {
-      const claudeCmd = this.claudeLaunchCommand(claudeCommand, helpText, model, effort, planMode);
+      const claudeCmd = this.claudeLaunchCommand(claudeCommand, helpText, model, effort);
       const wrapped = `${claudeCmd}; echo '[claude exited]'; exec bash`;
       const out = await this.backend.exec([
         this.tmuxCommand,
@@ -1064,7 +1090,6 @@ class TmuxSession {
     helpText: string,
     model: string | undefined,
     effort: string | undefined,
-    planMode: boolean,
   ): string {
     let command = shellArg(claudeCommand);
     if (model?.trim()) command += ` --model ${shellArg(model)}`;
@@ -1075,7 +1100,6 @@ class TmuxSession {
         console.warn("[tmux] claude CLI does not support --effort; launching without it");
       }
     }
-    if (planMode) command += " --permission-mode plan";
     command += " --dangerously-skip-permissions";
     command += this.resumed ? ` --resume ${this.sessionId}` : ` --session-id ${this.sessionId}`;
     return command;
@@ -1153,6 +1177,8 @@ class TmuxSession {
             try {
               const lines = await tail.readNew(this.backend);
               for (const line of lines) {
+                const permissionMode = permissionModeFromTranscriptLine(line);
+                if (permissionMode) this.setPermissionMode(permissionMode, context);
                 context.emit(CLAUDE_TMUX_EVENT, {
                   kind: "transcript-line",
                   tab_id: this.tabId,
@@ -1253,6 +1279,61 @@ class TmuxSession {
     if (!trimmed) throw new Error("effort level cannot be empty");
     await this.submit(`/effort ${trimmed}`);
     await this.waitForCommandIdle();
+  }
+
+  async switchPlanMode(planMode: boolean, context: CommandContext): Promise<string> {
+    if (this.busy) throw new Error("Cannot switch Claude mode while a turn is running");
+    const targetMode = planMode ? "plan" : "bypassPermissions";
+    let observedMode = await this.waitForPanePermissionMode(PERMISSION_MODE_READY_TIMEOUT_MS);
+
+    for (let attempt = 0; attempt < PERMISSION_MODE_SWITCH_ATTEMPTS; attempt += 1) {
+      if (observedMode) this.setPermissionMode(observedMode, context);
+      if (observedMode === targetMode) return targetMode;
+
+      await this.sendKeys(["BTab"]);
+      observedMode = await this.waitForPanePermissionMode(
+        PERMISSION_MODE_SWITCH_TIMEOUT_MS,
+        observedMode,
+      );
+    }
+
+    if (observedMode) this.setPermissionMode(observedMode, context);
+    if (observedMode === targetMode) return targetMode;
+    throw new Error(`Claude did not enter ${planMode ? "plan" : "build"} mode`);
+  }
+
+  private async waitForPanePermissionMode(
+    timeoutMs: number,
+    previousMode?: string,
+  ): Promise<string | undefined> {
+    const deadline = Date.now() + timeoutMs;
+    let lastObservedMode: string | undefined;
+    while (Date.now() < deadline) {
+      const snapshot = await this.capturePane();
+      if (paneHasClaudeExited(snapshot)) throw new Error("Claude exited before its mode could be changed");
+      if (paneHasSelectionPrompt(snapshot)) {
+        throw new Error("Finish the active Claude prompt before changing modes");
+      }
+      const observedMode = permissionModeFromPane(snapshot);
+      if (observedMode) {
+        lastObservedMode = observedMode;
+        if (previousMode === undefined || observedMode !== previousMode) return observedMode;
+      }
+      await delay(PERMISSION_MODE_POLL_MS);
+    }
+    return lastObservedMode;
+  }
+
+  private setPermissionMode(permissionMode: string, context: CommandContext): void {
+    if (permissionMode === this.permissionMode) return;
+    this.permissionMode = permissionMode;
+    context.emit(CLAUDE_TMUX_EVENT, {
+      kind: "permission-mode-changed",
+      tab_id: this.tabId,
+      environment_id: this.environmentId,
+      session_id: this.sessionId,
+      permission_mode: permissionMode,
+    });
   }
 
   private async waitForCommandIdle(): Promise<void> {
@@ -1637,7 +1718,7 @@ export function registerTmuxBackendCommands(register: RegisterCommand): void {
     claudeStatePolls.stop(asString(containerId, "containerId"));
   });
 
-  register("claude_tmux_start", async ({ tabId, environmentId, initialPrompt, model, effort, planMode, resumeSessionId }, context) => {
+  register("claude_tmux_start", async ({ tabId, environmentId, initialPrompt, model, effort, resumeSessionId }, context) => {
     const envId = asString(environmentId, "environmentId");
     const tab = asString(tabId, "tabId");
     const resumeId = asOptionalString(resumeSessionId);
@@ -1655,7 +1736,6 @@ export function registerTmuxBackendCommands(register: RegisterCommand): void {
         asOptionalString(initialPrompt),
         asOptionalString(model),
         asOptionalString(effort),
-        asBoolean(planMode),
       );
       return session.status(await session.tmuxAlive().catch(() => false));
     });
@@ -1703,6 +1783,12 @@ export function registerTmuxBackendCommands(register: RegisterCommand): void {
   );
   register("claude_tmux_switch_effort", ({ tabId, effort, environmentId }) =>
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).switchEffort(asString(effort, "effort")),
+  );
+  register("claude_tmux_switch_plan_mode", ({ tabId, planMode, environmentId }, context) =>
+    requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).switchPlanMode(
+      asBoolean(planMode),
+      context,
+    ),
   );
   register("claude_tmux_capture_pane", ({ tabId, environmentId }) =>
     requireSession(asString(environmentId, "environmentId"), asString(tabId, "tabId")).capturePane(),

@@ -75,15 +75,40 @@ case "$command" in
     ;;
   new-session)
     mkdir -p "$FAKE_TMUX_ALIVE"
-    [ -n "$session_name" ] && touch "$FAKE_TMUX_ALIVE/$session_name"
+    if [ -n "$session_name" ]; then
+      touch "$FAKE_TMUX_ALIVE/$session_name"
+      printf 'bypassPermissions' > "$FAKE_TMUX_ALIVE/$session_name.mode"
+    fi
     exit 0
     ;;
   kill-session)
-    [ -n "$session_name" ] && rm -f "$FAKE_TMUX_ALIVE/$session_name"
+    [ -n "$session_name" ] && rm -f "$FAKE_TMUX_ALIVE/$session_name" "$FAKE_TMUX_ALIVE/$session_name.mode"
     exit 0
     ;;
   capture-pane)
-    printf 'fake snapshot'
+    if [ -n "$session_name" ] && [ -f "$FAKE_TMUX_ALIVE/$session_name.mode" ]; then
+      mode="$(cat "$FAKE_TMUX_ALIVE/$session_name.mode")"
+      if [ "$mode" = 'plan' ]; then
+        printf 'plan mode on'
+      else
+        printf 'bypass permissions on'
+      fi
+    else
+      printf 'fake snapshot'
+    fi
+    exit 0
+    ;;
+  send-keys)
+    case "$*" in
+      *BTab*)
+        mode_file="$FAKE_TMUX_ALIVE/$session_name.mode"
+        if [ "$(cat "$mode_file" 2>/dev/null)" = 'plan' ]; then
+          printf 'bypassPermissions' > "$mode_file"
+        else
+          printf 'plan' > "$mode_file"
+        fi
+        ;;
+    esac
     exit 0
     ;;
   *)
@@ -191,6 +216,7 @@ describe("Electron tmux backend command registration", () => {
       "claude_tmux_submit",
       "claude_tmux_switch_model",
       "claude_tmux_switch_effort",
+      "claude_tmux_switch_plan_mode",
       "claude_tmux_capture_pane",
       "claude_tmux_resize",
       "claude_tmux_answer_pre_tool_use",
@@ -293,11 +319,52 @@ describe("Electron tmux backend command registration", () => {
       const status = await invoke(
         handlers,
         "claude_tmux_start",
-        { tabId: "tab-1", environmentId: environment.id, model: "sonnet", effort: "medium", planMode: true },
+        {
+          tabId: "tab-1",
+          environmentId: environment.id,
+          model: "sonnet",
+          effort: "medium",
+          // Legacy callers may still send this launch-time field. It must not
+          // override the invariant that Claude starts in bypass mode.
+          planMode: true,
+        },
         context,
       ) as { session_id: string; running: boolean };
       expect(status.running).toBe(true);
       expect(status.session_id).toBeTruthy();
+
+      const launchLog = await fs.readFile(log, "utf8");
+      expect(launchLog).toContain(" --dangerously-skip-permissions");
+      expect(launchLog).not.toContain("--permission-mode plan");
+
+      await expect(invoke(
+        handlers,
+        "claude_tmux_switch_plan_mode",
+        { tabId: "tab-1", environmentId: environment.id, planMode: true },
+        context,
+      )).resolves.toBe("plan");
+      await expect(invoke(
+        handlers,
+        "claude_tmux_status",
+        { tabId: "tab-1", environmentId: environment.id },
+        context,
+      )).resolves.toEqual(expect.objectContaining({ permission_mode: "plan" }));
+      await expect(invoke(
+        handlers,
+        "claude_tmux_switch_plan_mode",
+        { tabId: "tab-1", environmentId: environment.id, planMode: false },
+        context,
+      )).resolves.toBe("bypassPermissions");
+      await expect(invoke(
+        handlers,
+        "claude_tmux_status",
+        { tabId: "tab-1", environmentId: environment.id },
+        context,
+      )).resolves.toEqual(expect.objectContaining({ permission_mode: "bypassPermissions" }));
+
+      const switchedLog = await fs.readFile(log, "utf8");
+      expect(switchedLog).toContain("send-keys -t");
+      expect(switchedLog).toContain("-- BTab");
 
       const sessionRoot = path.join("/tmp", "orkestrator-v2-claude-tmux", environment.id, "sessions", status.session_id);
       const pendingDir = path.join(sessionRoot, "pending");

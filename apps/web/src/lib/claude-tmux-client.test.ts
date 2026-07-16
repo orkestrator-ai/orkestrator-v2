@@ -55,15 +55,15 @@ import {
   stopSession,
   submit,
   switchModel,
+  switchPlanMode,
   writeInteractiveTerminal,
 } from "./claude-tmux-client";
 
 describe("claude-tmux-client invoke wrappers", () => {
-  test("startSession forwards tabId, environmentId, prompt/model/plan, and resume", async () => {
+  test("startSession forwards tabId, environmentId, prompt/model, and resume", async () => {
     await startSession("tab-1", "env-1", {
       initialPrompt: "hi",
       model: "sonnet",
-      planMode: true,
       resumeSessionId: "sess-resume",
     });
     expect(calls).toHaveLength(1);
@@ -73,7 +73,6 @@ describe("claude-tmux-client invoke wrappers", () => {
       environmentId: "env-1",
       initialPrompt: "hi",
       model: "sonnet",
-      planMode: true,
       resumeSessionId: "sess-resume",
     });
   });
@@ -85,7 +84,6 @@ describe("claude-tmux-client invoke wrappers", () => {
       environmentId: "env-1",
       initialPrompt: undefined,
       model: undefined,
-      planMode: undefined,
       resumeSessionId: undefined,
     });
   });
@@ -100,6 +98,16 @@ describe("claude-tmux-client invoke wrappers", () => {
     await interruptSession("tab-1", "env-1");
     expect(calls[0]!.cmd).toBe("claude_tmux_interrupt");
     expect(calls[0]!.args).toEqual({ tabId: "tab-1", environmentId: "env-1" });
+  });
+
+  test("switchPlanMode invokes the live tmux mode command", async () => {
+    await switchPlanMode("tab-1", true, "env-1");
+    expect(calls[0]!.cmd).toBe("claude_tmux_switch_plan_mode");
+    expect(calls[0]!.args).toEqual({
+      tabId: "tab-1",
+      environmentId: "env-1",
+      planMode: true,
+    });
   });
 
   test("getStatus invokes the status command with tabId and environmentId", async () => {

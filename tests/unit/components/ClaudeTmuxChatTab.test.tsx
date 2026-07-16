@@ -56,6 +56,7 @@ const startSessionMock = mock(async () => ({
   transcript_path: null,
   resumed: false,
   busy: false,
+  permission_mode: "bypassPermissions",
 }));
 const getStatusMock = mock(async () => null);
 const getTranscriptMock = mock(async () => []);
@@ -75,6 +76,9 @@ const replyHookMock = mock(async () => {});
 const submitMock = mock(async () => {});
 const switchModelMock = mock(async () => {});
 const switchEffortMock = mock(async () => {});
+const switchPlanModeMock = mock(async (_tabId: string, planMode: boolean, _environmentId?: string) =>
+  planMode ? "plan" : "bypassPermissions",
+);
 const answerPreToolUseMock = mock(async () => {});
 const listPreviousSessionsMock = mock(async () => [
   {
@@ -127,6 +131,8 @@ mock.module("@/lib/claude-tmux-client", () => ({
     switchModelMock(tabId, model, environmentId),
   switchEffort: (tabId: string, effort: string, environmentId?: string) =>
     switchEffortMock(tabId, effort, environmentId),
+  switchPlanMode: (tabId: string, planMode: boolean, environmentId?: string) =>
+    switchPlanModeMock(tabId, planMode, environmentId),
   replyHook: (
     tabId: string,
     eventKind: realTmuxClient.HookEventKind,
@@ -396,6 +402,7 @@ describe("ClaudeTmuxChatTab", () => {
     submitMock.mockClear();
     switchModelMock.mockClear();
     switchEffortMock.mockClear();
+    switchPlanModeMock.mockClear();
     answerPreToolUseMock.mockClear();
     listPreviousSessionsMock.mockClear();
     interactiveTerminalRenderMock.mockClear();
@@ -403,6 +410,9 @@ describe("ClaudeTmuxChatTab", () => {
     submitMock.mockImplementation(async () => {});
     switchModelMock.mockImplementation(async () => {});
     switchEffortMock.mockImplementation(async () => {});
+    switchPlanModeMock.mockImplementation(async (_tabId: string, planMode: boolean, _environmentId?: string) =>
+      planMode ? "plan" : "bypassPermissions",
+    );
     listPreviousSessionsMock.mockImplementation(async () => [
       {
         session_id: "resume-1",
@@ -514,7 +524,6 @@ describe("ClaudeTmuxChatTab", () => {
         initialPrompt: "Run the audit",
         model: "sonnet",
         effort: "high",
-        planMode: false,
         resumeSessionId: undefined,
       },
     ]);
@@ -1142,6 +1151,7 @@ Running 1 Explore agent...
       transcript_path: "/tmp/session-existing.jsonl",
       resumed: false,
       busy: false,
+      permission_mode: "plan",
     }));
     getTranscriptMock.mockImplementation(async () => [
       {
@@ -1178,6 +1188,7 @@ Running 1 Explore agent...
         "Final result: tests pass.",
       ]);
       expect(tab.busy).toBe(false);
+      expect(screen.getByRole("button", { name: "Plan" })).toBeTruthy();
     });
 
     expect(startSessionMock).not.toHaveBeenCalled();
@@ -1990,7 +2001,6 @@ Running 1 Explore agent...
         initialPrompt: undefined,
         model: "haiku",
         effort: undefined,
-        planMode: false,
         resumeSessionId: undefined,
       });
     });
@@ -2027,7 +2037,6 @@ Running 1 Explore agent...
         initialPrompt: undefined,
         model: "haiku",
         effort: undefined,
-        planMode: false,
         resumeSessionId: undefined,
       });
     });
@@ -2099,7 +2108,6 @@ Running 1 Explore agent...
         initialPrompt: undefined,
         model: undefined,
         effort: "high",
-        planMode: false,
         resumeSessionId: undefined,
       });
     });
@@ -2311,7 +2319,6 @@ Running 1 Explore agent...
         initialPrompt: undefined,
         model: "sonnet",
         effort: "max",
-        planMode: false,
         resumeSessionId: undefined,
       });
     });
@@ -2559,7 +2566,7 @@ Running 1 Explore agent...
     });
   });
 
-  test("keeps plan mode launch-only once the session is running", async () => {
+  test("switches the running tmux TUI between plan and build mode", async () => {
     useClaudeTmuxStore
       .getState()
       .setRunning("tab-1", true, {
@@ -2579,7 +2586,28 @@ Running 1 Explore agent...
       name: /Build/,
     }) as HTMLButtonElement;
 
-    expect(planButton.disabled).toBe(true);
+    expect(planButton.disabled).toBe(false);
+    fireEvent.pointerDown(planButton);
+    const planOption = await screen.findByRole("menuitem", { name: "Plan" });
+    await act(async () => {
+      fireEvent.click(planOption);
+    });
+
+    await waitFor(() => {
+      expect(switchPlanModeMock).toHaveBeenCalledWith("tab-1", true, "env-1");
+      expect(screen.getByRole("button", { name: "Plan" })).toBeTruthy();
+    });
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Plan" }));
+    const buildOption = await screen.findByRole("menuitem", { name: "Build" });
+    await act(async () => {
+      fireEvent.click(buildOption);
+    });
+
+    await waitFor(() => {
+      expect(switchPlanModeMock).toHaveBeenLastCalledWith("tab-1", false, "env-1");
+      expect(screen.getByRole("button", { name: "Build" })).toBeTruthy();
+    });
   });
 
   test("starts a previous session from the resume picker", async () => {
@@ -2602,7 +2630,6 @@ Running 1 Explore agent...
         initialPrompt: undefined,
         model: "sonnet",
         effort: "high",
-        planMode: false,
         resumeSessionId: "resume-1",
       });
     });

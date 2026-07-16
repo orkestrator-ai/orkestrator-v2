@@ -172,6 +172,7 @@ export function OpenCodeChatTab({
     return hasClient && hasSession ? "connected" : "connecting";
   });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
@@ -702,32 +703,37 @@ export function OpenCodeChatTab({
           // Sync pending interactions in case we missed early SSE events
           await syncPendingRequests(sdkClient, existingSessionId);
 
-          // Refresh messages from server to ensure latest state on reconnection
-          if (existingSessionFromStore) {
-            try {
-              const messages = await getSessionMessages(
-                sdkClient,
-                existingSessionId,
-              );
-              if (!mounted) return;
+          // Refresh messages from server to ensure latest state on reconnection.
+          // A restored pane on a new client has no in-memory session yet, so it
+          // must hydrate the transcript rather than installing an empty shell.
+          try {
+            const messages = await getSessionMessages(
+              sdkClient,
+              existingSessionId,
+            );
+            if (!mounted) return;
 
+            if (existingSessionFromStore) {
               // setMessages preserves client-side error messages (ERROR_MESSAGE_PREFIX)
               // from the existing session state when replacing server messages.
               setMessages(sessionKey, messages);
-            } catch (err) {
+            } else {
+              setSession(sessionKey, {
+                sessionId: existingSessionId,
+                messages,
+                isLoading: false,
+              });
+            }
+          } catch (err) {
+            if (existingSessionFromStore) {
               console.warn(
                 "[OpenCodeChatTab] Failed to refresh messages on reconnect:",
                 err,
               );
               // Keep existing messages from store if refresh fails
+            } else {
+              throw err;
             }
-          } else {
-            // Session exists in ref but not in store, restore minimal state
-            setSession(sessionKey, {
-              sessionId: existingSessionId,
-              messages: [],
-              isLoading: false,
-            });
           }
         } else {
           // First initialization - create a new session
@@ -806,6 +812,7 @@ export function OpenCodeChatTab({
     setSelectedModel,
     setSelectedVariant,
     setupPending,
+    initAttempt,
   ]);
 
   useEffect(() => {
@@ -1412,6 +1419,7 @@ export function OpenCodeChatTab({
     setSession(sessionKey, null);
     setContextUsage(sessionKey, null);
     setServerStatus(environmentId, { running: false, hostPort: null });
+    setInitAttempt((value) => value + 1);
   }, [
     sessionKey,
     environmentId,

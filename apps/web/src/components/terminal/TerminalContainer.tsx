@@ -785,7 +785,10 @@ export function TerminalContainer({
             const latestEnvironment = useEnvironmentStore
               .getState()
               .getEnvironmentById(environmentId);
-            if (!latestEnvironment) return;
+            if (!latestEnvironment) {
+              paneStore.finishHydration(environmentId);
+              return;
+            }
 
             const latestIsLocal = latestEnvironment.environmentType === "local";
             const latestContainerId = latestIsLocal ? null : latestEnvironment.containerId;

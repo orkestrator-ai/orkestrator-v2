@@ -135,4 +135,116 @@ describe("reconcilePersistedLayout", () => {
       ],
     }), context)).toBeNull();
   });
+
+  test("rehydrates local files and every specialized tab against current environment data", () => {
+    const localContext = {
+      environmentId: "env-1",
+      containerId: null,
+      isLocal: true,
+      worktreePath: "/worktrees/current",
+      hasBuildPipeline: (pipelineId: string) => pipelineId === "pipeline-1",
+    };
+    const restored = reconcilePersistedLayout(saved({
+      kind: "leaf",
+      id: "pane",
+      tabs: [
+        {
+          id: "file",
+          type: "file",
+          fileData: {
+            filePath: "src/index.ts",
+            containerId: "stale",
+            worktreePath: "/stale",
+            isLocalEnvironment: false,
+            language: "typescript",
+            isDiff: true,
+            gitStatus: "M",
+            baseBranch: "main",
+          },
+        },
+        { id: "codex", type: "codex-native", codexNativeData: { environmentId: "old", sessionId: "cx-1" } },
+        { id: "open", type: "opencode-native", openCodeNativeData: { environmentId: "old", sessionId: "oc-1" } },
+        { id: "tmux", type: "claude-tmux", claudeTmuxData: { environmentId: "old" } },
+        {
+          id: "build",
+          type: "claude-build",
+          buildTabData: { environmentId: "old", pipelineId: "pipeline-1", taskId: "task-1" },
+        },
+      ],
+      activeTabId: "file",
+    }, { containerId: null }), localContext);
+
+    expect(restored?.root).toMatchObject({
+      kind: "leaf",
+      tabs: [
+        { id: "file", fileData: { worktreePath: "/worktrees/current", isLocalEnvironment: true } },
+        { id: "codex", codexNativeData: { environmentId: "env-1", sessionId: "cx-1", isLocal: true } },
+        { id: "open", openCodeNativeData: { environmentId: "env-1", sessionId: "oc-1", isLocal: true } },
+        { id: "tmux", claudeTmuxData: { environmentId: "env-1", isLocal: true } },
+        { id: "build", buildTabData: { environmentId: "env-1", pipelineId: "pipeline-1", taskId: "task-1", isLocal: true } },
+      ],
+    });
+    expect(JSON.stringify(restored)).not.toContain("stale");
+  });
+
+  test("preserves child order and direction while normalizing split sizes", () => {
+    const restored = reconcilePersistedLayout(saved({
+      kind: "split",
+      id: "split",
+      direction: "vertical",
+      sizes: [1, 999],
+      children: [
+        { kind: "leaf", id: "first", tabs: [{ id: "one", type: "plain" }], activeTabId: "one" },
+        { kind: "leaf", id: "second", tabs: [{ id: "two", type: "plain" }], activeTabId: "two" },
+      ],
+    }), context);
+
+    expect(restored?.root).toMatchObject({
+      kind: "split",
+      direction: "vertical",
+      sizes: [10, 90],
+      depth: 1,
+      children: [{ id: "first" }, { id: "second" }],
+    });
+  });
+
+  test("defaults invalid sizes and rejects invalid direction, child count, and excessive depth", () => {
+    const leaves = [
+      { kind: "leaf", id: "first", tabs: [{ id: "one", type: "plain" }], activeTabId: "one" },
+      { kind: "leaf", id: "second", tabs: [{ id: "two", type: "plain" }], activeTabId: "two" },
+    ];
+    expect(reconcilePersistedLayout(saved({
+      kind: "split",
+      id: "split",
+      direction: "horizontal",
+      sizes: [0, Number.NaN],
+      children: leaves,
+    }), context)?.root).toMatchObject({ sizes: [50, 50] });
+    expect(reconcilePersistedLayout(saved({ ...leaves[0], kind: "split", direction: "diagonal", children: leaves }), context)).toBeNull();
+    expect(reconcilePersistedLayout(saved({ kind: "split", id: "split", direction: "horizontal", children: [leaves[0]] }), context)).toBeNull();
+
+    let tooDeep: unknown = { kind: "leaf", id: "deep-leaf", tabs: [{ id: "deep-tab", type: "plain" }], activeTabId: "deep-tab" };
+    for (let depth = 0; depth < 10; depth += 1) {
+      tooDeep = {
+        kind: "split",
+        id: `split-${depth}`,
+        direction: "horizontal",
+        sizes: [50, 50],
+        children: [
+          tooDeep,
+          { kind: "leaf", id: `sibling-${depth}`, tabs: [{ id: `tab-${depth}`, type: "plain" }], activeTabId: `tab-${depth}` },
+        ],
+      };
+    }
+    expect(reconcilePersistedLayout(saved(tooDeep), context)).toBeNull();
+  });
+
+  test("returns null when every restored tab is filtered out", () => {
+    expect(reconcilePersistedLayout(saved({
+      kind: "leaf",
+      id: "empty",
+      tabs: [{ id: "future", type: "future-tab" }],
+      activeTabId: "future",
+    }), context)).toBeNull();
+  });
 });

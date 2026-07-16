@@ -308,19 +308,23 @@ export async function getSessionMessages(
 export async function getSessionStatus(
   client: CodexClient,
   sessionId: string,
+  options: { throwOnError?: boolean } = {},
 ): Promise<CodexSessionStatus | null> {
   try {
     const response = await fetchWithTimeout(
       `${client.baseUrl}/session/${sessionId}/status`,
     );
-    if (!response.ok) return null;
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new Error(`Failed to get Codex session status: HTTP ${response.status}`);
+    }
     const data = (await response.json()) as Partial<CodexSessionStatusResponse>;
     if (
       data.status !== "idle"
       && data.status !== "running"
       && data.status !== "error"
     ) {
-      return null;
+      throw new Error("Codex session status response was malformed");
     }
     return {
       status: data.status,
@@ -329,6 +333,11 @@ export async function getSessionStatus(
     };
   } catch (error) {
     console.error("[codex-client] Failed to get session status:", error);
+    if (options.throwOnError) {
+      throw error instanceof Error
+        ? error
+        : new Error("Failed to get Codex session status");
+    }
     return null;
   }
 }

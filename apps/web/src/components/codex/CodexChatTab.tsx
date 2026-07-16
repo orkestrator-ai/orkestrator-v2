@@ -625,7 +625,11 @@ export function CodexChatTab({
 
           const warmFastMode = seedInitialFastMode(codexState);
           if (data.sessionId) {
-            const restoredStatus = await getSessionStatus(cachedClient, data.sessionId);
+            const restoredStatus = await getSessionStatus(
+              cachedClient,
+              data.sessionId,
+              { throwOnError: true },
+            );
             if (restoredStatus) {
               const restoredMessages = await getSessionMessages(cachedClient, data.sessionId);
               if (!mounted) return;
@@ -736,7 +740,7 @@ export function CodexChatTab({
         const existingSession = useCodexStore.getState().sessions.get(sessionKey);
         const existingSessionId = existingSession?.sessionId || data.sessionId;
         const existingStatus = existingSessionId
-          ? await getSessionStatus(nextClient, existingSessionId)
+          ? await getSessionStatus(nextClient, existingSessionId, { throwOnError: true })
           : null;
         if (existingSessionId && existingStatus) {
           const messages = await getSessionMessages(nextClient, existingSessionId);

@@ -37,7 +37,9 @@ const mockCreateSession = mock(async () => ({
   id: "session-1",
   createdAt: "2026-04-15T10:00:00.000Z",
 }));
-const mockGetSessionMessages = mock(async () => []);
+const mockGetSessionMessages = mock<
+  (_client: unknown, _sessionId: string) => Promise<NativeMessage[]>
+>(async () => []);
 const mockListSessions = mock(async () => [
   { id: "session-1", createdAt: "2026-04-15T10:00:00.000Z" },
 ]);
@@ -172,7 +174,17 @@ mock.module("./OpenCodeQuestionCard", () => ({
 }));
 
 mock.module("./OpenCodeResumeSessionDialog", () => ({
-  OpenCodeResumeSessionDialog: () => null,
+  OpenCodeResumeSessionDialog: ({
+    open,
+    onResume,
+  }: {
+    open: boolean;
+    onResume: (sessionId: string) => void;
+  }) => open ? (
+    <button type="button" data-testid="opencode-resume-choice" onClick={() => onResume("resumed-opencode")}>
+      Resume previous OpenCode session
+    </button>
+  ) : null,
 }));
 
 mock.module("./slash-command-directory", () => ({
@@ -431,6 +443,114 @@ describe("OpenCodeChatTab", () => {
     if (!restoredRoot || restoredRoot.kind !== "leaf") throw new Error("Expected pane leaf");
     const restoredTab = restoredRoot.tabs.find((tab) => tab.id === TAB_ID);
     expect(restoredTab?.openCodeNativeData?.sessionId).toBe(restoredSessionId);
+  });
+
+  test("cold-restores a persisted session with its transcript", async () => {
+    const restoredSessionId = "cold-restored-opencode";
+    const restoredMessage: NativeMessage = {
+      id: "restored-message",
+      role: "assistant",
+      content: "Persisted OpenCode transcript",
+      parts: [{ type: "text", content: "Persisted OpenCode transcript" }],
+      createdAt: "2026-04-15T10:00:00.000Z",
+    };
+    useOpenCodeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    seedPaneLayout(restoredSessionId);
+    mockListSessions.mockResolvedValue([
+      { id: restoredSessionId, createdAt: "2026-04-15T10:00:00.000Z" },
+    ]);
+    mockGetSessionMessages.mockResolvedValue([restoredMessage]);
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: restoredSessionId })}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        sessionId: restoredSessionId,
+        messages: [restoredMessage],
+      });
+    });
+    expect(mockGetSessionMessages).toHaveBeenCalledWith(expect.anything(), restoredSessionId);
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("replaces a missing restored session and persists the replacement id", async () => {
+    const missingSessionId = "missing-opencode";
+    useOpenCodeStore.setState((state) => ({ ...state, sessions: new Map() }));
+    seedPaneLayout(missingSessionId);
+    mockListSessions.mockResolvedValue([]);
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: missingSessionId })}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockCreateSession).toHaveBeenCalledWith(MOCK_CLIENT);
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe("session-1");
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.openCodeNativeData?.sessionId)
+        .toBe("session-1");
+    });
+  });
+
+  test("retries a failed cold initialization and writes the created session id", async () => {
+    useOpenCodeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    seedPaneLayout();
+    mockGetModelsWithDefaults.mockRejectedValueOnce(new Error("model load failed"));
+
+    render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await screen.findByText("Error: model load failed");
+    fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe("session-1");
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.openCodeNativeData?.sessionId)
+        .toBe("session-1");
+    });
+    expect(mockCreateSession).toHaveBeenCalledTimes(1);
+  });
+
+  test("writes a manually resumed session id and transcript to both stores", async () => {
+    const resumedMessage: NativeMessage = {
+      id: "resumed-message",
+      role: "assistant",
+      content: "Resumed OpenCode transcript",
+      parts: [{ type: "text", content: "Resumed OpenCode transcript" }],
+      createdAt: "2026-04-15T10:00:00.000Z",
+    };
+    mockGetSessionMessages.mockImplementation(async (_client, sessionId) =>
+      sessionId === "resumed-opencode" ? [resumedMessage] : []
+    );
+    render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+    fireEvent.click(await screen.findByTestId("opencode-resume-choice"));
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        sessionId: "resumed-opencode",
+        messages: [resumedMessage],
+      });
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.openCodeNativeData?.sessionId)
+        .toBe("resumed-opencode");
+    });
   });
 
   test("shows the scroll down accessory and scrolls to the bottom when clicked", () => {

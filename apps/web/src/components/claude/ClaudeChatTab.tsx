@@ -87,6 +87,7 @@ export function ClaudeChatTab({
     return hasClient && hasSession ? "connected" : "connecting";
   });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
@@ -747,7 +748,7 @@ export function ClaudeChatTab({
       slashCmdCleanupRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [containerId, environmentId, tabId, isLocal, setupPending]);
+  }, [containerId, environmentId, tabId, isLocal, setupPending, initAttempt]);
 
   const startSharedEventSubscription = useCallback(
     async (bridgeClient: ReturnType<typeof createClient>) => {
@@ -1325,6 +1326,7 @@ export function ClaudeChatTab({
     setSession(sessionKey, null);
     setContextUsage(sessionKey, null);
     setServerStatus(environmentId, { running: false, hostPort: null });
+    setInitAttempt((value) => value + 1);
   }, [sessionKey, environmentId, tabId, setClient, setSession, setContextUsage, setServerStatus, updateTabNativeSessionId]);
 
   const handleResumeSession = useCallback(

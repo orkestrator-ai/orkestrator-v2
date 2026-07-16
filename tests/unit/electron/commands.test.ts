@@ -1473,6 +1473,8 @@ exit 0
 
       await commands.get("delete_environment")?.({ environmentId: environment.id }, context);
 
+      expect(context.storage.deletePaneLayout).toHaveBeenCalledWith(environment.id);
+
       expect(
         await commands.get("get_environment_setup_session")?.({ environmentId: environment.id }, context),
       ).toBeNull();
@@ -3704,17 +3706,28 @@ exit 0
 
 describe("pane layout commands", () => {
   test("validates and forwards pane layout envelopes", async () => {
+    const persisted = {
+      version: 1,
+      environmentId: "env-1",
+      containerId: null,
+      activePaneId: "default",
+      root: { kind: "leaf", id: "default", tabs: [], activeTabId: null },
+      updatedAt: new Date(0).toISOString(),
+      revision: 1,
+    };
+    const getPaneLayout = mock(async () => persisted);
     const savePaneLayout = mock(async (environmentId: string, layout: Record<string, unknown>) => ({
       ...layout,
       environmentId,
       updatedAt: new Date(0).toISOString(),
       revision: 1,
     }));
+    const deletePaneLayout = mock(async () => undefined);
     const context = {
       storage: {
-        getPaneLayout: mock(async () => null),
+        getPaneLayout,
         savePaneLayout,
-        deletePaneLayout: mock(async () => undefined),
+        deletePaneLayout,
       },
     } as unknown as CommandContext;
     const commands = createCommandRegistry();
@@ -3736,6 +3749,12 @@ describe("pane layout commands", () => {
       activePaneId: "default",
       root,
     });
+    await expect(commands.get("get_pane_layout")?.({ environmentId: "env-1" }, context))
+      .resolves.toEqual(persisted);
+    expect(getPaneLayout).toHaveBeenCalledWith("env-1");
+    await expect(commands.get("delete_pane_layout")?.({ environmentId: "env-1" }, context))
+      .resolves.toBeUndefined();
+    expect(deletePaneLayout).toHaveBeenCalledWith("env-1");
     await expect(commands.get("save_pane_layout")?.({
       environmentId: "env-1",
       layout: { version: 2, containerId: null, activePaneId: "default", root },

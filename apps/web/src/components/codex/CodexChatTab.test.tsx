@@ -45,6 +45,17 @@ const mockSubscribeToEvents = mock(() => (async function* () {})());
 const mockUpdateSessionConfig = mock(async () => true);
 const mockAbortSession = mock(async () => true);
 const mockCreateSession = mock(async () => ({ sessionId: "session-1", title: "Test session" }));
+const mockGetSessionStatus = mock<
+  (
+    _client: unknown,
+    _sessionId: string,
+    _options?: { throwOnError?: boolean },
+  ) => Promise<{ status: string; title?: string; error?: string } | null>
+>(async () => ({ status: "idle" }));
+const mockResumeSession = mock(async () => null as null | {
+  session: { sessionId: string; title?: string };
+  messages: TestCodexMessage[];
+});
 
 // NOTE: Do NOT mock @/hooks/useScrollLock here — it pollutes the global
 // module cache and breaks useScrollLock.test.ts. The real hook returns
@@ -70,8 +81,8 @@ mock.module("@/lib/codex-client", () => ({
   getModels: mock(async () => ({ models: MOCK_MODELS, source: "fallback" })),
   getSlashCommands: mock(async () => []),
   getSessionMessages: mockGetSessionMessages,
-  getSessionStatus: mock(async () => ({ status: "idle" })),
-  resumeSession: mock(async () => null),
+  getSessionStatus: mockGetSessionStatus,
+  resumeSession: mockResumeSession,
   sendPrompt: mockSendPrompt,
   subscribeToEvents: mockSubscribeToEvents,
   updateSessionConfig: mockUpdateSessionConfig,
@@ -215,7 +226,17 @@ mock.module("./CodexPlanModeCard", () => ({
 }));
 
 mock.module("./CodexResumeSessionDialog", () => ({
-  CodexResumeSessionDialog: () => null,
+  CodexResumeSessionDialog: ({
+    open,
+    onResume,
+  }: {
+    open: boolean;
+    onResume: (threadId: string) => void;
+  }) => open ? (
+    <button type="button" data-testid="codex-resume-choice" onClick={() => onResume("resumed-thread")}>
+      Resume previous Codex session
+    </button>
+  ) : null,
 }));
 
 mock.module("@/hooks", () => ({
@@ -443,6 +464,10 @@ describe("CodexChatTab", () => {
     mockAbortSession.mockImplementation(async () => true);
     mockCreateSession.mockClear();
     mockCreateSession.mockImplementation(async () => ({ sessionId: "session-1", title: "Test session" }));
+    mockGetSessionStatus.mockReset();
+    mockGetSessionStatus.mockImplementation(async () => ({ status: "idle" }));
+    mockResumeSession.mockReset();
+    mockResumeSession.mockResolvedValue(null);
     mockIsAtBottom = true;
     lastVirtualizedMessages = [];
     restoreTimerHarness();
@@ -514,6 +539,109 @@ describe("CodexChatTab", () => {
     if (!restoredRoot || restoredRoot.kind !== "leaf") throw new Error("Expected pane leaf");
     const restoredTab = restoredRoot.tabs.find((tab) => tab.id === TAB_ID);
     expect(restoredTab?.codexNativeData?.sessionId).toBe(restoredSessionId);
+  });
+
+  test("cold-restores a persisted session with its transcript", async () => {
+    const restoredSessionId = "cold-restored-codex";
+    const restoredMessage = createMessage("restored-message", "Persisted Codex transcript");
+    useCodexStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    seedPaneLayout();
+    usePaneLayoutStore.getState().updateTabNativeSessionId(TAB_ID, restoredSessionId, ENVIRONMENT_ID);
+    mockGetSessionMessages.mockResolvedValue([restoredMessage]);
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: restoredSessionId })}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetSessionStatus).toHaveBeenCalledWith(
+        expect.anything(),
+        restoredSessionId,
+        { throwOnError: true },
+      );
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([restoredMessage]);
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("keeps a restored session on transient status failure and succeeds on retry", async () => {
+    const restoredSessionId = "transient-codex";
+    useCodexStore.setState((state) => ({ ...state, sessions: new Map() }));
+    seedPaneLayout();
+    usePaneLayoutStore.getState().updateTabNativeSessionId(TAB_ID, restoredSessionId, ENVIRONMENT_ID);
+    mockGetSessionStatus.mockRejectedValueOnce(new Error("status transport failed"));
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: restoredSessionId })}
+        isActive
+      />,
+    );
+
+    await screen.findByText("status transport failed");
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.codexNativeData?.sessionId)
+      .toBe(restoredSessionId);
+
+    fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(restoredSessionId);
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("replaces a confirmed-missing restored session and writes the new id to the pane", async () => {
+    const missingSessionId = "missing-codex";
+    useCodexStore.setState((state) => ({ ...state, sessions: new Map() }));
+    seedPaneLayout();
+    usePaneLayoutStore.getState().updateTabNativeSessionId(TAB_ID, missingSessionId, ENVIRONMENT_ID);
+    mockGetSessionStatus.mockResolvedValueOnce(null);
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: missingSessionId })}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockCreateSession).toHaveBeenCalled();
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe("session-1");
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.codexNativeData?.sessionId)
+        .toBe("session-1");
+    });
+  });
+
+  test("writes a manually resumed session id and transcript to both stores", async () => {
+    const resumedMessage = createMessage("resumed-message", "Resumed Codex transcript");
+    mockResumeSession.mockResolvedValue({
+      session: { sessionId: "resumed-codex", title: "Resumed" },
+      messages: [resumedMessage],
+    });
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+    fireEvent.click(await screen.findByTestId("codex-resume-choice"));
+
+    await waitFor(() => {
+      expect(mockResumeSession).toHaveBeenCalledWith(MOCK_CLIENT, expect.objectContaining({ threadId: "resumed-thread" }));
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        sessionId: "resumed-codex",
+        messages: [resumedMessage],
+      });
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.codexNativeData?.sessionId)
+        .toBe("resumed-codex");
+    });
   });
 
   test("queues prompts with a generated UUID", async () => {

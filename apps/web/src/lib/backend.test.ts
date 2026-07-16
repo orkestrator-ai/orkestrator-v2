@@ -21,7 +21,9 @@ const {
   createEnvironment,
   disconnectLinear,
   ensureEnvironmentSetup,
+  deletePaneLayout,
   getEnvironmentSnapshots,
+  getPaneLayout,
   getLinearConnection,
   getLinearIssue,
   getLinearIssues,
@@ -30,6 +32,7 @@ const {
   getWebClientStatus,
   postLinearCompletionComment,
   runEnvironmentSetup,
+  savePaneLayout,
   setWebClientEnabled,
   setGatewayToken,
   setEnvironmentSetupComplete,
@@ -133,6 +136,50 @@ describe("backend setup wrappers", () => {
         body: "Done",
       }],
       ["disconnect_linear"],
+    ]);
+  });
+});
+
+describe("backend pane layout wrappers", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue(undefined);
+  });
+
+  test("forwards exact pane layout command payloads and results", async () => {
+    const layout = {
+      version: 1,
+      environmentId: "env-1",
+      containerId: "container-1",
+      activePaneId: "pane-1",
+      root: { kind: "leaf", id: "pane-1", tabs: [], activeTabId: null },
+      updatedAt: "2026-07-16T00:00:00.000Z",
+      revision: 2,
+    };
+    invokeMock.mockResolvedValueOnce(layout);
+    await expect(getPaneLayout("env-1")).resolves.toEqual(layout);
+
+    invokeMock.mockResolvedValueOnce(layout);
+    await expect(savePaneLayout("env-1", {
+      version: layout.version,
+      containerId: layout.containerId,
+      activePaneId: layout.activePaneId,
+      root: layout.root,
+    })).resolves.toEqual(layout);
+    await expect(deletePaneLayout("env-1")).resolves.toBeUndefined();
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["get_pane_layout", { environmentId: "env-1" }],
+      ["save_pane_layout", {
+        environmentId: "env-1",
+        layout: {
+          version: 1,
+          containerId: "container-1",
+          activePaneId: "pane-1",
+          root: layout.root,
+        },
+      }],
+      ["delete_pane_layout", { environmentId: "env-1" }],
     ]);
   });
 });

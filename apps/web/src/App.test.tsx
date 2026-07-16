@@ -204,6 +204,12 @@ const mockCheckCodexCli = mock(async () => true);
 const mockCheckGithubCli = mock(async () => true);
 const mockGetAvailableAiCli = mock<() => Promise<string | null>>(async () => "claude");
 const mockGetConfig = mock(async () => mockConfig);
+const mockSavePaneLayout = mock(async (environmentId: string, layout: Record<string, unknown>) => ({
+  ...layout,
+  environmentId,
+  updatedAt: "2026-07-16T00:00:00.000Z",
+  revision: 1,
+}));
 
 mock.module("@/lib/backend", () => ({
   checkDocker: mockCheckDocker,
@@ -214,6 +220,7 @@ mock.module("@/lib/backend", () => ({
   checkGithubCli: mockCheckGithubCli,
   getAvailableAiCli: mockGetAvailableAiCli,
   getConfig: mockGetConfig,
+  savePaneLayout: mockSavePaneLayout,
   syncAllEnvironmentsWithDocker: mockSyncAllEnvironmentsWithDocker,
 }));
 
@@ -305,6 +312,7 @@ function resetStores({
 
   usePaneLayoutStore.setState({
     environments: new Map(),
+    hydration: new Map(),
     activeEnvironmentId: null,
   });
 
@@ -354,6 +362,7 @@ function resetAppMocks() {
   mockGetAvailableAiCli.mockImplementation(async () => "claude");
   mockGetConfig.mockClear();
   mockGetConfig.mockImplementation(async () => mockConfig);
+  mockSavePaneLayout.mockClear();
   mockToastError.mockClear();
   mockLinearMonitorRender.mockClear();
   mockAppUnlisten.mockClear();
@@ -433,6 +442,31 @@ describe("App background processing mounts", () => {
 
     expect(await screen.findByTestId("linear-completion-monitor")).toBeTruthy();
     expect(mockLinearMonitorRender).toHaveBeenCalled();
+  });
+
+  test("starts one pane persistence subscription and flushes it on app teardown", async () => {
+    resetStores({
+      environments: [],
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+    });
+    const { unmount } = render(<App />);
+
+    act(() => {
+      const store = usePaneLayoutStore.getState();
+      store.initialize("container-1", "env-1");
+      store.beginHydration("env-1");
+      store.finishHydration("env-1");
+      store.addTab("default", { id: "tab-1", type: "plain" }, "env-1");
+      store.addTab("default", { id: "tab-2", type: "plain" }, "env-1");
+    });
+    unmount();
+
+    await waitFor(() => expect(mockSavePaneLayout).toHaveBeenCalledTimes(1));
+    expect(mockSavePaneLayout).toHaveBeenCalledWith(
+      "env-1",
+      expect.objectContaining({ version: 1, activePaneId: "default" }),
+    );
   });
 
   test("keeps off-screen environments with pending setup commands mounted before setup starts", async () => {

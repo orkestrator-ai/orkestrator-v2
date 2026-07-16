@@ -427,6 +427,44 @@ describe("Electron StorageService", () => {
     await expect(storage.getPaneLayout(secondEnvironment.id)).resolves.toEqual(isolated);
   });
 
+  test("rejects cyclic pane roots and recovers the pane mutation queue after a failed save", async () => {
+    const dataDir = await createTempDir("ork-storage-pane-layout-errors-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(createEnvironment("project-1"));
+    const cyclicRoot: Record<string, unknown> = { kind: "leaf" };
+    cyclicRoot.self = cyclicRoot;
+
+    await expect(storage.savePaneLayout(environment.id, {
+      version: 1,
+      containerId: null,
+      activePaneId: "default",
+      root: cyclicRoot,
+    })).rejects.toThrow("JSON serializable");
+    await expect(storage.savePaneLayout("missing", {
+      version: 1,
+      containerId: null,
+      activePaneId: "default",
+      root: {},
+    })).rejects.toThrow("Environment not found");
+
+    await expect(storage.savePaneLayout(environment.id, {
+      version: 1,
+      containerId: null,
+      activePaneId: "default",
+      root: { kind: "leaf", id: "default", tabs: [], activeTabId: null },
+    })).resolves.toMatchObject({ environmentId: environment.id, revision: 1 });
+  });
+
+  test("deleting an absent pane layout is a no-op", async () => {
+    const dataDir = await createTempDir("ork-storage-pane-layout-absent-delete-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    await expect(storage.deletePaneLayout("missing")).resolves.toBeUndefined();
+    await expect(fs.stat(path.join(dataDir, "pane-layouts.json"))).rejects.toThrow();
+  });
+
   test("updates and deletes kanban tasks and comments with missing-id errors", async () => {
     const dataDir = await createTempDir("ork-storage-kanban-crud-");
     const storage = new StorageService(dataDir);

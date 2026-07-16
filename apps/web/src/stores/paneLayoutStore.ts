@@ -703,6 +703,12 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
     if (!paneWithTab || !existingTab) return;
 
+    const hasNativeSessionData =
+      (existingTab.type === "claude-native" && !!existingTab.claudeNativeData)
+      || (existingTab.type === "codex-native" && !!existingTab.codexNativeData)
+      || (existingTab.type === "opencode-native" && !!existingTab.openCodeNativeData);
+    if (!hasNativeSessionData) return;
+
     const currentSessionId = existingTab.type === "claude-native"
       ? existingTab.claudeNativeData?.sessionId
       : existingTab.type === "codex-native"

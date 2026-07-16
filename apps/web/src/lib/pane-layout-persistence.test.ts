@@ -94,4 +94,102 @@ describe("pane layout persistence", () => {
     expect(save).toHaveBeenCalledTimes(2);
     stop();
   });
+
+  test("flushes a pending write when persistence is stopped", async () => {
+    const save = mock(async (environmentId: string, input: LayoutInput) => createSaved(environmentId, input));
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 60_000 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+    store.addTab("default", { id: "tab-1", type: "plain" }, "env-1");
+
+    stop();
+    await waitForTimers();
+
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith("env-1", expect.objectContaining({ activePaneId: "default" }));
+  });
+
+  test("persists hydrated environments independently", async () => {
+    const save = mock(async (environmentId: string, input: LayoutInput) => createSaved(environmentId, input));
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const store = usePaneLayoutStore.getState();
+    for (const environmentId of ["env-1", "env-2"]) {
+      store.initialize(`container-${environmentId}`, environmentId);
+      store.beginHydration(environmentId);
+      store.finishHydration(environmentId);
+      store.addTab("default", { id: `tab-${environmentId}`, type: "plain" }, environmentId);
+    }
+
+    await waitForTimers();
+
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save.mock.calls.map(([environmentId]) => environmentId).sort()).toEqual(["env-1", "env-2"]);
+    stop();
+  });
+
+  test("cancels a pending write when its environment is removed", async () => {
+    const save = mock(async (environmentId: string, input: LayoutInput) => createSaved(environmentId, input));
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 10 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+    store.addTab("default", { id: "tab-1", type: "plain" }, "env-1");
+
+    usePaneLayoutStore.setState({ environments: new Map(), hydration: new Map() });
+    await waitForTimers();
+
+    expect(save).not.toHaveBeenCalled();
+    stop();
+  });
+
+  test("does not write when a state update has an identical sanitized snapshot", async () => {
+    const save = mock(async (environmentId: string, input: LayoutInput) => createSaved(environmentId, input));
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.addTab("default", { id: "tab-1", type: "plain", initialPrompt: "one shot" }, "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+
+    usePaneLayoutStore.getState().clearTabInitialPrompt("tab-1", "env-1");
+    await waitForTimers();
+
+    expect(save).not.toHaveBeenCalled();
+    stop();
+  });
+
+  test("serializes in-flight writes per environment in update order", async () => {
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const save = mock(async (environmentId: string, input: LayoutInput) => {
+      if (save.mock.calls.length === 1) await firstBlocked;
+      return createSaved(environmentId, input);
+    });
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 5 });
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.beginHydration("env-1");
+    store.finishHydration("env-1");
+    store.addTab("default", { id: "tab-1", type: "plain" }, "env-1");
+    await waitForTimers();
+    expect(save).toHaveBeenCalledTimes(1);
+
+    usePaneLayoutStore.getState().addTab("default", { id: "tab-2", type: "plain" }, "env-1");
+    await waitForTimers();
+    expect(save).toHaveBeenCalledTimes(1);
+
+    releaseFirst();
+    await waitForTimers();
+    expect(save).toHaveBeenCalledTimes(2);
+    const firstTabs = (save.mock.calls[0]?.[1].root as { tabs: Array<{ id: string }> }).tabs;
+    const secondTabs = (save.mock.calls[1]?.[1].root as { tabs: Array<{ id: string }> }).tabs;
+    expect(firstTabs.map(({ id }) => id)).toEqual(["tab-1"]);
+    expect(secondTabs.map(({ id }) => id)).toEqual(["tab-1", "tab-2"]);
+    stop();
+  });
 });

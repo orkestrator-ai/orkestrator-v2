@@ -44,6 +44,46 @@ export type SidebarReorderResult =
   | { type: "project"; ids: string[] }
   | { type: "environment"; projectId: string; ids: string[] };
 
+export type SidebarSelectionResult =
+  | { type: "toggle"; environmentId: string }
+  | { type: "range"; ids: string[] }
+  | { type: "single"; environmentId: string };
+
+export function resolveSidebarSelection(
+  environmentId: string,
+  modifiers: { shiftKey?: boolean; metaKey?: boolean },
+  orderedIds: string[],
+  selectedEnvironmentId: string | null,
+  selectedEnvironmentIds: string[],
+): SidebarSelectionResult {
+  if (modifiers.shiftKey) {
+    const clickedIndex = orderedIds.indexOf(environmentId);
+    if (clickedIndex === -1) {
+      return { type: "toggle", environmentId };
+    }
+
+    const anchorId = selectedEnvironmentId || selectedEnvironmentIds[0];
+    if (!anchorId) {
+      return { type: "range", ids: [environmentId] };
+    }
+
+    const anchorIndex = orderedIds.indexOf(anchorId);
+    if (anchorIndex === -1) {
+      return { type: "range", ids: [environmentId] };
+    }
+
+    const startIndex = Math.min(anchorIndex, clickedIndex);
+    const endIndex = Math.max(anchorIndex, clickedIndex);
+    return { type: "range", ids: orderedIds.slice(startIndex, endIndex + 1) };
+  }
+
+  if (modifiers.metaKey) {
+    return { type: "toggle", environmentId };
+  }
+
+  return { type: "single", environmentId };
+}
+
 export function resolveSidebarReorder(
   activeId: string,
   overId: string,
@@ -384,75 +424,50 @@ export function HierarchicalSidebar() {
     environmentId: string,
     modifiers: { shiftKey?: boolean; metaKey?: boolean } = {}
   ) => {
-    const { shiftKey, metaKey } = modifiers;
+    const selection = resolveSidebarSelection(
+      environmentId,
+      modifiers,
+      getOrderedEnvironmentIds(),
+      selectedEnvironmentId,
+      selectedEnvironmentIds,
+    );
+    if (selection.type === "toggle") {
+      toggleEnvironmentSelection(selection.environmentId);
+      return;
+    }
+    if (selection.type === "range") {
+      setMultiSelection(selection.ids);
+      return;
+    }
 
-    if (shiftKey) {
-      // Shift+Click: range selection from anchor (selectedEnvironmentId or last in selection) to clicked
-      const orderedIds = getOrderedEnvironmentIds();
-      const clickedIndex = orderedIds.indexOf(environmentId);
-
-      if (clickedIndex === -1) {
-        // Clicked environment not found in ordered list, just toggle it
-        toggleEnvironmentSelection(environmentId);
-        return;
-      }
-
-      // Determine anchor: use currently selected environment or first item in multi-selection
-      const anchorId = selectedEnvironmentId || selectedEnvironmentIds[0];
-
-      if (!anchorId) {
-        // No anchor, start fresh selection with just the clicked item
-        setMultiSelection([environmentId]);
-        return;
-      }
-
-      const anchorIndex = orderedIds.indexOf(anchorId);
-
-      if (anchorIndex === -1) {
-        // Anchor not found, start fresh with clicked item
-        setMultiSelection([environmentId]);
-        return;
-      }
-
-      // Select range between anchor and clicked (inclusive)
-      const startIndex = Math.min(anchorIndex, clickedIndex);
-      const endIndex = Math.max(anchorIndex, clickedIndex);
-      const rangeIds = orderedIds.slice(startIndex, endIndex + 1);
-
-      setMultiSelection(rangeIds);
-    } else if (metaKey) {
-      // Cmd/Ctrl+Click: toggle individual item in selection
-      toggleEnvironmentSelection(environmentId);
-    } else {
-      // Normal click: clear multi-selection and select single environment
-      clearMultiSelection();
-      const environment = allEnvironments.find((e) => e.id === environmentId);
-      if (environment) {
-        selectProjectAndEnvironment(environment.projectId, environmentId);
-        // Auto-start local environments on selection so a terminal can open
-        if (
-          environment.environmentType === "local" &&
-          !environment.worktreePath &&
-          environment.status !== "creating"
-        ) {
-          console.info("[HierarchicalSidebar] Auto-starting local environment:", {
-            environmentId: environment.id,
-            branch: environment.branch,
-            status: environment.status,
-            worktreePath: environment.worktreePath,
+    // Normal click: clear multi-selection and select single environment
+    clearMultiSelection();
+    const environment = allEnvironments.find((e) => e.id === selection.environmentId);
+    if (environment) {
+      selectProjectAndEnvironment(environment.projectId, environmentId);
+      // Auto-start local environments on selection so a terminal can open
+      if (
+        environment.environmentType === "local" &&
+        !environment.worktreePath &&
+        environment.status !== "creating"
+      ) {
+        console.info("[HierarchicalSidebar] Auto-starting local environment:", {
+          environmentId: environment.id,
+          branch: environment.branch,
+          status: environment.status,
+          worktreePath: environment.worktreePath,
+        });
+        // Setup command handling (blocking, placeholder, resolve) is centralized
+        // in useEnvironments.startEnvironment() for all code paths.
+        startEnvironment(environment.id)
+          .catch((err) => {
+            console.error("[HierarchicalSidebar] Failed to auto-start local environment:", err);
           });
-          // Setup command handling (blocking, placeholder, resolve) is centralized
-          // in useEnvironments.startEnvironment() for all code paths.
-          startEnvironment(environment.id)
-            .catch((err) => {
-              console.error("[HierarchicalSidebar] Failed to auto-start local environment:", err);
-            });
-        }
-        // Already-started local environments: TerminalContainer's effect decides
-        // whether to auto-resolve (setup previously complete) or re-run setup
-        // (previously incomplete). Persisted `setupScriptsComplete` also seeds
-        // `setupCommandsResolved` during env hydration in the store.
       }
+      // Already-started local environments: TerminalContainer's effect decides
+      // whether to auto-resolve (setup previously complete) or re-run setup
+      // (previously incomplete). Persisted `setupScriptsComplete` also seeds
+      // `setupCommandsResolved` during env hydration in the store.
     }
   };
 

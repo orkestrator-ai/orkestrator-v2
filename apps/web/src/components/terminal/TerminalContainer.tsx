@@ -34,7 +34,9 @@ import {
   saveInitialPromptAttachments,
 } from "@/lib/initial-prompt-attachments";
 import { resolveClaudeConfig } from "@/lib/claude-mode-resolver";
+import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
 import { createOrkestratorScriptPrompt } from "@/prompts";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { PaneTree } from "@/components/pane-layout";
 import { TerminalPortalHost } from "./TerminalPortalHost";
 import { InitializationLogs } from "./InitializationLogs";
@@ -300,7 +302,7 @@ export function TerminalContainer({
   const pendingNativeLaunch = useClaudeOptionsStore(
     (state) => state.pendingNativeLaunches[environmentId]
   );
-  const hasAppliedClaudeOptionsRef = useRef(false);
+  const [hasAppliedClaudeOptions, setHasAppliedClaudeOptions] = useState(false);
 
   // Get config for agent modes - per-environment overrides take precedence over global
   const { config } = useConfigStore();
@@ -455,6 +457,7 @@ export function TerminalContainer({
 
   // Pane layout store - use selectors for reactive state
   const environments = usePaneLayoutStore((state) => state.environments);
+  const hydrationStatus = usePaneLayoutStore((state) => state.hydration.get(environmentId));
 
   // Get derived state for THIS environment (not the globally active one)
   // Each TerminalContainer should render its own environment's tabs
@@ -467,6 +470,8 @@ export function TerminalContainer({
     setActiveEnvironment,
     initialize,
     reset,
+    beginHydration,
+    finishHydration,
     addTab,
     removeTab,
     reorderTabs,
@@ -764,6 +769,46 @@ export function TerminalContainer({
         return;
       }
 
+      if (backendSetupRunning) {
+        // Setup owns the temporary layout. Mark hydration complete without
+        // restoring an older layout so the setup/default layout can persist.
+        if (hydrationStatus !== "done") finishHydration(environmentId);
+      } else if (hydrationStatus === "pending") {
+        return;
+      } else if (hydrationStatus === undefined) {
+        beginHydration(environmentId);
+        void backend.getPaneLayout(environmentId)
+          .then((saved) => {
+            const paneStore = usePaneLayoutStore.getState();
+            if (paneStore.hydration.get(environmentId) !== "pending") return;
+
+            const latestEnvironment = useEnvironmentStore
+              .getState()
+              .getEnvironmentById(environmentId);
+            if (!latestEnvironment) return;
+
+            const latestIsLocal = latestEnvironment.environmentType === "local";
+            const latestContainerId = latestIsLocal ? null : latestEnvironment.containerId;
+            const restored = reconcilePersistedLayout(saved, {
+              environmentId,
+              containerId: latestContainerId,
+              isLocal: latestIsLocal,
+              worktreePath: latestEnvironment.worktreePath,
+              hasBuildPipeline: (pipelineId) =>
+                useBuildPipelineStore.getState().pipelines.has(pipelineId),
+            });
+            paneStore.finishHydration(environmentId, restored ?? undefined);
+          })
+          .catch((error) => {
+            console.warn("[TerminalContainer] Failed to restore pane layout:", error);
+            const paneStore = usePaneLayoutStore.getState();
+            if (paneStore.hydration.get(environmentId) === "pending") {
+              paneStore.finishHydration(environmentId);
+            }
+          });
+        return;
+      }
+
       const pendingAttachments = claudeOptions?.initialPromptAttachments ?? [];
       if (claudeOptions?.launchAgent && pendingAttachments.length > 0) {
         if (!isSavingInitialPromptAttachmentsRef.current) {
@@ -811,7 +856,7 @@ export function TerminalContainer({
       const launchAgent = claudeOptions?.launchAgent ?? false;
       if (launchAgent) {
         initialTabType = claudeOptions!.agentType;
-        hasAppliedClaudeOptionsRef.current = true;
+        setHasAppliedClaudeOptions(true);
         if (claudeOptions!.initialPrompt?.trim()) {
           pendingInitialPrompt = claudeOptions!.initialPrompt.trim();
           initialPromptRef.current = pendingInitialPrompt;
@@ -1076,7 +1121,7 @@ export function TerminalContainer({
         addTab("default", initialTab, environmentId);
       }
     }
-  }, [isEnvironmentRunning, containerId, isLocalEnvironmentReady, isLocalEnvironment, setupCommandsResolved, setupScriptsRunning, environment?.setupScriptsComplete, claudeOptions, initialize, addTab, environmentId, currentEnvState, opencodeMode, claudeMode, claudeNativeBackend, codexMode, setWorkspaceReady, consumePendingSetupCommands, setSetupScriptsRunning, setPendingNativeLaunch, setOptions, worktreePath, startInactiveBackendSetup, hasBoundSetupSession, bindBackendSetupSession, setupSessionBindNonce]);
+  }, [isEnvironmentRunning, containerId, isLocalEnvironmentReady, isLocalEnvironment, setupCommandsResolved, setupScriptsRunning, environment?.setupScriptsComplete, claudeOptions, initialize, addTab, environmentId, currentEnvState, hydrationStatus, beginHydration, finishHydration, opencodeMode, claudeMode, claudeNativeBackend, codexMode, setWorkspaceReady, consumePendingSetupCommands, setSetupScriptsRunning, setPendingNativeLaunch, setOptions, worktreePath, startInactiveBackendSetup, hasBoundSetupSession, bindBackendSetupSession, setupSessionBindNonce]);
 
   // Reset pane layout when container changes within the same environment
   // (e.g., container was stopped and restarted with a new ID)
@@ -1084,7 +1129,7 @@ export function TerminalContainer({
     if (previousContainerIdRef.current !== null && previousContainerIdRef.current !== containerId) {
       console.debug("[TerminalContainer] Container changed for environment:", environmentId, "resetting panes");
       reset(environmentId);
-      hasAppliedClaudeOptionsRef.current = false;
+      setHasAppliedClaudeOptions(false);
       clearPendingNativeLaunch(environmentId);
     }
     previousContainerIdRef.current = containerId;
@@ -1405,7 +1450,7 @@ export function TerminalContainer({
 
   // Clear launch options after they've been applied to the first tab.
   useEffect(() => {
-    if (hasAppliedClaudeOptionsRef.current && claudeOptions) {
+    if (hasAppliedClaudeOptions && claudeOptions) {
       // Give pending native launches time to be converted into tabs. Once the
       // tab exists, its initialPrompt lives in pane state until dispatched.
       const timer = setTimeout(() => {
@@ -1418,7 +1463,7 @@ export function TerminalContainer({
       }, 3000);
       return () => clearTimeout(timer);
     }
-  }, [claudeOptions, environmentId, clearOptions]);
+  }, [hasAppliedClaudeOptions, claudeOptions, environmentId, clearOptions]);
 
   // Register tab functions with context
   useEffect(() => {

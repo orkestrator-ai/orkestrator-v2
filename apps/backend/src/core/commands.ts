@@ -4,7 +4,16 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { parseStoredDesktopConnections } from "@orkestrator/protocol/connections";
-import type { Environment, EnvironmentStatus, EnvironmentType, PortMapping, PrState, SessionStatus, SessionType } from "./models.js";
+import {
+  PANE_LAYOUT_VERSION,
+  type Environment,
+  type EnvironmentStatus,
+  type EnvironmentType,
+  type PortMapping,
+  type PrState,
+  type SessionStatus,
+  type SessionType,
+} from "./models.js";
 import { spawnPty, type PtyProcess } from "./pty.js";
 import {
   APP_SLUG,
@@ -107,6 +116,13 @@ const WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS = [".orkestrator", ".claude/settin
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string") throw new Error(`Expected ${name} to be a string`);
   return value;
+}
+
+function asRecord(value: unknown, name: string): JsonRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`Expected ${name} to be an object`);
+  }
+  return value as JsonRecord;
 }
 
 async function requireLinearApiKey(context: CommandContext): Promise<string> {
@@ -2089,13 +2105,15 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     return storage.addEnvironment(env);
   });
   register("delete_environment", async ({ environmentId }, { storage }) => {
-    const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
+    const envId = asString(environmentId, "environmentId");
+    const environment = await storage.getEnvironment(envId);
     if (environment) await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
     if (environment?.containerId) await runCommand("docker", ["rm", "-f", environment.containerId], { timeoutMs: 60_000 }).catch(() => undefined);
     if (environment?.worktreePath) await removeLocalWorktree(environment.worktreePath).catch(() => undefined);
-    await storage.removeSessionsByEnvironment(asString(environmentId, "environmentId")).catch(() => undefined);
-    await storage.removeEnvironment(asString(environmentId, "environmentId"));
-    cleanupEnvironmentSetupState(asString(environmentId, "environmentId"));
+    await storage.removeSessionsByEnvironment(envId).catch(() => undefined);
+    await storage.removeEnvironment(envId);
+    await storage.deletePaneLayout(envId).catch(() => undefined);
+    cleanupEnvironmentSetupState(envId);
   });
   register("rename_environment", ({ environmentId, name }, { storage }) => {
     const newName = sanitizeEnvironmentName(asString(name, "name"));
@@ -2506,6 +2524,33 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   });
   register("reorder_sessions", ({ environmentId, sessionIds }, { storage }) => storage.reorderSessions(asString(environmentId, "environmentId"), asStringArray(sessionIds)));
   register("cleanup_orphaned_buffers", (_args, { storage }) => storage.cleanupOrphanedBuffers());
+
+  register("get_pane_layout", ({ environmentId }, { storage }) =>
+    storage.getPaneLayout(asString(environmentId, "environmentId")),
+  );
+  register("save_pane_layout", async ({ environmentId, layout }, { storage }) => {
+    const envId = asString(environmentId, "environmentId");
+    const value = asRecord(layout, "layout");
+    const version = asNumber(value.version, "layout.version");
+    if (version !== PANE_LAYOUT_VERSION) {
+      throw new Error(`Unsupported pane layout version: ${version}`);
+    }
+    const activePaneId = asString(value.activePaneId, "layout.activePaneId").trim();
+    if (!activePaneId) throw new Error("Expected layout.activePaneId to be non-empty");
+    const containerId = value.containerId === null
+      ? null
+      : asString(value.containerId, "layout.containerId");
+    const root = asRecord(value.root, "layout.root");
+    return storage.savePaneLayout(envId, {
+      version,
+      containerId,
+      activePaneId,
+      root,
+    });
+  });
+  register("delete_pane_layout", ({ environmentId }, { storage }) =>
+    storage.deletePaneLayout(asString(environmentId, "environmentId")),
+  );
 
   register("create_terminal_session", ({ containerId, cols, rows, user }) => {
     const id = `${asString(containerId, "containerId")}:${randomUUID()}`;

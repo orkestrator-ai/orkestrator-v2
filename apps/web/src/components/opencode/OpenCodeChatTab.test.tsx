@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createOpenCodeSessionKey, useOpenCodeStore } from "@/stores/openCodeStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
@@ -32,6 +33,14 @@ let lastVirtualizedMessages: any[] = [];
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
 const mockSendPrompt = mock(async () => ({ success: true }));
 const mockAbortSession = mock(async () => true);
+const mockCreateSession = mock(async () => ({
+  id: "session-1",
+  createdAt: "2026-04-15T10:00:00.000Z",
+}));
+const mockGetSessionMessages = mock(async () => []);
+const mockListSessions = mock(async () => [
+  { id: "session-1", createdAt: "2026-04-15T10:00:00.000Z" },
+]);
 import type {
   OpenCodeModel,
   OpenCodeModelDefaults,
@@ -56,8 +65,9 @@ const mockGetOpencodeModelPreferences = mock<
 mock.module("@/lib/opencode-client", () => ({
   createClient: mock(() => ({ baseUrl: "http://127.0.0.1:9999" })),
   getModelsWithDefaults: mockGetModelsWithDefaults,
-  createSession: mock(async () => ({ id: "session-1", createdAt: "2026-04-15T10:00:00.000Z" })),
-  getSessionMessages: mock(async () => []),
+  createSession: mockCreateSession,
+  getSessionMessages: mockGetSessionMessages,
+  listSessions: mockListSessions,
   getPendingPermissions: mock(async () => []),
   getPendingQuestions: mock(async () => []),
   getAvailableSlashCommands: mock(async () => []),
@@ -227,6 +237,34 @@ function createData(overrides: Partial<OpenCodeNativeData> = {}): OpenCodeNative
   };
 }
 
+function seedPaneLayout(sessionId?: string) {
+  usePaneLayoutStore.setState({
+    environments: new Map([
+      [
+        ENVIRONMENT_ID,
+        {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              {
+                id: TAB_ID,
+                type: "opencode-native",
+                openCodeNativeData: createData({ sessionId }),
+              },
+            ],
+            activeTabId: TAB_ID,
+          },
+          activePaneId: "default",
+          containerId: "container-1",
+        },
+      ],
+    ]),
+    hydration: new Map([[ENVIRONMENT_ID, "done"]]),
+    activeEnvironmentId: ENVIRONMENT_ID,
+  });
+}
+
 function resetStores(name = "20260415-123456") {
   useOpenCodeStore.setState({
     serverStatus: new Map(),
@@ -283,6 +321,7 @@ function resetStores(name = "20260415-123456") {
     setupCommandsResolved: new Set(),
     setupScriptsRunning: new Set(),
   });
+  seedPaneLayout();
 }
 
 // Restore the real sibling modules once this file's tests finish so later
@@ -309,6 +348,17 @@ describe("OpenCodeChatTab", () => {
     mockSendPrompt.mockImplementation(async () => ({ success: true }));
     mockAbortSession.mockClear();
     mockAbortSession.mockImplementation(async () => true);
+    mockCreateSession.mockClear();
+    mockCreateSession.mockImplementation(async () => ({
+      id: "session-1",
+      createdAt: "2026-04-15T10:00:00.000Z",
+    }));
+    mockGetSessionMessages.mockClear();
+    mockGetSessionMessages.mockImplementation(async () => []);
+    mockListSessions.mockClear();
+    mockListSessions.mockImplementation(async () => [
+      { id: "session-1", createdAt: "2026-04-15T10:00:00.000Z" },
+    ]);
     mockGetModelsWithDefaults.mockClear();
     mockGetModelsWithDefaults.mockImplementation(async () => ({
       models: [],
@@ -351,6 +401,36 @@ describe("OpenCodeChatTab", () => {
     await waitFor(() => {
       expect(screen.getByTestId("opencode-compose-layout").textContent).toBe("bottom");
     });
+  });
+
+  test("rehydrates the session id saved in a restored pane tab", async () => {
+    const restoredSessionId = "restored-opencode-session";
+    useOpenCodeStore.setState({ sessions: new Map() });
+    seedPaneLayout(restoredSessionId);
+    mockListSessions.mockResolvedValue([
+      { id: restoredSessionId, createdAt: "2026-04-15T10:00:00.000Z" },
+    ]);
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: restoredSessionId })}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetSessionMessages).toHaveBeenCalledWith(MOCK_CLIENT, restoredSessionId);
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
+        restoredSessionId,
+      );
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    const restoredRoot = usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)?.root;
+    expect(restoredRoot?.kind).toBe("leaf");
+    if (!restoredRoot || restoredRoot.kind !== "leaf") throw new Error("Expected pane leaf");
+    const restoredTab = restoredRoot.tabs.find((tab) => tab.id === TAB_ID);
+    expect(restoredTab?.openCodeNativeData?.sessionId).toBe(restoredSessionId);
   });
 
   test("shows the scroll down accessory and scrolls to the bottom when clicked", () => {

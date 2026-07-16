@@ -25,6 +25,7 @@ import {
 import { useCodexStore } from "@/stores/codexStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { getBackgroundProcessingEnvironments } from "@/lib/background-pipelines";
+import { startPaneLayoutPersistence } from "@/lib/pane-layout-persistence";
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
@@ -60,6 +61,7 @@ function App() {
   usePrMonitorService();
   // Monitor agent activity for ALL environments (regardless of selected project)
   useGlobalActivityMonitor();
+  useEffect(() => startPaneLayoutPersistence(), []);
   const [claudeCliAvailable, setClaudeCliAvailable] = useState<boolean | null>(null);
   const [claudeConfigAvailable, setClaudeConfigAvailable] = useState<boolean | null>(null);
   const [opencodeCliAvailable, setOpencodeCliAvailable] = useState<boolean | null>(null);

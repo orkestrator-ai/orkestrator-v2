@@ -358,6 +358,75 @@ describe("Electron StorageService", () => {
     expect(await storage.getSessionsByEnvironment("env-1")).toEqual([]);
   });
 
+  test("persists versioned pane layouts with revisions, isolation, limits, and deletion", async () => {
+    const dataDir = await createTempDir("ork-storage-pane-layouts-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const firstEnvironment = await storage.addEnvironment(createEnvironment("project-1", { name: "first" }));
+    const secondEnvironment = await storage.addEnvironment(createEnvironment("project-1", { name: "second" }));
+    const root = {
+      kind: "leaf",
+      id: "default",
+      tabs: [{ id: "tab-1", type: "plain" }],
+      activeTabId: "tab-1",
+    };
+
+    const first = await storage.savePaneLayout(firstEnvironment.id, {
+      version: 1,
+      containerId: "container-1",
+      activePaneId: "default",
+      root,
+    });
+    expect(first).toMatchObject({
+      environmentId: firstEnvironment.id,
+      revision: 1,
+      root,
+    });
+    await expect(storage.getPaneLayout(firstEnvironment.id)).resolves.toEqual(first);
+
+    const [second, third] = await Promise.all([
+      storage.savePaneLayout(firstEnvironment.id, {
+        version: 1,
+        containerId: "container-1",
+        activePaneId: "default",
+        root: { ...root, activeTabId: "tab-2" },
+      }),
+      storage.savePaneLayout(firstEnvironment.id, {
+        version: 1,
+        containerId: "container-1",
+        activePaneId: "default",
+        root: { ...root, activeTabId: "tab-3" },
+      }),
+    ]);
+    expect([second.revision, third.revision]).toEqual([2, 3]);
+
+    const isolated = await storage.savePaneLayout(secondEnvironment.id, {
+      version: 1,
+      containerId: null,
+      activePaneId: "local-pane",
+      root: { kind: "leaf", id: "local-pane", tabs: [], activeTabId: null },
+    });
+    expect(isolated.revision).toBe(1);
+    expect((await storage.getPaneLayout(firstEnvironment.id))?.revision).toBe(3);
+
+    await expect(storage.savePaneLayout(firstEnvironment.id, {
+      version: 1,
+      containerId: "container-1",
+      activePaneId: "default",
+      root: { value: "x".repeat(256 * 1024) },
+    })).rejects.toThrow("256 KB");
+    await expect(storage.savePaneLayout("missing", {
+      version: 1,
+      containerId: null,
+      activePaneId: "default",
+      root,
+    })).rejects.toThrow("Environment not found");
+
+    await storage.deletePaneLayout(firstEnvironment.id);
+    await expect(storage.getPaneLayout(firstEnvironment.id)).resolves.toBeNull();
+    await expect(storage.getPaneLayout(secondEnvironment.id)).resolves.toEqual(isolated);
+  });
+
   test("updates and deletes kanban tasks and comments with missing-id errors", async () => {
     const dataDir = await createTempDir("ork-storage-kanban-crud-");
     const storage = new StorageService(dataDir);

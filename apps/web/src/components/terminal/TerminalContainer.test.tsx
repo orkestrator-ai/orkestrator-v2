@@ -7,7 +7,7 @@ import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createSessionKey, useTerminalSessionStore } from "@/stores/terminalSessionStore";
-import type { PaneLeaf } from "@/types/paneLayout";
+import type { PaneLeaf, PersistedPaneLayout } from "@/types/paneLayout";
 import type { EnsureEnvironmentSetupResult, EnvironmentSetupSession } from "@/types";
 import * as realBackend from "@/lib/backend";
 import * as realSetupCommands from "@/lib/setup-commands";
@@ -34,6 +34,7 @@ const runEnvironmentSetupMock = mock(async (environmentId: string) => ({
   setupScriptsComplete: true,
 }));
 const getEnvironmentSetupSessionMock = mock(async (_environmentId: string): Promise<EnvironmentSetupSession | null> => null);
+const getPaneLayoutMock = mock(async (_environmentId: string): Promise<PersistedPaneLayout | null> => null);
 const writeContainerFileMock = mock(async (_containerId: string, filePath: string) => `/workspace/${filePath}`);
 const writeLocalFileMock = mock(async (worktreePath: string, filePath: string) => `${worktreePath}/${filePath}`);
 const TEST_CONTAINER_SETUP_COMMAND = "/backend-provided/workspace-setup.sh";
@@ -71,6 +72,7 @@ mock.module("@/lib/backend", () => ({
   ensureEnvironmentSetup: ensureEnvironmentSetupMock,
   runEnvironmentSetup: runEnvironmentSetupMock,
   getEnvironmentSetupSession: getEnvironmentSetupSessionMock,
+  getPaneLayout: getPaneLayoutMock,
   writeContainerFile: writeContainerFileMock,
   writeLocalFile: writeLocalFileMock,
 }));
@@ -130,6 +132,7 @@ describe("TerminalContainer", () => {
           containerId: "container-visible",
         }],
       ]),
+      hydration: new Map(),
       activeEnvironmentId: "env-visible",
     });
 
@@ -204,6 +207,8 @@ describe("TerminalContainer", () => {
     }));
     getEnvironmentSetupSessionMock.mockReset();
     getEnvironmentSetupSessionMock.mockResolvedValue(null);
+    getPaneLayoutMock.mockReset();
+    getPaneLayoutMock.mockResolvedValue(null);
     writeContainerFileMock.mockReset();
     writeLocalFileMock.mockReset();
     writeContainerFileMock.mockImplementation(async (_containerId: string, filePath: string) => `/workspace/${filePath}`);
@@ -254,6 +259,45 @@ describe("TerminalContainer", () => {
     });
 
     expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-visible");
+  });
+
+  test("restores a backend pane layout before default tab seeding", async () => {
+    getPaneLayoutMock.mockResolvedValue({
+      version: 1,
+      environmentId: "env-hidden",
+      containerId: "container-hidden",
+      activePaneId: "restored-pane",
+      root: {
+        kind: "leaf",
+        id: "restored-pane",
+        tabs: [{ id: "restored-tab", type: "plain", displayTitle: "Restored" }],
+        activeTabId: "restored-tab",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 1,
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      const restored = usePaneLayoutStore.getState().environments.get("env-hidden");
+      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+      expect(restored?.activePaneId).toBe("restored-pane");
+      expect(restored?.root).toMatchObject({
+        kind: "leaf",
+        tabs: [{ id: "restored-tab", displayTitle: "Restored" }],
+      });
+    });
+    expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
   });
 
   test("creates a codex terminal tab when codexMode is terminal", async () => {

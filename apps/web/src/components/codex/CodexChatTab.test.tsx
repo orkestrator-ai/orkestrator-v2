@@ -487,6 +487,35 @@ describe("CodexChatTab", () => {
     expect(optimistic?.id).toMatch(/^optimistic-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 
+  test("rehydrates the session id saved in a restored pane tab", async () => {
+    const restoredSessionId = "restored-codex-session";
+    useCodexStore.setState({ sessions: new Map() });
+    usePaneLayoutStore
+      .getState()
+      .updateTabNativeSessionId(TAB_ID, restoredSessionId, ENVIRONMENT_ID);
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: restoredSessionId })}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetSessionMessages).toHaveBeenCalledWith(MOCK_CLIENT, restoredSessionId);
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
+        restoredSessionId,
+      );
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    const restoredRoot = usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)?.root;
+    expect(restoredRoot?.kind).toBe("leaf");
+    if (!restoredRoot || restoredRoot.kind !== "leaf") throw new Error("Expected pane leaf");
+    const restoredTab = restoredRoot.tabs.find((tab) => tab.id === TAB_ID);
+    expect(restoredTab?.codexNativeData?.sessionId).toBe(restoredSessionId);
+  });
+
   test("queues prompts with a generated UUID", async () => {
     composeText = "Queue this prompt";
     useCodexStore.getState().setSessionLoading(SESSION_KEY, true);

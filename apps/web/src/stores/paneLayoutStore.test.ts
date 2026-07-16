@@ -85,6 +85,7 @@ const { useEnvironmentStore } = await import("./environmentStore");
 function resetStores() {
   usePaneLayoutStore.setState({
     environments: new Map(),
+    hydration: new Map(),
     activeEnvironmentId: null,
   });
   useTerminalSessionStore.setState({
@@ -494,6 +495,25 @@ describe("paneLayoutStore environment scoping", () => {
     expect(store.getActivePane("env-a")?.activeTabId).toBe("file-a");
     expect(store.getRoot("env-a").kind).toBe("leaf");
     expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-b");
+  });
+
+  test("writes and clears native session ids on the owning tab", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    store.addTab("default", {
+      id: "claude-a",
+      type: "claude-native",
+      claudeNativeData: {
+        environmentId: "env-a",
+        containerId: "container-a",
+      },
+    }, "env-a");
+
+    store.updateTabNativeSessionId("claude-a", "session-1", "env-a");
+    expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.claudeNativeData?.sessionId).toBe("session-1");
+
+    usePaneLayoutStore.getState().updateTabNativeSessionId("claude-a", undefined, "env-a");
+    expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.claudeNativeData?.sessionId).toBeUndefined();
   });
 
   test("sets and resets a hidden environment without changing the active environment", () => {

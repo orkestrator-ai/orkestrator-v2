@@ -26,6 +26,7 @@ import type {
   CodexMode,
   OpenCodeMode,
   EnvironmentSetupSession,
+  PersistedPaneLayout,
 } from "@/types";
 import type {
   LinearCompletionCommentResult,
@@ -1086,6 +1087,25 @@ export async function reorderSessions(
 /** Clean up orphaned buffer files (buffers without corresponding sessions) */
 export async function cleanupOrphanedBuffers(): Promise<string[]> {
   return invoke<string[]>("cleanup_orphaned_buffers", {});
+}
+
+// --- Pane Layout Commands (Restore-on-connect) ---
+
+export async function getPaneLayout(
+  environmentId: string,
+): Promise<PersistedPaneLayout | null> {
+  return invoke<PersistedPaneLayout | null>("get_pane_layout", { environmentId });
+}
+
+export async function savePaneLayout(
+  environmentId: string,
+  layout: Pick<PersistedPaneLayout, "version" | "containerId" | "activePaneId" | "root">,
+): Promise<PersistedPaneLayout> {
+  return invoke<PersistedPaneLayout>("save_pane_layout", { environmentId, layout });
+}
+
+export async function deletePaneLayout(environmentId: string): Promise<void> {
+  return invoke("delete_pane_layout", { environmentId });
 }
 
 // --- Local Server Commands (for local/worktree environments) ---

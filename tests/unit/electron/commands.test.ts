@@ -249,6 +249,7 @@ function createContext(
         if (index >= 0) environments.splice(index, 1);
       }),
       removeSessionsByEnvironment: mock(async () => undefined),
+      deletePaneLayout: mock(async () => undefined),
       getProject: mock(async (projectId: string) => {
         if (options.project) return options.project.id === projectId ? options.project : null;
         return {
@@ -3698,6 +3699,55 @@ exit 0
       cols: 100,
       rows: 32,
     });
+  });
+});
+
+describe("pane layout commands", () => {
+  test("validates and forwards pane layout envelopes", async () => {
+    const savePaneLayout = mock(async (environmentId: string, layout: Record<string, unknown>) => ({
+      ...layout,
+      environmentId,
+      updatedAt: new Date(0).toISOString(),
+      revision: 1,
+    }));
+    const context = {
+      storage: {
+        getPaneLayout: mock(async () => null),
+        savePaneLayout,
+        deletePaneLayout: mock(async () => undefined),
+      },
+    } as unknown as CommandContext;
+    const commands = createCommandRegistry();
+    const root = { kind: "leaf", id: "default", tabs: [], activeTabId: null };
+
+    await commands.get("save_pane_layout")?.({
+      environmentId: "env-1",
+      layout: {
+        version: 1,
+        containerId: null,
+        activePaneId: "default",
+        root,
+      },
+    }, context);
+
+    expect(savePaneLayout).toHaveBeenCalledWith("env-1", {
+      version: 1,
+      containerId: null,
+      activePaneId: "default",
+      root,
+    });
+    await expect(commands.get("save_pane_layout")?.({
+      environmentId: "env-1",
+      layout: { version: 2, containerId: null, activePaneId: "default", root },
+    }, context)).rejects.toThrow("Unsupported pane layout version");
+    await expect(commands.get("save_pane_layout")?.({
+      environmentId: "env-1",
+      layout: { version: 1, containerId: null, activePaneId: "", root },
+    }, context)).rejects.toThrow("non-empty");
+    await expect(commands.get("save_pane_layout")?.({
+      environmentId: "env-1",
+      layout: { version: 1, containerId: null, activePaneId: "default", root: [] },
+    }, context)).rejects.toThrow("layout.root");
   });
 });
 

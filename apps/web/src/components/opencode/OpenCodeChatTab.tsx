@@ -31,6 +31,7 @@ import {
   getModelsWithDefaults,
   createSession,
   getSessionMessages,
+  listSessions,
   getPendingPermissions,
   getPendingQuestions,
   getAvailableSlashCommands,
@@ -233,7 +234,7 @@ export function OpenCodeChatTab({
     pendingQuestions: pendingQuestionsMap,
   } = useOpenCodeStore();
 
-  const { clearTabInitialPrompt } = usePaneLayoutStore();
+  const { clearTabInitialPrompt, updateTabNativeSessionId } = usePaneLayoutStore();
 
   // Create a unique session key that combines environmentId and tabId
   // This prevents session collisions when multiple environments use the same tab IDs (e.g., "default")
@@ -496,6 +497,7 @@ export function OpenCodeChatTab({
             sessionId: existingSession.sessionId,
           });
           tabSessionIdRef.current = existingSession.sessionId;
+          updateTabNativeSessionId(tabId, existingSession.sessionId, environmentId);
           isInitializedRef.current = true;
           lastInitTimeRef.current = Date.now();
           setConnectionState("connected");
@@ -520,6 +522,29 @@ export function OpenCodeChatTab({
           setConnectionState("connecting");
           setErrorMessage(null);
 
+          if (data.sessionId) {
+            const availableSessions = await listSessions(existingClient);
+            if (availableSessions.some((session) => session.id === data.sessionId)) {
+              const messages = await getSessionMessages(existingClient, data.sessionId);
+              if (!mounted) return;
+              tabSessionIdRef.current = data.sessionId;
+              updateTabNativeSessionId(tabId, data.sessionId, environmentId);
+              isInitializedRef.current = true;
+              setSession(sessionKey, {
+                sessionId: data.sessionId,
+                messages,
+                isLoading: false,
+              });
+              setConnectionState("connected");
+              if (!hasActiveEventSubscription(environmentId)) {
+                startSharedEventSubscription(existingClient);
+              }
+              await syncPendingRequests(existingClient, data.sessionId);
+              return;
+            }
+            updateTabNativeSessionId(tabId, undefined, environmentId);
+          }
+
           const newSession = await createSession(existingClient);
           if (!mounted) return;
 
@@ -528,6 +553,7 @@ export function OpenCodeChatTab({
           }
 
           tabSessionIdRef.current = newSession.id;
+          updateTabNativeSessionId(tabId, newSession.id, environmentId);
           isInitializedRef.current = true;
 
           setSession(sessionKey, {
@@ -652,12 +678,21 @@ export function OpenCodeChatTab({
         const existingSessionFromStore = useOpenCodeStore
           .getState()
           .sessions.get(sessionKey);
-        const existingSessionId =
-          existingSessionFromRef || existingSessionFromStore?.sessionId;
+        let existingSessionId =
+          existingSessionFromRef || existingSessionFromStore?.sessionId || data.sessionId;
+
+        if (existingSessionId) {
+          const availableSessions = await listSessions(sdkClient);
+          if (!availableSessions.some((session) => session.id === existingSessionId)) {
+            updateTabNativeSessionId(tabId, undefined, environmentId);
+            existingSessionId = undefined;
+          }
+        }
 
         if (existingSessionId) {
           // Restore session from store - component may have remounted
           tabSessionIdRef.current = existingSessionId;
+          updateTabNativeSessionId(tabId, existingSessionId, environmentId);
           isInitializedRef.current = true;
           setConnectionState("connected");
 
@@ -701,6 +736,7 @@ export function OpenCodeChatTab({
 
           // Store the session ID in the ref for future re-activations
           tabSessionIdRef.current = newSession.id;
+          updateTabNativeSessionId(tabId, newSession.id, environmentId);
           isInitializedRef.current = true;
 
           setSession(sessionKey, {
@@ -1368,6 +1404,7 @@ export function OpenCodeChatTab({
     setErrorMessage(null);
     // Reset initialization state to force new session creation
     tabSessionIdRef.current = null;
+    updateTabNativeSessionId(tabId, undefined, environmentId);
     isInitializedRef.current = false;
     clearPersistedVirtuosoState(sessionKey);
     // Trigger re-initialization by clearing client
@@ -1382,6 +1419,8 @@ export function OpenCodeChatTab({
     setSession,
     setContextUsage,
     setServerStatus,
+    tabId,
+    updateTabNativeSessionId,
   ]);
 
   const promoteNextQueuedPromptToDraft = useCallback(() => {
@@ -1456,6 +1495,7 @@ export function OpenCodeChatTab({
         const messages = await getSessionMessages(client, sessionId);
 
         tabSessionIdRef.current = sessionId;
+        updateTabNativeSessionId(tabId, sessionId, environmentId);
         isInitializedRef.current = true;
 
         setSession(sessionKey, {
@@ -1471,7 +1511,7 @@ export function OpenCodeChatTab({
         console.error("[OpenCodeChatTab] Failed to resume session:", error);
       }
     },
-    [client, sessionKey, setSession, syncPendingRequests],
+    [client, environmentId, sessionKey, setSession, syncPendingRequests, tabId, updateTabNativeSessionId],
   );
 
   // Refresh models by re-fetching from the SDK client

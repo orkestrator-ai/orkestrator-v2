@@ -28,11 +28,13 @@ import { createUuid } from "@/lib/uuid";
 /**
  * Per-environment state for pane layout
  */
-interface EnvironmentPaneState {
+export interface EnvironmentPaneState {
   root: PaneNode;
   activePaneId: string;
   containerId: string | null;
 }
+
+export type PaneLayoutHydrationStatus = "pending" | "done";
 
 // Generate unique IDs across desktop and secure/insecure browser contexts.
 function generateId(prefix: string): string {
@@ -137,6 +139,8 @@ export function getAllLeaves(node: PaneNode): PaneLeaf[] {
 interface PaneLayoutState {
   // Per-environment state (keyed by environmentId)
   environments: Map<string, EnvironmentPaneState>;
+  // Restore-on-connect state (keyed by environmentId)
+  hydration: Map<string, PaneLayoutHydrationStatus>;
   // Currently active environment ID
   activeEnvironmentId: string | null;
 
@@ -144,6 +148,8 @@ interface PaneLayoutState {
   setActiveEnvironment: (environmentId: string) => void;
   initialize: (containerId: string | null, environmentId?: string) => void;
   reset: (environmentId?: string) => void;
+  beginHydration: (environmentId: string) => void;
+  finishHydration: (environmentId: string, restored?: EnvironmentPaneState) => void;
 
   // Tab management
   addTab: (paneId: string, tab: TabInfo, environmentId?: string) => void;
@@ -152,6 +158,7 @@ interface PaneLayoutState {
   moveTab: (fromPaneId: string, toPaneId: string, tabId: string, toIndex?: number, environmentId?: string) => void;
   reorderTabs: (paneId: string, fromIndex: number, toIndex: number, environmentId?: string) => void;
   clearTabInitialPrompt: (tabId: string, environmentId?: string) => void;
+  updateTabNativeSessionId: (tabId: string, sessionId: string | undefined, environmentId?: string) => void;
 
   // Pane management
   splitPane: (paneId: string, direction: "horizontal" | "vertical", tabId: string, environmentId?: string) => void;
@@ -312,6 +319,7 @@ function cleanupTabResources(envId: string, containerId: string | null, tab: Tab
 
 export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
   environments: new Map(),
+  hydration: new Map(),
   activeEnvironmentId: null,
 
   // Getter functions for current environment state
@@ -385,6 +393,29 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
       containerId: null,
     });
     set({ environments: newEnvs });
+  },
+
+  beginHydration: (environmentId) => {
+    const state = get();
+    if (state.hydration.has(environmentId)) return;
+    const hydration = new Map(state.hydration);
+    hydration.set(environmentId, "pending");
+    set({ hydration });
+  },
+
+  finishHydration: (environmentId, restored) => {
+    const state = get();
+    const hydration = new Map(state.hydration);
+    hydration.set(environmentId, "done");
+
+    if (!restored) {
+      set({ hydration });
+      return;
+    }
+
+    const environments = new Map(state.environments);
+    environments.set(environmentId, restored);
+    set({ environments, hydration });
   },
 
   addTab: (paneId, tab, environmentId) => {
@@ -659,6 +690,57 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     newEnvs.set(envId, { ...envState, root: newRoot });
     set({ environments: newEnvs });
     console.debug("[PaneLayout] Cleared initialPrompt for tab:", tabId);
+  },
+
+  updateTabNativeSessionId: (tabId, sessionId, environmentId) => {
+    const state = get();
+    const envId = environmentId ?? state.activeEnvironmentId;
+    if (!envId) return;
+
+    const envState = state.environments.get(envId);
+    if (!envState) return;
+    const paneWithTab = findPaneWithTab(envState.root, tabId);
+    const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
+    if (!paneWithTab || !existingTab) return;
+
+    const currentSessionId = existingTab.type === "claude-native"
+      ? existingTab.claudeNativeData?.sessionId
+      : existingTab.type === "codex-native"
+        ? existingTab.codexNativeData?.sessionId
+        : existingTab.type === "opencode-native"
+          ? existingTab.openCodeNativeData?.sessionId
+          : undefined;
+    if (currentSessionId === sessionId) return;
+
+    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+      ...leaf,
+      tabs: leaf.tabs.map((tab) => {
+        if (tab.id !== tabId) return tab;
+        if (tab.type === "claude-native" && tab.claudeNativeData) {
+          return {
+            ...tab,
+            claudeNativeData: { ...tab.claudeNativeData, sessionId },
+          };
+        }
+        if (tab.type === "codex-native" && tab.codexNativeData) {
+          return {
+            ...tab,
+            codexNativeData: { ...tab.codexNativeData, sessionId },
+          };
+        }
+        if (tab.type === "opencode-native" && tab.openCodeNativeData) {
+          return {
+            ...tab,
+            openCodeNativeData: { ...tab.openCodeNativeData, sessionId },
+          };
+        }
+        return tab;
+      }),
+    }));
+
+    const environments = new Map(state.environments);
+    environments.set(envId, { ...envState, root: newRoot });
+    set({ environments });
   },
 
   splitPane: (paneId, direction, tabId, environmentId) => {

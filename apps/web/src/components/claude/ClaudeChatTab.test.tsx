@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { createClaudeSessionKey, useClaudeStore } from "@/stores/claudeStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { ClaudeMessage as ClaudeMessageType } from "@/lib/claude-client";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 
@@ -114,6 +115,34 @@ function createData(overrides: Partial<ClaudeNativeData> = {}): ClaudeNativeData
   };
 }
 
+function seedPaneLayout(sessionId?: string) {
+  usePaneLayoutStore.setState({
+    environments: new Map([
+      [
+        ENVIRONMENT_ID,
+        {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              {
+                id: TAB_ID,
+                type: "claude-native",
+                claudeNativeData: createData({ sessionId }),
+              },
+            ],
+            activeTabId: TAB_ID,
+          },
+          activePaneId: "default",
+          containerId: "container-1",
+        },
+      ],
+    ]),
+    hydration: new Map([[ENVIRONMENT_ID, "done"]]),
+    activeEnvironmentId: ENVIRONMENT_ID,
+  });
+}
+
 function resetStores(environmentName = "review-table") {
   useConfigStore.setState((state) => ({
     ...state,
@@ -183,6 +212,7 @@ function resetStores(environmentName = "review-table") {
     setupCommandsResolved: new Set(),
     setupScriptsRunning: new Set(),
   });
+  seedPaneLayout();
 }
 
 describe("ClaudeChatTab", () => {
@@ -320,6 +350,33 @@ describe("ClaudeChatTab", () => {
       expect(mockCheckHealth).toHaveBeenCalledWith(MOCK_CLIENT);
     });
     expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("rehydrates the session id saved in a restored pane tab", async () => {
+    const restoredSessionId = "restored-claude-session";
+    useClaudeStore.setState({ sessions: new Map() });
+    seedPaneLayout(restoredSessionId);
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: restoredSessionId })}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetSessionMessages).toHaveBeenCalledWith(MOCK_CLIENT, restoredSessionId);
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
+        restoredSessionId,
+      );
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    const restoredRoot = usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)?.root;
+    expect(restoredRoot?.kind).toBe("leaf");
+    if (!restoredRoot || restoredRoot.kind !== "leaf") throw new Error("Expected pane leaf");
+    const restoredTab = restoredRoot.tabs.find((tab) => tab.id === TAB_ID);
+    expect(restoredTab?.claudeNativeData?.sessionId).toBe(restoredSessionId);
   });
 
   test("review tabs show Address all after messages exist and send the shared prompt", async () => {

@@ -13,6 +13,7 @@ import type {
   PortMapping,
   PrState,
   Project,
+  PersistedPaneLayout,
   RepositoryConfig,
   Session,
   SessionType,
@@ -352,6 +353,7 @@ export class StorageService {
   private environmentMutationQueue: Promise<unknown> = Promise.resolve();
   private configMutationQueue: Promise<unknown> = Promise.resolve();
   private featurePlanMutation: Promise<unknown> = Promise.resolve();
+  private paneLayoutMutation: Promise<unknown> = Promise.resolve();
 
   constructor(dataDir: string) {
     this.dataDir = dataDir;
@@ -383,6 +385,10 @@ export class StorageService {
 
   private sessionsFile(): string {
     return this.file("sessions.json");
+  }
+
+  private paneLayoutsFile(): string {
+    return this.file("pane-layouts.json");
   }
 
   private kanbanFile(): string {
@@ -828,6 +834,72 @@ export class StorageService {
     sessions.push(session);
     await this.saveJson(this.sessionsFile(), sessions);
     return session;
+  }
+
+  async getPaneLayout(environmentId: string): Promise<PersistedPaneLayout | null> {
+    const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
+      this.paneLayoutsFile(),
+      () => ({}),
+    );
+    return layouts[environmentId] ?? null;
+  }
+
+  async savePaneLayout(
+    environmentId: string,
+    layout: Pick<PersistedPaneLayout, "version" | "containerId" | "activePaneId" | "root">,
+  ): Promise<PersistedPaneLayout> {
+    let serializedRoot: string | undefined;
+    try {
+      serializedRoot = JSON.stringify(layout.root);
+    } catch {
+      throw new Error("Pane layout root must be JSON serializable");
+    }
+    if (serializedRoot === undefined) {
+      throw new Error("Pane layout root must be JSON serializable");
+    }
+    if (Buffer.byteLength(serializedRoot, "utf8") > 256 * 1024) {
+      throw new Error("Pane layout root exceeds the 256 KB limit");
+    }
+
+    const run = this.paneLayoutMutation.then(async () => {
+      if (!await this.getEnvironment(environmentId)) {
+        throw new Error(`Environment not found: ${environmentId}`);
+      }
+
+      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
+        this.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[environmentId];
+      const saved: PersistedPaneLayout = {
+        version: layout.version,
+        environmentId,
+        containerId: layout.containerId,
+        activePaneId: layout.activePaneId,
+        root: layout.root,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      layouts[environmentId] = saved;
+      await this.saveJson(this.paneLayoutsFile(), layouts);
+      return saved;
+    });
+    this.paneLayoutMutation = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  async deletePaneLayout(environmentId: string): Promise<void> {
+    const run = this.paneLayoutMutation.then(async () => {
+      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
+        this.paneLayoutsFile(),
+        () => ({}),
+      );
+      if (!(environmentId in layouts)) return;
+      delete layouts[environmentId];
+      await this.saveJson(this.paneLayoutsFile(), layouts);
+    });
+    this.paneLayoutMutation = run.then(() => undefined, () => undefined);
+    return run;
   }
 
   async getSession(sessionId: string): Promise<Session | null> {

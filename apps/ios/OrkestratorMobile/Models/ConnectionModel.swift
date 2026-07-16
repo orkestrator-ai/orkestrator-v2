@@ -9,12 +9,12 @@ final class ConnectionModel: ObservableObject {
     @Published var isConnecting = false
     @Published var connectionError: String?
 
-    private let credentialStore: KeychainCredentialStore
-    private let validator: GatewayConnectionValidator
+    private let credentialStore: any ConnectionCredentialStoring
+    private let validator: any GatewayConnectionValidating
 
     init(
-        credentialStore: KeychainCredentialStore = KeychainCredentialStore(),
-        validator: GatewayConnectionValidator = GatewayConnectionValidator()
+        credentialStore: any ConnectionCredentialStoring = KeychainCredentialStore(),
+        validator: any GatewayConnectionValidating = GatewayConnectionValidator()
     ) {
         self.credentialStore = credentialStore
         self.validator = validator
@@ -87,10 +87,22 @@ final class ConnectionModel: ObservableObject {
     }
 
     @discardableResult
-    func use(connectionID: String) throws -> ConnectionListPayload {
+    func use(connectionID: String) async throws -> ConnectionListPayload {
         guard let id = UUID(uuidString: connectionID),
-              vault.connections.contains(where: { $0.id == id }) else {
+              let connection = vault.connections.first(where: { $0.id == id }) else {
             throw ConnectionModelError.missingConnection
+        }
+
+        // Do not strand the user on a saved server that can no longer be
+        // reached or authenticated. The active connection remains unchanged
+        // when validation fails.
+        try await validator.check(address: connection.address, token: connection.token)
+
+        guard let currentConnection = vault.connections.first(where: { $0.id == id }) else {
+            throw ConnectionModelError.missingConnection
+        }
+        guard currentConnection == connection else {
+            throw ConnectionModelError.changedConnection
         }
         var nextVault = vault
         nextVault.activeConnectionID = id
@@ -139,8 +151,14 @@ final class ConnectionModel: ObservableObject {
 
 enum ConnectionModelError: LocalizedError {
     case missingConnection
+    case changedConnection
 
     var errorDescription: String? {
-        "That saved connection no longer exists."
+        switch self {
+        case .missingConnection:
+            return "That saved connection no longer exists."
+        case .changedConnection:
+            return "That saved connection changed while it was being checked. Try again."
+        }
     }
 }

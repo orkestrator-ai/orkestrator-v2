@@ -35,6 +35,7 @@
     "build:all": "bun run download:binaries && turbo --cwd . run build --cache-dir .turbo",
     "preview": "bun run --cwd apps/web preview",
     "test": "bun scripts/test-all.ts",
+    "test:ios": "bun scripts/test-ios.ts",
     "test:unit": "bun test tests/unit",
     "docker:build": "docker build -t orkestrator-v2:latest --no-cache -f docker/Dockerfile .",
     "package": "bun run build:all && bunx electron-builder && bun scripts/install-packaged-app.ts"

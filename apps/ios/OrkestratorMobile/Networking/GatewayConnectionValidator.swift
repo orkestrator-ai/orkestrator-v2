@@ -1,9 +1,29 @@
 import Foundation
 
-struct GatewayConnectionValidator: Sendable {
+protocol GatewayConnectionValidating: Sendable {
+    func normalizedAddress(_ value: String) throws -> URL
+    func normalizedToken(_ value: String) throws -> String
+    func check(address: URL, token: String) async throws
+}
+
+struct GatewayConnectionValidator: GatewayConnectionValidating, Sendable {
     static let minimumTokenLength = 16
     static let maximumTokenLength = 1_024
     static let maximumCookieBytes = 4_096
+
+    private let session: URLSession
+
+    init(session: URLSession? = nil) {
+        if let session {
+            self.session = session
+        } else {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.timeoutIntervalForRequest = 10
+            configuration.httpCookieStorage = nil
+            configuration.httpShouldSetCookies = false
+            self.session = URLSession(configuration: configuration)
+        }
+    }
 
     func normalizedAddress(_ value: String) throws -> URL {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -62,18 +82,14 @@ struct GatewayConnectionValidator: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
 
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 10
-        configuration.httpCookieStorage = nil
-        configuration.httpShouldSetCookies = false
-        let session = URLSession(configuration: configuration)
-
         let data: Data
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: request)
         } catch let error as URLError {
             switch error.code {
+            case .cancelled where Task.isCancelled:
+                throw CancellationError()
             case .timedOut:
                 throw ConnectionValidationError.timedOut
             case .serverCertificateUntrusted, .serverCertificateHasBadDate,

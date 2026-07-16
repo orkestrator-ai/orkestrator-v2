@@ -1,9 +1,23 @@
 import Foundation
 import Security
 
-struct KeychainCredentialStore: Sendable {
-    private let service = "dev.orkestrator.mobile.remote-connections"
-    private let account = "connection-vault"
+protocol ConnectionCredentialStoring: Sendable {
+    func load() throws -> ConnectionVault
+    func save(_ vault: ConnectionVault) throws
+    func delete() throws
+}
+
+struct KeychainCredentialStore: ConnectionCredentialStoring, Sendable {
+    let service: String
+    let account: String
+
+    init(
+        service: String = "dev.orkestrator.mobile.remote-connections",
+        account: String = "connection-vault"
+    ) {
+        self.service = service
+        self.account = account
+    }
 
     func load() throws -> ConnectionVault {
         var query = baseQuery

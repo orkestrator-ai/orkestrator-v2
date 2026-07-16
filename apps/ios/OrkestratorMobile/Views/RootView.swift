@@ -19,7 +19,9 @@ struct RootView: View {
                         ConnectionFailureView(
                             message: message,
                             retry: { webState = .retrying(UUID()) },
-                            edit: { model.showConnectionEditor(prefillActiveConnection: true, error: message) }
+                            edit: { model.showConnectionEditor(prefillActiveConnection: true, error: message) },
+                            alternatives: model.vault.connections.filter { $0.id != connection.id },
+                            switchConnection: switchConnection
                         )
                     case .ready, .retrying:
                         EmptyView()
@@ -37,6 +39,18 @@ struct RootView: View {
         }
         .onChange(of: model.activeConnection?.id) { _, _ in
             webState = .loading
+        }
+    }
+
+    private func switchConnection(_ connection: RemoteConnection) {
+        webState = .loading
+        Task {
+            do {
+                try await model.use(connectionID: connection.id.uuidString)
+                webState = .loading
+            } catch {
+                webState = .failed(error.localizedDescription)
+            }
         }
     }
 }
@@ -72,6 +86,8 @@ private struct ConnectionFailureView: View {
     let message: String
     let retry: () -> Void
     let edit: () -> Void
+    let alternatives: [RemoteConnection]
+    let switchConnection: (RemoteConnection) -> Void
 
     var body: some View {
         VStack(spacing: 18) {
@@ -91,6 +107,16 @@ private struct ConnectionFailureView: View {
                     .buttonStyle(.bordered)
                 Button("Try again", action: retry)
                     .buttonStyle(.borderedProminent)
+            }
+            if !alternatives.isEmpty {
+                Menu {
+                    ForEach(alternatives) { connection in
+                        Button(connection.name) { switchConnection(connection) }
+                    }
+                } label: {
+                    Label("Switch saved server", systemImage: "server.rack")
+                }
+                .buttonStyle(.bordered)
             }
         }
         .frame(maxWidth: 360)

@@ -35,4 +35,12 @@ The first successful connection is saved with `kSecAttrAccessibleWhenUnlockedThi
 
 Saved servers appear in the existing server switcher inside Orkestrator's mobile sidebar. Adding or switching there is routed back through the native Keychain store.
 
+If the active server is offline or its credential has expired, use **Switch saved server** on the native failure screen to reach another Keychain-backed connection without re-entering its token.
+
+Run the native unit tests on an installed simulator with:
+
+```bash
+bun run test:ios
+```
+
 Plain HTTP and invalid TLS certificates are intentionally rejected. Use Tailscale Serve HTTPS as described in the repository root README.

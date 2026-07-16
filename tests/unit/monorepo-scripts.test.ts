@@ -51,5 +51,13 @@ describe("monorepo orchestration scripts", () => {
     expect(rootRun).toBeGreaterThan(workspaceRun);
     expect(source).toContain("process.exit(result.status ?? 1)");
     expect(source).toContain('"--filter=@orkestrator/web-public"');
+    expect(source).toContain('run("bun", ["scripts/test-ios.ts"])');
+    expect(source).toContain('process.platform === "darwin"');
+  });
+
+  test("iOS development and test scripts use Bun entrypoints", () => {
+    const rootPackage = JSON.parse(read("package.json")) as { scripts?: Record<string, string> };
+    expect(rootPackage.scripts?.["dev:ios"]).toBe("bun scripts/run-ios-simulator.ts");
+    expect(rootPackage.scripts?.["test:ios"]).toBe("bun scripts/test-ios.ts");
   });
 });

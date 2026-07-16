@@ -48,6 +48,7 @@ struct RemoteWebView: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+        coordinator.teardown()
         webView.stopLoading()
         webView.configuration.userContentController.removeScriptMessageHandler(forName: Coordinator.messageHandlerName)
         webView.navigationDelegate = nil
@@ -94,8 +95,8 @@ struct RemoteWebView: UIViewRepresentable {
         weak var webView: WKWebView?
         var authenticatedConnection: RemoteConnection?
         var isSwitchingThroughBridge = false
-        private var requestedConnection: RemoteConnection?
-        private var authenticationTask: Task<Void, Never>?
+        private(set) var requestedConnection: RemoteConnection?
+        var authenticationTask: Task<Void, Never>?
 
         init(model: ConnectionModel, state: Binding<WebViewState>) {
             self.model = model
@@ -134,6 +135,15 @@ struct RemoteWebView: UIViewRepresentable {
             }
         }
 
+        func teardown() {
+            authenticationTask?.cancel()
+            authenticationTask = nil
+            requestedConnection = nil
+            authenticatedConnection = nil
+            isSwitchingThroughBridge = false
+            webView = nil
+        }
+
         private func loginCookie(for connection: RemoteConnection) async throws -> HTTPCookie {
             let loginURL = connection.address.appending(path: "__orkestrator/login")
             var components = URLComponents()
@@ -162,6 +172,8 @@ struct RemoteWebView: UIViewRepresentable {
                 (_, response) = try await session.data(for: request)
             } catch let error as URLError {
                 switch error.code {
+                case .cancelled where Task.isCancelled:
+                    throw CancellationError()
                 case .timedOut:
                     throw NativeGatewayLoginError.timedOut
                 case .serverCertificateUntrusted, .serverCertificateHasBadDate,
@@ -202,7 +214,8 @@ struct RemoteWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard let requestedConnection,
-                  webView.url?.host == requestedConnection.address.host else { return }
+                  let url = webView.url,
+                  Self.sameOrigin(url, requestedConnection.address) else { return }
             authenticatedConnection = requestedConnection
             state.wrappedValue = .ready
         }
@@ -231,20 +244,20 @@ struct RemoteWebView: UIViewRepresentable {
                 decisionHandler(.cancel)
                 return
             }
-            if navigationAction.targetFrame == nil {
+            switch Self.navigationDisposition(
+                for: url,
+                targetFrameExists: navigationAction.targetFrame != nil,
+                targetFrameIsMain: navigationAction.targetFrame?.isMainFrame == true,
+                connection: requestedConnection
+            ) {
+            case .allow:
+                decisionHandler(.allow)
+            case .openExternally:
                 UIApplication.shared.open(url)
                 decisionHandler(.cancel)
-                return
-            }
-            if let requestedConnection,
-               let scheme = url.scheme?.lowercased(),
-               (scheme == "http" || scheme == "https"),
-               !sameOrigin(url, requestedConnection.address) {
-                UIApplication.shared.open(url)
+            case .cancel:
                 decisionHandler(.cancel)
-                return
             }
-            decisionHandler(.allow)
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -261,7 +274,7 @@ struct RemoteWebView: UIViewRepresentable {
             state.wrappedValue = .failed("The remote app could not be loaded. Check Tailscale and try again.")
         }
 
-        private func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
+        static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
             func effectivePort(_ url: URL) -> Int? {
                 if let port = url.port { return port }
                 if url.scheme?.lowercased() == "https" { return 443 }
@@ -273,18 +286,70 @@ struct RemoteWebView: UIViewRepresentable {
                 && effectivePort(lhs) == effectivePort(rhs)
         }
 
+        enum NavigationDisposition: Equatable {
+            case allow
+            case openExternally
+            case cancel
+        }
+
+        static func navigationDisposition(
+            for url: URL,
+            targetFrameExists: Bool,
+            targetFrameIsMain: Bool,
+            connection: RemoteConnection?
+        ) -> NavigationDisposition {
+            guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+                return .cancel
+            }
+            guard targetFrameExists else { return .openExternally }
+            guard targetFrameIsMain else { return .allow }
+            guard let connection else { return .cancel }
+            return sameOrigin(url, connection.address) ? .allow : .openExternally
+        }
+
+        static func isTrustedBridgeOrigin(
+            isMainFrame: Bool,
+            scheme: String,
+            host: String,
+            port: Int,
+            connection: RemoteConnection?
+        ) -> Bool {
+            guard isMainFrame, let connection else { return false }
+            var components = URLComponents()
+            components.scheme = scheme
+            components.host = host
+            components.port = port > 0 ? port : nil
+            guard let source = components.url else { return false }
+            return sameOrigin(source, connection.address)
+        }
+
         func webView(
             _ webView: WKWebView,
             createWebViewWith configuration: WKWebViewConfiguration,
             for navigationAction: WKNavigationAction,
             windowFeatures: WKWindowFeatures
         ) -> WKWebView? {
-            if let url = navigationAction.request.url { UIApplication.shared.open(url) }
+            if let url = navigationAction.request.url,
+               Self.navigationDisposition(
+                for: url,
+                targetFrameExists: false,
+                targetFrameIsMain: false,
+                connection: requestedConnection
+               ) == .openExternally {
+                UIApplication.shared.open(url)
+            }
             return nil
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.name == Self.messageHandlerName,
+                  Self.isTrustedBridgeOrigin(
+                    isMainFrame: message.frameInfo.isMainFrame,
+                    scheme: message.frameInfo.securityOrigin.protocol,
+                    host: message.frameInfo.securityOrigin.host,
+                    port: message.frameInfo.securityOrigin.port,
+                    connection: requestedConnection
+                  ),
                   let body = message.body as? [String: Any],
                   let requestID = body["id"] as? String,
                   let action = body["action"] as? String else { return }
@@ -308,7 +373,7 @@ struct RemoteWebView: UIViewRepresentable {
                             throw ConnectionBridgeError.invalidInput
                         }
                         isSwitchingThroughBridge = true
-                        let result = try model.use(connectionID: connectionID)
+                        let result = try await model.use(connectionID: connectionID)
                         try await reply(id: requestID, result: result)
                         finishBridgeSwitch()
                     case "forget":

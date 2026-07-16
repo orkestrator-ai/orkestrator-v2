@@ -200,10 +200,14 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
           running: true,
           url: `${baseUrl ?? getGatewayBaseUrl()}/`,
           error: null,
+          resetAvailable: false,
         });
       },
       setEnabled(): Promise<WebClientStatus> {
         return Promise.reject(new Error("Web client controls are only available in the desktop app"));
+      },
+      resetServe(): Promise<WebClientStatus> {
+        return Promise.reject(new Error("Tailscale Serve reset is only available for the local desktop app"));
       },
       async getTokenSettings(): Promise<GatewayTokenSettings> {
         const response = await fetch(apiUrl(`${GATEWAY_PREFIX}/gateway-settings`), {

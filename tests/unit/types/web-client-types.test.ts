@@ -15,6 +15,7 @@ const status: WebClientStatus = {
   running: true,
   url: "http://100.88.12.3:34121/",
   error: null,
+  resetAvailable: true,
 };
 
 function acceptsWindowApi(api: WindowWebClientApi): WindowWebClientApi {
@@ -31,12 +32,14 @@ describe("web client type contracts", () => {
     const api = acceptsWindowApi({
       getStatus: async () => status,
       setEnabled: async (enabled) => ({ ...status, enabled }),
+      resetServe: async () => status,
       getTokenSettings: async () => tokenSettings,
       setToken: async (token) => ({ ...tokenSettings, token }),
     });
 
     await expect(api.getStatus()).resolves.toEqual(status);
     await expect(api.setEnabled(false)).resolves.toMatchObject({ enabled: false });
+    await expect(api.resetServe()).resolves.toEqual(status);
     await expect(api.getTokenSettings()).resolves.toEqual(tokenSettings);
     await expect(api.setToken("replacement-token-123456")).resolves.toMatchObject({
       token: "replacement-token-123456",

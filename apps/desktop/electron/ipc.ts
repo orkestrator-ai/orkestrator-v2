@@ -45,6 +45,7 @@ export type MainIpcDependencies = {
   nativeImageApi: NativeImageLike;
   getWebClientStatus: () => WebClientStatus | Promise<WebClientStatus>;
   setWebClientEnabled: (enabled: boolean) => Promise<WebClientStatus>;
+  resetWebClientServe: () => Promise<WebClientStatus>;
   getGatewayTokenSettings: () => Promise<GatewayTokenSettings>;
   setGatewayToken: (token: string) => Promise<GatewayTokenSettings>;
   listConnections: () => ConnectionList | Promise<ConnectionList>;
@@ -64,6 +65,7 @@ export function registerMainIpc({
   nativeImageApi,
   getWebClientStatus,
   setWebClientEnabled,
+  resetWebClientServe,
   getGatewayTokenSettings,
   setGatewayToken,
   listConnections,
@@ -147,6 +149,7 @@ export function registerMainIpc({
     if (typeof enabled !== "boolean") throw new Error("Expected enabled to be a boolean");
     return setWebClientEnabled(enabled);
   });
+  handle("orkestrator:web-client:reset-serve", () => resetWebClientServe());
   handle("orkestrator:web-client:get-token-settings", () => getGatewayTokenSettings());
   handle("orkestrator:web-client:set-token", (_event, token: unknown) => {
     if (typeof token !== "string") throw new Error("Expected token to be a string");

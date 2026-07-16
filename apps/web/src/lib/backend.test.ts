@@ -34,6 +34,7 @@ const {
   postLinearCompletionComment,
   openInBrowser,
   runEnvironmentSetup,
+  resetWebClientServe,
   savePaneLayout,
   setWebClientEnabled,
   setGatewayToken,
@@ -197,22 +198,25 @@ describe("backend web client wrappers", () => {
       running: enabled,
       url: enabled ? status.url : null,
     }));
+    const resetServe = mock(async () => status);
     const tokenSettings = { token: "test-token-123456", editable: true, source: "file" as const };
     const getTokenSettings = mock(async () => tokenSettings);
     const setToken = mock(async (token: string) => ({ ...tokenSettings, token }));
     window.orkestrator = {
       ...originalOrkestrator!,
-      webClient: { getStatus, setEnabled, getTokenSettings, setToken },
+      webClient: { getStatus, setEnabled, resetServe, getTokenSettings, setToken },
     };
 
     await expect(getWebClientStatus()).resolves.toEqual(status);
     await expect(setWebClientEnabled(false)).resolves.toMatchObject({ enabled: false, running: false });
+    await expect(resetWebClientServe()).resolves.toEqual(status);
     await expect(getGatewayTokenSettings()).resolves.toEqual(tokenSettings);
     await expect(setGatewayToken("replacement-token-123456")).resolves.toMatchObject({
       token: "replacement-token-123456",
     });
     expect(getStatus).toHaveBeenCalledTimes(1);
     expect(setEnabled).toHaveBeenCalledWith(false);
+    expect(resetServe).toHaveBeenCalledTimes(1);
     expect(setToken).toHaveBeenCalledWith("replacement-token-123456");
   });
 
@@ -249,6 +253,7 @@ describe("backend web client wrappers", () => {
 
     await expect(getWebClientStatus()).rejects.toThrow("only available in the desktop app");
     await expect(setWebClientEnabled(true)).rejects.toThrow("only available in the desktop app");
+    await expect(resetWebClientServe()).rejects.toThrow("only available for the local desktop app");
     await expect(getGatewayTokenSettings()).rejects.toThrow("unavailable");
     await expect(setGatewayToken("replacement-token-123456")).rejects.toThrow("unavailable");
   });
@@ -300,6 +305,7 @@ describe("backend command wrapper coverage", () => {
     const specialWrappers = new Set([
       "getWebClientStatus",
       "setWebClientEnabled",
+      "resetWebClientServe",
       "getGatewayTokenSettings",
       "setGatewayToken",
       "readBinaryFile",

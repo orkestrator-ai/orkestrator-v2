@@ -1,10 +1,22 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   extractTailscaleServeUrl,
   getTailscaleServeTargetPort,
+  TailscaleServeConflictError,
   TailscaleServeManager,
   type TailscaleCommandRunner,
 } from "./tailscale-serve.js";
+
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => (
+    rm(directory, { recursive: true, force: true })
+  )));
+});
 
 function failure(message: string, stderr?: string): Error {
   const error = new Error(message) as Error & { stderr?: string };
@@ -74,6 +86,90 @@ describe("Tailscale Serve manager", () => {
     await expect(manager.start(34121)).rejects.toThrow("Refusing to replace");
     await manager.stop();
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  test("clears every path handler on only the selected HTTPS listener", async () => {
+    const runMock = mock(async (_command: string, args: string[]) => {
+      if (args.at(-1) === "--json") {
+        return {
+          stdout: JSON.stringify({
+            TCP: { "443": { HTTPS: true }, "8443": { HTTPS: true } },
+            Web: {
+              "workstation.example.ts.net:443": {
+                Handlers: {
+                  "/": { Proxy: "http://127.0.0.1:3000" },
+                  "/api": { Proxy: "http://127.0.0.1:3001" },
+                  "/docs": { Proxy: "http://127.0.0.1:3002" },
+                },
+              },
+              "workstation.example.ts.net:8443": {
+                Handlers: { "/other": { Proxy: "http://127.0.0.1:4000" } },
+              },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const run: TailscaleCommandRunner = runMock;
+    const manager = new TailscaleServeManager("tailscale", run);
+
+    await expect(manager.clearHttpsPort(443)).resolves.toBeUndefined();
+    expect(runMock.mock.calls.map((call) => call[1])).toEqual([
+      ["serve", "status", "--json"],
+      ["serve", "--https=443", "--set-path=/api", "off"],
+      ["serve", "--https=443", "--set-path=/docs", "off"],
+      ["serve", "--https=443", "off"],
+    ]);
+
+    await expect(manager.clearHttpsPort(0)).rejects.toThrow("Invalid Tailscale Serve HTTPS port");
+    expect(run).toHaveBeenCalledTimes(4);
+  });
+
+  test("no-ops an absent reset and refuses a non-HTTPS listener", async () => {
+    const runMock = mock(async (_command: string, args: string[]) => ({
+      stdout: args.at(-1) === "--json"
+        ? JSON.stringify({ TCP: { "8443": { TCPForward: "127.0.0.1:3000" } } })
+        : "",
+      stderr: "",
+    }));
+    const run: TailscaleCommandRunner = runMock;
+    const manager = new TailscaleServeManager("tailscale", run);
+
+    await expect(manager.clearHttpsPort(443)).resolves.toBeUndefined();
+    await expect(manager.clearHttpsPort(8443)).rejects.toThrow("non-HTTPS");
+
+    const conflict = await manager.start(34121, 8443).catch((error: unknown) => error);
+    expect(conflict).toBeInstanceOf(TailscaleServeConflictError);
+    expect(conflict).toMatchObject({ resetAvailable: false });
+    expect(runMock.mock.calls.every((call) => call[1]?.includes("--json"))).toBe(true);
+  });
+
+  test("surfaces status inspection and individual handler reset failures", async () => {
+    const inspectionFailed = mock(async () => {
+      throw failure("reset failed", "permission denied");
+    }) as TailscaleCommandRunner;
+
+    await expect(new TailscaleServeManager("tailscale", inspectionFailed).clearHttpsPort()).rejects.toThrow(
+      "Unable to inspect Tailscale Serve configuration for reset: permission denied",
+    );
+
+    const handlerFailed = mock(async (_command: string, args: string[]) => {
+      if (args.at(-1) === "--json") {
+        return {
+          stdout: JSON.stringify({
+            TCP: { "443": { HTTPS: true } },
+            Web: { "workstation.example.ts.net:443": { Handlers: { "/api": {} } } },
+          }),
+          stderr: "",
+        };
+      }
+      throw failure("reset failed", "daemon unavailable");
+    }) as TailscaleCommandRunner;
+    await expect(new TailscaleServeManager("tailscale", handlerFailed).clearHttpsPort()).rejects.toThrow(
+      "Unable to reset Tailscale Serve handler /api: daemon unavailable",
+    );
   });
 
   test("adopts and removes an existing listener only when its proxy target matches", async () => {
@@ -259,5 +355,25 @@ describe("Tailscale Serve manager", () => {
     await expect(manager.stop()).rejects.toThrow("temporary stop failure");
     await expect(manager.stop()).resolves.toBeUndefined();
     expect(stopAttempts).toBe(2);
+  });
+
+  test("runs the default command runner through an executable boundary", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "ork-tailscale-runner-"));
+    temporaryDirectories.push(directory);
+    const executable = path.join(directory, "tailscale");
+    await writeFile(executable, `#!/bin/sh
+if [ "$2" = "status" ] && [ "$3" = "--json" ]; then
+  printf '{}'
+elif [ "$2" = "--https=443" ] && [ "$3" = "off" ]; then
+  exit 0
+else
+  printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
+fi
+`);
+    await chmod(executable, 0o755);
+
+    const manager = new TailscaleServeManager(executable);
+    await expect(manager.start(34121)).resolves.toBe("https://workstation.example.ts.net/");
+    await expect(manager.stop()).resolves.toBeUndefined();
   });
 });

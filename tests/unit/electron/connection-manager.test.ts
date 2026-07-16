@@ -46,6 +46,7 @@ function localBackendHarness(initial?: StoredDesktopConnections) {
       invoke,
       getWebClientStatus: mock(async () => ({ enabled: true, running: true, url: null, error: null })),
       setWebClientEnabled: mock(async () => ({ enabled: true, running: true, url: null, error: null })),
+      resetWebClientServe: mock(async () => ({ enabled: true, running: true, url: null, error: null })),
       getTokenSettings: mock(async () => ({ token, editable: true as const, source: "file" as const })),
       setToken: mock(async (nextToken: string) => ({ token: nextToken, editable: true as const, source: "file" as const })),
     },
@@ -70,10 +71,14 @@ function installHealthyRemoteFetch(): void {
 describe("Electron connection manager", () => {
   test("encrypts remote credentials, routes commands, and returns to Local", async () => {
     const local = localBackendHarness();
-    const remoteRequests: Array<{ url: string; authorization: string | null }> = [];
+    const remoteRequests: Array<{ url: string; method: string; authorization: string | null }> = [];
     globalThis.fetch = mock(async (input, init) => {
       const url = String(input);
-      remoteRequests.push({ url, authorization: new Headers(init?.headers).get("authorization") });
+      remoteRequests.push({
+        url,
+        method: init?.method ?? "GET",
+        authorization: new Headers(init?.headers).get("authorization"),
+      });
       if (url.endsWith("/__orkestrator/events")) {
         return new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
@@ -81,6 +86,15 @@ describe("Electron connection manager", () => {
       }
       if (url.endsWith("/__orkestrator/status")) {
         return new Response(JSON.stringify({ ok: true }));
+      }
+      if (url.endsWith("/__orkestrator/web-client-access")) {
+        return new Response(JSON.stringify({
+          enabled: true,
+          running: true,
+          url: "https://desk.tailnet.ts.net/",
+          error: null,
+          resetAvailable: false,
+        }));
       }
       const body = JSON.parse(String(init?.body)) as { command?: string };
       return new Response(JSON.stringify({ result: body.command === "get_projects" ? [{ id: "remote-project" }] : {} }));
@@ -112,6 +126,12 @@ describe("Electron connection manager", () => {
 
     await expect(manager.invoke("get_projects")).resolves.toEqual([{ id: "remote-project" }]);
     expect(remoteRequests.some((request) => request.authorization === `Bearer ${token}`)).toBe(true);
+    await expect(manager.resetWebClientServe()).resolves.toMatchObject({ running: true });
+    expect(remoteRequests).toContainEqual({
+      url: "https://desk.tailnet.ts.net/__orkestrator/web-client-access",
+      method: "DELETE",
+      authorization: `Bearer ${token}`,
+    });
 
     await manager.use("local");
     manager.handleLocalEvent("local-event", { ignored: false });
@@ -381,6 +401,7 @@ describe("Electron connection manager", () => {
     expect(onEvent).toHaveBeenCalledWith("environment-updated", { id: "env-1" });
     await expect(manager.getWebClientStatus()).resolves.toMatchObject({ running: true });
     await expect(manager.setWebClientEnabled(false)).resolves.toMatchObject({ enabled: true });
+    await expect(manager.resetWebClientServe()).resolves.toMatchObject({ running: true });
     await expect(manager.getGatewayTokenSettings()).resolves.toMatchObject({ token });
     await expect(manager.setToken("replacement-token-123456")).resolves.toMatchObject({ token: "replacement-token-123456" });
     await expect(manager.forget("local")).rejects.toThrow("cannot be removed");

@@ -51,9 +51,11 @@ export interface OrkestratorGatewayOptions {
   logger?: Pick<Console, "debug" | "error" | "info" | "warn">;
   allowNonTailscaleBind?: boolean;
   allowedOrigins?: string[];
+  keepaliveMs?: number;
   webClientControl?: {
     getStatus(): WebClientStatus;
     setEnabled(enabled: boolean): Promise<WebClientStatus>;
+    resetServe(): Promise<WebClientStatus>;
   };
 }
 
@@ -63,7 +65,7 @@ const DEFAULT_GATEWAY_PORT = 34121;
 const GATEWAY_PORT_FALLBACK_ATTEMPTS = 20;
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const KEEPALIVE_MS = 25_000;
-const CORS_ALLOWED_METHODS = "GET, POST, PUT, OPTIONS";
+const CORS_ALLOWED_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
 const CORS_ALLOWED_HEADERS = "Authorization, Content-Type";
 
 class InvalidRequestBodyError extends Error {}
@@ -509,6 +511,7 @@ export class OrkestratorGateway {
   private readonly allowNonTailscaleBind: boolean;
   private readonly webClientControl: OrkestratorGatewayOptions["webClientControl"];
   private readonly allowedOrigins: string[];
+  private readonly keepaliveMs: number;
   private servers = new Set<Server>();
   private token = "";
   private authFile = "";
@@ -533,6 +536,7 @@ export class OrkestratorGateway {
     this.logger = options.logger ?? console;
     this.allowNonTailscaleBind = options.allowNonTailscaleBind ?? false;
     this.webClientControl = options.webClientControl;
+    this.keepaliveMs = options.keepaliveMs ?? KEEPALIVE_MS;
     this.allowedOrigins = (
       options.allowedOrigins ?? parseAllowedOrigins(this.env.ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS)
     )
@@ -940,8 +944,12 @@ export class OrkestratorGateway {
       jsonResponse(response, 200, this.webClientControl.getStatus());
       return;
     }
+    if (request.method === "DELETE") {
+      jsonResponse(response, 200, await this.webClientControl.resetServe());
+      return;
+    }
     if (request.method !== "PUT") {
-      response.writeHead(405, { allow: "GET, PUT" });
+      response.writeHead(405, { allow: "GET, PUT, DELETE" });
       response.end();
       return;
     }
@@ -1036,7 +1044,7 @@ export class OrkestratorGateway {
 
     this.keepalive ??= setInterval(() => {
       for (const client of this.clients) client.write(": keepalive\n\n");
-    }, KEEPALIVE_MS);
+    }, this.keepaliveMs);
     this.keepalive.unref?.();
 
     request.once("close", () => {
@@ -1067,6 +1075,21 @@ export class OrkestratorGateway {
 
   private async proxyToTarget(request: IncomingMessage, response: ServerResponse, target: URL, proxyPrefix?: string): Promise<void> {
     await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      const fail = (error: Error) => {
+        if (settled) return;
+        if (!response.headersSent) {
+          jsonResponse(response, 502, { error: error.message });
+        } else {
+          response.destroy(error);
+        }
+        finish();
+      };
       const proxyRequest = http.request({
         host: target.hostname,
         port: target.port,
@@ -1076,21 +1099,16 @@ export class OrkestratorGateway {
       }, (proxyResponse) => {
         response.writeHead(proxyResponse.statusCode ?? 502, sanitizeProxyResponseHeaders(proxyResponse.headers, target, proxyPrefix));
         proxyResponse.pipe(response);
-        proxyResponse.once("end", resolve);
+        proxyResponse.once("end", finish);
+        proxyResponse.once("error", fail);
+        proxyResponse.once("aborted", () => fail(new Error("Loopback proxy response was aborted")));
       });
       this.proxyRequests.add(proxyRequest);
       proxyRequest.once("close", () => {
         this.proxyRequests.delete(proxyRequest);
       });
 
-      proxyRequest.once("error", (error) => {
-        if (!response.headersSent) {
-          jsonResponse(response, 502, { error: error.message });
-        } else {
-          response.destroy(error);
-        }
-        resolve();
-      });
+      proxyRequest.once("error", fail);
 
       request.pipe(proxyRequest);
     });

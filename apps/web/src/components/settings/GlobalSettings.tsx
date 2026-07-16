@@ -6,6 +6,17 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -14,7 +25,7 @@ import {
 } from "@/components/ui/select";
 import { useConfigStore } from "@/stores";
 import * as backend from "@/lib/backend";
-import { Loader2, Eye, EyeOff, Key, Github, CheckCircle2, XCircle, AlertCircle, Code2, Check, Terminal, Bot, FolderOpen, ExternalLink, Globe2, WifiOff, Copy } from "lucide-react";
+import { Loader2, Eye, EyeOff, Key, Github, CheckCircle2, XCircle, AlertCircle, Code2, Check, Terminal, Bot, FolderOpen, ExternalLink, Globe2, WifiOff, Copy, RefreshCw } from "lucide-react";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -119,6 +130,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [showGithubToken, setShowGithubToken] = useState(false);
   const [showGatewayToken, setShowGatewayToken] = useState(false);
   const { copied: gatewayTokenCopied, copy: copyGatewayToken } = useTimedCopyFeedback();
+  const { copied: webClientUrlCopied, copy: copyWebClientUrl } = useTimedCopyFeedback();
+  const [isResettingTailscaleServe, setIsResettingTailscaleServe] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
@@ -178,6 +191,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
             running: false,
             url: null,
             error: error instanceof Error ? error.message : String(error),
+            resetAvailable: false,
           });
         }
       })
@@ -392,6 +406,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
             running: status?.running ?? false,
             url: status?.url ?? null,
             error: message,
+            resetAvailable: status?.resetAvailable ?? false,
           }));
           throw error;
         }
@@ -1048,9 +1063,45 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     }
   }, [copyGatewayToken, gatewayToken]);
 
+  const handleCopyWebClientUrl = useCallback(async () => {
+    if (!webClientStatus?.url) return;
+    try {
+      await copyWebClientUrl(webClientStatus.url);
+    } catch (error) {
+      console.error("[settings] Failed to copy web client URL:", error);
+      toast.error("Failed to copy web client URL");
+    }
+  }, [copyWebClientUrl, webClientStatus?.url]);
+
+  const handleResetTailscaleServe = useCallback(async () => {
+    setIsResettingTailscaleServe(true);
+    try {
+      const status = await backend.resetWebClientServe();
+      setWebClientStatus(status);
+      setWebClientApplyError(null);
+      if (status.error) throw new Error(status.error);
+      toast.success("Tailscale Serve reset");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setWebClientStatus((status) => ({
+        enabled: status?.enabled ?? webClientEnabled,
+        running: status?.running ?? false,
+        url: status?.url ?? null,
+        error: message,
+        resetAvailable: status?.resetAvailable ?? false,
+      }));
+      toast.error("Failed to reset Tailscale Serve", { description: message });
+    } finally {
+      setIsResettingTailscaleServe(false);
+    }
+  }, [webClientEnabled]);
+
   const renderWebClient = () => {
     const isRemoteClient = window.orkestratorGateway?.enabled === true;
     const hasPendingAccessChange = webClientEnabled !== (global.webClientEnabled ?? true);
+    const canResetTailscaleServe = !isRemoteClient
+      && !hasPendingAccessChange
+      && webClientStatus?.resetAvailable === true;
     const statusLabel = isLoadingWebClientStatus
       ? "Checking"
       : webClientStatus?.running
@@ -1185,22 +1236,35 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
               </div>
 
               {webClientStatus?.running && webClientStatus.url && !hasPendingAccessChange && (
-                <a
-                  href={webClientStatus.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={(event) => {
-                    if (!isRemoteClient) {
-                      event.preventDefault();
-                      void backend.openInBrowser(webClientStatus.url!);
-                    }
-                  }}
-                  className="flex min-w-0 items-center gap-1.5 font-mono text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  title={webClientStatus.url}
-                >
-                  <span className="truncate">{webClientStatus.url}</span>
-                  <ExternalLink className="h-3 w-3 shrink-0" />
-                </a>
+                <div className="flex min-w-0 items-center gap-1">
+                  <a
+                    href={webClientStatus.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(event) => {
+                      if (!isRemoteClient) {
+                        event.preventDefault();
+                        void backend.openInBrowser(webClientStatus.url!);
+                      }
+                    }}
+                    className="flex min-w-0 items-center gap-1.5 font-mono text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    title={webClientStatus.url}
+                  >
+                    <span className="truncate">{webClientStatus.url}</span>
+                    <ExternalLink className="h-3 w-3 shrink-0" />
+                  </a>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
+                    onClick={() => void handleCopyWebClientUrl()}
+                    aria-label={webClientUrlCopied ? "Web client URL copied" : "Copy web client URL"}
+                    title={webClientUrlCopied ? "Copied" : "Copy web client URL"}
+                  >
+                    {webClientUrlCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                  </Button>
+                </div>
               )}
             </div>
 
@@ -1210,10 +1274,44 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
               </p>
             )}
             {!hasPendingAccessChange && webClientStatus?.error && (
-              <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-400/90">
-                <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
-                {webClientStatus.error}
-              </p>
+              <div className="mt-2">
+                <p className="flex items-start gap-1.5 text-xs text-amber-400/90">
+                  <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+                  {webClientStatus.error}
+                </p>
+                {canResetTailscaleServe && (
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="mt-3 h-7 gap-1.5 text-xs"
+                        disabled={isResettingTailscaleServe}
+                      >
+                        {isResettingTailscaleServe
+                          ? <Loader2 className="h-3 w-3 animate-spin" />
+                          : <RefreshCw className="h-3 w-3" />}
+                        Reset Tailscale Serve
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Reset Tailscale Serve?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          This removes the existing HTTPS listener on port 443, then publishes Orkestrator again. Any other service using that listener will be disconnected.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => void handleResetTailscaleServe()}>
+                          Reset Tailscale Serve
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                )}
+              </div>
             )}
           </div>
         </div>

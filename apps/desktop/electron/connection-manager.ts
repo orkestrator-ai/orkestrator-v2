@@ -13,7 +13,7 @@ import { BackendHttpClient } from "./backend-process.js";
 
 type LocalBackend = Pick<
   BackendHttpClient,
-  "invoke" | "getWebClientStatus" | "setWebClientEnabled" | "getTokenSettings" | "setToken"
+  "invoke" | "getWebClientStatus" | "setWebClientEnabled" | "resetWebClientServe" | "getTokenSettings" | "setToken"
 >;
 
 export type SecureStorage = {
@@ -221,6 +221,10 @@ export class ConnectionManager {
 
   setWebClientEnabled(enabled: boolean): Promise<WebClientStatus> {
     return this.currentBackend().setWebClientEnabled(enabled);
+  }
+
+  resetWebClientServe(): Promise<WebClientStatus> {
+    return this.currentBackend().resetWebClientServe();
   }
 
   getGatewayTokenSettings(): Promise<GatewayTokenSettings> {

@@ -8,6 +8,7 @@ import {
   ManagedWebClient,
   type ManagedWebClientOwnership,
 } from "./managed-web-client.js";
+import { TailscaleServeConflictError } from "./tailscale-serve.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -39,6 +40,7 @@ describe("managed Electron web client", () => {
       running: true,
       url: "https://workstation.example.ts.net/",
       error: null,
+      resetAvailable: false,
     });
     expect(start).toHaveBeenCalledWith(34121, 443, { adoptExisting: false });
 
@@ -47,6 +49,7 @@ describe("managed Electron web client", () => {
       running: false,
       url: null,
       error: null,
+      resetAvailable: false,
     });
     expect(stop).toHaveBeenCalledTimes(1);
   });
@@ -70,6 +73,180 @@ describe("managed Electron web client", () => {
     start.mockImplementationOnce(async () => "https://workstation.example.ts.net:8443/");
     await expect(client.setEnabled(true)).resolves.toMatchObject({ running: true, error: null });
     expect(start).toHaveBeenLastCalledWith(41234, 8443, { adoptExisting: false });
+  });
+
+  test("clears a conflicting HTTPS listener and republishes web access", async () => {
+    const ownership = memoryOwnershipStore();
+    const start = mock(async () => "https://workstation.example.ts.net/");
+    start.mockImplementationOnce(async () => {
+      throw new TailscaleServeConflictError(443, true);
+    });
+    const clearHttpsPort = mock(async () => undefined);
+    const client = new ManagedWebClient(
+      { start, stop: mock(async () => undefined), clearHttpsPort },
+      443,
+      { error: mock(() => undefined) },
+      ownership,
+    );
+    client.setBrowserListenerUrl("http://127.0.0.1:34121/");
+    await expect(client.setEnabled(true)).resolves.toMatchObject({
+      enabled: true,
+      running: false,
+      error: "Refusing to replace the existing Tailscale Serve configuration on HTTPS port 443",
+      resetAvailable: true,
+    });
+
+    await expect(client.resetServe()).resolves.toEqual({
+      enabled: true,
+      running: true,
+      url: "https://workstation.example.ts.net/",
+      error: null,
+      resetAvailable: false,
+    });
+    expect(clearHttpsPort).toHaveBeenCalledWith(443);
+    expect(start).toHaveBeenCalledWith(34121, 443, { adoptExisting: false });
+    expect(ownership.current()).toEqual({ version: 1, targetPort: 34121, httpsPort: 443 });
+  });
+
+  test("reports a targeted reset failure without pretending web access stopped", async () => {
+    const client = new ManagedWebClient({
+      start: mock(async () => "https://workstation.example.ts.net/"),
+      stop: mock(async () => undefined),
+      clearHttpsPort: mock(async () => { throw new Error("permission denied"); }),
+    }, 443, { error: mock(() => undefined) });
+    client.setBrowserListenerUrl("http://127.0.0.1:34121/");
+    await client.setEnabled(true);
+
+    await expect(client.resetServe()).resolves.toMatchObject({
+      enabled: true,
+      running: true,
+      error: "permission denied",
+      resetAvailable: false,
+    });
+  });
+
+  test("keeps a conflicting listener resettable after a transient reset failure", async () => {
+    const start = mock(async () => "https://workstation.example.ts.net/");
+    start.mockImplementationOnce(async () => {
+      throw new TailscaleServeConflictError(443, true);
+    });
+    const clearHttpsPort = mock(async () => undefined);
+    clearHttpsPort.mockImplementationOnce(async () => { throw new Error("daemon unavailable"); });
+    const client = new ManagedWebClient(
+      { start, stop: mock(async () => undefined), clearHttpsPort },
+      443,
+      { error: mock(() => undefined) },
+    );
+    client.setBrowserListenerUrl("http://127.0.0.1:34121/");
+    await expect(client.setEnabled(true)).resolves.toMatchObject({ resetAvailable: true });
+
+    await expect(client.resetServe()).resolves.toMatchObject({
+      running: false,
+      error: "daemon unavailable",
+      resetAvailable: true,
+    });
+    await expect(client.resetServe()).resolves.toMatchObject({
+      running: true,
+      error: null,
+      resetAvailable: false,
+    });
+    expect(clearHttpsPort).toHaveBeenCalledTimes(2);
+  });
+
+  test("reports reset capability and persistence failures without corrupting state", async () => {
+    const unsupported = new ManagedWebClient({
+      start: mock(async () => "https://unused.example/"),
+      stop: mock(async () => undefined),
+    });
+    await expect(unsupported.resetServe()).resolves.toMatchObject({
+      error: "Tailscale Serve reset is unavailable.",
+      resetAvailable: false,
+    });
+
+    let clearCalls = 0;
+    const ownership = memoryOwnershipStore();
+    ownership.clear.mockImplementation(async () => {
+      clearCalls += 1;
+      if (clearCalls === 2) throw new Error("ownership disk full");
+    });
+    const start = mock(async () => "https://workstation.example.ts.net/");
+    start.mockImplementationOnce(async () => { throw new TailscaleServeConflictError(443, true); });
+    const client = new ManagedWebClient(
+      {
+        start,
+        stop: mock(async () => undefined),
+        clearHttpsPort: mock(async () => undefined),
+      },
+      443,
+      { error: mock(() => undefined) },
+      ownership,
+    );
+    client.setBrowserListenerUrl("http://127.0.0.1:34121/");
+    await client.setEnabled(true);
+
+    await expect(client.resetServe()).resolves.toMatchObject({
+      running: false,
+      error: "ownership disk full",
+      resetAvailable: true,
+    });
+    await expect(client.resetServe()).resolves.toMatchObject({ running: true, error: null });
+  });
+
+  test("reports a republish failure after clearing the conflicting listener", async () => {
+    const start = mock(async (): Promise<string> => {
+      throw new TailscaleServeConflictError(443, true);
+    });
+    start.mockImplementationOnce(async () => { throw new TailscaleServeConflictError(443, true); });
+    start.mockImplementationOnce(async () => { throw new Error("republish failed"); });
+    const client = new ManagedWebClient({
+      start,
+      stop: mock(async () => undefined),
+      clearHttpsPort: mock(async () => undefined),
+    }, 443, { error: mock(() => undefined) });
+    client.setBrowserListenerUrl("http://127.0.0.1:34121/");
+    await client.setEnabled(true);
+
+    await expect(client.resetServe()).resolves.toMatchObject({
+      running: false,
+      error: "republish failed",
+      resetAvailable: false,
+    });
+  });
+
+  test("serializes reset operations with following lifecycle transitions", async () => {
+    const order: string[] = [];
+    let releaseReset: (() => void) | undefined;
+    const start = mock(async () => {
+      order.push("start");
+      return "https://workstation.example.ts.net/";
+    });
+    start.mockImplementationOnce(async () => {
+      throw new TailscaleServeConflictError(443, true);
+    });
+    const client = new ManagedWebClient({
+      start,
+      stop: mock(async () => { order.push("stop"); }),
+      clearHttpsPort: mock(() => new Promise<void>((resolve) => {
+        order.push("reset-start");
+        releaseReset = () => {
+          order.push("reset-end");
+          resolve();
+        };
+      })),
+    }, 443, { error: mock(() => undefined) });
+    client.setBrowserListenerUrl("http://127.0.0.1:34121/");
+    await client.setEnabled(true);
+    order.length = 0;
+
+    const resetting = client.resetServe();
+    const disabling = client.setEnabled(false);
+    await Bun.sleep(0);
+    expect(order).toEqual(["reset-start"]);
+    releaseReset?.();
+
+    await expect(resetting).resolves.toMatchObject({ enabled: true, running: true });
+    await expect(disabling).resolves.toMatchObject({ enabled: false, running: false });
+    expect(order).toEqual(["reset-start", "reset-end", "start", "stop"]);
   });
 
   test("reports an unavailable browser listener without invoking Serve", async () => {

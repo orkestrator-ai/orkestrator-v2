@@ -15,12 +15,21 @@ const mockGetWebClientStatus = mock(async () => ({
   running: true,
   url: "http://100.88.12.3:34121/",
   error: null,
+  resetAvailable: false,
 }));
 const mockSetWebClientEnabled = mock(async (enabled: boolean) => ({
   enabled,
   running: enabled,
   url: enabled ? "http://100.88.12.3:34121/" : null,
   error: null,
+  resetAvailable: false,
+}));
+const mockResetWebClientServe = mock(async () => ({
+  enabled: true,
+  running: true,
+  url: "https://workstation.example.ts.net/",
+  error: null,
+  resetAvailable: false,
 }));
 const mockGetGatewayTokenSettings = mock(async () => ({
   token: "gateway-token-123456",
@@ -45,6 +54,7 @@ mock.module("@/lib/backend", () => ({
   propagateGithubTokenToContainers: mockPropagateGithubTokenToContainers,
   getWebClientStatus: mockGetWebClientStatus,
   setWebClientEnabled: mockSetWebClientEnabled,
+  resetWebClientServe: mockResetWebClientServe,
   getGatewayTokenSettings: mockGetGatewayTokenSettings,
   setGatewayToken: mockSetGatewayToken,
   openInBrowser: mockOpenInBrowser,
@@ -69,6 +79,7 @@ describe("GlobalSettings", () => {
     mockPropagateGithubTokenToContainers.mockClear();
     mockGetWebClientStatus.mockClear();
     mockSetWebClientEnabled.mockClear();
+    mockResetWebClientServe.mockClear();
     mockGetGatewayTokenSettings.mockClear();
     mockSetGatewayToken.mockClear();
     mockOpenInBrowser.mockClear();
@@ -82,12 +93,21 @@ describe("GlobalSettings", () => {
       running: true,
       url: "http://100.88.12.3:34121/",
       error: null,
+      resetAvailable: false,
     }));
     mockSetWebClientEnabled.mockImplementation(async (enabled: boolean) => ({
       enabled,
       running: enabled,
       url: enabled ? "http://100.88.12.3:34121/" : null,
       error: null,
+      resetAvailable: false,
+    }));
+    mockResetWebClientServe.mockImplementation(async () => ({
+      enabled: true,
+      running: true,
+      url: "https://workstation.example.ts.net/",
+      error: null,
+      resetAvailable: false,
     }));
     mockGetGatewayTokenSettings.mockImplementation(async () => ({
       token: "gateway-token-123456",
@@ -189,6 +209,87 @@ describe("GlobalSettings", () => {
     });
   });
 
+  test("copies the current web client URL", async () => {
+    render(<GlobalSettings activeSection="web-client" />);
+    await screen.findByText("Running");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy web client URL" }));
+
+    await waitFor(() => {
+      expect(mockWriteText).toHaveBeenCalledWith("http://100.88.12.3:34121/");
+    });
+    expect(screen.getByRole("button", { name: "Web client URL copied" })).toBeTruthy();
+  });
+
+  test("confirms and resets a conflicting Tailscale Serve listener", async () => {
+    window.orkestratorGateway = undefined;
+    mockGetWebClientStatus.mockResolvedValueOnce({
+      enabled: true,
+      running: false,
+      url: null,
+      error: "Refusing to replace the existing Tailscale Serve configuration on HTTPS port 443",
+      resetAvailable: true,
+    });
+    render(<GlobalSettings activeSection="web-client" />);
+
+    expect(await screen.findByText(/Refusing to replace/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Reset Tailscale Serve" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/removes the existing HTTPS listener on port 443/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Reset Tailscale Serve" }));
+
+    await waitFor(() => expect(mockResetWebClientServe).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText("Running")).toBeTruthy());
+    expect(mockToastSuccess).toHaveBeenCalledWith("Tailscale Serve reset");
+  });
+
+  test("keeps a resettable Serve conflict retryable after a transient reset failure", async () => {
+    window.orkestratorGateway = undefined;
+    mockGetWebClientStatus.mockResolvedValueOnce({
+      enabled: true,
+      running: false,
+      url: null,
+      error: "Refusing to replace the existing Tailscale Serve configuration on HTTPS port 443",
+      resetAvailable: true,
+    });
+    mockResetWebClientServe
+      .mockResolvedValueOnce({
+        enabled: true,
+        running: false,
+        url: null,
+        error: "Tailscale daemon unavailable",
+        resetAvailable: true,
+      })
+      .mockResolvedValueOnce({
+        enabled: true,
+        running: true,
+        url: "https://workstation.example.ts.net/",
+        error: null,
+        resetAvailable: false,
+      });
+    render(<GlobalSettings activeSection="web-client" />);
+
+    const confirmReset = async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Reset Tailscale Serve" }));
+      const dialog = await screen.findByRole("alertdialog");
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole("button", { name: "Reset Tailscale Serve" }));
+      });
+    };
+
+    await confirmReset();
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to reset Tailscale Serve",
+      { description: "Tailscale daemon unavailable" },
+    ));
+    expect(screen.getByRole("button", { name: "Reset Tailscale Serve" })).toBeTruthy();
+
+    await confirmReset();
+    await waitFor(() => expect(mockResetWebClientServe).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("Running")).toBeTruthy();
+  });
+
   test("keeps a failed Electron web access transition retryable after config persistence", async () => {
     window.orkestratorGateway = undefined;
     mockSetWebClientEnabled.mockRejectedValueOnce(new Error("control request failed"));
@@ -257,6 +358,26 @@ describe("GlobalSettings", () => {
       expect(mockWriteText).toHaveBeenCalledWith("gateway-token-123456");
     });
     expect(screen.getByRole("button", { name: "Gateway token copied" })).toBeTruthy();
+  });
+
+  test("reports clipboard failures for the web URL and gateway token", async () => {
+    const originalConsoleError = console.error;
+    console.error = mock(() => undefined);
+    mockWriteText.mockRejectedValue(new Error("clipboard denied"));
+    try {
+      render(<GlobalSettings activeSection="web-client" />);
+      await screen.findByText("Running");
+      await screen.findByDisplayValue("gateway-token-123456");
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy web client URL" }));
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith("Failed to copy web client URL"));
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy gateway token" }));
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith("Failed to copy gateway token"));
+      expect(mockWriteText).toHaveBeenCalledTimes(2);
+    } finally {
+      console.error = originalConsoleError;
+    }
   });
 
   test("shows an environment-managed gateway token as read-only", async () => {
@@ -368,6 +489,7 @@ describe("GlobalSettings", () => {
 
     expect(await screen.findByText("Unavailable")).toBeTruthy();
     expect(screen.getByText("No Tailscale connection was found")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Reset Tailscale Serve" })).toBeNull();
     unmount();
 
     mockGetWebClientStatus.mockRejectedValueOnce(new Error("IPC unavailable"));
@@ -421,6 +543,36 @@ describe("GlobalSettings", () => {
     expect(screen.getByText("Codex Raw Event Logging")).toBeTruthy();
     rerender(<GlobalSettings activeSection="debug" />);
     expect(screen.getByText("Save Logs for Debugging")).toBeTruthy();
+  });
+
+  test("saves non-default editor and agent selections", async () => {
+    render(<GlobalSettings activeSection="general" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ preferredEditor: "cursor", defaultAgent: "codex" }),
+    ));
+  });
+
+  test("uses and restores the default terminal scrollback when legacy config omits it", () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: { ...state.config.global, terminalScrollback: undefined },
+      },
+    }));
+    const { container } = render(<GlobalSettings activeSection="terminal" />);
+    expect(screen.getByText("1,000 lines")).toBeTruthy();
+
+    const colorTextInput = container.querySelector('input[type="text"][value="#000000"]') as HTMLInputElement;
+    fireEvent.change(colorTextInput, { target: { value: "invalid" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Reset" }).at(-1)!);
+
+    expect(screen.getByText("1,000 lines")).toBeTruthy();
+    expect(screen.queryByText("Invalid hex color format. Use #RGB or #RRGGBB.")).toBeNull();
   });
 
   test("blocks saves for invalid domains and terminal colors", () => {
@@ -634,6 +786,40 @@ describe("GlobalSettings", () => {
     expect(screen.queryByText(/Invalid domain format/)).toBeNull();
   });
 
+  test("renders every DNS result state and recovers from a test failure", async () => {
+    const originalConsoleError = console.error;
+    console.error = mock(() => undefined);
+    mockTestDomainResolution
+      .mockResolvedValueOnce([
+        { domain: "resolved.example", valid: true, resolvable: true },
+        { domain: "missing.example", valid: true, resolvable: false, error: "Not found" },
+        { domain: "invalid.example", valid: false, resolvable: false, error: "Invalid response" },
+      ])
+      .mockRejectedValueOnce(new Error("resolver offline"));
+    try {
+      render(<GlobalSettings activeSection="network" />);
+      const domains = screen.getByPlaceholderText(/github\.com/);
+      fireEvent.change(domains, {
+        target: { value: "resolved.example\nmissing.example\ninvalid.example" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Test DNS" }));
+
+      expect(await screen.findByText("resolved.example")).toBeTruthy();
+      expect(screen.getByText("Not found")).toBeTruthy();
+      expect(screen.getByText("Invalid response")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Test DNS" }));
+      await waitFor(() => expect(mockTestDomainResolution).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Test DNS" })).toBeTruthy());
+      expect(console.error).toHaveBeenCalledWith(
+        "[settings] Failed to test domains:",
+        expect.any(Error),
+      );
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
   test("clears terminal color validation errors when changes are reset", () => {
     const { container } = render(<GlobalSettings activeSection="terminal" />);
     const colorTextInput = container.querySelector('input[type="text"][value="#000000"]') as HTMLInputElement;
@@ -641,6 +827,10 @@ describe("GlobalSettings", () => {
     fireEvent.change(colorTextInput, { target: { value: "invalid" } });
     expect(screen.getByText("Invalid hex color format. Use #RGB or #RRGGBB.")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(colorTextInput, { target: { value: "#123456" } });
+    expect(screen.queryByText("Invalid hex color format. Use #RGB or #RRGGBB.")).toBeNull();
+    fireEvent.change(colorTextInput, { target: { value: "invalid" } });
 
     fireEvent.click(screen.getAllByRole("button", { name: "Reset" }).at(-1)!);
     expect(colorTextInput.value).toBe("#000000");

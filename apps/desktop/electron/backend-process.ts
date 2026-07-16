@@ -84,6 +84,10 @@ export class BackendHttpClient {
     return this.webClientAccess("PUT", { enabled });
   }
 
+  async resetWebClientServe(): Promise<WebClientStatus> {
+    return this.webClientAccess("DELETE");
+  }
+
   listen(onEvent: (event: string, payload: unknown) => void): void {
     this.abortEvents?.abort();
     const controller = new AbortController();
@@ -138,7 +142,7 @@ export class BackendHttpClient {
     return payload;
   }
 
-  private async webClientAccess(method: "GET" | "PUT", body?: { enabled: boolean }): Promise<WebClientStatus> {
+  private async webClientAccess(method: "GET" | "PUT" | "DELETE", body?: { enabled: boolean }): Promise<WebClientStatus> {
     const response = await fetch(new URL("/__orkestrator/web-client-access", this.baseUrl), {
       method,
       headers: { authorization: `Bearer ${this.token}`, ...(body ? { "content-type": "application/json" } : {}) },

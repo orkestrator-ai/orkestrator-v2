@@ -28,6 +28,7 @@ interface Window {
     webClient?: {
       getStatus(): Promise<import("./types/webClient").WebClientStatus>;
       setEnabled(enabled: boolean): Promise<import("./types/webClient").WebClientStatus>;
+      resetServe(): Promise<import("./types/webClient").WebClientStatus>;
       getTokenSettings(): Promise<import("./types/webClient").GatewayTokenSettings>;
       setToken(token: string): Promise<import("./types/webClient").GatewayTokenSettings>;
     };

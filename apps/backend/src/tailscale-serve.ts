@@ -48,11 +48,27 @@ export function getTailscaleServeTargetPort(browserUrl: string): number {
 }
 
 type ServeStatus = {
-  TCP?: Record<string, unknown>;
+  TCP?: Record<string, {
+    HTTPS?: boolean;
+    TCPForward?: unknown;
+    TerminateTLS?: unknown;
+  }>;
   Web?: Record<string, {
     Handlers?: Record<string, { Proxy?: unknown }>;
   }>;
 };
+
+export class TailscaleServeConflictError extends Error {
+  constructor(
+    httpsPort: number,
+    readonly resetAvailable: boolean,
+  ) {
+    super(resetAvailable
+      ? `Refusing to replace the existing Tailscale Serve configuration on HTTPS port ${httpsPort}`
+      : `Refusing to replace a non-HTTPS Tailscale Serve configuration on port ${httpsPort}`);
+    this.name = "TailscaleServeConflictError";
+  }
+}
 
 function parseServeStatus(output: string): ServeStatus {
   let status: unknown;
@@ -68,6 +84,24 @@ function parseServeStatus(output: string): ServeStatus {
 function configuredPort(status: ServeStatus, port: number): boolean {
   const tcp = status.TCP;
   return Boolean(tcp && typeof tcp === "object" && !Array.isArray(tcp) && String(port) in tcp);
+}
+
+function hasHttpsListener(status: ServeStatus, port: number): boolean {
+  return status.TCP?.[String(port)]?.HTTPS === true;
+}
+
+function httpsHandlerPaths(status: ServeStatus, port: number): string[] {
+  const paths = new Set<string>();
+  for (const [hostPort, server] of Object.entries(status.Web ?? {})) {
+    const separator = hostPort.lastIndexOf(":");
+    if (separator < 0 || Number.parseInt(hostPort.slice(separator + 1), 10) !== port) continue;
+    for (const handlerPath of Object.keys(server?.Handlers ?? {})) paths.add(handlerPath);
+  }
+  return [...paths].sort((left, right) => {
+    if (left === "/") return 1;
+    if (right === "/") return -1;
+    return left.localeCompare(right);
+  });
 }
 
 function expectedProxyTarget(targetPort: number): string {
@@ -128,9 +162,7 @@ export class TailscaleServeManager {
         this.activeHttpsPort = httpsPort;
         return existingUrl;
       }
-      throw new Error(
-        `Refusing to replace the existing Tailscale Serve configuration on HTTPS port ${httpsPort}`,
-      );
+      throw new TailscaleServeConflictError(httpsPort, hasHttpsListener(status, httpsPort));
     }
 
     const args = [
@@ -170,6 +202,45 @@ export class TailscaleServeManager {
     if (httpsPort === null) return;
     await this.run(this.executable, ["serve", `--https=${httpsPort}`, "off"]);
     this.activeHttpsPort = null;
+  }
+
+  async clearHttpsPort(httpsPort = 443): Promise<void> {
+    if (!Number.isInteger(httpsPort) || httpsPort < 1 || httpsPort > 65535) {
+      throw new Error(`Invalid Tailscale Serve HTTPS port: ${httpsPort}`);
+    }
+
+    let status: ServeStatus;
+    try {
+      const existingStatus = await this.run(this.executable, ["serve", "status", "--json"]);
+      status = parseServeStatus(existingStatus.stdout);
+    } catch (error) {
+      throw new Error(`Unable to inspect Tailscale Serve configuration for reset: ${commandError(error)}`);
+    }
+
+    if (!configuredPort(status, httpsPort)) {
+      if (this.activeHttpsPort === httpsPort) this.activeHttpsPort = null;
+      return;
+    }
+    if (!hasHttpsListener(status, httpsPort)) {
+      throw new Error(`Refusing to reset a non-HTTPS Tailscale Serve configuration on port ${httpsPort}`);
+    }
+
+    const handlerPaths = httpsHandlerPaths(status, httpsPort);
+    if (handlerPaths.length === 0) handlerPaths.push("/");
+    for (const handlerPath of handlerPaths) {
+      const args = [
+        "serve",
+        `--https=${httpsPort}`,
+        ...(handlerPath === "/" ? [] : [`--set-path=${handlerPath}`]),
+        "off",
+      ];
+      try {
+        await this.run(this.executable, args);
+      } catch (error) {
+        throw new Error(`Unable to reset Tailscale Serve handler ${handlerPath}: ${commandError(error)}`);
+      }
+    }
+    if (this.activeHttpsPort === httpsPort) this.activeHttpsPort = null;
   }
 
   async stopOwned(targetPort: number, httpsPort = 443): Promise<boolean> {

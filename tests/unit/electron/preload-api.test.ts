@@ -98,6 +98,7 @@ describe("preload API factory", () => {
     await expect(api.dialog.open({ directory: true })).resolves.toEqual({ channel: "orkestrator:dialog:open", args: [{ directory: true }] });
     await expect(api.webClient.getStatus()).resolves.toEqual({ channel: "orkestrator:web-client:get-status", args: [] });
     await expect(api.webClient.setEnabled(false)).resolves.toEqual({ channel: "orkestrator:web-client:set-enabled", args: [false] });
+    await expect(api.webClient.resetServe()).resolves.toEqual({ channel: "orkestrator:web-client:reset-serve", args: [] });
     await expect(api.webClient.getTokenSettings()).resolves.toEqual({ channel: "orkestrator:web-client:get-token-settings", args: [] });
     await expect(api.webClient.setToken("replacement-token-123456")).resolves.toEqual({
       channel: "orkestrator:web-client:set-token",

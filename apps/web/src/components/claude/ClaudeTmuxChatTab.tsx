@@ -360,6 +360,7 @@ export function ClaudeTmuxChatTab({
   const [promptControlBusy, setPromptControlBusy] = useState(false);
   const [backendHydrated, setBackendHydrated] = useState(false);
   const startedRef = useRef(false);
+  const permissionModeEventVersionRef = useRef(0);
   const isProcessingQueueRef = useRef(false);
   const submitPromptRef = useRef<
     ((
@@ -512,6 +513,7 @@ export function ClaudeTmuxChatTab({
     setBackendHydrated(false);
 
     const hydrate = async () => {
+      const permissionModeVersion = permissionModeEventVersionRef.current;
       try {
         const status = await getStatus(tabId, environmentId);
         if (cancelled) return;
@@ -524,13 +526,19 @@ export function ClaudeTmuxChatTab({
             resumed: status.resumed,
           });
           setTabBusy(storeKey, status.busy);
-          setPlanMode(status.permission_mode === "plan");
+          if (permissionModeEventVersionRef.current === permissionModeVersion) {
+            setPlanMode(status.permission_mode === "plan");
+          }
 
           if (status.session_id) {
             const lines = await getTranscript(tabId, environmentId);
             if (cancelled) return;
             for (const line of lines) {
-              if (line.type === "permission-mode" && typeof line.permissionMode === "string") {
+              if (
+                permissionModeEventVersionRef.current === permissionModeVersion &&
+                line.type === "permission-mode" &&
+                typeof line.permissionMode === "string"
+              ) {
                 setPlanMode(line.permissionMode === "plan");
               }
               applyTranscriptLine(storeKey, line);
@@ -606,9 +614,11 @@ export function ClaudeTmuxChatTab({
           }
           return;
         case "permission-mode-changed":
+          permissionModeEventVersionRef.current += 1;
           setPlanMode(ev.permission_mode === "plan");
           return;
         case "stopped":
+          permissionModeEventVersionRef.current += 1;
           setRunning(storeKey, false, { sessionId: null });
           setPlanMode(false);
           // No claude process means no in-flight turn.
@@ -616,6 +626,7 @@ export function ClaudeTmuxChatTab({
           return;
         case "transcript-line":
           if (ev.line.type === "permission-mode" && typeof ev.line.permissionMode === "string") {
+            permissionModeEventVersionRef.current += 1;
             setPlanMode(ev.line.permissionMode === "plan");
           }
           applyTranscriptLine(storeKey, ev.line);
@@ -933,7 +944,7 @@ export function ClaudeTmuxChatTab({
   };
 
   const handleInterrupt = async () => {
-    if (!running) return;
+    if (!running || modeSwitching) return;
     setError(null);
     try {
       await interruptSession(tabId, environmentId);
@@ -1181,6 +1192,7 @@ export function ClaudeTmuxChatTab({
     setError(null);
     try {
       const permissionMode = await switchPlanMode(tabId, enabled, environmentId);
+      permissionModeEventVersionRef.current += 1;
       setPlanMode(permissionMode === "plan");
     } catch (e) {
       setError(String(e));
@@ -1237,12 +1249,12 @@ export function ClaudeTmuxChatTab({
               interactiveMode
                 ? "text-foreground bg-muted/40 hover:bg-muted/60"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
-              !running && "opacity-50 cursor-not-allowed",
+              (!running || modeSwitching) && "opacity-50 cursor-not-allowed",
             )}
             onClick={() => {
-              if (running) setInteractiveMode((v) => !v);
+              if (running && !modeSwitching) setInteractiveMode((v) => !v);
             }}
-            disabled={!running}
+            disabled={!running || modeSwitching}
             title={
               interactiveMode
                 ? "Switch back to the native tmux transcript view"
@@ -1270,7 +1282,7 @@ export function ClaudeTmuxChatTab({
             type="button"
             className="text-muted-foreground hover:text-foreground"
             onClick={handleInterrupt}
-            disabled={!running}
+            disabled={!running || modeSwitching}
             title="Interrupt the current Claude turn without closing tmux"
           >
             Interrupt

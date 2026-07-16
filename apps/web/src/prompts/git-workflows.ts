@@ -4,6 +4,10 @@
  */
 
 import { buildReviewBody } from "./review-shared";
+import { getReviewPromptValidationError } from "@orkestrator/protocol/review-prompt";
+
+/** Token available in custom action-bar review prompt templates. */
+export const REVIEW_PROMPT_TARGET_BRANCH_TOKEN = "{{targetBranch}}";
 
 /**
  * Generates the prompt for the PR creation workflow.
@@ -66,7 +70,7 @@ Begin by running git status to understand the current state.`;
  * This prompt instructs the agent to commit changes and perform a code review.
  * Shares its body with `createBuildReviewPrompt` via `buildReviewBody()`.
  */
-export function createReviewPrompt(targetBranch: string): string {
+function createDefaultReviewPrompt(targetBranch: string): string {
   return [
     "You are performing a commit and code review workflow. Execute the steps in order.",
     "",
@@ -76,6 +80,29 @@ export function createReviewPrompt(targetBranch: string): string {
     "",
     "Begin by running the git commands to understand the current state.",
   ].join("\n");
+}
+
+/** Built-in action-bar review prompt, kept as a template for the settings editor. */
+export const DEFAULT_REVIEW_PROMPT_TEMPLATE = createDefaultReviewPrompt(
+  REVIEW_PROMPT_TARGET_BRANCH_TOKEN,
+);
+
+/**
+ * Generates the action-bar code review prompt.
+ *
+ * A saved custom template replaces the built-in workflow. Both templates may
+ * use `{{targetBranch}}`, which is resolved when a review tab is created.
+ */
+export function createReviewPrompt(targetBranch: string, customPrompt?: unknown): string {
+  const template = typeof customPrompt === "string"
+    && getReviewPromptValidationError(customPrompt) === null
+    ? customPrompt
+    : DEFAULT_REVIEW_PROMPT_TEMPLATE;
+
+  return template.replaceAll(
+    REVIEW_PROMPT_TARGET_BRANCH_TOKEN,
+    () => targetBranch,
+  );
 }
 
 /**

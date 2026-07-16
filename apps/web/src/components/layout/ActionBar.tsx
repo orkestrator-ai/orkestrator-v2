@@ -300,14 +300,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
     const repoConfig = config.repositories[selectedProjectId];
     const targetBranch = repoConfig?.prBaseBranch || "main";
-    const reviewPrompt = createReviewPrompt(targetBranch);
+    const reviewPrompt = createReviewPrompt(targetBranch, config.global.reviewPrompt);
 
     createTab(agentOverride || defaultAgent, {
       initialPrompt: reviewPrompt,
       displayTitle: "Review",
       isReviewTab: true,
     });
-  }, [createTab, selectedProjectId, canCreateTab, config.repositories, defaultAgent]);
+  }, [createTab, selectedProjectId, canCreateTab, config.repositories, config.global.reviewPrompt, defaultAgent]);
 
   // Load run commands from orkestrator-ai.json when workspace is ready
   useEffect(() => {
@@ -343,9 +343,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       .then((result) => {
         if (cancelled) return;
         try {
-          const config = JSON.parse(result.content);
-          if (Array.isArray(config.run) && config.run.length > 0) {
-            setRunCommands(config.run);
+          const config = JSON.parse(result.content) as { run?: unknown };
+          const commands = Array.isArray(config.run)
+            ? config.run.filter(
+                (command): command is string => typeof command === "string" && command.trim().length > 0,
+              )
+            : [];
+          if (commands.length > 0) {
+            setRunCommands(commands);
           } else {
             setRunCommands(null);
           }

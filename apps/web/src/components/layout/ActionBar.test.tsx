@@ -29,7 +29,15 @@ const realSonnerSnapshot = { ...realSonner };
 const deleteEnvironmentMock = mock(async (_environmentId: string) => {});
 const mergePrMock = mock(async (_containerId: string, _method: string, _deleteBranch: boolean) => {});
 const mergePrLocalMock = mock(async (_environmentId: string, _method: string, _deleteBranch: boolean) => {});
+const openInEditorMock = mock(async (_containerId: string, _editor: string) => {});
+const openLocalInEditorMock = mock(async (_worktreePath: string, _editor: string) => {});
+const readContainerFileMock = mock(async (_containerId: string, _path: string) => ({ content: "{}" }));
+const readLocalFileMock = mock(async (_worktreePath: string, _path: string) => ({ content: "{}" }));
+const setEnvironmentPrBackendMock = mock(async () => {});
+const setEnvironmentPRStoreMock = mock(() => {});
 const createTabMock = mock((_agent: string, _options?: unknown) => {});
+const selectTabMock = mock((_index: number) => {});
+const closeActiveTabMock = mock(() => {});
 const toastSuccessMock = mock(() => {});
 const toastErrorMock = mock(() => {});
 const setProjectBoardTabMock = mock((_tab: string) => {});
@@ -70,6 +78,10 @@ let currentSelectedProjectId: string | null = selectedProject.id;
 let currentProjectBoardTab: "kanban" | "linear" | "features" = "kanban";
 let currentChanges: unknown[] = [];
 let currentFilesPanelOpen = false;
+let currentReviewPrompt: string | undefined;
+let currentWorkspaceReady = false;
+let currentSetupScriptsRunning = false;
+let currentTabCount = 0;
 
 function selectState<TState, TResult>(
   state: TState,
@@ -210,14 +222,18 @@ mock.module("@/components/docker", () => ({
 mock.module("@/stores", () => ({
   useConfigStore: <T,>(selector?: (state: {
     config: {
-      global: { defaultAgent: "codex"; preferredEditor: "vscode" };
+      global: { defaultAgent: "codex"; preferredEditor: "vscode"; reviewPrompt?: string };
       repositories: Record<string, { prBaseBranch?: string }>;
     };
   }) => T) =>
     selectState(
       {
         config: {
-          global: { defaultAgent: "codex" as const, preferredEditor: "vscode" as const },
+          global: {
+            defaultAgent: "codex" as const,
+            preferredEditor: "vscode" as const,
+            reviewPrompt: currentReviewPrompt,
+          },
           repositories: { "project-1": { prBaseBranch: "main" } },
         },
       },
@@ -235,9 +251,9 @@ mock.module("@/stores", () => ({
         getEnvironmentById: (environmentId: string) =>
           environmentId === currentEnvironment.id ? currentEnvironment : undefined,
         updateEnvironment: () => {},
-        isWorkspaceReady: () => false,
-        isSetupScriptsRunning: () => false,
-        setEnvironmentPR: () => {},
+        isWorkspaceReady: () => currentWorkspaceReady,
+        isSetupScriptsRunning: () => currentSetupScriptsRunning,
+        setEnvironmentPR: setEnvironmentPRStoreMock,
       },
       selector,
     ),
@@ -302,22 +318,22 @@ mock.module("@/hooks", () => ({
 mock.module("@/contexts", () => ({
   MAX_TABS: 10,
   useTerminalContext: () => ({
-    closeActiveTab: () => {},
+    closeActiveTab: closeActiveTabMock,
     createTab: createTabMock,
-    selectTab: () => {},
-    tabCount: 0,
+    selectTab: selectTabMock,
+    tabCount: currentTabCount,
   }),
 }));
 
 mock.module("@/lib/backend", () => ({
   mergePr: mergePrMock,
   mergePrLocal: mergePrLocalMock,
-  openInEditor: async () => {},
-  openLocalInEditor: async () => {},
-  readContainerFile: async () => ({ content: "{}" }),
-  readLocalFile: async () => ({ content: "{}" }),
+  openInEditor: openInEditorMock,
+  openLocalInEditor: openLocalInEditorMock,
+  readContainerFile: readContainerFileMock,
+  readLocalFile: readLocalFileMock,
   recreateEnvironment: async () => {},
-  setEnvironmentPr: async () => {},
+  setEnvironmentPr: setEnvironmentPrBackendMock,
 }));
 
 mock.module("sonner", () => ({
@@ -350,7 +366,15 @@ beforeEach(() => {
   deleteEnvironmentMock.mockReset();
   mergePrMock.mockReset();
   mergePrLocalMock.mockReset();
+  openInEditorMock.mockReset();
+  openLocalInEditorMock.mockReset();
+  readContainerFileMock.mockReset();
+  readLocalFileMock.mockReset();
+  setEnvironmentPrBackendMock.mockReset();
+  setEnvironmentPRStoreMock.mockReset();
   createTabMock.mockReset();
+  selectTabMock.mockReset();
+  closeActiveTabMock.mockReset();
   toastSuccessMock.mockReset();
   toastErrorMock.mockReset();
   setProjectBoardTabMock.mockReset();
@@ -368,6 +392,15 @@ beforeEach(() => {
   currentProjectBoardTab = "kanban";
   currentChanges = [];
   currentFilesPanelOpen = false;
+  currentReviewPrompt = undefined;
+  currentWorkspaceReady = false;
+  currentSetupScriptsRunning = false;
+  currentTabCount = 0;
+  openInEditorMock.mockImplementation(async () => {});
+  openLocalInEditorMock.mockImplementation(async () => {});
+  readContainerFileMock.mockImplementation(async () => ({ content: "{}" }));
+  readLocalFileMock.mockImplementation(async () => ({ content: "{}" }));
+  setEnvironmentPrBackendMock.mockImplementation(async () => {});
 });
 
 afterEach(() => {
@@ -752,6 +785,28 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
+  test("uses the saved custom review prompt and resolves its target branch", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentReviewPrompt = "Inspect origin/{{targetBranch}}...HEAD for release blockers.";
+
+    render(<ActionBar />);
+    fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
+
+    expect(createTabMock).toHaveBeenCalledWith(
+      "codex",
+      expect.objectContaining({
+        initialPrompt: "Inspect origin/main...HEAD for release blockers.",
+        displayTitle: "Review",
+        isReviewTab: true,
+      }),
+    );
+  });
+
   test("names PR, conflict, and push workflow tabs", () => {
     currentEnvironment = {
       ...selectedEnvironment,
@@ -795,6 +850,266 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).toHaveBeenLastCalledWith(
       "codex",
       expect.objectContaining({ displayTitle: "Git Push" }),
+    );
+  });
+});
+
+describe("ActionBar run commands", () => {
+  test("loads, validates, and launches container run commands", async () => {
+    currentWorkspaceReady = true;
+    readContainerFileMock.mockResolvedValueOnce({
+      content: JSON.stringify({ run: ["bun run dev", 42, " ", "bun test"] }),
+    });
+
+    render(<ActionBar />);
+
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledWith(
+      "container-1",
+      "orkestrator-ai.json",
+    ));
+    const runButton = screen.getByRole("button", { name: "Run commands" });
+    await waitFor(() => expect(runButton.getAttribute("aria-disabled")).toBe("false"));
+    fireEvent.click(runButton);
+
+    expect(createTabMock).toHaveBeenCalledWith("plain", {
+      initialCommands: ["bun run dev", "bun test"],
+    });
+  });
+
+  test("loads local run commands from the worktree", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      environmentType: "local",
+      containerId: null,
+      status: "stopped",
+      worktreePath: "/tmp/repo-worktree",
+    };
+    currentWorkspaceReady = true;
+    readLocalFileMock.mockResolvedValueOnce({ content: '{"run":["bun run dev"]}' });
+
+    render(<ActionBar />);
+    await waitFor(() => expect(readLocalFileMock).toHaveBeenCalledWith(
+      "/tmp/repo-worktree",
+      "orkestrator-ai.json",
+    ));
+    const runButton = screen.getByRole("button", { name: "Run commands" });
+    await waitFor(() => expect(runButton.getAttribute("aria-disabled")).toBe("false"));
+    fireEvent.click(runButton);
+
+    expect(createTabMock).toHaveBeenCalledWith("plain", {
+      initialCommands: ["bun run dev"],
+    });
+  });
+
+  test("keeps run disabled for malformed files, read failures, and setup scripts", async () => {
+    currentWorkspaceReady = true;
+    readContainerFileMock.mockResolvedValueOnce({ content: "{not-json" });
+    const { rerender } = render(<ActionBar />);
+
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe("true");
+
+    currentEnvironment = { ...selectedEnvironment, containerId: "container-2" };
+    currentSelectedEnvironmentId = currentEnvironment.id;
+    readContainerFileMock.mockRejectedValueOnce(new Error("file unavailable"));
+    rerender(<ActionBar />);
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe("true");
+
+    currentEnvironment = { ...selectedEnvironment, containerId: "container-3" };
+    currentSetupScriptsRunning = true;
+    readContainerFileMock.mockResolvedValueOnce({ content: '{"run":["bun test"]}' });
+    rerender(<ActionBar />);
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(3));
+    expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Run commands" }));
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("ignores a stale run-command response after the environment changes", async () => {
+    currentWorkspaceReady = true;
+    let resolveOld!: (value: { content: string }) => void;
+    readContainerFileMock
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveOld = resolve;
+      }))
+      .mockResolvedValueOnce({ content: '{"run":[]}' });
+
+    const { rerender } = render(<ActionBar />);
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(1));
+
+    currentEnvironment = {
+      ...selectedEnvironment,
+      id: "env-2",
+      containerId: "container-2",
+    };
+    currentSelectedEnvironmentId = "env-2";
+    rerender(<ActionBar />);
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(2));
+
+    resolveOld({ content: '{"run":["stale command"]}' });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const runButton = screen.getByRole("button", { name: "Run commands" });
+    expect(runButton.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(runButton);
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("ActionBar editor actions", () => {
+  test("opens container and local environments in the preferred editor", async () => {
+    const { rerender } = render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
+    await waitFor(() => expect(openInEditorMock).toHaveBeenCalledWith("container-1", "vscode"));
+
+    currentEnvironment = {
+      ...selectedEnvironment,
+      environmentType: "local",
+      containerId: null,
+      status: "stopped",
+      worktreePath: "/tmp/repo-worktree",
+    };
+    rerender(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
+    await waitFor(() => expect(openLocalInEditorMock).toHaveBeenCalledWith(
+      "/tmp/repo-worktree",
+      "vscode",
+    ));
+  });
+
+  test("shows and dismisses editor launch failures", async () => {
+    openInEditorMock.mockRejectedValueOnce(new Error("editor CLI unavailable"));
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
+    expect(await screen.findByText("Failed to Open Editor")).toBeTruthy();
+    expect(screen.getByText("editor CLI unavailable")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "OK" }));
+    expect(screen.queryByText("Failed to Open Editor")).toBeNull();
+  });
+});
+
+describe("ActionBar successful cleanup and merge actions", () => {
+  test("deletes a finished environment and closes the cleanup dialog", async () => {
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
+
+    await waitFor(() => expect(deleteEnvironmentMock).toHaveBeenCalledWith("env-1"));
+    expect(screen.queryByRole("button", { name: "Delete Environment" })).toBeNull();
+  });
+
+  test("merges a container PR and persists its merged state", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
+
+    await waitFor(() => expect(mergePrMock).toHaveBeenCalledWith(
+      "container-1",
+      "squash",
+      true,
+    ));
+    expect(setEnvironmentPrBackendMock).toHaveBeenCalledWith(
+      "env-1",
+      "https://github.com/org/repo/pull/1",
+      "merged",
+      false,
+    );
+    expect(setEnvironmentPRStoreMock).toHaveBeenCalledWith(
+      "env-1",
+      "https://github.com/org/repo/pull/1",
+      "merged",
+      false,
+    );
+  });
+
+  test("uses the local merge path for a ready worktree", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      environmentType: "local",
+      containerId: null,
+      status: "stopped",
+      worktreePath: "/tmp/repo-worktree",
+      prState: "open",
+    };
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
+
+    await waitFor(() => expect(mergePrLocalMock).toHaveBeenCalledWith(
+      "env-1",
+      "squash",
+      true,
+    ));
+    expect(mergePrMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("ActionBar keyboard shortcuts and tab guards", () => {
+  test("dispatches tab, workflow, editor, close, and panel shortcuts", async () => {
+    currentWorkspaceReady = true;
+    currentTabCount = 1;
+    readContainerFileMock.mockResolvedValueOnce({ content: '{"run":["bun test"]}' });
+    render(<ActionBar />);
+    await waitFor(() => expect(
+      screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
+    ).toBe("false"));
+
+    fireEvent.keyDown(window, { key: "3", code: "Digit3", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "t", code: "KeyT", metaKey: true });
+    fireEvent.keyDown(window, { key: "n", code: "KeyN", metaKey: true });
+    fireEvent.keyDown(window, { key: "m", code: "KeyM", metaKey: true });
+    fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
+    fireEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true });
+    fireEvent.keyDown(window, { key: "o", code: "KeyO", metaKey: true });
+    fireEvent.keyDown(window, { key: "w", code: "KeyW", metaKey: true });
+    fireEvent.keyDown(window, { key: "e", code: "KeyE", metaKey: true });
+
+    expect(selectTabMock).toHaveBeenCalledWith(2);
+    expect(createTabMock).toHaveBeenCalledWith("plain");
+    expect(createTabMock).toHaveBeenCalledWith("claude");
+    expect(createTabMock).toHaveBeenCalledWith("opencode");
+    expect(createTabMock).toHaveBeenCalledWith(
+      "codex",
+      expect.objectContaining({ displayTitle: "Review" }),
+    );
+    expect(createTabMock).toHaveBeenCalledWith("plain", { initialCommands: ["bun test"] });
+    await waitFor(() => expect(openInEditorMock).toHaveBeenCalledWith("container-1", "vscode"));
+    expect(closeActiveTabMock).toHaveBeenCalledTimes(1);
+    expect(toggleFilesPanelMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not create tabs after the maximum tab count is reached", () => {
+    currentTabCount = 10;
+    currentWorkspaceReady = true;
+    render(<ActionBar />);
+
+    for (const key of ["t", "n", "m", "r", "p"]) {
+      fireEvent.keyDown(window, { key, code: `Key${key.toUpperCase()}`, metaKey: true });
+    }
+
+    expect(createTabMock).not.toHaveBeenCalled();
+    expect((screen.getByRole("button", { name: "Code review" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "New terminal tab" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  test("falls back to the built-in review prompt for malformed config state", () => {
+    currentReviewPrompt = 123 as never;
+    render(<ActionBar />);
+
+    fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
+
+    expect(createTabMock).toHaveBeenCalledWith(
+      "codex",
+      expect.objectContaining({
+        initialPrompt: expect.stringContaining("Security and instruction hierarchy"),
+      }),
     );
   });
 });

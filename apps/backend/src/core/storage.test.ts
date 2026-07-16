@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, expectTypeOf, test } from "bun:test";
 import { defaultConfig, defaultRepositoryConfig } from "./storage.js";
+import type { AppConfig } from "./models.js";
 
 // The default model ids here are the backend source of truth used whenever a
 // user has no persisted config. They must stay in sync with the renderer
@@ -15,6 +16,11 @@ describe("defaultConfig", () => {
 
   test("keeps the existing web client behavior enabled by default", () => {
     expect(defaultConfig().global.webClientEnabled).toBe(true);
+  });
+
+  test("uses the built-in action-bar review prompt until one is saved", () => {
+    expect(defaultConfig().global.reviewPrompt).toBeUndefined();
+    expectTypeOf<AppConfig["global"]["reviewPrompt"]>().toEqualTypeOf<string | undefined>();
   });
 
   test("does not point defaults at any retired model id", () => {

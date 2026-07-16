@@ -821,6 +821,7 @@ export async function openLocalInEditor(
 /** Represents a file changed in git */
 export interface GitFileChange {
   path: string;
+  originalPath?: string;
   filename: string;
   directory: string;
   additions: number;
@@ -897,6 +898,23 @@ export async function writeContainerFile(
   return invoke<string>("write_container_file", { containerId, filePath, base64Data });
 }
 
+/** Restore a container file to its state at the target branch or commit. */
+export async function revertContainerFile(
+  environmentId: string,
+  filePath: string,
+  targetBranch: string
+): Promise<string> {
+  return invoke<string>("revert_container_file", { environmentId, filePath, targetBranch });
+}
+
+/** Delete a container file and stage the deletion when it is tracked by Git. */
+export async function deleteContainerFile(
+  environmentId: string,
+  filePath: string
+): Promise<string> {
+  return invoke<string>("delete_container_file", { environmentId, filePath });
+}
+
 // --- Local Environment File Commands ---
 
 /** Get git changes for a local environment (worktree path) */
@@ -942,6 +960,23 @@ export async function writeLocalFile(
   base64Data: string
 ): Promise<string> {
   return invoke<string>("write_local_file", { worktreePath, filePath, base64Data });
+}
+
+/** Restore a local file to its state at the target branch or commit. */
+export async function revertLocalFile(
+  environmentId: string,
+  filePath: string,
+  targetBranch: string
+): Promise<string> {
+  return invoke<string>("revert_local_file", { environmentId, filePath, targetBranch });
+}
+
+/** Delete a local file and stage the deletion when it is tracked by Git. */
+export async function deleteLocalFile(
+  environmentId: string,
+  filePath: string
+): Promise<string> {
+  return invoke<string>("delete_local_file", { environmentId, filePath });
 }
 
 // --- Port Mapping Commands ---

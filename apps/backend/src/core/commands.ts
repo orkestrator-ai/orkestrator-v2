@@ -1696,9 +1696,13 @@ async function getLocalGitStatus(worktreePath: string, targetBranch: string): Pr
       const parts = line.split("\t");
       const status = parts[0] ?? "";
       const filePath = parts.at(-1) ?? "";
+      const originalPath = (status.startsWith("R") || status.startsWith("C"))
+        ? parts[1]
+        : undefined;
       const fileStats = stats.get(filePath) ?? { additions: 0, deletions: 0 };
       return {
         path: filePath,
+        originalPath,
         filename: path.basename(filePath),
         directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
         additions: fileStats.additions,
@@ -1715,6 +1719,7 @@ async function getLocalGitStatus(worktreePath: string, targetBranch: string): Pr
     const additions = await countLocalFileLines(worktreePath, filePath).catch(() => 0);
     changes.push({
       path: filePath,
+      originalPath: undefined,
       filename: path.basename(filePath),
       directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath),
       additions,
@@ -1776,6 +1781,261 @@ async function resolveLocalGitBase(worktreePath: string, targetBranch: string): 
   if (await gitRefExists(worktreePath, remoteRef)) return remoteRef;
   if (await gitRefExists(worktreePath, branch)) return branch;
   return remoteRef;
+}
+
+function validateWorkspaceMutationPath(relativePath: string, label = "filePath"): string {
+  const target = validateRelativeFilePath(relativePath, label);
+  if (target === ".git" || target.startsWith(".git/")) {
+    throw new Error(`Invalid ${label}: Git metadata cannot be modified`);
+  }
+  return target;
+}
+
+async function assertNoLocalSymlinkAncestors(worktreePath: string, target: string): Promise<void> {
+  const root = await fs.realpath(worktreePath);
+  let current = root;
+  const ancestors = target.split("/").slice(0, -1);
+
+  for (const segment of ancestors) {
+    current = path.join(current, segment);
+    let stats;
+    try {
+      stats = await fs.lstat(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Invalid filePath: symlink ancestor is not allowed: ${target}`);
+    }
+    if (!stats.isDirectory()) {
+      throw new Error(`Invalid filePath: ancestor is not a directory: ${target}`);
+    }
+  }
+}
+
+async function removeLocalWorkspacePath(worktreePath: string, target: string): Promise<void> {
+  await assertNoLocalSymlinkAncestors(worktreePath, target);
+  await runCommand(
+    "git",
+    ["-C", worktreePath, "rm", "-f", "--ignore-unmatch", "--", target],
+    { timeoutMs: 30_000 },
+  );
+  // Git clean understands worktree boundaries and does not traverse a symlinked
+  // parent. It handles the untracked/ignored case left behind by git rm.
+  await runCommand(
+    "git",
+    ["-C", worktreePath, "clean", "-f", "-x", "--", target],
+    { timeoutMs: 30_000 },
+  );
+}
+
+async function gitPathExistsAtRef(worktreePath: string, refName: string, target: string): Promise<boolean> {
+  const { stdout } = await runCommand(
+    "git",
+    ["-C", worktreePath, "ls-tree", "-z", "--name-only", refName, "--", target],
+    { timeoutMs: 10_000 },
+  );
+  return stdout.split("\0").includes(target);
+}
+
+async function findLocalRenamePair(
+  worktreePath: string,
+  base: string,
+  target: string,
+): Promise<{ source: string; destination: string } | null> {
+  const { stdout } = await runCommand(
+    "git",
+    ["-C", worktreePath, "diff", "--name-status", "-z", "-M", base],
+    { timeoutMs: 60_000 },
+  );
+  const fields = stdout.split("\0");
+  for (let index = 0; index < fields.length;) {
+    const status = fields[index++] ?? "";
+    if (!status) break;
+    if (status.startsWith("R") || status.startsWith("C")) {
+      const source = fields[index++] ?? "";
+      const destination = fields[index++] ?? "";
+      if (status.startsWith("R") && (source === target || destination === target)) {
+        return { source, destination };
+      }
+    } else {
+      index += 1;
+    }
+  }
+  return null;
+}
+
+async function restoreLocalPathFromBase(worktreePath: string, base: string, target: string): Promise<void> {
+  await assertNoLocalSymlinkAncestors(worktreePath, target);
+  if (await gitPathExistsAtRef(worktreePath, base, target)) {
+    await runCommand(
+      "git",
+      ["-C", worktreePath, "restore", `--source=${base}`, "--staged", "--worktree", "--", target],
+      { timeoutMs: 30_000 },
+    );
+  } else {
+    await removeLocalWorkspacePath(worktreePath, target);
+  }
+}
+
+async function revertLocalFile(worktreePath: string, relativePath: string, targetBranch: string): Promise<string> {
+  const target = validateWorkspaceMutationPath(relativePath);
+  const base = await resolveLocalGitBase(worktreePath, targetBranch);
+  if (!await gitRefExists(worktreePath, base)) {
+    throw new Error(`Target ref not found: ${targetBranch}`);
+  }
+  const rename = await findLocalRenamePair(worktreePath, base, target);
+  if (rename) {
+    const source = validateWorkspaceMutationPath(rename.source);
+    const destination = validateWorkspaceMutationPath(rename.destination);
+    // Preflight both endpoints before changing either one so a rejected
+    // destination cannot leave a half-reverted rename behind.
+    await assertNoLocalSymlinkAncestors(worktreePath, source);
+    await assertNoLocalSymlinkAncestors(worktreePath, destination);
+    await restoreLocalPathFromBase(worktreePath, base, source);
+    await restoreLocalPathFromBase(worktreePath, base, destination);
+  } else {
+    await restoreLocalPathFromBase(worktreePath, base, target);
+  }
+
+  return target;
+}
+
+async function deleteLocalFile(worktreePath: string, relativePath: string): Promise<string> {
+  const target = validateWorkspaceMutationPath(relativePath);
+  await removeLocalWorkspacePath(worktreePath, target);
+  return target;
+}
+
+async function requireLocalMutationEnvironment(storage: StorageService, environmentId: string): Promise<Environment> {
+  const environment = await storage.getEnvironment(environmentId);
+  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  if (environment.environmentType !== "local" || !environment.worktreePath) {
+    throw new Error(`Environment is not a local worktree: ${environmentId}`);
+  }
+  return environment;
+}
+
+async function requireContainerMutationEnvironment(storage: StorageService, environmentId: string): Promise<Environment> {
+  const environment = await storage.getEnvironment(environmentId);
+  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  if (environment.environmentType === "local" || !environment.containerId) {
+    throw new Error(`Environment is not containerized: ${environmentId}`);
+  }
+  return environment;
+}
+
+const CONTAINER_SAFE_MUTATION_FUNCTIONS = [
+  "assert_safe_path() {",
+  "  local candidate=\"$1\"",
+  "  case \"$candidate\" in .git|.git/*) echo \"Git metadata cannot be modified\" >&2; return 1 ;; esac",
+  "  local current=/workspace",
+  "  local -a parts=()",
+  "  local index",
+  "  IFS=/ read -r -a parts <<< \"$candidate\"",
+  "  for ((index = 0; index < ${#parts[@]} - 1; index++)); do",
+  "    current=\"$current/${parts[$index]}\"",
+  "    if [ -L \"$current\" ]; then",
+  "      echo \"Symlink ancestor is not allowed: $candidate\" >&2",
+  "      return 1",
+  "    fi",
+  "    if [ -e \"$current\" ] && [ ! -d \"$current\" ]; then",
+  "      echo \"Path ancestor is not a directory: $candidate\" >&2",
+  "      return 1",
+  "    fi",
+  "  done",
+  "}",
+  "remove_path() {",
+  "  local candidate=\"$1\"",
+  "  assert_safe_path \"$candidate\" || return 1",
+  "  git rm -f --ignore-unmatch -- \"$candidate\"",
+  "  git clean -f -x -- \"$candidate\"",
+  "}",
+].join("\n");
+
+function containerRevertFileCommand(target: string, branch: string): string {
+  return `
+    set -euo pipefail
+    cd /workspace
+    branch=${quoteShell(branch)}
+    target=${quoteShell(target)}
+    ${CONTAINER_SAFE_MUTATION_FUNCTIONS}
+    git fetch origin "$branch" >/dev/null 2>&1 || true
+    if git rev-parse --verify --quiet "origin/$branch^{commit}" >/dev/null; then
+      base="origin/$branch"
+    elif git rev-parse --verify --quiet "$branch^{commit}" >/dev/null; then
+      base="$branch"
+    else
+      echo "Target ref not found: $branch" >&2
+      exit 1
+    fi
+
+    diff_file=$(mktemp)
+    tree_file=$(mktemp)
+    trap 'rm -f "$diff_file" "$tree_file"' EXIT
+    if ! git diff --name-status -z -M "$base" > "$diff_file"; then
+      exit 1
+    fi
+
+    source_path=""
+    destination_path=""
+    while IFS= read -r -d '' status; do
+      case "$status" in
+        R*|C*)
+          IFS= read -r -d '' old_path || exit 1
+          IFS= read -r -d '' new_path || exit 1
+          if [[ "$status" == R* ]] && { [ "$old_path" = "$target" ] || [ "$new_path" = "$target" ]; }; then
+            source_path="$old_path"
+            destination_path="$new_path"
+            break
+          fi
+          ;;
+        *)
+          IFS= read -r -d '' changed_path || exit 1
+          ;;
+      esac
+    done < "$diff_file"
+
+    restore_path() {
+      local candidate="$1"
+      local found=0
+      assert_safe_path "$candidate" || return 1
+      if ! git ls-tree -z --name-only "$base" -- "$candidate" > "$tree_file"; then
+        return 1
+      fi
+      while IFS= read -r -d '' base_path; do
+        if [ "$base_path" = "$candidate" ]; then
+          found=1
+          break
+        fi
+      done < "$tree_file"
+      if [ "$found" -eq 1 ]; then
+        git restore --source="$base" --staged --worktree -- "$candidate"
+      else
+        remove_path "$candidate"
+      fi
+    }
+
+    if [ -n "$source_path" ]; then
+      assert_safe_path "$source_path"
+      assert_safe_path "$destination_path"
+      restore_path "$source_path"
+      restore_path "$destination_path"
+    else
+      restore_path "$target"
+    fi
+  `;
+}
+
+function containerDeleteFileCommand(target: string): string {
+  return `
+    set -euo pipefail
+    cd /workspace
+    target=${quoteShell(target)}
+    ${CONTAINER_SAFE_MUTATION_FUNCTIONS}
+    remove_path "$target"
+  `;
 }
 
 function isGitShowMissingPathError(error: unknown): boolean {
@@ -2636,6 +2896,14 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   );
   register("read_file_base64", ({ filePath }) => readFileBase64(asString(filePath, "filePath")));
   register("write_local_file", ({ worktreePath, filePath, base64Data }) => writeFileBase64(asString(worktreePath, "worktreePath"), asString(filePath, "filePath"), asString(base64Data, "base64Data")));
+  register("revert_local_file", async ({ environmentId, filePath, targetBranch }, { storage }) => {
+    const environment = await requireLocalMutationEnvironment(storage, asString(environmentId, "environmentId"));
+    return revertLocalFile(environment.worktreePath!, asString(filePath, "filePath"), asString(targetBranch, "targetBranch"));
+  });
+  register("delete_local_file", async ({ environmentId, filePath }, { storage }) => {
+    const environment = await requireLocalMutationEnvironment(storage, asString(environmentId, "environmentId"));
+    return deleteLocalFile(environment.worktreePath!, asString(filePath, "filePath"));
+  });
 
   register("get_git_status", async ({ containerId, targetBranch }) => {
     const branch = quoteShell(asString(targetBranch, "targetBranch"));
@@ -2663,8 +2931,11 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       git diff --name-status origin/${branch} 2>/dev/null || git diff --name-status ${branch} 2>/dev/null || true
     `);
     return output.split("\n").filter(Boolean).map((line) => {
-      const [status, filePath = ""] = line.split("\t");
-      return { path: filePath, filename: path.basename(filePath), directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath), additions: 0, deletions: 0, status };
+      const parts = line.split("\t");
+      const status = parts[0] ?? "";
+      const filePath = parts.at(-1) ?? "";
+      const originalPath = (status.startsWith("R") || status.startsWith("C")) ? parts[1] : undefined;
+      return { path: filePath, originalPath, filename: path.basename(filePath), directory: path.dirname(filePath) === "." ? "" : path.dirname(filePath), additions: 0, deletions: 0, status };
     });
   });
   register("get_file_tree", async ({ containerId }) => {
@@ -2705,6 +2976,21 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       child.once("error", reject);
     });
     return fullPath;
+  });
+  register("revert_container_file", async ({ environmentId, filePath, targetBranch }, { storage }) => {
+    const environment = await requireContainerMutationEnvironment(storage, asString(environmentId, "environmentId"));
+    const id = environment.containerId!;
+    const target = validateWorkspaceMutationPath(asString(filePath, "filePath"));
+    const branch = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
+    await dockerExec(id, containerRevertFileCommand(target, branch));
+    return target;
+  });
+  register("delete_container_file", async ({ environmentId, filePath }, { storage }) => {
+    const environment = await requireContainerMutationEnvironment(storage, asString(environmentId, "environmentId"));
+    const id = environment.containerId!;
+    const target = validateWorkspaceMutationPath(asString(filePath, "filePath"));
+    await dockerExec(id, containerDeleteFileCommand(target));
+    return target;
   });
 
   register("detect_pr_local", async ({ environmentId, branch }, { storage }) => {

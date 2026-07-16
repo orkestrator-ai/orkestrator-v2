@@ -5,3 +5,4 @@ export { ChangedFileItem } from "./ChangedFileItem";
 export { AllFilesView } from "./AllFilesView";
 export { FileTreeNode } from "./FileTreeNode";
 export { FileIcon } from "./FileIcon";
+export { FileActionDialog } from "./FileActionDialog";

@@ -4362,7 +4362,7 @@ Enter to confirm · Esc to cancel
       });
     useClaudeTmuxStore.getState().addPendingPlan("tab-1", {
       eventId: "plan-hook",
-      plan: "Update the tests",
+      plan: "## Update the tests\n\n- **Add** edge-case coverage",
       planFilePath: "/tmp/plan.md",
       allowedPrompts: [],
       toolInput: { plan: "Update the tests" },
@@ -4386,6 +4386,12 @@ Enter to confirm · Esc to cancel
         isActive
       />,
     );
+
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Update the tests" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("listitem").textContent).toBe("Add edge-case coverage");
+    expect(screen.getByText("Add").tagName).toBe("STRONG");
 
     fireEvent.click(screen.getAllByRole("button", { name: "Request changes" })[0]!);
     fireEvent.change(screen.getByPlaceholderText("What should Claude change?"), {

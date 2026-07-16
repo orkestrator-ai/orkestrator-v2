@@ -27,6 +27,7 @@ import { useVirtuosoScrollState } from "@/hooks";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
+import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import {
   Dialog,
@@ -1587,9 +1588,10 @@ function TmuxPlanCard({
         </div>
       )}
       {plan.plan && (
-        <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded border border-border/70 bg-background/60 p-3 text-sm">
-          {plan.plan}
-        </pre>
+        <MessageMarkdown
+          content={plan.plan}
+          className="max-h-80 overflow-auto rounded border border-border/70 bg-background/60 p-3"
+        />
       )}
       {plan.allowedPrompts.length > 0 && (
         <div className="mt-2 text-xs text-muted-foreground">

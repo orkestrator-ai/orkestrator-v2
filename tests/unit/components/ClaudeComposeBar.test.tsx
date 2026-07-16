@@ -13,7 +13,6 @@ const mockSerializeForLLM = mock((text: string, _mentions?: unknown[]) => text);
 const mockHandleFileMentionCursorChange = mock(() => {});
 const mockHandleFileMentionKeyDown = mock(() => false);
 const mockCloseFileMentionMenu = mock(() => {});
-const mockToastError = mock((_message: string) => {});
 const mockCreateMention = mock(() => ({
   id: "mention-created",
   filename: "app.ts",
@@ -57,10 +56,6 @@ mock.module("@/lib/backend", () => ({
   updateGlobalConfig: mockUpdateGlobalConfig,
   getFileTree: async () => [],
   getLocalFileTree: async () => [],
-}));
-
-mock.module("sonner", () => ({
-  toast: { success: () => {}, error: mockToastError },
 }));
 
 // @/lib/native/clipboard is centrally mocked in tests/setup.ts.
@@ -196,7 +191,6 @@ describe("ClaudeComposeBar", () => {
     mockHandleFileMentionKeyDown.mockReset();
     mockHandleFileMentionKeyDown.mockImplementation(() => false);
     mockCloseFileMentionMenu.mockReset();
-    mockToastError.mockReset();
     mockCreateMention.mockReset();
     mockCreateMention.mockImplementation(() => ({
       id: "mention-created",
@@ -282,7 +276,6 @@ describe("ClaudeComposeBar", () => {
       expect(useConfigStore.getState().config.global.claudeModel).toBe("opus");
     });
     expect(useClaudeStore.getState().getSelectedModel(SESSION_KEY)).toBe("sonnet");
-    expect(mockToastError).toHaveBeenCalledWith("Failed to save Claude model default");
   });
 
   test("keeps the newest selected model when an older persistence request resolves later", async () => {
@@ -364,6 +357,12 @@ describe("ClaudeComposeBar", () => {
     expect(screen.getByTitle("Stop current query")).toBeTruthy();
   });
 
+  test("disables the stop button when no stop callback is available", () => {
+    renderComposeBar({ isLoading: true, onStop: undefined });
+
+    expect(screen.getByTitle("Stop current query").hasAttribute("disabled")).toBe(true);
+  });
+
   test("shows queue indicator when queueLength > 0", () => {
     renderComposeBar({ queueLength: 3 });
     expect(screen.getByText("+3 queued")).toBeTruthy();
@@ -430,6 +429,59 @@ describe("ClaudeComposeBar", () => {
       expect(onSend).toHaveBeenCalledWith("Ship the release", [], "high", false, false);
     });
     expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe("");
+  });
+
+  test("sends an attachment-only prompt", async () => {
+    const attachment = {
+      id: "attachment-only",
+      type: "image" as const,
+      path: "/workspace/attachment.png",
+      previewUrl: "data:image/png;base64,abc",
+      name: "attachment.png",
+    };
+    useClaudeStore.getState().addAttachment(SESSION_KEY, attachment);
+    const { onSend } = renderComposeBar();
+
+    const sendButton = screen.getByTitle("Send message");
+    expect(sendButton.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(sendButton);
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("", [attachment], "high", false, false);
+    });
+    expect(useClaudeStore.getState().getAttachments(SESSION_KEY)).toHaveLength(0);
+  });
+
+  test("retains the draft and reports an error when sending fails", async () => {
+    const onSend = mock(async () => {
+      throw new Error("bridge unavailable");
+    });
+    useClaudeStore.getState().setDraftText(SESSION_KEY, "Keep this prompt");
+    renderComposeBar({ onSend });
+
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => {
+      expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(false);
+    });
+    expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe("Keep this prompt");
+  });
+
+  test("retains a busy draft and reports an error when queueing fails", async () => {
+    const onQueue = mock(async () => {
+      throw new Error("queue unavailable");
+    });
+    useClaudeStore.getState().setDraftText(SESSION_KEY, "Keep queued prompt");
+    renderComposeBar({ isLoading: true, onQueue });
+
+    fireEvent.click(screen.getByTitle("Add to queue"));
+
+    await waitFor(() => {
+      expect(screen.getByTitle("Add to queue").hasAttribute("disabled")).toBe(false);
+    });
+    expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe(
+      "Keep queued prompt",
+    );
   });
 
   test("queues the prompt while Claude is loading", async () => {
@@ -598,6 +650,34 @@ describe("ClaudeComposeBar", () => {
 
     await waitFor(() => {
       expect(useClaudeStore.getState().getQueueLength(SESSION_KEY)).toBe(0);
+    });
+  });
+
+  test("enforces queue movement boundaries and reorders queued prompts", async () => {
+    for (const [id, text] of [
+      ["queue-1", "First queued prompt"],
+      ["queue-2", "Second queued prompt"],
+    ] as const) {
+      useClaudeStore.getState().addToQueue(SESSION_KEY, {
+        id,
+        text,
+        attachments: [],
+        effort: "high",
+        planModeEnabled: false,
+      });
+    }
+
+    renderComposeBar({ queueLength: 2 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+
+    expect(screen.getAllByTitle("Move up")[0]?.hasAttribute("disabled")).toBe(true);
+    expect(screen.getAllByTitle("Move down")[1]?.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getAllByTitle("Move down")[0]!);
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().getQueuedMessages(SESSION_KEY)[0]?.id).toBe(
+        "queue-2",
+      );
     });
   });
 

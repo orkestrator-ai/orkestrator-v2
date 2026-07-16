@@ -63,7 +63,7 @@ interface OpenCodeComposeBarProps {
   models: OpenCodeModel[];
   slashCommands?: OpenCodeSlashCommand[];
   favoriteModelIds?: string[];
-  onSend: (text: string, attachments: OpenCodeAttachment[]) => void;
+  onSend: (text: string, attachments: OpenCodeAttachment[]) => void | Promise<void>;
   disabled?: boolean;
   /** Whether OpenCode is currently processing a query */
   isLoading?: boolean;
@@ -72,7 +72,7 @@ interface OpenCodeComposeBarProps {
   /** Callback when stop button is clicked */
   onStop?: () => void;
   /** Callback when prompt should be queued instead of sent */
-  onQueue?: (text: string, attachments: OpenCodeAttachment[]) => void;
+  onQueue?: (text: string, attachments: OpenCodeAttachment[]) => void | Promise<void>;
   /** Callback to refresh/reload models */
   onRefreshModels?: () => void;
   /** Show the review follow-up action for review workflow tabs. */
@@ -336,27 +336,37 @@ export function OpenCodeComposeBar({
     if (attachments.length === 0 && !text.trim()) return;
 
     setIsSending(true);
+    const isQueueing = isLoading && Boolean(onQueue);
     try {
       const serializedText = serializeForLLM(text.trim(), mentions);
-      if (isLoading && onQueue) {
-        onQueue(serializedText, attachments);
+      if (isQueueing) {
+        await onQueue!(serializedText, attachments);
       } else {
-        onSend(serializedText, attachments);
+        await onSend(serializedText, attachments);
       }
       setDraftText(sessionKey, "");
       setDraftMentions(sessionKey, []);
       clearAttachments(sessionKey);
+    } catch (error) {
+      console.error(
+        `[OpenCodeComposeBar] Failed to ${isQueueing ? "queue" : "send"} prompt:`,
+        error,
+      );
+      toast.error(isQueueing ? "Failed to queue prompt" : "Failed to send prompt");
     } finally {
       setIsSending(false);
     }
   };
 
-  const handleAddressAll = () => {
+  const handleAddressAll = async () => {
     if (isSending || disabled || isLoading) return;
 
     setIsSending(true);
     try {
-      onSend(ADDRESS_ALL_REVIEW_PROMPT, []);
+      await onSend(ADDRESS_ALL_REVIEW_PROMPT, []);
+    } catch (error) {
+      console.error("[OpenCodeComposeBar] Failed to send review follow-up:", error);
+      toast.error("Failed to send prompt");
     } finally {
       setIsSending(false);
     }
@@ -564,7 +574,7 @@ export function OpenCodeComposeBar({
         {/* Bottom toolbar */}
         <div
           data-native-compose-toolbar
-          className="flex flex-col gap-1 pt-1 sm:flex-row sm:items-center"
+          className="flex flex-col gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&>*]:shrink-0 [&::-webkit-scrollbar]:hidden sm:flex-row sm:items-center"
         >
           <div
             data-native-compose-controls="primary"
@@ -808,7 +818,9 @@ export function OpenCodeComposeBar({
               type="button"
               size="sm"
               variant="secondary"
-              onClick={handleAddressAll}
+              onClick={() => {
+                void handleAddressAll();
+              }}
               disabled={disabled || isSending}
               className="h-8 rounded-full px-3 text-xs"
               title="Send the review follow-up prompt"

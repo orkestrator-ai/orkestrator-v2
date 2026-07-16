@@ -247,8 +247,17 @@ describe("OpenCodeComposeBar", () => {
   });
 
   test("shows stop button when loading", () => {
-    renderComposeBar({ isLoading: true });
-    expect(screen.getByTitle("Stop current query")).toBeTruthy();
+    const { onStop } = renderComposeBar({ isLoading: true });
+
+    fireEvent.click(screen.getByTitle("Stop current query"));
+
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  test("disables the stop button when no stop callback is available", () => {
+    renderComposeBar({ isLoading: true, onStop: undefined });
+
+    expect(screen.getByTitle("Stop current query").hasAttribute("disabled")).toBe(true);
   });
 
   test("shows queue indicator when queueLength > 0", () => {
@@ -318,6 +327,72 @@ describe("OpenCodeComposeBar", () => {
     await waitFor(() => {
       expect(onQueue).toHaveBeenCalledWith("Queue this prompt", []);
     });
+  });
+
+  test("queues an attachment-only prompt while OpenCode is loading", async () => {
+    const attachment = {
+      id: "attachment-only",
+      type: "image" as const,
+      path: "/workspace/attachment.png",
+      previewUrl: "data:image/png;base64,abc",
+      name: "attachment.png",
+    };
+    useOpenCodeStore.getState().addAttachment(SESSION_KEY, attachment);
+    const { onQueue } = renderComposeBar({ isLoading: true });
+
+    fireEvent.click(screen.getByTitle("Add to queue"));
+
+    await waitFor(() => {
+      expect(onQueue).toHaveBeenCalledWith("", [attachment]);
+    });
+    expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toHaveLength(0);
+  });
+
+  test("falls back to onSend while loading when no queue callback is available", async () => {
+    useOpenCodeStore.getState().setDraftText(SESSION_KEY, "Send through fallback");
+    const { onSend } = renderComposeBar({ isLoading: true, onQueue: undefined });
+
+    fireEvent.click(screen.getByTitle("Add to queue"));
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("Send through fallback", []);
+    });
+  });
+
+  test("retains the draft and re-enables sending when onSend rejects", async () => {
+    const onSend = mock(async () => {
+      throw new Error("bridge unavailable");
+    });
+    useOpenCodeStore.getState().setDraftText(SESSION_KEY, "Retry this prompt");
+    renderComposeBar({ onSend });
+
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("Retry this prompt", []);
+      expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(false);
+    });
+    expect(useOpenCodeStore.getState().getDraftText(SESSION_KEY)).toBe(
+      "Retry this prompt",
+    );
+  });
+
+  test("retains a busy draft when queueing rejects", async () => {
+    const onQueue = mock(async () => {
+      throw new Error("queue unavailable");
+    });
+    useOpenCodeStore.getState().setDraftText(SESSION_KEY, "Keep queued prompt");
+    renderComposeBar({ isLoading: true, onQueue });
+
+    fireEvent.click(screen.getByTitle("Add to queue"));
+
+    await waitFor(() => {
+      expect(onQueue).toHaveBeenCalledWith("Keep queued prompt", []);
+      expect(screen.getByTitle("Add to queue").hasAttribute("disabled")).toBe(false);
+    });
+    expect(useOpenCodeStore.getState().getDraftText(SESSION_KEY)).toBe(
+      "Keep queued prompt",
+    );
   });
 
   test("removes queued prompts from the dialog", async () => {
@@ -415,6 +490,19 @@ describe("OpenCodeComposeBar", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  test("cycles mode with Shift+Tab", async () => {
+    renderComposeBar();
+
+    fireEvent.keyDown(screen.getByTestId("mentionable-input"), {
+      key: "Tab",
+      shiftKey: true,
+    });
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().getSelectedMode(SESSION_KEY)).toBe("plan");
+    });
+  });
+
   test("adds a pasted image attachment through the shared paste hook", async () => {
     const { getByTestId } = renderComposeBar({ containerId: "container-1" });
     const input = getByTestId("mentionable-input") as HTMLTextAreaElement;
@@ -443,6 +531,18 @@ describe("OpenCodeComposeBar", () => {
       expect(useOpenCodeStore.getState().getSelectedModel(ENV_ID)).toBe("claude-sonnet");
     });
     expect(useOpenCodeStore.getState().getSelectedVariant(ENV_ID)).toBeUndefined();
+  });
+
+  test("selects a model variant from the variant menu", async () => {
+    useOpenCodeStore.getState().setSelectedModel(ENV_ID, "gpt-5");
+    renderComposeBar();
+
+    fireEvent.pointerDown(screen.getByText("Default").closest("button")!);
+    fireEvent.click(await screen.findByText("high"));
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().getSelectedVariant(ENV_ID)).toBe("high");
+    });
   });
 
   test("reorders queued prompts from the dialog", async () => {

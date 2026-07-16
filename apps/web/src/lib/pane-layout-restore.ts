@@ -71,6 +71,15 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
     return { ...common, type };
   }
 
+  if (type === "browser") {
+    if (!isRecord(value.browserData)) return null;
+    return {
+      ...common,
+      type,
+      browserData: { url: optionalString(value.browserData.url) ?? "" },
+    };
+  }
+
   if (type === "file") {
     if (!isRecord(value.fileData)) return null;
     const filePath = nonEmptyString(value.fileData.filePath);

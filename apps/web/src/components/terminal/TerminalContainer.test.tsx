@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect, useRef, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { TerminalProvider, useTerminalContext, type TerminalTabType, type CreateTabOptions, type CreateFileTabOptions } from "@/contexts";
+import { TerminalProvider, useTerminalContext, type CreatableTabType, type CreateTabOptions, type CreateFileTabOptions } from "@/contexts";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -2057,7 +2057,7 @@ describe("TerminalContainer", () => {
       type,
       options,
     }: {
-      type: TerminalTabType;
+      type: CreatableTabType;
       options: CreateTabOptions;
     }) {
       const { createTab } = useTerminalContext();
@@ -2089,6 +2089,30 @@ describe("TerminalContainer", () => {
         const created = env.root.tabs.find((t) => t.type === "plain" && t.id !== "visible-tab");
         expect(created?.displayTitle).toBe("Custom");
         expect(created?.isReviewTab).toBe(true);
+      });
+    });
+
+    test("browser tabs receive their initial backend-local address", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="browser"
+            options={{ initialUrl: "http://localhost:49152/" }}
+          />
+        </TerminalProvider>
+      );
+
+      await waitFor(() => {
+        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
+        const created = env.root.tabs.find((tab) => tab.type === "browser");
+        expect(created?.browserData).toEqual({ url: "http://localhost:49152/" });
       });
     });
 

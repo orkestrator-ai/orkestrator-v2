@@ -21,10 +21,28 @@ export function resolveGatewayLoopbackBaseUrl(baseUrl: string): string {
 
   try {
     const url = new URL(baseUrl);
-    if (!isLoopbackHost(url.hostname) || !url.port) return baseUrl;
+    if (!isLoopbackHost(url.hostname)) return baseUrl;
+
+    const port = url.port || (url.protocol === "http:" ? "80" : "");
+    if (!port) return baseUrl;
 
     const basePath = url.pathname === "/" ? "" : url.pathname.replace(/\/$/, "");
-    return `${getGatewayBaseUrl()}/__orkestrator/proxy/loopback/${url.port}${basePath}`;
+    return `${getGatewayBaseUrl()}/__orkestrator/proxy/loopback/${port}${basePath}${url.search}${url.hash}`;
+  } catch {
+    return baseUrl;
+  }
+}
+
+/** Resolve a loopback page through the gateway's browser-preview namespace. */
+export function resolveGatewayBrowserPreviewUrl(baseUrl: string): string {
+  if (typeof window === "undefined" || !window.orkestratorGateway?.enabled) return baseUrl;
+
+  try {
+    const url = new URL(baseUrl);
+    if (!isLoopbackHost(url.hostname) || url.protocol !== "http:") return baseUrl;
+    const port = url.port || "80";
+    const targetPath = `${url.pathname}${url.search}${url.hash}`;
+    return `${getGatewayBaseUrl()}/__orkestrator/browser/loopback/${port}${targetPath}`;
   } catch {
     return baseUrl;
   }

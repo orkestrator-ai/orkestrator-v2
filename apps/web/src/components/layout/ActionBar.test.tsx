@@ -636,6 +636,30 @@ describe("ActionBar copy URL", () => {
   });
 });
 
+describe("ActionBar browser tabs", () => {
+  test("opens a browser tab at the selected environment's mapped backend port", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      entryPort: 3000,
+      hostEntryPort: 49152,
+    };
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "New browser tab" }));
+
+    expect(createTabMock).toHaveBeenCalledWith("browser", {
+      initialUrl: "http://localhost:49152/",
+    });
+  });
+
+  test("opens an empty browser tab when the environment has no mapped port", () => {
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "New browser tab" }));
+
+    expect(createTabMock).toHaveBeenCalledWith("browser", { initialUrl: undefined });
+  });
+});
+
 describe("ActionBar workflow tabs", () => {
   test("shows project board tabs in the top bar when no environment is selected", () => {
     currentSelectedEnvironmentId = null;

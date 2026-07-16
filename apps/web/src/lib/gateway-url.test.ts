@@ -1,8 +1,27 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { getGatewayBaseUrl, resolveGatewayApiUrl, resolveGatewayLoopbackBaseUrl } from "./gateway-url";
+import { getGatewayBaseUrl, resolveGatewayApiUrl, resolveGatewayBrowserPreviewUrl, resolveGatewayLoopbackBaseUrl } from "./gateway-url";
 
 afterEach(() => {
   delete window.orkestratorGateway;
+});
+
+describe("resolveGatewayBrowserPreviewUrl", () => {
+  test("uses the dedicated backend browser namespace", () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+
+    expect(resolveGatewayBrowserPreviewUrl("http://localhost:3000/app?mode=dark#main")).toBe(
+      "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/3000/app?mode=dark#main",
+    );
+  });
+
+  test("leaves addresses direct when no remote gateway is active", () => {
+    expect(resolveGatewayBrowserPreviewUrl("http://localhost:3000/")).toBe(
+      "http://localhost:3000/",
+    );
+  });
 });
 
 describe("resolveGatewayLoopbackBaseUrl", () => {
@@ -53,10 +72,20 @@ describe("resolveGatewayLoopbackBaseUrl", () => {
     expect(resolveGatewayLoopbackBaseUrl("http://example.com:4000")).toBe("http://example.com:4000");
   });
 
-  test("leaves invalid URLs and loopback URLs without explicit ports unchanged", () => {
+  test("leaves invalid URLs unchanged and routes the default HTTP port", () => {
     window.orkestratorGateway = { enabled: true };
 
     expect(resolveGatewayLoopbackBaseUrl("not a url")).toBe("not a url");
-    expect(resolveGatewayLoopbackBaseUrl("http://127.0.0.1")).toBe("http://127.0.0.1");
+    expect(resolveGatewayLoopbackBaseUrl("http://127.0.0.1")).toBe(
+      `${window.location.origin}/__orkestrator/proxy/loopback/80`,
+    );
+  });
+
+  test("preserves query strings and fragments", () => {
+    window.orkestratorGateway = { enabled: true };
+
+    expect(resolveGatewayLoopbackBaseUrl("http://localhost:4000/app?mode=dark#main")).toBe(
+      `${window.location.origin}/__orkestrator/proxy/loopback/4000/app?mode=dark#main`,
+    );
   });
 });

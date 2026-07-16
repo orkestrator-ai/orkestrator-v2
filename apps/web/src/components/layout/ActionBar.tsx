@@ -42,6 +42,7 @@ import {
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
+  Globe2,
   ListChecks,
   Loader2,
   Play,
@@ -71,7 +72,7 @@ import { EnvironmentSettingsDialog } from "@/components/environments/Environment
 import { DockerStatsDialog } from "@/components/docker";
 import * as backend from "@/lib/backend";
 import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
-import { getEnvironmentPortAddress } from "@/lib/environment-address";
+import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
 import { cn } from "@/lib/utils";
 
 function isEditableShortcutTarget(target: EventTarget | null): boolean {
@@ -251,6 +252,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     (!isLocalEnvironment && !!selectedEnvironment?.containerId)
   );
   const environmentPortAddress = getEnvironmentPortAddress(selectedEnvironment);
+  const environmentBrowserUrl = getEnvironmentBrowserUrl(selectedEnvironment);
   const canCopyEnvironmentUrl = !!environmentPortAddress;
 
   // Handler for opening in editor
@@ -392,6 +394,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
     createTab(agent, agentLaunchMode ? { agentLaunchMode } : undefined);
   }, [createTab, canCreateTab]);
+
+  const handleCreateBrowserTab = useCallback(() => {
+    if (!createTab || !canCreateTab) return;
+    createTab("browser", { initialUrl: environmentBrowserUrl ?? undefined });
+  }, [canCreateTab, createTab, environmentBrowserUrl]);
 
   const hasRunCommands = runCommands && runCommands.length > 0;
   const canRunCommands = canCreateTab && !isLoadingRunCommands && !!hasRunCommands && !setupRunning;
@@ -845,6 +852,29 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   >
                     <Shield className="h-4 w-4" />
                     {isGrid && <span className="truncate text-xs">Root terminal</span>}
+                  </Button>
+              </ToolbarTooltipTrigger>
+
+              <ToolbarTooltipTrigger
+                tooltip={
+                  <>
+                    <p>New Browser Tab</p>
+                    <p className="text-xs text-muted-foreground">
+                      {environmentBrowserUrl ? `Open ${environmentBrowserUrl}` : "Preview a service on the backend machine"}
+                    </p>
+                  </>
+                }
+              >
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={handleCreateBrowserTab}
+                    disabled={!selectedEnvironment || !canCreateTab}
+                    aria-label="New browser tab"
+                  >
+                    <Globe2 className="h-4 w-4" />
+                    {isGrid && <span className="truncate text-xs">New browser</span>}
                   </Button>
               </ToolbarTooltipTrigger>
 

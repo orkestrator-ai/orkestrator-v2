@@ -106,6 +106,12 @@ export interface BuildTabData {
   isLocal?: boolean;
 }
 
+// Data for backend-local browser preview tabs
+export interface BrowserTabData {
+  /** User-facing backend-local URL. An empty string opens the browser start screen. */
+  url: string;
+}
+
 // Tab information stored in pane leaves
 export interface TabInfo {
   id: string;
@@ -121,6 +127,8 @@ export interface TabInfo {
   codexNativeData?: CodexNativeData;
   /** Data for claude-build tabs */
   buildTabData?: BuildTabData;
+  /** Data for browser tabs */
+  browserData?: BrowserTabData;
   /** Initial prompt to send to agent (only for claude/opencode tabs) */
   initialPrompt?: string;
   /** Initial commands to execute (only for plain terminal tabs) */

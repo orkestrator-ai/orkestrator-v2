@@ -80,7 +80,8 @@ export function DraggableTabBar({
       type === "claude-native" ||
       type === "codex-native" ||
       type === "opencode-native" ||
-      type === "claude-tmux",
+      type === "claude-tmux" ||
+      type === "browser",
     [],
   );
 

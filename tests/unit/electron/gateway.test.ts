@@ -7,6 +7,7 @@ import {
   isTailscaleAddress,
   loadOrCreateGatewayToken,
   OrkestratorGateway,
+  rewriteBrowserPreviewBody,
   selectTailscaleBindAddress,
 } from "../../../apps/backend/src/gateway";
 
@@ -126,6 +127,26 @@ afterEach(async () => {
 });
 
 describe("remote gateway", () => {
+  test("rewrites browser-preview asset paths into their isolated proxy namespace", () => {
+    const prefix = "/__orkestrator/browser/loopback/3000";
+    const target = new URL("http://127.0.0.1:3000/");
+    const source = [
+      '<script type="module" src="/src/main.tsx"></script>',
+      "import '/src/style.css'",
+      "const icon = '/assets/icon.svg'",
+      "body { background: url(/assets/grid.png) }",
+      "fetch('http://localhost:3000/api/status')",
+    ].join("\n");
+
+    expect(rewriteBrowserPreviewBody(source, prefix, target)).toBe([
+      `<script type="module" src="${prefix}/src/main.tsx"></script>`,
+      `import '${prefix}/src/style.css'`,
+      `const icon = '${prefix}/assets/icon.svg'`,
+      `body { background: url(${prefix}/assets/grid.png) }`,
+      `fetch('${prefix}/api/status')`,
+    ].join("\n"));
+  });
+
   test("detects Tailscale addresses and prefers IPv4 bind candidates", () => {
     expect(isTailscaleAddress("100.64.0.1")).toBe(true);
     expect(isTailscaleAddress("100.127.255.254")).toBe(true);
@@ -1067,6 +1088,40 @@ describe("remote gateway", () => {
     } finally {
       await new Promise<void>((resolve) => target.close(() => resolve()));
     }
+  });
+
+  test("serves browser previews with rewritten root assets and iframe-safe headers", async () => {
+    const target = createServer((request, response) => {
+      if (request.url === "/") {
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "content-security-policy": "default-src 'self'",
+          "x-frame-options": "DENY",
+        });
+        response.end('<script type="module" src="/src/main.js"></script>');
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
+      response.end('import "/src/dependency.js";');
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const targetAddress = target.address();
+    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+
+    const { info } = await startGateway();
+    const prefix = `/__orkestrator/browser/loopback/${targetAddress.port}`;
+    const headers = { authorization: `Bearer ${info.token}`, origin: "null" };
+
+    const page = await requestUrl(`${info.url}${prefix}/`, { headers });
+    expect(page.status).toBe(200);
+    expect(page.body).toBe(`<script type="module" src="${prefix}/src/main.js"></script>`);
+    expect(page.headers["x-frame-options"]).toBeUndefined();
+    expect(page.headers["content-security-policy"]).toBeUndefined();
+    expect(page.headers["access-control-allow-origin"]).toBe("*");
+
+    const script = await requestUrl(`${info.url}${prefix}/src/main.js`, { headers });
+    expect(script.body).toBe(`import "${prefix}/src/dependency.js";`);
   });
 
   test("serves renderer requests through a configured dev server proxy", async () => {

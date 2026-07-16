@@ -516,6 +516,29 @@ describe("paneLayoutStore environment scoping", () => {
     expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.claudeNativeData?.sessionId).toBeUndefined();
   });
 
+  test("persists browser addresses on the owning environment only", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    store.initialize("container-b", "env-b");
+    store.addTab("default", {
+      id: "browser-a",
+      type: "browser",
+      browserData: { url: "" },
+    }, "env-a");
+    store.addTab("default", { id: "plain-b", type: "plain" }, "env-b");
+    store.setActiveEnvironment("env-b");
+
+    store.updateTabBrowserUrl("browser-a", "http://localhost:3000/", "env-a");
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData?.url).toBe(
+      "http://localhost:3000/",
+    );
+    expect(usePaneLayoutStore.getState().getAllTabs("env-b")).toEqual([
+      { id: "plain-b", type: "plain" },
+    ]);
+    expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-b");
+  });
+
   test("installs restored state and completes hydration", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");

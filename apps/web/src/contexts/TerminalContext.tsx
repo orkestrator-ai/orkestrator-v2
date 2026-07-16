@@ -3,11 +3,13 @@ import { createContext, useContext, useCallback, useState, ReactNode } from "rea
 
 // Terminal-specific tab types
 export type TerminalTabType = "plain" | "claude" | "opencode" | "codex" | "root";
+export type CreatableTabType = TerminalTabType | "browser";
 export type AgentLaunchModeOverride = "cli" | "native" | "tmux";
 
 // All tab types including file viewer and native agent tabs
 export type TabType =
   | TerminalTabType
+  | "browser"
   | "file"
   | "opencode-native"
   | "claude-native"
@@ -30,6 +32,8 @@ export interface CreateTabOptions {
   isReviewTab?: boolean;
   /** Optional one-shot agent launch mode that overrides repository/global defaults. */
   agentLaunchMode?: AgentLaunchModeOverride;
+  /** Initial backend-local address for browser tabs. */
+  initialUrl?: string;
 }
 
 // Options for creating a file tab
@@ -50,8 +54,8 @@ interface TerminalContextValue {
   setLastPrUrl: (url: string | null) => void;
 
   // Tab management
-  createTab: ((type: TerminalTabType, options?: CreateTabOptions) => void) | null;
-  setCreateTab: (fn: ((type: TerminalTabType, options?: CreateTabOptions) => void) | null) => void;
+  createTab: ((type: CreatableTabType, options?: CreateTabOptions) => void) | null;
+  setCreateTab: (fn: ((type: CreatableTabType, options?: CreateTabOptions) => void) | null) => void;
   selectTab: ((index: number) => void) | null;
   setSelectTab: (fn: ((index: number) => void) | null) => void;
   closeActiveTab: (() => void) | null;
@@ -75,7 +79,7 @@ interface TerminalProviderProps {
 export function TerminalProvider({ children }: TerminalProviderProps) {
   const [terminalWrite, setTerminalWriteState] = useState<((data: string) => Promise<void>) | null>(null);
   const [lastPrUrl, setLastPrUrl] = useState<string | null>(null);
-  const [createTabFn, setCreateTabFn] = useState<((type: TerminalTabType, options?: CreateTabOptions) => void) | null>(null);
+  const [createTabFn, setCreateTabFn] = useState<((type: CreatableTabType, options?: CreateTabOptions) => void) | null>(null);
   const [selectTabFn, setSelectTabFn] = useState<((index: number) => void) | null>(null);
   const [closeActiveTabFn, setCloseActiveTabFn] = useState<(() => void) | null>(null);
   const [tabCount, setTabCount] = useState(0);
@@ -90,7 +94,7 @@ export function TerminalProvider({ children }: TerminalProviderProps) {
     setTerminalWriteState(() => write);
   }, []);
 
-  const setCreateTab = useCallback((fn: ((type: TerminalTabType, options?: CreateTabOptions) => void) | null) => {
+  const setCreateTab = useCallback((fn: ((type: CreatableTabType, options?: CreateTabOptions) => void) | null) => {
     setCreateTabFn(() => fn);
   }, []);
 

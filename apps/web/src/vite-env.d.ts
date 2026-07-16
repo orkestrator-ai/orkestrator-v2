@@ -3,6 +3,8 @@
 interface Window {
   orkestratorGateway?: {
     enabled: boolean;
+    /** True when gateway metadata was supplied by the Electron preload. */
+    desktop?: boolean;
     /** Backend origin used when the renderer was loaded from a separate host. */
     baseUrl?: string;
   };

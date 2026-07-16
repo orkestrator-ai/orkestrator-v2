@@ -26,6 +26,7 @@ export function exposeActiveConnectionGateway(
   if (activeConnection?.kind !== "remote" || !activeConnection.address) return false;
   contextBridge.exposeInMainWorld("orkestratorGateway", {
     enabled: true,
+    desktop: true,
     baseUrl: activeConnection.address,
   });
   return true;

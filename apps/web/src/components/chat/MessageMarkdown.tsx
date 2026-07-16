@@ -1,8 +1,11 @@
 import {
   Children,
   isValidElement,
+  useCallback,
   useMemo,
+  type AnchorHTMLAttributes,
   type HTMLAttributes,
+  type MouseEvent as ReactMouseEvent,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -11,6 +14,7 @@ import Markdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import type { PluggableList } from "unified";
+import { openInBrowser } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
 const DEFAULT_MARKDOWN_CLASSNAME =
@@ -114,7 +118,42 @@ function MarkdownListItem({
   );
 }
 
+function SafeMarkdownLink({
+  href,
+  children,
+  className,
+  onClick,
+  ...props
+}: AnchorHTMLAttributes<HTMLAnchorElement>) {
+  const handleClick = useCallback(
+    (event: ReactMouseEvent<HTMLAnchorElement>) => {
+      onClick?.(event);
+      if (event.defaultPrevented) return;
+
+      event.preventDefault();
+      if (!href) return;
+
+      void openInBrowser(href).catch((error) => {
+        console.error("[MessageMarkdown] Failed to open link:", error);
+      });
+    },
+    [href, onClick],
+  );
+
+  return (
+    <a
+      {...props}
+      href={href}
+      className={cn("cursor-pointer text-primary hover:underline", className)}
+      onClick={handleClick}
+    >
+      {children}
+    </a>
+  );
+}
+
 const DEFAULT_COMPONENTS: Components = {
+  a: SafeMarkdownLink,
   input: TaskListCheckbox,
   li: MarkdownListItem,
   ul: MarkdownList,

@@ -75,7 +75,7 @@ interface CodexComposeBarProps {
   isLoading?: boolean;
   queueLength?: number;
   onSend: (text: string, attachments: CodexAttachment[]) => Promise<void>;
-  onQueue?: (text: string, attachments: CodexAttachment[]) => void;
+  onQueue?: (text: string, attachments: CodexAttachment[]) => void | Promise<void>;
   onStop?: () => Promise<void>;
   onModeChange: (mode: CodexConversationMode) => Promise<void> | void;
   onModelChange: (modelId: string) => Promise<void> | void;
@@ -200,24 +200,35 @@ export function CodexComposeBar({
 
   const handleSubmit = useCallback(async () => {
     const trimmed = text.trim();
-    if ((trimmed.length === 0 && attachments.length === 0) || disabled) {
+    if (
+      (trimmed.length === 0 && attachments.length === 0)
+      || disabled
+      || isSending
+    ) {
       return;
     }
 
-    if (isLoading) {
-      onQueue?.(serializeForLLM(trimmed, mentions), attachments);
-      setDraftText(sessionKey, "");
-      setDraftMentions(sessionKey, []);
-      clearAttachments(sessionKey);
+    const isQueueing = isLoading && Boolean(onQueue);
+    if (isLoading && !onQueue) {
       return;
     }
 
     setIsSending(true);
-    setDraftText(sessionKey, "");
-    setDraftMentions(sessionKey, []);
-    clearAttachments(sessionKey);
     try {
-      await onSend(serializeForLLM(trimmed, mentions), attachments);
+      if (isQueueing) {
+        await onQueue!(serializeForLLM(trimmed, mentions), attachments);
+      } else {
+        await onSend(serializeForLLM(trimmed, mentions), attachments);
+      }
+      setDraftText(sessionKey, "");
+      setDraftMentions(sessionKey, []);
+      clearAttachments(sessionKey);
+    } catch (error) {
+      console.error(
+        `[CodexComposeBar] Failed to ${isQueueing ? "queue" : "send"} prompt:`,
+        error,
+      );
+      toast.error(isQueueing ? "Failed to queue prompt" : "Failed to send prompt");
     } finally {
       setIsSending(false);
     }
@@ -226,6 +237,7 @@ export function CodexComposeBar({
     clearAttachments,
     disabled,
     isLoading,
+    isSending,
     mentions,
     onQueue,
     onSend,
@@ -244,6 +256,9 @@ export function CodexComposeBar({
     setIsSending(true);
     try {
       await onSend(ADDRESS_ALL_REVIEW_PROMPT, []);
+    } catch (error) {
+      console.error("[CodexComposeBar] Failed to send review follow-up:", error);
+      toast.error("Failed to send prompt");
     } finally {
       setIsSending(false);
     }
@@ -394,6 +409,13 @@ export function CodexComposeBar({
     [removeQueueItem, sessionKey],
   );
 
+  const sendDisabled =
+    disabled ||
+    isSending ||
+    (isLoading && !onQueue) ||
+    (text.trim().length === 0 && attachments.length === 0);
+  const showSendButton = !isLoading || !sendDisabled;
+
   return (
     <div
       className={cn(
@@ -513,7 +535,14 @@ export function CodexComposeBar({
         />
       </div>
 
-      <div className="flex items-center gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&>*]:shrink-0 [&::-webkit-scrollbar]:hidden">
+      <div
+        data-native-compose-toolbar
+        className="flex flex-col gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&>*]:shrink-0 [&::-webkit-scrollbar]:hidden sm:flex-row sm:items-center"
+      >
+        <div
+          data-native-compose-controls="primary"
+          className="flex w-full min-w-0 items-center gap-1 sm:w-auto"
+        >
         <div className="relative" ref={attachmentMenuRef}>
           <button
             type="button"
@@ -573,11 +602,11 @@ export function CodexComposeBar({
             <button
               type="button"
               disabled={disabled || settingsLocked}
-              className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex min-w-0 flex-1 items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
               title={settingsLocked ? "Wait for Codex to finish before changing the model" : "Choose model"}
             >
               <ChevronDown className="h-3 w-3" />
-              <span className="max-w-[220px] truncate">{selectedModelName}</span>
+              <span className="min-w-0 max-w-full truncate sm:max-w-[220px]">{selectedModelName}</span>
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="min-w-[260px] max-h-[360px] overflow-y-auto">
@@ -658,6 +687,13 @@ export function CodexComposeBar({
           </DropdownMenuContent>
         </DropdownMenu>
 
+        </div>
+
+        <div
+          data-native-compose-controls="secondary"
+          className="flex w-full items-center gap-1 sm:ml-auto sm:w-auto"
+        >
+
         {/* Fast mode toggle — maps to Codex's `service_tier = fast` config. */}
         <button
           type="button"
@@ -680,7 +716,7 @@ export function CodexComposeBar({
           <span>Fast</span>
         </button>
 
-        <div className="flex-1" />
+        <div className="flex-1 sm:hidden" />
 
         {queueLength > 0 && (
           <button
@@ -699,7 +735,7 @@ export function CodexComposeBar({
             onClick={() => {
               void onStop?.();
             }}
-            disabled={disabled}
+            disabled={disabled || !onStop}
             className={cn(
               "flex h-8 w-8 items-center justify-center rounded-full bg-destructive/10 text-destructive transition-colors hover:bg-destructive/20",
               "disabled:cursor-not-allowed disabled:opacity-50",
@@ -726,23 +762,26 @@ export function CodexComposeBar({
           </Button>
         ) : null}
 
-        <Button
-          type="button"
-          size="icon"
-          className={cn(
-            "h-8 w-8 rounded-full text-foreground transition-colors",
-            isLoading
-              ? "bg-primary/20 text-primary hover:bg-primary/30"
-              : "bg-muted hover:bg-muted/80",
-          )}
-          disabled={disabled || isSending || (text.trim().length === 0 && attachments.length === 0)}
-          onClick={() => {
-            void handleSubmit();
-          }}
-          title={isLoading ? "Add to queue" : "Send message"}
-        >
-          <ArrowUp className="h-4 w-4" />
-        </Button>
+        {showSendButton ? (
+          <Button
+            type="button"
+            size="icon"
+            className={cn(
+              "h-8 w-8 rounded-full text-foreground transition-colors",
+              isLoading
+                ? "bg-primary/20 text-primary hover:bg-primary/30"
+                : "bg-muted hover:bg-muted/80",
+            )}
+            disabled={sendDisabled}
+            onClick={() => {
+              void handleSubmit();
+            }}
+            title={isLoading ? "Add to queue" : "Send message"}
+          >
+            <ArrowUp className="h-4 w-4" />
+          </Button>
+        ) : null}
+        </div>
       </div>
 
       <Dialog open={queueDialogOpen} onOpenChange={setQueueDialogOpen}>

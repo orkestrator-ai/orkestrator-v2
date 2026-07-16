@@ -54,7 +54,7 @@ interface ClaudeComposeBarProps {
   /** Container ID for containerized environments, undefined for local */
   containerId?: string;
   models: ClaudeModel[];
-  onSend: (text: string, attachments: ClaudeAttachment[], effort: ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => void;
+  onSend: (text: string, attachments: ClaudeAttachment[], effort: ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => void | Promise<void>;
   disabled?: boolean;
   /** Whether Claude is currently processing a query */
   isLoading?: boolean;
@@ -63,7 +63,7 @@ interface ClaudeComposeBarProps {
   /** Callback when stop button is clicked */
   onStop?: () => void;
   /** Callback when a message should be added to the queue */
-  onQueue?: (text: string, attachments: ClaudeAttachment[], effort: ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => void;
+  onQueue?: (text: string, attachments: ClaudeAttachment[], effort: ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => void | Promise<void>;
   /** Show the review follow-up action for review workflow tabs. */
   showAddressAll?: boolean;
   layout?: "bottom" | "centered";
@@ -369,6 +369,7 @@ export function ClaudeComposeBar({
     if (attachments.length === 0 && !text.trim()) return;
 
     setIsSending(true);
+    const isQueueing = isLoading && Boolean(onQueue);
     try {
       // Read current values directly from store to avoid stale closures
       const currentEffort = getEffort(sessionKey);
@@ -379,14 +380,32 @@ export function ClaudeComposeBar({
       const serializedText = serializeForLLM(text.trim(), mentions);
 
       // If loading and onQueue is provided, add to queue instead of sending immediately
-      if (isLoading && onQueue) {
-        onQueue(serializedText, attachments, currentEffort, currentPlanModeEnabled, currentFastModeEnabled);
+      if (isQueueing) {
+        await onQueue!(
+          serializedText,
+          attachments,
+          currentEffort,
+          currentPlanModeEnabled,
+          currentFastModeEnabled,
+        );
       } else {
-        onSend(serializedText, attachments, currentEffort, currentPlanModeEnabled, currentFastModeEnabled);
+        await onSend(
+          serializedText,
+          attachments,
+          currentEffort,
+          currentPlanModeEnabled,
+          currentFastModeEnabled,
+        );
       }
       setText("");
       setMentions([]);
       clearAttachments(sessionKey);
+    } catch (error) {
+      console.error(
+        `[ClaudeComposeBar] Failed to ${isQueueing ? "queue" : "send"} prompt:`,
+        error,
+      );
+      toast.error(isQueueing ? "Failed to queue prompt" : "Failed to send prompt");
     } finally {
       setIsSending(false);
     }
@@ -473,17 +492,20 @@ export function ClaudeComposeBar({
     }
   };
 
-  const handleAddressAll = () => {
+  const handleAddressAll = async () => {
     if (disabled || isSending || isLoading) return;
     setIsSending(true);
     try {
-      onSend(
+      await onSend(
         ADDRESS_ALL_REVIEW_PROMPT,
         [],
         effort,
         planModeEnabled,
         fastModeEnabled,
       );
+    } catch (error) {
+      console.error("[ClaudeComposeBar] Failed to send review follow-up:", error);
+      toast.error("Failed to send prompt");
     } finally {
       setIsSending(false);
     }
@@ -570,8 +592,15 @@ export function ClaudeComposeBar({
         />
       </div>
 
-      {/* Bottom toolbar row */}
-      <div className="flex items-center gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&>*]:shrink-0 [&::-webkit-scrollbar]:hidden">
+      {/* Bottom toolbar */}
+      <div
+        data-native-compose-toolbar
+        className="flex flex-col gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&>*]:shrink-0 [&::-webkit-scrollbar]:hidden sm:flex-row sm:items-center"
+      >
+        <div
+          data-native-compose-controls="primary"
+          className="flex w-full min-w-0 items-center gap-1 sm:w-auto"
+        >
         {/* Attachment button */}
         <div className="relative" ref={attachmentMenuRef}>
           <button
@@ -608,9 +637,9 @@ export function ClaudeComposeBar({
         {/* Model dropdown - minimal style */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors">
+            <button className="flex min-w-0 flex-1 items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground sm:flex-none">
               <ChevronDown className="w-3 h-3" />
-              <span className="max-w-[200px] truncate">{selectedModelName}</span>
+              <span className="min-w-0 max-w-full truncate sm:max-w-[200px]">{selectedModelName}</span>
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="max-h-[400px] overflow-y-auto min-w-[240px]">
@@ -706,6 +735,13 @@ export function ClaudeComposeBar({
           </DropdownMenuContent>
         </DropdownMenu>
 
+        </div>
+
+        <div
+          data-native-compose-controls="secondary"
+          className="flex w-full items-center gap-1 sm:ml-auto sm:w-auto"
+        >
+
         {/* Fast mode toggle — only shown when the selected model supports it. */}
         {selectedModelSupportsFastMode && (
           <button
@@ -733,7 +769,7 @@ export function ClaudeComposeBar({
         <ContextUsageWheel usage={contextUsage} className="ml-1" />
 
         {/* Spacer */}
-        <div className="flex-1" />
+        <div className="flex-1 sm:hidden" />
 
         {/* Queue indicator */}
         {queueLength > 0 && (
@@ -752,7 +788,9 @@ export function ClaudeComposeBar({
             type="button"
             size="sm"
             variant="secondary"
-            onClick={handleAddressAll}
+            onClick={() => {
+              void handleAddressAll();
+            }}
             disabled={disabled || isSending}
             className="h-8 rounded-full px-3 text-xs"
             title="Send the review follow-up prompt"
@@ -766,7 +804,7 @@ export function ClaudeComposeBar({
           // Stop button when loading and no content
           <button
             onClick={handleStop}
-            disabled={disabled}
+            disabled={disabled || !onStop}
             className={cn(
               "w-8 h-8 rounded-full flex items-center justify-center transition-colors",
               "bg-destructive/10 hover:bg-destructive/20 text-destructive",
@@ -793,6 +831,7 @@ export function ClaudeComposeBar({
             <ArrowUp className="w-4 h-4" />
           </button>
         )}
+        </div>
       </div>
 
       <Dialog open={queueDialogOpen} onOpenChange={setQueueDialogOpen}>

@@ -282,8 +282,18 @@ describe("CodexComposeBar", () => {
   });
 
   test("shows stop button when loading with empty input", () => {
-    renderComposeBar({ isLoading: true });
-    expect(screen.getByTitle("Stop current query")).toBeTruthy();
+    const { onStop } = renderComposeBar({ isLoading: true });
+    const stopButton = screen.getByTitle("Stop current query");
+
+    fireEvent.click(stopButton);
+
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  test("disables the stop button when no stop callback is available", () => {
+    renderComposeBar({ isLoading: true, onStop: undefined });
+
+    expect(screen.getByTitle("Stop current query").hasAttribute("disabled")).toBe(true);
   });
 
   test("keeps stop button available while loading with drafted text", () => {
@@ -380,6 +390,99 @@ describe("CodexComposeBar", () => {
     await waitFor(() => {
       expect(onQueue).toHaveBeenCalledWith("Queue this for later", []);
     });
+  });
+
+  test("queues an attachment-only prompt while Codex is loading", async () => {
+    const attachment = {
+      id: "attachment-only",
+      type: "image" as const,
+      path: "/workspace/attachment.png",
+      previewUrl: "data:image/png;base64,abc",
+      name: "attachment.png",
+    };
+    useCodexStore.getState().addAttachment(SESSION_KEY, attachment);
+    const { onQueue } = renderComposeBar({ isLoading: true });
+
+    fireEvent.click(screen.getByTitle("Add to queue"));
+
+    await waitFor(() => {
+      expect(onQueue).toHaveBeenCalledWith("", [attachment]);
+    });
+    expect(useCodexStore.getState().getAttachments(SESSION_KEY)).toHaveLength(0);
+  });
+
+  test("prevents another queue submission while the first is pending", async () => {
+    let resolveQueue!: () => void;
+    const onQueue = mock(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveQueue = resolve;
+        }),
+    );
+    useCodexStore.getState().setDraftText(SESSION_KEY, "Queue once");
+    renderComposeBar({ isLoading: true, onQueue });
+
+    const addButton = screen.getByTitle("Add to queue");
+    fireEvent.click(addButton);
+
+    await waitFor(() => {
+      expect(onQueue).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTitle("Add to queue")).toBeNull();
+    });
+
+    fireEvent.click(addButton);
+    expect(onQueue).toHaveBeenCalledTimes(1);
+
+    resolveQueue();
+    await waitFor(() => {
+      expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe("");
+    });
+  });
+
+  test("keeps a busy draft when no queue callback is available", () => {
+    useCodexStore.getState().setDraftText(SESSION_KEY, "Do not discard this");
+    renderComposeBar({ isLoading: true, onQueue: undefined });
+
+    expect(screen.queryByTitle("Add to queue")).toBeNull();
+    expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe(
+      "Do not discard this",
+    );
+  });
+
+  test("retains the draft and re-enables sending when onSend rejects", async () => {
+    const onSend = mock(async () => {
+      throw new Error("bridge unavailable");
+    });
+    useCodexStore.getState().setDraftText(SESSION_KEY, "Retry this prompt");
+    renderComposeBar({ onSend });
+
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("Retry this prompt", []);
+      expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(false);
+    });
+    expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe(
+      "Retry this prompt",
+    );
+  });
+
+  test("retains a busy draft when queueing rejects", async () => {
+    const onQueue = mock(async () => {
+      throw new Error("queue unavailable");
+    });
+    useCodexStore.getState().setDraftText(SESSION_KEY, "Keep queued prompt");
+    renderComposeBar({ isLoading: true, onQueue });
+
+    fireEvent.click(screen.getByTitle("Add to queue"));
+
+    await waitFor(() => {
+      expect(onQueue).toHaveBeenCalledWith("Keep queued prompt", []);
+      expect(screen.getByTitle("Add to queue").hasAttribute("disabled")).toBe(false);
+    });
+    expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe(
+      "Keep queued prompt",
+    );
   });
 
   test("clicking a queued prompt restores it into the draft and removes it from the queue", async () => {
@@ -542,5 +645,13 @@ describe("CodexComposeBar", () => {
     await waitFor(() => {
       expect(useCodexStore.getState().getQueueLength(SESSION_KEY)).toBe(1);
     });
+  });
+
+  test("forwards fast-mode changes", () => {
+    const { onFastModeChange } = renderComposeBar({ fastModeEnabled: false });
+
+    fireEvent.click(screen.getByText("Fast").closest("button")!);
+
+    expect(onFastModeChange).toHaveBeenCalledWith(true);
   });
 });

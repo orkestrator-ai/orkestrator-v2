@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  DEFAULT_REVIEW_PROMPT_TEMPLATE,
+  REVIEW_PROMPT_TARGET_BRANCH_TOKEN,
   createReviewPrompt,
   createPRPrompt,
   createPushChangesPrompt,
@@ -113,6 +115,23 @@ describe("createReviewPrompt", () => {
     expect(result).toContain("git diff origin/develop...HEAD");
     expect(result).toContain("Base ref: origin/develop...HEAD");
     expect(result).not.toContain("origin/main...HEAD");
+  });
+
+  test("resolves target-branch tokens in a custom prompt", () => {
+    const customPrompt = `Review origin/${REVIEW_PROMPT_TARGET_BRANCH_TOKEN}...HEAD\nTarget: ${REVIEW_PROMPT_TARGET_BRANCH_TOKEN}`;
+
+    expect(createReviewPrompt("release/v2", customPrompt)).toBe(
+      "Review origin/release/v2...HEAD\nTarget: release/v2",
+    );
+  });
+
+  test("falls back to the built-in template for an empty custom prompt", () => {
+    expect(createReviewPrompt("main", "   ")).toBe(
+      DEFAULT_REVIEW_PROMPT_TEMPLATE.replaceAll(
+        REVIEW_PROMPT_TARGET_BRANCH_TOKEN,
+        "main",
+      ),
+    );
   });
 });
 

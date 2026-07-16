@@ -6,7 +6,7 @@ This document captures the prompt sent when the user clicks the **Code Review** 
 
 | Item | Location |
 |------|----------|
-| Prompt generator | `apps/web/src/prompts/git-workflows.ts` → `createReviewPrompt(targetBranch)` |
+| Prompt generator | `apps/web/src/prompts/git-workflows.ts` → `createReviewPrompt(targetBranch, customPrompt?)` |
 | Shared body | `apps/web/src/prompts/review-shared.ts` → `buildReviewBody(opts)` |
 | Export | `apps/web/src/prompts/index.ts` |
 | UI trigger | `apps/web/src/components/layout/ActionBar.tsx` → `handleReview()` |
@@ -19,7 +19,7 @@ The shared `buildReviewBody` is also consumed by `createBuildReviewPrompt` in `a
 1. User selects an environment with a project configured.
 2. `handleReview(agentOverride?)` runs:
    - Reads `config.repositories[selectedProjectId].prBaseBranch`, defaulting to `"main"` if unset.
-   - Calls `createReviewPrompt(targetBranch)`.
+   - Calls `createReviewPrompt(targetBranch, config.global.reviewPrompt)`.
    - Opens a new agent tab via `createTab(agent, { initialPrompt: reviewPrompt, displayTitle: "Review" })`.
 3. Agent selection:
    - **Click**: environment `defaultAgent`, or global `config.global.defaultAgent`, or `"claude"`.
@@ -27,6 +27,12 @@ The shared `buildReviewBody` is also consumed by `createBuildReviewPrompt` in `a
 4. **Keyboard**: `⌘R` (same as click; requires `canCreateTab` and `selectedProjectId`).
 
 The prompt is passed as `initialPrompt` on the new tab and sent automatically once the agent session is ready (terminal or native mode, depending on tab type).
+
+## Custom prompt setting
+
+The global **Settings → Review** page displays the built-in prompt as an editable template. Saving changed text stores it as `global.reviewPrompt`; choosing **Reset to default** and saving removes the override. Custom text replaces the complete action-bar prompt and applies only to newly opened review tabs. Automated build-pipeline reviews continue to use their ticket-aware prompt.
+
+The editor exposes `{{targetBranch}}` as a template token. `createReviewPrompt()` replaces every occurrence with the selected repository's `prBaseBranch` immediately before opening the review tab. Blank custom prompts fall back to the built-in template defensively, while the settings UI prevents saving one.
 
 ## Dynamic parameter
 

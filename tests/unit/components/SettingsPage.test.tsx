@@ -65,11 +65,14 @@ describe("SettingsPage", () => {
     invokeMock.mockResolvedValue(undefined);
   });
 
-  test("loads config and routes the Web client menu item to its settings section", async () => {
+  test("loads config and routes menu items to their settings sections", async () => {
     render(<SettingsPage open onOpenChange={() => undefined} />);
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_config"));
     expect(screen.getByTestId("active-settings-section").textContent).toBe("general");
+
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    expect(screen.getByTestId("active-settings-section").textContent).toBe("review");
 
     fireEvent.click(screen.getByRole("button", { name: "Web client" }));
     expect(screen.getByTestId("active-settings-section").textContent).toBe("web-client");

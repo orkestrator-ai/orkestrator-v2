@@ -40,5 +40,6 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
     expect(initialGlobal.codexReasoningEffort).toBe(backendGlobal.codexReasoningEffort);
     expect(initialGlobal.defaultAgent).toBe(backendGlobal.defaultAgent);
     expect(initialGlobal.webClientEnabled).toBe(backendGlobal.webClientEnabled);
+    expect(initialGlobal.reviewPrompt).toBe(backendGlobal.reviewPrompt);
   });
 });

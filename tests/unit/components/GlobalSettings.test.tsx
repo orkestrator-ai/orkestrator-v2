@@ -527,6 +527,8 @@ describe("GlobalSettings", () => {
   test("renders every settings section", () => {
     const { rerender } = render(<GlobalSettings activeSection="general" />);
     expect(screen.getByText("Preferred Editor")).toBeTruthy();
+    rerender(<GlobalSettings activeSection="review" />);
+    expect(screen.getByText("Code review prompt")).toBeTruthy();
     rerender(<GlobalSettings activeSection="claude" />);
     expect(screen.getByText("Choose how Claude runs in environments")).toBeTruthy();
     rerender(<GlobalSettings activeSection="opencode" />);
@@ -543,6 +545,60 @@ describe("GlobalSettings", () => {
     expect(screen.getByText("Codex Raw Event Logging")).toBeTruthy();
     rerender(<GlobalSettings activeSection="debug" />);
     expect(screen.getByText("Save Logs for Debugging")).toBeTruthy();
+  });
+
+  test("saves a custom action-bar review prompt", async () => {
+    render(<GlobalSettings activeSection="review" />);
+
+    const prompt = screen.getByLabelText("Prompt template") as HTMLTextAreaElement;
+    expect(prompt.value).toContain("{{targetBranch}}");
+
+    fireEvent.change(prompt, {
+      target: { value: "Review origin/{{targetBranch}}...HEAD for regressions." },
+    });
+    expect(screen.getByText("Custom")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reviewPrompt: "Review origin/{{targetBranch}}...HEAD for regressions.",
+        }),
+      );
+    });
+  });
+
+  test("resets a saved custom review prompt to the built-in default", async () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: { ...state.config.global, reviewPrompt: "Only review tests." },
+      },
+    }));
+    render(<GlobalSettings activeSection="review" />);
+
+    const prompt = screen.getByLabelText("Prompt template") as HTMLTextAreaElement;
+    expect(prompt.value).toBe("Only review tests.");
+    fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
+    expect(prompt.value).toContain("Security and instruction hierarchy");
+    expect(screen.getByText("Default")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
+    const savedGlobal = mockUpdateGlobalConfig.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(Object.hasOwn(savedGlobal, "reviewPrompt")).toBe(false);
+  });
+
+  test("does not allow an empty review prompt to be saved", async () => {
+    render(<GlobalSettings activeSection="review" />);
+    await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByLabelText("Prompt template"), {
+      target: { value: "   " },
+    });
+
+    expect(screen.getByText("Review prompt cannot be empty. Enter a prompt or reset to the default.")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   test("saves non-default editor and agent selections", async () => {

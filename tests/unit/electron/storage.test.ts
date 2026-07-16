@@ -236,8 +236,12 @@ describe("Electron StorageService", () => {
     expect(await storage.getRepositoryConfig(firstProject.id)).toEqual({ defaultBranch: "develop", prBaseBranch: "release" });
     const global = defaultConfig().global;
     global.webClientEnabled = false;
+    global.reviewPrompt = "Review origin/{{targetBranch}}...HEAD.";
     await storage.updateGlobalConfig(global);
-    expect((await storage.loadConfig()).global.webClientEnabled).toBe(false);
+    expect((await storage.loadConfig()).global).toMatchObject({
+      webClientEnabled: false,
+      reviewPrompt: "Review origin/{{targetBranch}}...HEAD.",
+    });
 
     await storage.removeEnvironment(otherEnvironment.id);
     await expect(storage.removeEnvironment(otherEnvironment.id)).rejects.toThrow("Environment not found");

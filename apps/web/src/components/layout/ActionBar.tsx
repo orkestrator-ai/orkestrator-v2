@@ -300,14 +300,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
     const repoConfig = config.repositories[selectedProjectId];
     const targetBranch = repoConfig?.prBaseBranch || "main";
-    const reviewPrompt = createReviewPrompt(targetBranch);
+    const reviewPrompt = createReviewPrompt(targetBranch, config.global.reviewPrompt);
 
     createTab(agentOverride || defaultAgent, {
       initialPrompt: reviewPrompt,
       displayTitle: "Review",
       isReviewTab: true,
     });
-  }, [createTab, selectedProjectId, canCreateTab, config.repositories, defaultAgent]);
+  }, [createTab, selectedProjectId, canCreateTab, config.repositories, config.global.reviewPrompt, defaultAgent]);
 
   // Load run commands from orkestrator-ai.json when workspace is ready
   useEffect(() => {

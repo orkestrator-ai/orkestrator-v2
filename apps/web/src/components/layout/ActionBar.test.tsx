@@ -70,6 +70,7 @@ let currentSelectedProjectId: string | null = selectedProject.id;
 let currentProjectBoardTab: "kanban" | "linear" | "features" = "kanban";
 let currentChanges: unknown[] = [];
 let currentFilesPanelOpen = false;
+let currentReviewPrompt: string | undefined;
 
 function selectState<TState, TResult>(
   state: TState,
@@ -210,14 +211,18 @@ mock.module("@/components/docker", () => ({
 mock.module("@/stores", () => ({
   useConfigStore: <T,>(selector?: (state: {
     config: {
-      global: { defaultAgent: "codex"; preferredEditor: "vscode" };
+      global: { defaultAgent: "codex"; preferredEditor: "vscode"; reviewPrompt?: string };
       repositories: Record<string, { prBaseBranch?: string }>;
     };
   }) => T) =>
     selectState(
       {
         config: {
-          global: { defaultAgent: "codex" as const, preferredEditor: "vscode" as const },
+          global: {
+            defaultAgent: "codex" as const,
+            preferredEditor: "vscode" as const,
+            reviewPrompt: currentReviewPrompt,
+          },
           repositories: { "project-1": { prBaseBranch: "main" } },
         },
       },
@@ -368,6 +373,7 @@ beforeEach(() => {
   currentProjectBoardTab = "kanban";
   currentChanges = [];
   currentFilesPanelOpen = false;
+  currentReviewPrompt = undefined;
 });
 
 afterEach(() => {
@@ -746,6 +752,28 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).toHaveBeenCalledWith(
       "codex",
       expect.objectContaining({
+        displayTitle: "Review",
+        isReviewTab: true,
+      }),
+    );
+  });
+
+  test("uses the saved custom review prompt and resolves its target branch", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentReviewPrompt = "Inspect origin/{{targetBranch}}...HEAD for release blockers.";
+
+    render(<ActionBar />);
+    fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
+
+    expect(createTabMock).toHaveBeenCalledWith(
+      "codex",
+      expect.objectContaining({
+        initialPrompt: "Inspect origin/main...HEAD for release blockers.",
         displayTitle: "Review",
         isReviewTab: true,
       }),

@@ -17,6 +17,10 @@ describe("defaultConfig", () => {
     expect(defaultConfig().global.webClientEnabled).toBe(true);
   });
 
+  test("uses the built-in action-bar review prompt until one is saved", () => {
+    expect(defaultConfig().global.reviewPrompt).toBeUndefined();
+  });
+
   test("does not point defaults at any retired model id", () => {
     const { global } = defaultConfig();
     const selected = [global.opencodeModel, global.claudeModel, global.codexModel];

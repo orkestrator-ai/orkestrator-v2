@@ -23,6 +23,7 @@ interface DraggableTabBarProps {
   pane: PaneLeaf;
   environmentId: string;
   onTabSelect: (tabId: string) => void;
+  onTabRefresh?: (tabId: string) => void;
   isDropTarget?: boolean;
   /** Currently dragged tab ID (for cross-pane visual feedback) */
   activeDragId?: string | null;
@@ -36,6 +37,7 @@ export function DraggableTabBar({
   pane,
   environmentId,
   onTabSelect,
+  onTabRefresh,
   isDropTarget = false,
   activeDragId,
   dragOverPaneId,
@@ -72,6 +74,15 @@ export function DraggableTabBar({
 
   // All tabs can be closed
   const canClose = true;
+
+  const isRefreshableAgentTab = useCallback(
+    (type: PaneLeaf["tabs"][number]["type"]) =>
+      type === "claude-native" ||
+      type === "codex-native" ||
+      type === "opencode-native" ||
+      type === "claude-tmux",
+    [],
+  );
 
   const closeTabs = useCallback(
     (tabIds: string[]) => {
@@ -196,6 +207,11 @@ export function DraggableTabBar({
                 isActive={isActive}
                 isFocused={isActive && isPaneFocused}
                 onSelect={() => onTabSelect(tab.id)}
+                onRefresh={
+                  onTabRefresh && isRefreshableAgentTab(tab.type)
+                    ? () => onTabRefresh(tab.id)
+                    : undefined
+                }
                 onClose={() => handleClose(tab.id)}
                 onCloseAll={() => handleCloseAll()}
                 onCloseOthers={() => handleCloseOthers(tab.id)}

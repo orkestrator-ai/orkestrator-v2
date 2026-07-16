@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, ArrowDown, History, Loader2, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
@@ -69,6 +70,7 @@ interface CodexChatTabProps {
   isActive: boolean;
   initialPrompt?: string;
   isReviewTab?: boolean;
+  refreshRequestId?: number;
 }
 
 type ConnectionState = "connecting" | "connected" | "error";
@@ -86,6 +88,7 @@ export function CodexChatTab({
   isActive,
   initialPrompt,
   isReviewTab = false,
+  refreshRequestId = 0,
 }: CodexChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
   // Initialize as "connected" if we already have a client and session from a previous init.
@@ -106,6 +109,8 @@ export function CodexChatTab({
   const isInitializedRef = useRef(false);
   const isProcessingQueueRef = useRef(false);
   const isWatchdogRefreshInFlightRef = useRef(false);
+  const lastHandledRefreshRequestIdRef = useRef(0);
+  const manualRefreshSequenceRef = useRef(0);
   const refreshControllerRef = useRef(createCodexSessionRefreshController());
   const sessionKey = useMemo(
     () => createCodexSessionKey(environmentId, tabId),
@@ -282,15 +287,34 @@ export function CodexChatTab({
   // (in App.tsx), which derives state from this store's session data.
 
   const refreshMessages = useCallback(
-    async (activeClient = client, sessionId = session?.sessionId) => {
-      if (!activeClient || !sessionId) return;
+    async (
+      activeClient = client,
+      sessionId = session?.sessionId,
+      options: {
+        throwOnError?: boolean;
+        shouldApply?: () => boolean;
+      } = {},
+    ): Promise<boolean> => {
+      if (!activeClient || !sessionId) return false;
+      const sessionBeforeRequest = useCodexStore.getState().sessions.get(sessionKey);
       const requestId = refreshControllerRef.current.beginRequest();
-      const messages = await getSessionMessages(activeClient, sessionId);
-      if (!refreshControllerRef.current.shouldApplyRequest(requestId)) {
-        return;
+      const messages = await getSessionMessages(activeClient, sessionId, options);
+      if (
+        !refreshControllerRef.current.shouldApplyRequest(requestId) ||
+        (options.shouldApply && !options.shouldApply())
+      ) {
+        return false;
+      }
+      const sessionAfterRequest = useCodexStore.getState().sessions.get(sessionKey);
+      if (
+        sessionAfterRequest?.sessionId !== sessionId ||
+        sessionAfterRequest !== sessionBeforeRequest
+      ) {
+        return false;
       }
       refreshControllerRef.current.markActivity();
       setMessages(sessionKey, messages);
+      return true;
     },
     [client, session?.sessionId, sessionKey, setMessages],
   );
@@ -1039,7 +1063,11 @@ export function CodexChatTab({
     && latestAssistantHasReviewContent
     && latestAssistantMessage.id !== dismissedPlanReviewMessageId;
 
-  const reconcileSessionState = useCallback(async (options?: { forceRefreshMessages?: boolean }) => {
+  const reconcileSessionState = useCallback(async (options?: {
+    forceRefreshMessages?: boolean;
+    throwOnError?: boolean;
+    manualRequestSequence?: number;
+  }) => {
     if (
       connectionState !== "connected"
       || !client
@@ -1048,8 +1076,17 @@ export function CodexChatTab({
       return;
     }
 
-    const status = await getSessionStatus(client, session.sessionId);
+    const shouldApply = () =>
+      options?.manualRequestSequence === undefined ||
+      options.manualRequestSequence === manualRefreshSequenceRef.current;
+    const status = await getSessionStatus(client, session.sessionId, {
+      throwOnError: options?.throwOnError,
+    });
+    if (!shouldApply()) return;
     if (!status) {
+      if (options?.throwOnError) {
+        throw new Error("The Codex session is no longer available on the server");
+      }
       return;
     }
     refreshControllerRef.current.markActivity();
@@ -1061,7 +1098,10 @@ export function CodexChatTab({
     if (status.status === "idle") {
       setSessionLoading(sessionKey, false);
       setSessionError(sessionKey, undefined);
-      await refreshMessages(client, session.sessionId);
+      await refreshMessages(client, session.sessionId, {
+        throwOnError: options?.throwOnError,
+        shouldApply,
+      });
       return;
     }
 
@@ -1070,13 +1110,19 @@ export function CodexChatTab({
       setSessionLoading(sessionKey, false);
       setSessionError(sessionKey, error);
       setErrorMessage(error);
-      await refreshMessages(client, session.sessionId);
+      await refreshMessages(client, session.sessionId, {
+        throwOnError: options?.throwOnError,
+        shouldApply,
+      });
       return;
     }
 
     setSessionLoading(sessionKey, true);
     if (options?.forceRefreshMessages) {
-      await refreshMessages(client, session.sessionId);
+      await refreshMessages(client, session.sessionId, {
+        throwOnError: options.throwOnError,
+        shouldApply,
+      });
     }
   }, [
     client,
@@ -1087,6 +1133,36 @@ export function CodexChatTab({
     setSessionError,
     setSessionLoading,
     setSessionTitle,
+  ]);
+
+  useEffect(() => {
+    if (
+      refreshRequestId <= lastHandledRefreshRequestIdRef.current ||
+      connectionState !== "connected" ||
+      !client ||
+      !session?.sessionId
+    ) {
+      return;
+    }
+
+    lastHandledRefreshRequestIdRef.current = refreshRequestId;
+    const manualRequestSequence = ++manualRefreshSequenceRef.current;
+    void reconcileSessionState({
+      forceRefreshMessages: true,
+      throwOnError: true,
+      manualRequestSequence,
+    }).catch((error) => {
+      console.error("[CodexChatTab] Manual refresh failed:", error);
+      toast.error("Failed to refresh Codex tab", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, [
+    client,
+    connectionState,
+    reconcileSessionState,
+    refreshRequestId,
+    session?.sessionId,
   ]);
 
   useEffect(() => {

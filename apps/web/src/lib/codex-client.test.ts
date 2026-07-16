@@ -326,6 +326,15 @@ describe("codex-client getSessionMessages", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]?.id).toBe("msg-1");
   });
+
+  test("throws when a strict refresh cannot fetch messages", async () => {
+    mockFetch(async () => new Response(null, { status: 503 }));
+
+    expect(await getSessionMessages(client, "session-1")).toEqual([]);
+    expect(
+      getSessionMessages(client, "session-1", { throwOnError: true }),
+    ).rejects.toThrow("HTTP 503");
+  });
 });
 
 describe("codex-client updateSessionConfig", () => {

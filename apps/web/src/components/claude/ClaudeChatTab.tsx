@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import { Loader2, AlertCircle, RefreshCw, ArrowDown, History } from "lucide-react";
+import { toast } from "sonner";
 import { useVirtuosoScrollState, clearPersistedVirtuosoState, useElapsedTimer } from "@/hooks";
 import { formatElapsed } from "@/lib/format-elapsed";
 import { createUuid } from "@/lib/uuid";
@@ -17,6 +18,8 @@ import {
   createSession,
   getSession,
   getSessionMessages,
+  getPendingQuestions,
+  getPendingPlanApprovals,
   sendPrompt,
   abortSession,
   subscribeToEvents,
@@ -60,6 +63,7 @@ interface ClaudeChatTabProps {
   isActive: boolean;
   initialPrompt?: string;
   isReviewTab?: boolean;
+  refreshRequestId?: number;
 }
 
 type ConnectionState = "connecting" | "connected" | "error";
@@ -77,6 +81,7 @@ export function ClaudeChatTab({
   isActive,
   initialPrompt,
   isReviewTab = false,
+  refreshRequestId = 0,
 }: ClaudeChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
   // Initialize as "connected" if we already have a client and session from a previous init.
@@ -97,6 +102,8 @@ export function ClaudeChatTab({
   const initialPromptSentRef = useRef(false);
   const isProcessingQueueRef = useRef(false);
   const slashCmdCleanupRef = useRef<(() => void) | null>(null);
+  const lastHandledRefreshRequestIdRef = useRef(0);
+  const manualRefreshSequenceRef = useRef(0);
   const handleSendRef = useRef<((text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => Promise<void>) | null>(null);
 
   const {
@@ -109,6 +116,7 @@ export function ClaudeChatTab({
     setMessages,
     upsertMessage,
     setSessionLoading,
+    setSessionError,
     setServerStatus,
     getSelectedModel,
     setSelectedModel,
@@ -191,6 +199,125 @@ export function ClaudeChatTab({
     }
     return approvals;
   }, [session?.sessionId, pendingPlanApprovalsMap]);
+
+  const refreshSessionFromServer = useCallback(async () => {
+    const stateBeforeRefresh = useClaudeStore.getState();
+    const activeClient = stateBeforeRefresh.clients.get(environmentId);
+    const activeSession = stateBeforeRefresh.sessions.get(sessionKey);
+    if (!activeClient || !activeSession?.sessionId) return;
+
+    const sessionId = activeSession.sessionId;
+    const requestSequence = ++manualRefreshSequenceRef.current;
+    const stateBeforeAttempt = useClaudeStore.getState();
+    const sessionBeforeAttempt = stateBeforeAttempt.sessions.get(sessionKey);
+    if (
+      stateBeforeAttempt.clients.get(environmentId) !== activeClient ||
+      sessionBeforeAttempt?.sessionId !== sessionId
+    ) {
+      return;
+    }
+
+    const questionsBeforeAttempt = stateBeforeAttempt.pendingQuestions;
+    const approvalsBeforeAttempt = stateBeforeAttempt.pendingPlanApprovals;
+    const existingQuestionIds = new Set(
+      Array.from(questionsBeforeAttempt.values())
+        .filter((question) => question.sessionId === sessionId)
+        .map((question) => question.id),
+    );
+    const existingApprovalIds = new Set(
+      Array.from(approvalsBeforeAttempt.values())
+        .filter((approval) => approval.sessionId === sessionId)
+        .map((approval) => approval.id),
+    );
+
+    const [serverSession, messages, questions, approvals] = await Promise.all([
+      getSession(activeClient, sessionId),
+      getSessionMessages(activeClient, sessionId, { throwOnError: true }),
+      getPendingQuestions(activeClient, sessionId, { throwOnError: true }),
+      getPendingPlanApprovals(activeClient, sessionId, { throwOnError: true }),
+    ]);
+
+    if (requestSequence !== manualRefreshSequenceRef.current) return;
+    if (!serverSession) {
+      throw new Error("The Claude session is no longer available on the server");
+    }
+
+    const stateAfterAttempt = useClaudeStore.getState();
+    const sessionAfterAttempt = stateAfterAttempt.sessions.get(sessionKey);
+    if (
+      stateAfterAttempt.clients.get(environmentId) !== activeClient ||
+      sessionAfterAttempt?.sessionId !== sessionId
+    ) {
+      return;
+    }
+    const liveStateChanged =
+      sessionAfterAttempt !== sessionBeforeAttempt ||
+      stateAfterAttempt.pendingQuestions !== questionsBeforeAttempt ||
+      stateAfterAttempt.pendingPlanApprovals !== approvalsBeforeAttempt;
+    if (liveStateChanged) {
+      throw new Error("Claude session changed while refreshing; try again");
+    }
+
+    setMessages(sessionKey, messages);
+    setSessionLoading(sessionKey, serverSession.status === "running");
+    setSessionError(
+      sessionKey,
+      serverSession.status === "error"
+        ? serverSession.error?.trim() || "Claude session failed"
+        : undefined,
+    );
+    if (serverSession.title?.trim()) {
+      setSessionTitle(sessionKey, serverSession.title);
+    }
+
+    const refreshedQuestionIds = new Set(questions.map((question) => question.id));
+    for (const question of questions) addPendingQuestion(question);
+    for (const questionId of existingQuestionIds) {
+      if (!refreshedQuestionIds.has(questionId)) removePendingQuestion(questionId);
+    }
+
+    const refreshedApprovalIds = new Set(approvals.map((approval) => approval.id));
+    for (const approval of approvals) addPendingPlanApproval(approval);
+    for (const approvalId of existingApprovalIds) {
+      if (!refreshedApprovalIds.has(approvalId)) removePendingPlanApproval(approvalId);
+    }
+  }, [
+    addPendingPlanApproval,
+    addPendingQuestion,
+    environmentId,
+    removePendingPlanApproval,
+    removePendingQuestion,
+    sessionKey,
+    setMessages,
+    setSessionError,
+    setSessionLoading,
+    setSessionTitle,
+  ]);
+
+  useEffect(() => {
+    if (
+      refreshRequestId <= lastHandledRefreshRequestIdRef.current ||
+      connectionState !== "connected" ||
+      !client ||
+      !session?.sessionId
+    ) {
+      return;
+    }
+
+    lastHandledRefreshRequestIdRef.current = refreshRequestId;
+    void refreshSessionFromServer().catch((error) => {
+      console.error("[ClaudeChatTab] Manual refresh failed:", error);
+      toast.error("Failed to refresh Claude tab", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, [
+    client,
+    connectionState,
+    refreshRequestId,
+    refreshSessionFromServer,
+    session?.sessionId,
+  ]);
 
   // Memoize messages separately to provide stable reference for child components
   // This prevents unnecessary recalculations when other session properties change

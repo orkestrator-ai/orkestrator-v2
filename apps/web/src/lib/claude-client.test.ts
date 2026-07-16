@@ -11,17 +11,20 @@ import {
   abortSession,
   deleteSession,
   getPendingQuestions,
+  getPendingPlanApprovals,
   answerQuestion,
   respondToPlanApproval,
   getMcpServers,
   getPlugins,
   getSessionInitData,
   getSlashCommands,
+  subscribeToEvents,
   SessionNotFoundError,
   type ClaudeClient,
 } from "./claude-client";
 
 const originalFetch = globalThis.fetch;
+const originalEventSource = globalThis.EventSource;
 
 function mockFetchJson(data: unknown, status = 200) {
   globalThis.fetch = mock(async () =>
@@ -50,6 +53,7 @@ describe("claude-client", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    globalThis.EventSource = originalEventSource;
     delete window.orkestratorGateway;
     mock.restore();
   });
@@ -212,6 +216,13 @@ describe("claude-client", () => {
       const messages = await getSessionMessages(client, "s-1");
       expect(messages).toEqual([]);
     });
+
+    test("throws on non-404 error status when strict refresh is requested", async () => {
+      mockFetchStatus(500);
+      expect(
+        getSessionMessages(client, "s-1", { throwOnError: true }),
+      ).rejects.toThrow("HTTP 500");
+    });
   });
 
   describe("sendPrompt", () => {
@@ -296,6 +307,92 @@ describe("claude-client", () => {
     test("returns empty array on network error", async () => {
       mockFetchError();
       expect(await getPendingQuestions(client, "s-1")).toEqual([]);
+    });
+
+    test("can surface refresh failures to strict callers", async () => {
+      mockFetchStatus(500);
+      await expect(
+        getPendingQuestions(client, "s-1", { throwOnError: true }),
+      ).rejects.toThrow("HTTP 500");
+    });
+  });
+
+  describe("getPendingPlanApprovals", () => {
+    test("returns the authoritative approval snapshot", async () => {
+      const approvals = [{ id: "approval-1", sessionId: "s-1" }];
+      mockFetchJson({ approvals });
+
+      expect(await getPendingPlanApprovals(client, "s-1")).toEqual(approvals);
+    });
+
+    test("returns an empty snapshot on ordinary failures and throws in strict mode", async () => {
+      mockFetchStatus(503);
+      expect(await getPendingPlanApprovals(client, "s-1")).toEqual([]);
+      await expect(
+        getPendingPlanApprovals(client, "s-1", { throwOnError: true }),
+      ).rejects.toThrow("HTTP 503");
+
+      mockFetchError();
+      expect(await getPendingPlanApprovals(client, "s-1")).toEqual([]);
+      await expect(
+        getPendingPlanApprovals(client, "s-1", { throwOnError: true }),
+      ).rejects.toThrow("network error");
+    });
+  });
+
+  describe("subscribeToEvents", () => {
+    class MockEventSource {
+      static latest: MockEventSource | null = null;
+      readonly url: string;
+      readonly readyState = 1;
+      onopen: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      close = mock(() => {});
+      private listeners = new Map<string, (event: MessageEvent) => void>();
+
+      constructor(url: string) {
+        this.url = url;
+        MockEventSource.latest = this;
+      }
+
+      addEventListener(type: string, listener: (event: MessageEvent) => void) {
+        this.listeners.set(type, listener);
+      }
+
+      emit(type: string, data: unknown) {
+        this.listeners.get(type)?.({
+          type,
+          data: JSON.stringify(data),
+        } as MessageEvent);
+      }
+    }
+
+    test("yields parsed events and closes on iterator return", async () => {
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+      const source = MockEventSource.latest!;
+      source.emit("message.updated", { sessionId: "s-1", message: { id: "m-1" } });
+
+      await expect(iterator.next()).resolves.toEqual({
+        done: false,
+        value: {
+          type: "message.updated",
+          sessionId: "s-1",
+          data: { sessionId: "s-1", message: { id: "m-1" } },
+        },
+      });
+      await iterator.return?.();
+      expect(source.close).toHaveBeenCalledTimes(1);
+    });
+
+    test("rejects a pending read on connection failure", async () => {
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+      const pending = iterator.next();
+      MockEventSource.latest?.onerror?.();
+
+      await expect(pending).rejects.toThrow("SSE connection error");
+      expect(MockEventSource.latest?.close).toHaveBeenCalledTimes(1);
     });
   });
 

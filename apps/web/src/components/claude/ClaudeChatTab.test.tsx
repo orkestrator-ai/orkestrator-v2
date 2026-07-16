@@ -4,7 +4,11 @@ import { createClaudeSessionKey, useClaudeStore } from "@/stores/claudeStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-import type { ClaudeMessage as ClaudeMessageType } from "@/lib/claude-client";
+import type {
+  ClaudeMessage as ClaudeMessageType,
+  ClaudePlanApprovalRequest,
+  ClaudeQuestionRequest,
+} from "@/lib/claude-client";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 
 import * as realHooks from "@/hooks";
@@ -22,7 +26,17 @@ const mockGetModels = mock(async () => []);
 const mockGetSessionMessages = mock<
   (_client: unknown, _sessionId: string) => Promise<ClaudeMessageType[]>
 >(async () => []);
-const mockGetSession = mock(async () => null as null | { status: string });
+const mockGetSession = mock(async () => null as null | {
+  status: "idle" | "running" | "error";
+  title?: string;
+  error?: string;
+});
+const mockGetPendingQuestions = mock(
+  async (): Promise<ClaudeQuestionRequest[]> => [],
+);
+const mockGetPendingPlanApprovals = mock(
+  async (): Promise<ClaudePlanApprovalRequest[]> => [],
+);
 const mockCheckHealth = mock(async () => true);
 const mockSendPrompt = mock(async () => {});
 const mockAbortSession = mock(async () => true);
@@ -67,6 +81,8 @@ mock.module("@/lib/claude-client", () => ({
   createSession: mockCreateSession,
   getSession: mockGetSession,
   getSessionMessages: mockGetSessionMessages,
+  getPendingQuestions: mockGetPendingQuestions,
+  getPendingPlanApprovals: mockGetPendingPlanApprovals,
   sendPrompt: mockSendPrompt,
   abortSession: mockAbortSession,
   subscribeToEvents: mock(() => (async function* () {})()),
@@ -254,6 +270,10 @@ describe("ClaudeChatTab", () => {
     mockGetSessionMessages.mockImplementation(async () => []);
     mockGetSession.mockReset();
     mockGetSession.mockResolvedValue(null);
+    mockGetPendingQuestions.mockReset();
+    mockGetPendingQuestions.mockResolvedValue([]);
+    mockGetPendingPlanApprovals.mockReset();
+    mockGetPendingPlanApprovals.mockResolvedValue([]);
     mockCheckHealth.mockClear();
     mockSendPrompt.mockClear();
     mockAbortSession.mockClear();
@@ -286,6 +306,210 @@ describe("ClaudeChatTab", () => {
 
     expect(screen.getByText("Ready to build!")).toBeTruthy();
     expect(screen.queryByText("No messages yet. Start a conversation with Claude!")).toBeNull();
+  });
+
+  test("refresh requests replace the transcript and reconcile server state", async () => {
+    const { rerender } = render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+
+    await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+    mockGetSessionMessages.mockReset();
+    mockGetSession.mockReset();
+
+    const serverMessage: ClaudeMessageType = {
+      id: "server-message",
+      role: "assistant",
+      content: "Updated by another client",
+      parts: [{ type: "text", content: "Updated by another client" }],
+      timestamp: "2026-07-16T12:00:00.000Z",
+    };
+    mockGetSessionMessages.mockResolvedValue([serverMessage]);
+    mockGetSession.mockResolvedValue({ status: "running", title: "Server title" });
+    mockGetPendingQuestions.mockResolvedValue([
+      { id: "question-1", sessionId: "session-1", questions: [] },
+    ]);
+    mockGetPendingPlanApprovals.mockResolvedValue([
+      { id: "approval-1", sessionId: "session-1" },
+    ]);
+    useClaudeStore.getState().addPendingQuestion({
+      id: "stale-question",
+      sessionId: "session-1",
+      questions: [],
+    });
+    useClaudeStore.getState().addPendingPlanApproval({
+      id: "stale-approval",
+      sessionId: "session-1",
+    });
+
+    rerender(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        messages: [serverMessage],
+        isLoading: true,
+        title: "Server title",
+      });
+      expect(useClaudeStore.getState().pendingQuestions.has("question-1")).toBe(true);
+      expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-1")).toBe(true);
+      expect(useClaudeStore.getState().pendingQuestions.has("stale-question")).toBe(false);
+      expect(useClaudeStore.getState().pendingPlanApprovals.has("stale-approval")).toBe(false);
+    });
+  });
+
+  test("failed and missing-session refreshes preserve the current transcript", async () => {
+    const { rerender } = render(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={0} />,
+    );
+    await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+
+    const currentMessage: ClaudeMessageType = {
+      id: "current-message",
+      role: "assistant",
+      content: "Keep this message",
+      parts: [{ type: "text", content: "Keep this message" }],
+      timestamp: "2026-07-16T12:00:00.000Z",
+    };
+    act(() => useClaudeStore.getState().setMessages(SESSION_KEY, [currentMessage]));
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue({ status: "idle" });
+    mockGetSessionMessages.mockReset();
+    mockGetSessionMessages.mockRejectedValue(new Error("offline"));
+
+    rerender(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={1} />,
+    );
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+    expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
+      currentMessage,
+    ]);
+
+    mockGetSessionMessages.mockReset();
+    mockGetSessionMessages.mockResolvedValue([]);
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue(null);
+    rerender(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={2} />,
+    );
+    await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+    expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
+      currentMessage,
+    ]);
+  });
+
+  test("an older overlapping refresh cannot overwrite the newer request", async () => {
+    const currentMessage: ClaudeMessageType = {
+      id: "current-message",
+      role: "assistant",
+      content: "Current transcript",
+      parts: [{ type: "text", content: "Current transcript" }],
+      timestamp: "2026-07-16T12:00:00.000Z",
+    };
+    const staleMessage: ClaudeMessageType = {
+      ...currentMessage,
+      id: "stale-message",
+      content: "Stale server snapshot",
+      parts: [{ type: "text", content: "Stale server snapshot" }],
+    };
+    const newerMessage: ClaudeMessageType = {
+      ...currentMessage,
+      id: "newer-message",
+      content: "Newer server snapshot",
+      parts: [{ type: "text", content: "Newer server snapshot" }],
+    };
+    let resolveFirstMessages!: (messages: ClaudeMessageType[]) => void;
+    const firstMessagesPromise = new Promise<ClaudeMessageType[]>((resolve) => {
+      resolveFirstMessages = resolve;
+    });
+    const { rerender } = render(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={0} />,
+    );
+    await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+
+    act(() => {
+      useClaudeStore.getState().setMessages(SESSION_KEY, [currentMessage]);
+    });
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue({ status: "idle" });
+    mockGetSessionMessages.mockReset();
+    mockGetSessionMessages
+      .mockImplementationOnce(() => firstMessagesPromise)
+      .mockResolvedValue([newerMessage]);
+    mockGetPendingQuestions.mockReset();
+    mockGetPendingQuestions.mockResolvedValue([]);
+    mockGetPendingPlanApprovals.mockReset();
+    mockGetPendingPlanApprovals.mockResolvedValue([]);
+
+    rerender(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={1} />,
+    );
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalledTimes(1));
+    rerender(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={2} />,
+    );
+    await waitFor(() => {
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
+        newerMessage,
+      ]);
+    });
+
+    await act(async () => {
+      resolveFirstMessages([staleMessage]);
+      await firstMessagesPromise;
+    });
+    expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
+      newerMessage,
+    ]);
+  });
+
+  test("does not replace a live SSE update with an older refresh snapshot", async () => {
+    const { rerender } = render(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={0} />,
+    );
+    await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+
+    let resolveSnapshot!: (messages: ClaudeMessageType[]) => void;
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue({ status: "running" });
+    mockGetSessionMessages.mockReset();
+    mockGetSessionMessages.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveSnapshot = resolve;
+      }),
+    );
+    rerender(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={1} />,
+    );
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+
+    const liveMessage: ClaudeMessageType = {
+      id: "live-message",
+      role: "assistant",
+      content: "Arrived over SSE",
+      parts: [{ type: "text", content: "Arrived over SSE" }],
+      timestamp: "2026-07-16T12:00:01.000Z",
+    };
+    act(() => useClaudeStore.getState().upsertMessage(SESSION_KEY, liveMessage));
+    await act(async () => {
+      resolveSnapshot([]);
+      await Promise.resolve();
+    });
+
+    expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toContainEqual(
+      liveMessage,
+    );
   });
 
   test("shows the scroll down accessory in the compose dock and scrolls to the bottom when clicked", () => {

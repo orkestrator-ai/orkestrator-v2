@@ -6,7 +6,11 @@ import {
   getEnvironmentIdFromClaudeTmuxStateKey,
   compactConsecutiveAssistantMessages,
   payloadToApproval,
+  payloadToElicitation,
   payloadToInfoEvent,
+  payloadToPermission,
+  payloadToPlan,
+  payloadToQuestion,
   useClaudeTmuxStore,
 } from "./claudeTmuxStore";
 
@@ -53,6 +57,42 @@ describe("applyTranscriptLine", () => {
     expect(env.messages[0]!.parts.find((p) => p.type === "text")?.content).toBe(
       "hello",
     );
+  });
+
+  test("replaceTranscript removes stale messages without clearing local drafts", () => {
+    const store = useClaudeTmuxStore.getState();
+    store.applyTranscriptLine("e", {
+      type: "assistant",
+      uuid: "stale",
+      message: { role: "assistant", content: "stale copy" },
+    });
+    store.setDraftText("e", "keep my draft");
+
+    store.replaceTranscript("e", [
+      {
+        type: "assistant",
+        uuid: "server",
+        message: { role: "assistant", content: "server copy" },
+      },
+    ]);
+
+    expect(useClaudeTmuxStore.getState().getTab("e").messages).toMatchObject([
+      { id: "server", content: "server copy" },
+    ]);
+    expect(useClaudeTmuxStore.getState().getDraftText("e")).toBe("keep my draft");
+  });
+
+  test("replaceTranscript accepts an authoritative empty snapshot", () => {
+    const store = useClaudeTmuxStore.getState();
+    store.applyTranscriptLine("e", {
+      type: "assistant",
+      uuid: "stale",
+      message: { role: "assistant", content: "stale copy" },
+    });
+
+    store.replaceTranscript("e", []);
+
+    expect(useClaudeTmuxStore.getState().getTab("e").messages).toEqual([]);
   });
 
   test("assistant tool_use + later tool_result merge into prior assistant message", () => {
@@ -571,6 +611,83 @@ describe("payloadToApproval", () => {
     const a = payloadToApproval("e1", null);
     expect(a.toolName).toBe("tool");
     expect(a.toolInput).toEqual({});
+  });
+});
+
+describe("pending hook payload conversion", () => {
+  test("normalizes question, plan, permission, and elicitation payload variants", () => {
+    expect(
+      payloadToQuestion("question", {
+        toolInput: { questions: [{ question: "Continue?", header: "Choice", options: [] }] },
+      }),
+    ).toMatchObject({
+      eventId: "question",
+      questions: [{ question: "Continue?" }],
+    });
+    expect(
+      payloadToPlan("plan", {
+        tool_input: {
+          plan: "Ship it",
+          plan_file_path: "/tmp/plan.md",
+          allowed_prompts: ["Bash"],
+        },
+      }),
+    ).toMatchObject({
+      eventId: "plan",
+      plan: "Ship it",
+      planFilePath: "/tmp/plan.md",
+      allowedPrompts: ["Bash"],
+    });
+    expect(
+      payloadToPermission("permission", {
+        toolName: "Edit",
+        toolInput: { file_path: "a.ts" },
+        permissionSuggestions: ["allow"],
+      }),
+    ).toMatchObject({
+      eventId: "permission",
+      toolName: "Edit",
+      toolInput: { file_path: "a.ts" },
+      permissionSuggestions: ["allow"],
+    });
+    expect(
+      payloadToElicitation("elicitation", {
+        mcp_server_name: "docs",
+        message: "Choose a value",
+        mode: "form",
+        requested_schema: { type: "object" },
+      }),
+    ).toMatchObject({
+      eventId: "elicitation",
+      mcpServerName: "docs",
+      message: "Choose a value",
+      mode: "form",
+      requestedSchema: { type: "object" },
+    });
+  });
+
+  test("uses safe empty fallbacks for malformed payloads", () => {
+    expect(payloadToQuestion("question", null)).toMatchObject({
+      questions: [],
+      toolInput: {},
+    });
+    expect(payloadToPlan("plan", { tool_input: "invalid" })).toMatchObject({
+      plan: null,
+      planFilePath: null,
+      allowedPrompts: [],
+    });
+    expect(payloadToPermission("permission", null)).toMatchObject({
+      toolName: "tool",
+      toolInput: {},
+      permissionSuggestions: [],
+    });
+    expect(payloadToElicitation("elicitation", { requested_schema: "invalid" })).toMatchObject({
+      mcpServerName: "MCP server",
+      message: "MCP server requested input",
+      mode: null,
+      url: null,
+      requestedSchema: null,
+    });
   });
 });
 

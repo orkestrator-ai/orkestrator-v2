@@ -120,6 +120,7 @@ interface Props {
   isActive: boolean;
   initialPrompt?: string;
   isReviewTab?: boolean;
+  refreshRequestId?: number;
 }
 
 /**
@@ -302,6 +303,7 @@ export function ClaudeTmuxChatTab({
   isActive,
   initialPrompt,
   isReviewTab = false,
+  refreshRequestId = 0,
 }: Props) {
   const { environmentId, containerId } = data;
   const stateKey = useMemo(
@@ -322,6 +324,7 @@ export function ClaudeTmuxChatTab({
   const storeKey = scopedTabState ? stateKey : shouldUseLegacyTabState ? tabId : stateKey;
   const setRunning = useClaudeTmuxStore((s) => s.setRunning);
   const applyTranscriptLine = useClaudeTmuxStore((s) => s.applyTranscriptLine);
+  const replaceTranscript = useClaudeTmuxStore((s) => s.replaceTranscript);
   const addPendingApproval = useClaudeTmuxStore((s) => s.addPendingApproval);
   const removePendingApproval = useClaudeTmuxStore((s) => s.removePendingApproval);
   const addPendingQuestion = useClaudeTmuxStore((s) => s.addPendingQuestion);
@@ -514,61 +517,104 @@ export function ClaudeTmuxChatTab({
     setBackendHydrated(false);
 
     const hydrate = async () => {
-      const permissionModeVersion = permissionModeEventVersionRef.current;
       try {
-        const status = await getStatus(tabId, environmentId);
-        if (cancelled) return;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const permissionModeVersion = permissionModeEventVersionRef.current;
+          const tabStateBeforeAttempt =
+            useClaudeTmuxStore.getState().tabs.get(storeKey);
+          const status = await getStatus(tabId, environmentId);
+          if (cancelled) return;
 
-        if (status && status.environment_id === environmentId) {
-          startedRef.current = Boolean(status.running);
-          setRunning(storeKey, status.running, {
-            environmentId: status.environment_id,
-            sessionId: status.session_id,
-            resumed: status.resumed,
-          });
-          setTabBusy(storeKey, status.busy);
-          if (permissionModeEventVersionRef.current === permissionModeVersion) {
+          let lines: Awaited<ReturnType<typeof getTranscript>> = [];
+          let hooks: TmuxPendingHook[] = [];
+          if (
+            status &&
+            status.environment_id === environmentId &&
+            status.session_id
+          ) {
+            [lines, hooks] = await Promise.all([
+              getTranscript(tabId, environmentId),
+              getPendingHooks(tabId, environmentId),
+            ]);
+            if (cancelled) return;
+          }
+
+          const liveStateChanged =
+            useClaudeTmuxStore.getState().tabs.get(storeKey) !==
+              tabStateBeforeAttempt ||
+            permissionModeEventVersionRef.current !== permissionModeVersion;
+          if (liveStateChanged) {
+            if (refreshRequestId > 0) {
+              throw new Error("Claude tmux session changed while refreshing; try again");
+            }
+            if (attempt < 2) continue;
+            throw new Error("Claude tmux session changed while refreshing; try again");
+          }
+
+          if (status && status.environment_id === environmentId) {
+            startedRef.current = Boolean(status.running);
+            setRunning(storeKey, status.running, {
+              environmentId: status.environment_id,
+              sessionId: status.session_id,
+              resumed: status.resumed,
+            });
+            setTabBusy(storeKey, status.busy);
             setPlanMode(status.permission_mode === "plan");
+
+            if (status.session_id) {
+              replaceTranscript(storeKey, lines);
+              for (const line of lines) {
+                if (
+                  line.type === "permission-mode" &&
+                  typeof line.permissionMode === "string"
+                ) {
+                  setPlanMode(line.permissionMode === "plan");
+                }
+              }
+              const hooksToRender = hooks.filter(
+                (hook) => !shouldAutoAllowPermissionHook(hook),
+              );
+              replacePendingHooks(storeKey, pendingSnapshotFromHooks(hooksToRender));
+              for (const hook of hooks) {
+                if (shouldAutoAllowPermissionHook(hook)) {
+                  void autoAllowPermissionHook(tabId, environmentId, hook.id, hook.payload).catch((e) => {
+                    if (!cancelled) {
+                      addPendingPermission(
+                        storeKey,
+                        payloadToPermission(hook.id, hook.payload),
+                      );
+                      setError(String(e));
+                    }
+                  });
+                }
+              }
+            } else {
+              replaceTranscript(storeKey, []);
+              replacePendingHooks(storeKey, pendingSnapshotFromHooks([]));
+            }
+          } else if (refreshRequestId > 0) {
+            startedRef.current = false;
+            setRunning(storeKey, false, {
+              environmentId,
+              sessionId: null,
+              resumed: false,
+            });
+            setTabBusy(storeKey, false);
+            replaceTranscript(storeKey, []);
+            replacePendingHooks(storeKey, pendingSnapshotFromHooks([]));
           }
 
-          if (status.session_id) {
-            const lines = await getTranscript(tabId, environmentId);
-            if (cancelled) return;
-            for (const line of lines) {
-              if (
-                permissionModeEventVersionRef.current === permissionModeVersion &&
-                line.type === "permission-mode" &&
-                typeof line.permissionMode === "string"
-              ) {
-                setPlanMode(line.permissionMode === "plan");
-              }
-              applyTranscriptLine(storeKey, line);
-            }
-            const hooks = await getPendingHooks(tabId, environmentId);
-            if (cancelled) return;
-            const hooksToRender = hooks.filter(
-              (hook) => !shouldAutoAllowPermissionHook(hook),
-            );
-            replacePendingHooks(storeKey, pendingSnapshotFromHooks(hooksToRender));
-            for (const hook of hooks) {
-              if (shouldAutoAllowPermissionHook(hook)) {
-                void autoAllowPermissionHook(tabId, environmentId, hook.id, hook.payload).catch((e) => {
-                  if (!cancelled) {
-                    addPendingPermission(
-                      storeKey,
-                      payloadToPermission(hook.id, hook.payload),
-                    );
-                    setError(String(e));
-                  }
-                });
-              }
-            }
-          }
+          if (refreshRequestId > 0) setError(null);
+          return;
         }
       } catch (e) {
         // A missing backend session is not fatal; the auto-start path below
         // still handles new tabs with an initial prompt.
         console.debug("[ClaudeTmuxChatTab] tmux hydrate failed", e);
+        if (refreshRequestId > 0) {
+          const message = e instanceof Error ? e.message : String(e);
+          setError(`Failed to refresh Claude tmux tab: ${message}`);
+        }
       } finally {
         if (!cancelled) setBackendHydrated(true);
       }
@@ -584,8 +630,9 @@ export function ClaudeTmuxChatTab({
     storeKey,
     setRunning,
     setTabBusy,
-    applyTranscriptLine,
     addPendingPermission,
+    refreshRequestId,
+    replaceTranscript,
     replacePendingHooks,
   ]);
 

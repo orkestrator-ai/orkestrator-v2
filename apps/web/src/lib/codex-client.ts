@@ -291,16 +291,24 @@ export async function updateSessionConfig(
 export async function getSessionMessages(
   client: CodexClient,
   sessionId: string,
+  options: { throwOnError?: boolean } = {},
 ): Promise<CodexMessage[]> {
   try {
     const response = await fetchWithTimeout(
       `${client.baseUrl}/session/${sessionId}/messages`,
     );
-    if (!response.ok) return [];
+    if (!response.ok) {
+      throw new Error(`Failed to get Codex session messages: HTTP ${response.status}`);
+    }
     const data = await response.json();
     return Array.isArray(data.messages) ? data.messages : [];
   } catch (error) {
     console.error("[codex-client] Failed to get session messages:", error);
+    if (options.throwOnError) {
+      throw error instanceof Error
+        ? error
+        : new Error("Failed to get Codex session messages");
+    }
     return [];
   }
 }

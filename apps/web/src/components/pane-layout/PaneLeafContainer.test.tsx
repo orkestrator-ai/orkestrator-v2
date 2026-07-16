@@ -35,10 +35,30 @@ mock.module("@dnd-kit/core", () => ({
 }));
 
 mock.module("./DraggableTabBar", () => ({
-  DraggableTabBar: ({ onTabSelect }: { onTabSelect: (tabId: string) => void }) => (
-    <button type="button" onClick={() => onTabSelect("tab-2")}>
-      Select tab 2
-    </button>
+  DraggableTabBar: ({
+    onTabSelect,
+    onTabRefresh,
+  }: {
+    onTabSelect: (tabId: string) => void;
+    onTabRefresh?: (tabId: string) => void;
+  }) => (
+    <>
+      <button type="button" onClick={() => onTabSelect("tab-2")}>
+        Select tab 2
+      </button>
+      <button type="button" onClick={() => onTabRefresh?.("tab-claude")}>
+        Refresh Claude tab
+      </button>
+      <button type="button" onClick={() => onTabRefresh?.("tab-tmux")}>
+        Refresh tmux tab
+      </button>
+      <button type="button" onClick={() => onTabRefresh?.("tab-codex")}>
+        Refresh Codex tab
+      </button>
+      <button type="button" onClick={() => onTabRefresh?.("tab-opencode")}>
+        Refresh OpenCode tab
+      </button>
+    </>
   ),
 }));
 
@@ -53,11 +73,17 @@ mock.module("@/components/claude/ClaudeChatTab", () => ({
   ClaudeChatTab: ({
     tabId,
     isReviewTab,
+    refreshRequestId,
   }: {
     tabId: string;
     isReviewTab?: boolean;
+    refreshRequestId?: number;
   }) => (
-    <div data-review-tab={String(Boolean(isReviewTab))} data-testid="claude-tab">
+    <div
+      data-refresh-request-id={refreshRequestId}
+      data-review-tab={String(Boolean(isReviewTab))}
+      data-testid="claude-tab"
+    >
       claude:{tabId}
     </div>
   ),
@@ -67,11 +93,17 @@ mock.module("@/components/claude/ClaudeTmuxChatTab", () => ({
   ClaudeTmuxChatTab: ({
     tabId,
     isReviewTab,
+    refreshRequestId,
   }: {
     tabId: string;
     isReviewTab?: boolean;
+    refreshRequestId?: number;
   }) => (
-    <div data-review-tab={String(Boolean(isReviewTab))} data-testid="claude-tmux-tab">
+    <div
+      data-refresh-request-id={refreshRequestId}
+      data-review-tab={String(Boolean(isReviewTab))}
+      data-testid="claude-tmux-tab"
+    >
       tmux:{tabId}
     </div>
   ),
@@ -81,11 +113,17 @@ mock.module("@/components/codex/CodexChatTab", () => ({
   CodexChatTab: ({
     tabId,
     isReviewTab,
+    refreshRequestId,
   }: {
     tabId: string;
     isReviewTab?: boolean;
+    refreshRequestId?: number;
   }) => (
-    <div data-review-tab={String(Boolean(isReviewTab))} data-testid="codex-tab">
+    <div
+      data-refresh-request-id={refreshRequestId}
+      data-review-tab={String(Boolean(isReviewTab))}
+      data-testid="codex-tab"
+    >
       codex:{tabId}
     </div>
   ),
@@ -95,11 +133,17 @@ mock.module("@/components/opencode/OpenCodeChatTab", () => ({
   OpenCodeChatTab: ({
     tabId,
     isReviewTab,
+    refreshRequestId,
   }: {
     tabId: string;
     isReviewTab?: boolean;
+    refreshRequestId?: number;
   }) => (
-    <div data-review-tab={String(Boolean(isReviewTab))} data-testid="opencode-tab">
+    <div
+      data-refresh-request-id={refreshRequestId}
+      data-review-tab={String(Boolean(isReviewTab))}
+      data-testid="opencode-tab"
+    >
       opencode:{tabId}
     </div>
   ),
@@ -330,5 +374,62 @@ describe("PaneLeafContainer", () => {
     expect(screen.getByTestId("claude-tmux-tab").dataset.reviewTab).toBe("true");
     expect(screen.getByTestId("codex-tab").dataset.reviewTab).toBe("true");
     expect(screen.getByTestId("opencode-tab").dataset.reviewTab).toBe("true");
+  });
+
+  test("forwards independent repeated refresh requests to every agent tab", () => {
+    const agentPane = {
+      kind: "leaf" as const,
+      id: "pane-agents",
+      tabs: [
+        {
+          id: "tab-claude",
+          type: "claude-native" as const,
+          claudeNativeData: { environmentId: "env-visible" },
+        },
+        {
+          id: "tab-tmux",
+          type: "claude-tmux" as const,
+          claudeTmuxData: { environmentId: "env-visible" },
+        },
+        {
+          id: "tab-codex",
+          type: "codex-native" as const,
+          codexNativeData: { environmentId: "env-visible" },
+        },
+        {
+          id: "tab-opencode",
+          type: "opencode-native" as const,
+          openCodeNativeData: { environmentId: "env-visible" },
+        },
+      ],
+      activeTabId: "tab-claude",
+    };
+
+    render(
+      <PaneLeafContainer
+        pane={agentPane}
+        containerId="container-visible"
+        environmentId="env-visible"
+        isActive
+      />,
+    );
+
+    const testIds = ["claude-tab", "claude-tmux-tab", "codex-tab", "opencode-tab"];
+    for (const testId of testIds) {
+      expect(screen.getByTestId(testId).dataset.refreshRequestId).toBe("0");
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Claude tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh tmux tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Codex tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh OpenCode tab" }));
+    expect(screen.getByTestId("claude-tab").dataset.refreshRequestId).toBe("1");
+    expect(screen.getByTestId("claude-tmux-tab").dataset.refreshRequestId).toBe("1");
+    expect(screen.getByTestId("codex-tab").dataset.refreshRequestId).toBe("1");
+    expect(screen.getByTestId("opencode-tab").dataset.refreshRequestId).toBe("1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Claude tab" }));
+    expect(screen.getByTestId("claude-tab").dataset.refreshRequestId).toBe("2");
+    expect(screen.getByTestId("codex-tab").dataset.refreshRequestId).toBe("1");
   });
 });

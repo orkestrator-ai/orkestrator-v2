@@ -36,4 +36,62 @@ describe("DraggableTabBar", () => {
     fireEvent.click(screen.getByText("Terminal 1"));
     expect(onTabSelect).toHaveBeenCalledWith("terminal");
   });
+
+  test("requests server refreshes only for server-backed agent tabs", () => {
+    const onTabRefresh = mock(() => undefined);
+    const pane: PaneLeaf = {
+      kind: "leaf",
+      id: "pane",
+      activeTabId: "claude",
+      tabs: [
+        {
+          id: "claude",
+          type: "claude-native",
+          claudeNativeData: { environmentId: "environment" },
+        },
+        {
+          id: "codex",
+          type: "codex-native",
+          codexNativeData: { environmentId: "environment" },
+        },
+        {
+          id: "opencode",
+          type: "opencode-native",
+          openCodeNativeData: { environmentId: "environment" },
+        },
+        {
+          id: "tmux",
+          type: "claude-tmux",
+          claudeTmuxData: { environmentId: "environment" },
+        },
+        { id: "terminal", type: "plain" },
+      ],
+    };
+
+    render(
+      <DndContext>
+        <DraggableTabBar
+          pane={pane}
+          environmentId="environment"
+          onTabSelect={() => undefined}
+          onTabRefresh={onTabRefresh}
+        />
+      </DndContext>,
+    );
+
+    for (const [label, tabId] of [
+      ["Claude 1", "claude"],
+      ["Codex 2", "codex"],
+      ["OpenCode 3", "opencode"],
+      ["Claude 4", "tmux"],
+    ] as const) {
+      fireEvent.contextMenu(screen.getByText(label));
+      fireEvent.click(screen.getByText("Refresh"));
+      expect(onTabRefresh).toHaveBeenLastCalledWith(tabId);
+    }
+
+    expect(onTabRefresh).toHaveBeenCalledTimes(4);
+    fireEvent.contextMenu(screen.getByText("Terminal 5"));
+    expect(screen.queryByText("Refresh")).toBeNull();
+  });
 });

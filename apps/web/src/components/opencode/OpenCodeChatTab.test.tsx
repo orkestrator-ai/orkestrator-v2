@@ -40,6 +40,11 @@ const mockCreateSession = mock(async () => ({
 const mockGetSessionMessages = mock<
   (_client: unknown, _sessionId: string) => Promise<NativeMessage[]>
 >(async () => []);
+const mockGetSessionStatus = mock(
+  async () => null as "idle" | "busy" | "retry" | null,
+);
+const mockGetPendingQuestions = mock(async (): Promise<QuestionRequest[]> => []);
+const mockGetPendingPermissions = mock(async (): Promise<PermissionRequest[]> => []);
 const mockListSessions = mock(async () => [
   { id: "session-1", createdAt: "2026-04-15T10:00:00.000Z" },
 ]);
@@ -47,6 +52,8 @@ import type {
   OpenCodeModel,
   OpenCodeModelDefaults,
   OpenCodeModelsResponse,
+  PermissionRequest,
+  QuestionRequest,
 } from "@/lib/opencode-client";
 import type {
   OpenCodeModelRef,
@@ -69,9 +76,10 @@ mock.module("@/lib/opencode-client", () => ({
   getModelsWithDefaults: mockGetModelsWithDefaults,
   createSession: mockCreateSession,
   getSessionMessages: mockGetSessionMessages,
+  getSessionStatus: mockGetSessionStatus,
   listSessions: mockListSessions,
-  getPendingPermissions: mock(async () => []),
-  getPendingQuestions: mock(async () => []),
+  getPendingPermissions: mockGetPendingPermissions,
+  getPendingQuestions: mockGetPendingQuestions,
   getAvailableSlashCommands: mock(async () => []),
   sendPrompt: mockSendPrompt,
   formatOpenCodeError: mock((error) => String(error)),
@@ -367,6 +375,12 @@ describe("OpenCodeChatTab", () => {
     }));
     mockGetSessionMessages.mockClear();
     mockGetSessionMessages.mockImplementation(async () => []);
+    mockGetSessionStatus.mockReset();
+    mockGetSessionStatus.mockResolvedValue(null);
+    mockGetPendingQuestions.mockReset();
+    mockGetPendingQuestions.mockResolvedValue([]);
+    mockGetPendingPermissions.mockReset();
+    mockGetPendingPermissions.mockResolvedValue([]);
     mockListSessions.mockClear();
     mockListSessions.mockImplementation(async () => [
       { id: "session-1", createdAt: "2026-04-15T10:00:00.000Z" },
@@ -412,6 +426,163 @@ describe("OpenCodeChatTab", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("opencode-compose-layout").textContent).toBe("bottom");
+    });
+  });
+
+  test("refresh requests pull the latest transcript, status, and pending prompts", async () => {
+    const { rerender } = render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+
+    const serverMessage: NativeMessage = {
+      id: "server-message",
+      role: "assistant",
+      content: "Updated by another client",
+      parts: [{ type: "text", content: "Updated by another client" }],
+      createdAt: "2026-07-16T12:00:00.000Z",
+    };
+    mockGetSessionMessages.mockResolvedValue([serverMessage]);
+    mockGetSessionStatus.mockResolvedValue("busy");
+    mockGetPendingQuestions.mockResolvedValue([
+      { id: "question-1", sessionID: "session-1", questions: [] },
+    ]);
+    mockGetPendingPermissions.mockResolvedValue([
+      {
+        id: "permission-1",
+        sessionID: "session-1",
+        permission: "edit",
+        patterns: [],
+        metadata: {},
+        always: [],
+      },
+    ]);
+    useOpenCodeStore.setState((state) => ({
+      ...state,
+      pendingQuestions: new Map([
+        ["stale-question", { id: "stale-question", sessionID: "session-1", questions: [] }],
+      ]),
+      pendingPermissions: new Map([
+        [
+          "stale-permission",
+          {
+            id: "stale-permission",
+            sessionID: "session-1",
+            permission: "edit",
+            patterns: [],
+            metadata: {},
+            always: [],
+          },
+        ],
+      ]),
+    }));
+
+    rerender(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        messages: [serverMessage],
+        isLoading: true,
+      });
+      expect(useOpenCodeStore.getState().pendingQuestions.has("question-1")).toBe(true);
+      expect(useOpenCodeStore.getState().pendingPermissions.has("permission-1")).toBe(true);
+      expect(useOpenCodeStore.getState().pendingQuestions.has("stale-question")).toBe(false);
+      expect(useOpenCodeStore.getState().pendingPermissions.has("stale-permission")).toBe(false);
+    });
+  });
+
+  test("failed refreshes preserve the current session snapshot", async () => {
+    const currentMessage: NativeMessage = {
+      id: "current-message",
+      role: "assistant",
+      content: "Keep this message",
+      parts: [{ type: "text", content: "Keep this message" }],
+      createdAt: "2026-07-16T12:00:00.000Z",
+    };
+    useOpenCodeStore.getState().setMessages(SESSION_KEY, [currentMessage]);
+
+    const { rerender } = render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+
+    mockGetSessionMessages.mockRejectedValue(new Error("server unavailable"));
+    rerender(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+    expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
+      currentMessage,
+    ]);
+  });
+
+  test("does not overwrite a live event with an older refresh snapshot", async () => {
+    let resolveMessages!: (messages: NativeMessage[]) => void;
+    const messagesPromise = new Promise<NativeMessage[]>((resolve) => {
+      resolveMessages = resolve;
+    });
+    const liveMessage: NativeMessage = {
+      id: "live-message",
+      role: "assistant",
+      content: "Arrived while refreshing",
+      parts: [{ type: "text", content: "Arrived while refreshing" }],
+      createdAt: "2026-07-16T12:00:01.000Z",
+    };
+
+    const { rerender } = render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+    mockGetSessionMessages.mockImplementation(() => messagesPromise);
+    mockGetSessionStatus.mockResolvedValue("idle");
+
+    rerender(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+
+    act(() => {
+      useOpenCodeStore.getState().addMessage(SESSION_KEY, liveMessage);
+    });
+    await act(async () => {
+      resolveMessages([]);
+      await messagesPromise;
+    });
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
+        liveMessage,
+      ]);
     });
   });
 

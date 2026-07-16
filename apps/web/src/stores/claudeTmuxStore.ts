@@ -185,6 +185,7 @@ interface ClaudeTmuxState {
   ) => void;
   resetTab: (tabId: string) => void;
   applyTranscriptLine: (tabId: string, line: TranscriptLine) => void;
+  replaceTranscript: (tabId: string, lines: TranscriptLine[]) => void;
   addPendingApproval: (tabId: string, approval: TmuxPendingApproval) => void;
   removePendingApproval: (tabId: string, eventId: string) => void;
   addPendingQuestion: (tabId: string, question: TmuxPendingQuestion) => void;
@@ -291,6 +292,13 @@ export const useClaudeTmuxStore = create<ClaudeTmuxState>()((set, get) => ({
   applyTranscriptLine: (tabId, line) =>
     set((state) =>
       patchTab(state, tabId, (s) => applyLine(s, line)),
+    ),
+
+  replaceTranscript: (tabId, lines) =>
+    set((state) =>
+      patchTab(state, tabId, (current) =>
+        lines.reduce(applyLine, { ...current, messages: [] }),
+      ),
     ),
 
   addPendingApproval: (tabId, approval) =>

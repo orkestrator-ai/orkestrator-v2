@@ -512,6 +512,159 @@ describe("CodexChatTab", () => {
     expect(optimistic?.id).toMatch(/^optimistic-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 
+  test("refresh requests pull the latest transcript and session status", async () => {
+    const { rerender } = render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetSessionStatus).toHaveBeenCalled();
+      expect(mockGetSessionMessages).toHaveBeenCalled();
+    });
+    mockGetSessionStatus.mockReset();
+    mockGetSessionMessages.mockReset();
+
+    const serverMessage = createMessage(
+      "server-message",
+      "Updated by another client",
+    );
+    mockGetSessionStatus.mockResolvedValue({
+      status: "running",
+      title: "Server title",
+    });
+    mockGetSessionMessages.mockResolvedValue([serverMessage]);
+
+    rerender(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        messages: [serverMessage],
+        isLoading: true,
+        title: "Server title",
+      });
+    });
+    expect(mockGetSessionStatus).toHaveBeenCalledWith(
+      MOCK_CLIENT,
+      SESSION_ID,
+      { throwOnError: true },
+    );
+  });
+
+  test("failed manual refreshes preserve the current transcript", async () => {
+    const currentMessage = createMessage("current-message", "Keep the current transcript");
+    const { rerender } = render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetSessionStatus).toHaveBeenCalled();
+      expect(mockGetSessionMessages).toHaveBeenCalled();
+    });
+    act(() => {
+      useCodexStore.getState().setMessages(SESSION_KEY, [currentMessage]);
+    });
+    mockGetSessionStatus.mockReset();
+    mockGetSessionStatus.mockResolvedValue({ status: "idle" });
+    mockGetSessionMessages.mockReset();
+    mockGetSessionMessages.mockRejectedValue(new Error("message fetch failed"));
+
+    rerender(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
+      currentMessage,
+    ]);
+  });
+
+  test("an older overlapping refresh cannot overwrite the newer request", async () => {
+    const currentMessage = createMessage("current-message", "Current transcript");
+    const staleMessage = createMessage("stale-message", "Stale server snapshot");
+    const newerMessage = createMessage("newer-message", "Newer server snapshot");
+    let resolveFirstMessages!: (messages: TestCodexMessage[]) => void;
+    const firstMessagesPromise = new Promise<TestCodexMessage[]>((resolve) => {
+      resolveFirstMessages = resolve;
+    });
+    const { rerender } = render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetSessionStatus).toHaveBeenCalled();
+      expect(mockGetSessionMessages).toHaveBeenCalled();
+    });
+    act(() => {
+      useCodexStore.getState().setMessages(SESSION_KEY, [currentMessage]);
+    });
+    mockGetSessionStatus.mockReset();
+    mockGetSessionStatus.mockResolvedValue({ status: "idle" });
+    mockGetSessionMessages.mockReset();
+    mockGetSessionMessages
+      .mockImplementationOnce(() => firstMessagesPromise)
+      .mockResolvedValue([newerMessage]);
+
+    rerender(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+    await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        refreshRequestId={2}
+      />,
+    );
+    await waitFor(() => {
+      expect(mockGetSessionStatus.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
+        newerMessage,
+      ]);
+    });
+    await act(async () => {
+      resolveFirstMessages([staleMessage]);
+      await firstMessagesPromise;
+    });
+
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
+      newerMessage,
+    ]);
+  });
+
   test("rehydrates the session id saved in a restored pane tab", async () => {
     const restoredSessionId = "restored-codex-session";
     useCodexStore.setState({ sessions: new Map() });

@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, useLayoutEffect } from "react";
+import { memo, useCallback, useRef, useLayoutEffect, useState } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { useShallow } from "zustand/react/shallow";
 import { usePaneLayoutStore, useEnvironmentStore, useConfigStore } from "@/stores";
@@ -48,6 +48,9 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
   const currentEnvState = environments.get(environmentId);
   const activePaneId = currentEnvState?.activePaneId ?? "default";
   const containerRef = useRef<HTMLDivElement>(null);
+  const [tabRefreshRequestIds, setTabRefreshRequestIds] = useState(
+    () => new Map<string, number>(),
+  );
 
   // Read the diff baseline reactively from the environment/config stores.
   const { projectId, createdFromCommit } = useEnvironmentStore(
@@ -100,6 +103,14 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
     [environmentId, pane.id, setActiveTab]
   );
 
+  const handleTabRefresh = useCallback((tabId: string) => {
+    setTabRefreshRequestIds((current) => {
+      const next = new Map(current);
+      next.set(tabId, (current.get(tabId) ?? 0) + 1);
+      return next;
+    });
+  }, []);
+
   // Check if this pane is focused (active in the layout)
   const isPaneFocused = activePaneId === pane.id;
 
@@ -118,6 +129,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
           pane={pane}
           environmentId={environmentId}
           onTabSelect={handleTabSelect}
+          onTabRefresh={handleTabRefresh}
           isDropTarget={isOver}
           activeDragId={activeDragId}
           dragOverPaneId={dragOverPaneId}
@@ -169,6 +181,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isActive={isTabActive && isActive}
                   initialPrompt={tab.initialPrompt}
                   isReviewTab={tab.isReviewTab}
+                  refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                 />
               </div>
             );
@@ -190,6 +203,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isActive={isTabActive && isActive}
                   initialPrompt={tab.initialPrompt}
                   isReviewTab={tab.isReviewTab}
+                  refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                 />
               </div>
             );
@@ -211,6 +225,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isActive={isTabActive && isActive}
                   initialPrompt={tab.initialPrompt}
                   isReviewTab={tab.isReviewTab}
+                  refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                 />
               </div>
             );
@@ -232,6 +247,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isActive={isTabActive && isActive}
                   initialPrompt={tab.initialPrompt}
                   isReviewTab={tab.isReviewTab}
+                  refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                 />
               </div>
             );

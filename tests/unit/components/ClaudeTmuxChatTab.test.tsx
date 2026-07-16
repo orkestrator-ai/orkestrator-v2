@@ -1281,6 +1281,192 @@ Running 1 Explore agent...
     expect(startSessionMock).not.toHaveBeenCalled();
   });
 
+  test("refresh requests replace the transcript with the latest backend snapshot", async () => {
+    seedPane();
+    mockRunningTmuxStatus();
+    let transcript = [
+      {
+        type: "assistant",
+        uuid: "stale-message",
+        message: { role: "assistant", content: "Stale client copy" },
+      },
+    ];
+    getTranscriptMock.mockImplementation(async () => transcript);
+
+    const { rerender } = render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+
+    await screen.findByText("Stale client copy");
+    transcript = [
+      {
+        type: "assistant",
+        uuid: "server-message",
+        message: { role: "assistant", content: "Updated by another client" },
+      },
+    ];
+
+    rerender(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+
+    await screen.findByText("Updated by another client");
+    expect(screen.queryByText("Stale client copy")).toBeNull();
+    expect(getStatusMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("reports manual refresh failures without clearing the current transcript", async () => {
+    seedPane();
+    mockRunningTmuxStatus();
+    getTranscriptMock.mockResolvedValue([
+      {
+        type: "assistant",
+        uuid: "current-message",
+        message: { role: "assistant", content: "Keep the current transcript" },
+      },
+    ]);
+
+    const { rerender } = render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+    await screen.findByText("Keep the current transcript");
+    getTranscriptMock.mockRejectedValue(new Error("transcript unavailable"));
+
+    rerender(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+
+    expect(
+      await screen.findByText(
+        "Failed to refresh Claude tmux tab: transcript unavailable",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("Keep the current transcript")).toBeTruthy();
+  });
+
+  test("clears tmux state when a manual refresh confirms the session is missing", async () => {
+    seedPane();
+    mockRunningTmuxStatus();
+    getTranscriptMock.mockResolvedValue([
+      {
+        type: "assistant",
+        uuid: "current-message",
+        message: { role: "assistant", content: "Session transcript" },
+      },
+    ]);
+
+    const { rerender } = render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+    await screen.findByText("Session transcript");
+    getStatusMock.mockResolvedValue(null);
+
+    rerender(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+
+    await waitFor(() => {
+      const tab = useClaudeTmuxStore.getState().getTab("tab-1");
+      expect(tab.running).toBe(false);
+      expect(tab.messages).toEqual([]);
+    });
+    expect(screen.queryByText("Session transcript")).toBeNull();
+  });
+
+  test("does not overwrite a live tmux event with an older refresh snapshot", async () => {
+    seedPane();
+    mockRunningTmuxStatus();
+    getTranscriptMock.mockResolvedValue([
+      {
+        type: "assistant",
+        uuid: "current-message",
+        message: { role: "assistant", content: "Current transcript" },
+      },
+    ]);
+    const { rerender } = render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+    await screen.findByText("Current transcript");
+    await waitFor(() => expect(subscribedHandler).not.toBeNull());
+
+    let resolveTranscript!: (lines: realTmuxClient.TranscriptLine[]) => void;
+    const transcriptPromise = new Promise<realTmuxClient.TranscriptLine[]>((resolve) => {
+      resolveTranscript = resolve;
+    });
+    getTranscriptMock.mockImplementation(() => transcriptPromise);
+    rerender(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+    await waitFor(() => expect(getTranscriptMock).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      subscribedHandler?.({
+        kind: "transcript-line",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-existing",
+        line: {
+          type: "assistant",
+          uuid: "live-message",
+          message: { role: "assistant", content: "Live event wins" },
+        },
+      });
+    });
+    await screen.findByText("Live event wins");
+
+    await act(async () => {
+      resolveTranscript([]);
+      await transcriptPromise;
+    });
+
+    expect(
+      await screen.findByText(
+        "Failed to refresh Claude tmux tab: Claude tmux session changed while refreshing; try again",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("Live event wins")).toBeTruthy();
+  });
+
   test("hydrates backend busy state and pending hook prompts", async () => {
     getStatusMock.mockImplementation(async () => ({
       tab_id: "tab-1",

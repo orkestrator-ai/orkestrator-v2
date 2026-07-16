@@ -85,6 +85,7 @@ const { useEnvironmentStore } = await import("./environmentStore");
 function resetStores() {
   usePaneLayoutStore.setState({
     environments: new Map(),
+    hydration: new Map(),
     activeEnvironmentId: null,
   });
   useTerminalSessionStore.setState({
@@ -494,6 +495,78 @@ describe("paneLayoutStore environment scoping", () => {
     expect(store.getActivePane("env-a")?.activeTabId).toBe("file-a");
     expect(store.getRoot("env-a").kind).toBe("leaf");
     expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-b");
+  });
+
+  test("writes and clears native session ids on the owning tab", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    store.addTab("default", {
+      id: "claude-a",
+      type: "claude-native",
+      claudeNativeData: {
+        environmentId: "env-a",
+        containerId: "container-a",
+      },
+    }, "env-a");
+
+    store.updateTabNativeSessionId("claude-a", "session-1", "env-a");
+    expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.claudeNativeData?.sessionId).toBe("session-1");
+
+    usePaneLayoutStore.getState().updateTabNativeSessionId("claude-a", undefined, "env-a");
+    expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.claudeNativeData?.sessionId).toBeUndefined();
+  });
+
+  test("installs restored state and completes hydration", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    store.beginHydration("env-a");
+    const restored = {
+      containerId: "container-a",
+      activePaneId: "restored",
+      root: {
+        kind: "leaf" as const,
+        id: "restored",
+        tabs: [{ id: "restored-tab", type: "plain" as const }],
+        activeTabId: "restored-tab",
+      },
+    };
+
+    usePaneLayoutStore.getState().finishHydration("env-a", restored);
+
+    expect(usePaneLayoutStore.getState().hydration.get("env-a")).toBe("done");
+    expect(usePaneLayoutStore.getState().environments.get("env-a")).toEqual(restored);
+    usePaneLayoutStore.getState().beginHydration("env-a");
+    expect(usePaneLayoutStore.getState().hydration.get("env-a")).toBe("done");
+  });
+
+  test("updates Codex and OpenCode session ids and ignores unsupported or unchanged updates", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    store.addTab("default", {
+      id: "codex",
+      type: "codex-native",
+      codexNativeData: { environmentId: "env-a" },
+    }, "env-a");
+    store.addTab("default", {
+      id: "opencode",
+      type: "opencode-native",
+      openCodeNativeData: { environmentId: "env-a" },
+    }, "env-a");
+    store.addTab("default", { id: "plain", type: "plain" }, "env-a");
+
+    store.updateTabNativeSessionId("codex", "codex-1", "env-a");
+    usePaneLayoutStore.getState().updateTabNativeSessionId("opencode", "open-1", "env-a");
+    expect(usePaneLayoutStore.getState().getAllTabs("env-a")).toMatchObject([
+      { codexNativeData: { sessionId: "codex-1" } },
+      { openCodeNativeData: { sessionId: "open-1" } },
+      { id: "plain" },
+    ]);
+
+    const beforeNoOps = usePaneLayoutStore.getState().environments;
+    usePaneLayoutStore.getState().updateTabNativeSessionId("codex", "codex-1", "env-a");
+    usePaneLayoutStore.getState().updateTabNativeSessionId("plain", "ignored", "env-a");
+    usePaneLayoutStore.getState().updateTabNativeSessionId("missing", "ignored", "env-a");
+    expect(usePaneLayoutStore.getState().environments).toBe(beforeNoOps);
   });
 
   test("sets and resets a hidden environment without changing the active environment", () => {

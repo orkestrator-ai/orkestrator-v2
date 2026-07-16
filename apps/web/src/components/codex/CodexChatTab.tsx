@@ -143,7 +143,7 @@ export function CodexChatTab({
     slashCommands: slashCommandsMap,
   } = useCodexStore();
 
-  const { clearTabInitialPrompt } = usePaneLayoutStore();
+  const { clearTabInitialPrompt, updateTabNativeSessionId } = usePaneLayoutStore();
 
   const client = useMemo(
     () => clientsMap.get(environmentId),
@@ -530,6 +530,7 @@ export function CodexChatTab({
         isLoading: false,
         title: resumed.session.title,
       });
+      updateTabNativeSessionId(tabId, resumed.session.sessionId, environmentId);
       setResumeDialogOpen(false);
     },
     [
@@ -540,6 +541,9 @@ export function CodexChatTab({
       selectedReasoningEffort,
       sessionKey,
       setSession,
+      tabId,
+      updateTabNativeSessionId,
+      environmentId,
     ],
   );
 
@@ -574,6 +578,7 @@ export function CodexChatTab({
             environmentId,
             sessionId: cachedSession.sessionId,
           });
+          updateTabNativeSessionId(tabId, cachedSession.sessionId, environmentId);
           isInitializedRef.current = true;
           lastInitTimeRef.current = Date.now();
           setConnectionState("connected");
@@ -619,6 +624,33 @@ export function CodexChatTab({
           });
 
           const warmFastMode = seedInitialFastMode(codexState);
+          if (data.sessionId) {
+            const restoredStatus = await getSessionStatus(
+              cachedClient,
+              data.sessionId,
+              { throwOnError: true },
+            );
+            if (restoredStatus) {
+              const restoredMessages = await getSessionMessages(cachedClient, data.sessionId);
+              if (!mounted) return;
+              setSession(sessionKey, {
+                sessionId: data.sessionId,
+                messages: restoredMessages,
+                isLoading: restoredStatus.status === "running",
+                title: restoredStatus.title,
+                error: restoredStatus.status === "error" ? restoredStatus.error : undefined,
+              });
+              updateTabNativeSessionId(tabId, data.sessionId, environmentId);
+              setSelectedModel(sessionKey, resolvedSelection.model);
+              setSelectedMode(sessionKey, resolvedMode);
+              setSelectedReasoningEffort(sessionKey, resolvedSelection.reasoningEffort);
+              isInitializedRef.current = true;
+              setConnectionState("connected");
+              return;
+            }
+            updateTabNativeSessionId(tabId, undefined, environmentId);
+          }
+
           const created = await createSession(cachedClient, {
             model: resolvedSelection.model,
             modelReasoningEffort: resolvedSelection.reasoningEffort,
@@ -634,6 +666,7 @@ export function CodexChatTab({
             isLoading: false,
             title: created.title,
           });
+          updateTabNativeSessionId(tabId, created.sessionId, environmentId);
           setSelectedModel(sessionKey, resolvedSelection.model);
           setSelectedMode(sessionKey, resolvedMode);
           setSelectedReasoningEffort(sessionKey, resolvedSelection.reasoningEffort);
@@ -705,11 +738,29 @@ export function CodexChatTab({
         const resolvedReasoningEffort = resolvedSelection.reasoningEffort;
 
         const existingSession = useCodexStore.getState().sessions.get(sessionKey);
-        if (existingSession?.sessionId) {
-          const messages = await getSessionMessages(nextClient, existingSession.sessionId);
+        const existingSessionId = existingSession?.sessionId || data.sessionId;
+        const existingStatus = existingSessionId
+          ? await getSessionStatus(nextClient, existingSessionId, { throwOnError: true })
+          : null;
+        if (existingSessionId && existingStatus) {
+          const messages = await getSessionMessages(nextClient, existingSessionId);
           if (!mounted) return;
-          setMessages(sessionKey, messages);
+          if (existingSession) {
+            setMessages(sessionKey, messages);
+          } else {
+            setSession(sessionKey, {
+              sessionId: existingSessionId,
+              messages,
+              isLoading: existingStatus.status === "running",
+              title: existingStatus.title,
+              error: existingStatus.status === "error" ? existingStatus.error : undefined,
+            });
+          }
+          updateTabNativeSessionId(tabId, existingSessionId, environmentId);
         } else {
+          if (existingSessionId) {
+            updateTabNativeSessionId(tabId, undefined, environmentId);
+          }
           const coldFastMode = seedInitialFastMode(codexState);
           const created = await createSession(nextClient, {
             model: resolvedModel,
@@ -723,6 +774,7 @@ export function CodexChatTab({
             isLoading: false,
             title: created.title,
           });
+          updateTabNativeSessionId(tabId, created.sessionId, environmentId);
         }
 
         if (!mounted) return;
@@ -786,6 +838,8 @@ export function CodexChatTab({
     setSession,
     seedInitialFastMode,
     setupPending,
+    tabId,
+    updateTabNativeSessionId,
   ]);
 
   const syncSessionConfig = useCallback(

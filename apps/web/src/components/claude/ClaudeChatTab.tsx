@@ -87,6 +87,7 @@ export function ClaudeChatTab({
     return hasClient && hasSession ? "connected" : "connecting";
   });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [initAttempt, setInitAttempt] = useState(0);
   const [serverLog, setServerLog] = useState<string | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
@@ -134,7 +135,7 @@ export function ClaudeChatTab({
   } = useClaudeStore();
 
   // Pane layout store - for clearing initialPrompt after it's been sent
-  const { clearTabInitialPrompt } = usePaneLayoutStore();
+  const { clearTabInitialPrompt, updateTabNativeSessionId } = usePaneLayoutStore();
 
   // Create a unique session key that combines environmentId and tabId
   // This prevents session collisions when multiple environments use the same tab IDs (e.g., "default")
@@ -282,6 +283,7 @@ export function ClaudeChatTab({
             sessionId: existingSession.sessionId,
           });
           tabSessionIdRef.current = existingSession.sessionId;
+          updateTabNativeSessionId(tabId, existingSession.sessionId, environmentId);
           isInitializedRef.current = true;
           lastInitTimeRef.current = Date.now();
           setConnectionState("connected");
@@ -365,6 +367,32 @@ export function ClaudeChatTab({
             setSelectedModel(sessionKey, preferredModel);
           }
 
+          if (data.sessionId) {
+            try {
+              const restoredMessages = await getSessionMessages(bridgeClient, data.sessionId);
+              if (!mounted) return;
+              const restoredServerSession = await getSession(bridgeClient, data.sessionId);
+              if (!mounted) return;
+
+              tabSessionIdRef.current = data.sessionId;
+              updateTabNativeSessionId(tabId, data.sessionId, environmentId);
+              isInitializedRef.current = true;
+              setSession(sessionKey, {
+                sessionId: data.sessionId,
+                messages: restoredMessages,
+                isLoading: restoredServerSession?.status === "running",
+              });
+              setConnectionState("connected");
+              if (!hasActiveEventSubscription(environmentId)) {
+                startSharedEventSubscription(bridgeClient);
+              }
+              return;
+            } catch (error) {
+              if (!(error instanceof SessionNotFoundError)) throw error;
+              updateTabNativeSessionId(tabId, undefined, environmentId);
+            }
+          }
+
           const newSession = await createSession(bridgeClient);
           if (!mounted) return;
 
@@ -373,6 +401,7 @@ export function ClaudeChatTab({
           }
 
           tabSessionIdRef.current = newSession.sessionId;
+          updateTabNativeSessionId(tabId, newSession.sessionId, environmentId);
           isInitializedRef.current = true;
           seedInitialFastMode();
 
@@ -512,11 +541,12 @@ export function ClaudeChatTab({
         // This handles reconnection after tab remount where refs are lost but store persists
         const existingSessionFromRef = tabSessionIdRef.current;
         const existingSessionFromStore = useClaudeStore.getState().sessions.get(sessionKey);
-        const existingSessionId = existingSessionFromRef || existingSessionFromStore?.sessionId;
+        const existingSessionId = existingSessionFromRef || existingSessionFromStore?.sessionId || data.sessionId;
 
         if (existingSessionId) {
           // Restore session from store - component may have remounted
           tabSessionIdRef.current = existingSessionId;
+          updateTabNativeSessionId(tabId, existingSessionId, environmentId);
           isInitializedRef.current = true;
           console.debug("[ClaudeChatTab] Reconnecting to existing session", {
             tabId,
@@ -533,39 +563,49 @@ export function ClaudeChatTab({
           startSharedEventSubscription(bridgeClient);
 
           // Refresh messages from server to ensure we have latest state
-          if (existingSessionFromStore) {
-            try {
-              const messages = await getSessionMessages(bridgeClient, existingSessionId);
+          try {
+            const messages = await getSessionMessages(bridgeClient, existingSessionId);
+            if (!mounted) return;
+            // Preserve any client-side error messages that may not be on the server
+            const currentMessages = existingSessionFromStore?.messages || [];
+            const errorMessages = currentMessages.filter((m) => m.id.startsWith(ERROR_MESSAGE_PREFIX));
+            const serverMessageIds = new Set(messages.map((m) => m.id));
+            const errorMessagesToKeep = errorMessages.filter((m) => !serverMessageIds.has(m.id));
+            if (existingSessionFromStore) {
+              setMessages(
+                sessionKey,
+                errorMessagesToKeep.length > 0 ? [...messages, ...errorMessagesToKeep] : messages,
+              );
+            } else {
+              const serverSession = await getSession(bridgeClient, existingSessionId);
               if (!mounted) return;
-              // Preserve any client-side error messages that may not be on the server
-              const currentMessages = existingSessionFromStore.messages || [];
-              const errorMessages = currentMessages.filter((m) => m.id.startsWith(ERROR_MESSAGE_PREFIX));
-              const serverMessageIds = new Set(messages.map((m) => m.id));
-              const errorMessagesToKeep = errorMessages.filter((m) => !serverMessageIds.has(m.id));
-              if (errorMessagesToKeep.length > 0) {
-                setMessages(sessionKey, [...messages, ...errorMessagesToKeep]);
-              } else {
-                setMessages(sessionKey, messages);
+              setSession(sessionKey, {
+                sessionId: existingSessionId,
+                messages,
+                isLoading: serverSession?.status === "running",
+              });
+            }
+          } catch (err) {
+            if (err instanceof SessionNotFoundError) {
+              // Session expired on server - create a new one
+              console.warn("[ClaudeChatTab] Session expired on server, creating new session");
+              const newSession = await createSession(bridgeClient);
+              if (!mounted) return;
+              if (newSession) {
+                seedInitialFastMode();
+                tabSessionIdRef.current = newSession.sessionId;
+                updateTabNativeSessionId(tabId, newSession.sessionId, environmentId);
+                setSession(sessionKey, {
+                  sessionId: newSession.sessionId,
+                  messages: [],
+                  isLoading: false,
+                });
               }
-            } catch (err) {
-              if (err instanceof SessionNotFoundError) {
-                // Session expired on server - create a new one
-                console.warn("[ClaudeChatTab] Session expired on server, creating new session");
-                const newSession = await createSession(bridgeClient);
-                if (!mounted) return;
-                if (newSession) {
-                  seedInitialFastMode();
-                  tabSessionIdRef.current = newSession.sessionId;
-                  setSession(sessionKey, {
-                    sessionId: newSession.sessionId,
-                    messages: [],
-                    isLoading: false,
-                  });
-                }
-              } else {
-                console.warn("[ClaudeChatTab] Failed to refresh messages on reconnect:", err);
-                // Keep existing messages from store if refresh fails
-              }
+            } else if (existingSessionFromStore) {
+              console.warn("[ClaudeChatTab] Failed to refresh messages on reconnect:", err);
+              // Keep existing messages from store if refresh fails
+            } else {
+              throw err;
             }
           }
         } else {
@@ -577,6 +617,7 @@ export function ClaudeChatTab({
           }
 
           tabSessionIdRef.current = newSession.sessionId;
+          updateTabNativeSessionId(tabId, newSession.sessionId, environmentId);
           isInitializedRef.current = true;
           seedInitialFastMode();
 
@@ -707,7 +748,7 @@ export function ClaudeChatTab({
       slashCmdCleanupRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [containerId, environmentId, tabId, isLocal, setupPending]);
+  }, [containerId, environmentId, tabId, isLocal, setupPending, initAttempt]);
 
   const startSharedEventSubscription = useCallback(
     async (bridgeClient: ReturnType<typeof createClient>) => {
@@ -1278,13 +1319,15 @@ export function ClaudeChatTab({
     setConnectionState("connecting");
     setErrorMessage(null);
     tabSessionIdRef.current = null;
+    updateTabNativeSessionId(tabId, undefined, environmentId);
     isInitializedRef.current = false;
     clearPersistedVirtuosoState(sessionKey);
     setClient(environmentId, null);
     setSession(sessionKey, null);
     setContextUsage(sessionKey, null);
     setServerStatus(environmentId, { running: false, hostPort: null });
-  }, [sessionKey, environmentId, setClient, setSession, setContextUsage, setServerStatus]);
+    setInitAttempt((value) => value + 1);
+  }, [sessionKey, environmentId, tabId, setClient, setSession, setContextUsage, setServerStatus, updateTabNativeSessionId]);
 
   const handleResumeSession = useCallback(
     async (sessionId: string) => {
@@ -1302,6 +1345,7 @@ export function ClaudeChatTab({
 
         // Update the component's session reference
         tabSessionIdRef.current = sessionId;
+        updateTabNativeSessionId(tabId, sessionId, environmentId);
 
         // Update the store with the resumed session
         setSession(sessionKey, {
@@ -1321,7 +1365,7 @@ export function ClaudeChatTab({
         console.error("[ClaudeChatTab] Failed to resume session:", error);
       }
     },
-    [client, sessionKey, setSession]
+    [client, environmentId, sessionKey, setSession, tabId, updateTabNativeSessionId]
   );
 
   if (setupPending) {

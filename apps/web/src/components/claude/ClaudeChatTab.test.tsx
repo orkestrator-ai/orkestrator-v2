@@ -3,26 +3,34 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { createClaudeSessionKey, useClaudeStore } from "@/stores/claudeStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { ClaudeMessage as ClaudeMessageType } from "@/lib/claude-client";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
+import * as realResumeSessionDialog from "./ResumeSessionDialog";
 
 const realHooksSnapshot = { ...realHooks };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
+const realResumeSessionDialogSnapshot = { ...realResumeSessionDialog };
 const mockScrollToBottom = mock(() => {});
 let mockIsAtBottom = true;
 let lastVirtualizedMessages: any[] = [];
 const mockCreateSession = mock(async () => ({ sessionId: "session-1" }));
 const mockGetModels = mock(async () => []);
-const mockGetSessionMessages = mock(async (): Promise<ClaudeMessageType[]> => []);
+const mockGetSessionMessages = mock<
+  (_client: unknown, _sessionId: string) => Promise<ClaudeMessageType[]>
+>(async () => []);
+const mockGetSession = mock(async () => null as null | { status: string });
 const mockCheckHealth = mock(async () => true);
 const mockSendPrompt = mock(async () => {});
 const mockAbortSession = mock(async () => true);
 const mockReadFileBase64 = mock(async () => "chat-local-base64");
 const mockReadContainerFileBase64 = mock(async () => "chat-container-base64");
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
+
+class MockSessionNotFoundError extends Error {}
 
 mock.module("@/hooks", () => ({
   ...realHooksSnapshot,
@@ -57,7 +65,7 @@ mock.module("@/lib/claude-client", () => ({
   createClient: mock(() => ({ baseUrl: "http://127.0.0.1:9999" })),
   getModels: mockGetModels,
   createSession: mockCreateSession,
-  getSession: mock(async () => null),
+  getSession: mockGetSession,
   getSessionMessages: mockGetSessionMessages,
   sendPrompt: mockSendPrompt,
   abortSession: mockAbortSession,
@@ -66,7 +74,7 @@ mock.module("@/lib/claude-client", () => ({
   getSlashCommands: mock(async () => []),
   ERROR_MESSAGE_PREFIX: "error-",
   SYSTEM_MESSAGE_PREFIX: "system-",
-  SessionNotFoundError: class SessionNotFoundError extends Error {},
+  SessionNotFoundError: MockSessionNotFoundError,
 }));
 
 mock.module("@/lib/backend", () => ({
@@ -85,10 +93,23 @@ mock.module("@/lib/backend", () => ({
   getLocalFileTree: mock(async () => []),
 }));
 
-// Sibling component stubs (ClaudeComposeBar, ClaudeQuestionCard, etc.) were
-// removed: Bun's mock.module is global, so stubbing `./ClaudeComposeBar` here
-// replaces the real module in the cache and leaks into ClaudeComposeBar.test.tsx,
-// causing that test to receive a `() => null` component.
+mock.module("./ResumeSessionDialog", () => ({
+  ResumeSessionDialog: ({
+    open,
+    onResume,
+  }: {
+    open: boolean;
+    onResume: (sessionId: string) => void;
+  }) => open ? (
+    <button type="button" data-testid="claude-resume-choice" onClick={() => onResume("resumed-claude")}>
+      Resume previous Claude session
+    </button>
+  ) : null,
+}));
+
+// Keep broad sibling components real. The narrow resume-dialog stub above is
+// restored from its snapshot in afterAll so it cannot leak through Bun's
+// global module cache into that component's own tests.
 
 import { ClaudeChatTab } from "./ClaudeChatTab";
 import type { ClaudeNativeData } from "@/types/paneLayout";
@@ -112,6 +133,34 @@ function createData(overrides: Partial<ClaudeNativeData> = {}): ClaudeNativeData
     isLocal: false,
     ...overrides,
   };
+}
+
+function seedPaneLayout(sessionId?: string) {
+  usePaneLayoutStore.setState({
+    environments: new Map([
+      [
+        ENVIRONMENT_ID,
+        {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              {
+                id: TAB_ID,
+                type: "claude-native",
+                claudeNativeData: createData({ sessionId }),
+              },
+            ],
+            activeTabId: TAB_ID,
+          },
+          activePaneId: "default",
+          containerId: "container-1",
+        },
+      ],
+    ]),
+    hydration: new Map([[ENVIRONMENT_ID, "done"]]),
+    activeEnvironmentId: ENVIRONMENT_ID,
+  });
 }
 
 function resetStores(environmentName = "review-table") {
@@ -183,12 +232,14 @@ function resetStores(environmentName = "review-table") {
     setupCommandsResolved: new Set(),
     setupScriptsRunning: new Set(),
   });
+  seedPaneLayout();
 }
 
 describe("ClaudeChatTab", () => {
   afterAll(() => {
     mock.module("@/hooks", () => realHooksSnapshot);
     mock.module("@/components/chat/VirtualizedMessageList", () => realVirtualizedMessageListSnapshot);
+    mock.module("./ResumeSessionDialog", () => realResumeSessionDialogSnapshot);
   });
 
   beforeEach(() => {
@@ -201,6 +252,8 @@ describe("ClaudeChatTab", () => {
     mockGetModels.mockImplementation(async () => []);
     mockGetSessionMessages.mockReset();
     mockGetSessionMessages.mockImplementation(async () => []);
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue(null);
     mockCheckHealth.mockClear();
     mockSendPrompt.mockClear();
     mockAbortSession.mockClear();
@@ -320,6 +373,140 @@ describe("ClaudeChatTab", () => {
       expect(mockCheckHealth).toHaveBeenCalledWith(MOCK_CLIENT);
     });
     expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("rehydrates the session id saved in a restored pane tab", async () => {
+    const restoredSessionId = "restored-claude-session";
+    useClaudeStore.setState({ sessions: new Map() });
+    seedPaneLayout(restoredSessionId);
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: restoredSessionId })}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetSessionMessages).toHaveBeenCalledWith(MOCK_CLIENT, restoredSessionId);
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe(
+        restoredSessionId,
+      );
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    const restoredRoot = usePaneLayoutStore.getState().environments.get(ENVIRONMENT_ID)?.root;
+    expect(restoredRoot?.kind).toBe("leaf");
+    if (!restoredRoot || restoredRoot.kind !== "leaf") throw new Error("Expected pane leaf");
+    const restoredTab = restoredRoot.tabs.find((tab) => tab.id === TAB_ID);
+    expect(restoredTab?.claudeNativeData?.sessionId).toBe(restoredSessionId);
+  });
+
+  test("cold-restores a persisted session with its transcript", async () => {
+    const restoredSessionId = "cold-restored-claude";
+    const restoredMessage: ClaudeMessageType = {
+      id: "restored-message",
+      role: "assistant",
+      content: "Persisted Claude transcript",
+      parts: [{ type: "text", content: "Persisted Claude transcript" }],
+      timestamp: "2026-04-15T10:00:00.000Z",
+    };
+    useClaudeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    seedPaneLayout(restoredSessionId);
+    mockGetSessionMessages.mockResolvedValue([restoredMessage]);
+    mockGetSession.mockResolvedValue({ status: "idle" });
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: restoredSessionId })}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        sessionId: restoredSessionId,
+        messages: [restoredMessage],
+        isLoading: false,
+      });
+    });
+    expect(mockGetSessionMessages).toHaveBeenCalledWith(expect.anything(), restoredSessionId);
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("replaces an expired restored session and persists the replacement id", async () => {
+    const expiredSessionId = "expired-claude";
+    useClaudeStore.setState((state) => ({ ...state, sessions: new Map() }));
+    seedPaneLayout(expiredSessionId);
+    mockGetSessionMessages.mockRejectedValueOnce(new MockSessionNotFoundError("expired"));
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData({ sessionId: expiredSessionId })}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockCreateSession).toHaveBeenCalledWith(MOCK_CLIENT);
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe("session-1");
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId)
+        .toBe("session-1");
+    });
+  });
+
+  test("retries a failed cold initialization and writes the created session id", async () => {
+    useClaudeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+    }));
+    seedPaneLayout();
+    mockGetModels.mockRejectedValueOnce(new Error("model load failed"));
+
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await screen.findByText("model load failed");
+    fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe("session-1");
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId)
+        .toBe("session-1");
+    });
+    expect(mockCreateSession).toHaveBeenCalledTimes(1);
+  });
+
+  test("writes a manually resumed session id and transcript to both stores", async () => {
+    const resumedMessage: ClaudeMessageType = {
+      id: "resumed-message",
+      role: "assistant",
+      content: "Resumed Claude transcript",
+      parts: [{ type: "text", content: "Resumed Claude transcript" }],
+      timestamp: "2026-04-15T10:00:00.000Z",
+    };
+    mockGetSessionMessages.mockImplementation(async (_client, sessionId) =>
+      sessionId === "resumed-claude" ? [resumedMessage] : []
+    );
+    render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Resume Session" })[0]!);
+    fireEvent.click(await screen.findByTestId("claude-resume-choice"));
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        sessionId: "resumed-claude",
+        messages: [resumedMessage],
+      });
+      expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId)
+        .toBe("resumed-claude");
+    });
   });
 
   test("review tabs show Address all after messages exist and send the shared prompt", async () => {

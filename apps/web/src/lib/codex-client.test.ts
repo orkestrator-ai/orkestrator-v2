@@ -395,6 +395,23 @@ describe("codex-client getSessionStatus", () => {
     mockFetchError(new Error("offline"));
     await expect(getSessionStatus(client, "session-1")).resolves.toBeNull();
   });
+
+  test("distinguishes a missing session from transport and malformed-response failures in strict mode", async () => {
+    mockFetch(async () => new Response(null, { status: 404 }));
+    await expect(getSessionStatus(client, "missing", { throwOnError: true })).resolves.toBeNull();
+
+    mockFetch(async () => new Response(null, { status: 503 }));
+    await expect(getSessionStatus(client, "session-1", { throwOnError: true }))
+      .rejects.toThrow("HTTP 503");
+
+    mockFetch(async () => new Response(JSON.stringify({ status: "paused" }), { status: 200 }));
+    await expect(getSessionStatus(client, "session-1", { throwOnError: true }))
+      .rejects.toThrow("malformed");
+
+    mockFetchError(new Error("offline"));
+    await expect(getSessionStatus(client, "session-1", { throwOnError: true }))
+      .rejects.toThrow("offline");
+  });
 });
 
 describe("codex-client sendPrompt", () => {

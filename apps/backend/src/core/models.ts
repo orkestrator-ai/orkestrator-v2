@@ -78,6 +78,23 @@ export interface Session {
   hasLaunchedCommand?: boolean;
 }
 
+export const PANE_LAYOUT_VERSION = 1;
+
+/**
+ * Versioned pane/tab layout persisted by the backend for restore-on-connect.
+ * The backend deliberately treats `root` as opaque; the frontend owns the
+ * PaneNode schema and validates it before installing a restored layout.
+ */
+export interface PersistedPaneLayout {
+  version: number;
+  environmentId: string;
+  containerId: string | null;
+  activePaneId: string;
+  root: unknown;
+  updatedAt: string;
+  revision: number;
+}
+
 export interface RepositoryConfig {
   defaultBranch: string;
   prBaseBranch: string;

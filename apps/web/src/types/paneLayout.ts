@@ -1,5 +1,17 @@
 import type { TabType } from "@/contexts";
 
+export const PANE_LAYOUT_VERSION = 1;
+
+export interface PersistedPaneLayout {
+  version: number;
+  environmentId: string;
+  containerId: string | null;
+  activePaneId: string;
+  root: unknown;
+  updatedAt: string;
+  revision: number;
+}
+
 // Git file status for diff context
 export type GitFileStatus = "M" | "A" | "D" | "?" | "R" | "C";
 

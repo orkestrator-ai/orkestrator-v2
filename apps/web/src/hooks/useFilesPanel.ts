@@ -47,17 +47,34 @@ export function useFilesPanel() {
   // environments fall back to the repository PR base branch.
   const repoConfig = projectId ? getRepositoryConfig(projectId) : null;
   const comparisonRef = selectedEnvironment?.createdFromCommit || repoConfig?.prBaseBranch || "main";
+  const environmentSnapshotKey = [
+    selectedEnvironmentId ?? "",
+    containerId ?? "",
+    worktreePath ?? "",
+    comparisonRef,
+  ].join("\0");
 
   // Track loading state for changes and tree separately to allow concurrent loads
   // of different data types while preventing duplicate requests of the same type
-  const loadingChangesRef = useRef<Promise<void> | null>(null);
-  const loadingTreeRef = useRef<Promise<void> | null>(null);
+  const loadingChangesRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
+  const loadingTreeRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
+  const activeSnapshotKeyRef = useRef(environmentSnapshotKey);
+  activeSnapshotKeyRef.current = environmentSnapshotKey;
   const [fileActionPending, setFileActionPending] = useState<string | null>(null);
 
   // Store the target branch so other components can access it
   useEffect(() => {
     setTargetBranch(comparisonRef);
   }, [comparisonRef, setTargetBranch]);
+
+  // Panel snapshots are global, so clear the previous environment immediately
+  // and only allow requests for the current key to publish their result.
+  useEffect(() => {
+    setChanges([]);
+    setFileTree([]);
+    setLoadingChanges(false);
+    setLoadingTree(false);
+  }, [environmentSnapshotKey, setChanges, setFileTree, setLoadingChanges, setLoadingTree]);
 
   // Load git changes from environment (silent mode for auto-refresh)
   const loadChanges = useCallback((silent = false): Promise<void> => {
@@ -67,7 +84,9 @@ export function useFilesPanel() {
     }
 
     // Reuse an in-flight snapshot request instead of overlapping it.
-    if (loadingChangesRef.current) return loadingChangesRef.current;
+    if (loadingChangesRef.current?.key === environmentSnapshotKey) {
+      return loadingChangesRef.current.promise;
+    }
 
     // Only show loading indicator on manual refresh, not auto-refresh
     if (!silent) {
@@ -85,27 +104,30 @@ export function useFilesPanel() {
           // Container environment - use container git status command
           changes = await backend.getGitStatus(containerId, comparisonRef);
         }
-        setChanges(changes);
+        if (activeSnapshotKeyRef.current === environmentSnapshotKey) {
+          setChanges(changes);
+        }
       } catch (err) {
         console.error("Failed to load git changes:", err);
         // Only clear on non-silent (manual) refresh to avoid flickering
-        if (!silent) {
+        if (!silent && activeSnapshotKeyRef.current === environmentSnapshotKey) {
           setChanges([]);
         }
       } finally {
-        if (!silent) {
+        if (!silent && activeSnapshotKeyRef.current === environmentSnapshotKey) {
           setLoadingChanges(false);
         }
       }
     })();
-    loadingChangesRef.current = request;
+    const inFlight = { key: environmentSnapshotKey, promise: request };
+    loadingChangesRef.current = inFlight;
     void request.finally(() => {
-      if (loadingChangesRef.current === request) {
+      if (loadingChangesRef.current === inFlight) {
         loadingChangesRef.current = null;
       }
     });
     return request;
-  }, [isAvailable, isLocalEnvironment, worktreePath, containerId, comparisonRef, setChanges, setLoadingChanges]);
+  }, [isAvailable, isLocalEnvironment, worktreePath, containerId, comparisonRef, environmentSnapshotKey, setChanges, setLoadingChanges]);
 
   // Load file tree from environment (silent mode for auto-refresh)
   const loadFileTree = useCallback((silent = false): Promise<void> => {
@@ -115,7 +137,9 @@ export function useFilesPanel() {
     }
 
     // Reuse an in-flight snapshot request instead of overlapping it.
-    if (loadingTreeRef.current) return loadingTreeRef.current;
+    if (loadingTreeRef.current?.key === environmentSnapshotKey) {
+      return loadingTreeRef.current.promise;
+    }
 
     if (!silent) {
       setLoadingTree(true);
@@ -131,26 +155,29 @@ export function useFilesPanel() {
           // Container environment - use container file tree command
           tree = await backend.getFileTree(containerId);
         }
-        setFileTree(tree);
+        if (activeSnapshotKeyRef.current === environmentSnapshotKey) {
+          setFileTree(tree);
+        }
       } catch (err) {
         console.error("Failed to load file tree:", err);
-        if (!silent) {
+        if (!silent && activeSnapshotKeyRef.current === environmentSnapshotKey) {
           setFileTree([]);
         }
       } finally {
-        if (!silent) {
+        if (!silent && activeSnapshotKeyRef.current === environmentSnapshotKey) {
           setLoadingTree(false);
         }
       }
     })();
-    loadingTreeRef.current = request;
+    const inFlight = { key: environmentSnapshotKey, promise: request };
+    loadingTreeRef.current = inFlight;
     void request.finally(() => {
-      if (loadingTreeRef.current === request) {
+      if (loadingTreeRef.current === inFlight) {
         loadingTreeRef.current = null;
       }
     });
     return request;
-  }, [isAvailable, isLocalEnvironment, worktreePath, containerId, setFileTree, setLoadingTree]);
+  }, [isAvailable, isLocalEnvironment, worktreePath, containerId, environmentSnapshotKey, setFileTree, setLoadingTree]);
 
   // Refresh data based on active tab (manual refresh shows loading indicator)
   const refresh = useCallback(() => {
@@ -171,23 +198,25 @@ export function useFilesPanel() {
   }, [activeTab, loadChanges, loadFileTree]);
 
   const refreshAllFilesData = useCallback(async () => {
+    if (activeSnapshotKeyRef.current !== environmentSnapshotKey) return;
     // First wait for any snapshot that was already in flight when the mutation
     // began, then take a guaranteed post-mutation snapshot of both views.
     await Promise.all([loadChanges(true), loadFileTree(true)]);
+    if (activeSnapshotKeyRef.current !== environmentSnapshotKey) return;
     await Promise.all([loadChanges(true), loadFileTree(true)]);
-  }, [loadChanges, loadFileTree]);
+  }, [environmentSnapshotKey, loadChanges, loadFileTree]);
 
   const revertFile = useCallback(async (filePath: string) => {
-    if (!isAvailable) {
+    if (!isAvailable || !selectedEnvironmentId) {
       throw new Error("The selected environment is not available");
     }
 
     setFileActionPending(filePath);
     try {
       if (isLocalEnvironment && worktreePath) {
-        await backend.revertLocalFile(worktreePath, filePath, comparisonRef);
+        await backend.revertLocalFile(selectedEnvironmentId, filePath, comparisonRef);
       } else if (containerId) {
-        await backend.revertContainerFile(containerId, filePath, comparisonRef);
+        await backend.revertContainerFile(selectedEnvironmentId, filePath, comparisonRef);
       }
       await refreshAllFilesData();
       toast.success("File reverted", { description: filePath });
@@ -198,19 +227,19 @@ export function useFilesPanel() {
     } finally {
       setFileActionPending(null);
     }
-  }, [isAvailable, isLocalEnvironment, worktreePath, containerId, comparisonRef, refreshAllFilesData]);
+  }, [isAvailable, selectedEnvironmentId, isLocalEnvironment, worktreePath, containerId, comparisonRef, refreshAllFilesData]);
 
   const deleteFile = useCallback(async (filePath: string) => {
-    if (!isAvailable) {
+    if (!isAvailable || !selectedEnvironmentId) {
       throw new Error("The selected environment is not available");
     }
 
     setFileActionPending(filePath);
     try {
       if (isLocalEnvironment && worktreePath) {
-        await backend.deleteLocalFile(worktreePath, filePath);
+        await backend.deleteLocalFile(selectedEnvironmentId, filePath);
       } else if (containerId) {
-        await backend.deleteContainerFile(containerId, filePath);
+        await backend.deleteContainerFile(selectedEnvironmentId, filePath);
       }
       await refreshAllFilesData();
       toast.success("File deleted", { description: filePath });
@@ -221,7 +250,7 @@ export function useFilesPanel() {
     } finally {
       setFileActionPending(null);
     }
-  }, [isAvailable, isLocalEnvironment, worktreePath, containerId, refreshAllFilesData]);
+  }, [isAvailable, selectedEnvironmentId, isLocalEnvironment, worktreePath, containerId, refreshAllFilesData]);
 
   // Load data when panel opens, tab changes, or environment changes
   useEffect(() => {
@@ -261,6 +290,7 @@ export function useFilesPanel() {
     containerId,
     worktreePath,
     isLocalEnvironment,
+    environmentId: selectedEnvironmentId,
     revertFile,
     deleteFile,
     fileActionPending,

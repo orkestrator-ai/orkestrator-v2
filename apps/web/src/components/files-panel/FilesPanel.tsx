@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FilesPanelHeader } from "./FilesPanelHeader";
 import { ChangesView } from "./ChangesView";
 import { AllFilesView } from "./AllFilesView";
@@ -13,10 +13,22 @@ export function FilesPanel() {
   const [pendingAction, setPendingAction] = useState<PendingFileAction | null>(null);
 
   // Initialize the files panel data loading
-  const { refresh, revertFile, deleteFile, fileActionPending } = useFilesPanel();
+  const { refresh, revertFile, deleteFile, fileActionPending, environmentId } = useFilesPanel();
+
+  useEffect(() => {
+    setPendingAction(null);
+  }, [environmentId]);
+
+  const requestFileAction = (kind: PendingFileAction["kind"], path: string) => {
+    if (!environmentId) return;
+    setPendingAction({ environmentId, kind, path });
+  };
 
   const confirmFileAction = async () => {
-    if (!pendingAction) return;
+    if (!pendingAction || pendingAction.environmentId !== environmentId) {
+      setPendingAction(null);
+      return;
+    }
     try {
       if (pendingAction.kind === "revert") {
         await revertFile(pendingAction.path);
@@ -35,13 +47,13 @@ export function FilesPanel() {
       <ScrollArea className="min-h-0 flex-1">
         {activeTab === "changes" ? (
           <ChangesView
-            onRevert={(path) => setPendingAction({ kind: "revert", path })}
-            onDelete={(path) => setPendingAction({ kind: "delete", path })}
+            onRevert={(path) => requestFileAction("revert", path)}
+            onDelete={(path) => requestFileAction("delete", path)}
           />
         ) : (
           <AllFilesView
-            onRevert={(path) => setPendingAction({ kind: "revert", path })}
-            onDelete={(path) => setPendingAction({ kind: "delete", path })}
+            onRevert={(path) => requestFileAction("revert", path)}
+            onDelete={(path) => requestFileAction("delete", path)}
           />
         )}
       </ScrollArea>

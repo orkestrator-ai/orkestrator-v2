@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/alert-dialog";
 
 export interface PendingFileAction {
+  environmentId: string;
   kind: "revert" | "delete";
   path: string;
 }

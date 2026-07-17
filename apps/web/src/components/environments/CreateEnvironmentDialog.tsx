@@ -79,10 +79,20 @@ export function resolveAgentDefaults(
 
 const UNSELECTED_CARD_CLASSES = "border-transparent bg-zinc-900 hover:border-zinc-600";
 const MOBILE_TAB_TRIGGER_CLASSES = "h-11 min-w-0 flex-1 flex-col gap-0.5 rounded-lg px-1 py-1 text-[10px] leading-none data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none";
+const MOBILE_TAB_CONTENT_CLASSES = "create-environment-mobile-tab-panel mt-0 data-[state=inactive]:hidden";
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 const MAX_RGBA_SIZE = 32 * 1024 * 1024;
 
 type MobileSection = "prompt" | "environment" | "agent" | "access" | "ports";
+type MobileTabTransitionDirection = "forward" | "backward";
+
+const MOBILE_SECTION_ORDER: MobileSection[] = [
+  "prompt",
+  "environment",
+  "agent",
+  "access",
+  "ports",
+];
 
 function generateImageFilename(): string {
   const timestamp = new Date()
@@ -153,6 +163,8 @@ export function CreateEnvironmentDialog({
   const [portMappings, setPortMappings] = useState<PortMapping[]>(defaultPortMappings);
   const [showPortConfig, setShowPortConfig] = useState(defaultPortMappings.length > 0);
   const [mobileSection, setMobileSection] = useState<MobileSection>("prompt");
+  const [mobileTabTransitionDirection, setMobileTabTransitionDirection] =
+    useState<MobileTabTransitionDirection | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
 
@@ -189,6 +201,7 @@ export function CreateEnvironmentDialog({
     setPortMappings(defaultPortMappings);
     setShowPortConfig(defaultPortMappings.length > 0);
     setMobileSection("prompt");
+    setMobileTabTransitionDirection(null);
   }, [defaultPortMappings, configDefaultAgent, configClaudeMode, configOpencodeMode, configCodexMode, configEnvironmentType]);
 
   const handlePromptPaste = useCallback(async (event: ClipboardEvent) => {
@@ -261,6 +274,7 @@ export function CreateEnvironmentDialog({
   useEffect(() => {
     if (open) {
       setMobileSection("prompt");
+      setMobileTabTransitionDirection(null);
       setPortMappings(defaultPortMappings);
       setShowPortConfig(defaultPortMappings.length > 0);
       setEnvironmentType(configEnvironmentType);
@@ -273,16 +287,28 @@ export function CreateEnvironmentDialog({
     // we read the current value at dialog-open time, not re-sync when defaults change mid-dialog
   }, [open]);
 
+  const selectMobileSection = useCallback(
+    (nextSection: MobileSection) => {
+      if (nextSection === mobileSection) return;
+
+      const currentIndex = MOBILE_SECTION_ORDER.indexOf(mobileSection);
+      const nextIndex = MOBILE_SECTION_ORDER.indexOf(nextSection);
+      setMobileTabTransitionDirection(nextIndex > currentIndex ? "forward" : "backward");
+      setMobileSection(nextSection);
+    },
+    [mobileSection],
+  );
+
   useEffect(() => {
     if (!launchAgent && mobileSection === "prompt") {
-      setMobileSection("agent");
+      selectMobileSection("agent");
     } else if (
       environmentType === "local" &&
       (mobileSection === "access" || mobileSection === "ports")
     ) {
-      setMobileSection("environment");
+      selectMobileSection("environment");
     }
-  }, [environmentType, launchAgent, mobileSection]);
+  }, [environmentType, launchAgent, mobileSection, selectMobileSection]);
 
   const addPortMapping = useCallback(() => {
     setPortMappings((prev) => [
@@ -408,10 +434,10 @@ export function CreateEnvironmentDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <form ref={formRef} onSubmit={handleSubmit} className="min-h-0 flex-1 overflow-y-auto pr-1">
+        <form ref={formRef} onSubmit={handleSubmit} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto pr-1">
           <Tabs
             value={mobileSection}
-            onValueChange={(value) => setMobileSection(value as MobileSection)}
+            onValueChange={(value) => selectMobileSection(value as MobileSection)}
             className="min-h-0 gap-4 sm:grid sm:grid-cols-2 sm:items-start"
           >
             <TabsList
@@ -463,7 +489,8 @@ export function CreateEnvironmentDialog({
             <TabsContent
               value="environment"
               forceMount
-              className="mt-0 space-y-4 data-[state=inactive]:hidden sm:!contents"
+              data-mobile-transition={mobileTabTransitionDirection ?? undefined}
+              className={cn(MOBILE_TAB_CONTENT_CLASSES, "space-y-4 sm:!contents")}
             >
           {/* Environment Type Selector */}
           <div className="space-y-2 sm:col-span-2">
@@ -536,7 +563,8 @@ export function CreateEnvironmentDialog({
               <TabsContent
                 value="access"
                 forceMount
-                className="mt-0 space-y-4 data-[state=inactive]:hidden sm:!contents"
+                data-mobile-transition={mobileTabTransitionDirection ?? undefined}
+                className={cn(MOBILE_TAB_CONTENT_CLASSES, "space-y-4 sm:!contents")}
               >
             {/* Network Access Mode - only for containerized environments */}
               <div className="space-y-2">
@@ -590,7 +618,8 @@ export function CreateEnvironmentDialog({
             <TabsContent
               value="agent"
               forceMount
-              className="mt-0 space-y-4 data-[state=inactive]:hidden sm:!contents"
+              data-mobile-transition={mobileTabTransitionDirection ?? undefined}
+              className={cn(MOBILE_TAB_CONTENT_CLASSES, "space-y-4 sm:!contents")}
             >
           {/* Startup + mode row */}
           <div className="space-y-2">
@@ -762,7 +791,8 @@ export function CreateEnvironmentDialog({
           <TabsContent
             value="ports"
             forceMount
-            className="mt-0 data-[state=inactive]:hidden sm:col-span-2 sm:!block"
+            data-mobile-transition={mobileTabTransitionDirection ?? undefined}
+            className={cn(MOBILE_TAB_CONTENT_CLASSES, "sm:col-span-2 sm:!block")}
           >
           <Collapsible open={showPortConfig} onOpenChange={setShowPortConfig}>
             <CollapsibleTrigger asChild>
@@ -883,7 +913,8 @@ export function CreateEnvironmentDialog({
           <TabsContent
             value="prompt"
             forceMount
-            className="mt-0 data-[state=inactive]:hidden sm:col-span-2 sm:!block"
+            data-mobile-transition={mobileTabTransitionDirection ?? undefined}
+            className={cn(MOBILE_TAB_CONTENT_CLASSES, "sm:col-span-2 sm:!block")}
           >
           {/* Initial Prompt */}
           {launchAgent && (

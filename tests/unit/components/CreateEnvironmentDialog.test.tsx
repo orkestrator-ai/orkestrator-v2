@@ -181,6 +181,29 @@ describe("resolveAgentDefaults", () => {
     expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe("Keep this task");
   });
 
+  test("sets the mobile tab animation direction from section order", () => {
+    render(
+      <CreateEnvironmentDialog
+        open={true}
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />
+    );
+
+    const promptTab = screen.getByRole("tab", { name: "Prompt" });
+    const setupTab = screen.getByRole("tab", { name: "Setup" });
+    const promptPanel = screen.getByLabelText(/Initial Prompt/i).closest('[role="tabpanel"]');
+    const setupPanel = screen.getByLabelText(/Environment Name/i).closest('[role="tabpanel"]');
+
+    expect(promptPanel?.getAttribute("data-mobile-transition")).toBeNull();
+
+    fireEvent.mouseDown(setupTab, { button: 0, ctrlKey: false });
+    expect(setupPanel?.getAttribute("data-mobile-transition")).toBe("forward");
+
+    fireEvent.mouseDown(promptTab, { button: 0, ctrlKey: false });
+    expect(promptPanel?.getAttribute("data-mobile-transition")).toBe("backward");
+  });
+
   test("hides container-only mobile tabs when local setup is selected", () => {
     render(
       <CreateEnvironmentDialog

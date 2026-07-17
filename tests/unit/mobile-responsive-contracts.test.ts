@@ -20,6 +20,7 @@ describe("mobile responsive layout contracts", () => {
       "grid-cols-1 gap-2 sm:grid-cols-2",
       'aria-label="Environment configuration sections"',
       "data-[state=inactive]:hidden",
+      "create-environment-mobile-tab-panel",
       "sm:!contents",
     ],
     ["apps/web/src/components/environments/EnvironmentSettingsDialog.tsx", "grid-cols-2 gap-2 sm:grid-cols-4"],
@@ -41,5 +42,7 @@ describe("mobile responsive layout contracts", () => {
     expect(css).toContain("font-size: 16px");
     expect(css).toContain("max-width: calc(100vw - 1rem)");
     expect(css).toContain("min-height: 2.75rem");
+    expect(css).toContain("create-environment-tab-enter-forward");
+    expect(css).toContain("prefers-reduced-motion: no-preference");
   });
 });

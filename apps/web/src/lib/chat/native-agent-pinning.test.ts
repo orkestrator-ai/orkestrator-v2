@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { NativeMessage } from "./native-message-types";
+import { normalizeOpenCodeNativeMessage } from "./native-message-adapters";
 import { pinActiveNativeAgentParts } from "./native-agent-pinning";
 
 function assistantMessage(
@@ -146,7 +147,7 @@ describe("pinActiveNativeAgentParts", () => {
     expect(pinned[1]?.parts[0]?.type).toBe("task-group");
   });
 
-  test("omits an empty source message when only active agents remain", () => {
+  test("leaves failed agents in their source message as terminal activity", () => {
     const messages: NativeMessage[] = [
       assistantMessage("assistant-1", [
         {
@@ -161,8 +162,78 @@ describe("pinActiveNativeAgentParts", () => {
     const pinned = pinActiveNativeAgentParts(messages);
 
     expect(pinned).toHaveLength(1);
-    expect(pinned[0]?.id).toBe("assistant-1:active-agent:agent-1");
+    expect(pinned[0]?.id).toBe("assistant-1");
     expect(pinned[0]?.parts[0]?.type).toBe("subagent");
+  });
+
+  test("extracts active children from normalized agent groups and retains terminal children", () => {
+    const normalized = normalizeOpenCodeNativeMessage(
+      assistantMessage("assistant-1", [
+        {
+          type: "subagent",
+          content: "active",
+          subagentId: "agent-active",
+          toolState: "pending",
+        },
+        {
+          type: "subagent",
+          content: "complete",
+          subagentId: "agent-complete",
+          toolState: "success",
+        },
+        {
+          type: "task-group",
+          content: "failed task",
+          task: {
+            type: "tool-invocation",
+            content: "failed task",
+            toolUseId: "task-failed",
+            toolState: "failure",
+          },
+          childTools: [],
+        },
+      ]),
+    );
+
+    expect(normalized.parts[0]?.type).toBe("agent-group");
+    const pinned = pinActiveNativeAgentParts([normalized]);
+
+    expect(pinned.map((message) => message.id)).toEqual([
+      "assistant-1",
+      "assistant-1:active-agent:agent-active",
+    ]);
+    expect(pinned[0]?.parts[0]?.type).toBe("agent-group");
+    if (pinned[0]?.parts[0]?.type === "agent-group") {
+      expect(pinned[0].parts[0].parts.map((part) => part.type)).toEqual([
+        "subagent",
+        "task-group",
+      ]);
+    }
+  });
+
+  test("pins every adjacent active agent after normalization", () => {
+    const normalized = normalizeOpenCodeNativeMessage(
+      assistantMessage("assistant-1", [
+        {
+          type: "subagent",
+          content: "first",
+          subagentId: "agent-1",
+          toolState: "pending",
+        },
+        {
+          type: "subagent",
+          content: "second",
+          subagentId: "agent-2",
+        },
+      ]),
+    );
+
+    const pinned = pinActiveNativeAgentParts([normalized]);
+
+    expect(pinned.map((message) => message.id)).toEqual([
+      "assistant-1:active-agent:agent-1",
+      "assistant-1:active-agent:agent-2",
+    ]);
   });
 
   test("generates unique fallback row ids for multiple active agents without stable ids", () => {

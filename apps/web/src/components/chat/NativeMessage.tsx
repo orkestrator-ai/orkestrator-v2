@@ -1,6 +1,8 @@
 import {
+  createContext,
   memo,
   useCallback,
+  useContext,
   useState,
   useMemo,
   useEffect,
@@ -46,6 +48,7 @@ import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { MessageCopyButton } from "@/components/chat/MessageCopyButton";
 import { formatElapsed } from "@/lib/format-elapsed";
 import {
+  type NativeAgentActivityPart,
   type NativeMessage as NativeMessageType,
   type NativeAgentGroupPart,
   type NativeMessagePart,
@@ -97,6 +100,48 @@ interface NativeMessageProps {
   previousMessage?: NativeMessageType | null;
   assistantLabel?: string;
   containerId?: string;
+}
+
+interface AgentExpansionContextValue {
+  expandedKeys: ReadonlySet<string>;
+  setExpanded: (key: string, expanded: boolean) => void;
+}
+
+const AgentExpansionContext = createContext<AgentExpansionContextValue | null>(null);
+
+function getAgentExpansionKey(part: NativeAgentActivityPart): string {
+  if (part.type === "task-group") {
+    return `task:${
+      part.task.toolUseId ??
+      part.task.subagentId ??
+      part.task.toolName ??
+      part.content ??
+      "agent"
+    }`;
+  }
+
+  return `subagent:${
+    part.subagentId ??
+    part.toolUseId ??
+    part.subagentName ??
+    part.content ??
+    "agent"
+  }`;
+}
+
+function useAgentExpansion(part: NativeAgentActivityPart) {
+  const expansionContext = useContext(AgentExpansionContext);
+  const [localIsOpen, setLocalIsOpen] = useState(false);
+  const expansionKey = getAgentExpansionKey(part);
+
+  if (!expansionContext) {
+    return [localIsOpen, setLocalIsOpen] as const;
+  }
+
+  return [
+    expansionContext.expandedKeys.has(expansionKey),
+    (expanded: boolean) => expansionContext.setExpanded(expansionKey, expanded),
+  ] as const;
 }
 
 /** Render a thinking/reasoning part inline */
@@ -954,12 +999,18 @@ function getSubagentStatusClasses(state: NativeMessagePart["toolState"]): string
   }
 }
 
+function isTerminalAgentState(state: NativeMessagePart["toolState"]): boolean {
+  return state === "success" || state === "failure";
+}
+
 function getSubagentPreview(part: NativeMessagePart): string {
   const actions = part.subagentActions ?? [];
   const latestAction = actions.at(-1);
 
   if (!latestAction) {
-    return part.toolState === "pending" ? "Waiting for activity." : "No activity captured.";
+    return isTerminalAgentState(part.toolState)
+      ? "No activity captured."
+      : "Waiting for activity.";
   }
 
   if (latestAction.type === "text") {
@@ -1005,8 +1056,14 @@ function shouldShowTokenOnlyAgentUsage(part: NativeMessagePart): boolean {
   return part.agentUsageDisplay === "token-only" && Boolean(part.tokenCountText);
 }
 
-function SubagentPart({ part }: { part: NativeMessagePart }) {
-  const [isOpen, setIsOpen] = useState(false);
+function SubagentPart({
+  part,
+  containerId,
+}: {
+  part: Extract<NativeMessagePart, { type: "subagent" }>;
+  containerId?: string;
+}) {
+  const [isOpen, setIsOpen] = useAgentExpansion(part);
   const subagentActions = part.subagentActions ?? [];
   const hasExternalUsage = typeof part.toolUseCount === "number";
   const tokenOnlyUsage = shouldShowTokenOnlyAgentUsage(part);
@@ -1090,6 +1147,7 @@ function SubagentPart({ part }: { part: NativeMessagePart }) {
               <MessagePart
                 key={`${part.subagentId || part.content}-subagent-part-${index}-${childPart.type}`}
                 part={childPart}
+                containerId={containerId}
               />
             ))}
             {subagentActions.length === 0 ? (
@@ -1113,7 +1171,7 @@ function AgentGroupPart({
 }) {
   const runningCount = part.parts.filter((child) => {
     const state = child.type === "task-group" ? child.task.toolState : child.toolState;
-    return state !== "success" && state !== "failure";
+    return !isTerminalAgentState(state);
   }).length;
 
   return (
@@ -1173,7 +1231,7 @@ function TaskGroupPart({
   part: NativeTaskGroupPart;
   containerId?: string;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useAgentExpansion(part);
   const toolLabel =
     getToolTitleDisplayName(
       part.task.toolTitle,
@@ -1211,9 +1269,9 @@ function TaskGroupPart({
     const latestChild = part.childTools.at(-1);
     if (!latestChild) {
       return description ?? (
-        part.task.toolState === "pending"
-          ? "Waiting for activity."
-          : "No activity captured."
+        isTerminalAgentState(part.task.toolState)
+          ? "No activity captured."
+          : "Waiting for activity."
       );
     }
 
@@ -1388,7 +1446,7 @@ function MessagePart({
     case "file":
       return <FilePart path={part.content} fileUrl={part.fileUrl} containerId={containerId} />;
     case "subagent":
-      return <SubagentPart part={part} />;
+      return <SubagentPart part={part} containerId={containerId} />;
     case "agent-group":
       return <AgentGroupPart part={part} containerId={containerId} />;
     case "tool-group":
@@ -1413,6 +1471,25 @@ export const NativeMessage = memo(function NativeMessage({
   );
   message = normalizedMessage;
   previousMessage = normalizedPreviousMessage;
+
+  const [expandedAgentKeys, setExpandedAgentKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const setAgentExpanded = useCallback((key: string, expanded: boolean) => {
+    setExpandedAgentKeys((current) => {
+      const next = new Set(current);
+      if (expanded) {
+        next.add(key);
+      } else {
+        next.delete(key);
+      }
+      return next;
+    });
+  }, []);
+  const agentExpansionValue = useMemo<AgentExpansionContextValue>(
+    () => ({ expandedKeys: expandedAgentKeys, setExpanded: setAgentExpanded }),
+    [expandedAgentKeys, setAgentExpanded],
+  );
 
   const isUser = message.role === "user";
   const isError = message.id.startsWith(ERROR_MESSAGE_PREFIX);
@@ -1476,32 +1553,34 @@ export const NativeMessage = memo(function NativeMessage({
   }
 
   return (
-    <MessageShell
-      isUser={isUser}
-      authorLabel={isUser ? "You" : assistantLabel}
-      timestampLabel={formatTime(message.createdAt)}
-      durationLabel={durationLabel}
-      showHeader={!isContinuation}
-      className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
-      actions={
-        (isUser ? userCopyContent : assistantCopyContent) ? (
-          <MessageCopyButton
-            content={isUser ? userCopyContent : assistantCopyContent}
-            wrapperClassName="mt-0 pr-0"
-          />
-        ) : undefined
-      }
-    >
-      {renderMessageParts(message, { showTextCopy: false, containerId })}
+    <AgentExpansionContext.Provider value={agentExpansionValue}>
+      <MessageShell
+        isUser={isUser}
+        authorLabel={isUser ? "You" : assistantLabel}
+        timestampLabel={formatTime(message.createdAt)}
+        durationLabel={durationLabel}
+        showHeader={!isContinuation}
+        className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
+        actions={
+          (isUser ? userCopyContent : assistantCopyContent) ? (
+            <MessageCopyButton
+              content={isUser ? userCopyContent : assistantCopyContent}
+              wrapperClassName="mt-0 pr-0"
+            />
+          ) : undefined
+        }
+      >
+        {renderMessageParts(message, { showTextCopy: false, containerId })}
 
-      {!hasTextParts && message.content && (
-        <TextPart
-          content={message.content}
-          showCopy={false}
-          truncateUserPrompt={isUser}
-        />
-      )}
-    </MessageShell>
+        {!hasTextParts && message.content && (
+          <TextPart
+            content={message.content}
+            showCopy={false}
+            truncateUserPrompt={isUser}
+          />
+        )}
+      </MessageShell>
+    </AgentExpansionContext.Provider>
   );
 });
 

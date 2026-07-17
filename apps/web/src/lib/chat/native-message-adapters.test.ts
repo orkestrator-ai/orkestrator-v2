@@ -1,10 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import type { ClaudeMessage } from "@/lib/claude-client";
+import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
 import type { NativeMessage } from "./native-message-types";
 import {
+  dedupeStreamedNativeParts,
+  groupNativeAgentActivity,
+  groupNativeToolActivity,
   normalizeClaudeMessage,
+  normalizeClaudeMessages,
+  normalizeClaudePart,
   normalizeCodexNativeMessage,
   normalizeOpenCodeNativeMessage,
+  parseNativeAttachmentsFromContent,
 } from "./native-message-adapters";
 
 describe("native message adapters", () => {
@@ -363,6 +369,182 @@ describe("native message adapters", () => {
       "subagent",
       "text",
       "subagent",
+    ]);
+  });
+
+  test("parses multiple attachment blocks and ignores malformed attachment entries", () => {
+    const parsed = parseNativeAttachmentsFromContent(
+      [
+        "Inspect these",
+        '<attached-files><attachment type="image" path="/workspace/a.png" filename="a.png" />',
+        '<attachment type="text" path="/workspace/readme.md" filename="readme.md" />',
+        '<attachment type="image" filename="missing-path.png" /></attached-files>',
+        "then compare",
+        '<attached-files><attachment path="/workspace/b.jpg" filename="b.jpg" type="image" /></attached-files>',
+      ].join("\n"),
+    );
+
+    expect(parsed.cleanContent).toBe("Inspect these\n\nthen compare");
+    expect(parsed.attachments).toEqual([
+      {
+        type: "file",
+        content: "/workspace/a.png",
+        fileUrl: "/workspace/a.png",
+      },
+      {
+        type: "file",
+        content: "/workspace/readme.md",
+        fileUrl: undefined,
+      },
+      {
+        type: "file",
+        content: "/workspace/b.jpg",
+        fileUrl: "/workspace/b.jpg",
+      },
+    ]);
+  });
+
+  test("leaves malformed attachment blocks in message text", () => {
+    const content =
+      'Keep this <attached-files><attachment type="image" path="/workspace/a.png" />';
+
+    expect(parseNativeAttachmentsFromContent(content)).toEqual({
+      cleanContent: content,
+      attachments: [],
+    });
+  });
+
+  test("normalizes every supported Claude part and rejects unknown variants", () => {
+    const supported: ClaudeMessagePart[] = [
+      { type: "text", content: undefined, _messageUuid: "text-id" },
+      { type: "thinking", content: "Reason", _messageUuid: "thinking-id" },
+      { type: "file", content: "/workspace/a.txt" },
+      {
+        type: "tool-invocation",
+        content: "Read",
+        toolName: "Read",
+        toolUseId: "tool-1",
+        toolState: "pending",
+      },
+      {
+        type: "tool-result",
+        content: "contents",
+        toolName: "Read",
+        toolState: "success",
+        toolOutput: "contents",
+      },
+    ];
+
+    expect(supported.map(normalizeClaudePart)).toEqual([
+      { type: "text", content: "", sourcePartId: "text-id" },
+      { type: "thinking", content: "Reason", sourcePartId: "thinking-id" },
+      { type: "file", content: "/workspace/a.txt" },
+      expect.objectContaining({
+        type: "tool-invocation",
+        toolName: "Read",
+        toolUseId: "tool-1",
+        toolState: "pending",
+      }),
+      expect.objectContaining({
+        type: "tool-result",
+        content: "contents",
+        toolOutput: "contents",
+      }),
+    ]);
+    expect(
+      normalizeClaudePart({ type: "unknown" } as unknown as ClaudeMessagePart),
+    ).toBeNull();
+  });
+
+  test("deduplicates only adjacent non-empty streamed prefixes", () => {
+    const deduped = dedupeStreamedNativeParts([
+      { type: "text", content: "Complete response" },
+      { type: "text", content: "Complete" },
+      { type: "text", content: " " },
+      { type: "text", content: " " },
+      { type: "thinking", content: "Plan" },
+      { type: "text", content: "Complete" },
+    ]);
+
+    expect(deduped).toEqual([
+      { type: "text", content: "Complete response" },
+      { type: "text", content: " " },
+      { type: "text", content: " " },
+      { type: "thinking", content: "Plan" },
+      { type: "text", content: "Complete" },
+    ]);
+  });
+
+  test("groups tools around agent boundaries and discards standalone results", () => {
+    const grouped = groupNativeToolActivity([
+      { type: "thinking", content: "Plan" },
+      { type: "tool-result", content: "hidden result" },
+      {
+        type: "subagent",
+        content: "reviewer",
+        subagentId: "agent-1",
+      },
+      { type: "tool-invocation", content: "Read", toolName: "Read" },
+    ]);
+
+    expect(grouped.map((part) => part.type)).toEqual([
+      "tool-group",
+      "subagent",
+      "tool-group",
+    ]);
+    expect(groupNativeToolActivity(grouped)).toEqual(grouped);
+  });
+
+  test("groups mixed and task-only agent runs idempotently", () => {
+    const task = {
+      type: "task-group" as const,
+      content: "Task",
+      task: {
+        type: "tool-invocation" as const,
+        content: "Task",
+        toolUseId: "task-1",
+      },
+      childTools: [],
+    };
+    const mixed = groupNativeAgentActivity([
+      task,
+      { type: "subagent", content: "reviewer", subagentId: "agent-1" },
+    ]);
+    const taskOnly = groupNativeAgentActivity([
+      task,
+      {
+        ...task,
+        task: { ...task.task, toolUseId: "task-2" },
+      },
+    ]);
+
+    expect(mixed[0]?.type).toBe("agent-group");
+    expect(taskOnly[0]?.type).toBe("agent-group");
+    expect(groupNativeAgentActivity(mixed)).toEqual(mixed);
+    expect(groupNativeAgentActivity(taskOnly)).toEqual(taskOnly);
+  });
+
+  test("normalizes arrays of Claude messages without changing their order", () => {
+    const messages: ClaudeMessage[] = [
+      {
+        id: "user-1",
+        role: "user",
+        content: "Question",
+        timestamp: "2026-06-18T12:00:00.000Z",
+        parts: [],
+      },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        content: "Answer",
+        timestamp: "2026-06-18T12:00:01.000Z",
+        parts: [{ type: "text", content: "Answer" }],
+      },
+    ];
+
+    expect(normalizeClaudeMessages(messages).map((message) => message.id)).toEqual([
+      "user-1",
+      "assistant-1",
     ]);
   });
 });

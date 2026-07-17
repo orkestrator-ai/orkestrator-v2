@@ -1,5 +1,6 @@
 import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
 import type {
+  NativeAgentActivityPart,
   NativeAgentGroupPart,
   NativeFilePart,
   NativeMessage,
@@ -72,7 +73,7 @@ function isToolActivity(part: NativeMessagePart): boolean {
   );
 }
 
-function isAgentActivity(part: NativeMessagePart): boolean {
+function isAgentActivity(part: NativeMessagePart): part is NativeAgentActivityPart {
   return part.type === "subagent" || part.type === "task-group";
 }
 
@@ -270,7 +271,7 @@ export function groupNativeToolActivity(parts: NativeMessagePart[]): NativeMessa
 
 export function groupNativeAgentActivity(parts: NativeMessagePart[]): NativeMessagePart[] {
   const rendered: NativeMessagePart[] = [];
-  let agentGroup: NativeMessagePart[] = [];
+  let agentGroup: NativeAgentActivityPart[] = [];
 
   const flushAgentGroup = () => {
     if (agentGroup.length === 1) {
@@ -289,6 +290,11 @@ export function groupNativeAgentActivity(parts: NativeMessagePart[]): NativeMess
   for (const part of parts) {
     if (isAgentActivity(part)) {
       agentGroup.push(part);
+      continue;
+    }
+
+    if (part.type === "agent-group") {
+      agentGroup.push(...part.parts);
       continue;
     }
 

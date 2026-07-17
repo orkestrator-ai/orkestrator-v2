@@ -84,6 +84,10 @@ describe("BrowserTab", () => {
       expect(environment.root.tabs[0]?.browserData?.url).toBe("http://localhost:3000/");
       expect(container.querySelector("iframe")?.getAttribute("src")).toBe("http://localhost:3000/");
     });
+
+    const iframe = container.querySelector("iframe");
+    expect(iframe?.getAttribute("sandbox")).toContain("allow-same-origin");
+    expect(iframe?.getAttribute("referrerpolicy")).toBe("no-referrer");
   });
 
   test("keeps invalid addresses in the bar and explains the constraint", () => {
@@ -128,6 +132,7 @@ describe("BrowserTab", () => {
     expect(sandbox).not.toContain("allow-same-origin");
     expect(sandbox).not.toContain("allow-popups");
     expect(sandbox).not.toContain("allow-downloads");
+    expect(iframe?.hasAttribute("referrerpolicy")).toBe(false);
   });
 
   test("moves backward and forward through browser history", () => {

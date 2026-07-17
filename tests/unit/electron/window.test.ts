@@ -160,6 +160,48 @@ describe("createMainWindow", () => {
     expect(openHandler?.()).toEqual({ action: "deny" });
   });
 
+  test("keeps preview subframes away from the privileged renderer origin", async () => {
+    const harness = createHarness();
+
+    await createMainWindow({
+      BrowserWindowCtor: harness.FakeBrowserWindow as never,
+      menu: harness.menu,
+      dirname: "/app/apps/desktop/dist/electron",
+      isDev: true,
+      appPath: "/app",
+      devServerUrl: "http://127.0.0.1:5173",
+    });
+
+    for (const eventName of ["will-frame-navigate", "will-redirect"]) {
+      const listener = harness.webContentsListeners.get(eventName);
+      expect(listener).toBeTruthy();
+
+      const previewNavigation = {
+        url: "http://localhost:3000/dashboard",
+        isMainFrame: false,
+        preventDefault: mock(() => undefined),
+      };
+      listener?.(previewNavigation);
+      expect(previewNavigation.preventDefault).not.toHaveBeenCalled();
+
+      const rendererNavigation = {
+        url: "http://127.0.0.1:5173/settings",
+        isMainFrame: false,
+        preventDefault: mock(() => undefined),
+      };
+      listener?.(rendererNavigation);
+      expect(rendererNavigation.preventDefault).toHaveBeenCalledTimes(1);
+
+      const rendererMainFrameNavigation = {
+        url: "http://127.0.0.1:5173/settings",
+        isMainFrame: true,
+        preventDefault: mock(() => undefined),
+      };
+      listener?.(rendererMainFrameNavigation);
+      expect(rendererMainFrameNavigation.preventDefault).not.toHaveBeenCalled();
+    }
+  });
+
   test("allows only the configured development origin", async () => {
     const harness = createHarness();
 

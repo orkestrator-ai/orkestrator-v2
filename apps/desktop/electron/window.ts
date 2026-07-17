@@ -69,6 +69,21 @@ export async function createMainWindow(options: CreateMainWindowOptions): Promis
       event.preventDefault();
     }
   });
+  const preventPreviewNavigationToRenderer = (event: {
+    url: string;
+    isMainFrame: boolean;
+    preventDefault(): void;
+  }) => {
+    // Direct browser previews preserve their loopback origin so development
+    // apps behave like they do in a standalone browser. Never let a subframe
+    // navigate onto the renderer itself, where it would become same-origin
+    // with the parent and gain access to the app's privileged bridge.
+    if (!event.isMainFrame && isTrustedRendererUrl(event.url, trustedRendererUrl)) {
+      event.preventDefault();
+    }
+  };
+  mainWindow.webContents.on("will-frame-navigate", preventPreviewNavigationToRenderer);
+  mainWindow.webContents.on("will-redirect", preventPreviewNavigationToRenderer);
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
 
   if (options.isDev) {

@@ -14,6 +14,8 @@ interface BrowserTabProps {
   refreshRequestId?: number;
 }
 
+const OPAQUE_PREVIEW_SANDBOX = "allow-forms allow-pointer-lock allow-presentation allow-scripts";
+
 export function BrowserTab({
   tabId,
   environmentId,
@@ -62,6 +64,16 @@ export function BrowserTab({
       return null;
     }
   }, [currentUrl]);
+  // Direct loopback previews need their real origin for normal browser behavior
+  // (module loading, CORS, cookies, storage, and workers). Gateway previews are
+  // served from the renderer's origin, so those must remain opaque to prevent a
+  // preview from reaching the parent app or its authenticated gateway routes.
+  // They also retain the referrer because gateway routing uses it to recover
+  // runtime-built root-relative requests that cannot be statically rewritten.
+  const isDirectPreview = resolved !== null && resolved.iframeUrl === resolved.displayUrl;
+  const previewSandbox = isDirectPreview
+    ? `${OPAQUE_PREVIEW_SANDBOX} allow-same-origin`
+    : OPAQUE_PREVIEW_SANDBOX;
   const navigate = useCallback((nextAddress: string, recordHistory = true) => {
     let next;
     try {
@@ -189,7 +201,8 @@ export function BrowserTab({
             data-load-revision={loadRevision}
             title="Backend browser preview"
             className="absolute inset-0 h-full w-full border-0 bg-white"
-            sandbox="allow-forms allow-pointer-lock allow-presentation allow-scripts"
+            sandbox={previewSandbox}
+            referrerPolicy={isDirectPreview ? "no-referrer" : undefined}
             onLoad={() => setIsLoading(false)}
           />
         ) : (

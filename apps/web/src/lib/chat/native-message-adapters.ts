@@ -1,5 +1,6 @@
 import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
 import type {
+  NativeAgentGroupPart,
   NativeFilePart,
   NativeMessage,
   NativeMessagePart,
@@ -267,10 +268,43 @@ export function groupNativeToolActivity(parts: NativeMessagePart[]): NativeMessa
   return rendered;
 }
 
+export function groupNativeAgentActivity(parts: NativeMessagePart[]): NativeMessagePart[] {
+  const rendered: NativeMessagePart[] = [];
+  let agentGroup: NativeMessagePart[] = [];
+
+  const flushAgentGroup = () => {
+    if (agentGroup.length === 1) {
+      rendered.push(agentGroup[0]!);
+    } else if (agentGroup.length > 1) {
+      const group: NativeAgentGroupPart = {
+        type: "agent-group",
+        content: "",
+        parts: agentGroup,
+      };
+      rendered.push(group);
+    }
+    agentGroup = [];
+  };
+
+  for (const part of parts) {
+    if (isAgentActivity(part)) {
+      agentGroup.push(part);
+      continue;
+    }
+
+    flushAgentGroup();
+    rendered.push(part);
+  }
+
+  flushAgentGroup();
+  return rendered;
+}
+
 export function normalizeNativeMessage(message: NativeMessage): NativeMessage {
+  const dedupedParts = dedupeStreamedNativeParts(message.parts);
   return {
     ...message,
-    parts: groupNativeToolActivity(dedupeStreamedNativeParts(message.parts)),
+    parts: groupNativeAgentActivity(groupNativeToolActivity(dedupedParts)),
   };
 }
 
@@ -304,7 +338,9 @@ export function normalizeClaudeMessage(message: ClaudeMessage): NativeMessage {
     id: message.id,
     role: message.role,
     content: cleanContent,
-    parts: groupNativeToolActivity(dedupeStreamedNativeParts(taskGroupedParts)),
+    parts: groupNativeAgentActivity(
+      groupNativeToolActivity(dedupeStreamedNativeParts(taskGroupedParts)),
+    ),
     createdAt: message.timestamp,
   };
 }

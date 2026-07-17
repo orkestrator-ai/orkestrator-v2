@@ -311,4 +311,58 @@ describe("native message adapters", () => {
       expect(normalized.parts[1].parts.map((part) => part.toolName)).toEqual(["Read"]);
     }
   });
+
+  test("collects adjacent agents into one inline agent block", () => {
+    const message: NativeMessage = {
+      id: "codex-agents",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-06-18T12:04:00.000Z",
+      parts: [
+        { type: "text", content: "Delegating" },
+        { type: "subagent", content: "reviewer", subagentId: "agent-1" },
+        { type: "subagent", content: "tester", subagentId: "agent-2" },
+        { type: "subagent", content: "researcher", subagentId: "agent-3" },
+        { type: "text", content: "Parent continued" },
+      ],
+    };
+
+    const normalized = normalizeCodexNativeMessage(message);
+
+    expect(normalized.parts.map((part) => part.type)).toEqual([
+      "text",
+      "agent-group",
+      "text",
+    ]);
+    expect(normalized.parts[1]?.type).toBe("agent-group");
+    if (normalized.parts[1]?.type === "agent-group") {
+      expect(normalized.parts[1].parts.map((part) => part.subagentId)).toEqual([
+        "agent-1",
+        "agent-2",
+        "agent-3",
+      ]);
+    }
+  });
+
+  test("does not group agents separated by parent activity", () => {
+    const message: NativeMessage = {
+      id: "codex-separated-agents",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-06-18T12:05:00.000Z",
+      parts: [
+        { type: "subagent", content: "reviewer", subagentId: "agent-1" },
+        { type: "text", content: "Parent update" },
+        { type: "subagent", content: "tester", subagentId: "agent-2" },
+      ],
+    };
+
+    const normalized = normalizeCodexNativeMessage(message);
+
+    expect(normalized.parts.map((part) => part.type)).toEqual([
+      "subagent",
+      "text",
+      "subagent",
+    ]);
+  });
 });

@@ -848,7 +848,7 @@ describe("CodexChatTab", () => {
     expect(mockScrollToBottom).toHaveBeenCalledTimes(1);
   });
 
-  test("pins active subagents to the rendered bottom and releases them on success", async () => {
+  test("keeps active subagents inline at their transcript position", async () => {
     const activeMessage: TestCodexMessage = {
       id: "assistant-agent",
       role: "assistant",
@@ -882,7 +882,11 @@ describe("CodexChatTab", () => {
     expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
       "assistant-agent",
       "assistant-later",
-      "assistant-agent:active-agent:agent-1",
+    ]);
+    expect(lastVirtualizedMessages[0]?.parts.map((part: any) => part.type)).toEqual([
+      "text",
+      "subagent",
+      "text",
     ]);
 
     const completedMessage: TestCodexMessage = {

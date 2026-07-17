@@ -45,7 +45,6 @@ import {
 import { SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
-import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { CodexComposeBar } from "./CodexComposeBar";
 import { CodexPlanModeCard } from "./CodexPlanModeCard";
 import { CodexResumeSessionDialog } from "./CodexResumeSessionDialog";
@@ -231,7 +230,7 @@ export function CodexChatTab({
     [session?.messages],
   );
   const displayMessages = useMemo(
-    () => pinActiveNativeAgentParts(sessionMessages.map(normalizeCodexNativeMessage)),
+    () => sessionMessages.map(normalizeCodexNativeMessage),
     [sessionMessages],
   );
   const hasMessageHistory = sessionMessages.length > 0;

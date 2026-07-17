@@ -224,7 +224,7 @@ describe("codex bridge abort handling", () => {
       error: "previous error",
       abortController,
       currentTurnId: "turn-1",
-      currentTurnStartedAt: "2026-04-15T10:00:00.000Z",
+      currentAssistantTurnStartedAt: "2026-04-15T10:00:00.000Z",
       pendingAttachments: [{ type: "image", path: "/tmp/screenshot.png" }],
     });
     __testing.sessions.set(session.id, session);
@@ -1301,6 +1301,39 @@ describe("codex bridge abort handling", () => {
         id: "assistant-running",
         content: "Latest streamed text",
         parts: [{ type: "text", content: "Latest streamed text" }],
+      }],
+    });
+  });
+
+  test("messages route reconciles the last assistant message after the turn becomes idle", async () => {
+    const assistantMessage = {
+      id: "assistant-idle",
+      role: "assistant",
+      content: "",
+      parts: [],
+      createdAt: "2026-04-15T10:00:00.000Z",
+    };
+    const session = createSession({
+      id: "idle-messages",
+      status: "idle",
+      currentAssistantMessageId: assistantMessage.id,
+      currentTurnStartedAt: "2026-04-15T10:00:00.000Z",
+      currentItems: new Map([
+        ["answer", { id: "answer", type: "agent_message", text: "Final response" }],
+      ]),
+      currentItemOrder: ["answer"],
+      messages: [assistantMessage],
+    });
+    __testing.sessions.set(session.id, session);
+
+    const response = await app.request("/session/idle-messages/messages");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      messages: [{
+        id: "assistant-idle",
+        content: "Final response",
+        parts: [{ type: "text", content: "Final response" }],
       }],
     });
   });

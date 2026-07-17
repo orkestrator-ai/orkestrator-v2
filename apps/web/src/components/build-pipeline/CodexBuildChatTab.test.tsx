@@ -546,7 +546,7 @@ describe("CodexBuildChatTab", () => {
     resolveAbort?.(true);
   });
 
-  test("pins active Codex build subagents to the rendered bottom and releases them on success", async () => {
+  test("keeps active Codex build subagents inline at their transcript position", async () => {
     seedPipeline("building", "running");
     seedCodexStore(false);
 
@@ -596,7 +596,11 @@ describe("CodexBuildChatTab", () => {
       ).toEqual([
         "assistant-agent",
         "assistant-later",
-        "assistant-agent:active-agent:agent-1",
+      ]);
+      expect(lastVirtualizedRows.find((row) => row.kind === "message")?.message.parts.map((part: any) => part.type)).toEqual([
+        "text",
+        "subagent",
+        "text",
       ]);
     });
 

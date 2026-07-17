@@ -449,6 +449,33 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.queryByText("0 updates")).toBeNull();
   });
 
+  test("renders adjacent agents inside a compact shared block", () => {
+    const message = makeMessage([
+      {
+        type: "subagent",
+        content: "Reviewer",
+        subagentName: "Reviewer",
+        toolState: "pending",
+        subagentActions: [],
+      },
+      {
+        type: "subagent",
+        content: "Tester",
+        subagentName: "Tester",
+        toolState: "success",
+        subagentActions: [],
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
+    expect(screen.getByText("Agents")).toBeTruthy();
+    expect(screen.getByText("1 running")).toBeTruthy();
+    expect(screen.getByText("Reviewer")).toBeTruthy();
+    expect(screen.getByText("Tester")).toBeTruthy();
+  });
+
   test("can render Claude tmux agent usage as tokens only", () => {
     const message = makeMessage([
       {

@@ -47,6 +47,7 @@ import { MessageCopyButton } from "@/components/chat/MessageCopyButton";
 import { formatElapsed } from "@/lib/format-elapsed";
 import {
   type NativeMessage as NativeMessageType,
+  type NativeAgentGroupPart,
   type NativeMessagePart,
   type NativeTaskGroupPart,
   type NativeToolGroupPart,
@@ -1103,6 +1104,48 @@ function SubagentPart({ part }: { part: NativeMessagePart }) {
   );
 }
 
+function AgentGroupPart({
+  part,
+  containerId,
+}: {
+  part: NativeAgentGroupPart;
+  containerId?: string;
+}) {
+  const runningCount = part.parts.filter((child) => {
+    const state = child.type === "task-group" ? child.task.toolState : child.toolState;
+    return state !== "success" && state !== "failure";
+  }).length;
+
+  return (
+    <section
+      aria-label={`${part.parts.length} agents`}
+      className="relative my-1 border-l border-primary/30 pl-2"
+    >
+      <div className="flex h-6 items-center gap-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">
+        <Layers className="h-3 w-3" />
+        <span>Agents</span>
+        <span className="font-normal tabular-nums text-muted-foreground/50">
+          {part.parts.length}
+        </span>
+        {runningCount > 0 ? (
+          <span className="ml-auto font-medium normal-case tracking-normal text-amber-600 dark:text-amber-300">
+            {runningCount} running
+          </span>
+        ) : null}
+      </div>
+      <div className="divide-y divide-border/30 rounded-r-md bg-muted/[0.08]">
+        {part.parts.map((child, index) => (
+          <MessagePart
+            key={`agent-group-part-${index}-${child.type}`}
+            part={child}
+            containerId={containerId}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function ToolGroupPart({
   part,
   containerId,
@@ -1346,6 +1389,8 @@ function MessagePart({
       return <FilePart path={part.content} fileUrl={part.fileUrl} containerId={containerId} />;
     case "subagent":
       return <SubagentPart part={part} />;
+    case "agent-group":
+      return <AgentGroupPart part={part} containerId={containerId} />;
     case "tool-group":
       return <ToolGroupPart part={part} containerId={containerId} />;
     case "task-group":

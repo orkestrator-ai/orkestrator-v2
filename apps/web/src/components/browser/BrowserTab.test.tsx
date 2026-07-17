@@ -237,6 +237,121 @@ describe("BrowserTab", () => {
     expect(container.querySelector("iframe")?.getAttribute("src")).toBe("http://localhost:4000/");
   });
 
+  test("discards forward history when navigating after moving back", () => {
+    const { container } = render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
+    );
+    const address = screen.getByLabelText("Browser address");
+    for (const port of ["3000", "4000"]) {
+      fireEvent.change(address, { target: { value: port } });
+      fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.change(address, { target: { value: "5000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+
+    expect(container.querySelector("iframe")?.getAttribute("src")).toBe("http://localhost:5000/");
+    expect(screen.getByRole("button", { name: "Forward" }).hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(container.querySelector("iframe")?.getAttribute("src")).toBe("http://localhost:3000/");
+  });
+
+  test("preserves history and loading state when local persistence echoes back", () => {
+    const view = render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
+    );
+    const address = screen.getByLabelText("Browser address");
+    for (const port of ["3000", "4000"]) {
+      fireEvent.change(address, { target: { value: port } });
+      fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    }
+    expect(view.container.querySelector(".animate-spin")).not.toBeNull();
+
+    view.rerender(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:4000/" }}
+        isActive
+      />,
+    );
+
+    expect(view.container.querySelector(".animate-spin")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Back" }).hasAttribute("disabled")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(view.container.querySelector("iframe")?.getAttribute("src")).toBe("http://localhost:3000/");
+  });
+
+  test("clears an invalid-address error after a valid navigation", () => {
+    const { container } = render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
+    );
+    const address = screen.getByLabelText("Browser address");
+    fireEvent.change(address, { target: { value: "example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    expect(screen.getByRole("alert")).toBeDefined();
+    expect(address.getAttribute("aria-invalid")).toBe("true");
+
+    fireEvent.change(address, { target: { value: "3000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(address.getAttribute("aria-invalid")).toBe("false");
+    expect(container.querySelector("iframe")?.getAttribute("src")).toBe("http://localhost:3000/");
+  });
+
+  test("clears an invalid-address error after an external address update", () => {
+    const view = render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
+    );
+    fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    expect(screen.getByRole("alert")).toBeDefined();
+
+    view.rerender(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:4000/external" }}
+        isActive
+      />,
+    );
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByLabelText("Browser address").getAttribute("aria-invalid")).toBe("false");
+    expect(view.container.querySelector("iframe")?.getAttribute("src")).toBe(
+      "http://localhost:4000/external",
+    );
+  });
+
+  test("ignores refresh requests while the address is empty", () => {
+    const view = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "" }}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+    view.rerender(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "" }}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+
+    expect(view.container.querySelector("iframe")).toBeNull();
+    expect(view.container.querySelector(".animate-spin")).toBeNull();
+    for (const name of ["Back", "Forward", "Reload preview"]) {
+      expect(screen.getByRole("button", { name }).hasAttribute("disabled")).toBe(true);
+    }
+  });
+
   test("reloads once for each refresh request and does not double-load later navigation", async () => {
     setBrowserTab("http://localhost:3000/");
     const view = render(

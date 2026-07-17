@@ -18,6 +18,45 @@ function read(rel: string): string {
 // If any one is dropped, `dark:` overrides silently stop applying while the
 // dark @theme colors remain, reproducing the original low-contrast bug.
 describe("forced dark mode theming", () => {
+  test("index.css declares the complete shared theme contract", () => {
+    const css = read("apps/web/src/index.css");
+    const expectedTokens = {
+      "--color-background": "#000000",
+      "--color-foreground": "#e4e4e7",
+      "--color-muted": "#27272a",
+      "--color-muted-foreground": "#a1a1aa",
+      "--color-card": "#18181b",
+      "--color-card-foreground": "#e4e4e7",
+      "--color-panel-surface": "#27272a",
+      "--color-popover": "#27272a",
+      "--color-popover-foreground": "#e4e4e7",
+      "--color-border": "#3f3f46",
+      "--color-input": "#3f3f46",
+      "--color-primary": "#3b82f6",
+      "--color-primary-foreground": "#ffffff",
+      "--color-secondary": "#3f3f46",
+      "--color-secondary-foreground": "#e4e4e7",
+      "--color-accent": "#3f3f46",
+      "--color-accent-foreground": "#e4e4e7",
+      "--color-destructive": "#ef4444",
+      "--color-destructive-foreground": "#ffffff",
+      "--color-ring": "#3b82f6",
+      "--color-status-running": "#22c55e",
+      "--color-status-stopped": "#71717a",
+      "--color-status-error": "#ef4444",
+      "--color-status-creating": "#3b82f6",
+      "--sidebar-width": "280px",
+      "--sidebar-width-collapsed": "0px",
+      "--radius-lg": "0.5rem",
+      "--radius-md": "0.375rem",
+      "--radius-sm": "0.25rem",
+    };
+
+    for (const [name, value] of Object.entries(expectedTokens)) {
+      expect(css).toContain(`${name}: ${value};`);
+    }
+  });
+
   test("index.html marks the document as dark", () => {
     const html = read("apps/web/index.html");
 
@@ -50,7 +89,12 @@ describe("forced dark mode theming", () => {
   test("native scrollbars use the dark surface palette", () => {
     const css = read("apps/web/src/index.css");
 
-    expect(css).toContain("scrollbar-color: var(--color-border) var(--color-background)");
+    expect(css).toMatch(
+      /html\s*{[^}]*scrollbar-color:\s*var\(--color-border\)\s+var\(--color-background\)/s,
+    );
     expect(css).toMatch(/::-webkit-scrollbar-track\s*{[^}]*@apply\s+bg-background/s);
+    expect(css).toMatch(/::-webkit-scrollbar\s*{[^}]*width:\s*8px[^}]*height:\s*8px/s);
+    expect(css).toMatch(/::-webkit-scrollbar-thumb\s*{[^}]*@apply\s+bg-border\s+rounded-md/s);
+    expect(css).toMatch(/::-webkit-scrollbar-thumb:hover\s*{[^}]*@apply\s+bg-muted-foreground/s);
   });
 });

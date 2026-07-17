@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { mockReadImage } from "../../mocks/clipboard";
 
@@ -13,19 +13,25 @@ const mockCreateMention = mock(() => ({
   filename: "app.ts",
   relativePath: "src/app.ts",
 }));
+const mockRefreshFileTree = mock(() => {});
+const mockSearchFiles = mock(() => []);
 let mockFileMentionMenuOpen = false;
+let mockFileSearchError: string | null = null;
 
 // Snapshot modules before stubbing them so later suites that exercise the
 // real file mention flow do not inherit these isolated compose-bar stubs.
 import * as realFileMentionMenu from "@/components/chat/FileMentionMenu";
+import * as realHooks from "@/hooks";
 import * as realUseFileMentions from "@/hooks/useFileMentions";
 import * as realUseFileSearch from "@/hooks/useFileSearch";
 const realFileMentionMenuSnapshot = { ...realFileMentionMenu };
+const realHooksSnapshot = { ...realHooks };
 const realUseFileMentionsSnapshot = { ...realUseFileMentions };
 const realUseFileSearchSnapshot = { ...realUseFileSearch };
 
 afterAll(() => {
   mock.module("@/components/chat/FileMentionMenu", () => realFileMentionMenuSnapshot);
+  mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/hooks/useFileMentions", () => realUseFileMentionsSnapshot);
   mock.module("@/hooks/useFileSearch", () => realUseFileSearchSnapshot);
 });
@@ -78,12 +84,42 @@ mock.module("@/components/chat/FileMentionMenu", () => ({
   FileMentionMenu: () => null,
 }));
 
-// @/hooks/useFileSearch is NOT mocked here: the top-level mock would leak
-// into useFileSearch.test.ts via Bun's module cache. The hook is a no-op
-// when containerId and worktreePath are both undefined, which is the case
-// in these tests.
+mock.module("@/hooks/useFileSearch", () => ({
+  useFileSearch: () => ({
+    flatFiles: [],
+    searchFiles: mockSearchFiles,
+    isLoading: false,
+    error: mockFileSearchError,
+    refresh: mockRefreshFileTree,
+    isAvailable: true,
+  }),
+}));
 
 mock.module("@/hooks/useFileMentions", () => ({
+  useFileMentions: () => ({
+    isMenuOpen: mockFileMentionMenuOpen,
+    selectedIndex: 0,
+    filteredFiles: [],
+    handleCursorChange: mockHandleFileMentionCursorChange,
+    handleKeyDown: mockHandleFileMentionKeyDown,
+    closeMenu: mockCloseFileMentionMenu,
+    serializeForLLM: mockSerializeForLLM,
+    createMention: mockCreateMention,
+  }),
+}));
+
+// CodexComposeBar imports these hooks through the barrel. Snapshotting and
+// restoring the barrel keeps this suite isolated from later hook tests.
+mock.module("@/hooks", () => ({
+  ...realHooksSnapshot,
+  useFileSearch: () => ({
+    flatFiles: [],
+    searchFiles: mockSearchFiles,
+    isLoading: false,
+    error: mockFileSearchError,
+    refresh: mockRefreshFileTree,
+    isAvailable: true,
+  }),
   useFileMentions: () => ({
     isMenuOpen: mockFileMentionMenuOpen,
     selectedIndex: 0,
@@ -195,7 +231,11 @@ describe("CodexComposeBar", () => {
       filename: "app.ts",
       relativePath: "src/app.ts",
     }));
+    mockRefreshFileTree.mockReset();
+    mockSearchFiles.mockReset();
+    mockSearchFiles.mockImplementation(() => []);
     mockFileMentionMenuOpen = false;
+    mockFileSearchError = null;
     mockReadImage.mockImplementation(async () => ({
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
@@ -275,6 +315,76 @@ describe("CodexComposeBar", () => {
     expect(screen.getByText("High")).toBeTruthy();
   });
 
+  test("uses custom reasoning option labels and descriptions", async () => {
+    const models: CodexModel[] = [{
+      id: "custom-model",
+      name: "Custom model",
+      reasoningEfforts: ["low", "high"],
+      reasoningOptions: [
+        { effort: "low", label: "Quick", description: "Short analysis" },
+        { effort: "high", label: "Thorough", description: "Deep analysis" },
+      ],
+    }];
+    const { onReasoningEffortChange } = renderComposeBar({
+      models,
+      selectedModel: "custom-model",
+      selectedReasoningEffort: "low",
+    });
+
+    expect(screen.getByText("Quick")).toBeTruthy();
+    fireEvent.pointerDown(screen.getByTitle("Choose reasoning effort"));
+    expect(await screen.findByText("Short analysis")).toBeTruthy();
+    expect(screen.getByText("Deep analysis")).toBeTruthy();
+    fireEvent.click(screen.getByText("Thorough"));
+    expect(onReasoningEffortChange).toHaveBeenCalledWith("high");
+  });
+
+  test("falls back to standard medium/high reasoning when the model catalog is empty", async () => {
+    const models: CodexModel[] = [{
+      id: "empty-model",
+      name: "Empty model",
+      reasoningEfforts: [],
+      reasoningOptions: [],
+    }];
+    renderComposeBar({
+      models,
+      selectedModel: "empty-model",
+      selectedReasoningEffort: "minimal",
+    });
+
+    expect(screen.getByText("Medium")).toBeTruthy();
+    fireEvent.pointerDown(screen.getByTitle("Choose reasoning effort"));
+    expect(await screen.findByText("Balances speed and reasoning depth for everyday tasks")).toBeTruthy();
+    expect(screen.getByText("Greater reasoning depth for complex problems")).toBeTruthy();
+  });
+
+  test("uses the standard effort label when custom options omit the effective effort", () => {
+    renderComposeBar({
+      models: [{
+        id: "partial-options",
+        name: "Partial options",
+        reasoningEfforts: ["low"],
+        reasoningOptions: [{ effort: "medium", label: "Balanced" }],
+      }],
+      selectedModel: "partial-options",
+      selectedReasoningEffort: "low",
+    });
+
+    expect(screen.getByText("Low")).toBeTruthy();
+  });
+
+  test("forwards mode and model selections", async () => {
+    const { onModeChange, onModelChange } = renderComposeBar();
+
+    fireEvent.pointerDown(screen.getByTitle("Choose mode"));
+    fireEvent.click(await screen.findByText("Plan"));
+    expect(onModeChange).toHaveBeenCalledWith("plan");
+
+    fireEvent.pointerDown(screen.getByTitle("Choose model"));
+    fireEvent.click(await screen.findByText("gpt-5.4"));
+    expect(onModelChange).toHaveBeenCalledWith("gpt-5.4");
+  });
+
   test("send button is disabled when input is empty and no attachments", () => {
     renderComposeBar();
     const sendButton = screen.getByTitle("Send message");
@@ -326,19 +436,34 @@ describe("CodexComposeBar", () => {
     });
   });
 
+  test("re-enables Address all and reports an error when the follow-up rejects", async () => {
+    const onSend = mock(async () => {
+      throw new Error("review bridge unavailable");
+    });
+    renderComposeBar({ showAddressAll: true, onSend });
+
+    fireEvent.click(screen.getByRole("button", { name: "Address all" }));
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith(ADDRESS_ALL_REVIEW_PROMPT, []);
+      expect(screen.getByRole("button", { name: "Address all" }).hasAttribute("disabled")).toBe(false);
+    });
+  });
+
   test("hides Address all while Codex is loading", () => {
     renderComposeBar({ showAddressAll: true, isLoading: true });
 
     expect(screen.queryByRole("button", { name: "Address all" })).toBeNull();
   });
 
-  test("input is disabled when disabled prop is true", () => {
+  test("input and Fast control are disabled when disabled prop is true", () => {
     renderComposeBar({ disabled: true });
     const input = screen.getByTestId("mentionable-input");
     expect(input.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("Fast").closest("button")?.hasAttribute("disabled")).toBe(true);
   });
 
-  test("model/mode/reasoning triggers are disabled when settingsLocked is true", () => {
+  test("model/mode/reasoning/fast controls are disabled when settingsLocked is true", () => {
     renderComposeBar({ settingsLocked: true });
     const modeTrigger = screen.getByTitle(
       "Wait for Codex to finish before changing the mode",
@@ -352,6 +477,7 @@ describe("CodexComposeBar", () => {
     expect(modeTrigger.hasAttribute("disabled")).toBe(true);
     expect(modelTrigger.hasAttribute("disabled")).toBe(true);
     expect(reasoningTrigger.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("Fast").closest("button")?.hasAttribute("disabled")).toBe(true);
   });
 
   test("renders draft text from the store", () => {
@@ -359,6 +485,52 @@ describe("CodexComposeBar", () => {
     renderComposeBar();
     const input = screen.getByTestId("mentionable-input") as HTMLTextAreaElement;
     expect(input.value).toBe("hello codex");
+  });
+
+  test("reports file-search errors and refreshes when the mention menu opens", async () => {
+    mockFileSearchError = "file service unavailable";
+    const { rerender } = renderComposeBar();
+
+    await waitFor(() => expect(screen.getByTestId("mentionable-input")).toBeTruthy());
+    expect(mockRefreshFileTree).not.toHaveBeenCalled();
+
+    mockFileMentionMenuOpen = true;
+    rerender(
+      <CodexComposeBar
+        environmentId={ENV_ID}
+        sessionKey={SESSION_KEY}
+        models={defaultModels}
+        selectedMode="build"
+        selectedModel="gpt-5.3-codex"
+        selectedReasoningEffort="high"
+        fastModeEnabled={false}
+        onSend={async () => {}}
+        onModeChange={() => {}}
+        onModelChange={() => {}}
+        onReasoningEffortChange={() => {}}
+        onFastModeChange={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(mockRefreshFileTree).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <CodexComposeBar
+        environmentId={ENV_ID}
+        sessionKey={SESSION_KEY}
+        models={defaultModels}
+        selectedMode="plan"
+        selectedModel="gpt-5.3-codex"
+        selectedReasoningEffort="high"
+        fastModeEnabled={false}
+        onSend={async () => {}}
+        onModeChange={() => {}}
+        onModelChange={() => {}}
+        onReasoningEffortChange={() => {}}
+        onFastModeChange={() => {}}
+      />,
+    );
+    expect(mockRefreshFileTree).toHaveBeenCalledTimes(1);
   });
 
   test("compose bar wrapper has shrink-0 class", () => {
@@ -449,6 +621,24 @@ describe("CodexComposeBar", () => {
     );
   });
 
+  test("keyboard submit keeps a busy draft when no queue callback is available", () => {
+    useCodexStore.getState().setDraftText(SESSION_KEY, "Still busy");
+    const { onSend } = renderComposeBar({ isLoading: true, onQueue: undefined });
+
+    fireEvent.keyDown(screen.getByTestId("mentionable-input"), { key: "Enter" });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe("Still busy");
+  });
+
+  test("keyboard submit ignores an empty prompt", () => {
+    const { onSend } = renderComposeBar();
+
+    fireEvent.keyDown(screen.getByTestId("mentionable-input"), { key: "Enter" });
+
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   test("retains the draft and re-enables sending when onSend rejects", async () => {
     const onSend = mock(async () => {
       throw new Error("bridge unavailable");
@@ -486,6 +676,9 @@ describe("CodexComposeBar", () => {
   });
 
   test("clicking a queued prompt restores it into the draft and removes it from the queue", async () => {
+    useCodexStore.getState().setDraftMentions(SESSION_KEY, [
+      { id: "old-mention", filename: "old.ts", relativePath: "src/old.ts" },
+    ]);
     useCodexStore.getState().addToQueue(SESSION_KEY, {
       id: "queue-1",
       text: "Queued codex task",
@@ -501,9 +694,10 @@ describe("CodexComposeBar", () => {
       model: "gpt-5.3-codex",
       mode: "plan",
       reasoningEffort: "xhigh",
+      fastMode: true,
     });
 
-    renderComposeBar({ queueLength: 1 });
+    const { onFastModeChange } = renderComposeBar({ queueLength: 1 });
     fireEvent.click(screen.getByTitle("View queued prompts"));
     fireEvent.click(screen.getByText("Queued codex task"));
 
@@ -513,6 +707,8 @@ describe("CodexComposeBar", () => {
       );
     });
     expect(useCodexStore.getState().getAttachments(SESSION_KEY)).toHaveLength(1);
+    expect(useCodexStore.getState().getDraftMentions(SESSION_KEY)).toEqual([]);
+    expect(onFastModeChange).toHaveBeenCalledWith(true);
     expect(useCodexStore.getState().getQueueLength(SESSION_KEY)).toBe(0);
   });
 
@@ -574,6 +770,18 @@ describe("CodexComposeBar", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  test("continues to ordinary keyboard handling when the file mention menu declines the key", async () => {
+    mockFileMentionMenuOpen = true;
+    mockHandleFileMentionKeyDown.mockImplementation(() => false);
+    useCodexStore.getState().setDraftText(SESSION_KEY, "Send despite menu");
+    const { onSend } = renderComposeBar();
+
+    fireEvent.keyDown(screen.getByTestId("mentionable-input"), { key: "Enter" });
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Send despite menu", []));
+    expect(mockHandleFileMentionKeyDown).toHaveBeenCalledTimes(1);
+  });
+
   test("selects a slash command instead of sending when Enter is pressed on slash input", async () => {
     const { onSend } = renderComposeBar({
       slashCommands: [{ name: "/fix", source: "prompt" }],
@@ -593,6 +801,98 @@ describe("CodexComposeBar", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  test("wraps slash-command selection upward and downward", async () => {
+    const slashCommands = [
+      { name: "/one", source: "prompt" as const },
+      { name: "/two", source: "prompt" as const },
+      { name: "/three", source: "prompt" as const },
+    ];
+    const first = renderComposeBar({ slashCommands });
+    const input = screen.getByTestId("mentionable-input");
+    fireEvent.change(input, { target: { value: "/" } });
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => {
+      expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe("/three ");
+    });
+    expect(first.onSend).not.toHaveBeenCalled();
+
+    first.unmount();
+    useCodexStore.getState().setDraftText(SESSION_KEY, "");
+    const second = renderComposeBar({ slashCommands });
+    const secondInput = screen.getByTestId("mentionable-input");
+    fireEvent.change(secondInput, { target: { value: "/" } });
+    fireEvent.keyDown(secondInput, { key: "ArrowDown" });
+    fireEvent.keyDown(secondInput, { key: "ArrowDown" });
+    fireEvent.keyDown(secondInput, { key: "ArrowDown" });
+    fireEvent.keyDown(secondInput, { key: "Enter" });
+    await waitFor(() => {
+      expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe("/one ");
+    });
+    expect(second.onSend).not.toHaveBeenCalled();
+  });
+
+  test("Escape closes the slash menu so Enter submits the slash text", async () => {
+    const { onSend } = renderComposeBar({
+      slashCommands: [{ name: "/fix", source: "prompt" }],
+    });
+    const input = screen.getByTestId("mentionable-input");
+    fireEvent.change(input, { target: { value: "/" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("/", []));
+  });
+
+  test.each([
+    ["/fix now", "command text containing a space"],
+    ["/unknown", "a slash command with no matches"],
+  ])("submits %s when it is %s", async (text, _case) => {
+    const { onSend } = renderComposeBar({
+      slashCommands: [{ name: "/fix", source: "prompt" }],
+    });
+    const input = screen.getByTestId("mentionable-input");
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith(text, []));
+  });
+
+  test("Shift+Enter preserves a multiline draft without submitting", () => {
+    const { onSend } = renderComposeBar();
+    const input = screen.getByTestId("mentionable-input");
+    fireEvent.change(input, { target: { value: "first line" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe("first line");
+  });
+
+  test.each([
+    ["build", "plan"],
+    ["plan", "build"],
+  ] as const)("Shift+Tab changes %s mode to %s", (selectedMode, expectedMode) => {
+    const { onModeChange } = renderComposeBar({ selectedMode });
+    fireEvent.keyDown(screen.getByTestId("mentionable-input"), {
+      key: "Tab",
+      shiftKey: true,
+    });
+
+    expect(onModeChange).toHaveBeenCalledWith(expectedMode);
+  });
+
+  test("Enter submits an ordinary keyboard-authored prompt", async () => {
+    const { onSend } = renderComposeBar();
+    const input = screen.getByTestId("mentionable-input");
+    fireEvent.change(input, { target: { value: "Submit from keyboard" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledWith("Submit from keyboard", []);
+      expect(useCodexStore.getState().getDraftText(SESSION_KEY)).toBe("");
+    });
+  });
+
   test("adds a pasted image attachment through the shared paste hook", async () => {
     const { getByTestId } = renderComposeBar({ containerId: "container-1" });
     const input = getByTestId("mentionable-input") as HTMLTextAreaElement;
@@ -608,6 +908,61 @@ describe("CodexComposeBar", () => {
     expect(mockWriteContainerFile).toHaveBeenCalledTimes(1);
   });
 
+  test("renders preview and file-only attachments and removes each one", async () => {
+    useCodexStore.getState().addAttachment(SESSION_KEY, {
+      id: "preview",
+      type: "image",
+      path: "/workspace/preview.png",
+      previewUrl: "data:image/png;base64,abc",
+      name: "preview.png",
+    });
+    useCodexStore.getState().addAttachment(SESSION_KEY, {
+      id: "file-only",
+      type: "image",
+      path: "/workspace/file-only.png",
+      name: "file-only.png",
+    });
+    renderComposeBar();
+
+    expect(screen.getByAltText("preview.png")).toBeTruthy();
+    expect(screen.queryByAltText("file-only.png")).toBeNull();
+
+    fireEvent.click(screen.getByText("file-only.png").parentElement!.querySelector("button")!);
+    await waitFor(() => {
+      expect(useCodexStore.getState().getAttachments(SESSION_KEY).map(({ id }) => id)).toEqual([
+        "preview",
+      ]);
+    });
+    fireEvent.click(screen.getByText("preview.png").parentElement!.querySelector("button")!);
+    await waitFor(() => {
+      expect(useCodexStore.getState().getAttachments(SESSION_KEY)).toEqual([]);
+    });
+  });
+
+  test("toggles and dismisses the attachment menu and removes its outside listener", () => {
+    const removeEventListener = spyOn(document, "removeEventListener");
+    const { container, unmount } = renderComposeBar();
+    const plusButton = container.querySelector(
+      '[data-native-compose-controls="primary"] button',
+    )!;
+
+    fireEvent.click(plusButton);
+    expect(screen.getByText("Attach file from workspace")).toBeTruthy();
+    expect(screen.getByText("Paste image (Cmd+V)")).toBeTruthy();
+
+    fireEvent.click(plusButton);
+    expect(screen.queryByText("Attach file from workspace")).toBeNull();
+
+    fireEvent.click(plusButton);
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByText("Attach file from workspace")).toBeNull();
+
+    fireEvent.click(plusButton);
+    unmount();
+    expect(removeEventListener).toHaveBeenCalledWith("mousedown", expect.any(Function));
+    removeEventListener.mockRestore();
+  });
+
   test("reorders and removes queued prompts from the dialog", async () => {
     useCodexStore.getState().addToQueue(SESSION_KEY, {
       id: "queue-1",
@@ -616,6 +971,7 @@ describe("CodexComposeBar", () => {
       model: "gpt-5.3-codex",
       mode: "build",
       reasoningEffort: "high",
+      fastMode: false,
     });
     useCodexStore.getState().addToQueue(SESSION_KEY, {
       id: "queue-2",
@@ -624,6 +980,7 @@ describe("CodexComposeBar", () => {
       model: "gpt-5.3-codex",
       mode: "build",
       reasoningEffort: "high",
+      fastMode: false,
     });
 
     renderComposeBar({ queueLength: 2 });
@@ -647,11 +1004,93 @@ describe("CodexComposeBar", () => {
     });
   });
 
+  test("shows an empty queue when the indicator count is stale", () => {
+    renderComposeBar({ queueLength: 1 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+
+    expect(screen.getByText("Queue is empty.")).toBeTruthy();
+  });
+
+  test("disables both reorder controls for a single queued prompt", () => {
+    useCodexStore.getState().addToQueue(SESSION_KEY, {
+      id: "only",
+      text: "Only queued task",
+      attachments: [],
+      model: "gpt-5.3-codex",
+      mode: "build",
+      reasoningEffort: "high",
+      fastMode: false,
+    });
+    renderComposeBar({ queueLength: 1 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+
+    expect(screen.getByTitle("Move up").hasAttribute("disabled")).toBe(true);
+    expect(screen.getByTitle("Move down").hasAttribute("disabled")).toBe(true);
+  });
+
+  test("renders queued prompt metadata and attachment pluralization", () => {
+    useCodexStore.getState().addToQueue(SESSION_KEY, {
+      id: "metadata-one",
+      text: "Plan quickly",
+      attachments: [{
+        id: "one",
+        type: "image",
+        path: "/workspace/one.png",
+        name: "one.png",
+      }],
+      model: "gpt-5.4",
+      mode: "plan",
+      reasoningEffort: "xhigh",
+      fastMode: true,
+    });
+    useCodexStore.getState().addToQueue(SESSION_KEY, {
+      id: "metadata-two",
+      text: "Build carefully",
+      attachments: [
+        { id: "two", type: "image", path: "/workspace/two.png", name: "two.png" },
+        { id: "three", type: "image", path: "/workspace/three.png", name: "three.png" },
+      ],
+      model: "gpt-5.3-codex",
+      mode: "build",
+      reasoningEffort: "high",
+      fastMode: false,
+    });
+    renderComposeBar({ queueLength: 2 });
+    fireEvent.click(screen.getByTitle("View queued prompts"));
+
+    expect(screen.getByText("#1")).toBeTruthy();
+    expect(screen.getByText("#2")).toBeTruthy();
+    expect(screen.getByText("Plan")).toBeTruthy();
+    expect(screen.getAllByText("Build").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("Extra high")).toBeTruthy();
+    expect(screen.getAllByText("High").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("Fast mode")).toBeTruthy();
+    expect(screen.getByText("1 attachment")).toBeTruthy();
+    expect(screen.getByText("2 attachments")).toBeTruthy();
+    const moveUpButtons = screen.getAllByTitle("Move up");
+    const moveDownButtons = screen.getAllByTitle("Move down");
+    expect(moveUpButtons[0]!.hasAttribute("disabled")).toBe(true);
+    expect(moveUpButtons[1]!.hasAttribute("disabled")).toBe(false);
+    expect(moveDownButtons[0]!.hasAttribute("disabled")).toBe(false);
+    expect(moveDownButtons[1]!.hasAttribute("disabled")).toBe(true);
+  });
+
   test("forwards fast-mode changes", () => {
     const { onFastModeChange } = renderComposeBar({ fastModeEnabled: false });
 
     fireEvent.click(screen.getByText("Fast").closest("button")!);
 
     expect(onFastModeChange).toHaveBeenCalledWith(true);
+  });
+
+  test("turns fast mode off when it is already enabled", () => {
+    const { onFastModeChange } = renderComposeBar({ fastModeEnabled: true });
+    const fastButton = screen.getByText("Fast").closest("button")!;
+
+    expect(fastButton.getAttribute("aria-pressed")).toBe("true");
+    expect(fastButton.getAttribute("title")).toContain("Fast mode on");
+    fireEvent.click(fastButton);
+
+    expect(onFastModeChange).toHaveBeenCalledWith(false);
   });
 });

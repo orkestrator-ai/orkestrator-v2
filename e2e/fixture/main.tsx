@@ -6,6 +6,7 @@ import {
   type ClaudeOptions,
 } from "../../apps/web/src/components/environments/CreateEnvironmentDialog";
 import { BrowserTab } from "../../apps/web/src/components/browser/BrowserTab";
+import { CodexComposeBar } from "../../apps/web/src/components/codex/CodexComposeBar";
 
 declare global {
   interface Window {
@@ -51,6 +52,41 @@ function BrowserFixture() {
           data={{ url: empty ? "" : "http://localhost:3000/" }}
           isActive
         />
+      </section>
+    </main>
+  );
+}
+
+function CodexComposeFixture() {
+  const [fastModeEnabled, setFastModeEnabled] = useState(false);
+  const [sentCount, setSentCount] = useState(0);
+
+  return (
+    <main className="min-h-screen bg-background pt-4 text-foreground">
+      <section data-testid="codex-compose-fixture" className="w-full">
+        <CodexComposeBar
+          environmentId="codex-compose-fixture"
+          sessionKey="codex-compose-fixture-session"
+          models={[{
+            id: "long-model",
+            name: "A deliberately long Codex model name for narrow viewport coverage",
+            reasoningEfforts: ["medium", "high"],
+          }]}
+          selectedMode="build"
+          selectedModel="long-model"
+          selectedReasoningEffort="high"
+          fastModeEnabled={fastModeEnabled}
+          queueLength={123}
+          showAddressAll
+          onSend={async () => setSentCount((count) => count + 1)}
+          onQueue={() => {}}
+          onStop={async () => {}}
+          onModeChange={() => {}}
+          onModelChange={() => {}}
+          onReasoningEffortChange={() => {}}
+          onFastModeChange={setFastModeEnabled}
+        />
+        <output data-testid="codex-send-count">{sentCount}</output>
       </section>
     </main>
   );
@@ -105,6 +141,7 @@ function GlobalStylesFixture() {
 
 function fixtureForPath() {
   if (window.location.pathname === "/browser") return <BrowserFixture />;
+  if (window.location.pathname === "/codex-compose") return <CodexComposeFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   return <CreateEnvironmentFixture />;
 }

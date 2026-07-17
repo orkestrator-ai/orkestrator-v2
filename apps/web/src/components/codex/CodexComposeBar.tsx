@@ -687,13 +687,6 @@ export function CodexComposeBar({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        </div>
-
-        <div
-          data-native-compose-controls="secondary"
-          className="flex w-full items-center gap-1 sm:ml-auto sm:w-auto"
-        >
-
         {/* Fast mode toggle — maps to Codex's `service_tier = fast` config. */}
         <button
           type="button"
@@ -716,6 +709,12 @@ export function CodexComposeBar({
           <span>Fast</span>
         </button>
 
+        </div>
+
+        <div
+          data-native-compose-controls="secondary"
+          className="flex w-full items-center gap-1 sm:ml-auto sm:w-auto"
+        >
         <div className="flex-1 sm:hidden" />
 
         {queueLength > 0 && (

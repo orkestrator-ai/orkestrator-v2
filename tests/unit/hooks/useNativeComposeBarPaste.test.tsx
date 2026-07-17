@@ -136,6 +136,28 @@ describe("useNativeComposeBarPaste", () => {
     );
   });
 
+  test("claims browser clipboard image items synchronously", async () => {
+    const { getByTestId } = render(<HookHarness containerId="container-1" />);
+    const input = getByTestId("compose-input") as HTMLTextAreaElement;
+    setActiveElement(input);
+
+    const imageFile = new File(["image"], "screenshot.png", { type: "image/png" });
+    const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteEvent, "clipboardData", {
+      value: {
+        items: [{ kind: "file", type: "image/png", getAsFile: () => imageFile }],
+        files: [],
+      },
+    });
+
+    document.dispatchEvent(pasteEvent);
+
+    // This must happen before any FileReader/canvas work; otherwise the
+    // contenteditable target also handles the same image as a text paste.
+    expect(pasteEvent.defaultPrevented).toBe(true);
+    await waitFor(() => expect(onAttach).toHaveBeenCalledTimes(1));
+  });
+
   test("writes pasted images to the local worktree when no container id is present", async () => {
     const { getByTestId } = render(
       <HookHarness

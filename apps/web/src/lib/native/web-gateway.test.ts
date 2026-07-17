@@ -427,4 +427,38 @@ describe("web gateway browser API", () => {
       window.close = originalClose;
     }
   });
+
+  test("reads browser clipboard images for keyboard-driven paste", async () => {
+    const imageBlob = new Blob(["PNG"], { type: "image/png" });
+    const getType = mock(async () => imageBlob);
+    const read = mock(async () => [
+      { types: ["text/plain", "image/png"], getType } as unknown as ClipboardItem,
+    ]);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { read },
+    });
+
+    const originalCreateImageBitmap = globalThis.createImageBitmap;
+    const close = mock(() => undefined);
+    globalThis.createImageBitmap = mock(async () => ({
+      width: 32,
+      height: 18,
+      close,
+    })) as unknown as typeof createImageBitmap;
+
+    try {
+      const api = createBrowserGatewayApi();
+      await expect(api.clipboard.readImage()).resolves.toEqual({
+        width: 32,
+        height: 18,
+        dataUrl: "data:image/png;base64,UE5H",
+      });
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(getType).toHaveBeenCalledWith("image/png");
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.createImageBitmap = originalCreateImageBitmap;
+    }
+  });
 });

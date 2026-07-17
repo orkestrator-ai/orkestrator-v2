@@ -18,13 +18,28 @@ async function decodeImageData(dataUrl: string): Promise<ImageData> {
   return context.getImageData(0, 0, canvas.width, canvas.height);
 }
 
-export async function readImage(): Promise<ClipboardImage> {
-  const image = await window.orkestrator?.clipboard.readImage();
-  if (!image) throw new Error("No image in clipboard");
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+      } else {
+        reject(new Error("Clipboard image could not be read"));
+      }
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Clipboard image could not be read"));
+    reader.readAsDataURL(blob);
+  });
+}
 
+function createClipboardImage(
+  dataUrl: string,
+  dimensions?: { width: number; height: number },
+): ClipboardImage {
   let imageData: ImageData | null = null;
   const getImageData = async () => {
-    imageData ??= await decodeImageData(image.dataUrl);
+    imageData ??= await decodeImageData(dataUrl);
     return imageData;
   };
 
@@ -33,9 +48,30 @@ export async function readImage(): Promise<ClipboardImage> {
       return new Uint8Array((await getImageData()).data);
     },
     async size() {
-      return { width: image.width, height: image.height };
+      if (dimensions) return dimensions;
+      const decoded = await getImageData();
+      return { width: decoded.width, height: decoded.height };
     },
   };
+}
+
+export async function readImage(pastedBlob?: Blob | null): Promise<ClipboardImage> {
+  if (pastedBlob) {
+    return createClipboardImage(await blobToDataUrl(pastedBlob));
+  }
+
+  // A real browser paste event has already exposed all readable data through
+  // clipboardData. Avoid a second async clipboard read (and its permission UI)
+  // when that event contained no image. Calls without an event still use the
+  // async browser API for terminal/context-menu paste commands.
+  if (pastedBlob === null && window.orkestratorGateway?.enabled) {
+    throw new Error("No image in clipboard");
+  }
+
+  const image = await window.orkestrator?.clipboard.readImage();
+  if (!image) throw new Error("No image in clipboard");
+
+  return createClipboardImage(image.dataUrl, { width: image.width, height: image.height });
 }
 
 export async function readText(): Promise<string> {

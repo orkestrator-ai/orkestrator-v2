@@ -7,12 +7,14 @@ import {
   mkdir,
   mkdtemp,
   open,
+  readFile,
   readdir,
   readlink,
   rename,
   rm,
   stat,
   symlink,
+  utimes,
 } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -31,6 +33,7 @@ const LOCK_STALE_AFTER_MS = 10 * 60 * 1_000;
 const LOCK_WAIT_TIMEOUT_MS = 12 * 60 * 1_000;
 const LOCK_POLL_MS = 250;
 const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1_000;
+const PROCESS_TIMEOUT_MS = 15_000;
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -41,7 +44,24 @@ export type ToolchainProgress = {
   totalTools: number;
   bytesReceived?: number;
   bytesTotal?: number;
+  overallFraction?: number;
   message: string;
+};
+
+type ToolchainManagerTimings = {
+  lockStaleAfterMs: number;
+  lockWaitTimeoutMs: number;
+  lockPollMs: number;
+  downloadTimeoutMs: number;
+  processTimeoutMs: number;
+};
+
+const DEFAULT_TIMINGS: ToolchainManagerTimings = {
+  lockStaleAfterMs: LOCK_STALE_AFTER_MS,
+  lockWaitTimeoutMs: LOCK_WAIT_TIMEOUT_MS,
+  lockPollMs: LOCK_POLL_MS,
+  downloadTimeoutMs: DOWNLOAD_TIMEOUT_MS,
+  processTimeoutMs: PROCESS_TIMEOUT_MS,
 };
 
 export type EnsurePinnedToolchainsOptions = {
@@ -53,6 +73,9 @@ export type EnsurePinnedToolchainsOptions = {
   onProgress?: (progress: ToolchainProgress) => void;
   allowInsecureDownloadsForTests?: boolean;
   skipExecutableProbeForTests?: boolean;
+  timingsForTests?: Partial<ToolchainManagerTimings>;
+  openLockFileForTests?: typeof open;
+  processExistsForTests?: (pid: number) => boolean;
 };
 
 export type PinnedToolchainResult = {
@@ -91,39 +114,131 @@ async function isValidExecutable(rootDir: string, artifact: ToolchainArtifact): 
     const expectedSize = artifact.executable.installedSize ?? artifact.executable.size;
     const expectedSha256 = artifact.executable.installedSha256 ?? artifact.executable.sha256;
     if (!file.isFile() || file.isSymbolicLink() || file.size !== expectedSize) return false;
-    return await sha256File(executablePath) === expectedSha256;
+    if (await sha256File(executablePath) !== expectedSha256) return false;
+    if ((file.mode & 0o777) !== 0o500) await chmod(executablePath, 0o500);
+    return true;
   } catch {
     return false;
   }
 }
 
-async function acquireInstallLock(rootDir: string, onProgress: (message: string) => void): Promise<() => Promise<void>> {
+type InstallLockOwner = {
+  token: string;
+  pid: number;
+  createdAt: string;
+};
+
+type InstallLock = {
+  release(): Promise<void>;
+};
+
+async function readInstallLockOwner(lockPath: string): Promise<InstallLockOwner | null> {
+  try {
+    const parsed = JSON.parse(await readFile(lockPath, "utf8")) as Partial<InstallLockOwner>;
+    if (typeof parsed.token !== "string" || typeof parsed.pid !== "number" || typeof parsed.createdAt !== "string") {
+      return null;
+    }
+    return { token: parsed.token, pid: parsed.pid, createdAt: parsed.createdAt };
+  } catch {
+    return null;
+  }
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function initializeInstallLock(
+  lockPath: string,
+  owner: InstallLockOwner,
+  openLockFile: typeof open,
+): Promise<void> {
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  let created = false;
+  let initialized = false;
+  try {
+    handle = await openLockFile(lockPath, "wx", 0o600);
+    created = true;
+    await handle.writeFile(JSON.stringify(owner));
+    await handle.close();
+    handle = null;
+    initialized = true;
+  } finally {
+    await handle?.close().catch(() => undefined);
+    if (created && !initialized) await rm(lockPath, { force: true }).catch(() => undefined);
+  }
+}
+
+async function acquireInstallLock(
+  rootDir: string,
+  onProgress: (message: string) => void,
+  timings: ToolchainManagerTimings,
+  openLockFile: typeof open,
+  ownerProcessExists: (pid: number) => boolean,
+): Promise<InstallLock> {
   const lockPath = path.join(rootDir, INSTALL_LOCK);
   const startedAt = Date.now();
   let announcedWait = false;
 
-  while (Date.now() - startedAt < LOCK_WAIT_TIMEOUT_MS) {
+  while (Date.now() - startedAt < timings.lockWaitTimeoutMs) {
+    const owner: InstallLockOwner = {
+      token: randomUUID(),
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+    };
     try {
-      const handle = await open(lockPath, "wx", 0o600);
-      await handle.writeFile(JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }));
-      await handle.close();
-      return async () => {
-        await rm(lockPath, { force: true });
+      await initializeInstallLock(lockPath, owner, openLockFile);
+      let heartbeat: Promise<void> = Promise.resolve();
+      const heartbeatInterval = Math.max(10, Math.floor(timings.lockStaleAfterMs / 3));
+      const heartbeatTimer = setInterval(() => {
+        heartbeat = heartbeat.then(async () => {
+          const current = await readInstallLockOwner(lockPath);
+          if (current?.token !== owner.token) return;
+          const now = new Date();
+          await utimes(lockPath, now, now);
+        }).catch(() => undefined);
+      }, heartbeatInterval);
+      heartbeatTimer.unref();
+      return {
+        release: async () => {
+          clearInterval(heartbeatTimer);
+          await heartbeat;
+          const current = await readInstallLockOwner(lockPath);
+          if (!current) {
+            throw new Error("Orkestrator toolchain installation lock disappeared unexpectedly");
+          }
+          if (current.token !== owner.token) {
+            throw new Error("Orkestrator toolchain installation lock ownership changed unexpectedly");
+          }
+          await rm(lockPath, { force: true });
+        },
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
 
     const lockStat = await stat(lockPath).catch(() => null);
-    if (lockStat && Date.now() - lockStat.mtimeMs > LOCK_STALE_AFTER_MS) {
-      await rm(lockPath, { force: true });
-      continue;
+    if (lockStat && Date.now() - lockStat.mtimeMs > timings.lockStaleAfterMs) {
+      const observedOwner = await readInstallLockOwner(lockPath);
+      const ownerIsAlive = observedOwner ? ownerProcessExists(observedOwner.pid) : false;
+      if (!ownerIsAlive) {
+        const currentOwner = await readInstallLockOwner(lockPath);
+        if (currentOwner?.token === observedOwner?.token || (!currentOwner && !observedOwner)) {
+          await rm(lockPath, { force: true });
+          continue;
+        }
+      }
     }
     if (!announcedWait) {
       announcedWait = true;
       onProgress("Waiting for another Orkestrator window to finish preparing tools…");
     }
-    await delay(LOCK_POLL_MS);
+    await delay(timings.lockPollMs);
   }
   throw new Error("Timed out waiting for the Orkestrator toolchain installation lock");
 }
@@ -152,9 +267,10 @@ async function downloadArchive(
   fetchImpl: FetchLike,
   onBytes: (received: number) => void,
   allowInsecureDownloadsForTests: boolean,
+  timeoutMs: number,
 ): Promise<void> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let handle: Awaited<ReturnType<typeof open>> | null = null;
   try {
     const response = await fetchImpl(artifact.archive.url, {
@@ -309,7 +425,11 @@ async function extractZipEntry(
   });
 }
 
-async function probeExecutable(executablePath: string, artifact: ToolchainArtifact): Promise<void> {
+async function probeExecutable(
+  executablePath: string,
+  artifact: ToolchainArtifact,
+  timeoutMs: number,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(executablePath, ["--version"], {
       env: process.env,
@@ -321,7 +441,7 @@ async function probeExecutable(executablePath: string, artifact: ToolchainArtifa
     const timeout = setTimeout(() => {
       child.kill("SIGKILL");
       reject(new Error(`${artifact.name} version check timed out`));
-    }, 15_000);
+    }, timeoutMs);
     child.once("error", (error) => {
       clearTimeout(timeout);
       reject(new Error(
@@ -342,7 +462,11 @@ async function probeExecutable(executablePath: string, artifact: ToolchainArtifa
   });
 }
 
-async function verifyMacCodeSignature(executablePath: string, artifact: ToolchainArtifact): Promise<void> {
+async function verifyMacCodeSignature(
+  executablePath: string,
+  artifact: ToolchainArtifact,
+  timeoutMs: number,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn("/usr/bin/codesign", ["--verify", "--strict", "--verbose=2", executablePath], {
       stdio: ["ignore", "ignore", "pipe"],
@@ -352,7 +476,7 @@ async function verifyMacCodeSignature(executablePath: string, artifact: Toolchai
     const timeout = setTimeout(() => {
       child.kill("SIGKILL");
       reject(new Error(`${artifact.name} code-signature check timed out`));
-    }, 15_000);
+    }, timeoutMs);
     child.once("error", (error) => {
       clearTimeout(timeout);
       reject(error);
@@ -371,13 +495,21 @@ async function verifyMacCodeSignature(executablePath: string, artifact: Toolchai
   });
 }
 
-async function runCodesign(args: string[], failureMessage: string): Promise<void> {
+async function runCodesign(args: string[], failureMessage: string, timeoutMs: number): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn("/usr/bin/codesign", args, { stdio: ["ignore", "ignore", "pipe"] });
     const errors: Buffer[] = [];
     child.stderr.on("data", (chunk) => errors.push(Buffer.from(chunk)));
-    child.once("error", reject);
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`${failureMessage} timed out`));
+    }, timeoutMs);
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
     child.once("exit", (code, signal) => {
+      clearTimeout(timeout);
       if (code === 0) {
         resolve();
         return;
@@ -390,10 +522,15 @@ async function runCodesign(args: string[], failureMessage: string): Promise<void
   });
 }
 
-async function repairInvalidMacSignature(executablePath: string, artifact: ToolchainArtifact): Promise<void> {
+async function repairInvalidMacSignature(
+  executablePath: string,
+  artifact: ToolchainArtifact,
+  timeoutMs: number,
+): Promise<void> {
   await runCodesign(
     ["--remove-signature", executablePath],
     `${artifact.name} invalid signature could not be removed`,
+    timeoutMs,
   ).catch((error: unknown) => {
     // codesign exits non-zero when no removable signature exists. The following
     // forced signature is still authoritative, so only retain unexpected I/O errors.
@@ -403,6 +540,7 @@ async function repairInvalidMacSignature(executablePath: string, artifact: Toolc
   await runCodesign(
     ["--sign", "-", "--force", executablePath],
     `${artifact.name} could not be ad-hoc signed after source verification`,
+    timeoutMs,
   );
 }
 
@@ -414,6 +552,7 @@ async function installArtifact(
   onVerify: () => void,
   allowInsecureDownloadsForTests: boolean,
   skipExecutableProbeForTests: boolean,
+  timings: ToolchainManagerTimings,
 ): Promise<string> {
   const stagingDirectory = await mkdtemp(path.join(rootDir, `.staging-${artifact.name}-`));
   const archivePath = path.join(stagingDirectory, `archive.${artifact.archive.format === "zip" ? "zip" : "tar.gz"}`);
@@ -425,6 +564,7 @@ async function installArtifact(
       fetchImpl,
       onBytes,
       allowInsecureDownloadsForTests,
+      timings.downloadTimeoutMs,
     );
     onVerify();
     if (artifact.archive.format === "zip") {
@@ -444,11 +584,11 @@ async function installArtifact(
     }
     if (!skipExecutableProbeForTests && artifact.platform === "darwin") {
       try {
-        await verifyMacCodeSignature(executablePath, artifact);
+        await verifyMacCodeSignature(executablePath, artifact, timings.processTimeoutMs);
       } catch (error) {
         if (!artifact.executable.repairInvalidMacSignature) throw error;
-        await repairInvalidMacSignature(executablePath, artifact);
-        await verifyMacCodeSignature(executablePath, artifact);
+        await repairInvalidMacSignature(executablePath, artifact, timings.processTimeoutMs);
+        await verifyMacCodeSignature(executablePath, artifact, timings.processTimeoutMs);
       }
     }
 
@@ -460,7 +600,7 @@ async function installArtifact(
     }
     await chmod(executablePath, 0o500);
     if (!skipExecutableProbeForTests) {
-      await probeExecutable(executablePath, artifact);
+      await probeExecutable(executablePath, artifact, timings.processTimeoutMs);
     }
 
     const destinationDirectory = artifactDirectory(rootDir, artifact);
@@ -518,9 +658,18 @@ export async function ensurePinnedToolchains(
   const artifacts = options.artifacts ?? pinnedToolchainArtifacts(options.platform, options.architecture);
   const fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
   const onProgress = options.onProgress ?? (() => undefined);
+  const timings = { ...DEFAULT_TIMINGS, ...options.timingsForTests };
   const rootDir = path.join(options.dataDir, TOOLCHAIN_DIRECTORY);
   const totalTools = artifacts.length;
-  const progress = (value: Omit<ToolchainProgress, "totalTools">) => onProgress({ ...value, totalTools });
+  const toolFractions = new Map<ToolchainName, number>(
+    artifacts.map((artifact) => [artifact.name, 0]),
+  );
+  const progress = (value: Omit<ToolchainProgress, "totalTools" | "overallFraction">) => {
+    const overallFraction = totalTools === 0
+      ? 1
+      : Array.from(toolFractions.values()).reduce((sum, fraction) => sum + fraction, 0) / totalTools;
+    onProgress({ ...value, totalTools, overallFraction });
+  };
 
   await mkdir(rootDir, { recursive: true, mode: 0o700 });
   await chmod(rootDir, 0o700);
@@ -531,20 +680,22 @@ export async function ensurePinnedToolchains(
   });
 
   const validity = await Promise.all(artifacts.map((artifact) => isValidExecutable(rootDir, artifact)));
+  artifacts.forEach((artifact, index) => toolFractions.set(artifact.name, validity[index] ? 1 : 0));
   let missing = artifacts.filter((_, index) => !validity[index]);
   if (missing.length > 0) {
-    const releaseLock = await acquireInstallLock(rootDir, (message) => progress({
+    const installLock = await acquireInstallLock(rootDir, (message) => progress({
       phase: "waiting",
       completedTools: totalTools - missing.length,
       message,
-    }));
+    }), timings, options.openLockFileForTests ?? open, options.processExistsForTests ?? processExists);
     try {
       await cleanStagingDirectories(rootDir);
       const lockedValidity = await Promise.all(artifacts.map((artifact) => isValidExecutable(rootDir, artifact)));
+      artifacts.forEach((artifact, index) => toolFractions.set(artifact.name, lockedValidity[index] ? 1 : 0));
       missing = artifacts.filter((_, index) => !lockedValidity[index]);
       let completedTools = totalTools - missing.length;
 
-      await Promise.all(missing.map(async (artifact) => {
+      const installations = await Promise.allSettled(missing.map(async (artifact) => {
         progress({
           phase: "downloading",
           tool: artifact.name,
@@ -559,6 +710,7 @@ export async function ensurePinnedToolchains(
           artifact,
           fetchImpl,
           (bytesReceived) => {
+            toolFractions.set(artifact.name, bytesReceived / artifact.archive.size);
             const now = Date.now();
             if (now - lastReportedAt < 200 && bytesReceived !== artifact.archive.size) return;
             lastReportedAt = now;
@@ -571,15 +723,20 @@ export async function ensurePinnedToolchains(
               message: `Downloading ${artifact.name} ${artifact.version}…`,
             });
           },
-          () => progress({
-            phase: "verifying",
-            tool: artifact.name,
-            completedTools,
-            message: `Verifying ${artifact.name} ${artifact.version}…`,
-          }),
+          () => {
+            toolFractions.set(artifact.name, 1);
+            progress({
+              phase: "verifying",
+              tool: artifact.name,
+              completedTools,
+              message: `Verifying ${artifact.name} ${artifact.version}…`,
+            });
+          },
           options.allowInsecureDownloadsForTests ?? false,
           options.skipExecutableProbeForTests ?? false,
+          timings,
         );
+        toolFractions.set(artifact.name, 1);
         completedTools += 1;
         progress({
           phase: "installing",
@@ -588,8 +745,12 @@ export async function ensurePinnedToolchains(
           message: `Installed ${artifact.name} ${artifact.version}`,
         });
       }));
+      const failedInstallation = installations.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (failedInstallation) throw failedInstallation.reason;
     } finally {
-      await releaseLock();
+      await installLock.release();
     }
   }
 
@@ -598,6 +759,7 @@ export async function ensurePinnedToolchains(
     throw new Error("One or more pinned Orkestrator tools failed final verification");
   }
   const result = await activateExecutables(rootDir, artifacts);
+  artifacts.forEach((artifact) => toolFractions.set(artifact.name, 1));
   progress({
     phase: "ready",
     completedTools: totalTools,

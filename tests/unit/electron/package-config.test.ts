@@ -30,6 +30,9 @@ describe("Electron packaging configuration", () => {
       };
     }>("package.json");
     const electronTsconfig = await readJson<{ compilerOptions: { outDir: string; rootDir: string }; include: string[] }>("apps/desktop/tsconfig.electron.json");
+    const desktopBuildScript = await fs.readFile(path.join(process.cwd(), "apps/desktop/scripts/build.ts"), "utf8");
+    const bootstrapPreload = await fs.readFile(path.join(process.cwd(), "apps/desktop/electron/toolchain-bootstrap-preload.ts"), "utf8");
+    const desktopMain = await fs.readFile(path.join(process.cwd(), "apps/desktop/electron/main.ts"), "utf8");
 
     expect(packageJson.main).toBe("apps/desktop/dist/electron/main.js");
     expect(packageJson.scripts.build).toContain("turbo");
@@ -55,6 +58,19 @@ describe("Electron packaging configuration", () => {
     expect(electronTsconfig.compilerOptions.outDir).toBe("dist");
     expect(electronTsconfig.compilerOptions.rootDir).toBe(".");
     expect(electronTsconfig.include).toEqual(["electron/**/*.ts"]);
+    expect(desktopBuildScript).toContain('path.join(packageRoot, "electron/toolchain-bootstrap-preload.ts")');
+    expect(bootstrapPreload).toContain('ipcRenderer.on("orkestrator:toolchain-progress"');
+    expect(bootstrapPreload).toContain('window.addEventListener("DOMContentLoaded"');
+    expect(desktopMain).toContain("createToolchainProgressController");
+    expect(desktopMain).toContain("await toolchainProgress.close()");
+  });
+
+  test("uses the Bun-based container image before running the simplified workspace setup", async () => {
+    const workspaceConfig = await readJson<{ setupContainer: string[] }>("orkestrator-ai.json");
+    const dockerfile = await fs.readFile(path.join(process.cwd(), "docker/Dockerfile"), "utf8");
+
+    expect(workspaceConfig.setupContainer).toEqual(["bun install"]);
+    expect(dockerfile).toMatch(/^FROM oven\/bun:/m);
   });
 
   test("keeps valid macOS and Linux icon resources available to electron-builder", async () => {

@@ -60,7 +60,20 @@ export async function createToolchainBootstrapWindow(options: {
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
-  await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(BOOTSTRAP_HTML)}`);
+  const preloadReady = new Promise<void>((_resolve, reject) => {
+    window.webContents.once("preload-error", (_event, preloadPath, error) => {
+      reject(new Error(`Toolchain bootstrap preload failed (${preloadPath}): ${error.message}`));
+    });
+  });
+  try {
+    await Promise.race([
+      window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(BOOTSTRAP_HTML)}`),
+      preloadReady,
+    ]);
+  } catch (error) {
+    if (!window.isDestroyed()) window.close();
+    throw error;
+  }
   return window;
 }
 

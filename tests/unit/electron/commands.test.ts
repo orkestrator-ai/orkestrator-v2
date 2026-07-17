@@ -3673,6 +3673,40 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
     }
   });
 
+  test("reports managed AI CLIs in priority order and falls back when none are installed", async () => {
+    const root = await createTempDir("ork-electron-cli-checks-");
+    const { context } = createContext(createEnvironment());
+    context.appRoot = root;
+    context.resourceRoot = root;
+    context.toolchainBinDir = root;
+    const commands = createCommandRegistry();
+    const previousPath = process.env.PATH;
+
+    try {
+      process.env.PATH = "";
+      await fs.writeFile(path.join(root, "codex"), "managed codex");
+      await fs.writeFile(path.join(root, "opencode"), "managed opencode");
+
+      await expect(commands.get("check_claude_cli")?.({}, context)).resolves.toBe(false);
+      await expect(commands.get("check_opencode_cli")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("check_codex_cli")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("check_any_ai_cli")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("opencode");
+
+      await fs.writeFile(path.join(root, "claude"), "managed claude");
+      await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("claude");
+
+      await Promise.all(["claude", "opencode", "codex"].map((name) =>
+        fs.rm(path.join(root, name), { force: true })
+      ));
+      await expect(commands.get("check_any_ai_cli")?.({}, context)).resolves.toBe(false);
+      await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBeNull();
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
+
   test("starts in-container bridges with bun, not node", async () => {
     const hostPort = await reserveFreePort();
     const pidFile = path.join(await createTempDir("ork-bridge-pid-"), "pid");

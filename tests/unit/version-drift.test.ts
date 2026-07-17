@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   PINNED_TOOLCHAIN_ARTIFACTS,
   PINNED_TOOLCHAIN_VERSIONS,
+  pinnedToolchainArtifacts,
 } from "../../apps/desktop/electron/toolchain-manifest";
 
 const repoRoot = join(import.meta.dir, "..", "..");
@@ -187,5 +188,22 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
     expect(actual).toEqual(expected);
     expect(PINNED_TOOLCHAIN_ARTIFACTS).toHaveLength(expected.size);
+  });
+
+  test("selects exactly one complete tool set for each supported target", () => {
+    for (const platform of ["darwin", "linux"] as const) {
+      for (const architecture of ["arm64", "x64"] as const) {
+        const selected = pinnedToolchainArtifacts(platform, architecture);
+        expect(selected.map((artifact) => artifact.name).sort()).toEqual(["claude", "codex", "opencode"]);
+        expect(selected.every((artifact) => (
+          artifact.platform === platform && artifact.architecture === architecture
+        ))).toBe(true);
+      }
+    }
+  });
+
+  test("rejects unsupported toolchain platforms and architectures", () => {
+    expect(() => pinnedToolchainArtifacts("win32", "x64")).toThrow("Unsupported toolchain platform");
+    expect(() => pinnedToolchainArtifacts("darwin", "ia32")).toThrow("Unsupported toolchain architecture");
   });
 });

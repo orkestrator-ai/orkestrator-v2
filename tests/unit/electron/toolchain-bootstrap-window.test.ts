@@ -10,6 +10,7 @@ describe("toolchain bootstrap window", () => {
   test("loads a locked-down local progress page and forwards status over IPC", async () => {
     let destroyed = false;
     let navigationListener: ((event: { preventDefault(): void }) => void) | undefined;
+    let preloadErrorListener: ((_event: unknown, path: string, error: Error) => void) | undefined;
     class FakeBrowserWindow {
       readonly webContents = {
         on: mock((event: string, listener: (event: { preventDefault(): void }) => void) => {
@@ -17,9 +18,13 @@ describe("toolchain bootstrap window", () => {
         }),
         send: mock(() => undefined),
         setWindowOpenHandler: mock(() => undefined),
+        once: mock((event: string, listener: (_event: unknown, path: string, error: Error) => void) => {
+          if (event === "preload-error") preloadErrorListener = listener;
+        }),
       };
       readonly loadURL = mock(async (_url: string) => undefined);
       readonly isDestroyed = mock(() => destroyed);
+      readonly close = mock(() => { destroyed = true; });
 
       constructor(readonly options: BrowserWindowConstructorOptions) {}
     }
@@ -47,6 +52,7 @@ describe("toolchain bootstrap window", () => {
     const preventDefault = mock(() => undefined);
     navigationListener?.({ preventDefault });
     expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(preloadErrorListener).toBeDefined();
 
     const progress = {
       phase: "downloading" as const,
@@ -63,5 +69,30 @@ describe("toolchain bootstrap window", () => {
     destroyed = true;
     reportToolchainProgress(window as never, progress);
     expect(window.webContents.send).toHaveBeenCalledTimes(1);
+  });
+
+  test("closes and rejects when the bootstrap preload fails", async () => {
+    let preloadErrorListener: ((_event: unknown, path: string, error: Error) => void) | undefined;
+    class FailingBrowserWindow {
+      readonly webContents = {
+        on: mock(() => undefined),
+        send: mock(() => undefined),
+        setWindowOpenHandler: mock(() => undefined),
+        once: mock((_event: string, listener: (_event: unknown, path: string, error: Error) => void) => {
+          preloadErrorListener = listener;
+        }),
+      };
+      readonly loadURL = mock(() => new Promise<void>(() => undefined));
+      readonly isDestroyed = mock(() => false);
+      readonly close = mock(() => undefined);
+    }
+
+    const creating = createToolchainBootstrapWindow({
+      BrowserWindowCtor: FailingBrowserWindow as never,
+      dirname: "/app/electron",
+    });
+    preloadErrorListener?.({}, "/app/electron/toolchain-bootstrap-preload.js", new Error("syntax error"));
+
+    await expect(creating).rejects.toThrow("syntax error");
   });
 });

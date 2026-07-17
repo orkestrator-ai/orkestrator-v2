@@ -1430,6 +1430,10 @@ describe("ActionBar successful cleanup and merge actions", () => {
       "merged",
       false,
     );
+    expect(toastSuccessMock).toHaveBeenCalledWith("Branch merged", {
+      description: "feature/very-long-error",
+      id: "branch-merged-env-1",
+    });
   });
 
   test("uses the local merge path for a ready worktree", async () => {
@@ -1535,6 +1539,10 @@ describe("ActionBar merge completion", () => {
 
     await waitFor(() => {
       expect(mergePrMock).toHaveBeenCalledWith("container-1", "squash", true);
+      expect(toastSuccessMock).toHaveBeenCalledWith("Branch merged", {
+        description: "feature/very-long-error",
+        id: "branch-merged-env-1",
+      });
       expect(setEnvironmentPrBackendMock).toHaveBeenCalledWith(
         "env-1",
         "https://github.com/org/repo/pull/1",
@@ -1650,6 +1658,7 @@ describe("ActionBar error dialogs", () => {
     const dialogContent = screen.getByTestId("alert-dialog-content");
 
     expect(mergePrMock).toHaveBeenCalledWith("container-1", "squash", true);
+    expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(dialogContent.className).toContain("max-h-[calc(100vh-2rem)]");
     expect(dialogContent.className).toContain("overflow-hidden");
     expect(errorAlert.className).toContain("max-h-[min(16rem,40vh)]");

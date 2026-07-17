@@ -684,6 +684,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         await backend.mergePr(selectedEnvironment!.containerId!, "squash", true);
       }
       console.log("[ActionBar] Merge command completed successfully");
+      toast.success("Branch merged", {
+        description: selectedEnvironment.branch,
+        id: `branch-merged-${selectedEnvironmentId}`,
+      });
 
       // IMPORTANT: Immediately save the "merged" state after successful merge.
       // For container environments, `gh pr merge --delete-branch` checks out the base branch
@@ -725,7 +729,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       setMergeDialogOpen(true); // Re-open dialog to show error
       setIsMerging(false);
     }
-  }, [selectedEnvironment?.containerId, selectedEnvironmentId, prUrl, isLocalEnvironment, setEnvironmentPR]);
+  }, [selectedEnvironment?.branch, selectedEnvironment?.containerId, selectedEnvironmentId, prUrl, isLocalEnvironment, setEnvironmentPR]);
 
   // Get target branch for PR dialog
   const targetBranch = selectedProjectId

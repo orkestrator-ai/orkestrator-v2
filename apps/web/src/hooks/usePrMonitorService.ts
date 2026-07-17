@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useRef, useCallback } from "react";
+import { toast } from "sonner";
 import {
   usePrMonitorStore,
   PR_MONITOR_TIMEOUTS,
@@ -203,6 +204,11 @@ export function usePrMonitorService(): void {
           detectionResult.data.state === "merged" &&
           environment.prState !== "merged"
         ) {
+          toast.success("Branch merged", {
+            description: environment.branch,
+            id: `branch-merged-${environmentId}`,
+          });
+
           try {
             const { task: taskInStore, taskId } = findTaskForEnvironment(environmentId);
 

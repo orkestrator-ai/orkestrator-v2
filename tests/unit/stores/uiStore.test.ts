@@ -7,6 +7,7 @@ describe("uiStore", () => {
     useUIStore.setState({
       selectedProjectId: null,
       selectedEnvironmentId: null,
+      recentProjectIds: [],
       projectBoardTab: "kanban",
       projectBoardNotesOpen: false,
       sidebarWidth: 280,
@@ -21,6 +22,7 @@ describe("uiStore", () => {
     const state = useUIStore.getState();
     expect(state.selectedProjectId).toBeNull();
     expect(state.selectedEnvironmentId).toBeNull();
+    expect(state.recentProjectIds).toEqual([]);
     expect(state.projectBoardTab).toBe("kanban");
     expect(state.projectBoardNotesOpen).toBe(false);
     expect(state.sidebarWidth).toBe(280);
@@ -38,6 +40,7 @@ describe("uiStore", () => {
     const state = useUIStore.getState();
     expect(state.selectedProjectId).toBe("project-1");
     expect(state.selectedEnvironmentId).toBeNull();
+    expect(state.recentProjectIds).toEqual(["project-1"]);
   });
 
   test("selectProject with null clears selection", () => {
@@ -96,6 +99,30 @@ describe("uiStore", () => {
     const state = useUIStore.getState();
     expect(state.selectedProjectId).toBe("project-1");
     expect(state.selectedEnvironmentId).toBe("env-1");
+    expect(state.recentProjectIds).toEqual(["project-1"]);
+  });
+
+  test("keeps the five most recently opened projects without duplicates", () => {
+    for (const projectId of ["p1", "p2", "p3", "p4", "p5", "p6", "p3"]) {
+      useUIStore.getState().selectProject(projectId);
+    }
+
+    expect(useUIStore.getState().recentProjectIds).toEqual([
+      "p3",
+      "p6",
+      "p5",
+      "p4",
+      "p2",
+    ]);
+
+    useUIStore.getState().selectProject(null);
+    expect(useUIStore.getState().recentProjectIds).toEqual([
+      "p3",
+      "p6",
+      "p5",
+      "p4",
+      "p2",
+    ]);
   });
 
   test("toggleProjectCollapse adds and removes", () => {

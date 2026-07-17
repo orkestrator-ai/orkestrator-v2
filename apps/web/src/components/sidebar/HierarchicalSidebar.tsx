@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Plus, FolderGit2, Square, Trash2, RotateCw, RefreshCw } from "lucide-react";
 import { SortableProjectGroup } from "./SortableProjectGroup";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
-import { CreateEnvironmentDialog, type ClaudeOptions } from "@/components/environments/CreateEnvironmentDialog";
+import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -33,9 +33,8 @@ import {
 import { useProjects } from "@/hooks/useProjects";
 import { useEnvironments } from "@/hooks/useEnvironments";
 import { useEnvironmentListPolling } from "@/hooks/useEnvironmentListPolling";
-import { useUIStore, useClaudeOptionsStore, useConfigStore } from "@/stores";
+import { useUIStore } from "@/stores";
 import { RepositorySettings } from "@/components/settings/RepositorySettings";
-import { renameEnvironmentFromPrompt, updateEnvironmentAgentSettings } from "@/lib/backend";
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import type { Environment, Project } from "@/types";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
@@ -153,7 +152,6 @@ export function HierarchicalSidebar() {
   const [showAddProjectDialog, setShowAddProjectDialog] = useState(false);
   const [showCreateEnvDialog, setShowCreateEnvDialog] = useState(false);
   const [createEnvProjectId, setCreateEnvProjectId] = useState<string | null>(null);
-  const [isCreatingEnv, setIsCreatingEnv] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeType, setActiveType] = useState<"project" | "environment" | null>(null);
   const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false);
@@ -190,7 +188,6 @@ export function HierarchicalSidebar() {
     setMultiSelection,
     clearMultiSelection,
     collapseEmptyProjects,
-    setProjectCollapsed,
   } = useUIStore();
 
   const isMultiSelectMode = selectedEnvironmentIds.length >= 1;
@@ -206,10 +203,6 @@ export function HierarchicalSidebar() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isMultiSelectMode, clearMultiSelection]);
-
-  const { setOptions } = useClaudeOptionsStore();
-  // Subscribe to config to ensure re-render when config loads from backend
-  const { config } = useConfigStore();
 
   // Track which project IDs we've already loaded environments for
   const loadedProjectIdsRef = useRef<Set<string>>(new Set());
@@ -331,76 +324,6 @@ export function HierarchicalSidebar() {
   const handleOpenCreateEnvDialog = (projectId: string) => {
     setCreateEnvProjectId(projectId);
     setShowCreateEnvDialog(true);
-  };
-
-  const handleCreateEnvironment = async (options: ClaudeOptions) => {
-    if (!createEnvProjectId) return;
-
-    setIsCreatingEnv(true);
-    try {
-      const environment = await createEnvironment(
-        createEnvProjectId,
-        options.environmentName || undefined,
-        options.networkAccessMode,
-        options.initialPrompt || undefined,
-        options.portMappings.length > 0 ? options.portMappings : undefined,
-        options.environmentType
-      );
-
-      const configuredEnvironment = await updateEnvironmentAgentSettings(
-        environment.id,
-        options.agentType,
-        options.agentType === "claude" ? options.claudeMode : null,
-        null,
-        options.agentType === "opencode" ? options.opencodeMode : null,
-        options.agentType === "codex" ? options.codexMode : null,
-      );
-      updateEnvironment(environment.id, configuredEnvironment);
-
-      // Store agent options for this environment (needed for terminal to know tab type)
-      setOptions(configuredEnvironment.id, {
-        launchAgent: options.launchAgent,
-        agentType: options.agentType,
-        initialPrompt: options.initialPrompt,
-        initialPromptAttachments: options.initialPromptAttachments,
-      });
-
-      // Expand the project if collapsed so the new environment is visible
-      setProjectCollapsed(createEnvProjectId, false);
-
-      // Always select the newly created environment
-      selectProjectAndEnvironment(createEnvProjectId, configuredEnvironment.id);
-
-      setShowCreateEnvDialog(false);
-      setCreateEnvProjectId(null);
-
-      // Auto-start after the environment is visible. Local startup creates the
-      // worktree and may fetch from the remote, so it should not keep the modal
-      // open or hide the newly-created environment. Naming runs only after
-      // start has been initiated so a slow LLM rename never leaves the user on
-      // the stopped-environment overlay.
-      const initialPromptForNaming = options.initialPrompt.trim();
-      const shouldRenameFromInitialPrompt = !options.environmentName.trim() && initialPromptForNaming.length > 0;
-      void (async () => {
-        try {
-          await startEnvironment(configuredEnvironment.id, options.initialPrompt);
-        } catch (startErr) {
-          console.error("Failed to auto-start environment:", startErr);
-          // Environment was created successfully, user can manually start it.
-          return;
-        }
-
-        if (shouldRenameFromInitialPrompt) {
-          try {
-            await renameEnvironmentFromPrompt(configuredEnvironment.id, initialPromptForNaming);
-          } catch (renameErr) {
-            console.error("Failed to rename environment from initial prompt:", renameErr);
-          }
-        }
-      })();
-    } finally {
-      setIsCreatingEnv(false);
-    }
   };
 
   // Build a flat ordered list of visible environment IDs in display order
@@ -707,17 +630,16 @@ export function HierarchicalSidebar() {
       />
 
       {/* Create Environment Dialog */}
-      <CreateEnvironmentDialog
+      <CreateEnvironmentFlowDialog
         open={showCreateEnvDialog}
-        onOpenChange={setShowCreateEnvDialog}
-        onCreate={handleCreateEnvironment}
-        isLoading={isCreatingEnv}
+        onOpenChange={(open) => {
+          setShowCreateEnvDialog(open);
+          if (!open) setCreateEnvProjectId(null);
+        }}
         projectId={createEnvProjectId}
-        defaultPortMappings={
-          createEnvProjectId
-            ? config.repositories[createEnvProjectId]?.defaultPortMappings
-            : undefined
-        }
+        createEnvironment={createEnvironment}
+        updateEnvironment={updateEnvironment}
+        startEnvironment={startEnvironment}
       />
 
       {/* Bulk Delete Confirmation Dialog */}

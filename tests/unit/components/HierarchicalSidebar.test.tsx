@@ -179,6 +179,7 @@ describe("HierarchicalSidebar", () => {
     useUIStore.setState({
       selectedProjectId: null,
       selectedEnvironmentId: null,
+      recentProjectIds: [],
       collapsedProjects: [],
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],

@@ -13,6 +13,7 @@ import { useOpenCodeStore, createOpenCodeSessionKey } from "@/stores/openCodeSto
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { useProjectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { AppConfig, Environment } from "@/types";
 
@@ -287,6 +288,7 @@ function resetStores({
   useUIStore.setState({
     selectedProjectId,
     selectedEnvironmentId,
+    recentProjectIds: [],
     sidebarWidth: 280,
     collapsedProjects: [],
     selectedEnvironmentIds: [],
@@ -297,6 +299,12 @@ function resetStores({
   useBuildPipelineStore.setState({
     pipelines: new Map(),
     buildEnvironmentIds: new Set(),
+  });
+
+  useProjectStore.setState({
+    projects: [],
+    isLoading: false,
+    error: null,
   });
 
   useConfigStore.setState({

@@ -123,8 +123,8 @@ export function BrowserTab({
   }, [currentUrl]);
 
   return (
-    <div className={cn("absolute inset-0 flex flex-col bg-background", !isActive && "hidden")}>
-      <div className="flex min-h-11 shrink-0 items-center gap-1.5 border-b border-border/80 bg-muted/25 px-2 py-1.5">
+    <div className={cn("@container/browser absolute inset-0 flex min-w-0 flex-col overflow-hidden bg-background", !isActive && "hidden")}>
+      <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-1.5 border-b border-border/80 bg-muted/25 px-2 py-1.5 @md/browser:flex-nowrap">
         <Button
           type="button"
           variant="ghost"
@@ -159,12 +159,15 @@ export function BrowserTab({
           <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
         </Button>
 
-        <form className="flex min-w-0 flex-1 items-center" onSubmit={handleSubmit}>
+        <form
+          className="flex w-full min-w-0 basis-full items-center @md/browser:w-auto @md/browser:basis-0 @md/browser:flex-1"
+          onSubmit={handleSubmit}
+        >
           <div className={cn(
             "flex h-8 min-w-0 flex-1 items-center rounded-md border bg-background shadow-sm transition-colors focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15",
             error ? "border-destructive/70" : "border-border",
           )}>
-            <div className="hidden h-full shrink-0 items-center gap-1.5 border-r border-border/70 px-2.5 text-[11px] font-medium text-muted-foreground sm:flex">
+            <div className="hidden h-full shrink-0 items-center gap-1.5 border-r border-border/70 px-2.5 text-[11px] font-medium text-muted-foreground @lg/browser:flex">
               <Server className="h-3.5 w-3.5 text-primary" />
               Backend
             </div>
@@ -188,26 +191,26 @@ export function BrowserTab({
       </div>
 
       {error && (
-        <div role="alert" className="shrink-0 border-b border-destructive/20 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+        <div role="alert" className="min-w-0 shrink-0 overflow-x-hidden border-b border-destructive/20 bg-destructive/10 px-3 py-1.5 text-xs text-destructive break-words [overflow-wrap:anywhere]">
           {error}
         </div>
       )}
 
-      <div className="relative min-h-0 flex-1 bg-background">
+      <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
         {resolved ? (
           <iframe
             key={`${resolved.iframeUrl}:${loadRevision}`}
             src={resolved.iframeUrl}
             data-load-revision={loadRevision}
             title="Backend browser preview"
-            className="absolute inset-0 h-full w-full border-0 bg-white"
+            className="absolute inset-0 block h-full min-h-0 w-full min-w-0 max-w-full border-0 bg-background [color-scheme:dark]"
             sandbox={previewSandbox}
             referrerPolicy={isDirectPreview ? "no-referrer" : undefined}
             onLoad={() => setIsLoading(false)}
           />
         ) : (
           <div className="absolute inset-0 grid place-items-center bg-[radial-gradient(circle_at_center,hsl(var(--muted))_0,transparent_65%)] p-6 text-center">
-            <div className="max-w-sm">
+            <div className="w-full min-w-0 max-w-sm">
               <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-border bg-background shadow-sm">
                 <Globe2 className="h-6 w-6 text-primary" />
               </div>

@@ -69,6 +69,30 @@ describe("BrowserTab", () => {
     expect(container.querySelector("iframe")).toBeNull();
   });
 
+  test("reflows its toolbar against the pane width and clamps horizontal overflow", () => {
+    const { container } = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "" }}
+        isActive
+      />,
+    );
+
+    const root = container.firstElementChild as HTMLElement;
+    const toolbar = root.firstElementChild as HTMLElement;
+    const form = screen.getByRole("textbox", { name: "Browser address" }).closest("form");
+    const backendLabel = screen.getByText("Backend");
+
+    expect(root.className).toContain("@container/browser");
+    expect(root.className).toContain("overflow-hidden");
+    expect(toolbar.className).toContain("flex-wrap");
+    expect(toolbar.className).toContain("@md/browser:flex-nowrap");
+    expect(form?.className).toContain("basis-full");
+    expect(form?.className).toContain("@md/browser:flex-1");
+    expect(backendLabel?.className).toContain("@lg/browser:flex");
+  });
+
   test("normalizes, loads, and persists a submitted backend-local address", async () => {
     const { container } = render(
       <BrowserTab
@@ -92,6 +116,8 @@ describe("BrowserTab", () => {
     const iframe = container.querySelector("iframe");
     expect(iframe?.getAttribute("sandbox")).toContain("allow-same-origin");
     expect(iframe?.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(iframe?.className).toContain("[color-scheme:dark]");
+    expect(iframe?.className).toContain("min-w-0");
   });
 
   test("keeps invalid addresses in the bar and explains the constraint", () => {

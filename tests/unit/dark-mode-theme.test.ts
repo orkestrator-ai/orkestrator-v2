@@ -46,4 +46,11 @@ describe("forced dark mode theming", () => {
 
     expect(css).toMatch(/color-scheme:\s*dark/);
   });
+
+  test("native scrollbars use the dark surface palette", () => {
+    const css = read("apps/web/src/index.css");
+
+    expect(css).toContain("scrollbar-color: var(--color-border) var(--color-background)");
+    expect(css).toMatch(/::-webkit-scrollbar-track\s*{[^}]*@apply\s+bg-background/s);
+  });
 });

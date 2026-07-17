@@ -42,7 +42,41 @@ describe("mobile responsive layout contracts", () => {
     expect(css).toContain("font-size: 16px");
     expect(css).toContain("max-width: calc(100vw - 1rem)");
     expect(css).toContain("min-height: 2.75rem");
-    expect(css).toContain("create-environment-tab-enter-forward");
-    expect(css).toContain("prefers-reduced-motion: no-preference");
+  });
+
+  test("mobile environment tab animations preserve direction and motion preferences", () => {
+    const css = read("apps/web/src/index.css");
+
+    expect(css).toContain(`@keyframes create-environment-tab-enter-forward {
+  from {
+    opacity: 0;
+    transform: translateX(0.75rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}`);
+    expect(css).toContain(`@keyframes create-environment-tab-enter-backward {
+  from {
+    opacity: 0;
+    transform: translateX(-0.75rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}`);
+    expect(css).toContain(`@media (max-width: 639px) and (prefers-reduced-motion: no-preference) {
+  .create-environment-mobile-tab-panel[data-state="active"][data-mobile-transition="forward"] {
+    animation: create-environment-tab-enter-forward 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .create-environment-mobile-tab-panel[data-state="active"][data-mobile-transition="backward"] {
+    animation: create-environment-tab-enter-backward 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+}`);
   });
 });

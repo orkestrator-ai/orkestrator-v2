@@ -167,6 +167,7 @@ export function CreateEnvironmentDialog({
     useState<MobileTabTransitionDirection | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
+  const promptPasteRequestIdRef = useRef(0);
 
   // Restore draft prompt when dialog opens, focus the textarea
   useEffect(() => {
@@ -188,6 +189,7 @@ export function CreateEnvironmentDialog({
   }, [open, launchAgent, mobileSection, projectId]);
 
   const resetForm = useCallback(() => {
+    promptPasteRequestIdRef.current += 1;
     setEnvironmentType(configEnvironmentType);
     setEnvironmentName("");
     setLaunchAgent(true);
@@ -207,10 +209,18 @@ export function CreateEnvironmentDialog({
   const handlePromptPaste = useCallback(async (event: ClipboardEvent) => {
     if (!open || !launchAgent || document.activeElement !== promptRef.current) return;
 
+    const requestId = ++promptPasteRequestIdRef.current;
+    const isCurrentRequest = () =>
+      requestId === promptPasteRequestIdRef.current &&
+      document.activeElement === promptRef.current;
+
     try {
       const image = await readImage();
+      if (!isCurrentRequest()) return;
       const rgba = await image.rgba();
+      if (!isCurrentRequest()) return;
       const { width, height } = await image.size();
+      if (!isCurrentRequest()) return;
 
       let canvas = document.createElement("canvas");
       canvas.width = width;
@@ -261,7 +271,10 @@ export function CreateEnvironmentDialog({
       void handlePromptPaste(event as ClipboardEvent);
     };
     document.addEventListener("paste", listener, { capture: true });
-    return () => document.removeEventListener("paste", listener, { capture: true });
+    return () => {
+      promptPasteRequestIdRef.current += 1;
+      document.removeEventListener("paste", listener, { capture: true });
+    };
   }, [open, handlePromptPaste]);
 
   const removeInitialPromptAttachment = useCallback((id: string) => {
@@ -367,7 +380,7 @@ export function CreateEnvironmentDialog({
       e.preventDefault();
 
       // Validate port mappings before submission
-      if (!validatePortMappings()) {
+      if (environmentType === "containerized" && !validatePortMappings()) {
         console.error("Invalid port mappings: ports must be between 1 and 65535");
         return;
       }
@@ -384,7 +397,7 @@ export function CreateEnvironmentDialog({
           initialPrompt: initialPrompt.trim(),
           initialPromptAttachments,
           networkAccessMode,
-          portMappings,
+          portMappings: environmentType === "containerized" ? portMappings : [],
         });
         // Clear the draft on successful creation and close directly
         // (bypass handleOpenChange which would re-save the draft)

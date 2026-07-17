@@ -2103,7 +2103,7 @@ describe("TerminalContainer", () => {
           />
           <CreateTabHarness
             type="browser"
-            options={{ initialUrl: "http://localhost:49152/" }}
+            options={{ initialUrl: "  http://localhost:49152/  " }}
           />
         </TerminalProvider>
       );
@@ -2113,6 +2113,120 @@ describe("TerminalContainer", () => {
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((tab) => tab.type === "browser");
         expect(created?.browserData).toEqual({ url: "http://localhost:49152/" });
+      });
+    });
+
+    test("normalizes a whitespace-only browser address to the empty start screen", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness type="browser" options={{ initialUrl: "   " }} />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        const created = usePaneLayoutStore
+          .getState()
+          .getAllTabs("env-visible")
+          .find((tab) => tab.type === "browser");
+        expect(created?.browserData).toEqual({ url: "" });
+      });
+    });
+
+    test("does not create browser tabs for stopped environments", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning={false}
+            isActive
+          />
+          <CreateTabHarness type="browser" options={{ initialUrl: "http://localhost:3000/" }} />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        expect(
+          usePaneLayoutStore.getState().getAllTabs("env-visible").some((tab) => tab.type === "browser"),
+        ).toBe(false);
+      });
+    });
+
+    test("respects the tab limit when creating browser tabs", async () => {
+      usePaneLayoutStore.setState((state) => ({
+        environments: new Map(state.environments).set("env-visible", {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: Array.from({ length: 9 }, (_, index) => ({ id: `tab-${index}`, type: "plain" as const })),
+            activeTabId: "tab-0",
+          },
+          activePaneId: "default",
+          containerId: "container-visible",
+        }),
+      }));
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness type="browser" options={{ initialUrl: "http://localhost:3000/" }} />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        const tabs = usePaneLayoutStore.getState().getAllTabs("env-visible");
+        expect(tabs).toHaveLength(9);
+        expect(tabs.some((tab) => tab.type === "browser")).toBe(false);
+      });
+    });
+
+    test("creates browser tabs in the active pane", async () => {
+      usePaneLayoutStore.setState((state) => ({
+        environments: new Map(state.environments).set("env-visible", {
+          root: {
+            kind: "split",
+            id: "split",
+            direction: "horizontal",
+            sizes: [50, 50],
+            depth: 1,
+            children: [
+              { kind: "leaf", id: "left", tabs: [{ id: "left-tab", type: "plain" }], activeTabId: "left-tab" },
+              { kind: "leaf", id: "right", tabs: [{ id: "right-tab", type: "plain" }], activeTabId: "right-tab" },
+            ],
+          },
+          activePaneId: "right",
+          containerId: "container-visible",
+        }),
+      }));
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness type="browser" options={{ initialUrl: "http://localhost:3000/" }} />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        const right = usePaneLayoutStore.getState().getPane("right", "env-visible");
+        const left = usePaneLayoutStore.getState().getPane("left", "env-visible");
+        expect(right?.tabs.some((tab) => tab.type === "browser")).toBe(true);
+        expect(left?.tabs.some((tab) => tab.type === "browser")).toBe(false);
       });
     });
 

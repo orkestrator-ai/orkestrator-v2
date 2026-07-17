@@ -64,6 +64,7 @@ describe("DraggableTabBar", () => {
           type: "claude-tmux",
           claudeTmuxData: { environmentId: "environment" },
         },
+        { id: "browser", type: "browser", browserData: { url: "http://localhost:3000/" } },
         { id: "terminal", type: "plain" },
       ],
     };
@@ -84,14 +85,15 @@ describe("DraggableTabBar", () => {
       ["Codex 2", "codex"],
       ["OpenCode 3", "opencode"],
       ["Claude 4", "tmux"],
+      ["Browser 5", "browser"],
     ] as const) {
       fireEvent.contextMenu(screen.getByText(label));
       fireEvent.click(screen.getByText("Refresh"));
       expect(onTabRefresh).toHaveBeenLastCalledWith(tabId);
     }
 
-    expect(onTabRefresh).toHaveBeenCalledTimes(4);
-    fireEvent.contextMenu(screen.getByText("Terminal 5"));
+    expect(onTabRefresh).toHaveBeenCalledTimes(5);
+    fireEvent.contextMenu(screen.getByText("Terminal 6"));
     expect(screen.queryByText("Refresh")).toBeNull();
   });
 });

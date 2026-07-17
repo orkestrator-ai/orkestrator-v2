@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   isTailscaleAddress,
@@ -1118,10 +1119,127 @@ describe("remote gateway", () => {
     expect(page.body).toBe(`<script type="module" src="${prefix}/src/main.js"></script>`);
     expect(page.headers["x-frame-options"]).toBeUndefined();
     expect(page.headers["content-security-policy"]).toBeUndefined();
-    expect(page.headers["access-control-allow-origin"]).toBe("*");
+    expect(page.headers["access-control-allow-origin"]).toBe("null");
+    expect(page.headers["access-control-allow-credentials"]).toBe("true");
 
     const script = await requestUrl(`${info.url}${prefix}/src/main.js`, { headers });
     expect(script.body).toBe(`import "${prefix}/src/dependency.js";`);
+  });
+
+  test("allows null-origin browser preview preflights and forwards non-simple requests", async () => {
+    const received = mock(() => undefined);
+    const target = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      request.on("end", () => {
+        received(request.method, request.url, request.headers["x-preview-test"], Buffer.concat(chunks).toString("utf8"));
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end('{"ok":true}');
+      });
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const targetAddress = target.address();
+    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+
+    const { info } = await startGateway();
+    const targetUrl = `${info.url}__orkestrator/browser/loopback/${targetAddress.port}/api`;
+    const preflight = await requestUrl(targetUrl, {
+      method: "OPTIONS",
+      headers: {
+        origin: "null",
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "content-type, x-preview-test",
+      },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers["access-control-allow-origin"]).toBe("null");
+    expect(preflight.headers["access-control-allow-credentials"]).toBe("true");
+    expect(preflight.headers["access-control-allow-headers"]).toBe("content-type, x-preview-test");
+    expect(received).not.toHaveBeenCalled();
+
+    const proxied = await requestUrl(targetUrl, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${info.token}`,
+        origin: "null",
+        "content-type": "application/json",
+        "x-preview-test": "forwarded",
+      },
+      body: '{"message":"hello"}',
+    });
+    expect(proxied.status).toBe(200);
+    expect(proxied.json()).toEqual({ ok: true });
+    expect(proxied.headers["access-control-allow-origin"]).toBe("null");
+    expect(proxied.headers["access-control-allow-credentials"]).toBe("true");
+    expect(received).toHaveBeenCalledWith("POST", "/api", "forwarded", '{"message":"hello"}');
+  });
+
+  test("decodes compressed preview text before rewriting it", async () => {
+    const compressed = gzipSync('<script src="/asset.js"></script>');
+    const target = createServer((_request, response) => {
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-encoding": "gzip",
+        "content-length": compressed.byteLength,
+      });
+      response.end(compressed);
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const targetAddress = target.address();
+    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+
+    const { info } = await startGateway();
+    const prefix = `/__orkestrator/browser/loopback/${targetAddress.port}`;
+    const result = await requestUrl(`${info.url}${prefix}/`, {
+      headers: { authorization: `Bearer ${info.token}`, origin: "null" },
+    });
+    expect(result.status).toBe(200);
+    expect(result.body).toBe(`<script src="${prefix}/asset.js"></script>`);
+    expect(result.headers["content-encoding"]).toBeUndefined();
+  });
+
+  test("rejects compressed preview text that expands beyond the rewrite limit", async () => {
+    const compressed = gzipSync(Buffer.alloc((8 * 1024 * 1024) + 1, 97));
+    const target = createServer((_request, response) => {
+      response.writeHead(200, {
+        "content-type": "text/css; charset=utf-8",
+        "content-encoding": "gzip",
+        "content-length": compressed.byteLength,
+      });
+      response.end(compressed);
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const targetAddress = target.address();
+    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+
+    const { info } = await startGateway();
+    const result = await requestUrl(`${info.url}__orkestrator/browser/loopback/${targetAddress.port}/large.css`, {
+      headers: { authorization: `Bearer ${info.token}`, origin: "null" },
+    });
+    expect(result.status).toBe(502);
+    expect(result.body).toContain("exceeded 8388608 decoded bytes");
+  });
+
+  test("aborts oversized streaming preview bodies without waiting for upstream completion", async () => {
+    const target = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
+      const chunk = Buffer.alloc(1024 * 1024, 97);
+      for (let index = 0; index < 9; index += 1) response.write(chunk);
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const targetAddress = target.address();
+    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+
+    const { info } = await startGateway();
+    const result = await requestUrl(`${info.url}__orkestrator/browser/loopback/${targetAddress.port}/large.js`, {
+      headers: { authorization: `Bearer ${info.token}`, origin: "null" },
+    });
+    expect(result.status).toBe(502);
+    expect(result.body).toContain("exceeded 8388608");
   });
 
   test("serves renderer requests through a configured dev server proxy", async () => {

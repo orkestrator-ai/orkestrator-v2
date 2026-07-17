@@ -22,6 +22,30 @@ describe("resolveGatewayBrowserPreviewUrl", () => {
       "http://localhost:3000/",
     );
   });
+
+  test("uses the current origin when the gateway has no explicit base URL", () => {
+    window.orkestratorGateway = { enabled: true };
+    expect(resolveGatewayBrowserPreviewUrl("http://localhost:3000/")).toBe(
+      `${window.location.origin}/__orkestrator/browser/loopback/3000/`,
+    );
+  });
+
+  test("supports IPv6 and the default HTTP port", () => {
+    window.orkestratorGateway = { enabled: true };
+    expect(resolveGatewayBrowserPreviewUrl("http://[::1]:6000/api/")).toBe(
+      `${window.location.origin}/__orkestrator/browser/loopback/6000/api/`,
+    );
+    expect(resolveGatewayBrowserPreviewUrl("http://127.0.0.1/")).toBe(
+      `${window.location.origin}/__orkestrator/browser/loopback/80/`,
+    );
+  });
+
+  test("leaves invalid, non-loopback, and non-HTTP addresses unchanged", () => {
+    window.orkestratorGateway = { enabled: true };
+    for (const address of ["not a url", "http://example.com:3000/", "https://localhost:3000/"]) {
+      expect(resolveGatewayBrowserPreviewUrl(address)).toBe(address);
+    }
+  });
 });
 
 describe("resolveGatewayLoopbackBaseUrl", () => {

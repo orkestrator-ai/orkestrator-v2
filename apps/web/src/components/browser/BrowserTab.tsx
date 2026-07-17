@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, Globe2, Loader2, RefreshCw, Server, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -29,14 +29,26 @@ export function BrowserTab({
   const [loadRevision, setLoadRevision] = useState(0);
   const [isLoading, setIsLoading] = useState(Boolean(data.url));
   const [error, setError] = useState<string | null>(null);
+  const previousRefreshRequestId = useRef(refreshRequestId);
+  const locallyPersistedUrl = useRef<string | null>(null);
 
   useEffect(() => {
+    const followsLocalNavigation = locallyPersistedUrl.current === data.url;
+    locallyPersistedUrl.current = null;
     setAddress(data.url);
     setCurrentUrl(data.url);
+    if (!followsLocalNavigation) {
+      setHistory(data.url ? [data.url] : []);
+      setHistoryIndex(data.url ? 0 : -1);
+      setIsLoading(Boolean(data.url));
+      setError(null);
+    }
   }, [data.url]);
 
   useEffect(() => {
-    if (refreshRequestId > 0 && currentUrl) {
+    const refreshChanged = refreshRequestId !== previousRefreshRequestId.current;
+    previousRefreshRequestId.current = refreshRequestId;
+    if (refreshChanged && refreshRequestId > 0 && currentUrl) {
       setIsLoading(true);
       setLoadRevision((revision) => revision + 1);
     }
@@ -50,15 +62,6 @@ export function BrowserTab({
       return null;
     }
   }, [currentUrl]);
-  const iframeIsCrossOrigin = useMemo(() => {
-    if (!resolved || typeof window === "undefined") return false;
-    try {
-      return new URL(resolved.iframeUrl).origin !== window.location.origin;
-    } catch {
-      return false;
-    }
-  }, [resolved]);
-
   const navigate = useCallback((nextAddress: string, recordHistory = true) => {
     let next;
     try {
@@ -73,6 +76,7 @@ export function BrowserTab({
     setCurrentUrl(next.displayUrl);
     setIsLoading(true);
     setLoadRevision((revision) => revision + 1);
+    locallyPersistedUrl.current = next.displayUrl;
     updateTabBrowserUrl(tabId, next.displayUrl, environmentId);
 
     if (recordHistory) {
@@ -182,12 +186,10 @@ export function BrowserTab({
           <iframe
             key={`${resolved.iframeUrl}:${loadRevision}`}
             src={resolved.iframeUrl}
+            data-load-revision={loadRevision}
             title="Backend browser preview"
             className="absolute inset-0 h-full w-full border-0 bg-white"
-            sandbox={cn(
-              "allow-downloads allow-forms allow-modals allow-pointer-lock allow-popups allow-presentation allow-scripts",
-              iframeIsCrossOrigin && "allow-same-origin",
-            )}
+            sandbox="allow-forms allow-pointer-lock allow-presentation allow-scripts"
             onLoad={() => setIsLoading(false)}
           />
         ) : (

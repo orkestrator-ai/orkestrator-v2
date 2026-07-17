@@ -12,6 +12,8 @@ import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 import type { Socket } from "node:net";
 import path from "node:path";
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { pipeline, type Readable, type Transform } from "node:stream";
+import { createBrotliDecompress, createUnzip } from "node:zlib";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import {
   GatewayTokenValidationError,
@@ -64,6 +66,7 @@ const API_PREFIX = "/__orkestrator";
 const DEFAULT_GATEWAY_PORT = 34121;
 const GATEWAY_PORT_FALLBACK_ATTEMPTS = 20;
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
+const MAX_BROWSER_PREVIEW_BODY_BYTES = 8 * 1024 * 1024;
 const KEEPALIVE_MS = 25_000;
 const CORS_ALLOWED_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
 const CORS_ALLOWED_HEADERS = "Authorization, Content-Type";
@@ -500,6 +503,16 @@ function isBrowserPreviewContentType(contentType: string | string[] | undefined)
   return /(?:text\/html|text\/css|(?:text|application)\/(?:javascript|x-javascript))/i.test(value);
 }
 
+function browserPreviewContentDecoder(contentEncoding: string | string[] | undefined): Transform | null | undefined {
+  const rawValue = (Array.isArray(contentEncoding) ? contentEncoding.join(",") : contentEncoding)?.trim().toLowerCase();
+  if (rawValue?.includes(",")) return undefined;
+  const value = rawValue;
+  if (!value || value === "identity") return null;
+  if (value === "gzip" || value === "x-gzip" || value === "deflate") return createUnzip();
+  if (value === "br") return createBrotliDecompress();
+  return undefined;
+}
+
 /** Keep root-relative development assets inside the browser-preview namespace. */
 export function rewriteBrowserPreviewBody(body: string, proxyPrefix: string, target: URL): string {
   const escapedPrefix = proxyPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -847,21 +860,46 @@ export class OrkestratorGateway {
     response.end();
   }
 
+  private handleBrowserPreviewCorsPreflight(request: IncomingMessage, response: ServerResponse): void {
+    const requestedHeaders = request.headers["access-control-request-headers"];
+    const allowedHeaders = Array.isArray(requestedHeaders)
+      ? requestedHeaders.join(", ")
+      : requestedHeaders?.trim() || CORS_ALLOWED_HEADERS;
+    response.writeHead(204, {
+      "access-control-allow-origin": "null",
+      "access-control-allow-credentials": "true",
+      "access-control-allow-methods": CORS_ALLOWED_METHODS,
+      "access-control-allow-headers": allowedHeaders,
+      "access-control-max-age": "600",
+      ...(request.headers["access-control-request-private-network"] === "true"
+        ? { "access-control-allow-private-network": "true" }
+        : {}),
+      vary: "Origin, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
+    });
+    response.end();
+  }
+
   private async handle(
     request: IncomingMessage,
     response: ServerResponse,
     listenerKind: "control" | "browser",
   ): Promise<void> {
     const url = new URL(request.url ?? "/", "http://orkestrator.local");
+    const isBrowserPreviewRequest = url.pathname.startsWith(`${API_PREFIX}/browser/loopback/`);
 
     if (request.method === "OPTIONS" && url.pathname.startsWith(`${API_PREFIX}/`)) {
-      this.handleCorsPreflight(request, response);
+      if (isBrowserPreviewRequest && request.headers.origin === "null") {
+        this.handleBrowserPreviewCorsPreflight(request, response);
+      } else {
+        this.handleCorsPreflight(request, response);
+      }
       return;
     }
 
-    const isBrowserPreviewRequest = url.pathname.startsWith(`${API_PREFIX}/browser/loopback/`);
     if (isBrowserPreviewRequest && request.headers.origin === "null") {
-      response.setHeader("access-control-allow-origin", "*");
+      response.setHeader("access-control-allow-origin", "null");
+      response.setHeader("access-control-allow-credentials", "true");
+      response.setHeader("vary", "Origin");
     } else if (url.pathname.startsWith(`${API_PREFIX}/`) && !this.applyCorsHeaders(request, response)) {
       jsonResponse(response, 403, { error: "Origin not allowed" });
       return;
@@ -1144,6 +1182,7 @@ export class OrkestratorGateway {
   private async proxyToTarget(request: IncomingMessage, response: ServerResponse, target: URL, proxyPrefix?: string, browserPreview = false): Promise<void> {
     await new Promise<void>((resolve) => {
       let settled = false;
+      let activeProxyResponse: IncomingMessage | null = null;
       const finish = () => {
         if (settled) return;
         settled = true;
@@ -1167,20 +1206,79 @@ export class OrkestratorGateway {
         method: request.method,
         headers: targetHeaders,
       }, (proxyResponse) => {
+        activeProxyResponse = proxyResponse;
         const responseHeaders = sanitizeProxyResponseHeaders(proxyResponse.headers, target, proxyPrefix);
         if (browserPreview) {
           delete responseHeaders["x-frame-options"];
           delete responseHeaders["content-security-policy"];
           delete responseHeaders["content-security-policy-report-only"];
-          responseHeaders["access-control-allow-origin"] = "*";
+          if (request.headers.origin === "null") {
+            responseHeaders["access-control-allow-origin"] = "null";
+            responseHeaders["access-control-allow-credentials"] = "true";
+            responseHeaders.vary = "Origin";
+          } else {
+            responseHeaders["access-control-allow-origin"] = "*";
+          }
         }
 
-        if (browserPreview && proxyPrefix && isBrowserPreviewContentType(proxyResponse.headers["content-type"])) {
+        if (
+          browserPreview
+          && proxyPrefix
+          && request.method !== "HEAD"
+          && isBrowserPreviewContentType(proxyResponse.headers["content-type"])
+        ) {
+          const decoder = browserPreviewContentDecoder(proxyResponse.headers["content-encoding"]);
+          if (decoder === undefined) {
+            proxyResponse.destroy();
+            fail(new Error("Browser preview response used an unsupported content encoding"));
+            return;
+          }
+
+          const contentLengthHeader = proxyResponse.headers["content-length"];
+          const contentLengthValue = Array.isArray(contentLengthHeader) ? contentLengthHeader[0] : contentLengthHeader;
+          const contentLength = Number.parseInt(contentLengthValue ?? "", 10);
+          if (Number.isFinite(contentLength) && contentLength > MAX_BROWSER_PREVIEW_BODY_BYTES) {
+            proxyResponse.destroy();
+            fail(new Error(`Browser preview response exceeded ${MAX_BROWSER_PREVIEW_BODY_BYTES} bytes`));
+            return;
+          }
+
           const chunks: Buffer[] = [];
-          proxyResponse.on("data", (chunk: Buffer | string) => {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          let sourceBytes = 0;
+          let decodedBytes = 0;
+          let bodySettled = false;
+          const bodyStream: Readable = decoder ? proxyResponse.pipe(decoder) : proxyResponse;
+          const abortBody = (error: Error) => {
+            if (bodySettled) return;
+            bodySettled = true;
+            decoder?.destroy();
+            proxyResponse.destroy();
+            fail(error);
+          };
+
+          if (decoder) {
+            proxyResponse.on("data", (chunk: Buffer | string) => {
+              sourceBytes += Buffer.byteLength(chunk);
+              if (sourceBytes > MAX_BROWSER_PREVIEW_BODY_BYTES) {
+                abortBody(new Error(`Browser preview response exceeded ${MAX_BROWSER_PREVIEW_BODY_BYTES} bytes`));
+              }
+            });
+            decoder.once("error", (error) => abortBody(error));
+          }
+
+          bodyStream.on("data", (chunk: Buffer | string) => {
+            if (bodySettled) return;
+            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            decodedBytes += buffer.byteLength;
+            if (decodedBytes > MAX_BROWSER_PREVIEW_BODY_BYTES) {
+              abortBody(new Error(`Browser preview response exceeded ${MAX_BROWSER_PREVIEW_BODY_BYTES} decoded bytes`));
+              return;
+            }
+            chunks.push(buffer);
           });
-          proxyResponse.once("end", () => {
+          bodyStream.once("end", () => {
+            if (bodySettled) return;
+            bodySettled = true;
             const rewritten = Buffer.from(rewriteBrowserPreviewBody(
               Buffer.concat(chunks).toString("utf8"),
               proxyPrefix,
@@ -1192,16 +1290,20 @@ export class OrkestratorGateway {
             response.end(rewritten);
             finish();
           });
-          proxyResponse.once("error", fail);
-          proxyResponse.once("aborted", () => fail(new Error("Browser preview response was aborted")));
+          proxyResponse.once("error", (error) => abortBody(error));
+          proxyResponse.once("aborted", () => abortBody(new Error("Browser preview response was aborted")));
           return;
         }
 
         response.writeHead(proxyResponse.statusCode ?? 502, responseHeaders);
-        proxyResponse.pipe(response);
-        proxyResponse.once("end", finish);
-        proxyResponse.once("error", fail);
-        proxyResponse.once("aborted", () => fail(new Error("Loopback proxy response was aborted")));
+        pipeline(proxyResponse, response, (error) => {
+          if (error) {
+            proxyRequest.destroy(error);
+            fail(error);
+            return;
+          }
+          finish();
+        });
       });
       this.proxyRequests.add(proxyRequest);
       proxyRequest.once("close", () => {
@@ -1209,6 +1311,21 @@ export class OrkestratorGateway {
       });
 
       proxyRequest.once("error", fail);
+
+      const cancelProxyForDisconnect = () => {
+        if (!settled && !response.writableFinished) {
+          const disconnectError = new Error("Proxy client disconnected");
+          this.logger.debug("[RemoteGateway] Proxy client disconnected; aborting upstream request");
+          activeProxyResponse?.socket.destroy(disconnectError);
+          activeProxyResponse?.destroy(disconnectError);
+          proxyRequest.socket?.destroy(disconnectError);
+          proxyRequest.destroy(disconnectError);
+          finish();
+        }
+      };
+      request.once("aborted", cancelProxyForDisconnect);
+      request.socket.once("close", cancelProxyForDisconnect);
+      response.once("close", cancelProxyForDisconnect);
 
       request.pipe(proxyRequest);
     });

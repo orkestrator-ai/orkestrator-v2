@@ -102,6 +102,9 @@ describe("getEnvironmentBrowserUrl", () => {
   });
 
   test("does not produce a browser default without a usable mapping", () => {
+    expect(getEnvironmentBrowserUrl(null)).toBeNull();
+    expect(getEnvironmentBrowserUrl(undefined)).toBeNull();
+    expect(getEnvironmentBrowserUrl(makeEnvironment({ hostEntryPort: 49152 }))).toBeNull();
     expect(getEnvironmentBrowserUrl(makeEnvironment({ entryPort: 3000 }))).toBeNull();
     expect(getEnvironmentBrowserUrl(makeEnvironment({ entryPort: 3000, hostEntryPort: 0 }))).toBeNull();
     expect(getEnvironmentBrowserUrl(makeEnvironment({

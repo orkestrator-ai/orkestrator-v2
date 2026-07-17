@@ -43,6 +43,20 @@ describe("parseTranscriptRecords", () => {
       },
     ]);
   });
+
+  test("normalizes non-string metadata while retaining object-like array payloads", () => {
+    const records = parseTranscriptRecords([
+      JSON.stringify({ timestamp: 123, type: false, payload: [] }),
+      JSON.stringify({ timestamp: null, type: {}, payload: null }),
+      JSON.stringify(["array record"]),
+    ]);
+
+    expect(records).toEqual([
+      { timestamp: undefined, type: undefined, payload: [] },
+      { timestamp: undefined, type: undefined, payload: undefined },
+      { timestamp: undefined, type: undefined, payload: undefined },
+    ]);
+  });
 });
 
 describe("deriveSubagentPartsFromTranscriptRecords", () => {
@@ -600,6 +614,427 @@ describe("deriveSubagentPartsFromTranscriptRecords", () => {
 
     expect(parts).toHaveLength(1);
     expect(parts[0]?.toolState).toBe("failure");
+  });
+
+  test("uses the resolved spawn-call map and lets matching output IDs take precedence", () => {
+    const parentRecords: TranscriptRecord[] = [
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: JSON.stringify({ message: "Resolved only" }),
+          call_id: "call-resolved",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: JSON.stringify({ message: "Output wins" }),
+          call_id: "call-output",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-output",
+          output: JSON.stringify({ agent_id: "output-agent", nickname: "Output" }),
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "unrelated-call",
+          output: JSON.stringify({ agent_id: "wrong-agent" }),
+        },
+      },
+    ];
+    const childRecords = new Map<string, TranscriptRecord[]>([
+      ["resolved-agent", [{ type: "event_msg", payload: { type: "task_complete" } }]],
+      ["output-agent", [{ type: "event_msg", payload: { type: "task_complete" } }]],
+    ]);
+
+    const parts = deriveSubagentPartsFromTranscriptRecords(
+      parentRecords,
+      childRecords,
+      new Map([
+        ["call-resolved", "resolved-agent"],
+        ["call-output", "ignored-resolved-agent"],
+        ["unrelated-call", "wrong-agent"],
+      ]),
+    );
+
+    expect(parts.map((part) => ({
+      prompt: part.subagentPrompt,
+      id: part.subagentId,
+      name: part.subagentName,
+      state: part.toolState,
+    }))).toEqual([
+      { prompt: "Resolved only", id: "resolved-agent", name: undefined, state: "success" },
+      { prompt: "Output wins", id: "output-agent", name: "Output", state: "success" },
+    ]);
+  });
+
+  test("retains resolved IDs across malformed or blank matching outputs", () => {
+    const parentRecords: TranscriptRecord[] = ["{broken", "", JSON.stringify({ agent_id: " " })]
+      .flatMap((output, index) => {
+        const callId = `call-${index}`;
+        return [
+          {
+            type: "response_item",
+            payload: {
+              type: "function_call",
+              name: "spawn_agent",
+              arguments: "",
+              call_id: callId,
+            },
+          },
+          {
+            type: "response_item",
+            payload: {
+              type: "function_call_output",
+              call_id: callId,
+              output,
+            },
+          },
+        ];
+      });
+    const resolved = new Map([
+      ["call-0", "resolved-0"],
+      ["call-1", "resolved-1"],
+      ["call-2", "resolved-2"],
+    ]);
+
+    const parts = deriveSubagentPartsFromTranscriptRecords(parentRecords, new Map(), resolved);
+
+    expect(parts.map((part) => part.subagentId)).toEqual([
+      "resolved-0",
+      "resolved-1",
+      "resolved-2",
+    ]);
+    expect(parts.every((part) => part.subagentRole === undefined)).toBe(true);
+    expect(parts.every((part) => part.subagentPrompt === undefined)).toBe(true);
+  });
+
+  test("ignores malformed spawn records and non-matching outputs", () => {
+    const parts = deriveSubagentPartsFromTranscriptRecords([
+      { type: "event_msg", payload: { type: "function_call", name: "spawn_agent", call_id: "event" } },
+      { type: "response_item", payload: { type: "function_call", name: "other", call_id: "other" } },
+      { type: "response_item", payload: { type: "function_call", name: "spawn_agent" } },
+      { type: "response_item", payload: { type: "function_call", name: "spawn_agent", call_id: " " } },
+      { type: "response_item", payload: { type: "function_call_output", call_id: "missing", output: "{}" } },
+      { type: "response_item", payload: { type: "function_call_output", output: "{}" } },
+      { type: "response_item", payload: { type: "function_call_output", call_id: " ", output: "{}" } },
+      { type: "response_item" },
+    ], new Map());
+
+    expect(parts).toEqual([]);
+  });
+
+  test("hydrates duplicate child IDs into both spawn parts without losing prompts", () => {
+    const parentRecords: TranscriptRecord[] = ["First", "Second"].flatMap((message, index) => {
+      const callId = `call-${index}`;
+      return [
+        {
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "spawn_agent",
+            arguments: JSON.stringify({ message }),
+            call_id: callId,
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "function_call_output",
+            call_id: callId,
+            output: JSON.stringify({ agent_id: "shared-agent" }),
+          },
+        },
+      ];
+    });
+    const childRecords = new Map<string, TranscriptRecord[]>([[
+      "shared-agent",
+      [{ type: "event_msg", payload: { type: "task_complete" } }],
+    ]]);
+
+    const parts = deriveSubagentPartsFromTranscriptRecords(parentRecords, childRecords);
+
+    expect(parts.map((part) => [part.subagentPrompt, part.subagentId, part.toolState])).toEqual([
+      ["First", "shared-agent", "success"],
+      ["Second", "shared-agent", "success"],
+    ]);
+  });
+
+  test("normalizes empty and non-JSON tool arguments", () => {
+    const childRecords: TranscriptRecord[] = [
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "empty_args",
+          arguments: "",
+          call_id: "empty",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "raw_args",
+          arguments: "not json",
+          call_id: "raw",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "array_args",
+          arguments: "[]",
+          call_id: "array",
+        },
+      },
+    ];
+
+    const [part] = deriveSubagentPartsFromTranscriptRecords([
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: "{}",
+          call_id: "spawn",
+        },
+      },
+    ], new Map([["agent", childRecords]]), new Map([["spawn", "agent"]]));
+
+    expect(part?.subagentActions.map((action) => action.toolArgs)).toEqual([
+      undefined,
+      { input: "not json" },
+      [],
+    ]);
+  });
+
+  test("serializes primitive, object, and circular tool outputs", () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const childRecords: TranscriptRecord[] = [];
+    const outputs: Array<[string, unknown]> = [
+      ["undefined", undefined],
+      ["number", 42],
+      ["boolean", false],
+      ["null", null],
+      ["object", { ok: true }],
+      ["circular", circular],
+    ];
+    for (const [callId, output] of outputs) {
+      childRecords.push(
+        {
+          type: "response_item",
+          payload: { type: "function_call", name: callId, arguments: "{}", call_id: callId },
+        },
+        {
+          type: "response_item",
+          payload: { type: "function_call_output", call_id: callId, output },
+        },
+      );
+    }
+
+    const [part] = deriveSubagentPartsFromTranscriptRecords([
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "spawn_agent", call_id: "spawn" },
+      },
+    ], new Map([["agent", childRecords]]), new Map([["spawn", "agent"]]));
+
+    expect(part?.subagentActions.map((action) => action.toolOutput)).toEqual([
+      undefined,
+      "42",
+      "false",
+      "null",
+      "{\n  \"ok\": true\n}",
+      "[object Object]",
+    ]);
+    expect(part?.subagentActions.every((action) => action.toolState === undefined)).toBe(true);
+  });
+
+  test("applies custom tool outputs while preserving their terminal states", () => {
+    const childRecords: TranscriptRecord[] = [
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "completed_tool",
+          input: { key: "value" },
+          output: { done: true },
+          status: "completed",
+          call_id: "completed",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "pending_tool",
+          input: "raw input",
+          call_id: "pending",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "failed_without_output",
+          status: "failed",
+          call_id: "failed",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          call_id: "pending",
+          output: "later output",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          call_id: "unknown",
+          output: "ignored",
+        },
+      },
+      {
+        type: "response_item",
+        payload: { type: "custom_tool_call_output", output: "ignored" },
+      },
+    ];
+    const [part] = deriveSubagentPartsFromTranscriptRecords([
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "spawn_agent", call_id: "spawn" },
+      },
+    ], new Map([["agent", childRecords]]), new Map([["spawn", "agent"]]));
+
+    expect(part?.subagentActions).toEqual([
+      expect.objectContaining({
+        toolName: "completed_tool",
+        toolArgs: { key: "value" },
+        toolState: "success",
+        toolOutput: "{\n  \"done\": true\n}",
+      }),
+      expect.objectContaining({
+        toolName: "pending_tool",
+        toolArgs: { input: "raw input" },
+        toolState: "pending",
+        toolOutput: "later output",
+      }),
+      expect.objectContaining({
+        toolName: "failed_without_output",
+        toolState: "failure",
+        toolOutput: undefined,
+        toolError: "Tool failed",
+      }),
+    ]);
+  });
+
+  test("marks final-answer messages complete and ignores non-final messages", () => {
+    const baseParent: TranscriptRecord[] = [{
+      type: "response_item",
+      payload: { type: "function_call", name: "spawn_agent", call_id: "spawn" },
+    }];
+    const makePart = (childRecords: TranscriptRecord[]) => deriveSubagentPartsFromTranscriptRecords(
+      baseParent,
+      new Map([["agent", childRecords]]),
+      new Map([["spawn", "agent"]]),
+    )[0];
+
+    expect(makePart([
+      { type: "response_item", payload: { type: "message", phase: "commentary" } },
+    ])?.toolState).toBe("pending");
+    expect(makePart([
+      { type: "response_item", payload: { type: "message", phase: "final_answer" } },
+    ])?.toolState).toBe("success");
+  });
+
+  test("handles wait errors, aborts, malformed outputs, and success precedence", () => {
+    const spawn = (agentId: string): TranscriptRecord[] => [
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          call_id: `spawn-${agentId}`,
+          arguments: "{}",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: `spawn-${agentId}`,
+          output: JSON.stringify({ agent_id: agentId }),
+        },
+      },
+    ];
+    const wait = (callId: string, output: unknown): TranscriptRecord[] => [
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "wait_agent", call_id: callId, arguments: "{}" },
+      },
+      {
+        type: "response_item",
+        payload: { type: "function_call_output", call_id: callId, output },
+      },
+    ];
+    const parentRecords = [
+      ...spawn("error-agent"),
+      ...spawn("aborted-agent"),
+      ...spawn("malformed-agent"),
+      ...spawn("parent-success-agent"),
+      ...spawn("child-success-agent"),
+      ...wait("wait-error", JSON.stringify({ status: { "error-agent": { error: "boom" } } })),
+      ...wait("wait-aborted", JSON.stringify({ status: { "aborted-agent": { aborted: true } } })),
+      ...wait("wait-malformed-json", "{broken"),
+      ...wait("wait-malformed-status", JSON.stringify({ status: [] })),
+      ...wait("wait-non-string", { status: { "malformed-agent": { failed: "ignored" } } }),
+      ...wait("wait-success", JSON.stringify({
+        status: { "parent-success-agent": { completed: "done", failed: "also present" } },
+      })),
+      ...wait("wait-child-failure", JSON.stringify({
+        status: { "child-success-agent": { failed: "parent says failure" } },
+      })),
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "not-a-wait-call",
+          output: JSON.stringify({ status: { "malformed-agent": { failed: "ignored" } } }),
+        },
+      },
+    ];
+    const childRecords = new Map<string, TranscriptRecord[]>([
+      ["parent-success-agent", [{ type: "event_msg", payload: { type: "task_failed" } }]],
+      ["child-success-agent", [{ type: "event_msg", payload: { type: "task_complete" } }]],
+    ]);
+
+    const parts = deriveSubagentPartsFromTranscriptRecords(parentRecords, childRecords);
+    const states = Object.fromEntries(parts.map((part) => [part.subagentId, part.toolState]));
+
+    expect(states).toEqual({
+      "error-agent": "failure",
+      "aborted-agent": "failure",
+      "malformed-agent": "pending",
+      "parent-success-agent": "success",
+      "child-success-agent": "success",
+    });
   });
 
   test("inserts collated subagent parts without reordering existing message parts", () => {

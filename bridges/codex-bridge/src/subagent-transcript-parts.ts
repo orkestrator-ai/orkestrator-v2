@@ -15,7 +15,7 @@ export interface TranscriptLike {
 interface DeriveTranscriptSubagentPartsOptions {
   threadId?: string | null;
   currentTurnStartedAt?: string;
-  fallbackAgentIdsInSpawnOrder?: readonly string[];
+  fallbackAgentIdsInSpawnOrder?: readonly (string | undefined)[];
   loadSessionMeta: (threadId: string) => Promise<PersistedSessionMetaLike | null>;
   loadTranscript: (path: string) => Promise<TranscriptLike>;
 }
@@ -85,7 +85,6 @@ export async function deriveTranscriptSubagentPartsForTurn({
     return [];
   }
 
-  const childRecordsByAgentId = new Map<string, TranscriptRecord[]>();
   const resolvedAgentIdBySpawnCallId = new Map<string, string>();
   const spawnCalls = parentRecords.flatMap((record) => {
     if (
@@ -105,24 +104,25 @@ export async function deriveTranscriptSubagentPartsForTurn({
     if (outputAgent) outputAgentIdByCallId.set(outputAgent.callId, outputAgent.agentId);
   }
 
+  const requestedAgentIds = new Set<string>();
   for (const [spawnIndex, spawnCallId] of spawnCalls.entries()) {
     const fallbackAgentId = asNonEmptyString(fallbackAgentIdsInSpawnOrder[spawnIndex]);
     const requestedAgentId = outputAgentIdByCallId.get(spawnCallId) ?? fallbackAgentId;
     if (!requestedAgentId) continue;
 
-    const childMeta = await loadSessionMeta(requestedAgentId);
-    if (!childMeta?.transcriptPath) {
-      childRecordsByAgentId.set(requestedAgentId, []);
-      resolvedAgentIdBySpawnCallId.set(spawnCallId, requestedAgentId);
-      continue;
-    }
-
-    const childRecords = (await loadTranscript(childMeta.transcriptPath)).records;
     resolvedAgentIdBySpawnCallId.set(spawnCallId, requestedAgentId);
-    if (!childRecordsByAgentId.has(requestedAgentId)) {
-      childRecordsByAgentId.set(requestedAgentId, childRecords);
-    }
+    requestedAgentIds.add(requestedAgentId);
   }
+
+  const childRecordsByAgentId = new Map(await Promise.all(
+    [...requestedAgentIds].map(async (requestedAgentId) => {
+      const childMeta = await loadSessionMeta(requestedAgentId);
+      const childRecords = childMeta?.transcriptPath
+        ? (await loadTranscript(childMeta.transcriptPath)).records
+        : [];
+      return [requestedAgentId, childRecords] as const;
+    }),
+  ));
 
   return deriveSubagentPartsFromTranscriptRecords(
     parentRecords,

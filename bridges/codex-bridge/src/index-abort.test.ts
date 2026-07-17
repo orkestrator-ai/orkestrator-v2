@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -207,12 +207,26 @@ function writePersistedThread(codexHome: string, cwd: string, threadId: string) 
   );
 }
 
+function writeRollout(
+  codexHome: string,
+  filenameThreadId: string,
+  records: Record<string, unknown>[],
+) {
+  const sessionsDir = join(codexHome, "sessions", "2026", "07", "17");
+  mkdirSync(sessionsDir, { recursive: true });
+  writeFileSync(
+    join(sessionsDir, `rollout-${filenameThreadId}.jsonl`),
+    `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+  );
+}
+
 describe("codex bridge abort handling", () => {
   beforeEach(() => {
     __testing.sessions.clear();
     __testing.expiredSessions.clear();
     __testing.setBeforePromptExecutionForTesting(null);
     __testing.setBeforeAssistantMessageCommitForTesting(null);
+    __testing.setAfterStreamEventLogForTesting(null);
     __testing.setFreshThreadFactoryForTesting(null);
   });
 
@@ -295,6 +309,123 @@ describe("codex bridge abort handling", () => {
     expect(assistantContent).toContain("NEW RESPONSE");
     expect(assistantContent).not.toContain("OLD RESPONSE");
     expect(session.status).toBe("idle");
+  });
+
+  test("drops every event kind when the turn changes across the logging boundary", async () => {
+    const cases = [
+      {
+        event: { type: "thread.started", thread_id: "stale-thread" },
+        verify: (session: ReturnType<typeof createSession>) => {
+          expect(session.threadId).toBeNull();
+        },
+      },
+      {
+        event: {
+          type: "item.completed",
+          item: { id: "stale-item", type: "agent_message", text: "STALE" },
+        },
+        verify: (session: ReturnType<typeof createSession>) => {
+          expect(session.currentItemOrder).toEqual([]);
+        },
+      },
+      {
+        event: { type: "turn.completed", usage: {} },
+        verify: (session: ReturnType<typeof createSession>) => {
+          expect(session.status).toBe("running");
+        },
+      },
+      {
+        event: { type: "turn.failed", error: { message: "stale failure" } },
+        verify: (session: ReturnType<typeof createSession>) => {
+          expect(session.error).toBeUndefined();
+        },
+      },
+      {
+        event: { type: "unknown-event" },
+        verify: (session: ReturnType<typeof createSession>) => {
+          expect(session.status).toBe("running");
+        },
+      },
+    ];
+
+    for (const { event, verify } of cases) {
+      const session = createSession({
+        thread: {
+          runStreamed: async () => ({
+            events: (async function* () {
+              yield event;
+            })(),
+          }),
+        },
+      });
+      __testing.setAfterStreamEventLogForTesting(() => {
+        session.currentTurnId = "replacement-turn";
+      });
+
+      await __testing.runPrompt(session, "stale boundary event");
+
+      expect(session.currentTurnId).toBe("replacement-turn");
+      verify(session);
+      __testing.setAfterStreamEventLogForTesting(null);
+    }
+  });
+
+  test("contains primary and recovery stream failures after cancellation", async () => {
+    const primary = createSession({
+      thread: {
+        runStreamed: async () => {
+          primary.abortController?.abort();
+          throw new Error("primary failure after abort");
+        },
+      },
+    });
+
+    await expect(__testing.runPrompt(primary, "cancel primary")).resolves.toBeUndefined();
+    expect(primary.error).toBeUndefined();
+    expect(primary.abortController).toBeUndefined();
+
+    const recovery = createSession({
+      threadId: "missing-thread",
+      thread: {
+        runStreamed: async () => {
+          throw new Error(
+            "thread/resume failed: no rollout found for thread id missing-thread",
+          );
+        },
+      },
+    });
+    __testing.setFreshThreadFactoryForTesting(() => ({
+      runStreamed: async () => {
+        recovery.abortController?.abort();
+        throw new Error("recovery failure after abort");
+      },
+    } as any));
+
+    await expect(__testing.runPrompt(recovery, "cancel recovery")).resolves.toBeUndefined();
+    expect(recovery.error).toBeUndefined();
+    expect(recovery.abortController).toBeUndefined();
+  });
+
+  test("stops accepted prompt setup when a newer turn appears after the setup hook", async () => {
+    let threadStarted = false;
+    const session = createSession({
+      currentTurnId: "accepted-turn",
+      thread: {
+        runStreamed: async () => {
+          threadStarted = true;
+          return { events: (async function* () {})() };
+        },
+      },
+    });
+    __testing.setBeforePromptExecutionForTesting(() => {
+      session.currentTurnId = "newer-turn";
+    });
+
+    await __testing.runPrompt(session, "accepted prompt", "accepted-turn");
+
+    expect(threadStarted).toBe(false);
+    expect(session.currentTurnId).toBe("newer-turn");
+    expect(session.messages).toEqual([]);
   });
 
   test("runPrompt updates the assistant timestamp as stream item events arrive", async () => {
@@ -557,6 +688,259 @@ describe("codex bridge abort handling", () => {
               toolOutput: "clean",
             }),
           ],
+        }),
+      ]);
+    });
+  });
+
+  test("maps multiple streamed spawns to matching transcript calls with mixed ID sources", async () => {
+    await withBridgeEnv(async ({ codexHome, cwd }) => {
+      const parentThreadId = "mixed-parent-thread";
+      const authoritativeChildId = "authoritative-child-thread";
+      const fallbackChildId = "fallback-child-thread";
+      writeRollout(codexHome, parentThreadId, [
+        {
+          timestamp: "2026-07-17T18:00:00.000Z",
+          type: "session_meta",
+          payload: { id: parentThreadId, cwd },
+        },
+        {
+          timestamp: "2026-07-17T18:00:01.000Z",
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "spawn_agent",
+            call_id: "call-authoritative",
+            arguments: JSON.stringify({ message: "Handle the authoritative task" }),
+          },
+        },
+        {
+          timestamp: "2026-07-17T18:00:01.100Z",
+          type: "response_item",
+          payload: {
+            type: "function_call_output",
+            call_id: "call-authoritative",
+            output: JSON.stringify({
+              agent_id: authoritativeChildId,
+              nickname: "Authoritative",
+            }),
+          },
+        },
+        {
+          timestamp: "2026-07-17T18:00:02.000Z",
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "spawn_agent",
+            call_id: "call-fallback",
+            arguments: JSON.stringify({ task_name: "fallback", message: "Handle fallback" }),
+          },
+        },
+        {
+          timestamp: "2026-07-17T18:00:02.100Z",
+          type: "response_item",
+          payload: {
+            type: "function_call_output",
+            call_id: "call-fallback",
+            output: JSON.stringify({ task_name: "/root/fallback" }),
+          },
+        },
+      ]);
+      writeRollout(codexHome, authoritativeChildId, [
+        {
+          timestamp: "2026-07-17T18:00:01.050Z",
+          type: "session_meta",
+          payload: { id: authoritativeChildId, cwd, agent_nickname: "Ada" },
+        },
+        {
+          timestamp: "2026-07-17T18:00:01.200Z",
+          type: "response_item",
+          payload: {
+            type: "custom_tool_call",
+            name: "exec",
+            call_id: "authoritative-action",
+            input: "bun test authoritative",
+            status: "completed",
+            output: "authoritative clean",
+          },
+        },
+      ]);
+      writeRollout(codexHome, fallbackChildId, [
+        {
+          timestamp: "2026-07-17T18:00:02.050Z",
+          type: "session_meta",
+          payload: { id: fallbackChildId, cwd, agent_nickname: "Grace" },
+        },
+        {
+          timestamp: "2026-07-17T18:00:02.200Z",
+          type: "response_item",
+          payload: {
+            type: "custom_tool_call",
+            name: "exec",
+            call_id: "fallback-action",
+            input: "bun test fallback",
+            status: "completed",
+            output: "fallback clean",
+          },
+        },
+      ]);
+
+      const assistantMessage = {
+        id: "mixed-assistant-message",
+        role: "assistant",
+        content: "",
+        parts: [],
+        createdAt: "2026-07-17T18:00:00.000Z",
+      };
+      const session = createSession({
+        id: "mixed-spawn-session",
+        threadId: parentThreadId,
+        status: "running",
+        currentAssistantMessageId: assistantMessage.id,
+        currentAssistantTurnStartedAt: "2026-07-17T18:00:00.000Z",
+        messages: [assistantMessage],
+        currentItems: new Map([
+          [
+            "spawn-authoritative",
+            {
+              id: "spawn-authoritative",
+              type: "collab_tool_call",
+              tool: "spawn_agent",
+              receiver_thread_ids: [authoritativeChildId],
+              agents_states: { [authoritativeChildId]: { status: "completed" } },
+              status: "completed",
+            },
+          ],
+          [
+            "spawn-fallback",
+            {
+              id: "spawn-fallback",
+              type: "collab_tool_call",
+              tool: "spawn_agent",
+              receiver_thread_ids: [fallbackChildId],
+              agents_states: { [fallbackChildId]: { status: "completed" } },
+              status: "completed",
+            },
+          ],
+        ]),
+        currentItemOrder: ["spawn-authoritative", "spawn-fallback"],
+      });
+
+      await __testing.rebuildAssistantMessage(session);
+
+      expect(assistantMessage.parts).toHaveLength(2);
+      expect(assistantMessage.parts).toEqual([
+        expect.objectContaining({
+          subagentId: authoritativeChildId,
+          subagentName: "Ada",
+          subagentPrompt: "Handle the authoritative task",
+          subagentActions: [
+            expect.objectContaining({
+              toolName: "exec",
+              toolOutput: "authoritative clean",
+            }),
+          ],
+        }),
+        expect.objectContaining({
+          subagentId: fallbackChildId,
+          subagentName: "Grace",
+          subagentPrompt: "Handle fallback",
+          subagentActions: [
+            expect.objectContaining({
+              toolName: "exec",
+              toolOutput: "fallback clean",
+            }),
+          ],
+        }),
+      ]);
+    });
+  });
+
+  test("rebuilds collaboration state when parent or child transcript metadata is unavailable", async () => {
+    await withBridgeEnv(async ({ codexHome, cwd }) => {
+      const parentThreadId = "missing-child-parent";
+      const missingChildId = "missing-child-thread";
+      writeRollout(codexHome, parentThreadId, [
+        {
+          timestamp: "2026-07-17T19:00:00.000Z",
+          type: "session_meta",
+          payload: { id: parentThreadId, cwd },
+        },
+        {
+          timestamp: "2026-07-17T19:00:01.000Z",
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "spawn_agent",
+            call_id: "call-missing-child",
+            arguments: JSON.stringify({ message: "Inspect unavailable child" }),
+          },
+        },
+        {
+          timestamp: "2026-07-17T19:00:01.100Z",
+          type: "response_item",
+          payload: {
+            type: "function_call_output",
+            call_id: "call-missing-child",
+            output: JSON.stringify({ agent_id: missingChildId }),
+          },
+        },
+      ]);
+
+      const assistantMessage = {
+        id: "missing-child-assistant",
+        role: "assistant",
+        content: "",
+        parts: [],
+        createdAt: "2026-07-17T19:00:00.000Z",
+      };
+      const session = createSession({
+        id: "missing-child-session",
+        threadId: parentThreadId,
+        status: "running",
+        currentAssistantMessageId: assistantMessage.id,
+        currentAssistantTurnStartedAt: "2026-07-17T19:00:00.000Z",
+        messages: [assistantMessage],
+        currentItems: new Map([
+          [
+            "spawn-missing-child",
+            {
+              id: "spawn-missing-child",
+              type: "collab_tool_call",
+              tool: "spawn_agent",
+              prompt: "Inspect unavailable child",
+              receiver_thread_ids: [missingChildId],
+              agents_states: {
+                [missingChildId]: {
+                  status: "errored",
+                  message: "Child transcript unavailable",
+                },
+              },
+              status: "failed",
+            },
+          ],
+        ]),
+        currentItemOrder: ["spawn-missing-child"],
+      });
+
+      await expect(__testing.rebuildAssistantMessage(session)).resolves.toBe(assistantMessage);
+      expect(assistantMessage.parts).toEqual([
+        expect.objectContaining({
+          type: "subagent",
+          subagentId: missingChildId,
+          subagentPrompt: "Inspect unavailable child",
+          toolState: "failure",
+          subagentActions: [{ type: "text", content: "Child transcript unavailable" }],
+        }),
+      ]);
+
+      session.threadId = "missing-parent-thread";
+      session.currentTimelineGeneration += 1;
+      await expect(__testing.rebuildAssistantMessage(session)).resolves.toBe(assistantMessage);
+      expect(assistantMessage.parts).toEqual([
+        expect.objectContaining({
+          subagentId: missingChildId,
+          toolState: "failure",
         }),
       ]);
     });
@@ -904,6 +1288,30 @@ describe("codex bridge abort handling", () => {
     expect(session.abortController).toBeUndefined();
   });
 
+  test("runPrompt contains ordinary stream exceptions and non-Error rejections", async () => {
+    for (const [failure, expectedMessage] of [
+      [new Error("stream iteration exploded"), "stream iteration exploded"],
+      ["non-error rejection", "Codex execution failed"],
+    ] as const) {
+      const session = createSession({
+        thread: {
+          runStreamed: async () => ({
+            events: (async function* () {
+              throw failure;
+            })(),
+          }),
+        },
+      });
+
+      await expect(__testing.runPrompt(session, "do something")).resolves.toBeUndefined();
+
+      expect(session.status).toBe("error");
+      expect(session.error).toBe(expectedMessage);
+      expect(session.currentTurnId).toBeUndefined();
+      expect(session.abortController).toBeUndefined();
+    }
+  });
+
   test("runPrompt clears file-change cache between turns while preserving baselines", async () => {
     await withBridgeEnv(async ({ cwd }) => {
       execFileSync("git", ["init"], { cwd, stdio: "ignore" });
@@ -1004,6 +1412,11 @@ describe("codex bridge abort handling", () => {
         join(cwd, ".codex", "prompts", "review.md"),
         "---\ndescription: Review this branch\n---\nReview the branch\n",
       );
+      mkdirSync(join(cwd, ".codex", "prompts", "nested"), { recursive: true });
+      writeFileSync(
+        join(cwd, ".codex", "prompts", "nested", "inspect.md"),
+        "Inspect nested files\n",
+      );
       let runCount = 0;
       const session = createSession({
         thread: {
@@ -1023,6 +1436,7 @@ describe("codex bridge abort handling", () => {
       expect(runCount).toBe(0);
       expect(assistantMessages[0]?.content).toContain("Available Codex slash commands:");
       expect(assistantMessages[0]?.content).toContain("/review: Review this branch");
+      expect(assistantMessages[0]?.content).toContain("/nested/inspect: Inspect nested files");
       expect(assistantMessages[1]?.content).toContain("Available Codex models:");
     });
   });
@@ -1036,6 +1450,7 @@ describe("codex bridge abort handling", () => {
           "Target: $ARGUMENTS",
           "Success: !`printf inline-success`",
           "Failure: !`printf inline-failure >&2; exit 1`",
+          "Silent failure: !`exit 1`",
           "",
         ].join("\n"),
       );
@@ -1054,6 +1469,7 @@ describe("codex bridge abort handling", () => {
       expect(observedInput).toContain("Target: src/index.ts");
       expect(observedInput).toContain("Success: inline-success");
       expect(observedInput).toContain("Failure: inline-failure");
+      expect(observedInput).toContain("Silent failure: Command failed:");
     });
   });
 
@@ -1355,6 +1771,28 @@ describe("codex bridge abort handling", () => {
     expect(prompt).toContain("Current work");
   });
 
+  test("resume recovery uses message part text when normalized content is empty", () => {
+    const prompt = __testing.buildResumeRecoveryPromptForTesting(
+      [
+        {
+          id: "parts-only",
+          role: "assistant",
+          content: "",
+          parts: [
+            { type: "thinking", content: "  reasoning from parts  " },
+            { type: "text", content: "answer from parts" },
+            { type: "tool-invocation" },
+          ],
+          createdAt: "2026-04-15T10:00:00.000Z",
+        },
+      ],
+      "Continue the request",
+    );
+
+    expect(prompt).toContain("reasoning from parts\nanswer from parts");
+    expect(prompt).toContain("Continue the request");
+  });
+
   test("prompt route marks a session running before async execution starts", async () => {
     const session = createSession({
       id: "route-session",
@@ -1572,7 +2010,7 @@ describe("codex bridge abort handling", () => {
     const response = await app.request("/session/attachment-session/prompt", {
       method: "POST",
       body: JSON.stringify({
-        prompt: "",
+        prompt: "Describe the image",
         attachments: [
           null,
           {},
@@ -1592,9 +2030,14 @@ describe("codex bridge abort handling", () => {
     expect(response.status).toBe(202);
     await waitUntil(() => session.status === "idle");
     expect(observedInput).toEqual([
+      { type: "text", text: "Describe the image" },
       { type: "local_image", path: "/tmp/valid.png" },
     ]);
     expect(session.messages[0]?.parts).toEqual([
+      {
+        type: "text",
+        content: "Describe the image",
+      },
       {
         type: "file",
         content: "valid.png",
@@ -1996,6 +2439,84 @@ describe("codex bridge abort handling", () => {
     });
   });
 
+  test("session discovery skips malformed metadata and resolves index aliases and orphan transcripts", async () => {
+    await withBridgeEnv(async ({ codexHome, cwd }) => {
+      const sessionsDir = join(codexHome, "sessions");
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(
+        join(codexHome, "session_index.jsonl"),
+        [
+          "not-json",
+          JSON.stringify({ thread_name: "Missing id" }),
+          JSON.stringify({
+            id: "alias-thread",
+            thread_name: "Alias title",
+            updated_at: "2026-04-16T10:00:00.000Z",
+          }),
+          JSON.stringify({
+            id: "missing-transcript",
+            thread_name: "Missing transcript",
+            updated_at: "2026-04-16T11:00:00.000Z",
+          }),
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(
+        join(sessionsDir, "no-session-meta.jsonl"),
+        `${JSON.stringify({ type: "response_item", payload: { type: "message" } })}\n`,
+      );
+      writeFileSync(
+        join(sessionsDir, "empty-id.jsonl"),
+        `${JSON.stringify({ type: "session_meta", payload: { id: "", cwd } })}\n`,
+      );
+      writeFileSync(
+        join(sessionsDir, "rollout-alias-thread.jsonl"),
+        `${JSON.stringify({
+          type: "session_meta",
+          payload: {
+            id: "canonical-thread",
+            cwd,
+            timestamp: "2026-04-16T12:00:00.000Z",
+          },
+        })}\n`,
+      );
+      writeFileSync(
+        join(sessionsDir, "rollout-orphan-thread.jsonl"),
+        `${JSON.stringify({
+          type: "response_item",
+          timestamp: "2026-04-16T13:00:00.000Z",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Recovered without metadata" }],
+          },
+        })}\n`,
+      );
+
+      const listResponse = await app.request("/session/list");
+      expect(listResponse.status).toBe(200);
+      expect(await listResponse.json()).toMatchObject({
+        sessions: expect.arrayContaining([
+          expect.objectContaining({ id: "alias-thread", title: "Alias title" }),
+          expect.objectContaining({ id: "canonical-thread" }),
+        ]),
+      });
+
+      const resumeResponse = await app.request("/session/resume", {
+        method: "POST",
+        body: JSON.stringify({ threadId: "orphan-thread" }),
+        headers: { "Content-Type": "application/json" },
+      });
+      expect(resumeResponse.status).toBe(201);
+      expect(await resumeResponse.json()).toMatchObject({
+        threadId: "orphan-thread",
+        messages: [
+          expect.objectContaining({ content: "Recovered without metadata" }),
+        ],
+      });
+    });
+  });
+
   test("session create, list, and resume routes cover persisted sessions", async () => {
     await withBridgeEnv(async ({ codexHome, cwd }) => {
       writePersistedThread(codexHome, cwd, "thread-1");
@@ -2122,5 +2643,71 @@ describe("codex bridge abort handling", () => {
 
     expect(errors[0]?.[0]).toBe("[codex-bridge] Failed to write SSE keepalive:");
     expect(errors[0]?.[1]).toBeInstanceOf(Error);
+  });
+
+  test("raw stream logging sanitizes filenames and contains log I/O failures", async () => {
+    const root = mkdtempSync(join(tmpdir(), "orkestrator-codex-raw-log-test-"));
+    const rawLogDir = join(root, "raw-logs");
+    const bridgeRoot = join(import.meta.dir, "..");
+    const script = [
+      'process.env.CODEX_BRIDGE_NO_SERVER = "1";',
+      'const { __testing } = await import("./src/index.ts");',
+      'const circular = { type: "unknown.event" };',
+      'circular.self = circular;',
+      'const session = {',
+      '  id: "../unsafe/session", conversationMode: "build", fastMode: false,',
+      '  thread: { runStreamed: async () => ({ events: (async function* () {',
+      '    yield circular;',
+      '  })() }) },',
+      '  threadOptions: {}, threadId: null, messages: [], status: "idle",',
+      '  currentItems: new Map(), currentItemOrder: [], pendingAttachments: [],',
+      '  lastAccessed: Date.now(),',
+      '};',
+      'await __testing.runPrompt(session, "log this");',
+      'process.exit(0);',
+    ].join("\n");
+
+    try {
+      const logged = spawnSync(process.execPath, ["-e", script], {
+        cwd: bridgeRoot,
+        env: {
+          ...process.env,
+          CODEX_BRIDGE_NO_SERVER: "1",
+          ORKESTRATOR_CODEX_RAW_LOG_DIR: rawLogDir,
+        },
+        encoding: "utf8",
+      });
+      expect(logged.status).toBe(0);
+      const logPath = join(rawLogDir, ".._unsafe_session.jsonl");
+      const entries = readFileSync(logPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(entries.map((entry) => entry.kind)).toEqual([
+        "stream.start",
+        "stream.event",
+      ]);
+      expect(entries[1]).toMatchObject({
+        sessionId: "../unsafe/session",
+        eventType: "unknown.event",
+        event: "[object Object]",
+      });
+
+      const blockedPath = join(root, "not-a-directory");
+      writeFileSync(blockedPath, "occupied");
+      const failed = spawnSync(process.execPath, ["-e", script], {
+        cwd: bridgeRoot,
+        env: {
+          ...process.env,
+          CODEX_BRIDGE_NO_SERVER: "1",
+          ORKESTRATOR_CODEX_RAW_LOG_DIR: blockedPath,
+        },
+        encoding: "utf8",
+      });
+      expect(failed.status).toBe(0);
+      expect(failed.stderr).toContain("[codex-bridge] Failed to write raw Codex log:");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

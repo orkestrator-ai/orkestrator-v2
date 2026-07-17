@@ -24,6 +24,42 @@ function makeAgent(
 }
 
 describe("Codex collaboration payload normalization", () => {
+  test("recognizes a complete valid collaboration item", () => {
+    expect(isCodexCollabToolCallItem({
+      id: "spawn-1",
+      type: "collab_tool_call",
+      tool: "spawn_agent",
+      sender_thread_id: "parent-1",
+      receiver_thread_ids: ["agent-1"],
+      prompt: "Review the bridge",
+      agents_states: {
+        "agent-1": { status: "running", message: null },
+      },
+      status: "in_progress",
+    })).toBe(true);
+  });
+
+  test("rejects invalid collaboration field types and statuses", () => {
+    const valid = {
+      id: "spawn-1",
+      type: "collab_tool_call",
+      tool: "spawn_agent",
+    } as const;
+
+    for (const invalidFields of [
+      { sender_thread_id: 42 },
+      { receiver_thread_ids: ["agent-1", 42] },
+      { prompt: 42 },
+      { agents_states: { "agent-1": { status: "unknown" } } },
+      { status: "unknown" },
+    ]) {
+      expect(isCodexCollabToolCallItem({
+        ...valid,
+        ...invalidFields,
+      })).toBe(false);
+    }
+  });
+
   test("rejects malformed required fields and leaves transcript parts unchanged", () => {
     const transcript = [makeAgent("existing")];
     for (const value of [
@@ -90,6 +126,47 @@ describe("Codex collaboration payload normalization", () => {
         agents_states: { "agent-2": { status: "running" } },
       },
     ])).toEqual(["agent-1", "agent-2"]);
+  });
+
+  test("returns no spawned IDs for empty or malformed input", () => {
+    expect(getCodexSpawnedAgentIdsInOrder([])).toEqual([]);
+    expect(getCodexSpawnedAgentIdsInOrder([
+      null,
+      [],
+      { type: "collab_tool_call", id: "", tool: "spawn_agent" },
+      { type: "agent_message", id: "spawn-1", tool: "spawn_agent" },
+      { type: "collab_tool_call", id: "wait-1", tool: "wait" },
+    ])).toEqual([]);
+  });
+
+  test("preserves spawn positions when receiver identity is absent or ambiguous", () => {
+    expect(getCodexSpawnedAgentIdsInOrder([
+      {
+        id: "spawn-without-receiver",
+        type: "collab_tool_call",
+        tool: "spawn_agent",
+        status: "failed",
+      },
+      {
+        id: "spawn-with-overlapping-state",
+        type: "collab_tool_call",
+        tool: "spawn_agent",
+        receiver_thread_ids: ["agent-1"],
+        agents_states: {
+          "agent-1": { status: "running" },
+        },
+      },
+      {
+        id: "spawn-with-multiple-receivers",
+        type: "collab_tool_call",
+        tool: "spawn_agent",
+        receiver_thread_ids: ["agent-2", "agent-3"],
+        agents_states: {
+          "agent-2": { status: "running" },
+          "agent-3": { status: "pending_init" },
+        },
+      },
+    ])).toEqual([undefined, "agent-1", undefined]);
   });
 });
 
@@ -190,6 +267,76 @@ describe("Codex collaboration state", () => {
 
     expect(part?.toolState).toBe("failure");
     expect(part?.subagentPrompt).toBe("Transcript task");
+  });
+
+  test("marks a failed spawn with a receiver as failed", () => {
+    const [part] = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1")],
+      [{
+        id: "spawn-failed",
+        type: "collab_tool_call",
+        tool: "spawn_agent",
+        prompt: "Runtime task",
+        receiver_thread_ids: ["agent-1"],
+        agents_states: { "agent-1": { status: "running" } },
+        status: "failed",
+      }],
+    );
+
+    expect(part).toMatchObject({
+      subagentId: "agent-1",
+      subagentPrompt: "Runtime task",
+      toolState: "failure",
+    });
+  });
+
+  test("updates only the first duplicate identified transcript row", () => {
+    const duplicate = makeAgent("agent-1", {
+      subagentPrompt: "Duplicate transcript row",
+    });
+    const parts = applyCodexCollabStateToSubagentParts(
+      [makeAgent("agent-1"), duplicate],
+      [{
+        id: "wait-1",
+        type: "collab_tool_call",
+        tool: "wait",
+        receiver_thread_ids: ["agent-1"],
+        agents_states: {
+          "agent-1": { status: "completed", message: "Done" },
+        },
+      }],
+    );
+
+    expect(parts).toHaveLength(2);
+    expect(parts[0]).toMatchObject({
+      subagentId: "agent-1",
+      toolState: "success",
+      subagentActions: [{ type: "text", content: "Done" }],
+    });
+    expect(parts[1]).toMatchObject({
+      subagentId: "agent-1",
+      subagentPrompt: "Duplicate transcript row",
+      toolState: "pending",
+      subagentActions: [],
+    });
+  });
+
+  test("does not apply a receiver-less spawn when no anonymous row exists", () => {
+    const source = makeAgent("existing-agent", {
+      subagentPrompt: "Existing task",
+    });
+    const [part] = applyCodexCollabStateToSubagentParts(
+      [source],
+      [{
+        id: "spawn-failed",
+        type: "collab_tool_call",
+        tool: "spawn_agent",
+        prompt: "Unmatched task",
+        status: "failed",
+      }],
+    );
+
+    expect(part).toEqual(source);
   });
 
   test("matches known agents and appends an unmatched earlier-turn agent", () => {
@@ -330,6 +477,37 @@ describe("Codex subagent timeline reconciliation", () => {
       fingerprints,
     );
     expect(timeline).toEqual(["subagent:anonymous:0", "subagent:anonymous:1"]);
+  });
+
+  test("keeps duplicate identified rows distinct", () => {
+    const timeline: string[] = [];
+    const currentParts = new Map<string, TranscriptSubagentPart>();
+    const fingerprints = new Map<string, string>();
+    reconcileCodexSubagentTimeline(
+      [makeAgent("agent-1"), makeAgent("agent-1")],
+      timeline,
+      currentParts,
+      fingerprints,
+    );
+
+    expect(timeline).toEqual([
+      "subagent:id:agent-1",
+      "subagent:id:agent-1:1",
+    ]);
+    expect(currentParts.get(timeline[0]!)?.subagentId).toBe("agent-1");
+    expect(currentParts.get(timeline[1]!)?.subagentId).toBe("agent-1");
+  });
+
+  test("escapes percent signs and colons in identified timeline keys", () => {
+    const timeline: string[] = [];
+    reconcileCodexSubagentTimeline(
+      [makeAgent("agent%:one")],
+      timeline,
+      new Map<string, TranscriptSubagentPart>(),
+      new Map<string, string>(),
+    );
+
+    expect(timeline).toEqual(["subagent:id:agent%25%3Aone"]);
   });
 
   test("handles unicode and delimiter characters in agent identities", () => {

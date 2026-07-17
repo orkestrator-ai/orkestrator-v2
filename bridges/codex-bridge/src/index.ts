@@ -214,6 +214,7 @@ function getCodex(fastMode: boolean): Codex {
 let freshThreadFactoryForTesting: ((session: SessionState) => Thread) | null = null;
 let beforePromptExecutionForTesting: (() => Promise<void> | void) | null = null;
 let beforeAssistantMessageCommitForTesting: (() => Promise<void> | void) | null = null;
+let afterStreamEventLogForTesting: ((event: ThreadEvent) => Promise<void> | void) | null = null;
 function createFreshThreadForSession(session: SessionState): Thread {
   if (freshThreadFactoryForTesting) {
     return freshThreadFactoryForTesting(session);
@@ -227,7 +228,7 @@ function resolveFastMode(body: Record<string, unknown>): boolean {
 const execFile = promisify(execFileCallback);
 const sessions = new Map<string, SessionState>();
 const expiredSessions = new Map<string, ExpiredSessionState>();
-const subscribers = new Set<(event: SseEvent) => void>();
+const subscribers = new Set<(event: SseEvent) => Promise<void> | void>();
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
 const EXPIRED_SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
@@ -286,10 +287,12 @@ function applyRuntimeEnvironmentOutput(output: string): string[] {
   return updated;
 }
 
-async function refreshRuntimeEnvironment(): Promise<void> {
+async function refreshRuntimeEnvironment(
+  run: typeof execFile = execFile,
+): Promise<void> {
   try {
     const runtimeEnvScript = getRuntimeEnvironmentScriptPath();
-    const { stdout } = await execFile(
+    const { stdout } = await run(
       "/bin/sh",
       [
         "-c",
@@ -328,16 +331,17 @@ function normalizeLogPayload(value: unknown): unknown {
 async function writeCodexRawLog(
   sessionId: string,
   entry: Record<string, unknown>,
+  logDir: string | null = codexRawLogDir,
 ): Promise<void> {
-  if (!codexRawLogDir) {
+  if (!logDir) {
     return;
   }
 
   try {
-    await mkdir(codexRawLogDir, { recursive: true });
+    await mkdir(logDir, { recursive: true });
     const filename = `${sanitizeLogFileComponent(sessionId)}.jsonl`;
     await appendFile(
-      join(codexRawLogDir, filename),
+      join(logDir, filename),
       `${JSON.stringify({
         timestamp: new Date().toISOString(),
         sessionId,
@@ -461,11 +465,21 @@ function cleanupIdleSessions(): void {
 
 const cleanupTimer = setInterval(cleanupIdleSessions, CLEANUP_INTERVAL_MS);
 
+function createShutdownHandler(
+  timer: ReturnType<typeof setInterval>,
+  clearTimer: (timer: ReturnType<typeof setInterval>) => void = clearInterval,
+  exit: (code: number) => void = (code) => process.exit(code),
+): () => void {
+  return () => {
+    clearTimer(timer);
+    exit(0);
+  };
+}
+
+const shutdownHandler = createShutdownHandler(cleanupTimer);
+
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
-  process.on(signal, () => {
-    clearInterval(cleanupTimer);
-    process.exit(0);
-  });
+  process.on(signal, shutdownHandler);
 }
 
 const BUILTIN_SLASH_COMMANDS: BuiltinSlashCommand[] = [
@@ -549,7 +563,13 @@ const FALLBACK_MODELS: BridgeModel[] = [
 
 function emit(event: SseEvent): void {
   for (const subscriber of subscribers) {
-    subscriber(event);
+    try {
+      void Promise.resolve(subscriber(event)).catch((error) => {
+        console.error("[codex-bridge] Failed to notify SSE subscriber:", error);
+      });
+    } catch (error) {
+      console.error("[codex-bridge] Failed to notify SSE subscriber:", error);
+    }
   }
 }
 
@@ -705,21 +725,20 @@ async function walkJsonlFiles(dir: string): Promise<string[]> {
   return files;
 }
 
-async function findTranscriptPath(threadId: string): Promise<string | null> {
+async function listTranscriptPaths(): Promise<string[]> {
   const searchRoots = [
     join(getCodexHomeDir(), "sessions"),
     join(getCodexHomeDir(), "archived_sessions"),
   ];
+  return (await Promise.all(searchRoots.map((root) => walkJsonlFiles(root)))).flat();
+}
 
-  for (const root of searchRoots) {
-    const files = await walkJsonlFiles(root);
-    const match = files.find((file) => file.includes(threadId));
-    if (match) {
-      return match;
-    }
-  }
-
-  return null;
+async function findTranscriptPath(
+  threadId: string,
+  transcriptPaths?: readonly string[],
+): Promise<string | null> {
+  const paths = transcriptPaths ?? await listTranscriptPaths();
+  return paths.find((file) => file.includes(threadId)) ?? null;
 }
 
 async function readTranscriptLines(path: string): Promise<string[]> {
@@ -738,30 +757,26 @@ async function getSessionMetaFromTranscriptPath(
     return null;
   }
 
-  try {
-    const payload = sessionMetaRecord.payload;
-    const id =
-      typeof payload.id === "string" && payload.id.length > 0
-        ? payload.id
-        : null;
+  const payload = sessionMetaRecord.payload;
+  const id =
+    typeof payload.id === "string" && payload.id.length > 0
+      ? payload.id
+      : null;
 
-    if (!id) {
-      return null;
-    }
-
-    return {
-      id,
-      title: fallbackTitle,
-      updatedAt:
-        typeof payload.timestamp === "string"
-          ? payload.timestamp
-          : (fallbackUpdatedAt ?? new Date().toISOString()),
-      cwd: typeof payload.cwd === "string" ? payload.cwd : undefined,
-      transcriptPath,
-    };
-  } catch {
+  if (!id) {
     return null;
   }
+
+  return {
+    id,
+    title: fallbackTitle,
+    updatedAt:
+      typeof payload.timestamp === "string"
+        ? payload.timestamp
+        : (fallbackUpdatedAt ?? new Date().toISOString()),
+    cwd: typeof payload.cwd === "string" ? payload.cwd : undefined,
+    transcriptPath,
+  };
 }
 
 async function buildTranscriptCatalog(): Promise<TranscriptCatalog> {
@@ -805,13 +820,14 @@ async function getPersistedSessionMeta(
   fallbackTitle?: string,
   fallbackUpdatedAt?: string,
   transcriptCatalog?: TranscriptCatalog,
+  transcriptPaths?: readonly string[],
 ): Promise<PersistedSessionMeta | null> {
   const transcriptPath = transcriptCatalog
     ? transcriptCatalog.transcriptPathByThreadId.get(threadId) ??
       transcriptCatalog.metas.find((meta) => meta.transcriptPath?.includes(threadId))
         ?.transcriptPath ??
       null
-    : await findTranscriptPath(threadId);
+    : await findTranscriptPath(threadId, transcriptPaths);
   if (!transcriptPath) {
     return fallbackUpdatedAt
       ? {
@@ -854,6 +870,27 @@ async function getPersistedSessionMeta(
   return meta;
 }
 
+function createSharedTranscriptMetaLoader(
+  loadPaths: () => Promise<string[]> = listTranscriptPaths,
+  loadMeta: (
+    threadId: string,
+    transcriptPaths: readonly string[],
+  ) => Promise<PersistedSessionMeta | null> = (threadId, transcriptPaths) =>
+    getPersistedSessionMeta(
+      threadId,
+      undefined,
+      undefined,
+      undefined,
+      transcriptPaths,
+    ),
+): (threadId: string) => Promise<PersistedSessionMeta | null> {
+  let transcriptPathsPromise: Promise<string[]> | undefined;
+  return async (threadId) => {
+    transcriptPathsPromise ??= loadPaths();
+    return loadMeta(threadId, await transcriptPathsPromise);
+  };
+}
+
 async function listPersistedSessionsForCwd(cwd: string): Promise<PersistedSessionMeta[]> {
   const indexPath = join(getCodexHomeDir(), "session_index.jsonl");
   const lines = await readTranscriptLines(indexPath);
@@ -891,32 +928,27 @@ async function listPersistedSessionsForCwd(cwd: string): Promise<PersistedSessio
     if (meta.cwd !== cwd) {
       continue;
     }
-
-    const indexed = sessions.get(meta.id);
-    if (!indexed) {
-      sessions.set(meta.id, { ...meta });
-      continue;
-    }
-
-    if (!indexed.transcriptPath) {
-      indexed.transcriptPath = meta.transcriptPath;
-    }
-    if (!indexed.cwd && meta.cwd) {
-      indexed.cwd = meta.cwd;
-    }
-    if (!indexed.title && meta.title) {
-      indexed.title = meta.title;
-    }
-    if (
-      new Date(meta.updatedAt).getTime() > new Date(indexed.updatedAt).getTime()
-    ) {
-      indexed.updatedAt = meta.updatedAt;
-    }
+    mergePersistedSessionMeta(sessions, meta);
   }
 
   return Array.from(sessions.values()).sort(
     (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
   );
+}
+
+function mergePersistedSessionMeta(
+  sessionsById: Map<string, PersistedSessionMeta>,
+  meta: PersistedSessionMeta,
+): void {
+  const indexed = sessionsById.get(meta.id);
+  if (!indexed) {
+    sessionsById.set(meta.id, { ...meta });
+    return;
+  }
+
+  if (new Date(meta.updatedAt).getTime() > new Date(indexed.updatedAt).getTime()) {
+    indexed.updatedAt = meta.updatedAt;
+  }
 }
 
 function shouldSkipHydratedUserText(text: string): boolean {
@@ -1400,19 +1432,6 @@ async function readGitHeadTextFile(cwd: string, relativePath: string): Promise<s
   }
 }
 
-async function runGitCommand(cwd: string, args: string[]): Promise<string | undefined> {
-  try {
-    const { stdout } = await execFile("git", args, {
-      cwd,
-      maxBuffer: 2 * 1024 * 1024,
-    });
-    const output = stdout.trimEnd();
-    return output.length > 0 ? output : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 async function runGitDiffNoIndex(
   cwd: string,
   relativePath: string,
@@ -1629,12 +1648,13 @@ async function buildTranscriptSubagentParts(
   const items = snapshot.currentItemOrder
     .map((id) => snapshot.currentItems.get(id))
     .filter((item): item is BridgeThreadItem => item !== undefined);
+  const loadSessionMeta = createSharedTranscriptMetaLoader();
   const transcriptParts = await deriveTranscriptSubagentPartsForTurn({
     threadId: snapshot.threadId,
     currentTurnStartedAt:
       snapshot.currentAssistantTurnStartedAt ?? snapshot.currentTurnStartedAt,
     fallbackAgentIdsInSpawnOrder: getCodexSpawnedAgentIdsInOrder(items),
-    loadSessionMeta: (threadId) => getPersistedSessionMeta(threadId),
+    loadSessionMeta,
     loadTranscript: (path) => readCachedTranscript(path),
   });
   const reconciledParts = applyCodexCollabStateToSubagentParts(transcriptParts, items);
@@ -2031,6 +2051,9 @@ async function processCodexStream(
       eventType: event.type,
       event: normalizeLogPayload(event),
     });
+    if (afterStreamEventLogForTesting) {
+      await afterStreamEventLogForTesting(event);
+    }
 
     if (event.type === "thread.started") {
       if (!isCurrentTurn()) {
@@ -2259,10 +2282,19 @@ export const __testing = {
   BRIDGE_MODEL_CACHE_VERSION,
   buildThreadOptions,
   cleanupIdleSessions,
+  createSharedTranscriptMetaLoaderForTesting: createSharedTranscriptMetaLoader,
+  createShutdownHandlerForTesting: createShutdownHandler,
+  createFreshThreadForSessionForTesting: createFreshThreadForSession,
   FALLBACK_MODELS,
   EXPIRED_SESSION_RETENTION_MS,
   expiredSessions: expiredSessions as Map<string, any>,
   emitForTesting: emit,
+  extractPersistedMessageTextForTesting: extractPersistedMessageText,
+  getPersistedSessionMetaForTesting: getPersistedSessionMeta,
+  handlePromptFailureForTesting: handlePromptFailure,
+  hydrateMessagesFromPersistedSessionForTesting: hydrateMessagesFromPersistedSession,
+  listPersistedSessionsForCwdForTesting: listPersistedSessionsForCwd,
+  mergePersistedSessionMetaForTesting: mergePersistedSessionMeta,
   getSubscriberCountForTesting: () => subscribers.size,
   rebuildAssistantMessage: rebuildAssistantMessage as (
     session: any,
@@ -2272,8 +2304,20 @@ export const __testing = {
   resetCurrentTurnTimelineForTesting: resetCurrentTurnTimeline as (session: any) => void,
   refreshRuntimeEnvironment,
   readPersistedBridgeCache,
+  readTextFileIfPresentForTesting: readTextFileIfPresent,
   runInlinePromptCommand,
-  runPrompt: runPrompt as (session: any, prompt: string) => Promise<void>,
+  normalizeLogPayloadForTesting: normalizeLogPayload,
+  runPrompt: runPrompt as (
+    session: any,
+    prompt: string,
+    acceptedTurnId?: string,
+  ) => Promise<void>,
+  sanitizeLogFileComponentForTesting: sanitizeLogFileComponent,
+  subscribeForTesting: (subscriber: (event: SseEvent) => Promise<void> | void) => {
+    subscribers.add(subscriber);
+    return () => subscribers.delete(subscriber);
+  },
+  writeCodexRawLogForTesting: writeCodexRawLog,
   buildResumeRecoveryPromptForTesting: buildResumeRecoveryPrompt,
   setBeforePromptExecutionForTesting: (callback: (() => Promise<void> | void) | null) => {
     beforePromptExecutionForTesting = callback;
@@ -2283,9 +2327,16 @@ export const __testing = {
   ) => {
     beforeAssistantMessageCommitForTesting = callback;
   },
+  setAfterStreamEventLogForTesting: (
+    callback: ((event: ThreadEvent) => Promise<void> | void) | null,
+  ) => {
+    afterStreamEventLogForTesting = callback;
+  },
   setFreshThreadFactoryForTesting: (factory: ((session: SessionState) => Thread) | null) => {
     freshThreadFactoryForTesting = factory;
   },
+  startBridgeServerForTesting: startBridgeServer,
+  createOpenSseWriterForTesting: createOpenSseWriter,
   startSseKeepaliveForTesting: startSseKeepalive,
   sessions: sessions as Map<string, any>,
   writePersistedBridgeCache,
@@ -2303,6 +2354,16 @@ function startSseKeepalive(
       console.error("[codex-bridge] Failed to write SSE keepalive:", error);
     });
   }, intervalMs);
+}
+
+function createOpenSseWriter<T>(
+  isOpen: () => boolean,
+  write: (event: T) => Promise<void>,
+): (event: T) => Promise<void> {
+  return async (event) => {
+    if (!isOpen()) return;
+    await write(event);
+  };
 }
 
 app.use(
@@ -2502,6 +2563,29 @@ app.get("/session/:id/status", (c) => {
   } satisfies SessionStatusResponse);
 });
 
+function handlePromptFailure(
+  session: SessionState,
+  acceptedTurnId: string,
+  error: unknown,
+): void {
+  if (session.currentTurnId !== acceptedTurnId) {
+    return;
+  }
+  console.error("[codex-bridge] Prompt failed:", error);
+  const message = error instanceof Error ? error.message : "Codex execution failed";
+  session.status = "error";
+  session.error = message;
+  session.currentTurnId = undefined;
+  session.currentTurnStartedAt = undefined;
+  session.abortController = undefined;
+  session.pendingAttachments = [];
+  emit({
+    type: "session.error",
+    sessionId: session.id,
+    data: { error: message },
+  });
+}
+
 app.post("/session/:id/prompt", async (c) => {
   const sessionId = c.req.param("id");
   const session = getSession(sessionId);
@@ -2552,22 +2636,7 @@ app.post("/session/:id/prompt", async (c) => {
   session.error = undefined;
   emit({ type: "session.updated", sessionId: session.id });
   runPrompt(session, prompt, acceptedTurnId).catch((error) => {
-    if (session.currentTurnId !== acceptedTurnId) {
-      return;
-    }
-    console.error("[codex-bridge] Prompt failed:", error);
-    const message = error instanceof Error ? error.message : "Codex execution failed";
-    session.status = "error";
-    session.error = message;
-    session.currentTurnId = undefined;
-    session.currentTurnStartedAt = undefined;
-    session.abortController = undefined;
-    session.pendingAttachments = [];
-    emit({
-      type: "session.error",
-      sessionId: session.id,
-      data: { error: message },
-    });
+    handlePromptFailure(session, acceptedTurnId, error);
   });
 
   return c.json({ status: "processing" }, 202);
@@ -2617,9 +2686,12 @@ app.get("/event/subscribe", (c) => {
     });
 
     let open = true;
+    const writeWhileOpen = createOpenSseWriter(
+      () => open,
+      (event: { event: string; data: string }) => stream.writeSSE(event),
+    );
     const listener = async (event: SseEvent) => {
-      if (!open) return;
-      await stream.writeSSE({
+      await writeWhileOpen({
         event: event.type,
         data: JSON.stringify({
           sessionId: event.sessionId,
@@ -2629,10 +2701,7 @@ app.get("/event/subscribe", (c) => {
     };
 
     subscribers.add(listener);
-    const keepalive = startSseKeepalive(async (event) => {
-      if (!open) return;
-      await stream.writeSSE(event);
-    });
+    const keepalive = startSseKeepalive(writeWhileOpen);
 
     try {
       await new Promise<void>((resolve) => {
@@ -2646,13 +2715,21 @@ app.get("/event/subscribe", (c) => {
   });
 });
 
-const port = parseInt(process.env.PORT || "4098", 10);
-const hostname = process.env.HOSTNAME || "0.0.0.0";
+type BridgeServerOptions = Parameters<typeof serve>[0];
 
-if (process.env.CODEX_BRIDGE_NO_SERVER !== "1") {
-  serve({
+function startBridgeServer(
+  env: NodeJS.ProcessEnv = process.env,
+  start: (options: BridgeServerOptions) => unknown = serve,
+): unknown {
+  if (env.CODEX_BRIDGE_NO_SERVER === "1") {
+    return undefined;
+  }
+
+  return start({
     fetch: app.fetch,
-    port,
-    hostname,
+    port: parseInt(env.PORT || "4098", 10),
+    hostname: env.HOSTNAME || "0.0.0.0",
   });
 }
+
+startBridgeServer();

@@ -249,11 +249,7 @@ function parseChildTranscript(
         continue;
       }
 
-      const existing = actions[actionIndex];
-      if (!existing || existing.type !== "tool-invocation") {
-        continue;
-      }
-
+      const existing = actions[actionIndex] as TranscriptActionPart;
       actions[actionIndex] = updateActionPart(
         existing,
         payload.output,

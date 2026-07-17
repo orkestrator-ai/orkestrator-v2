@@ -174,11 +174,14 @@ function getReceiverThreadIds(item: CodexCollabToolCallItem): string[] {
  * collaboration items carry the actual child thread IDs. Both sources are
  * emitted in invocation order, so retain that order for transcript hydration.
  */
-export function getCodexSpawnedAgentIdsInOrder(items: unknown[]): string[] {
+export function getCodexSpawnedAgentIdsInOrder(items: unknown[]): Array<string | undefined> {
   return items
     .map(normalizeCodexCollabToolCallItem)
     .filter((item): item is CodexCollabToolCallItem => item !== null && isSpawnTool(item.tool))
-    .flatMap(getReceiverThreadIds);
+    .map((item) => {
+      const receiverThreadIds = getReceiverThreadIds(item);
+      return receiverThreadIds.length === 1 ? receiverThreadIds[0] : undefined;
+    });
 }
 
 function toToolState(

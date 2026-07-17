@@ -73,6 +73,7 @@ import { DockerStatsDialog } from "@/components/docker";
 import * as backend from "@/lib/backend";
 import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
 import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
+import { isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { cn } from "@/lib/utils";
 
 function isEditableShortcutTarget(target: EventTarget | null): boolean {
@@ -253,6 +254,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   );
   const environmentPortAddress = getEnvironmentPortAddress(selectedEnvironment);
   const environmentBrowserUrl = getEnvironmentBrowserUrl(selectedEnvironment);
+  const browserPreviewSupported = isGatewayBrowserPreviewSupported();
   const canCopyEnvironmentUrl = !!environmentPortAddress;
 
   // Handler for opening in editor
@@ -860,7 +862,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   <>
                     <p>New Browser Tab</p>
                     <p className="text-xs text-muted-foreground">
-                      {environmentBrowserUrl ? `Open ${environmentBrowserUrl}` : "Preview a service on the backend machine"}
+                      {!browserPreviewSupported
+                        ? "Available in the desktop app; the web client cannot authenticate previews"
+                        : environmentBrowserUrl ? `Open ${environmentBrowserUrl}` : "Preview a service on the backend machine"}
                     </p>
                   </>
                 }
@@ -870,7 +874,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     size="icon"
                     className="h-8 w-8"
                     onClick={handleCreateBrowserTab}
-                    disabled={!selectedEnvironment || !canCreateTab}
+                    disabled={!selectedEnvironment || !canCreateTab || !browserPreviewSupported}
                     aria-label="New browser tab"
                   >
                     <Globe2 className="h-4 w-4" />

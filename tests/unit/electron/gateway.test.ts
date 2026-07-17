@@ -131,21 +131,65 @@ describe("remote gateway", () => {
   test("rewrites browser-preview asset paths into their isolated proxy namespace", () => {
     const prefix = "/__orkestrator/browser/loopback/3000";
     const target = new URL("http://127.0.0.1:3000/");
-    const source = [
-      '<script type="module" src="/src/main.tsx"></script>',
-      "import '/src/style.css'",
-      "const icon = '/assets/icon.svg'",
-      "body { background: url(/assets/grid.png) }",
-      "fetch('http://localhost:3000/api/status')",
-    ].join("\n");
 
-    expect(rewriteBrowserPreviewBody(source, prefix, target)).toBe([
+    expect(rewriteBrowserPreviewBody(
+      [
+        '<script type="module" src="/src/main.tsx"></script>',
+        "<link rel='stylesheet' href='/src/style.css'>",
+        "<img src=/assets/logo.png alt=logo>",
+        "<style>body { background: url(/assets/grid.png) }</style>",
+      ].join("\n"),
+      prefix,
+      target,
+      "html",
+    )).toBe([
       `<script type="module" src="${prefix}/src/main.tsx"></script>`,
+      `<link rel='stylesheet' href='${prefix}/src/style.css'>`,
+      `<img src=${prefix}/assets/logo.png alt=logo>`,
+      `<style>body { background: url(${prefix}/assets/grid.png) }</style>`,
+    ].join("\n"));
+
+    expect(rewriteBrowserPreviewBody(
+      [
+        "import '/src/style.css'",
+        'import { app } from "/src/app.ts"',
+        "const page = await import('/src/page.ts')",
+        "const worker = new URL('/src/worker.ts', import.meta.url)",
+        "fetch('http://localhost:3000/api/status')",
+      ].join("\n"),
+      prefix,
+      target,
+      "js",
+    )).toBe([
       `import '${prefix}/src/style.css'`,
-      `const icon = '${prefix}/assets/icon.svg'`,
-      `body { background: url(${prefix}/assets/grid.png) }`,
+      `import { app } from "${prefix}/src/app.ts"`,
+      `const page = await import('${prefix}/src/page.ts')`,
+      `const worker = new URL('${prefix}/src/worker.ts', import.meta.url)`,
       `fetch('${prefix}/api/status')`,
     ].join("\n"));
+
+    expect(rewriteBrowserPreviewBody(
+      '@import "/theme.css";\nbody { background: url(\'/assets/grid.png\') }',
+      prefix,
+      target,
+      "css",
+    )).toBe(`@import "${prefix}/theme.css";\nbody { background: url('${prefix}/assets/grid.png') }`);
+  });
+
+  test("leaves application string literals and already-proxied paths untouched", () => {
+    const prefix = "/__orkestrator/browser/loopback/3000";
+    const target = new URL("http://127.0.0.1:3000/");
+    const source = [
+      'const parts = location.pathname.split("/");',
+      'const key = ["users", id].join("/");',
+      'createBrowserRouter([{ path: "/", element: root }]);',
+      'if (route.startsWith("/admin")) {}',
+      "const icon = '/assets/icon.svg';",
+      `const proxied = "${prefix}";`,
+      `import "${prefix}/src/dep.js";`,
+    ].join("\n");
+
+    expect(rewriteBrowserPreviewBody(source, prefix, target, "js")).toBe(source);
   });
 
   test("detects Tailscale addresses and prefers IPv4 bind candidates", () => {
@@ -1240,6 +1284,152 @@ describe("remote gateway", () => {
     });
     expect(result.status).toBe(502);
     expect(result.body).toContain("exceeded 8388608");
+  });
+
+  test("rejects preview text with an unsupported content encoding", async () => {
+    const target = createServer((_request, response) => {
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-encoding": "zstd",
+      });
+      response.end("opaque");
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const targetAddress = target.address();
+    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+
+    const { info } = await startGateway();
+    const result = await requestUrl(`${info.url}__orkestrator/browser/loopback/${targetAddress.port}/`, {
+      headers: { authorization: `Bearer ${info.token}`, origin: "null" },
+    });
+    expect(result.status).toBe(502);
+    expect(result.body).toContain("unsupported content encoding");
+  });
+
+  test("passes non-UTF-8 preview documents through without rewriting", async () => {
+    const body = '<script src="/asset.js"></script>';
+    const target = createServer((_request, response) => {
+      response.writeHead(200, {
+        "content-type": "text/html; charset=iso-8859-1",
+        "content-length": Buffer.byteLength(body),
+      });
+      response.end(body);
+    });
+    auxiliaryServers.push(target);
+    await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
+    const targetAddress = target.address();
+    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+
+    const { info } = await startGateway();
+    const result = await requestUrl(`${info.url}__orkestrator/browser/loopback/${targetAddress.port}/`, {
+      headers: { authorization: `Bearer ${info.token}`, origin: "null" },
+    });
+    expect(result.status).toBe(200);
+    expect(result.body).toBe(body);
+  });
+
+  test("redirects preview-referred root requests back into their namespace", async () => {
+    const { info } = await startGateway();
+    const referer = `${info.url}__orkestrator/browser/loopback/3000/app`;
+
+    const redirect = await requestUrl(`${info.url}api/status?probe=1`, {
+      headers: { referer, origin: "null" },
+    });
+    expect(redirect.status).toBe(307);
+    expect(redirect.headers.location).toBe("/__orkestrator/browser/loopback/3000/api/status?probe=1");
+    expect(redirect.headers["access-control-allow-origin"]).toBe("null");
+    expect(redirect.headers["access-control-allow-credentials"]).toBe("true");
+    expect(redirect.headers["cache-control"]).toBe("no-store");
+
+    const preflight = await requestUrl(`${info.url}api/status`, {
+      method: "OPTIONS",
+      headers: {
+        referer,
+        origin: "null",
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "content-type",
+      },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers["access-control-allow-origin"]).toBe("null");
+    expect(preflight.headers["access-control-allow-headers"]).toBe("content-type");
+
+    const unrelatedReferer = await requestUrl(`${info.url}api/status`, {
+      headers: { referer: `${info.url}some/other/page` },
+    });
+    expect(unrelatedReferer.status).toBe(401);
+
+    const malformedReferer = await requestUrl(`${info.url}api/status`, {
+      headers: { referer: "not a url" },
+    });
+    expect(malformedReferer.status).toBe(401);
+  });
+
+  test("cancels the upstream request when the preview client disconnects", async () => {
+    // Abruptly dropping an in-process connection to a Bun HTTP server wedges
+    // the bun:test runner even after the scenario completes, so the whole
+    // disconnect scenario runs in a subprocess and reports over stdout.
+    const dataDir = await createTempDir("ork-gateway-disconnect-");
+    const rendererRoot = await createRendererRoot(dataDir);
+    const scriptPath = path.join(dataDir, "disconnect-scenario.ts");
+    const gatewayModule = path.resolve(import.meta.dir, "../../../apps/backend/src/gateway.ts");
+    await writeFile(scriptPath, `
+      import { createServer } from "node:http";
+      import { connect } from "node:net";
+      import { OrkestratorGateway } from ${JSON.stringify(gatewayModule)};
+
+      setTimeout(() => { console.log("TIMED_OUT"); process.exit(1); }, 8000);
+
+      const target = createServer((request, response) => {
+        request.socket.once("close", () => {
+          console.log("UPSTREAM_CLOSED");
+          process.exit(0);
+        });
+        response.writeHead(200, { "content-type": "application/octet-stream" });
+        response.write("streaming");
+      });
+      await new Promise((resolve) => target.listen(0, "127.0.0.1", resolve));
+      const targetPort = target.address().port;
+
+      const gateway = new OrkestratorGateway({
+        backend: { invoke: async () => null },
+        dataDir: ${JSON.stringify(dataDir)},
+        rendererRoot: ${JSON.stringify(rendererRoot)},
+        bindAddress: "127.0.0.1",
+        port: 0,
+        env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
+        logger: { debug() {}, error() {}, info() {}, warn() {} },
+        allowNonTailscaleBind: true,
+      });
+      const info = await gateway.start();
+      if (!info) throw new Error("Gateway did not start");
+      const gatewayUrl = new URL(info.url);
+
+      const socket = connect({ host: gatewayUrl.hostname, port: Number(gatewayUrl.port) }, () => {
+        socket.write([
+          "GET /__orkestrator/browser/loopback/" + targetPort + "/stream HTTP/1.1",
+          "Host: " + gatewayUrl.host,
+          "Authorization: Bearer " + info.token,
+          "",
+          "",
+        ].join("\\r\\n"));
+      });
+      socket.once("data", () => socket.destroy());
+    `);
+
+    const scenario = Bun.spawn([process.execPath, scriptPath], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      scenario.exited,
+      new Response(scenario.stdout).text(),
+      new Response(scenario.stderr).text(),
+    ]);
+    expect(stderr).toBe("");
+    expect(stdout).toContain("UPSTREAM_CLOSED");
+    expect(exitCode).toBe(0);
   });
 
   test("serves renderer requests through a configured dev server proxy", async () => {

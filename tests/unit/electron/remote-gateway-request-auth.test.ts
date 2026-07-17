@@ -141,6 +141,55 @@ describe("remote gateway renderer request authentication", () => {
     expect(navigatedFrameCallback).toHaveBeenCalledWith({ requestHeaders: {} });
   });
 
+  test("treats malformed referrers as non-preview initiators", () => {
+    const harness = installHarness();
+
+    const mainRenderer = mock(() => undefined);
+    harness.beforeHeaders()({
+      url: "https://desk.example/__orkestrator/invoke",
+      resourceType: "xhr",
+      referrer: "::not-a-url::",
+      frame: null,
+      requestHeaders: { Accept: "application/json" },
+    }, mainRenderer);
+    expect(mainRenderer).toHaveBeenCalledWith({
+      requestHeaders: {
+        Accept: "application/json",
+        Authorization: "Bearer gateway-token",
+        Origin: "https://orkestrator.dev",
+      },
+    });
+
+    const responseCallback = mock(() => undefined);
+    harness.receivedHeaders()({
+      url: "https://desk.example/__orkestrator/invoke",
+      resourceType: "xhr",
+      referrer: "::not-a-url::",
+      frame: null,
+      responseHeaders: { "Access-Control-Allow-Origin": ["https://orkestrator.dev"] },
+    }, responseCallback);
+    expect(responseCallback).toHaveBeenCalledWith({
+      responseHeaders: { "Access-Control-Allow-Origin": ["*"] },
+    });
+  });
+
+  test("terminates on frame-parent cycles and still strips subframe credentials", () => {
+    const harness = installHarness();
+    const frameA: { url: string; parent: unknown } = { url: "https://app.example/a", parent: null };
+    const frameB = { url: "https://app.example/b", parent: frameA };
+    frameA.parent = frameB;
+
+    const callback = mock(() => undefined);
+    harness.beforeHeaders()({
+      url: "https://desk.example/__orkestrator/invoke",
+      resourceType: "xhr",
+      referrer: "",
+      frame: frameA,
+      requestHeaders: { Authorization: "Bearer ambient", Accept: "application/json" },
+    }, callback);
+    expect(callback).toHaveBeenCalledWith({ requestHeaders: { Accept: "application/json" } });
+  });
+
   test("authorizes a newly created preview subframe from the trusted renderer", () => {
     const harness = installHarness();
     const callback = mock(() => undefined);

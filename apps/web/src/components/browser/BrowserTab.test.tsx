@@ -106,6 +106,7 @@ describe("BrowserTab", () => {
   test("keeps remote preview documents in an opaque sandbox", () => {
     window.orkestratorGateway = {
       enabled: true,
+      desktop: true,
       baseUrl: "https://workstation.tailnet.ts.net/",
     };
     setBrowserTab("http://localhost:3000/");
@@ -202,6 +203,62 @@ describe("BrowserTab", () => {
       "http://localhost:4000/external",
     );
     expect(screen.getByRole("button", { name: "Back" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  test("reloads through the toolbar button without duplicating history", () => {
+    setBrowserTab("http://localhost:3000/");
+    const { container } = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+
+    expect(container.querySelector("iframe")?.dataset.loadRevision).toBe("0");
+    fireEvent.click(screen.getByRole("button", { name: "Reload preview" }));
+    expect(container.querySelector("iframe")?.dataset.loadRevision).toBe("1");
+    expect(container.querySelector("iframe")?.getAttribute("src")).toBe("http://localhost:3000/");
+    expect(screen.getByRole("button", { name: "Back" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  test("resubmitting the current address reloads in place", () => {
+    setBrowserTab("http://localhost:3000/");
+    const { container } = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    expect(container.querySelector("iframe")?.dataset.loadRevision).toBe("1");
+    expect(screen.getByRole("button", { name: "Back" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Forward" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  test("explains that web-client sessions cannot host previews", () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+    setBrowserTab("http://localhost:3000/");
+    const { container } = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+
+    expect(container.querySelector("iframe")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    expect(screen.getByRole("alert").textContent).toContain("desktop app");
   });
 
   test("clears loading state when the iframe reports a load", () => {

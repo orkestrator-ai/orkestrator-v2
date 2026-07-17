@@ -19,6 +19,7 @@ describe("resolveBrowserAddress", () => {
   test("routes loopback previews through the configured backend gateway", () => {
     window.orkestratorGateway = {
       enabled: true,
+      desktop: true,
       baseUrl: "https://workstation.tailnet.ts.net/",
     };
 
@@ -26,6 +27,15 @@ describe("resolveBrowserAddress", () => {
       displayUrl: "http://127.0.0.1:3000/dashboard?mode=dark",
       iframeUrl: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/3000/dashboard?mode=dark",
     });
+  });
+
+  test("rejects previews in the web client, which cannot authenticate iframe loads", () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+
+    expect(() => resolveBrowserAddress("localhost:3000")).toThrow("desktop app");
   });
 
   test("rejects non-loopback and non-HTTP addresses", () => {

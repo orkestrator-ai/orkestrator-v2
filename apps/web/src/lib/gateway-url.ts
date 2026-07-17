@@ -33,6 +33,18 @@ export function resolveGatewayLoopbackBaseUrl(baseUrl: string): string {
   }
 }
 
+/**
+ * Browser previews load in a sandboxed (opaque-origin) iframe, so the gateway
+ * auth cookie is never sent and a bearer token cannot be attached to document
+ * loads. Only the Electron desktop app injects gateway credentials at the
+ * network layer, so previews through a remote gateway are desktop-only.
+ */
+export function isGatewayBrowserPreviewSupported(): boolean {
+  if (typeof window === "undefined") return true;
+  const gateway = window.orkestratorGateway;
+  return !gateway?.enabled || gateway.desktop === true;
+}
+
 /** Resolve a loopback page through the gateway's browser-preview namespace. */
 export function resolveGatewayBrowserPreviewUrl(baseUrl: string): string {
   if (typeof window === "undefined" || !window.orkestratorGateway?.enabled) return baseUrl;

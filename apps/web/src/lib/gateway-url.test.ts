@@ -1,8 +1,29 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { getGatewayBaseUrl, resolveGatewayApiUrl, resolveGatewayBrowserPreviewUrl, resolveGatewayLoopbackBaseUrl } from "./gateway-url";
+import { getGatewayBaseUrl, isGatewayBrowserPreviewSupported, resolveGatewayApiUrl, resolveGatewayBrowserPreviewUrl, resolveGatewayLoopbackBaseUrl } from "./gateway-url";
 
 afterEach(() => {
   delete window.orkestratorGateway;
+});
+
+describe("isGatewayBrowserPreviewSupported", () => {
+  test("supports previews with no gateway and with the desktop gateway", () => {
+    expect(isGatewayBrowserPreviewSupported()).toBe(true);
+
+    window.orkestratorGateway = {
+      enabled: true,
+      desktop: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+    expect(isGatewayBrowserPreviewSupported()).toBe(true);
+  });
+
+  test("rejects previews in the non-desktop web client", () => {
+    window.orkestratorGateway = { enabled: true };
+    expect(isGatewayBrowserPreviewSupported()).toBe(false);
+
+    window.orkestratorGateway = { enabled: false };
+    expect(isGatewayBrowserPreviewSupported()).toBe(true);
+  });
 });
 
 describe("resolveGatewayBrowserPreviewUrl", () => {

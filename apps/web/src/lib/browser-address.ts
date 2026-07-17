@@ -1,4 +1,4 @@
-import { resolveGatewayBrowserPreviewUrl } from "@/lib/gateway-url";
+import { isGatewayBrowserPreviewSupported, resolveGatewayBrowserPreviewUrl } from "@/lib/gateway-url";
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
@@ -10,6 +10,10 @@ export interface BrowserAddress {
 }
 
 export function resolveBrowserAddress(value: string): BrowserAddress {
+  if (!isGatewayBrowserPreviewSupported()) {
+    throw new Error("Browser previews are only available in the desktop app when connected remotely.");
+  }
+
   const trimmed = value.trim();
   if (!trimmed) throw new Error("Enter a backend-local address.");
 

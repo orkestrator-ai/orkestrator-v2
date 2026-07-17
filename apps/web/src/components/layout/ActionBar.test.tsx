@@ -658,6 +658,29 @@ describe("ActionBar browser tabs", () => {
 
     expect(createTabMock).toHaveBeenCalledWith("browser", { initialUrl: undefined });
   });
+
+  test("keeps the browser tab button visible but disabled without an environment", () => {
+    currentSelectedEnvironmentId = null;
+    render(<ActionBar presentation="grid" />);
+
+    const button = screen.getByRole("button", { name: "New browser tab" });
+    expect(button.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(button);
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("disables browser previews in the non-desktop web client", () => {
+    window.orkestratorGateway = { enabled: true };
+    try {
+      render(<ActionBar />);
+      const button = screen.getByRole("button", { name: "New browser tab" });
+      expect(button.hasAttribute("disabled")).toBe(true);
+      fireEvent.click(button);
+      expect(createTabMock).not.toHaveBeenCalled();
+    } finally {
+      delete window.orkestratorGateway;
+    }
+  });
 });
 
 describe("ActionBar workflow tabs", () => {

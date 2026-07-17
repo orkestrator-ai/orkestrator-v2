@@ -498,9 +498,18 @@ function sanitizeProxyResponseHeaders(headers: IncomingHttpHeaders, target: URL,
   return sanitized;
 }
 
-function isBrowserPreviewContentType(contentType: string | string[] | undefined): boolean {
+export type BrowserPreviewContentKind = "html" | "css" | "js";
+
+function browserPreviewContentKind(contentType: string | string[] | undefined): BrowserPreviewContentKind | null {
   const value = Array.isArray(contentType) ? contentType.join(";") : contentType ?? "";
-  return /(?:text\/html|text\/css|(?:text|application)\/(?:javascript|x-javascript))/i.test(value);
+  // The rewriter decodes and re-encodes as UTF-8; pass other charsets through
+  // untouched and let the Referer-based redirect recover their asset requests.
+  const charset = /charset\s*=\s*"?([\w-]+)/i.exec(value)?.[1]?.toLowerCase();
+  if (charset && charset !== "utf-8" && charset !== "utf8" && charset !== "us-ascii") return null;
+  if (/text\/html/i.test(value)) return "html";
+  if (/text\/css/i.test(value)) return "css";
+  if (/(?:text|application)\/(?:javascript|x-javascript)/i.test(value)) return "js";
+  return null;
 }
 
 function browserPreviewContentDecoder(contentEncoding: string | string[] | undefined): Transform | null | undefined {
@@ -513,26 +522,56 @@ function browserPreviewContentDecoder(contentEncoding: string | string[] | undef
   return undefined;
 }
 
-/** Keep root-relative development assets inside the browser-preview namespace. */
-export function rewriteBrowserPreviewBody(body: string, proxyPrefix: string, target: URL): string {
+/**
+ * Keep root-relative development assets inside the browser-preview namespace.
+ *
+ * Rewriting is deliberately narrow: HTML URL attributes, CSS url()/@import
+ * values, and JavaScript module specifiers. Generic string literals stay
+ * untouched — values like `split("/")` or router paths are code, not URLs.
+ * Requests those produce at runtime are recovered by the gateway's
+ * Referer-based preview redirect instead.
+ */
+export function rewriteBrowserPreviewBody(
+  body: string,
+  proxyPrefix: string,
+  target: URL,
+  kind: BrowserPreviewContentKind,
+): string {
   const escapedPrefix = proxyPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const alreadyProxied = new RegExp(`^(?:${escapedPrefix}/|//)`);
+  const alreadyProxied = new RegExp(`^(?:${escapedPrefix}(?:/|$)|//)`);
   const rewritePath = (value: string) => alreadyProxied.test(value)
     ? value
     : `${proxyPrefix}${value.startsWith("/") ? value : `/${value}`}`;
 
-  let rewritten = body.replace(
-    /(["'`])(\/(?!\/)[^"'`\r\n]*)\1/g,
-    (_match, quote: string, value: string) => `${quote}${rewritePath(value)}${quote}`,
-  );
-  rewritten = rewritten.replace(
-    /(\b(?:src|href|action|poster)\s*=\s*)(\/(?!\/)[^\s>]+)/gi,
-    (_match, prefix: string, value: string) => `${prefix}${rewritePath(value)}`,
-  );
-  rewritten = rewritten.replace(
-    /(url\(\s*)(\/(?!\/)[^)\s]+)(\s*\))/gi,
-    (_match, start: string, value: string, end: string) => `${start}${rewritePath(value)}${end}`,
-  );
+  let rewritten = body;
+  const rewriteQuotedAfter = (pattern: RegExp) => {
+    rewritten = rewritten.replace(
+      pattern,
+      (_match, before: string, quote: string, value: string) => `${before}${quote}${rewritePath(value)}${quote}`,
+    );
+  };
+
+  if (kind === "html") {
+    rewriteQuotedAfter(/(\b(?:src|href|action|poster)\s*=\s*)(["'])(\/(?!\/)[^"']*)\2/gi);
+    rewritten = rewritten.replace(
+      /(\b(?:src|href|action|poster)\s*=\s*)(\/(?!\/)[^\s>"']+)/gi,
+      (_match, prefix: string, value: string) => `${prefix}${rewritePath(value)}`,
+    );
+  }
+  if (kind === "html" || kind === "css") {
+    rewritten = rewritten.replace(
+      /(url\(\s*)(["']?)(\/(?!\/)[^)"'\s]+)\2(\s*\))/gi,
+      (_match, start: string, quote: string, value: string, end: string) =>
+        `${start}${quote}${rewritePath(value)}${quote}${end}`,
+    );
+    rewriteQuotedAfter(/(@import\s+)(["'])(\/(?!\/)[^"']*)\2/gi);
+  }
+  if (kind === "html" || kind === "js") {
+    rewriteQuotedAfter(/(\bfrom\s*)(["'])(\/(?!\/)[^"'\r\n]*)\2/g);
+    rewriteQuotedAfter(/(\bimport\s*\(\s*)(["'])(\/(?!\/)[^"'\r\n]*)\2/g);
+    rewriteQuotedAfter(/(\bimport\s+)(["'])(\/(?!\/)[^"'\r\n]*)\2/g);
+    rewriteQuotedAfter(/(\bnew\s+URL\s*\(\s*)(["'])(\/(?!\/)[^"'\r\n]*)\2/g);
+  }
 
   const loopbackOrigin = new RegExp(
     `(["'\u0060])http:\\/\\/(?:localhost|127\\.0\\.0\\.1|\\[::1\\]):${target.port || "80"}(\\/[^"'\u0060\\r\\n]*)?\\1`,
@@ -544,6 +583,27 @@ export function rewriteBrowserPreviewBody(body: string, proxyPrefix: string, tar
   );
 
   return rewritten;
+}
+
+/**
+ * Resolve the preview namespace a request originated from, based on its
+ * Referer. Lets the gateway recover root-relative requests produced by
+ * previewed application code that the body rewriter intentionally leaves
+ * alone (runtime-built URLs, plain string literals).
+ */
+function browserPreviewRefererPrefix(request: IncomingMessage): string | null {
+  const referer = request.headers.referer;
+  if (!referer) return null;
+  try {
+    const pathname = new URL(referer).pathname;
+    const match = new RegExp(`^${API_PREFIX}/browser/loopback/(\\d{1,5})(?:/|$)`).exec(pathname);
+    if (!match) return null;
+    const port = Number.parseInt(match[1] ?? "", 10);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+    return `${API_PREFIX}/browser/loopback/${port}`;
+  } catch {
+    return null;
+  }
 }
 
 export class OrkestratorGateway {
@@ -905,6 +965,34 @@ export class OrkestratorGateway {
       return;
     }
 
+    // Root-relative requests issued by a preview document (fetch("/api"),
+    // runtime-built asset URLs) escape the preview namespace; steer them back
+    // via their Referer. Runs before authentication on purpose: the redirect
+    // is a deterministic transform of the request's own headers, and the
+    // redirected request still has to pass the preview namespace's auth.
+    if (!url.pathname.startsWith(`${API_PREFIX}/`)) {
+      const previewPrefix = browserPreviewRefererPrefix(request);
+      if (previewPrefix) {
+        if (request.method === "OPTIONS" && request.headers.origin === "null") {
+          this.handleBrowserPreviewCorsPreflight(request, response);
+          return;
+        }
+        const redirectHeaders: OutgoingHttpHeaders = {
+          location: `${previewPrefix}${url.pathname}${url.search}`,
+          "cache-control": "no-store",
+          vary: "Referer",
+        };
+        if (request.headers.origin === "null") {
+          redirectHeaders["access-control-allow-origin"] = "null";
+          redirectHeaders["access-control-allow-credentials"] = "true";
+          redirectHeaders.vary = "Origin, Referer";
+        }
+        response.writeHead(307, redirectHeaders);
+        response.end();
+        return;
+      }
+    }
+
     if (url.pathname === `${API_PREFIX}/login`) {
       await this.handleLogin(request, response);
       return;
@@ -1186,6 +1274,9 @@ export class OrkestratorGateway {
       const finish = () => {
         if (settled) return;
         settled = true;
+        // Keep-alive sockets outlive individual requests; drop this
+        // request's disconnect handler so they do not accumulate.
+        request.socket.removeListener("close", cancelProxyForDisconnect);
         resolve();
       };
       const fail = (error: Error) => {
@@ -1221,12 +1312,10 @@ export class OrkestratorGateway {
           }
         }
 
-        if (
-          browserPreview
-          && proxyPrefix
-          && request.method !== "HEAD"
-          && isBrowserPreviewContentType(proxyResponse.headers["content-type"])
-        ) {
+        const previewContentKind = browserPreview && proxyPrefix && request.method !== "HEAD"
+          ? browserPreviewContentKind(proxyResponse.headers["content-type"])
+          : null;
+        if (browserPreview && proxyPrefix && previewContentKind) {
           const decoder = browserPreviewContentDecoder(proxyResponse.headers["content-encoding"]);
           if (decoder === undefined) {
             proxyResponse.destroy();
@@ -1283,6 +1372,7 @@ export class OrkestratorGateway {
               Buffer.concat(chunks).toString("utf8"),
               proxyPrefix,
               target,
+              previewContentKind,
             ));
             delete responseHeaders["content-encoding"];
             responseHeaders["content-length"] = rewritten.byteLength;
@@ -1316,18 +1406,34 @@ export class OrkestratorGateway {
         if (!settled && !response.writableFinished) {
           const disconnectError = new Error("Proxy client disconnected");
           this.logger.debug("[RemoteGateway] Proxy client disconnected; aborting upstream request");
+          // Settle first: destroying the response re-enters this handler via
+          // its own "close" event, and a throwing destroy must not leave the
+          // proxy promise dangling.
+          finish();
           activeProxyResponse?.socket.destroy(disconnectError);
           activeProxyResponse?.destroy(disconnectError);
           proxyRequest.socket?.destroy(disconnectError);
           proxyRequest.destroy(disconnectError);
-          finish();
+          response.destroy(disconnectError);
         }
       };
-      request.once("aborted", cancelProxyForDisconnect);
+      // "close" fires for premature client disconnects as well as normal
+      // completion; the settled/writableFinished guard makes the latter a
+      // no-op. The socket listener is required (response "close" alone is not
+      // reliably emitted on abrupt disconnects) and is removed in finish().
       request.socket.once("close", cancelProxyForDisconnect);
       response.once("close", cancelProxyForDisconnect);
 
-      request.pipe(proxyRequest);
+      // Piping an already-ended request stream suppresses client-socket
+      // close events under Bun, which would leave disconnected proxy
+      // requests streaming forever; only pipe when a body can exist.
+      const hasRequestBody = request.headers["content-length"] !== undefined
+        || request.headers["transfer-encoding"] !== undefined;
+      if (hasRequestBody) {
+        request.pipe(proxyRequest);
+      } else {
+        proxyRequest.end();
+      }
     });
   }
 

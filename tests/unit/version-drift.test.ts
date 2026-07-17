@@ -1,6 +1,11 @@
 import { describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  PINNED_TOOLCHAIN_ARTIFACTS,
+  PINNED_TOOLCHAIN_VERSIONS,
+  pinnedToolchainArtifacts,
+} from "../../apps/desktop/electron/toolchain-manifest";
 
 const repoRoot = join(import.meta.dir, "..", "..");
 
@@ -47,7 +52,7 @@ function getDockerfileBaseImageTag(): string {
   return match[1];
 }
 
-describe("version drift between SDK pins and bundled/container CLIs", () => {
+describe("version drift between SDK pins and managed/container CLIs", () => {
   test("Bun: host-bundled runtime matches the container base image", () => {
     // The bridges run on Bun both on the host (bundled binary) and inside the
     // container (oven/bun base). Pinning both to the same version keeps the two
@@ -83,7 +88,7 @@ describe("version drift between SDK pins and bundled/container CLIs", () => {
   });
 
 
-  test("Claude: bundled binary and Docker CLI match", () => {
+  test("Claude: managed binary, download script, and Docker CLI match", () => {
     const downloadScriptPin = getShellVar(
       "scripts/download-claude.sh",
       "CLAUDE_VERSION",
@@ -91,6 +96,7 @@ describe("version drift between SDK pins and bundled/container CLIs", () => {
     const dockerfilePin = getDockerfileArg("CLAUDE_CLI_VERSION");
 
     expect(dockerfilePin).toBe(downloadScriptPin);
+    expect(PINNED_TOOLCHAIN_VERSIONS.claude).toBe(downloadScriptPin);
   });
 
   test("Claude: agent SDK dependency is exact-pinned", () => {
@@ -100,7 +106,7 @@ describe("version drift between SDK pins and bundled/container CLIs", () => {
     );
   });
 
-  test("Codex: SDK pin, bundled binary, and Docker CLI all match", () => {
+  test("Codex: SDK pin, managed binary, download script, and Docker CLI all match", () => {
     const sdkPin = expectExactVersion(
       "bridges/codex-bridge/package.json",
       "@openai/codex-sdk",
@@ -113,6 +119,7 @@ describe("version drift between SDK pins and bundled/container CLIs", () => {
 
     expect(downloadScriptPin).toBe(sdkPin);
     expect(dockerfilePin).toBe(sdkPin);
+    expect(PINNED_TOOLCHAIN_VERSIONS.codex).toBe(sdkPin);
   });
 
   test("Codex: bundled binary download uses the Rust release artifact URL", () => {
@@ -142,7 +149,7 @@ describe("version drift between SDK pins and bundled/container CLIs", () => {
     expect(script).toContain('CODEX_ARCH="aarch64"');
   });
 
-  test("OpenCode: SDK pin, bundled binary, and Docker CLI all match", () => {
+  test("OpenCode: SDK pin, managed binary, download script, and Docker CLI all match", () => {
     const sdkPin = expectExactVersion("apps/web/package.json", "@opencode-ai/sdk");
     const downloadScriptPin = getShellVar(
       "scripts/download-opencode.sh",
@@ -152,5 +159,51 @@ describe("version drift between SDK pins and bundled/container CLIs", () => {
 
     expect(downloadScriptPin).toBe(sdkPin);
     expect(dockerfilePin).toBe(sdkPin);
+    expect(PINNED_TOOLCHAIN_VERSIONS.opencode).toBe(sdkPin);
+  });
+
+  test("managed manifest covers every supported platform and architecture with immutable checksums", () => {
+    const expected = new Set<string>();
+    for (const platform of ["darwin", "linux"]) {
+      for (const architecture of ["arm64", "x64"]) {
+        for (const name of ["claude", "codex", "opencode"]) {
+          expected.add(`${name}:${platform}:${architecture}`);
+        }
+      }
+    }
+
+    const actual = new Set(PINNED_TOOLCHAIN_ARTIFACTS.map((artifact) => {
+      expect(artifact.archive.url).toMatch(/^https:\/\//);
+      expect(artifact.archive.sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(artifact.executable.sha256).toMatch(/^[a-f0-9]{64}$/);
+      if (artifact.executable.installedSha256) {
+        expect(artifact.executable.installedSha256).toMatch(/^[a-f0-9]{64}$/);
+        expect(artifact.executable.installedSize).toBeGreaterThan(0);
+      }
+      expect(artifact.archive.size).toBeGreaterThan(0);
+      expect(artifact.executable.size).toBeGreaterThan(0);
+      expect(artifact.version).toBe(PINNED_TOOLCHAIN_VERSIONS[artifact.name]);
+      return `${artifact.name}:${artifact.platform}:${artifact.architecture}`;
+    }));
+
+    expect(actual).toEqual(expected);
+    expect(PINNED_TOOLCHAIN_ARTIFACTS).toHaveLength(expected.size);
+  });
+
+  test("selects exactly one complete tool set for each supported target", () => {
+    for (const platform of ["darwin", "linux"] as const) {
+      for (const architecture of ["arm64", "x64"] as const) {
+        const selected = pinnedToolchainArtifacts(platform, architecture);
+        expect(selected.map((artifact) => artifact.name).sort()).toEqual(["claude", "codex", "opencode"]);
+        expect(selected.every((artifact) => (
+          artifact.platform === platform && artifact.architecture === architecture
+        ))).toBe(true);
+      }
+    }
+  });
+
+  test("rejects unsupported toolchain platforms and architectures", () => {
+    expect(() => pinnedToolchainArtifacts("win32", "x64")).toThrow("Unsupported toolchain platform");
+    expect(() => pinnedToolchainArtifacts("darwin", "ia32")).toThrow("Unsupported toolchain architecture");
   });
 });

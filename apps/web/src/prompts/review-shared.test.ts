@@ -47,8 +47,14 @@ describe("buildReviewBody", () => {
   });
 
   test("keeps the documented current review prompt in sync with createReviewPrompt", () => {
-    const documentedPrompt = extractDocumentedPrompt(read("docs/current-review-prompt.md"));
+    const documentation = read("docs/current-review-prompt.md");
+    const documentedPrompt = extractDocumentedPrompt(documentation);
 
     expect(documentedPrompt).toBe(createReviewPrompt("main"));
+    expect(documentation).toContain("Settings → Review");
+    expect(documentation).toContain("Reset to default");
+    expect(documentation).toContain("100,000 characters");
+    expect(documentation).toContain("malformed, blank, or oversized persisted overrides");
+    expect(documentation).toContain("{{targetBranch}}");
   });
 });

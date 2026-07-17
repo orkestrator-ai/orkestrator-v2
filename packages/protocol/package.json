@@ -6,6 +6,7 @@
   "exports": {
     "./connections": "./src/connections.ts",
     "./gateway-token": "./src/gateway-token.ts",
+    "./review-prompt": "./src/review-prompt.ts",
     "./web-client": "./src/web-client.ts"
   },
   "scripts": {

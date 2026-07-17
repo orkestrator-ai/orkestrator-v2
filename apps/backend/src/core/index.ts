@@ -7,12 +7,14 @@ export class OrkestratorBackend {
 
   constructor(options: {
     dataDir: string;
+    toolchainBinDir: string;
     appRoot: string;
     resourceRoot: string;
     emit: BackendEmit;
   }) {
     this.context = {
       storage: new StorageService(options.dataDir),
+      toolchainBinDir: options.toolchainBinDir,
       appRoot: options.appRoot,
       resourceRoot: options.resourceRoot,
       emit: options.emit,

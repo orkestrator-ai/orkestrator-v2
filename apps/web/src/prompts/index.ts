@@ -1,4 +1,6 @@
 export {
+  DEFAULT_REVIEW_PROMPT_TEMPLATE,
+  REVIEW_PROMPT_TARGET_BRANCH_TOKEN,
   createPRPrompt,
   createReviewPrompt,
   createPushChangesPrompt,

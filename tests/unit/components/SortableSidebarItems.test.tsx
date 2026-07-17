@@ -130,7 +130,20 @@ describe("sortable sidebar items", () => {
     expect(screen.getByText("1").className).toContain("bg-zinc-800");
     expect(screen.getByTestId("sortable-context")).toBeTruthy();
 
-    fireEvent.click(screen.getByTitle("Create environment"));
+    const addEnvironmentButton = screen.getByTitle("Create environment");
+    expect(addEnvironmentButton.className).toContain("opacity-100");
+    expect(addEnvironmentButton.className).toContain("md:opacity-0");
+    expect(addEnvironmentButton.className).not.toContain("md:opacity-100");
+
+    fireEvent.mouseEnter(projectHeader);
+    expect(addEnvironmentButton.className).toContain("md:opacity-100");
+    expect(addEnvironmentButton.className).not.toContain("md:opacity-0");
+
+    fireEvent.mouseLeave(projectHeader);
+    expect(addEnvironmentButton.className).toContain("md:opacity-0");
+    expect(addEnvironmentButton.className).not.toContain("md:opacity-100");
+
+    fireEvent.click(addEnvironmentButton);
     expect(onCreateEnvironment).toHaveBeenCalled();
 
     fireEvent.click(projectButton);
@@ -239,6 +252,48 @@ describe("sortable sidebar items", () => {
     expect(screen.getByText("Click to open board")).toBeTruthy();
   });
 
+  test("SortableProjectGroup tooltip describes an empty project without a local path", async () => {
+    renderProjectGroup({
+      project: { ...project, localPath: null },
+      environments: [],
+      selectedEnvironmentId: null,
+    });
+
+    fireEvent.mouseEnter(screen.getByRole("button", { name: /Project One/i }));
+
+    expect(await screen.findByText("0 environments")).toBeTruthy();
+    expect(screen.queryByText("/workspace/project-one")).toBeNull();
+    expect(screen.queryByText(/running/)).toBeNull();
+  });
+
+  test("SortableProjectGroup tooltip pluralizes totals and reports only running environments", async () => {
+    const stoppedEnvironment: Environment = {
+      ...environment,
+      id: "env-2",
+      name: "Stopped Env",
+      status: "stopped",
+      order: 1,
+    };
+    renderProjectGroup({ environments: [environment, stoppedEnvironment] });
+
+    fireEvent.mouseEnter(screen.getByRole("button", { name: /Project One/i }));
+
+    expect(await screen.findByText("2 environments (1 running)")).toBeTruthy();
+  });
+
+  test("SortableProjectGroup tooltip omits the running summary when every environment is stopped", async () => {
+    const stoppedEnvironments: Environment[] = [
+      { ...environment, id: "env-1", status: "stopped" },
+      { ...environment, id: "env-2", name: "Stopped Env", status: "stopped", order: 1 },
+    ];
+    renderProjectGroup({ environments: stoppedEnvironments });
+
+    fireEvent.mouseEnter(screen.getByRole("button", { name: /Project One/i }));
+
+    expect(await screen.findByText("2 environments")).toBeTruthy();
+    expect(screen.queryByText(/running/)).toBeNull();
+  });
+
   test("SortableProjectGroup renders the collapse chevron rotated when expanded", () => {
     const { container } = renderProjectGroup({ isCollapsed: false });
 
@@ -264,6 +319,32 @@ describe("sortable sidebar items", () => {
 
     fireEvent.click(chevronButton!);
     expect(onToggleCollapse).toHaveBeenCalled();
+  });
+
+  test("SortableProjectGroup applies the dragging treatment to the project wrapper", () => {
+    sortableState.isDragging = true;
+    const { container } = renderProjectGroup();
+
+    expect(container.firstElementChild?.className).toContain("opacity-50");
+    expect(container.firstElementChild?.className).toContain("z-50");
+  });
+
+  test("SortableProjectGroup confirms project deletion and closes the dialog", async () => {
+    const onDeleteProject = mock(() => {});
+    renderProjectGroup({ onDeleteProject });
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /Project One/i }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Project" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).toContain("Project One");
+    expect(dialog.textContent).toContain("1 environment");
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(onDeleteProject).toHaveBeenCalledTimes(1);
+    expect(onDeleteProject).toHaveBeenCalledWith("project-1");
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   });
 
   test("SortableProjectGroup add action does not also trigger project selection", () => {

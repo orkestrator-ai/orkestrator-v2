@@ -1,5 +1,5 @@
 {
-  "setupContainer": ["curl -fsSL https://bun.sh/install | bash", "bun install"],
+  "setupContainer": ["bun install"],
   "setupLocal": ["bun run setup"],
   "run": ["bun run dev"]
 }

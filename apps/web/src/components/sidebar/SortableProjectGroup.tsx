@@ -201,15 +201,14 @@ export function SortableProjectGroup({
               </ContextMenuContent>
             </ContextMenu>
 
-            {/* Action buttons - shown on hover, replacing chevron */}
-            {/* Add button - shown on hover */}
+            {/* Add button - visible on compact layouts and revealed on desktop hover */}
             <Button
               type="button"
               variant="ghost"
               size="icon"
               className={cn(
-                "h-6 w-6 text-muted-foreground hover:text-foreground transition-opacity",
-                isHovered ? "opacity-100" : "opacity-0"
+                "h-6 w-6 text-muted-foreground opacity-100 transition-opacity hover:text-foreground md:opacity-0",
+                isHovered && "md:opacity-100"
               )}
               onClick={handleAddEnvironment}
               title="Create environment"

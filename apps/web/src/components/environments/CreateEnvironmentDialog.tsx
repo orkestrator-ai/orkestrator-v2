@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Collapsible,
   CollapsibleContent,
@@ -24,7 +25,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, Shield, Globe, Network, Plus, Trash2, ChevronDown, Container, Laptop, Terminal, Bot, X } from "lucide-react";
+import {
+  Bot,
+  ChevronDown,
+  Container,
+  Globe,
+  Laptop,
+  Loader2,
+  MessageSquareText,
+  Network,
+  Plus,
+  Shield,
+  Terminal,
+  Trash2,
+  X,
+} from "lucide-react";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { cn } from "@/lib/utils";
 import { readImage } from "@/lib/native/clipboard";
@@ -63,8 +78,11 @@ export function resolveAgentDefaults(
 }
 
 const UNSELECTED_CARD_CLASSES = "border-transparent bg-zinc-900 hover:border-zinc-600";
+const MOBILE_TAB_TRIGGER_CLASSES = "h-11 min-w-0 flex-1 flex-col gap-0.5 rounded-lg px-1 py-1 text-[10px] leading-none data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none";
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 const MAX_RGBA_SIZE = 32 * 1024 * 1024;
+
+type MobileSection = "prompt" | "environment" | "agent" | "access" | "ports";
 
 function generateImageFilename(): string {
   const timestamp = new Date()
@@ -134,6 +152,7 @@ export function CreateEnvironmentDialog({
   const [networkAccessMode, setNetworkAccessMode] = useState<NetworkAccessMode>("full");
   const [portMappings, setPortMappings] = useState<PortMapping[]>(defaultPortMappings);
   const [showPortConfig, setShowPortConfig] = useState(defaultPortMappings.length > 0);
+  const [mobileSection, setMobileSection] = useState<MobileSection>("prompt");
   const formRef = useRef<HTMLFormElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
 
@@ -146,7 +165,7 @@ export function CreateEnvironmentDialog({
           setInitialPrompt(draft);
         }
       }
-      if (launchAgent) {
+      if (launchAgent && mobileSection === "prompt") {
         // Small delay to ensure the dialog is fully rendered
         const timer = setTimeout(() => {
           promptRef.current?.focus();
@@ -154,7 +173,7 @@ export function CreateEnvironmentDialog({
         return () => clearTimeout(timer);
       }
     }
-  }, [open, launchAgent, projectId]);
+  }, [open, launchAgent, mobileSection, projectId]);
 
   const resetForm = useCallback(() => {
     setEnvironmentType(configEnvironmentType);
@@ -169,6 +188,7 @@ export function CreateEnvironmentDialog({
     setNetworkAccessMode("full");
     setPortMappings(defaultPortMappings);
     setShowPortConfig(defaultPortMappings.length > 0);
+    setMobileSection("prompt");
   }, [defaultPortMappings, configDefaultAgent, configClaudeMode, configOpencodeMode, configCodexMode, configEnvironmentType]);
 
   const handlePromptPaste = useCallback(async (event: ClipboardEvent) => {
@@ -240,6 +260,7 @@ export function CreateEnvironmentDialog({
   // may have been mounted before the defaults were available (e.g., config loaded async)
   useEffect(() => {
     if (open) {
+      setMobileSection("prompt");
       setPortMappings(defaultPortMappings);
       setShowPortConfig(defaultPortMappings.length > 0);
       setEnvironmentType(configEnvironmentType);
@@ -251,6 +272,17 @@ export function CreateEnvironmentDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally omit defaultPortMappings and configDefaultAgent:
     // we read the current value at dialog-open time, not re-sync when defaults change mid-dialog
   }, [open]);
+
+  useEffect(() => {
+    if (!launchAgent && mobileSection === "prompt") {
+      setMobileSection("agent");
+    } else if (
+      environmentType === "local" &&
+      (mobileSection === "access" || mobileSection === "ports")
+    ) {
+      setMobileSection("environment");
+    }
+  }, [environmentType, launchAgent, mobileSection]);
 
   const addPortMapping = useCallback(() => {
     setPortMappings((prev) => [
@@ -365,7 +397,7 @@ export function CreateEnvironmentDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="sm:max-w-[700px] max-h-[85vh] flex flex-col"
+        className="flex max-h-[calc(100dvh-1rem)] flex-col sm:max-h-[85vh] sm:max-w-[700px]"
         onOpenAutoFocus={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
       >
@@ -376,9 +408,65 @@ export function CreateEnvironmentDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <form ref={formRef} onSubmit={handleSubmit} className="space-y-4 overflow-y-auto flex-1 min-h-0 pr-1">
+        <form ref={formRef} onSubmit={handleSubmit} className="min-h-0 flex-1 overflow-y-auto pr-1">
+          <Tabs
+            value={mobileSection}
+            onValueChange={(value) => setMobileSection(value as MobileSection)}
+            className="min-h-0 gap-4 sm:grid sm:grid-cols-2 sm:items-start"
+          >
+            <TabsList
+              aria-label="Environment configuration sections"
+              className="sticky top-0 z-10 flex h-auto w-full shrink-0 rounded-xl border border-border/80 bg-zinc-950/95 p-1 shadow-lg shadow-black/15 backdrop-blur sm:hidden"
+            >
+              <TabsTrigger
+                value="prompt"
+                disabled={!launchAgent}
+                className={MOBILE_TAB_TRIGGER_CLASSES}
+              >
+                <MessageSquareText className="h-4 w-4" />
+                <span>Prompt</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="environment"
+                className={MOBILE_TAB_TRIGGER_CLASSES}
+              >
+                <Container className="h-4 w-4" />
+                <span>Setup</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="agent"
+                className={MOBILE_TAB_TRIGGER_CLASSES}
+              >
+                <Bot className="h-4 w-4" />
+                <span>Agent</span>
+              </TabsTrigger>
+              {environmentType === "containerized" && (
+                <>
+                  <TabsTrigger
+                    value="access"
+                    className={MOBILE_TAB_TRIGGER_CLASSES}
+                  >
+                    <Shield className="h-4 w-4" />
+                    <span>Access</span>
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="ports"
+                    className={MOBILE_TAB_TRIGGER_CLASSES}
+                  >
+                    <Network className="h-4 w-4" />
+                    <span>Ports</span>
+                  </TabsTrigger>
+                </>
+              )}
+            </TabsList>
+
+            <TabsContent
+              value="environment"
+              forceMount
+              className="mt-0 space-y-4 data-[state=inactive]:hidden sm:!contents"
+            >
           {/* Environment Type Selector */}
-          <div className="space-y-2">
+          <div className="space-y-2 sm:col-span-2">
             <Label>Environment Type</Label>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <button
@@ -425,11 +513,6 @@ export function CreateEnvironmentDialog({
             </div>
           </div>
 
-          {/* Top row: Environment Name and Network Access */}
-          <div className={cn(
-            "grid gap-4",
-            environmentType === "containerized" ? "grid-cols-2" : "grid-cols-1"
-          )}>
             {/* Environment Name */}
             <div className="space-y-2">
               <Label htmlFor="environment-name">
@@ -446,9 +529,16 @@ export function CreateEnvironmentDialog({
                 Also used as the git branch name.
               </p>
             </div>
+            </TabsContent>
 
             {/* Network Access Mode - only for containerized environments */}
             {environmentType === "containerized" && (
+              <TabsContent
+                value="access"
+                forceMount
+                className="mt-0 space-y-4 data-[state=inactive]:hidden sm:!contents"
+              >
+            {/* Network Access Mode - only for containerized environments */}
               <div className="space-y-2">
                 <Label>Network Access</Label>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -494,11 +584,16 @@ export function CreateEnvironmentDialog({
                     : "Unrestricted internet access."}
                 </p>
               </div>
+              </TabsContent>
             )}
-          </div>
 
+            <TabsContent
+              value="agent"
+              forceMount
+              className="mt-0 space-y-4 data-[state=inactive]:hidden sm:!contents"
+            >
           {/* Startup + mode row */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
             {/* Launch Agent Toggle */}
             <div className="space-y-2">
               <Label className="text-sm">Container Startup</Label>
@@ -517,6 +612,8 @@ export function CreateEnvironmentDialog({
               />
               </div>
             </div>
+
+          </div>
 
             {/* Agent Mode Selector */}
             <div className={cn(
@@ -594,12 +691,12 @@ export function CreateEnvironmentDialog({
                 </>
               </div>
             </div>
-          </div>
 
           {/* Full-width Default Agent Selector */}
           <div className={cn(
             "space-y-2",
-            !launchAgent && "opacity-50"
+            !launchAgent && "opacity-50",
+            "sm:col-span-2"
           )}>
             <Label className="text-sm">Default Agent</Label>
             <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-3">
@@ -658,9 +755,15 @@ export function CreateEnvironmentDialog({
               </button>
             </div>
           </div>
+            </TabsContent>
 
           {/* Port Configuration - only for containerized environments */}
           {environmentType === "containerized" && (
+          <TabsContent
+            value="ports"
+            forceMount
+            className="mt-0 data-[state=inactive]:hidden sm:col-span-2 sm:!block"
+          >
           <Collapsible open={showPortConfig} onOpenChange={setShowPortConfig}>
             <CollapsibleTrigger asChild>
               <Button
@@ -691,8 +794,8 @@ export function CreateEnvironmentDialog({
                 Expose container ports to the host machine. These are set at container creation.
               </p>
               {portMappings.length > 0 && (
-                <div className="flex items-center gap-2 -mb-1">
-                  <div className="flex-1 grid grid-cols-[1fr_auto_1fr_auto_auto] items-center gap-2">
+                <div className="-mb-1 hidden items-center gap-2 sm:flex">
+                  <div className="grid flex-1 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[1fr_auto_1fr_auto_auto]">
                     <span className="text-xs text-muted-foreground">Container</span>
                     <span></span>
                     <span className="text-xs text-muted-foreground">Host</span>
@@ -703,7 +806,7 @@ export function CreateEnvironmentDialog({
               )}
               {portMappings.map((mapping, index) => (
                 <div key={index} className="flex items-center gap-2">
-                  <div className="flex-1 grid grid-cols-[1fr_auto_1fr_auto_auto] items-center gap-2">
+                  <div className="grid flex-1 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[1fr_auto_1fr_auto_auto]">
                     <Input
                       type="number"
                       placeholder="Container"
@@ -740,7 +843,7 @@ export function CreateEnvironmentDialog({
                       }
                       disabled={isLoading}
                     >
-                      <SelectTrigger className="w-20">
+                      <SelectTrigger className="col-span-3 col-start-1 w-full sm:col-span-1 sm:col-start-auto sm:w-20">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -754,7 +857,7 @@ export function CreateEnvironmentDialog({
                       size="icon"
                       onClick={() => removePortMapping(index)}
                       disabled={isLoading}
-                      className="h-8 w-8"
+                      className="col-start-4 row-start-2 h-8 w-8 sm:col-start-auto sm:row-start-auto"
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -774,8 +877,14 @@ export function CreateEnvironmentDialog({
               </Button>
             </CollapsibleContent>
           </Collapsible>
+          </TabsContent>
           )}
 
+          <TabsContent
+            value="prompt"
+            forceMount
+            className="mt-0 data-[state=inactive]:hidden sm:col-span-2 sm:!block"
+          >
           {/* Initial Prompt */}
           {launchAgent && (
             <div className="space-y-2">
@@ -826,10 +935,12 @@ export function CreateEnvironmentDialog({
               )}
             </div>
           )}
+          </TabsContent>
 
+          </Tabs>
         </form>
 
-        <DialogFooter>
+        <DialogFooter className="grid grid-cols-2 sm:flex sm:flex-row">
           <Button
             type="button"
             variant="outline"

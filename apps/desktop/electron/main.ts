@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, safeStorage, session } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, safeStorage, session } from "electron";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
@@ -9,6 +9,9 @@ import { resolveRuntimeRoots } from "./paths.js";
 import { createMainWindow } from "./window.js";
 import { ConnectionManager } from "./connection-manager.js";
 import { installRemoteGatewayRequestAuth } from "./remote-gateway-request-auth.js";
+import { ensurePinnedToolchains } from "./toolchain-manager.js";
+import { createToolchainBootstrapWindow, reportToolchainProgress } from "./toolchain-bootstrap-window.js";
+import { createToolchainProgressController, preparePinnedToolchains } from "./toolchain-startup.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,6 +24,14 @@ let mainWindow: BrowserWindow | null = null;
 let backend: BackendHttpClient | null = null;
 let connectionManager: ConnectionManager | null = null;
 const backendProcess = new BackendProcess();
+const toolchainProgress = createToolchainProgressController({
+  createWindow: () => createToolchainBootstrapWindow({
+    BrowserWindowCtor: BrowserWindow,
+    dirname: __dirname,
+  }),
+  reportProgress: (window, progress) => reportToolchainProgress(window as BrowserWindow, progress),
+  logError: (error) => console.error("[Toolchains] Failed to show bootstrap progress:", error),
+});
 
 function emitToRenderers(event: string, payload: unknown): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -112,18 +123,30 @@ function registerIpc(): void {
   });
 }
 
-app.whenReady().then(async () => {
+async function startApplication(): Promise<void> {
   const { appRoot, resourceRoot } = resolveRuntimeRoots({
     isDev,
     dirname: __dirname,
     appPath: app.getAppPath(),
     resourcesPath: process.resourcesPath,
   });
+  const dataDir = app.getPath("userData");
+  const toolchainBinDir = await preparePinnedToolchains({
+    dataDir,
+    ensure: ensurePinnedToolchains,
+    fetchImpl: (input, init) => net.fetch(input, init),
+    onProgress: (progress) => toolchainProgress.report(progress),
+    showMessageBox: (options) => dialog.showMessageBox(options),
+    quit: () => app.quit(),
+    logError: (error) => console.error("[Toolchains] Failed to prepare pinned tools:", error),
+  });
+  if (!toolchainBinDir) return;
   backend = await backendProcess.start({
     isDev,
-    dataDir: app.getPath("userData"),
+    dataDir,
     appRoot,
     resourceRoot,
+    toolchainBinDir,
     rendererDevServerUrl: isDev ? process.env.VITE_DEV_SERVER_URL : undefined,
     desktopWebClient: true,
     onEvent: (event, payload) => {
@@ -153,10 +176,20 @@ app.whenReady().then(async () => {
   );
   registerIpc();
   await createWindow();
+  await toolchainProgress.close();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow();
   });
+}
+
+void app.whenReady().then(startApplication).catch((error: unknown) => {
+  console.error("[Desktop] Startup failed:", error);
+  dialog.showErrorBox(
+    `${PRODUCT_NAME} failed to start`,
+    error instanceof Error ? error.message : String(error),
+  );
+  app.quit();
 });
 
 app.on("window-all-closed", () => {

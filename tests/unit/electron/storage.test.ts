@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { REVIEW_PROMPT_MAX_LENGTH } from "../../../packages/protocol/src/review-prompt";
 import {
   createEnvironment,
   createProject,
@@ -236,13 +237,94 @@ describe("Electron StorageService", () => {
     expect(await storage.getRepositoryConfig(firstProject.id)).toEqual({ defaultBranch: "develop", prBaseBranch: "release" });
     const global = defaultConfig().global;
     global.webClientEnabled = false;
+    global.reviewPrompt = "Review origin/{{targetBranch}}...HEAD.";
     await storage.updateGlobalConfig(global);
-    expect((await storage.loadConfig()).global.webClientEnabled).toBe(false);
+    expect((await storage.loadConfig()).global).toMatchObject({
+      webClientEnabled: false,
+      reviewPrompt: "Review origin/{{targetBranch}}...HEAD.",
+    });
 
     await storage.removeEnvironment(otherEnvironment.id);
     await expect(storage.removeEnvironment(otherEnvironment.id)).rejects.toThrow("Environment not found");
     await storage.removeProject(secondProject.id);
     await expect(storage.removeProject(secondProject.id)).rejects.toThrow("Project not found");
+  });
+
+  test("round-trips and removes a custom review prompt from global config", async () => {
+    const dataDir = await createTempDir("ork-storage-review-prompt-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    const withPrompt = defaultConfig().global;
+    withPrompt.reviewPrompt = "Review origin/{{targetBranch}}...HEAD.";
+    await storage.updateGlobalConfig(withPrompt);
+    expect((await storage.loadConfig()).global.reviewPrompt).toBe(
+      "Review origin/{{targetBranch}}...HEAD.",
+    );
+
+    const withoutPrompt = { ...withPrompt };
+    delete withoutPrompt.reviewPrompt;
+    await storage.updateGlobalConfig(withoutPrompt);
+
+    expect((await storage.loadConfig()).global.reviewPrompt).toBeUndefined();
+    const persisted = JSON.parse(
+      await fs.readFile(path.join(dataDir, "config.json"), "utf8"),
+    ) as { global: Record<string, unknown> };
+    expect(Object.hasOwn(persisted.global, "reviewPrompt")).toBe(false);
+  });
+
+  test("drops malformed persisted review prompts without discarding other config", async () => {
+    const dataDir = await createTempDir("ork-storage-malformed-review-prompt-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    for (const reviewPrompt of [
+      null,
+      123,
+      { prompt: "Review" },
+      "   ",
+      "x".repeat(REVIEW_PROMPT_MAX_LENGTH + 1),
+    ]) {
+      const config = defaultConfig() as unknown as {
+        global: Record<string, unknown>;
+        repositories: Record<string, unknown>;
+      };
+      config.global.defaultAgent = "codex";
+      config.global.reviewPrompt = reviewPrompt;
+      await fs.writeFile(
+        path.join(dataDir, "config.json"),
+        `${JSON.stringify(config)}\n`,
+      );
+
+      const loaded = await storage.loadConfig();
+      expect(loaded.global.defaultAgent).toBe("codex");
+      expect(loaded.global.reviewPrompt).toBeUndefined();
+    }
+  });
+
+  test("validates review prompts at save and global-update boundaries", async () => {
+    const dataDir = await createTempDir("ork-storage-review-validation-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    for (const reviewPrompt of [null, 42, {}, " ", "x".repeat(REVIEW_PROMPT_MAX_LENGTH + 1)]) {
+      await expect(storage.updateGlobalConfig({
+        ...defaultConfig().global,
+        reviewPrompt,
+      } as never)).rejects.toThrow("Review prompt");
+    }
+
+    const malformed = defaultConfig();
+    malformed.global.reviewPrompt = 42 as never;
+    await expect(storage.saveConfig(malformed)).rejects.toThrow("Review prompt must be a string");
+
+    await storage.updateGlobalConfig({
+      ...defaultConfig().global,
+      reviewPrompt: "x".repeat(REVIEW_PROMPT_MAX_LENGTH),
+    });
+    expect((await storage.loadConfig()).global.reviewPrompt).toHaveLength(
+      REVIEW_PROMPT_MAX_LENGTH,
+    );
   });
 
   test("preserves concurrent environment mutations across storage instances", async () => {

@@ -146,6 +146,7 @@ export interface AppConfig {
     experimentalCodexRawEventLogging?: boolean;
     debugLogging?: boolean;
     webClientEnabled?: boolean;
+    reviewPrompt?: string;
   };
   repositories: Record<string, RepositoryConfig>;
 }

@@ -452,6 +452,10 @@ type PrDetectionResult = {
   hasMergeConflicts: boolean;
 };
 
+type MergePrResult = {
+  outcome: "merged" | "pending" | "unknown";
+};
+
 type GhPrListEntry = {
   url?: unknown;
   state?: unknown;
@@ -472,6 +476,10 @@ type GitHubPullRequestHead = {
       full_name?: unknown;
     } | null;
   } | null;
+};
+
+type GitHubPullRequestMergeResponse = {
+  merged?: unknown;
 };
 
 type GhCliRunner = (args: string[], timeoutMs?: number) => Promise<string>;
@@ -576,7 +584,7 @@ async function mergePullRequestViaGitHubApi(
   method: "squash" | "merge" | "rebase",
   deleteBranch: boolean,
   cwd: string,
-): Promise<void> {
+): Promise<MergePrResult> {
   const pr = parseGitHubPullRequestUrl(prUrl);
   const pullEndpoint = `repos/${encodeGitHubPathSegment(pr.owner)}/${encodeGitHubPathSegment(pr.repo)}/pulls/${pr.number}`;
   const mergeEndpoint = `${pullEndpoint}/merge`;
@@ -587,7 +595,7 @@ async function mergePullRequestViaGitHubApi(
     head = await loadPullRequestHead(pullEndpoint, runGh);
   }
 
-  await runGh([
+  const mergeOutput = await runGh([
     "api",
     mergeEndpoint,
     "--method",
@@ -596,8 +604,48 @@ async function mergePullRequestViaGitHubApi(
     `merge_method=${method}`,
   ], 120_000);
 
-  if (!deleteBranch) return;
-  await deleteRemoteBranchForPullRequestHead(head, runGh);
+  let mergeResponse: GitHubPullRequestMergeResponse;
+  try {
+    mergeResponse = JSON.parse(mergeOutput) as GitHubPullRequestMergeResponse;
+  } catch {
+    return { outcome: "unknown" };
+  }
+
+  if (mergeResponse.merged !== true) return { outcome: "unknown" };
+
+  if (deleteBranch) {
+    await deleteRemoteBranchForPullRequestHead(head, runGh);
+  }
+  return { outcome: "merged" };
+}
+
+async function mergePullRequestInContainer(
+  containerId: string,
+  method: "squash" | "merge" | "rebase",
+  deleteBranch: boolean,
+): Promise<MergePrResult> {
+  const runGh = createContainerGhRunner(containerId);
+  const prUrl = (await runGh(["pr", "view", "--json", "url", "--jq", ".url"], 30_000)).trim();
+  parseGitHubPullRequestUrl(prUrl);
+
+  await runGh([
+    "pr",
+    "merge",
+    prUrl,
+    `--${method}`,
+    ...(deleteBranch ? ["--delete-branch"] : []),
+  ], 120_000);
+
+  let state: string;
+  try {
+    state = (await runGh(["pr", "view", prUrl, "--json", "state", "--jq", ".state"], 30_000)).trim().toUpperCase();
+  } catch {
+    return { outcome: "unknown" };
+  }
+
+  if (state === "MERGED") return { outcome: "merged" };
+  if (state === "OPEN") return { outcome: "pending" };
+  return { outcome: "unknown" };
 }
 
 function isExpectedPrAbsenceOutput(text: string): boolean {
@@ -3073,16 +3121,18 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const env = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!env?.worktreePath) throw new Error("Local environment worktree is not available");
     if (!env.prUrl) throw new Error("Local environment PR URL is not available");
-    await mergePullRequestViaGitHubApi(
+    return mergePullRequestViaGitHubApi(
       env.prUrl,
       parseMergeMethod(method),
       asBoolean(deleteBranch, true),
       env.worktreePath,
     );
   });
-  register("merge_pr", ({ containerId, method, deleteBranch }) =>
-    dockerExec(asString(containerId, "containerId"), `gh pr merge --${asOptionalString(method) ?? "squash"} ${asBoolean(deleteBranch, true) ? "--delete-branch" : ""}`).then(() => undefined),
-  );
+  register("merge_pr", ({ containerId, method, deleteBranch }) => mergePullRequestInContainer(
+    asString(containerId, "containerId"),
+    parseMergeMethod(method),
+    asBoolean(deleteBranch, true),
+  ));
 
   register("start_local_opencode_server_cmd", ({ environmentId }, context) => startLocalServer(asString(environmentId, "environmentId"), context, "opencode"));
   register("stop_local_opencode_server_cmd", ({ environmentId }, context) => stopLocalServer(asString(environmentId, "environmentId"), context, "opencode"));

@@ -3125,6 +3125,95 @@ exit 0
     });
   });
 
+  test("reports a container PR as merged only after verifying the captured PR URL", async () => {
+    const { context } = createContext(createEnvironment());
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+command=""
+for arg in "$@"; do command="$arg"; done
+if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
+  printf '%s\\n' 'https://github.com/acme/repo/pull/42'
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--squash'" ]; then
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'state' '--jq' '.state'" ]; then
+  printf '%s\\n' 'MERGED'
+  exit 0
+fi
+printf 'unexpected docker command: %s\\n' "$command" >&2
+exit 1
+`, async (logs) => {
+      await expect(commands.get("merge_pr")?.(
+        { containerId: "container-1", method: "squash", deleteBranch: false },
+        context,
+      )).resolves.toEqual({ outcome: "merged" });
+
+      const execLog = await fs.readFile(logs.exec, "utf8");
+      expect(execLog).toContain("'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--squash'");
+      expect(execLog).toContain("'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'state'");
+    });
+  });
+
+  test("reports a queued container PR as pending when the captured PR remains open", async () => {
+    const { context } = createContext(createEnvironment());
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+command=""
+for arg in "$@"; do command="$arg"; done
+if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
+  printf '%s\\n' 'https://github.com/acme/repo/pull/42'
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--rebase' '--delete-branch'" ]; then
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'state' '--jq' '.state'" ]; then
+  printf '%s\\n' 'OPEN'
+  exit 0
+fi
+printf 'unexpected docker command: %s\\n' "$command" >&2
+exit 1
+`, async () => {
+      await expect(commands.get("merge_pr")?.(
+        { containerId: "container-1", method: "rebase", deleteBranch: true },
+        context,
+      )).resolves.toEqual({ outcome: "pending" });
+    });
+  });
+
+  test("reports an unknown container merge outcome when post-submit verification fails", async () => {
+    const { context } = createContext(createEnvironment());
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+command=""
+for arg in "$@"; do command="$arg"; done
+if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
+  printf '%s\\n' 'https://github.com/acme/repo/pull/42'
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--merge'" ]; then
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'state' '--jq' '.state'" ]; then
+  printf '%s\\n' 'temporary verification failure' >&2
+  exit 1
+fi
+printf 'unexpected docker command: %s\\n' "$command" >&2
+exit 1
+`, async () => {
+      await expect(commands.get("merge_pr")?.(
+        { containerId: "container-1", method: "merge", deleteBranch: false },
+        context,
+      )).resolves.toEqual({ outcome: "unknown" });
+    });
+  });
+
   test("merges local PRs through the GitHub API without updating worktree branches", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-worktree-");
     const environment = createEnvironment({
@@ -3146,7 +3235,7 @@ exit 1
       await expect(commands.get("merge_pr_local")?.(
         { environmentId: environment.id, method: "squash", deleteBranch: false },
         context,
-      )).resolves.toBeUndefined();
+      )).resolves.toEqual({ outcome: "merged" });
 
       const ghLog = await fs.readFile(logPath, "utf8");
       expect(ghLog).toContain("api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash");
@@ -3183,7 +3272,7 @@ exit 1
       await expect(commands.get("merge_pr_local")?.(
         { environmentId: environment.id, method: "rebase", deleteBranch: true },
         context,
-      )).resolves.toBeUndefined();
+      )).resolves.toEqual({ outcome: "merged" });
 
       const ghLog = await fs.readFile(logPath, "utf8");
       expect(ghLog).toContain("api repos/acme/repo/pulls/42");
@@ -3214,10 +3303,58 @@ exit 1
       await expect(commands.get("merge_pr_local")?.(
         { environmentId: environment.id, deleteBranch: false },
         context,
-      )).resolves.toBeUndefined();
+      )).resolves.toEqual({ outcome: "merged" });
 
       const ghLog = await fs.readFile(logPath, "utf8");
       expect(ghLog).toContain("api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash");
+    });
+  });
+
+  test("does not report a local API merge as successful without an explicit merged response", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-unconfirmed-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
+  printf '%s\\n' '{"merged":false,"message":"Merge is pending"}'
+  exit 0
+fi
+printf 'unexpected gh args: %s\\n' "$*" >&2
+exit 1
+`, async () => {
+      await expect(commands.get("merge_pr_local")?.(
+        { environmentId: environment.id, method: "squash", deleteBranch: false },
+        context,
+      )).resolves.toEqual({ outcome: "unknown" });
+    });
+  });
+
+  test("reports an unknown local API merge outcome when the response cannot be parsed", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-malformed-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
+  printf '%s\\n' 'not-json'
+  exit 0
+fi
+exit 1
+`, async () => {
+      await expect(commands.get("merge_pr_local")?.(
+        { environmentId: environment.id, method: "squash", deleteBranch: false },
+        context,
+      )).resolves.toEqual({ outcome: "unknown" });
     });
   });
 
@@ -3291,7 +3428,7 @@ exit 1
       await expect(commands.get("merge_pr_local")?.(
         { environmentId: environment.id, method: "merge", deleteBranch: true },
         context,
-      )).resolves.toBeUndefined();
+      )).resolves.toEqual({ outcome: "merged" });
 
       const ghLog = await fs.readFile(logPath, "utf8");
       expect(ghLog).toContain("api repos/acme/repo/git/refs/heads/feature/already-deleted --method DELETE");

@@ -244,9 +244,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const workspaceReady = selectedEnvironmentId ? isWorkspaceReady(selectedEnvironmentId) : false;
   const setupRunning = selectedEnvironmentId ? isSetupScriptsRunning(selectedEnvironmentId) : false;
 
-  const { prUrl, prState, hasMergeConflicts, viewPR, setModeCreatePending } = usePullRequest({
-    environmentId: selectedEnvironmentId,
-  });
+  const {
+    prUrl,
+    prState,
+    hasMergeConflicts,
+    viewPR,
+    setModeCreatePending,
+    setModeMergePending,
+  } = usePullRequest({ environmentId: selectedEnvironmentId });
 
   const { deleteEnvironment } = useEnvironments(selectedProjectId, {
     listenForRenameEvents: false,
@@ -678,12 +683,25 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     try {
       // Use appropriate merge method based on environment type
       console.log("[ActionBar] Starting PR merge...");
-      if (isLocalEnvironment) {
-        await backend.mergePrLocal(selectedEnvironmentId, "squash", true);
-      } else {
-        await backend.mergePr(selectedEnvironment!.containerId!, "squash", true);
-      }
+      const mergeResult = isLocalEnvironment
+        ? await backend.mergePrLocal(selectedEnvironmentId, "squash", true)
+        : await backend.mergePr(selectedEnvironment!.containerId!, "squash", true);
       console.log("[ActionBar] Merge command completed successfully");
+
+      if (mergeResult.outcome !== "merged") {
+        toast.success(mergeResult.outcome === "pending" ? "Merge pending" : "Merge submitted", {
+          description: selectedEnvironment.branch,
+          id: `branch-merge-submitted-${selectedEnvironmentId}`,
+        });
+        setModeMergePending();
+        setIsMerging(false);
+        return;
+      }
+
+      toast.success("Branch merged", {
+        description: selectedEnvironment.branch,
+        id: `branch-merged-${selectedEnvironmentId}`,
+      });
 
       // IMPORTANT: Immediately save the "merged" state after successful merge.
       // For container environments, `gh pr merge --delete-branch` checks out the base branch
@@ -725,7 +743,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       setMergeDialogOpen(true); // Re-open dialog to show error
       setIsMerging(false);
     }
-  }, [selectedEnvironment?.containerId, selectedEnvironmentId, prUrl, isLocalEnvironment, setEnvironmentPR]);
+  }, [selectedEnvironment?.branch, selectedEnvironment?.containerId, selectedEnvironmentId, prUrl, isLocalEnvironment, setEnvironmentPR, setModeMergePending]);
 
   // Get target branch for PR dialog
   const targetBranch = selectedProjectId

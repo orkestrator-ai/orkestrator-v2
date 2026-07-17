@@ -516,6 +516,68 @@ describe("paneLayoutStore environment scoping", () => {
     expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.claudeNativeData?.sessionId).toBeUndefined();
   });
 
+  test("persists browser addresses on the owning environment only", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    store.initialize("container-b", "env-b");
+    store.addTab("default", {
+      id: "browser-a",
+      type: "browser",
+      browserData: { url: "" },
+    }, "env-a");
+    store.addTab("default", { id: "plain-b", type: "plain" }, "env-b");
+    store.setActiveEnvironment("env-b");
+
+    store.updateTabBrowserUrl("browser-a", "http://localhost:3000/", "env-a");
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData?.url).toBe(
+      "http://localhost:3000/",
+    );
+    expect(usePaneLayoutStore.getState().getAllTabs("env-b")).toEqual([
+      { id: "plain-b", type: "plain" },
+    ]);
+    expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-b");
+  });
+
+  test("updates browser addresses through the active environment fallback", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    store.addTab("default", {
+      id: "browser-a",
+      type: "browser",
+      browserData: { url: "" },
+    }, "env-a");
+    store.setActiveEnvironment("env-a");
+
+    usePaneLayoutStore.getState().updateTabBrowserUrl("browser-a", "http://localhost:3000/");
+    expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData?.url).toBe(
+      "http://localhost:3000/",
+    );
+  });
+
+  test("ignores unchanged, missing, and non-browser URL updates", () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-a", "env-a");
+    store.addTab("default", {
+      id: "browser-a",
+      type: "browser",
+      browserData: { url: "http://localhost:3000/" },
+    }, "env-a");
+    store.addTab("default", { id: "plain-a", type: "plain" }, "env-a");
+    store.setActiveEnvironment("env-a");
+    const originalEnvironments = usePaneLayoutStore.getState().environments;
+
+    store.updateTabBrowserUrl("browser-a", "http://localhost:3000/", "env-a");
+    store.updateTabBrowserUrl("missing", "http://localhost:4000/", "env-a");
+    store.updateTabBrowserUrl("plain-a", "http://localhost:4000/", "env-a");
+    store.updateTabBrowserUrl("browser-a", "http://localhost:4000/", "missing-env");
+
+    expect(usePaneLayoutStore.getState().environments).toBe(originalEnvironments);
+    expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData?.url).toBe(
+      "http://localhost:3000/",
+    );
+  });
+
   test("installs restored state and completes hydration", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");

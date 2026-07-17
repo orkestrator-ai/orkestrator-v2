@@ -174,6 +174,11 @@ describe("DraggableTab title precedence", () => {
     expect(screen.getByText("Custom Tmux 3")).toBeDefined();
   });
 
+  test("browser tabs use the browser label", () => {
+    renderTab({ id: "browser-a", type: "browser", browserData: { url: "" } }, 1);
+    expect(screen.getByText("Browser 2")).toBeDefined();
+  });
+
   test("file tab title uses the basename and ignores displayTitle", () => {
     const tab: TabInfo = {
       id: "tab-a",

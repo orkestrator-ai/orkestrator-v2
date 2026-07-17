@@ -7,11 +7,13 @@ import * as realClaudeChatTab from "@/components/claude/ClaudeChatTab";
 import * as realClaudeTmuxChatTab from "@/components/claude/ClaudeTmuxChatTab";
 import * as realCodexChatTab from "@/components/codex/CodexChatTab";
 import * as realOpenCodeChatTab from "@/components/opencode/OpenCodeChatTab";
+import * as realBrowserTab from "@/components/browser/BrowserTab";
 
 const realClaudeChatTabSnapshot = { ...realClaudeChatTab };
 const realClaudeTmuxChatTabSnapshot = { ...realClaudeTmuxChatTab };
 const realCodexChatTabSnapshot = { ...realCodexChatTab };
 const realOpenCodeChatTabSnapshot = { ...realOpenCodeChatTab };
+const realBrowserTabSnapshot = { ...realBrowserTab };
 
 mock.module("@dnd-kit/core", () => ({
   DndContext: ({ children }: { children: React.ReactNode }) => children,
@@ -57,6 +59,9 @@ mock.module("./DraggableTabBar", () => ({
       </button>
       <button type="button" onClick={() => onTabRefresh?.("tab-opencode")}>
         Refresh OpenCode tab
+      </button>
+      <button type="button" onClick={() => onTabRefresh?.("tab-browser")}>
+        Refresh Browser tab
       </button>
     </>
   ),
@@ -149,6 +154,32 @@ mock.module("@/components/opencode/OpenCodeChatTab", () => ({
   ),
 }));
 
+mock.module("@/components/browser/BrowserTab", () => ({
+  BrowserTab: ({
+    tabId,
+    environmentId,
+    data,
+    isActive,
+    refreshRequestId,
+  }: {
+    tabId: string;
+    environmentId: string;
+    data: { url: string };
+    isActive: boolean;
+    refreshRequestId?: number;
+  }) => (
+    <div
+      data-active={String(isActive)}
+      data-environment-id={environmentId}
+      data-refresh-request-id={refreshRequestId}
+      data-url={data.url}
+      data-testid="browser-tab"
+    >
+      browser:{tabId}
+    </div>
+  ),
+}));
+
 mock.module("@/stores/terminalPortalStore", () => ({
   createTerminalKey: (environmentId: string, tabId: string) => `${environmentId}::${tabId}`,
   useTerminalPortalStore: <T,>(selector: (state: {
@@ -182,6 +213,10 @@ describe("PaneLeafContainer", () => {
     mock.module(
       "@/components/opencode/OpenCodeChatTab",
       () => realOpenCodeChatTabSnapshot,
+    );
+    mock.module(
+      "@/components/browser/BrowserTab",
+      () => realBrowserTabSnapshot,
     );
   });
 
@@ -376,7 +411,7 @@ describe("PaneLeafContainer", () => {
     expect(screen.getByTestId("opencode-tab").dataset.reviewTab).toBe("true");
   });
 
-  test("forwards independent repeated refresh requests to every agent tab", () => {
+  test("forwards independent repeated refresh requests to every refreshable tab", () => {
     const agentPane = {
       kind: "leaf" as const,
       id: "pane-agents",
@@ -401,6 +436,11 @@ describe("PaneLeafContainer", () => {
           type: "opencode-native" as const,
           openCodeNativeData: { environmentId: "env-visible" },
         },
+        {
+          id: "tab-browser",
+          type: "browser" as const,
+          browserData: { url: "http://localhost:3000/" },
+        },
       ],
       activeTabId: "tab-claude",
     };
@@ -414,7 +454,7 @@ describe("PaneLeafContainer", () => {
       />,
     );
 
-    const testIds = ["claude-tab", "claude-tmux-tab", "codex-tab", "opencode-tab"];
+    const testIds = ["claude-tab", "claude-tmux-tab", "codex-tab", "opencode-tab", "browser-tab"];
     for (const testId of testIds) {
       expect(screen.getByTestId(testId).dataset.refreshRequestId).toBe("0");
     }
@@ -423,13 +463,17 @@ describe("PaneLeafContainer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh tmux tab" }));
     fireEvent.click(screen.getByRole("button", { name: "Refresh Codex tab" }));
     fireEvent.click(screen.getByRole("button", { name: "Refresh OpenCode tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Browser tab" }));
     expect(screen.getByTestId("claude-tab").dataset.refreshRequestId).toBe("1");
     expect(screen.getByTestId("claude-tmux-tab").dataset.refreshRequestId).toBe("1");
     expect(screen.getByTestId("codex-tab").dataset.refreshRequestId).toBe("1");
     expect(screen.getByTestId("opencode-tab").dataset.refreshRequestId).toBe("1");
+    expect(screen.getByTestId("browser-tab").dataset.refreshRequestId).toBe("1");
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh Claude tab" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Browser tab" }));
     expect(screen.getByTestId("claude-tab").dataset.refreshRequestId).toBe("2");
     expect(screen.getByTestId("codex-tab").dataset.refreshRequestId).toBe("1");
+    expect(screen.getByTestId("browser-tab").dataset.refreshRequestId).toBe("2");
   });
 });

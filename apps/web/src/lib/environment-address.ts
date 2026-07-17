@@ -19,3 +19,18 @@ export function getEnvironmentPortAddress(environment: Environment | null | unde
 
   return `localhost:${environment.hostEntryPort}`;
 }
+
+/** Backend-local URL used as the initial address for an environment browser tab. */
+export function getEnvironmentBrowserUrl(environment: Environment | null | undefined): string | null {
+  if (
+    !environment
+    || environment.environmentType === "local"
+    || environment.entryPort == null
+    || environment.hostEntryPort == null
+    || environment.hostEntryPort <= 0
+  ) {
+    return null;
+  }
+
+  return `http://localhost:${environment.hostEntryPort}/`;
+}

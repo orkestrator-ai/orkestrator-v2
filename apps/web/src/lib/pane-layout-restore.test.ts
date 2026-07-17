@@ -84,6 +84,55 @@ describe("reconcilePersistedLayout", () => {
     expect(json).not.toContain("isSetupTab");
   });
 
+  test("restores the last browser address", () => {
+    const result = reconcilePersistedLayout(saved({
+      kind: "leaf",
+      id: "pane",
+      tabs: [{
+        id: "browser",
+        type: "browser",
+        browserData: { url: "http://localhost:3000/app" },
+      }],
+      activeTabId: "browser",
+    }), context);
+
+    expect(result?.root).toEqual({
+      kind: "leaf",
+      id: "pane",
+      tabs: [{
+        id: "browser",
+        type: "browser",
+        browserData: { url: "http://localhost:3000/app" },
+        displayTitle: undefined,
+        isReviewTab: undefined,
+      }],
+      activeTabId: "browser",
+    });
+  });
+
+  test("drops malformed browser data and normalizes a missing or non-string URL", () => {
+    const malformed = reconcilePersistedLayout(saved({
+      kind: "leaf",
+      id: "pane",
+      tabs: [{ id: "browser", type: "browser", browserData: "invalid" }],
+      activeTabId: "browser",
+    }), context);
+    expect(malformed).toBeNull();
+
+    for (const browserData of [{}, { url: 123 }]) {
+      const restored = reconcilePersistedLayout(saved({
+        kind: "leaf",
+        id: "pane",
+        tabs: [{ id: "browser", type: "browser", browserData }],
+        activeTabId: "browser",
+      }), context);
+      expect(restored?.root).toMatchObject({
+        kind: "leaf",
+        tabs: [{ id: "browser", type: "browser", browserData: { url: "" } }],
+      });
+    }
+  });
+
   test("deduplicates tabs, drops missing build tabs, and collapses empty leaves", () => {
     const restored = reconcilePersistedLayout(saved({
       kind: "split",

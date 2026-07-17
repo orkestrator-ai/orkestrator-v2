@@ -21,10 +21,40 @@ export function resolveGatewayLoopbackBaseUrl(baseUrl: string): string {
 
   try {
     const url = new URL(baseUrl);
-    if (!isLoopbackHost(url.hostname) || !url.port) return baseUrl;
+    if (!isLoopbackHost(url.hostname)) return baseUrl;
+
+    const port = url.port || (url.protocol === "http:" ? "80" : "");
+    if (!port) return baseUrl;
 
     const basePath = url.pathname === "/" ? "" : url.pathname.replace(/\/$/, "");
-    return `${getGatewayBaseUrl()}/__orkestrator/proxy/loopback/${url.port}${basePath}`;
+    return `${getGatewayBaseUrl()}/__orkestrator/proxy/loopback/${port}${basePath}${url.search}${url.hash}`;
+  } catch {
+    return baseUrl;
+  }
+}
+
+/**
+ * Browser previews load in a sandboxed (opaque-origin) iframe, so the gateway
+ * auth cookie is never sent and a bearer token cannot be attached to document
+ * loads. Only the Electron desktop app injects gateway credentials at the
+ * network layer, so previews through a remote gateway are desktop-only.
+ */
+export function isGatewayBrowserPreviewSupported(): boolean {
+  if (typeof window === "undefined") return true;
+  const gateway = window.orkestratorGateway;
+  return !gateway?.enabled || gateway.desktop === true;
+}
+
+/** Resolve a loopback page through the gateway's browser-preview namespace. */
+export function resolveGatewayBrowserPreviewUrl(baseUrl: string): string {
+  if (typeof window === "undefined" || !window.orkestratorGateway?.enabled) return baseUrl;
+
+  try {
+    const url = new URL(baseUrl);
+    if (!isLoopbackHost(url.hostname) || url.protocol !== "http:") return baseUrl;
+    const port = url.port || "80";
+    const targetPath = `${url.pathname}${url.search}${url.hash}`;
+    return `${getGatewayBaseUrl()}/__orkestrator/browser/loopback/${port}${targetPath}`;
   } catch {
     return baseUrl;
   }

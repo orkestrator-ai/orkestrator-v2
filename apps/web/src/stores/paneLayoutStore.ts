@@ -159,6 +159,7 @@ interface PaneLayoutState {
   reorderTabs: (paneId: string, fromIndex: number, toIndex: number, environmentId?: string) => void;
   clearTabInitialPrompt: (tabId: string, environmentId?: string) => void;
   updateTabNativeSessionId: (tabId: string, sessionId: string | undefined, environmentId?: string) => void;
+  updateTabBrowserUrl: (tabId: string, url: string, environmentId?: string) => void;
 
   // Pane management
   splitPane: (paneId: string, direction: "horizontal" | "vertical", tabId: string, environmentId?: string) => void;
@@ -742,6 +743,32 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
         }
         return tab;
       }),
+    }));
+
+    const environments = new Map(state.environments);
+    environments.set(envId, { ...envState, root: newRoot });
+    set({ environments });
+  },
+
+  updateTabBrowserUrl: (tabId, url, environmentId) => {
+    const state = get();
+    const envId = environmentId ?? state.activeEnvironmentId;
+    if (!envId) return;
+
+    const envState = state.environments.get(envId);
+    if (!envState) return;
+    const paneWithTab = findPaneWithTab(envState.root, tabId);
+    const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
+    if (!paneWithTab || existingTab?.type !== "browser" || !existingTab.browserData) return;
+    if (existingTab.browserData.url === url) return;
+
+    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+      ...leaf,
+      tabs: leaf.tabs.map((tab) =>
+        tab.id === tabId && tab.type === "browser" && tab.browserData
+          ? { ...tab, browserData: { ...tab.browserData, url } }
+          : tab
+      ),
     }));
 
     const environments = new Map(state.environments);

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Environment } from "@/types";
-import { getEnvironmentPortAddress } from "./environment-address";
+import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "./environment-address";
 
 function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
   return {
@@ -92,5 +92,26 @@ describe("getEnvironmentPortAddress", () => {
     });
 
     expect(getEnvironmentPortAddress(environment)).toBeNull();
+  });
+});
+
+describe("getEnvironmentBrowserUrl", () => {
+  test("returns a backend-local HTTP URL for a mapped container port", () => {
+    const environment = makeEnvironment({ entryPort: 3000, hostEntryPort: 49152 });
+    expect(getEnvironmentBrowserUrl(environment)).toBe("http://localhost:49152/");
+  });
+
+  test("does not produce a browser default without a usable mapping", () => {
+    expect(getEnvironmentBrowserUrl(null)).toBeNull();
+    expect(getEnvironmentBrowserUrl(undefined)).toBeNull();
+    expect(getEnvironmentBrowserUrl(makeEnvironment({ hostEntryPort: 49152 }))).toBeNull();
+    expect(getEnvironmentBrowserUrl(makeEnvironment({ entryPort: 3000 }))).toBeNull();
+    expect(getEnvironmentBrowserUrl(makeEnvironment({ entryPort: 3000, hostEntryPort: 0 }))).toBeNull();
+    expect(getEnvironmentBrowserUrl(makeEnvironment({
+      environmentType: "local",
+      entryPort: 3000,
+      hostEntryPort: 49152,
+      worktreePath: "/tmp/repo",
+    }))).toBeNull();
   });
 });

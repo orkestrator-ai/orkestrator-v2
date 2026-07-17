@@ -15,7 +15,7 @@ import {
   type Collision,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
-import { useTerminalContext, MAX_TABS, type TerminalTabType, type CreateTabOptions, type CreateFileTabOptions } from "@/contexts";
+import { useTerminalContext, MAX_TABS, type CreatableTabType, type TerminalTabType, type CreateTabOptions, type CreateFileTabOptions } from "@/contexts";
 import { createSessionKey, useClaudeOptionsStore, usePaneLayoutStore, useEnvironmentStore, useConfigStore, useTerminalSessionStore, getAllLeaves } from "@/stores";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
@@ -1270,7 +1270,7 @@ export function TerminalContainer({
 
   // Handler for creating new terminal tabs
   const handleCreateTab = useCallback(
-    (type: TerminalTabType, options?: CreateTabOptions) => {
+    (type: CreatableTabType, options?: CreateTabOptions) => {
       // For local environments, we don't need a containerId but do need worktreePath to be set
       if (!isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) return;
 
@@ -1281,6 +1281,18 @@ export function TerminalContainer({
       }
 
       const newTabId = createUniqueTabId("tab");
+
+      if (type === "browser") {
+        const newTab: TabInfo = {
+          id: newTabId,
+          type,
+          browserData: { url: options?.initialUrl?.trim() ?? "" },
+          displayTitle: options?.displayTitle,
+        };
+        console.debug("[TerminalContainer] Creating browser tab:", newTabId, "for environment:", environmentId);
+        addTab(activePaneId, newTab, environmentId);
+        return;
+      }
 
       const launchModeOverride = options?.agentLaunchMode;
       const shouldUseOpenCodeNative =

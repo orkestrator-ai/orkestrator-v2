@@ -1,7 +1,7 @@
 import { useCallback, useRef } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { FileCode, Terminal as TerminalIcon, X, Hammer } from "lucide-react";
+import { FileCode, Globe2, Terminal as TerminalIcon, X, Hammer } from "lucide-react";
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
@@ -155,6 +155,7 @@ export function DraggableTab({
     if (isOpenCodeTab(tab.type)) return `OpenCode ${tabNumber}`;
     if (isCodexTab(tab.type)) return `Codex ${tabNumber}`;
     if (isBuildTab(tab.type)) return `Build ${tabNumber}`;
+    if (tab.type === "browser") return `Browser ${tabNumber}`;
     if (tab.type === "root") return `ROOT ${tabNumber}`;
     return `Tab ${tabNumber}`;
   };
@@ -163,6 +164,9 @@ export function DraggableTab({
   const getTabIcon = () => {
     if (tab.type === "file") {
       return <FileCode className="h-3 w-3 shrink-0" />;
+    }
+    if (tab.type === "browser") {
+      return <Globe2 className="h-3 w-3 shrink-0 text-sky-400" />;
     }
     if (isOpenCodeTab(tab.type)) {
       return <OpenCodeIcon className="h-3 w-3 shrink-0 text-green-500" />;

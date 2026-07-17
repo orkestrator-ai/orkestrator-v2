@@ -12,6 +12,8 @@ import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 import type { Socket } from "node:net";
 import path from "node:path";
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { pipeline, type Readable, type Transform } from "node:stream";
+import { createBrotliDecompress, createUnzip } from "node:zlib";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import {
   GatewayTokenValidationError,
@@ -64,6 +66,7 @@ const API_PREFIX = "/__orkestrator";
 const DEFAULT_GATEWAY_PORT = 34121;
 const GATEWAY_PORT_FALLBACK_ATTEMPTS = 20;
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
+const MAX_BROWSER_PREVIEW_BODY_BYTES = 8 * 1024 * 1024;
 const KEEPALIVE_MS = 25_000;
 const CORS_ALLOWED_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
 const CORS_ALLOWED_HEADERS = "Authorization, Content-Type";
@@ -495,6 +498,114 @@ function sanitizeProxyResponseHeaders(headers: IncomingHttpHeaders, target: URL,
   return sanitized;
 }
 
+export type BrowserPreviewContentKind = "html" | "css" | "js";
+
+function browserPreviewContentKind(contentType: string | string[] | undefined): BrowserPreviewContentKind | null {
+  const value = Array.isArray(contentType) ? contentType.join(";") : contentType ?? "";
+  // The rewriter decodes and re-encodes as UTF-8; pass other charsets through
+  // untouched and let the Referer-based redirect recover their asset requests.
+  const charset = /charset\s*=\s*"?([\w-]+)/i.exec(value)?.[1]?.toLowerCase();
+  if (charset && charset !== "utf-8" && charset !== "utf8" && charset !== "us-ascii") return null;
+  if (/text\/html/i.test(value)) return "html";
+  if (/text\/css/i.test(value)) return "css";
+  if (/(?:text|application)\/(?:javascript|x-javascript)/i.test(value)) return "js";
+  return null;
+}
+
+function browserPreviewContentDecoder(contentEncoding: string | string[] | undefined): Transform | null | undefined {
+  const rawValue = (Array.isArray(contentEncoding) ? contentEncoding.join(",") : contentEncoding)?.trim().toLowerCase();
+  if (rawValue?.includes(",")) return undefined;
+  const value = rawValue;
+  if (!value || value === "identity") return null;
+  if (value === "gzip" || value === "x-gzip" || value === "deflate") return createUnzip();
+  if (value === "br") return createBrotliDecompress();
+  return undefined;
+}
+
+/**
+ * Keep root-relative development assets inside the browser-preview namespace.
+ *
+ * Rewriting is deliberately narrow: HTML URL attributes, CSS url()/@import
+ * values, and JavaScript module specifiers. Generic string literals stay
+ * untouched — values like `split("/")` or router paths are code, not URLs.
+ * Requests those produce at runtime are recovered by the gateway's
+ * Referer-based preview redirect instead.
+ */
+export function rewriteBrowserPreviewBody(
+  body: string,
+  proxyPrefix: string,
+  target: URL,
+  kind: BrowserPreviewContentKind,
+): string {
+  const escapedPrefix = proxyPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const alreadyProxied = new RegExp(`^(?:${escapedPrefix}(?:/|$)|//)`);
+  const rewritePath = (value: string) => alreadyProxied.test(value)
+    ? value
+    : `${proxyPrefix}${value.startsWith("/") ? value : `/${value}`}`;
+
+  let rewritten = body;
+  const rewriteQuotedAfter = (pattern: RegExp) => {
+    rewritten = rewritten.replace(
+      pattern,
+      (_match, before: string, quote: string, value: string) => `${before}${quote}${rewritePath(value)}${quote}`,
+    );
+  };
+
+  if (kind === "html") {
+    rewriteQuotedAfter(/(\b(?:src|href|action|poster)\s*=\s*)(["'])(\/(?!\/)[^"']*)\2/gi);
+    rewritten = rewritten.replace(
+      /(\b(?:src|href|action|poster)\s*=\s*)(\/(?!\/)[^\s>"']+)/gi,
+      (_match, prefix: string, value: string) => `${prefix}${rewritePath(value)}`,
+    );
+  }
+  if (kind === "html" || kind === "css") {
+    rewritten = rewritten.replace(
+      /(url\(\s*)(["']?)(\/(?!\/)[^)"'\s]+)\2(\s*\))/gi,
+      (_match, start: string, quote: string, value: string, end: string) =>
+        `${start}${quote}${rewritePath(value)}${quote}${end}`,
+    );
+    rewriteQuotedAfter(/(@import\s+)(["'])(\/(?!\/)[^"']*)\2/gi);
+  }
+  if (kind === "html" || kind === "js") {
+    rewriteQuotedAfter(/(\bfrom\s*)(["'])(\/(?!\/)[^"'\r\n]*)\2/g);
+    rewriteQuotedAfter(/(\bimport\s*\(\s*)(["'])(\/(?!\/)[^"'\r\n]*)\2/g);
+    rewriteQuotedAfter(/(\bimport\s+)(["'])(\/(?!\/)[^"'\r\n]*)\2/g);
+    rewriteQuotedAfter(/(\bnew\s+URL\s*\(\s*)(["'])(\/(?!\/)[^"'\r\n]*)\2/g);
+  }
+
+  const loopbackOrigin = new RegExp(
+    `(["'\u0060])http:\\/\\/(?:localhost|127\\.0\\.0\\.1|\\[::1\\]):${target.port || "80"}(\\/[^"'\u0060\\r\\n]*)?\\1`,
+    "g",
+  );
+  rewritten = rewritten.replace(
+    loopbackOrigin,
+    (_match, quote: string, pathname = "/") => `${quote}${rewritePath(pathname)}${quote}`,
+  );
+
+  return rewritten;
+}
+
+/**
+ * Resolve the preview namespace a request originated from, based on its
+ * Referer. Lets the gateway recover root-relative requests produced by
+ * previewed application code that the body rewriter intentionally leaves
+ * alone (runtime-built URLs, plain string literals).
+ */
+function browserPreviewRefererPrefix(request: IncomingMessage): string | null {
+  const referer = request.headers.referer;
+  if (!referer) return null;
+  try {
+    const pathname = new URL(referer).pathname;
+    const match = new RegExp(`^${API_PREFIX}/browser/loopback/(\\d{1,5})(?:/|$)`).exec(pathname);
+    if (!match) return null;
+    const port = Number.parseInt(match[1] ?? "", 10);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+    return `${API_PREFIX}/browser/loopback/${port}`;
+  } catch {
+    return null;
+  }
+}
+
 export class OrkestratorGateway {
   private readonly backend: BackendInvoker;
   private readonly dataDir: string;
@@ -809,21 +920,77 @@ export class OrkestratorGateway {
     response.end();
   }
 
+  private handleBrowserPreviewCorsPreflight(request: IncomingMessage, response: ServerResponse): void {
+    const requestedHeaders = request.headers["access-control-request-headers"];
+    const allowedHeaders = Array.isArray(requestedHeaders)
+      ? requestedHeaders.join(", ")
+      : requestedHeaders?.trim() || CORS_ALLOWED_HEADERS;
+    response.writeHead(204, {
+      "access-control-allow-origin": "null",
+      "access-control-allow-credentials": "true",
+      "access-control-allow-methods": CORS_ALLOWED_METHODS,
+      "access-control-allow-headers": allowedHeaders,
+      "access-control-max-age": "600",
+      ...(request.headers["access-control-request-private-network"] === "true"
+        ? { "access-control-allow-private-network": "true" }
+        : {}),
+      vary: "Origin, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
+    });
+    response.end();
+  }
+
   private async handle(
     request: IncomingMessage,
     response: ServerResponse,
     listenerKind: "control" | "browser",
   ): Promise<void> {
     const url = new URL(request.url ?? "/", "http://orkestrator.local");
+    const isBrowserPreviewRequest = url.pathname.startsWith(`${API_PREFIX}/browser/loopback/`);
 
     if (request.method === "OPTIONS" && url.pathname.startsWith(`${API_PREFIX}/`)) {
-      this.handleCorsPreflight(request, response);
+      if (isBrowserPreviewRequest && request.headers.origin === "null") {
+        this.handleBrowserPreviewCorsPreflight(request, response);
+      } else {
+        this.handleCorsPreflight(request, response);
+      }
       return;
     }
 
-    if (url.pathname.startsWith(`${API_PREFIX}/`) && !this.applyCorsHeaders(request, response)) {
+    if (isBrowserPreviewRequest && request.headers.origin === "null") {
+      response.setHeader("access-control-allow-origin", "null");
+      response.setHeader("access-control-allow-credentials", "true");
+      response.setHeader("vary", "Origin");
+    } else if (url.pathname.startsWith(`${API_PREFIX}/`) && !this.applyCorsHeaders(request, response)) {
       jsonResponse(response, 403, { error: "Origin not allowed" });
       return;
+    }
+
+    // Root-relative requests issued by a preview document (fetch("/api"),
+    // runtime-built asset URLs) escape the preview namespace; steer them back
+    // via their Referer. Runs before authentication on purpose: the redirect
+    // is a deterministic transform of the request's own headers, and the
+    // redirected request still has to pass the preview namespace's auth.
+    if (!url.pathname.startsWith(`${API_PREFIX}/`)) {
+      const previewPrefix = browserPreviewRefererPrefix(request);
+      if (previewPrefix) {
+        if (request.method === "OPTIONS" && request.headers.origin === "null") {
+          this.handleBrowserPreviewCorsPreflight(request, response);
+          return;
+        }
+        const redirectHeaders: OutgoingHttpHeaders = {
+          location: `${previewPrefix}${url.pathname}${url.search}`,
+          "cache-control": "no-store",
+          vary: "Referer",
+        };
+        if (request.headers.origin === "null") {
+          redirectHeaders["access-control-allow-origin"] = "null";
+          redirectHeaders["access-control-allow-credentials"] = "true";
+          redirectHeaders.vary = "Origin, Referer";
+        }
+        response.writeHead(307, redirectHeaders);
+        response.end();
+        return;
+      }
     }
 
     if (url.pathname === `${API_PREFIX}/login`) {
@@ -886,6 +1053,11 @@ export class OrkestratorGateway {
 
     if (url.pathname.startsWith(`${API_PREFIX}/proxy/loopback/`)) {
       await this.handleLoopbackProxy(request, response, url);
+      return;
+    }
+
+    if (url.pathname.startsWith(`${API_PREFIX}/browser/loopback/`)) {
+      await this.handleBrowserLoopbackProxy(request, response, url);
       return;
     }
 
@@ -1073,12 +1245,38 @@ export class OrkestratorGateway {
     );
   }
 
-  private async proxyToTarget(request: IncomingMessage, response: ServerResponse, target: URL, proxyPrefix?: string): Promise<void> {
+  private async handleBrowserLoopbackProxy(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    const prefix = `${API_PREFIX}/browser/loopback/`;
+    const remaining = url.pathname.slice(prefix.length);
+    const slashIndex = remaining.indexOf("/");
+    const rawPort = slashIndex >= 0 ? remaining.slice(0, slashIndex) : remaining;
+    const port = Number.parseInt(rawPort, 10);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      jsonResponse(response, 400, { error: "Invalid browser preview port" });
+      return;
+    }
+
+    const restPath = slashIndex >= 0 ? remaining.slice(slashIndex) : "/";
+    const targetPath = `${restPath}${url.search}`;
+    await this.proxyToTarget(
+      request,
+      response,
+      new URL(`http://127.0.0.1:${port}${targetPath}`),
+      `${API_PREFIX}/browser/loopback/${port}`,
+      true,
+    );
+  }
+
+  private async proxyToTarget(request: IncomingMessage, response: ServerResponse, target: URL, proxyPrefix?: string, browserPreview = false): Promise<void> {
     await new Promise<void>((resolve) => {
       let settled = false;
+      let activeProxyResponse: IncomingMessage | null = null;
       const finish = () => {
         if (settled) return;
         settled = true;
+        // Keep-alive sockets outlive individual requests; drop this
+        // request's disconnect handler so they do not accumulate.
+        request.socket.removeListener("close", cancelProxyForDisconnect);
         resolve();
       };
       const fail = (error: Error) => {
@@ -1090,18 +1288,112 @@ export class OrkestratorGateway {
         }
         finish();
       };
+      const targetHeaders = sanitizeTargetRequestHeaders(request.headers, target);
+      if (browserPreview) targetHeaders["accept-encoding"] = "identity";
       const proxyRequest = http.request({
         host: target.hostname,
         port: target.port,
         path: `${target.pathname}${target.search}`,
         method: request.method,
-        headers: sanitizeTargetRequestHeaders(request.headers, target),
+        headers: targetHeaders,
       }, (proxyResponse) => {
-        response.writeHead(proxyResponse.statusCode ?? 502, sanitizeProxyResponseHeaders(proxyResponse.headers, target, proxyPrefix));
-        proxyResponse.pipe(response);
-        proxyResponse.once("end", finish);
-        proxyResponse.once("error", fail);
-        proxyResponse.once("aborted", () => fail(new Error("Loopback proxy response was aborted")));
+        activeProxyResponse = proxyResponse;
+        const responseHeaders = sanitizeProxyResponseHeaders(proxyResponse.headers, target, proxyPrefix);
+        if (browserPreview) {
+          delete responseHeaders["x-frame-options"];
+          delete responseHeaders["content-security-policy"];
+          delete responseHeaders["content-security-policy-report-only"];
+          if (request.headers.origin === "null") {
+            responseHeaders["access-control-allow-origin"] = "null";
+            responseHeaders["access-control-allow-credentials"] = "true";
+            responseHeaders.vary = "Origin";
+          } else {
+            responseHeaders["access-control-allow-origin"] = "*";
+          }
+        }
+
+        const previewContentKind = browserPreview && proxyPrefix && request.method !== "HEAD"
+          ? browserPreviewContentKind(proxyResponse.headers["content-type"])
+          : null;
+        if (browserPreview && proxyPrefix && previewContentKind) {
+          const decoder = browserPreviewContentDecoder(proxyResponse.headers["content-encoding"]);
+          if (decoder === undefined) {
+            proxyResponse.destroy();
+            fail(new Error("Browser preview response used an unsupported content encoding"));
+            return;
+          }
+
+          const contentLengthHeader = proxyResponse.headers["content-length"];
+          const contentLengthValue = Array.isArray(contentLengthHeader) ? contentLengthHeader[0] : contentLengthHeader;
+          const contentLength = Number.parseInt(contentLengthValue ?? "", 10);
+          if (Number.isFinite(contentLength) && contentLength > MAX_BROWSER_PREVIEW_BODY_BYTES) {
+            proxyResponse.destroy();
+            fail(new Error(`Browser preview response exceeded ${MAX_BROWSER_PREVIEW_BODY_BYTES} bytes`));
+            return;
+          }
+
+          const chunks: Buffer[] = [];
+          let sourceBytes = 0;
+          let decodedBytes = 0;
+          let bodySettled = false;
+          const bodyStream: Readable = decoder ? proxyResponse.pipe(decoder) : proxyResponse;
+          const abortBody = (error: Error) => {
+            if (bodySettled) return;
+            bodySettled = true;
+            decoder?.destroy();
+            proxyResponse.destroy();
+            fail(error);
+          };
+
+          if (decoder) {
+            proxyResponse.on("data", (chunk: Buffer | string) => {
+              sourceBytes += Buffer.byteLength(chunk);
+              if (sourceBytes > MAX_BROWSER_PREVIEW_BODY_BYTES) {
+                abortBody(new Error(`Browser preview response exceeded ${MAX_BROWSER_PREVIEW_BODY_BYTES} bytes`));
+              }
+            });
+            decoder.once("error", (error) => abortBody(error));
+          }
+
+          bodyStream.on("data", (chunk: Buffer | string) => {
+            if (bodySettled) return;
+            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            decodedBytes += buffer.byteLength;
+            if (decodedBytes > MAX_BROWSER_PREVIEW_BODY_BYTES) {
+              abortBody(new Error(`Browser preview response exceeded ${MAX_BROWSER_PREVIEW_BODY_BYTES} decoded bytes`));
+              return;
+            }
+            chunks.push(buffer);
+          });
+          bodyStream.once("end", () => {
+            if (bodySettled) return;
+            bodySettled = true;
+            const rewritten = Buffer.from(rewriteBrowserPreviewBody(
+              Buffer.concat(chunks).toString("utf8"),
+              proxyPrefix,
+              target,
+              previewContentKind,
+            ));
+            delete responseHeaders["content-encoding"];
+            responseHeaders["content-length"] = rewritten.byteLength;
+            response.writeHead(proxyResponse.statusCode ?? 502, responseHeaders);
+            response.end(rewritten);
+            finish();
+          });
+          proxyResponse.once("error", (error) => abortBody(error));
+          proxyResponse.once("aborted", () => abortBody(new Error("Browser preview response was aborted")));
+          return;
+        }
+
+        response.writeHead(proxyResponse.statusCode ?? 502, responseHeaders);
+        pipeline(proxyResponse, response, (error) => {
+          if (error) {
+            proxyRequest.destroy(error);
+            fail(error);
+            return;
+          }
+          finish();
+        });
       });
       this.proxyRequests.add(proxyRequest);
       proxyRequest.once("close", () => {
@@ -1110,7 +1402,38 @@ export class OrkestratorGateway {
 
       proxyRequest.once("error", fail);
 
-      request.pipe(proxyRequest);
+      const cancelProxyForDisconnect = () => {
+        if (!settled && !response.writableFinished) {
+          const disconnectError = new Error("Proxy client disconnected");
+          this.logger.debug("[RemoteGateway] Proxy client disconnected; aborting upstream request");
+          // Settle first: destroying the response re-enters this handler via
+          // its own "close" event, and a throwing destroy must not leave the
+          // proxy promise dangling.
+          finish();
+          activeProxyResponse?.socket.destroy(disconnectError);
+          activeProxyResponse?.destroy(disconnectError);
+          proxyRequest.socket?.destroy(disconnectError);
+          proxyRequest.destroy(disconnectError);
+          response.destroy(disconnectError);
+        }
+      };
+      // "close" fires for premature client disconnects as well as normal
+      // completion; the settled/writableFinished guard makes the latter a
+      // no-op. The socket listener is required (response "close" alone is not
+      // reliably emitted on abrupt disconnects) and is removed in finish().
+      request.socket.once("close", cancelProxyForDisconnect);
+      response.once("close", cancelProxyForDisconnect);
+
+      // Piping an already-ended request stream suppresses client-socket
+      // close events under Bun, which would leave disconnected proxy
+      // requests streaming forever; only pipe when a body can exist.
+      const hasRequestBody = request.headers["content-length"] !== undefined
+        || request.headers["transfer-encoding"] !== undefined;
+      if (hasRequestBody) {
+        request.pipe(proxyRequest);
+      } else {
+        proxyRequest.end();
+      }
     });
   }
 

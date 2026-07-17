@@ -12,6 +12,7 @@ import { ClaudeChatTab } from "@/components/claude/ClaudeChatTab";
 import { ClaudeTmuxChatTab } from "@/components/claude/ClaudeTmuxChatTab";
 import { CodexChatTab } from "@/components/codex";
 import { BuildChatTab } from "@/components/build-pipeline";
+import { BrowserTab } from "@/components/browser/BrowserTab";
 import { DraggableTabBar } from "./DraggableTabBar";
 import { DropZoneOverlay } from "./DropZoneOverlay";
 
@@ -161,6 +162,20 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                 isDiff={tab.fileData.isDiff}
                 gitStatus={tab.fileData.gitStatus}
                 baseBranch={tab.fileData.isDiff ? comparisonRef : tab.fileData.baseBranch}
+              />
+            );
+          }
+
+          // Backend-local browser preview tabs
+          if (tab.type === "browser" && tab.browserData) {
+            return (
+              <BrowserTab
+                key={tab.id}
+                tabId={tab.id}
+                environmentId={environmentId}
+                data={tab.browserData}
+                isActive={isTabActive && isActive}
+                refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
               />
             );
           }

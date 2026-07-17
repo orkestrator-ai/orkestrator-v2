@@ -809,6 +809,53 @@ describe("ActionBar copy URL", () => {
   });
 });
 
+describe("ActionBar browser tabs", () => {
+  test("opens a browser tab at the selected environment's mapped backend port", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      entryPort: 3000,
+      hostEntryPort: 49152,
+    };
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "New browser tab" }));
+
+    expect(createTabMock).toHaveBeenCalledWith("browser", {
+      initialUrl: "http://localhost:49152/",
+    });
+  });
+
+  test("opens an empty browser tab when the environment has no mapped port", () => {
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "New browser tab" }));
+
+    expect(createTabMock).toHaveBeenCalledWith("browser", { initialUrl: undefined });
+  });
+
+  test("keeps the browser tab button visible but disabled without an environment", () => {
+    currentSelectedEnvironmentId = null;
+    render(<ActionBar presentation="grid" />);
+
+    const button = screen.getByRole("button", { name: "New browser tab" });
+    expect(button.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(button);
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("disables browser previews in the non-desktop web client", () => {
+    window.orkestratorGateway = { enabled: true };
+    try {
+      render(<ActionBar />);
+      const button = screen.getByRole("button", { name: "New browser tab" });
+      expect(button.hasAttribute("disabled")).toBe(true);
+      fireEvent.click(button);
+      expect(createTabMock).not.toHaveBeenCalled();
+    } finally {
+      delete window.orkestratorGateway;
+    }
+  });
+});
+
 describe("ActionBar editor and run commands", () => {
   test("opens container and local environments in the configured editor", async () => {
     const { rerender } = render(<ActionBar />);

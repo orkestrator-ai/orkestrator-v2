@@ -249,11 +249,7 @@ function parseChildTranscript(
         continue;
       }
 
-      const existing = actions[actionIndex];
-      if (!existing || existing.type !== "tool-invocation") {
-        continue;
-      }
-
+      const existing = actions[actionIndex] as TranscriptActionPart;
       actions[actionIndex] = updateActionPart(
         existing,
         payload.output,
@@ -369,6 +365,7 @@ function parseWaitAgentOutcomeByAgentId(
 export function deriveSubagentPartsFromTranscriptRecords(
   parentRecords: TranscriptRecord[],
   childRecordsByAgentId: Map<string, TranscriptRecord[]>,
+  resolvedAgentIdBySpawnCallId: ReadonlyMap<string, string> = new Map(),
 ): TranscriptSubagentPart[] {
   const spawnedSubagents: SpawnedSubagent[] = [];
   const spawnedSubagentByCallId = new Map<string, SpawnedSubagent>();
@@ -390,6 +387,7 @@ export function deriveSubagentPartsFromTranscriptRecords(
       const args = parseJson<Record<string, unknown>>(payload.arguments);
       const spawned: SpawnedSubagent = {
         callId,
+        agentId: resolvedAgentIdBySpawnCallId.get(callId),
         role: asString(args?.agent_type),
         prompt: asString(args?.message),
       };
@@ -410,7 +408,9 @@ export function deriveSubagentPartsFromTranscriptRecords(
       }
 
       const output = parseJson<Record<string, unknown>>(payload.output);
-      spawned.agentId = asString(output?.agent_id) ?? spawned.agentId;
+      spawned.agentId = asString(output?.agent_id)
+        ?? resolvedAgentIdBySpawnCallId.get(callId)
+        ?? spawned.agentId;
       spawned.nickname = asString(output?.nickname) ?? spawned.nickname;
     }
   }

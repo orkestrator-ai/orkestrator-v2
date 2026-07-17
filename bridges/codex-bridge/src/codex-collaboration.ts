@@ -169,6 +169,21 @@ function getReceiverThreadIds(item: CodexCollabToolCallItem): string[] {
   return [...ids];
 }
 
+/**
+ * Transcript spawn outputs may expose only a task path while streamed
+ * collaboration items carry the actual child thread IDs. Both sources are
+ * emitted in invocation order, so retain that order for transcript hydration.
+ */
+export function getCodexSpawnedAgentIdsInOrder(items: unknown[]): Array<string | undefined> {
+  return items
+    .map(normalizeCodexCollabToolCallItem)
+    .filter((item): item is CodexCollabToolCallItem => item !== null && isSpawnTool(item.tool))
+    .map((item) => {
+      const receiverThreadIds = getReceiverThreadIds(item);
+      return receiverThreadIds.length === 1 ? receiverThreadIds[0] : undefined;
+    });
+}
+
 function toToolState(
   status: CodexCollabAgentStatus | undefined,
 ): TranscriptSubagentPart["toolState"] | undefined {

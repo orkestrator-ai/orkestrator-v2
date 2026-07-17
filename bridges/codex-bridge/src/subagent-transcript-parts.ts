@@ -15,11 +15,23 @@ export interface TranscriptLike {
 interface DeriveTranscriptSubagentPartsOptions {
   threadId?: string | null;
   currentTurnStartedAt?: string;
+  fallbackAgentIdsInSpawnOrder?: readonly (string | undefined)[];
   loadSessionMeta: (threadId: string) => Promise<PersistedSessionMetaLike | null>;
   loadTranscript: (path: string) => Promise<TranscriptLike>;
 }
 
-function parseAgentIdFromFunctionCallOutput(record: TranscriptRecord): string | null {
+interface SpawnOutputAgent {
+  callId: string;
+  agentId: string;
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value
+    : undefined;
+}
+
+function parseSpawnOutputAgent(record: TranscriptRecord): SpawnOutputAgent | null {
   if (
     record.type !== "response_item"
     || record.payload?.type !== "function_call_output"
@@ -30,9 +42,9 @@ function parseAgentIdFromFunctionCallOutput(record: TranscriptRecord): string | 
 
   try {
     const parsedOutput = JSON.parse(record.payload.output) as { agent_id?: unknown };
-    return typeof parsedOutput.agent_id === "string" && parsedOutput.agent_id.length > 0
-      ? parsedOutput.agent_id
-      : null;
+    const callId = asNonEmptyString(record.payload.call_id);
+    const agentId = asNonEmptyString(parsedOutput.agent_id);
+    return callId && agentId ? { callId, agentId } : null;
   } catch {
     return null;
   }
@@ -41,6 +53,7 @@ function parseAgentIdFromFunctionCallOutput(record: TranscriptRecord): string | 
 export async function deriveTranscriptSubagentPartsForTurn({
   threadId,
   currentTurnStartedAt,
+  fallbackAgentIdsInSpawnOrder = [],
   loadSessionMeta,
   loadTranscript,
 }: DeriveTranscriptSubagentPartsOptions): Promise<TranscriptSubagentPart[]> {
@@ -72,22 +85,48 @@ export async function deriveTranscriptSubagentPartsForTurn({
     return [];
   }
 
-  const childRecordsByAgentId = new Map<string, TranscriptRecord[]>();
+  const resolvedAgentIdBySpawnCallId = new Map<string, string>();
+  const spawnCalls = parentRecords.flatMap((record) => {
+    if (
+      record.type !== "response_item"
+      || record.payload?.type !== "function_call"
+      || record.payload.name !== "spawn_agent"
+    ) {
+      return [];
+    }
+    const callId = asNonEmptyString(record.payload.call_id);
+    return callId ? [callId] : [];
+  });
+  const outputAgentIdByCallId = new Map<string, string>();
 
   for (const record of parentRecords) {
-    const agentId = parseAgentIdFromFunctionCallOutput(record);
-    if (!agentId || childRecordsByAgentId.has(agentId)) {
-      continue;
-    }
-
-    const childMeta = await loadSessionMeta(agentId);
-    if (!childMeta?.transcriptPath) {
-      childRecordsByAgentId.set(agentId, []);
-      continue;
-    }
-
-    childRecordsByAgentId.set(agentId, (await loadTranscript(childMeta.transcriptPath)).records);
+    const outputAgent = parseSpawnOutputAgent(record);
+    if (outputAgent) outputAgentIdByCallId.set(outputAgent.callId, outputAgent.agentId);
   }
 
-  return deriveSubagentPartsFromTranscriptRecords(parentRecords, childRecordsByAgentId);
+  const requestedAgentIds = new Set<string>();
+  for (const [spawnIndex, spawnCallId] of spawnCalls.entries()) {
+    const fallbackAgentId = asNonEmptyString(fallbackAgentIdsInSpawnOrder[spawnIndex]);
+    const requestedAgentId = outputAgentIdByCallId.get(spawnCallId) ?? fallbackAgentId;
+    if (!requestedAgentId) continue;
+
+    resolvedAgentIdBySpawnCallId.set(spawnCallId, requestedAgentId);
+    requestedAgentIds.add(requestedAgentId);
+  }
+
+  const childRecordsByAgentId = new Map(await Promise.all(
+    [...requestedAgentIds].map(async (requestedAgentId) => {
+      const childMeta = await loadSessionMeta(requestedAgentId);
+      const childRecords = childMeta?.transcriptPath
+        ? (await loadTranscript(childMeta.transcriptPath)).records
+        : [];
+      return [requestedAgentId, childRecords] as const;
+    }),
+  ));
+
+  return deriveSubagentPartsFromTranscriptRecords(
+    parentRecords,
+    childRecordsByAgentId,
+    resolvedAgentIdBySpawnCallId,
+  );
 }

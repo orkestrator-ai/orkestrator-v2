@@ -8,6 +8,7 @@ test("mobile sections have one visible panel, preserve values, and stay within t
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile project only");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.goto("/");
 
   const dialog = page.getByRole("dialog");
@@ -32,11 +33,26 @@ test("mobile sections have one visible panel, preserve values, and stay within t
   await page.getByRole("tab", { name: "Setup" }).click();
   await expect(setupPanel).toBeVisible();
   await expect(promptPanel).toBeHidden();
+  await expect(setupPanel).toHaveAttribute("data-mobile-transition", "forward");
+  await expect(setupPanel).toHaveCSS(
+    "animation-name",
+    "create-environment-tab-enter-forward",
+  );
+  await expect(setupPanel).toHaveCSS("animation-duration", "0.18s");
   await environmentName.fill("mobile-layout");
 
   await page.getByRole("tab", { name: "Prompt" }).click();
+  await expect(promptPanel).toHaveAttribute("data-mobile-transition", "backward");
+  await expect(promptPanel).toHaveCSS(
+    "animation-name",
+    "create-environment-tab-enter-backward",
+  );
   await prompt.fill("Keep this prompt");
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.getByRole("tab", { name: "Setup" }).click();
+  await expect(setupPanel).toHaveAttribute("data-mobile-transition", "forward");
+  await expect(setupPanel).toHaveCSS("animation-name", "none");
   await expect(environmentName).toHaveValue("mobile-layout");
   await expect(prompt).toHaveValue("Keep this prompt");
 
@@ -124,4 +140,17 @@ test("desktop hides the mobile tablist while exposing every configuration sectio
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
   ).toBe(true);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(tabList).toBeVisible();
+  await page.getByRole("tab", { name: "Setup" }).click();
+  await expect(setupPanel).toHaveCSS(
+    "animation-name",
+    "create-environment-tab-enter-forward",
+  );
+
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await expect(tabList).toBeHidden();
+  await expect(setupPanel).toHaveCSS("display", "contents");
+  await expect(setupPanel).toHaveCSS("animation-name", "none");
 });

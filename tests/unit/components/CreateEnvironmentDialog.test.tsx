@@ -181,6 +181,49 @@ describe("resolveAgentDefaults", () => {
     expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).value).toBe("Keep this task");
   });
 
+  test("sets every mobile panel's animation direction from section order", () => {
+    render(
+      <CreateEnvironmentDialog
+        open={true}
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />
+    );
+
+    const panels = {
+      Prompt: screen.getByLabelText(/Initial Prompt/i).closest('[role="tabpanel"]'),
+      Setup: screen.getByLabelText(/Environment Name/i).closest('[role="tabpanel"]'),
+      Agent: screen.getByRole("switch", { name: "Launch Agent" }).closest('[role="tabpanel"]'),
+      Access: screen.getByRole("button", { name: "Restricted" }).closest('[role="tabpanel"]'),
+      Ports: screen.getByRole("button", { name: /Port Configuration/ }).closest('[role="tabpanel"]'),
+    };
+
+    for (const panel of Object.values(panels)) {
+      expect(panel?.classList.contains("create-environment-mobile-tab-panel")).toBe(true);
+      expect(panel?.getAttribute("data-mobile-transition")).toBeNull();
+    }
+
+    for (const tabName of ["Setup", "Agent", "Access", "Ports"] as const) {
+      fireEvent.mouseDown(screen.getByRole("tab", { name: tabName }), {
+        button: 0,
+        ctrlKey: false,
+      });
+      expect(panels[tabName]?.getAttribute("data-mobile-transition")).toBe("forward");
+    }
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Setup" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(panels.Setup?.getAttribute("data-mobile-transition")).toBe("backward");
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Prompt" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    expect(panels.Prompt?.getAttribute("data-mobile-transition")).toBe("backward");
+  });
+
   test("hides container-only mobile tabs when local setup is selected", () => {
     render(
       <CreateEnvironmentDialog
@@ -224,6 +267,12 @@ describe("resolveAgentDefaults", () => {
       await waitFor(() => {
         expect(screen.getByRole("tab", { name: "Setup" }).getAttribute("aria-selected")).toBe("true");
       });
+      expect(
+        screen
+          .getByLabelText(/Environment Name/i)
+          .closest('[role="tabpanel"]')
+          ?.getAttribute("data-mobile-transition"),
+      ).toBe("backward");
       expect(screen.queryByRole("tab", { name: tabName })).toBeNull();
     },
   );
@@ -243,6 +292,12 @@ describe("resolveAgentDefaults", () => {
     await waitFor(() => {
       expect(screen.getByRole("tab", { name: "Agent" }).getAttribute("aria-selected")).toBe("true");
     });
+    expect(
+      screen
+        .getByRole("switch", { name: "Launch Agent" })
+        .closest('[role="tabpanel"]')
+        ?.getAttribute("data-mobile-transition"),
+    ).toBe("forward");
     expect(screen.getByRole("tab", { name: "Prompt" }).hasAttribute("disabled")).toBe(true);
   });
 
@@ -258,6 +313,12 @@ describe("resolveAgentDefaults", () => {
       ctrlKey: false,
     });
     expect(screen.getByRole("tab", { name: "Setup" }).getAttribute("aria-selected")).toBe("true");
+    expect(
+      screen
+        .getByLabelText(/Environment Name/i)
+        .closest('[role="tabpanel"]')
+        ?.getAttribute("data-mobile-transition"),
+    ).toBe("forward");
 
     rerender(<CreateEnvironmentDialog open={false} {...props} />);
     rerender(<CreateEnvironmentDialog open={true} {...props} />);
@@ -265,6 +326,12 @@ describe("resolveAgentDefaults", () => {
     await waitFor(() => {
       expect(screen.getByRole("tab", { name: "Prompt" }).getAttribute("aria-selected")).toBe("true");
     });
+    expect(
+      screen
+        .getByLabelText(/Initial Prompt/i)
+        .closest('[role="tabpanel"]')
+        ?.getAttribute("data-mobile-transition"),
+    ).toBeNull();
   });
 
   test("saves a trimmed draft on cancel, resets other fields, and restores the draft", async () => {
@@ -387,7 +454,7 @@ describe("resolveAgentDefaults", () => {
     });
   });
 
-  test("submits on plain Enter but not Shift+Enter in the prompt", async () => {
+  test("submits on plain Enter but not modified Enter in the prompt", async () => {
     const onCreate = mock(async () => {});
     render(
       <CreateEnvironmentDialog
@@ -398,7 +465,9 @@ describe("resolveAgentDefaults", () => {
     );
     const prompt = screen.getByLabelText(/Initial Prompt/i);
 
-    fireEvent.keyDown(prompt, { key: "Enter", shiftKey: true });
+    for (const modifier of ["shiftKey", "metaKey", "ctrlKey", "altKey"] as const) {
+      fireEvent.keyDown(prompt, { key: "Enter", [modifier]: true });
+    }
     expect(onCreate).not.toHaveBeenCalled();
 
     fireEvent.keyDown(prompt, { key: "Enter" });
@@ -478,6 +547,93 @@ describe("resolveAgentDefaults", () => {
           codexMode: "terminal",
           initialPrompt: "Review the migration plan",
         })
+      );
+    });
+  });
+
+  test.each([
+    {
+      agentLabel: "Claude",
+      agentType: "claude",
+      selectedMode: "Native",
+      expectedField: "claudeMode",
+      expectedMode: "native",
+    },
+    {
+      agentLabel: "Claude",
+      agentType: "claude",
+      selectedMode: "Terminal",
+      expectedField: "claudeMode",
+      expectedMode: "terminal",
+    },
+    {
+      agentLabel: "OpenCode",
+      agentType: "opencode",
+      selectedMode: "Native",
+      expectedField: "opencodeMode",
+      expectedMode: "native",
+    },
+    {
+      agentLabel: "OpenCode",
+      agentType: "opencode",
+      selectedMode: "Terminal",
+      expectedField: "opencodeMode",
+      expectedMode: "terminal",
+    },
+  ] as const)(
+    "submits $agentLabel $selectedMode mode from the dialog",
+    async ({ agentLabel, agentType, selectedMode, expectedField, expectedMode }) => {
+      const onCreate = mock(async () => {});
+      render(
+        <CreateEnvironmentDialog
+          open={true}
+          onOpenChange={() => {}}
+          onCreate={onCreate}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: agentLabel }));
+      fireEvent.click(screen.getByRole("button", { name: "Native" }));
+      if (selectedMode === "Terminal") {
+        fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+      }
+      fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+      await waitFor(() => {
+        expect(onCreate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            agentType,
+            [expectedField]: expectedMode,
+          }),
+        );
+      });
+    },
+  );
+
+  test("submits a trimmed environment name without launching an agent", async () => {
+    const onCreate = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog
+        open={true}
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/Environment Name/i), {
+      target: { value: "  local-review  " },
+    });
+    fireEvent.click(screen.getByRole("switch", { name: "Launch Agent" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environmentName: "local-review",
+          launchAgent: false,
+          initialPrompt: "",
+          initialPromptAttachments: [],
+        }),
       );
     });
   });
@@ -814,6 +970,106 @@ describe("resolveAgentDefaults", () => {
     expect(screen.queryByAltText(/initial-prompt-/)).toBeNull();
   });
 
+  test("does not inspect clipboard images when the prompt is unfocused or unavailable", async () => {
+    const props = {
+      onOpenChange: () => {},
+      onCreate: mock(async () => {}),
+    };
+    const { rerender } = render(<CreateEnvironmentDialog open={true} {...props} />);
+
+    screen.getByLabelText(/Environment Name/i).focus();
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+    await Promise.resolve();
+    expect(mockReadImage).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("switch", { name: "Launch Agent" }));
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/Initial Prompt/i)).toBeNull();
+    });
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+    await Promise.resolve();
+    expect(mockReadImage).not.toHaveBeenCalled();
+
+    rerender(<CreateEnvironmentDialog open={false} {...props} />);
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+    await Promise.resolve();
+    expect(mockReadImage).not.toHaveBeenCalled();
+  });
+
+  test("cancels an in-flight clipboard image when the dialog closes", async () => {
+    let resolveImage!: (image: {
+      rgba: () => Promise<Uint8Array>;
+      size: () => Promise<{ width: number; height: number }>;
+    }) => void;
+    const rgba = mock(async () => new Uint8Array([255, 0, 0, 255]));
+    const size = mock(async () => ({ width: 1, height: 1 }));
+    mockReadImage.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveImage = resolve;
+      }),
+    );
+    const onOpenChange = mock(() => {});
+    render(
+      <CreateEnvironmentDialog
+        open={true}
+        onOpenChange={onOpenChange}
+        onCreate={mock(async () => {})}
+      />,
+    );
+    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    prompt.focus();
+    const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+    document.dispatchEvent(pasteEvent);
+    await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    resolveImage({ rgba, size });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(rgba).not.toHaveBeenCalled();
+    expect(size).not.toHaveBeenCalled();
+    expect(pasteEvent.defaultPrevented).toBe(false);
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+  });
+
+  test("cancels an in-flight clipboard image when the dialog unmounts", async () => {
+    let resolveImage!: (image: {
+      rgba: () => Promise<Uint8Array>;
+      size: () => Promise<{ width: number; height: number }>;
+    }) => void;
+    const rgba = mock(async () => new Uint8Array([255, 0, 0, 255]));
+    const size = mock(async () => ({ width: 1, height: 1 }));
+    mockReadImage.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveImage = resolve;
+      }),
+    );
+    const { unmount } = render(
+      <CreateEnvironmentDialog
+        open={true}
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />,
+    );
+    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    prompt.focus();
+    const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+    document.dispatchEvent(pasteEvent);
+    await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
+
+    unmount();
+    resolveImage({ rgba, size });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(rgba).not.toHaveBeenCalled();
+    expect(size).not.toHaveBeenCalled();
+    expect(pasteEvent.defaultPrevented).toBe(false);
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+  });
+
   test("adds, validates, updates, and removes port mappings", async () => {
     const onCreate = mock(async () => {});
     render(
@@ -856,7 +1112,7 @@ describe("resolveAgentDefaults", () => {
     });
   });
 
-  test("rejects host and container ports above 65535 and accepts the upper boundary", async () => {
+  test("rejects empty and out-of-range ports and accepts both boundaries", async () => {
     const onCreate = mock(async () => {});
     render(
       <CreateEnvironmentDialog
@@ -869,6 +1125,18 @@ describe("resolveAgentDefaults", () => {
     const containerPort = screen.getByPlaceholderText("Container");
     const hostPort = screen.getByPlaceholderText("Host");
     const createButton = screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement;
+
+    for (const invalidHostPort of ["", "0", "-1"]) {
+      fireEvent.change(hostPort, { target: { value: invalidHostPort } });
+      expect(createButton.disabled).toBe(true);
+    }
+    fireEvent.change(hostPort, { target: { value: "1" } });
+    for (const invalidContainerPort of ["", "0", "-1"]) {
+      fireEvent.change(containerPort, { target: { value: invalidContainerPort } });
+      expect(createButton.disabled).toBe(true);
+    }
+    fireEvent.change(containerPort, { target: { value: "1" } });
+    expect(createButton.disabled).toBe(false);
 
     fireEvent.change(hostPort, { target: { value: "65536" } });
     expect(createButton.disabled).toBe(true);
@@ -883,6 +1151,34 @@ describe("resolveAgentDefaults", () => {
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({
           portMappings: [{ containerPort: 65535, hostPort: 65535, protocol: "tcp" }],
+        }),
+      );
+    });
+  });
+
+  test("ignores hidden invalid port mappings when creating a local environment", async () => {
+    const onCreate = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+        defaultPortMappings={[{ containerPort: 3000, hostPort: 3000, protocol: "tcp" }]}
+      />,
+    );
+    const createButton = screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement;
+
+    fireEvent.change(screen.getByPlaceholderText("Host"), { target: { value: "0" } });
+    expect(createButton.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: /Local/ }));
+
+    expect(createButton.disabled).toBe(false);
+    fireEvent.click(createButton);
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environmentType: "local",
+          portMappings: [],
         }),
       );
     });

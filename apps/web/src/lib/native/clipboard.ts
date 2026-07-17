@@ -1,16 +1,33 @@
+import {
+  readClipboardImageBlob,
+  validateClipboardImageDimensions,
+} from "@/lib/clipboard-image";
+
 export interface ClipboardImage {
   rgba(): Promise<Uint8Array>;
   size(): Promise<{ width: number; height: number }>;
 }
 
-async function decodeImageData(dataUrl: string): Promise<ImageData> {
+async function decodeImageData(
+  dataUrl: string,
+  expectedDimensions?: { width: number; height: number },
+): Promise<ImageData> {
   const image = new Image();
   image.src = dataUrl;
   await image.decode();
 
+  const decodedDimensions = validateClipboardImageDimensions(image.naturalWidth, image.naturalHeight);
+  if (
+    expectedDimensions &&
+    (decodedDimensions.width !== expectedDimensions.width ||
+      decodedDimensions.height !== expectedDimensions.height)
+  ) {
+    throw new Error("Clipboard image dimensions do not match its encoded metadata");
+  }
+
   const canvas = document.createElement("canvas");
-  canvas.width = image.naturalWidth;
-  canvas.height = image.naturalHeight;
+  canvas.width = decodedDimensions.width;
+  canvas.height = decodedDimensions.height;
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Canvas 2D context is not available");
 
@@ -18,28 +35,16 @@ async function decodeImageData(dataUrl: string): Promise<ImageData> {
   return context.getImageData(0, 0, canvas.width, canvas.height);
 }
 
-async function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-      } else {
-        reject(new Error("Clipboard image could not be read"));
-      }
-    };
-    reader.onerror = () => reject(reader.error ?? new Error("Clipboard image could not be read"));
-    reader.readAsDataURL(blob);
-  });
-}
-
 function createClipboardImage(
   dataUrl: string,
   dimensions?: { width: number; height: number },
 ): ClipboardImage {
+  const safeDimensions = dimensions
+    ? validateClipboardImageDimensions(dimensions.width, dimensions.height)
+    : undefined;
   let imageData: ImageData | null = null;
   const getImageData = async () => {
-    imageData ??= await decodeImageData(dataUrl);
+    imageData ??= await decodeImageData(dataUrl, safeDimensions);
     return imageData;
   };
 
@@ -48,7 +53,7 @@ function createClipboardImage(
       return new Uint8Array((await getImageData()).data);
     },
     async size() {
-      if (dimensions) return dimensions;
+      if (safeDimensions) return safeDimensions;
       const decoded = await getImageData();
       return { width: decoded.width, height: decoded.height };
     },
@@ -57,14 +62,19 @@ function createClipboardImage(
 
 export async function readImage(pastedBlob?: Blob | null): Promise<ClipboardImage> {
   if (pastedBlob) {
-    return createClipboardImage(await blobToDataUrl(pastedBlob));
+    const { dataUrl, width, height } = await readClipboardImageBlob(pastedBlob);
+    return createClipboardImage(dataUrl, { width, height });
   }
 
   // A real browser paste event has already exposed all readable data through
   // clipboardData. Avoid a second async clipboard read (and its permission UI)
   // when that event contained no image. Calls without an event still use the
   // async browser API for terminal/context-menu paste commands.
-  if (pastedBlob === null && window.orkestratorGateway?.enabled) {
+  if (
+    pastedBlob === null &&
+    window.orkestratorGateway?.enabled &&
+    !window.orkestratorGateway.desktop
+  ) {
     throw new Error("No image in clipboard");
   }
 

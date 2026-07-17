@@ -83,6 +83,8 @@ const initialKanbanState = useKanbanStore.getState();
 const initialEnvironmentState = useEnvironmentStore.getState();
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
+const originalReadAsDataURL = FileReader.prototype.readAsDataURL;
+const originalConsoleWarn = console.warn;
 const putImageDataMock = mock(() => {});
 
 if (typeof globalThis.ImageData === "undefined") {
@@ -225,6 +227,8 @@ describe("KanbanTaskDialog", () => {
     resetStores();
     HTMLCanvasElement.prototype.getContext = originalGetContext;
     HTMLCanvasElement.prototype.toDataURL = originalToDataURL;
+    FileReader.prototype.readAsDataURL = originalReadAsDataURL;
+    console.warn = originalConsoleWarn;
   });
 
   afterAll(() => {
@@ -387,6 +391,46 @@ describe("KanbanTaskDialog", () => {
     });
   });
 
+  test("edit mode cancel controls discard title and acceptance-criteria edits", () => {
+    render(
+      <KanbanTaskDialog
+        task={makeTask({ description: "", acceptanceCriteria: "" })}
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("Click to add a description...")).toBeTruthy();
+    fireEvent.click(screen.getByText("Existing task"));
+    fireEvent.change(screen.getByDisplayValue("Existing task"), {
+      target: { value: "Discarded title" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(updateTaskMock).not.toHaveBeenCalled();
+    expect(screen.getByText("Existing task")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Click to add acceptance criteria..."));
+    fireEvent.change(screen.getByPlaceholderText("Define what 'done' looks like..."), {
+      target: { value: "Discarded criteria" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(updateTaskMock).not.toHaveBeenCalled();
+    expect(screen.getByText("Click to add acceptance criteria...")).toBeTruthy();
+  });
+
+  test("pressing Enter in the create title submits the task", async () => {
+    render(
+      <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
+    );
+    const title = screen.getByPlaceholderText("Task title...");
+    fireEvent.change(title, { target: { value: "Keyboard task" } });
+    fireEvent.keyDown(title, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(addTaskMock).toHaveBeenCalledWith("project-1", "Keyboard task", "");
+    });
+  });
+
   test("comment input adds comments and existing comment delete controls remove comments", () => {
     const task = makeTask({
       comments: [
@@ -534,6 +578,54 @@ describe("KanbanTaskDialog", () => {
     expect(screen.queryByAltText("large.png")).toBeNull();
   });
 
+  test("reports file-reader failures and resets the file input", async () => {
+    FileReader.prototype.readAsDataURL = function () {
+      this.onerror?.(new ProgressEvent("error"));
+    } as typeof FileReader.prototype.readAsDataURL;
+    render(
+      <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
+    );
+    const fileInput = document.querySelector<HTMLInputElement>("input[type='file']")!;
+
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["image"], "broken.png", { type: "image/png" })] },
+    });
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith("Failed to read image file");
+    });
+    expect(screen.queryByAltText("broken.png")).toBeNull();
+    expect(fileInput.value).toBe("");
+  });
+
+  test("attach control opens the hidden image picker", () => {
+    render(
+      <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
+    );
+    const fileInput = document.querySelector<HTMLInputElement>("input[type='file']")!;
+    const click = mock(() => {});
+    fileInput.click = click;
+
+    fireEvent.click(screen.getByTitle("Attach image"));
+
+    expect(click).toHaveBeenCalledTimes(1);
+  });
+
+  test("selected image files attach directly to an existing task", async () => {
+    render(
+      <KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />,
+    );
+    const fileInput = document.querySelector<HTMLInputElement>("input[type='file']")!;
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["image"], "existing.png", { type: "image/png" })] },
+    });
+
+    await waitFor(() => {
+      expect(addImageMock).toHaveBeenCalledWith("task-1", "existing.png", expect.any(String));
+      expect(toastSuccessMock).toHaveBeenCalledWith("Image attached");
+    });
+  });
+
   test("reports failed image persistence after creating a task", async () => {
     addImageMock.mockRejectedValueOnce(new Error("disk full"));
     render(
@@ -547,6 +639,68 @@ describe("KanbanTaskDialog", () => {
     await screen.findByAltText("failure.png");
     fireEvent.click(screen.getByRole("button", { name: "Create Task" }));
     await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Failed to save 1 image"));
+  });
+
+  test("removes a pending image before creating the task", async () => {
+    render(
+      <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
+    );
+    const fileInput = document.querySelector<HTMLInputElement>("input[type='file']")!;
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["image"], "remove-me.png", { type: "image/png" })] },
+    });
+    const thumbnail = await screen.findByAltText("remove-me.png");
+    const removeButton = thumbnail.closest("div")?.querySelector("button");
+    expect(removeButton).toBeTruthy();
+    fireEvent.click(removeButton!);
+
+    expect(screen.queryByAltText("remove-me.png")).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText("Task title..."), {
+      target: { value: "No image task" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create Task" }));
+    await waitFor(() => expect(addTaskMock).toHaveBeenCalled());
+    expect(addImageMock).not.toHaveBeenCalled();
+  });
+
+  test("reports when task creation for a build returns no id", async () => {
+    addTaskMock.mockImplementationOnce(async () => "");
+    render(
+      <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
+    );
+    fireEvent.change(screen.getByPlaceholderText("Task title..."), {
+      target: { value: "Failed creation" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Build Container" }));
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Failed to create task"));
+    expect(startBuildMock).not.toHaveBeenCalled();
+  });
+
+  test("continues a build when acceptance criteria persistence fails", async () => {
+    const createdTask = makeTask({ id: "task-created", title: "Partial build task" });
+    addTaskMock.mockImplementationOnce(async () => {
+      useKanbanStore.setState({ tasks: [createdTask] });
+      return createdTask.id;
+    });
+    updateTaskMock.mockRejectedValueOnce(new Error("storage unavailable"));
+    render(
+      <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
+    );
+    fireEvent.change(screen.getByPlaceholderText("Task title..."), {
+      target: { value: createdTask.title },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Define what 'done' looks like..."), {
+      target: { value: "Persist this" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Build Local" }));
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        "Task created but acceptance criteria could not be saved",
+      );
+      expect(startBuildMock).toHaveBeenCalledWith(createdTask, "local");
+    });
   });
 
   test("reports when a newly created task cannot be found for building", async () => {
@@ -614,6 +768,99 @@ describe("KanbanTaskDialog", () => {
     });
   });
 
+  test("uses an image supplied by the browser paste event", async () => {
+    const pastedFile = new File(["browser-image"], "browser.png", { type: "image/png" });
+    readImageMock.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    render(
+      <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
+    );
+    const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteEvent, "clipboardData", {
+      value: {
+        items: [{ kind: "file", type: "image/png", getAsFile: () => pastedFile }],
+        files: [],
+      },
+    });
+
+    document.dispatchEvent(pasteEvent);
+
+    await waitFor(() => {
+      expect(readImageMock).toHaveBeenCalledWith(pastedFile);
+      expect(screen.getByAltText(/^clipboard-.*\.png$/)).toBeTruthy();
+    });
+    expect(pasteEvent.defaultPrevented).toBe(true);
+  });
+
+  test("paste exits cleanly when canvas creation or encoding fails", async () => {
+    readImageMock.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    HTMLCanvasElement.prototype.getContext = (() => null) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+    render(
+      <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
+    );
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+    await waitFor(() => expect(readImageMock).toHaveBeenCalledTimes(1));
+    expect(screen.queryByAltText(/^clipboard-.*\.png$/)).toBeNull();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+
+    cleanup();
+    readImageMock.mockClear();
+    HTMLCanvasElement.prototype.getContext = (() => ({
+      putImageData: putImageDataMock,
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.toDataURL = (() => "data:image/png;base64,") as typeof HTMLCanvasElement.prototype.toDataURL;
+    render(
+      <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
+    );
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+    await waitFor(() => expect(readImageMock).toHaveBeenCalledTimes(1));
+    expect(screen.queryByAltText(/^clipboard-.*\.png$/)).toBeNull();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+  });
+
+  test("rejects an oversized encoded clipboard image", async () => {
+    readImageMock.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    HTMLCanvasElement.prototype.toDataURL = (() =>
+      `data:image/png;base64,${"A".repeat(7 * 1024 * 1024)}`) as typeof HTMLCanvasElement.prototype.toDataURL;
+    render(
+      <KanbanTaskDialog task={null} open onOpenChange={() => {}} createForProjectId="project-1" />,
+    );
+
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith("Image is too large (max 5 MB)");
+    });
+    expect(screen.queryByAltText(/^clipboard-.*\.png$/)).toBeNull();
+  });
+
+  test("pasted clipboard images attach directly to an existing task", async () => {
+    readImageMock.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
+
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+
+    await waitFor(() => {
+      expect(addImageMock).toHaveBeenCalledWith(
+        "task-1",
+        expect.stringMatching(/^clipboard-.*\.png$/),
+        "QUJD",
+      );
+      expect(toastSuccessMock).toHaveBeenCalledWith("Image pasted");
+    });
+  });
+
   test("existing task build actions start builds and close the dialog", async () => {
     const onOpenChange = mock(() => {});
     const task = makeTask();
@@ -637,14 +884,33 @@ describe("KanbanTaskDialog", () => {
       <KanbanTaskDialog task={task} open onOpenChange={() => {}} />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Build Local" }));
+    fireEvent.click(screen.getByRole("button", { name: "Build Container" }));
     expect(startBuildMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Start Build" }));
 
     await waitFor(() => {
+      expect(startBuildMock).toHaveBeenCalledWith(task, "containerized");
+    });
+
+    startBuildMock.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Build Local" }));
+    expect(startBuildMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Start Build" }));
+    await waitFor(() => {
       expect(startBuildMock).toHaveBeenCalledWith(task, "local");
     });
+  });
+
+  test("view build navigates to the linked environment and closes the dialog", () => {
+    const onOpenChange = mock(() => {});
+    const task = makeTask({ environmentId: "env-1" });
+    render(<KanbanTaskDialog task={task} open onOpenChange={onOpenChange} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /View Build/ }));
+
+    expect(navigateToBuildMock).toHaveBeenCalledWith(task);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   test("detects merged pull requests on open and records the merge comment once", async () => {
@@ -678,6 +944,72 @@ describe("KanbanTaskDialog", () => {
         prMergeCommented: true,
       });
     });
+  });
+
+  test("detects closed pull requests for local environments", async () => {
+    detectPrLocalMock.mockImplementation(async () => ({
+      url: "https://github.com/org/repo/pull/2",
+      state: "closed",
+      hasMergeConflicts: false,
+    }));
+    useEnvironmentStore.setState({
+      environments: [makeEnvironment({
+        id: "local-env",
+        environmentType: "local",
+        containerId: undefined,
+        worktreePath: "/tmp/worktree",
+        branch: "feature/local",
+      })],
+    });
+    render(
+      <KanbanTaskDialog
+        task={makeTask({
+          environmentId: "local-env",
+          prUrl: "https://github.com/org/repo/pull/2",
+          prState: "open",
+          prMergeCommented: false,
+        })}
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(detectPrLocalMock).toHaveBeenCalledWith("local-env", "feature/local");
+      expect(addCommentMock).toHaveBeenCalledWith("task-1", "❌ PR closed");
+      expect(updateTaskMock).toHaveBeenCalledWith("task-1", {
+        prState: "closed",
+        prMergeCommented: true,
+      });
+    });
+  });
+
+  test("logs and contains PR lookup failures", async () => {
+    const warn = mock(() => {});
+    console.warn = warn;
+    detectPrMock.mockRejectedValueOnce(new Error("lookup failed"));
+    useEnvironmentStore.setState({ environments: [makeEnvironment()] });
+    render(
+      <KanbanTaskDialog
+        task={makeTask({
+          environmentId: "env-1",
+          prUrl: "https://github.com/org/repo/pull/1",
+          prState: "open",
+          prMergeCommented: false,
+        })}
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(warn).toHaveBeenCalledWith(
+        "[KanbanTaskDialog] Failed to check PR state on dialog open:",
+        expect.any(Error),
+      );
+    });
+    expect(updateTaskMock).not.toHaveBeenCalled();
+    expect(addCommentMock).not.toHaveBeenCalled();
   });
 
   test("delete task control removes the task and closes the dialog", () => {

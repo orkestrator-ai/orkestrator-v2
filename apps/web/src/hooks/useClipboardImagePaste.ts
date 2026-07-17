@@ -246,14 +246,9 @@ export function useClipboardImagePaste({
         const filePath = `.orkestrator/clipboard/${filename}`;
 
         // Write to container or local worktree
-        let fullPath: string;
-        if (containerId) {
-          fullPath = await writeContainerFile(containerId, filePath, base64Data);
-        } else if (worktreePath) {
-          fullPath = await writeLocalFile(worktreePath, filePath, base64Data);
-        } else {
-          throw new Error("No target for image save (no containerId or worktreePath)");
-        }
+        const fullPath = containerId
+          ? await writeContainerFile(containerId, filePath, base64Data)
+          : await writeLocalFile(worktreePath!, filePath, base64Data);
         await onImageSaved?.(fullPath);
       } catch (error) {
         const message =

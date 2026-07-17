@@ -4,43 +4,13 @@ import {
   configureDirectGatewayTransport,
   updateDirectGatewayToken,
 } from "@/lib/native/gateway-auth-transport";
+import { readClipboardImageBlob } from "@/lib/clipboard-image";
 
 const GATEWAY_PREFIX = "/__orkestrator";
 const EVENT_RECONNECT_DELAY_MS = 2_000;
 
 type EventCallback<T> = (payload: T) => void;
 type GatewayWindow = Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
-
-async function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === "string") resolve(reader.result);
-      else reject(new Error("Clipboard image could not be read"));
-    };
-    reader.onerror = () => reject(reader.error ?? new Error("Clipboard image could not be read"));
-    reader.readAsDataURL(blob);
-  });
-}
-
-async function getBlobImageSize(
-  blob: Blob,
-  dataUrl: string,
-): Promise<{ width: number; height: number }> {
-  if (typeof createImageBitmap === "function") {
-    const bitmap = await createImageBitmap(blob);
-    const size = { width: bitmap.width, height: bitmap.height };
-    bitmap.close();
-    return size;
-  }
-
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
-    image.onerror = () => reject(new Error("Clipboard image could not be decoded"));
-    image.src = dataUrl;
-  });
-}
 
 async function readBrowserClipboardImage(): Promise<{
   width: number;
@@ -55,8 +25,7 @@ async function readBrowserClipboardImage(): Promise<{
     if (!imageType) continue;
 
     const blob = await item.getType(imageType);
-    const dataUrl = await blobToDataUrl(blob);
-    return { ...(await getBlobImageSize(blob, dataUrl)), dataUrl };
+    return readClipboardImageBlob(blob);
   }
 
   return null;

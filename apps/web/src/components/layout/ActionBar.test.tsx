@@ -28,9 +28,19 @@ const realBackendSnapshot = { ...realBackend };
 const realKanbanStoreSnapshot = { ...realKanbanStore };
 const realSonnerSnapshot = { ...realSonner };
 
+type MergeOutcome = { outcome: "merged" | "pending" | "unknown" };
+
 const deleteEnvironmentMock = mock(async (_environmentId: string) => {});
-const mergePrMock = mock(async (_containerId: string, _method: string, _deleteBranch: boolean) => {});
-const mergePrLocalMock = mock(async (_environmentId: string, _method: string, _deleteBranch: boolean) => {});
+const mergePrMock = mock(async (
+  _containerId: string,
+  _method: string,
+  _deleteBranch: boolean,
+): Promise<MergeOutcome> => ({ outcome: "merged" }));
+const mergePrLocalMock = mock(async (
+  _environmentId: string,
+  _method: string,
+  _deleteBranch: boolean,
+): Promise<MergeOutcome> => ({ outcome: "merged" }));
 const openInEditorMock = mock(async (_containerId: string, _editor: string) => {});
 const openLocalInEditorMock = mock(async (_worktreePath: string, _editor: string) => {});
 const readContainerFileMock = mock(async (_containerId: string, _path: string) => ({ content: "{}" }));
@@ -52,6 +62,12 @@ const setProjectBoardNotesOpenMock = mock((_open: boolean) => {});
 const toggleFilesPanelMock = mock(() => {});
 const addCommentMock = mock(async (_taskId: string, _body: string) => {});
 const updateTaskMock = mock(async (_taskId: string, _updates: unknown) => {});
+const viewPRMock = mock(() => {});
+const setModeCreatePendingMock = mock(() => {});
+const setModeMergePendingMock = mock(() => {});
+const updateProjectMock = mock(async () => {});
+const updateEnvironmentMock = mock(() => {});
+const recreateEnvironmentMock = mock(async () => {});
 const originalConsoleError = console.error;
 const originalConsoleLog = console.log;
 const originalConsoleWarn = console.warn;
@@ -89,6 +105,11 @@ let currentProjectBoardTab: "kanban" | "linear" | "features" = "kanban";
 let currentChanges: unknown[] = [];
 let currentFilesPanelOpen = false;
 let currentReviewPrompt: string | undefined;
+let currentDefaultAgent: "claude" | "opencode" | "codex" | undefined = "codex";
+let currentPreferredEditor: "vscode" | "cursor" | undefined = "vscode";
+let currentRepositoryConfig: Record<string, { prBaseBranch?: string }> = {
+  "project-1": { prBaseBranch: "main" },
+};
 let currentWorkspaceReady = false;
 let currentSetupScriptsRunning = false;
 let currentTabCount = 0;
@@ -110,6 +131,11 @@ function longError(prefix: string) {
 
 function findErrorAlert(label: string) {
   return screen.getByText((_content, element) => element?.textContent?.startsWith(label) ?? false);
+}
+
+function confirmMerge() {
+  fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
+  fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
 }
 
 const MockContextMenuState = createContext<{
@@ -248,22 +274,66 @@ mock.module("@/components/ui/tooltip", () => ({
 }));
 
 mock.module("@/components/settings", () => ({
-  RepositorySettings: () => null,
-  SettingsPage: () => null,
+  RepositorySettings: ({
+    onUpdateProject,
+    open,
+    project,
+  }: {
+    onUpdateProject: (project: Project) => Promise<void>;
+    open: boolean;
+    project: Project;
+  }) => open ? (
+    <div>
+      <span>Repository settings for {project.name}</span>
+      <button
+        onClick={() => void onUpdateProject({ ...project, name: "updated-repo" })}
+        type="button"
+      >
+        Update mock repository
+      </button>
+    </div>
+  ) : null,
+  SettingsPage: ({ open }: { open: boolean }) =>
+    open ? <div>Global settings dialog</div> : null,
 }));
 
 mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
-  EnvironmentSettingsDialog: () => null,
+  EnvironmentSettingsDialog: ({
+    environment,
+    onRestart,
+    onUpdate,
+    open,
+  }: {
+    environment: Environment;
+    onRestart: (environmentId: string) => Promise<void>;
+    onUpdate: (environment: Environment) => void;
+    open: boolean;
+  }) => open ? (
+    <div>
+      <span>Environment settings for {environment.name}</span>
+      <button onClick={() => onUpdate({ ...environment, name: "updated-env" })} type="button">
+        Update mock environment
+      </button>
+      <button onClick={() => void onRestart(environment.id)} type="button">
+        Restart mock environment
+      </button>
+    </div>
+  ) : null,
 }));
 
 mock.module("@/components/docker", () => ({
-  DockerStatsDialog: () => null,
+  DockerStatsDialog: ({ open }: { open: boolean }) =>
+    open ? <div>Docker configuration dialog</div> : null,
 }));
 
 mock.module("@/stores", () => ({
   useConfigStore: <T,>(selector?: (state: {
     config: {
-      global: { defaultAgent: "codex"; preferredEditor: "vscode"; reviewPrompt?: string };
+      global: {
+        defaultAgent?: "claude" | "opencode" | "codex";
+        preferredEditor?: "vscode" | "cursor";
+        reviewPrompt?: string;
+      };
       repositories: Record<string, { prBaseBranch?: string }>;
     };
   }) => T) =>
@@ -271,18 +341,18 @@ mock.module("@/stores", () => ({
       {
         config: {
           global: {
-            defaultAgent: "codex" as const,
-            preferredEditor: "vscode" as const,
+            defaultAgent: currentDefaultAgent,
+            preferredEditor: currentPreferredEditor,
             reviewPrompt: currentReviewPrompt,
           },
-          repositories: { "project-1": { prBaseBranch: "main" } },
+          repositories: currentRepositoryConfig,
         },
       },
       selector,
     ),
   useEnvironmentStore: <T,>(selector?: (state: {
     getEnvironmentById: (environmentId: string) => Environment | undefined;
-    updateEnvironment: () => void;
+    updateEnvironment: (environmentId: string, environment: Environment) => void;
     isWorkspaceReady: () => boolean;
     isSetupScriptsRunning: () => boolean;
     setEnvironmentPR: () => void;
@@ -291,7 +361,7 @@ mock.module("@/stores", () => ({
       {
         getEnvironmentById: (environmentId: string) =>
           environmentId === currentEnvironment.id ? currentEnvironment : undefined,
-        updateEnvironment: () => {},
+        updateEnvironment: updateEnvironmentMock,
         isWorkspaceReady: () => currentWorkspaceReady,
         isSetupScriptsRunning: () => currentSetupScriptsRunning,
         setEnvironmentPR: setEnvironmentPRStoreMock,
@@ -345,14 +415,15 @@ mock.module("@/hooks", () => ({
     deleteEnvironment: deleteEnvironmentMock,
   }),
   useProjects: () => ({
-    updateProject: () => Promise.resolve(),
+    updateProject: updateProjectMock,
   }),
   usePullRequest: () => ({
     prUrl: currentEnvironment.prUrl,
     prState: currentEnvironment.prState,
     hasMergeConflicts: currentEnvironment.hasMergeConflicts,
-    viewPR: () => {},
-    setModeCreatePending: () => {},
+    viewPR: viewPRMock,
+    setModeCreatePending: setModeCreatePendingMock,
+    setModeMergePending: setModeMergePendingMock,
   }),
 }));
 
@@ -373,7 +444,7 @@ mock.module("@/lib/backend", () => ({
   openLocalInEditor: openLocalInEditorMock,
   readContainerFile: readContainerFileMock,
   readLocalFile: readLocalFileMock,
-  recreateEnvironment: async () => {},
+  recreateEnvironment: recreateEnvironmentMock,
   setEnvironmentPr: setEnvironmentPrBackendMock,
 }));
 
@@ -435,6 +506,14 @@ beforeEach(() => {
   toggleFilesPanelMock.mockReset();
   addCommentMock.mockReset();
   updateTaskMock.mockReset();
+  viewPRMock.mockReset();
+  setModeCreatePendingMock.mockReset();
+  setModeMergePendingMock.mockReset();
+  updateProjectMock.mockReset();
+  updateEnvironmentMock.mockReset();
+  recreateEnvironmentMock.mockReset();
+  mergePrMock.mockImplementation(async () => ({ outcome: "merged" }));
+  mergePrLocalMock.mockImplementation(async () => ({ outcome: "merged" }));
   openInEditorMock.mockImplementation(async () => {});
   openLocalInEditorMock.mockImplementation(async () => {});
   readContainerFileMock.mockImplementation(async () => ({ content: "{}" }));
@@ -455,6 +534,9 @@ beforeEach(() => {
   currentChanges = [];
   currentFilesPanelOpen = false;
   currentReviewPrompt = undefined;
+  currentDefaultAgent = "codex";
+  currentPreferredEditor = "vscode";
+  currentRepositoryConfig = { "project-1": { prBaseBranch: "main" } };
   currentWorkspaceReady = false;
   currentSetupScriptsRunning = false;
   currentTabCount = 0;
@@ -982,6 +1064,34 @@ describe("ActionBar editor and run commands", () => {
 });
 
 describe("ActionBar toolbar interactions", () => {
+  test("opens global, Docker, repository, and environment settings", async () => {
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Global settings" }));
+    expect(screen.getByText("Global settings dialog")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Docker configuration" }));
+    expect(screen.getByText("Docker configuration dialog")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
+    expect(screen.getByText("Repository settings for repo")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Update mock repository" }));
+    await waitFor(() => expect(updateProjectMock).toHaveBeenCalledWith({
+      ...selectedProject,
+      name: "updated-repo",
+    }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
+    expect(screen.getByText("Environment settings for feature-env")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Update mock environment" }));
+    expect(updateEnvironmentMock).toHaveBeenCalledWith(
+      "env-1",
+      expect.objectContaining({ id: "env-1", name: "updated-env" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Restart mock environment" }));
+    await waitFor(() => expect(recreateEnvironmentMock).toHaveBeenCalledWith("env-1"));
+  });
+
   test("supports drag scrolling and ends dragging on mouse up or leave", () => {
     const { container } = render(<ActionBar />);
     const toolbar = container.querySelector("[data-presentation='bar']")!;
@@ -1042,6 +1152,21 @@ describe("ActionBar toolbar interactions", () => {
     expect(createTabMock).toHaveBeenCalledWith("opencode");
     expect(closeActiveTabMock).toHaveBeenCalledTimes(1);
     expect(toggleFilesPanelMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("ignores out-of-range tab selection and disabled close and panel shortcuts", () => {
+    currentSelectedEnvironmentId = null;
+    currentTabCount = 0;
+    render(<ActionBar />);
+
+    fireEvent.keyDown(window, { key: "0", code: "Digit0", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "9", code: "Digit9", ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(window, { key: "w", code: "KeyW", metaKey: true });
+    fireEvent.keyDown(window, { key: "e", code: "KeyE", metaKey: true });
+
+    expect(selectTabMock).not.toHaveBeenCalled();
+    expect(closeActiveTabMock).not.toHaveBeenCalled();
+    expect(toggleFilesPanelMock).not.toHaveBeenCalled();
   });
 
   test("runs commands and opens the editor from keyboard shortcuts", async () => {
@@ -1256,6 +1381,110 @@ describe("ActionBar workflow tabs", () => {
       expect.objectContaining({ displayTitle: "Git Push" }),
     );
   });
+
+  test("starts PR monitoring and honors environment defaults and one-shot workflow overrides", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      defaultAgent: "opencode",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentDefaultAgent = "claude";
+    const { rerender } = render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
+    expect(setModeCreatePendingMock).toHaveBeenCalledTimes(1);
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "opencode",
+      expect.objectContaining({ displayTitle: "PR" }),
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create PR with Claude" }));
+    expect(setModeCreatePendingMock).toHaveBeenCalledTimes(2);
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "claude",
+      expect.objectContaining({ displayTitle: "PR" }),
+    );
+
+    currentEnvironment = {
+      ...currentEnvironment,
+      prUrl: selectedEnvironment.prUrl,
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    rerender(<ActionBar />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resolve with Codex" }));
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "codex",
+      expect.objectContaining({ displayTitle: "Conflict" }),
+    );
+
+    currentEnvironment = {
+      ...currentEnvironment,
+      hasMergeConflicts: false,
+    };
+    currentChanges = [{ path: "src/example.ts" }];
+    rerender(<ActionBar />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Push Changes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Push with Claude" }));
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "claude",
+      expect.objectContaining({ displayTitle: "Git Push" }),
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Code review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review with Codex" }));
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "codex",
+      expect.objectContaining({ displayTitle: "Review" }),
+    );
+  });
+
+  test("falls back from an absent environment and global workflow default to Claude", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      defaultAgent: undefined,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentDefaultAgent = undefined;
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
+
+    expect(createTabMock).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ displayTitle: "PR" }),
+    );
+  });
+});
+
+describe("ActionBar pull request actions", () => {
+  test("opens an active pull request in the browser", () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "View PR" }));
+
+    expect(viewPRMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("presents a closed pull request and cleanup explanation without merged-branch wording", () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "closed" };
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "PR Closed" }));
+    expect(viewPRMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Merge PR" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
+    expect(screen.getByText(/The PR has been closed/)).toBeTruthy();
+    expect(screen.queryByText(/remote branch will also be deleted/)).toBeNull();
+  });
 });
 
 describe("ActionBar run commands", () => {
@@ -1330,6 +1559,20 @@ describe("ActionBar run commands", () => {
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
+  test("keeps run disabled when a backend read unexpectedly returns no request", async () => {
+    currentWorkspaceReady = true;
+    readContainerFileMock.mockImplementationOnce(() => null as never);
+    render(<ActionBar />);
+
+    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledWith(
+      "container-1",
+      "orkestrator-ai.json",
+    ));
+    expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"))
+      .toBe("true");
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
   test("ignores a stale run-command response after the environment changes", async () => {
     currentWorkspaceReady = true;
     let resolveOld!: (value: { content: string }) => void;
@@ -1394,6 +1637,18 @@ describe("ActionBar editor actions", () => {
     fireEvent.click(screen.getByRole("button", { name: "OK" }));
     expect(screen.queryByText("Failed to Open Editor")).toBeNull();
   });
+
+  test("uses the Cursor preference in the action and failure guidance", async () => {
+    currentPreferredEditor = "cursor";
+    openInEditorMock.mockRejectedValueOnce(new Error("cursor CLI unavailable"));
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open in Cursor" }));
+
+    await waitFor(() => expect(openInEditorMock).toHaveBeenCalledWith("container-1", "cursor"));
+    expect(await screen.findByText("Failed to Open Editor")).toBeTruthy();
+    expect(screen.getByText(/Make sure you have the Cursor CLI/)).toBeTruthy();
+  });
 });
 
 describe("ActionBar successful cleanup and merge actions", () => {
@@ -1456,6 +1711,10 @@ describe("ActionBar successful cleanup and merge actions", () => {
       true,
     ));
     expect(mergePrMock).not.toHaveBeenCalled();
+    expect(toastSuccessMock).toHaveBeenCalledWith("Branch merged", {
+      description: "feature/very-long-error",
+      id: "branch-merged-env-1",
+    });
   });
 });
 
@@ -1580,6 +1839,171 @@ describe("ActionBar merge completion", () => {
       expect(mergePrLocalMock).toHaveBeenCalledWith("env-1", "squash", true);
     });
     expect(mergePrMock).not.toHaveBeenCalled();
+    expect(toastSuccessMock).toHaveBeenCalledWith("Branch merged", {
+      description: "feature/very-long-error",
+      id: "branch-merged-env-1",
+    });
+  });
+
+  test("keeps pending merges open without recording merge completion", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    currentTaskAssociation = {
+      task: { prMergeCommented: false },
+      taskId: "task-1",
+    };
+    mergePrMock.mockResolvedValueOnce({ outcome: "pending" });
+    render(<ActionBar />);
+
+    confirmMerge();
+
+    await waitFor(() => expect(toastSuccessMock).toHaveBeenCalledWith("Merge pending", {
+      description: "feature/very-long-error",
+      id: "branch-merge-submitted-env-1",
+    }));
+    expect(setModeMergePendingMock).toHaveBeenCalledTimes(1);
+    expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
+    expect(setEnvironmentPRStoreMock).not.toHaveBeenCalled();
+    expect(addCommentMock).not.toHaveBeenCalled();
+    expect(updateTaskMock).not.toHaveBeenCalled();
+  });
+
+  test("monitors an unconfirmed merge submission without recording merge completion", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    currentTaskAssociation = {
+      task: { prMergeCommented: false },
+      taskId: "task-1",
+    };
+    mergePrMock.mockResolvedValueOnce({ outcome: "unknown" });
+    render(<ActionBar />);
+
+    confirmMerge();
+
+    await waitFor(() => expect(toastSuccessMock).toHaveBeenCalledWith("Merge submitted", {
+      description: "feature/very-long-error",
+      id: "branch-merge-submitted-env-1",
+    }));
+    expect(setModeMergePendingMock).toHaveBeenCalledTimes(1);
+    expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
+    expect(setEnvironmentPRStoreMock).not.toHaveBeenCalled();
+    expect(addCommentMock).not.toHaveBeenCalled();
+    expect(updateTaskMock).not.toHaveBeenCalled();
+  });
+
+  test("does not duplicate task comments that were already recorded", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    currentTaskAssociation = {
+      task: { prMergeCommented: true },
+      taskId: "task-1",
+    };
+    render(<ActionBar />);
+
+    confirmMerge();
+
+    await waitFor(() => expect(toastSuccessMock).toHaveBeenCalledWith(
+      "Branch merged",
+      expect.any(Object),
+    ));
+    expect(addCommentMock).not.toHaveBeenCalled();
+    expect(updateTaskMock).not.toHaveBeenCalled();
+  });
+
+  test("completes a merge when no task is associated", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    currentTaskAssociation = { task: undefined, taskId: undefined };
+    render(<ActionBar />);
+
+    confirmMerge();
+
+    await waitFor(() => expect(setEnvironmentPrBackendMock).toHaveBeenCalledTimes(1));
+    expect(addCommentMock).not.toHaveBeenCalled();
+    expect(updateTaskMock).not.toHaveBeenCalled();
+  });
+
+  test("reports a task update failure after its merge comment was added", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    currentTaskAssociation = {
+      task: { prMergeCommented: false },
+      taskId: "task-1",
+    };
+    updateTaskMock.mockRejectedValueOnce(new Error("task update failed"));
+    render(<ActionBar />);
+
+    confirmMerge();
+
+    await waitFor(() => expect(console.warn).toHaveBeenCalledWith(
+      "[ActionBar] Failed to add PR merged comment:",
+      expect.objectContaining({ message: "task update failed" }),
+    ));
+    expect(addCommentMock).toHaveBeenCalledWith("task-1", "🎉 PR merged");
+    expect(updateTaskMock).toHaveBeenCalledWith("task-1", {
+      prState: "merged",
+      prMergeCommented: true,
+    });
+  });
+
+  test("finishes an in-flight merge for the environment that initiated it after selection changes", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    let resolveMerge!: (outcome: MergeOutcome) => void;
+    mergePrMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveMerge = resolve;
+    }));
+    const { rerender } = render(<ActionBar />);
+    confirmMerge();
+    await waitFor(() => expect(mergePrMock).toHaveBeenCalledTimes(1));
+
+    currentEnvironment = {
+      ...selectedEnvironment,
+      id: "env-2",
+      branch: "feature/second",
+      containerId: "container-2",
+      prUrl: "https://github.com/org/repo/pull/2",
+      prState: "open",
+    };
+    currentSelectedEnvironmentId = "env-2";
+    rerender(<ActionBar />);
+    resolveMerge({ outcome: "merged" });
+
+    await waitFor(() => expect(setEnvironmentPrBackendMock).toHaveBeenCalledWith(
+      "env-1",
+      "https://github.com/org/repo/pull/1",
+      "merged",
+      false,
+    ));
+    expect(setEnvironmentPRStoreMock).toHaveBeenCalledWith(
+      "env-1",
+      "https://github.com/org/repo/pull/1",
+      "merged",
+      false,
+    );
+    expect(toastSuccessMock).toHaveBeenCalledWith("Branch merged", {
+      description: "feature/very-long-error",
+      id: "branch-merged-env-1",
+    });
+  });
+
+  test("finishes merge side effects after the initiating action bar unmounts", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    let resolveMerge!: (outcome: MergeOutcome) => void;
+    mergePrMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveMerge = resolve;
+    }));
+    const { unmount } = render(<ActionBar />);
+    confirmMerge();
+    await waitFor(() => expect(mergePrMock).toHaveBeenCalledTimes(1));
+
+    unmount();
+    resolveMerge({ outcome: "merged" });
+
+    await waitFor(() => expect(setEnvironmentPrBackendMock).toHaveBeenCalledWith(
+      "env-1",
+      "https://github.com/org/repo/pull/1",
+      "merged",
+      false,
+    ));
+    expect(toastSuccessMock).toHaveBeenCalledWith("Branch merged", {
+      description: "feature/very-long-error",
+      id: "branch-merged-env-1",
+    });
   });
 
   test("keeps a successful merge complete when state persistence and task comments fail", async () => {
@@ -1642,6 +2066,19 @@ describe("ActionBar error dialogs", () => {
     )).toBeNull();
   });
 
+  test("uses generic cleanup guidance for non-Error rejections", async () => {
+    deleteEnvironmentMock.mockRejectedValueOnce({ reason: "backend disconnected" });
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
+
+    const errorAlert = await waitFor(() => findErrorAlert("Failed to delete environment:"));
+    expect(errorAlert.textContent).toContain(
+      "Failed to delete environment: An unexpected error occurred",
+    );
+  });
+
   test("keeps merge errors constrained and scrollable", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
@@ -1674,5 +2111,39 @@ describe("ActionBar error dialogs", () => {
       (_content, element) =>
         element?.textContent?.startsWith("Failed to merge PR:") ?? false,
     )).toBeNull();
+  });
+
+  test("reports a local merge failure without a success toast", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      environmentType: "local",
+      containerId: null,
+      worktreePath: "/tmp/feature-env",
+      prState: "open",
+    };
+    mergePrLocalMock.mockRejectedValueOnce(new Error("local merge failed"));
+    render(<ActionBar />);
+
+    confirmMerge();
+
+    const errorAlert = await waitFor(() => findErrorAlert("Failed to merge PR:"));
+    expect(errorAlert.textContent).toContain("local merge failed");
+    expect(mergePrLocalMock).toHaveBeenCalledWith("env-1", "squash", true);
+    expect(mergePrMock).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
+  });
+
+  test("uses generic merge guidance for unknown rejection values", async () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    mergePrMock.mockRejectedValueOnce({ reason: "unknown backend failure" });
+    render(<ActionBar />);
+
+    confirmMerge();
+
+    const errorAlert = await waitFor(() => findErrorAlert("Failed to merge PR:"));
+    expect(errorAlert.textContent).toContain("Failed to merge PR: An unexpected error occurred");
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
   });
 });

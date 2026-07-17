@@ -126,6 +126,10 @@ async function savePRState(
 export function usePrMonitorService(): void {
   const tickIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isInitializedRef = useRef(false);
+  const notifiedPrTransitionsRef = useRef(new Set<string>());
+  const kanbanReconciliationProgressRef = useRef(
+    new Map<string, Set<"status" | "comment" | "metadata">>()
+  );
 
   // Get store actions (these are stable references)
   const {
@@ -190,6 +194,28 @@ export function usePrMonitorService(): void {
           _resetErrors(environmentId);
         }
 
+        // A confirmed remote transition should be announced even if persisting it
+        // locally fails. Keep a hook-lifetime record because the stale environment
+        // state will otherwise make every retry look like the same new transition.
+        if (
+          detectionResult.status === "success" &&
+          detectionResult.data.state === "merged" &&
+          environment.prState !== "merged"
+        ) {
+          const notificationKey = [
+            environmentId,
+            detectionResult.data.url,
+            detectionResult.data.state,
+          ].join("\u0000");
+          if (!notifiedPrTransitionsRef.current.has(notificationKey)) {
+            notifiedPrTransitionsRef.current.add(notificationKey);
+            toast.success("Branch merged", {
+              description: environment.branch,
+              id: `branch-merged-${environmentId}`,
+            });
+          }
+        }
+
         await savePRState(
           environmentId,
           detectionResult,
@@ -198,62 +224,100 @@ export function usePrMonitorService(): void {
           useEnvironmentStore.getState().setEnvironmentPR
         );
 
-        // When a PR transitions to "merged", move the associated kanban task to "review"
+        // Reconcile terminal PR state on every successful detection until every
+        // side effect completes. Progress is tracked per PR/task so a failure in a
+        // later step retries that step without repeating comments or status moves.
         if (
           detectionResult.status === "success" &&
-          detectionResult.data.state === "merged" &&
-          environment.prState !== "merged"
+          (detectionResult.data.state === "merged" ||
+            detectionResult.data.state === "closed")
         ) {
-          toast.success("Branch merged", {
-            description: environment.branch,
-            id: `branch-merged-${environmentId}`,
-          });
-
+          const terminalState = detectionResult.data.state;
           try {
             const { task: taskInStore, taskId } = findTaskForEnvironment(environmentId);
 
             if (taskId) {
               const kanbanState = useKanbanStore.getState();
-              // Only advance tasks that are currently in-progress to avoid
-              // regressing tasks that have already moved to "done".
-              const currentStatus = taskInStore?.status;
-              if (currentStatus === "in-progress") {
-                await kanbanState.moveTask(taskId, "review");
-                console.log(`[PrMonitorService] PR merged, moved task ${taskId} to review`);
-              } else if (!taskInStore) {
-                // Task not loaded in store (found via pipeline); update backend directly
-                await kanbanState.updateTask(taskId, { status: "review" });
-                console.log(`[PrMonitorService] PR merged, moved task ${taskId} to review (via pipeline)`);
+              const reconciliationKey = [
+                environmentId,
+                detectionResult.data.url,
+                terminalState,
+                taskId,
+              ].join("\u0000");
+              const progress =
+                kanbanReconciliationProgressRef.current.get(reconciliationKey) ??
+                new Set<"status" | "comment" | "metadata">();
+              kanbanReconciliationProgressRef.current.set(reconciliationKey, progress);
+              const commentText =
+                terminalState === "merged" ? "🎉 PR merged" : "❌ PR closed";
+
+              if (taskInStore?.prMergeCommented) {
+                progress.add("comment");
+                progress.add("metadata");
+              } else if (taskInStore?.comments.some((comment) => comment.text === commentText)) {
+                // A previous attempt may have added the comment but failed before
+                // setting the idempotency metadata.
+                progress.add("comment");
               }
 
-              // Add "PR merged" comment if not already added (avoids duplicates from in-app merge)
-              if (!taskInStore?.prMergeCommented) {
-                await kanbanState.addComment(taskId, "🎉 PR merged");
-                await kanbanState.updateTask(taskId, { prState: "merged", prMergeCommented: true });
-                console.log(`[PrMonitorService] Added PR merged comment to task ${taskId}`);
+              if (terminalState === "merged" && !progress.has("status")) {
+                // Only advance tasks that are currently in-progress to avoid
+                // regressing tasks that have already moved to "done".
+                const currentStatus = taskInStore?.status;
+                if (currentStatus === "in-progress") {
+                  await kanbanState.moveTask(taskId, "review");
+                  console.log(`[PrMonitorService] PR merged, moved task ${taskId} to review`);
+                } else if (!taskInStore) {
+                  // Task not loaded in store (found via pipeline); update backend directly
+                  await kanbanState.updateTask(taskId, { status: "review" });
+                  console.log(`[PrMonitorService] PR merged, moved task ${taskId} to review (via pipeline)`);
+                }
+                const refreshedTask = findTaskForEnvironment(environmentId).task;
+                if (!taskInStore || refreshedTask?.status !== "in-progress") {
+                  progress.add("status");
+                } else {
+                  throw new Error(`Task ${taskId} status update did not persist`);
+                }
+              }
+
+              if (!progress.has("comment")) {
+                await kanbanState.addComment(taskId, commentText);
+                const refreshedTask = findTaskForEnvironment(environmentId).task;
+                if (
+                  !taskInStore ||
+                  refreshedTask?.comments.some((comment) => comment.text === commentText)
+                ) {
+                  progress.add("comment");
+                } else {
+                  throw new Error(`Task ${taskId} comment did not persist`);
+                }
+              }
+
+              if (!progress.has("metadata")) {
+                await kanbanState.updateTask(taskId, {
+                  prState: terminalState,
+                  prMergeCommented: true,
+                });
+                const refreshedTask = findTaskForEnvironment(environmentId).task;
+                if (
+                  !taskInStore ||
+                  (refreshedTask?.prState === terminalState &&
+                    refreshedTask.prMergeCommented)
+                ) {
+                  progress.add("metadata");
+                } else {
+                  throw new Error(`Task ${taskId} PR metadata did not persist`);
+                }
+                console.log(
+                  `[PrMonitorService] Added PR ${terminalState} comment to task ${taskId}`
+                );
               }
             }
           } catch (error) {
-            console.warn("[PrMonitorService] Failed to move task to review after PR merge:", error);
-          }
-        }
-
-        // When a PR transitions to "closed", add a comment to the associated ticket
-        if (
-          detectionResult.status === "success" &&
-          detectionResult.data.state === "closed" &&
-          environment.prState !== "closed"
-        ) {
-          try {
-            const { task: taskInStore, taskId } = findTaskForEnvironment(environmentId);
-            if (taskId && !taskInStore?.prMergeCommented) {
-              const kanbanState = useKanbanStore.getState();
-              await kanbanState.addComment(taskId, "❌ PR closed");
-              await kanbanState.updateTask(taskId, { prState: "closed", prMergeCommented: true });
-              console.log(`[PrMonitorService] Added PR closed comment to task ${taskId}`);
-            }
-          } catch (error) {
-            console.warn("[PrMonitorService] Failed to add PR closed comment:", error);
+            console.warn(
+              `[PrMonitorService] Failed to reconcile task after PR ${terminalState}:`,
+              error
+            );
           }
         }
 

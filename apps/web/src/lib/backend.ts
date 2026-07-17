@@ -402,22 +402,26 @@ export async function detectPrLocal(environmentId: string, branch: string): Prom
 /** Merge method options for PR merging */
 export type MergeMethod = "squash" | "merge" | "rebase";
 
-/** Merge the current branch's PR using gh pr merge */
+export interface MergePrResult {
+  outcome: "merged" | "pending" | "unknown";
+}
+
+/** Submit and verify the current branch's PR merge from its container */
 export async function mergePr(
   containerId: string,
   method?: MergeMethod,
   deleteBranch?: boolean
-): Promise<void> {
-  return invoke("merge_pr", { containerId, method, deleteBranch });
+): Promise<MergePrResult> {
+  return invoke<MergePrResult>("merge_pr", { containerId, method, deleteBranch });
 }
 
-/** Merge the current branch's PR locally using gh pr merge */
+/** Merge the local environment's PR through the GitHub API */
 export async function mergePrLocal(
   environmentId: string,
   method?: MergeMethod,
   deleteBranch?: boolean
-): Promise<void> {
-  return invoke("merge_pr_local", { environmentId, method, deleteBranch });
+): Promise<MergePrResult> {
+  return invoke<MergePrResult>("merge_pr_local", { environmentId, method, deleteBranch });
 }
 
 // --- Docker Commands ---

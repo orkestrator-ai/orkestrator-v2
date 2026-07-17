@@ -4,12 +4,32 @@ import {
   configureDirectGatewayTransport,
   updateDirectGatewayToken,
 } from "@/lib/native/gateway-auth-transport";
+import { readClipboardImageBlob } from "@/lib/clipboard-image";
 
 const GATEWAY_PREFIX = "/__orkestrator";
 const EVENT_RECONNECT_DELAY_MS = 2_000;
 
 type EventCallback<T> = (payload: T) => void;
 type GatewayWindow = Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
+
+async function readBrowserClipboardImage(): Promise<{
+  width: number;
+  height: number;
+  dataUrl: string;
+} | null> {
+  const read = navigator.clipboard?.read?.bind(navigator.clipboard);
+  if (!read) return null;
+
+  for (const item of await read()) {
+    const imageType = item.types.find((type) => type.startsWith("image/"));
+    if (!imageType) continue;
+
+    const blob = await item.getType(imageType);
+    return readClipboardImageBlob(blob);
+  }
+
+  return null;
+}
 
 export interface BrowserGatewayOptions {
   baseUrl?: string;
@@ -178,7 +198,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         return navigator.clipboard?.writeText(text) ?? Promise.resolve();
       },
       readImage(): Promise<{ width: number; height: number; dataUrl: string } | null> {
-        return Promise.resolve(null);
+        return readBrowserClipboardImage();
       },
       writeImage(_dataUrl: string): Promise<void> {
         return Promise.resolve();

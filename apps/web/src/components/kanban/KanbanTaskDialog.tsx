@@ -32,6 +32,7 @@ import { getKanbanImageData, detectPr, detectPrLocal, openInBrowser } from "@/li
 import { useEnvironmentStore } from "@/stores";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
 import { createUuid } from "@/lib/uuid";
+import { getPastedImageBlob } from "@/lib/clipboard-event";
 
 const STATUS_LABELS: Record<KanbanStatus, string> = {
   backlog: "Backlog",
@@ -238,18 +239,23 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
   }, []);
 
   // Handle paste events for image attachment
-  // Uses Electron readImage() directly (like the compose bars) so native screenshots
-  // from the system clipboard are reliably detected.
+  // Browser/iOS images come from the paste event; Electron's clipboard bridge
+  // remains the fallback for native screenshots without an image MIME item.
   const handlePaste = useCallback(async (e: ClipboardEvent) => {
     // Only handle if focus is within this dialog
     const activeEl = document.activeElement;
     if (!activeEl || !dialogContentRef.current?.contains(activeEl)) return;
 
-    // No early-return for text/plain clipboard — in Electron's webview, native
-    // screenshots may report text/plain without any image/* type, so we must
-    // always attempt readImage(). This matches the compose bar pattern.
+    // No early-return for text/plain clipboard — Electron screenshots may not
+    // expose an image item, so the native bridge still needs to be attempted.
     try {
-      const image = await readImage();
+      const pastedBlob = getPastedImageBlob(e);
+      if (pastedBlob) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+
+      const image = await readImage(pastedBlob);
       const rgba = await image.rgba();
       const { width, height } = await image.size();
 
@@ -279,10 +285,12 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
         return;
       }
 
-      e.preventDefault();
-      // stopImmediatePropagation prevents other document-level capture handlers
-      // (compose bars) from also calling readImage() for the same event.
-      e.stopImmediatePropagation();
+      if (!pastedBlob) {
+        e.preventDefault();
+        // stopImmediatePropagation prevents other document-level capture handlers
+        // (compose bars) from also calling readImage() for the same event.
+        e.stopImmediatePropagation();
+      }
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
       const filename = `clipboard-${timestamp}.png`;

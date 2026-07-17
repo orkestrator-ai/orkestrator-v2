@@ -2,6 +2,7 @@ import { useEffect, useCallback, useRef } from "react";
 import { readImage, readText } from "@/lib/native/clipboard";
 import { writeContainerFile, writeLocalFile } from "@/lib/backend";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
+import { getPastedImageBlob } from "@/lib/clipboard-event";
 
 type AsyncPasteCallback<T> = (value: T) => void | Promise<void>;
 
@@ -204,17 +205,7 @@ export function useClipboardImagePaste({
       if (document.activeElement?.closest("[role='dialog']")) return;
 
       // Check for image in clipboard
-      const clipboardItems = event.clipboardData?.items;
-      if (!clipboardItems) return;
-
-      // Find image item
-      let imageBlob: Blob | null = null;
-      for (const item of clipboardItems) {
-        if (item.type.startsWith("image/")) {
-          imageBlob = item.getAsFile();
-          break;
-        }
-      }
+      const imageBlob = getPastedImageBlob(event);
 
       // If no image, let the event continue to xterm.js for text paste
       if (!imageBlob) return;
@@ -255,14 +246,9 @@ export function useClipboardImagePaste({
         const filePath = `.orkestrator/clipboard/${filename}`;
 
         // Write to container or local worktree
-        let fullPath: string;
-        if (containerId) {
-          fullPath = await writeContainerFile(containerId, filePath, base64Data);
-        } else if (worktreePath) {
-          fullPath = await writeLocalFile(worktreePath, filePath, base64Data);
-        } else {
-          throw new Error("No target for image save (no containerId or worktreePath)");
-        }
+        const fullPath = containerId
+          ? await writeContainerFile(containerId, filePath, base64Data)
+          : await writeLocalFile(worktreePath!, filePath, base64Data);
         await onImageSaved?.(fullPath);
       } catch (error) {
         const message =

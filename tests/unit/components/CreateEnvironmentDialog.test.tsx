@@ -580,6 +580,13 @@ describe("resolveAgentDefaults", () => {
       expectedField: "opencodeMode",
       expectedMode: "terminal",
     },
+    {
+      agentLabel: "Codex",
+      agentType: "codex",
+      selectedMode: "Native",
+      expectedField: "codexMode",
+      expectedMode: "native",
+    },
   ] as const)(
     "submits $agentLabel $selectedMode mode from the dialog",
     async ({ agentLabel, agentType, selectedMode, expectedField, expectedMode }) => {
@@ -813,6 +820,38 @@ describe("resolveAgentDefaults", () => {
         })
       );
     });
+  });
+
+  test("uses an image supplied by the browser paste event", async () => {
+    const pastedFile = new File(["image"], "browser.png", { type: "image/png" });
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+
+    render(
+      <CreateEnvironmentDialog
+        open={true}
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />,
+    );
+    screen.getByLabelText(/Initial Prompt/i).focus();
+    const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteEvent, "clipboardData", {
+      value: {
+        items: [{ kind: "file", type: "image/png", getAsFile: () => pastedFile }],
+        files: [],
+      },
+    });
+
+    document.dispatchEvent(pasteEvent);
+
+    await waitFor(() => {
+      expect(mockReadImage).toHaveBeenCalledWith(pastedFile);
+      expect(screen.getByAltText(/initial-prompt-/)).toBeTruthy();
+    });
+    expect(pasteEvent.defaultPrevented).toBe(true);
   });
 
   test("removes a pasted initial prompt image before submitting", async () => {
@@ -1154,6 +1193,24 @@ describe("resolveAgentDefaults", () => {
         }),
       );
     });
+  });
+
+  test("rejects invalid ports again at form submission time", () => {
+    const onCreate = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+        defaultPortMappings={[{ containerPort: 0, hostPort: 3000, protocol: "tcp" }]}
+      />,
+    );
+
+    const form = screen.getByRole("dialog").querySelector("form");
+    expect(form).toBeTruthy();
+    fireEvent.submit(form!);
+
+    expect(onCreate).not.toHaveBeenCalled();
   });
 
   test("ignores hidden invalid port mappings when creating a local environment", async () => {

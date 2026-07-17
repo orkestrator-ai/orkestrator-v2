@@ -8,6 +8,16 @@ import {
 const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
 const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+
+function pngBlob(width: number, height: number): Blob {
+  const bytes = new Uint8Array(24);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  bytes.set([0x49, 0x48, 0x44, 0x52], 12);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(16, width);
+  view.setUint32(20, height);
+  return new Blob([bytes], { type: "image/png" });
+}
 type TestGatewayWindow = {
   location: Pick<Location, "protocol">;
   orkestrator?: Window["orkestrator"];
@@ -426,5 +436,55 @@ describe("web gateway browser API", () => {
     } finally {
       window.close = originalClose;
     }
+  });
+
+  test("reads browser clipboard images for keyboard-driven paste", async () => {
+    const imageBlob = pngBlob(32, 18);
+    const getType = mock(async () => imageBlob);
+    const read = mock(async () => [
+      { types: ["text/plain", "image/png"], getType } as unknown as ClipboardItem,
+    ]);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { read },
+    });
+
+    const api = createBrowserGatewayApi();
+    const result = await api.clipboard.readImage();
+    expect(result).toMatchObject({ width: 32, height: 18 });
+    expect(result?.dataUrl).toStartWith("data:image/png;base64,");
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(getType).toHaveBeenCalledWith("image/png");
+  });
+
+  test("returns null when browser clipboard items do not contain an image", async () => {
+    const getType = mock(async () => new Blob(["text"], { type: "text/plain" }));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        read: mock(async () => [
+          { types: ["text/plain"], getType } as unknown as ClipboardItem,
+        ]),
+      },
+    });
+
+    const api = createBrowserGatewayApi();
+    await expect(api.clipboard.readImage()).resolves.toBeNull();
+    expect(getType).not.toHaveBeenCalled();
+  });
+
+  test("rejects oversized browser clipboard image metadata before data URL encoding", async () => {
+    const getType = mock(async () => pngBlob(9000, 1));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        read: mock(async () => [
+          { types: ["image/png"], getType } as unknown as ClipboardItem,
+        ]),
+      },
+    });
+
+    const api = createBrowserGatewayApi();
+    await expect(api.clipboard.readImage()).rejects.toMatchObject({ code: "too-large" });
   });
 });

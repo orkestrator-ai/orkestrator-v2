@@ -136,6 +136,51 @@ describe("useNativeComposeBarPaste", () => {
     );
   });
 
+  test("claims browser clipboard image items synchronously", async () => {
+    const { getByTestId } = render(<HookHarness containerId="container-1" />);
+    const input = getByTestId("compose-input") as HTMLTextAreaElement;
+    setActiveElement(input);
+
+    const imageFile = new File(["image"], "screenshot.png", { type: "image/png" });
+    const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteEvent, "clipboardData", {
+      value: {
+        items: [{ kind: "file", type: "image/png", getAsFile: () => imageFile }],
+        files: [],
+      },
+    });
+
+    document.dispatchEvent(pasteEvent);
+
+    // This must happen before any FileReader/canvas work; otherwise the
+    // contenteditable target also handles the same image as a text paste.
+    expect(pasteEvent.defaultPrevented).toBe(true);
+    await waitFor(() => expect(onAttach).toHaveBeenCalledTimes(1));
+  });
+
+  test("reads WebKit file-list image payloads and claims the paste synchronously", async () => {
+    const { getByTestId } = render(<HookHarness containerId="container-1" />);
+    const input = getByTestId("compose-input") as HTMLTextAreaElement;
+    setActiveElement(input);
+
+    const imageFile = new File(["image"], "webkit-shot.png", {
+      type: "image/png",
+    });
+    const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteEvent, "clipboardData", {
+      value: {
+        items: [],
+        files: [imageFile],
+      },
+    });
+
+    document.dispatchEvent(pasteEvent);
+
+    expect(pasteEvent.defaultPrevented).toBe(true);
+    await waitFor(() => expect(mockReadImage).toHaveBeenCalledWith(imageFile));
+    expect(onAttach).toHaveBeenCalledTimes(1);
+  });
+
   test("writes pasted images to the local worktree when no container id is present", async () => {
     const { getByTestId } = render(
       <HookHarness
@@ -178,6 +223,45 @@ describe("useNativeComposeBarPaste", () => {
     await Promise.resolve();
 
     expect(mockReadImage).not.toHaveBeenCalled();
+    expect(onAttach).not.toHaveBeenCalled();
+  });
+
+  test("does not write or attach when the canvas context is unavailable", async () => {
+    HTMLCanvasElement.prototype.getContext = (() =>
+      null) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+
+    const { getByTestId } = render(<HookHarness containerId="container-1" />);
+    setActiveElement(getByTestId("compose-input"));
+
+    document.dispatchEvent(
+      new Event("paste", { bubbles: true, cancelable: true }),
+    );
+    await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
+
+    expect(mockWriteContainerFile).not.toHaveBeenCalled();
+    expect(onAttach).not.toHaveBeenCalled();
+  });
+
+  test("shows a configuration error when there is no save target", async () => {
+    const { getByTestId } = render(
+      <HookHarness containerId={null} worktreePath={null} />,
+    );
+    setActiveElement(getByTestId("compose-input"));
+
+    document.dispatchEvent(
+      new Event("paste", { bubbles: true, cancelable: true }),
+    );
+
+    await waitFor(() => {
+      expect(toastError).toHaveBeenCalledWith(
+        "Cannot save image",
+        expect.objectContaining({
+          description: "Environment not properly configured for attachments",
+        }),
+      );
+    });
+    expect(mockWriteContainerFile).not.toHaveBeenCalled();
+    expect(mockWriteLocalFile).not.toHaveBeenCalled();
     expect(onAttach).not.toHaveBeenCalled();
   });
 

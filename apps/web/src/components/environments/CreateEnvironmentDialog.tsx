@@ -45,6 +45,7 @@ import { cn } from "@/lib/utils";
 import { readImage } from "@/lib/native/clipboard";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
 import { createUuid } from "@/lib/uuid";
+import { getPastedImageBlob } from "@/lib/clipboard-event";
 import { toast } from "sonner";
 import type {
   ClaudeMode,
@@ -215,7 +216,13 @@ export function CreateEnvironmentDialog({
       document.activeElement === promptRef.current;
 
     try {
-      const image = await readImage();
+      const pastedBlob = getPastedImageBlob(event);
+      if (pastedBlob) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+
+      const image = await readImage(pastedBlob);
       if (!isCurrentRequest()) return;
       const rgba = await image.rgba();
       if (!isCurrentRequest()) return;
@@ -246,8 +253,10 @@ export function CreateEnvironmentDialog({
       canvas.height = 0;
       if (!base64Data) return;
 
-      event.preventDefault();
-      event.stopImmediatePropagation();
+      if (!pastedBlob) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
 
       setInitialPromptAttachments((prev) => [
         ...prev,

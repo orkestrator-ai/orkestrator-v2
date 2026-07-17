@@ -7,6 +7,7 @@ import {
   resizeCanvasToMaxDimension,
 } from "@/lib/canvas-utils";
 import { writeContainerFile, writeLocalFile } from "@/lib/backend";
+import { getPastedImageBlob } from "@/lib/clipboard-event";
 
 /** Maximum final PNG size in bytes (8MB) */
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
@@ -66,10 +67,11 @@ function isExpectedClipboardError(error: unknown): boolean {
 
 /**
  * Document-level paste handler shared by the native compose bars (Claude,
- * Codex, OpenCode). Reads an image from the Electron clipboard, resizes it to
- * safe bounds, writes it into the environment, and hands a ready-to-use
- * attachment descriptor back via `onAttach`. Non-image pastes fall through
- * to the browser's default text-paste behavior.
+ * Codex, OpenCode). Reads an image from a browser/iOS paste event or the
+ * Electron clipboard, resizes it to safe bounds, writes it into the
+ * environment, and hands a ready-to-use attachment descriptor back via
+ * `onAttach`. Non-image pastes fall through to the browser's default text
+ * paste behavior.
  */
 export function useNativeComposeBarPaste({
   inputContainerRef,
@@ -83,8 +85,17 @@ export function useNativeComposeBarPaste({
       const activeEl = document.activeElement;
       if (!activeEl || !inputContainerRef.current?.contains(activeEl)) return;
 
+      // Browser and iOS paste data is only guaranteed to be readable during
+      // the event itself. Claim an image paste synchronously so the editable
+      // input cannot also insert a filename, URL, or empty text payload.
+      const pastedBlob = getPastedImageBlob(event);
+      if (pastedBlob) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+
       try {
-        const image = await readImage();
+        const image = await readImage(pastedBlob);
         const rgba = await image.rgba();
         const { width, height } = await image.size();
 
@@ -113,8 +124,10 @@ export function useNativeComposeBarPaste({
         canvas.width = 0;
         canvas.height = 0;
 
-        event.preventDefault();
-        event.stopPropagation();
+        if (!pastedBlob) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
 
         const filename = generateImageFilename();
         const filePath = `.orkestrator/clipboard/${filename}`;

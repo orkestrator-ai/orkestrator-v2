@@ -7,6 +7,7 @@ import { writeContainerFile, writeLocalFile } from "@/lib/backend";
 import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
 import { toast } from "sonner";
 import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
+import { getPastedImageBlob } from "@/lib/clipboard-event";
 
 interface ImageAttachment {
   id: string;
@@ -82,9 +83,15 @@ export function ComposeBar({
     // Only handle paste if THIS compose bar's textarea has focus
     if (document.activeElement !== textareaRef.current) return;
 
-    // Try to get image from clipboard via Electron
+    const pastedBlob = getPastedImageBlob(event);
+    if (pastedBlob) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    // Browser/iOS provide a blob on the event; Electron remains the fallback.
     try {
-      const image = await readImage();
+      const image = await readImage(pastedBlob);
       const rgba = await image.rgba();
       const { width, height } = await image.size();
 
@@ -123,8 +130,10 @@ export function ComposeBar({
       canvas.height = 0;
 
       // Prevent default behavior when we have an image
-      event.preventDefault();
-      event.stopPropagation();
+      if (!pastedBlob) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
 
       // Add to images - use final canvas dimensions after potential resize
       const newImage: ImageAttachment = {

@@ -1037,6 +1037,181 @@ describe("deriveSubagentPartsFromTranscriptRecords", () => {
     });
   });
 
+  test("resolves multi-agent v2 spawns through sub_agent_activity records", () => {
+    const opaquePrompt = `gAAAAAB${"x".repeat(120)}`;
+    const parentRecords: TranscriptRecord[] = [
+      {
+        timestamp: "2026-07-17T20:43:07.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: JSON.stringify({
+            task_name: "correctness_review",
+            fork_turns: "all",
+            message: opaquePrompt,
+          }),
+          call_id: "call-spawn-v2",
+        },
+      },
+      {
+        timestamp: "2026-07-17T20:43:08.706Z",
+        type: "event_msg",
+        payload: {
+          type: "sub_agent_activity",
+          event_id: "call-spawn-v2",
+          agent_thread_id: "child-thread-v2",
+          agent_path: "/root/correctness_review",
+          kind: "started",
+        },
+      },
+      {
+        timestamp: "2026-07-17T20:43:08.800Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-spawn-v2",
+          output: JSON.stringify({ task_name: "/root/correctness_review" }),
+        },
+      },
+    ];
+    const childRecords = new Map<string, TranscriptRecord[]>([
+      ["child-thread-v2", [
+        {
+          timestamp: "2026-07-17T20:43:08.701Z",
+          type: "session_meta",
+          payload: {
+            id: "child-thread-v2",
+            agent_nickname: "Ptolemy",
+          },
+        },
+        {
+          timestamp: "2026-07-17T20:43:08.900Z",
+          type: "event_msg",
+          payload: {
+            type: "user_message",
+            message: "Review the branch diff for correctness issues.",
+          },
+        },
+        {
+          timestamp: "2026-07-17T20:43:10.000Z",
+          type: "response_item",
+          payload: {
+            type: "custom_tool_call",
+            name: "exec",
+            call_id: "child-exec",
+            input: "git diff --stat",
+            status: "completed",
+            output: "2 files changed",
+          },
+        },
+        {
+          timestamp: "2026-07-17T20:44:00.000Z",
+          type: "event_msg",
+          payload: { type: "task_complete" },
+        },
+      ]],
+    ]);
+
+    const parts = deriveSubagentPartsFromTranscriptRecords(parentRecords, childRecords);
+
+    expect(parts).toEqual([
+      expect.objectContaining({
+        subagentId: "child-thread-v2",
+        subagentName: "Ptolemy",
+        subagentRole: "correctness_review",
+        subagentPrompt: "Review the branch diff for correctness issues.",
+        subagentActionCount: 1,
+        toolState: "success",
+        subagentActions: [
+          expect.objectContaining({
+            type: "tool-invocation",
+            toolName: "exec",
+            toolState: "success",
+            toolOutput: "2 files changed",
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  test("derives terminal states from list_agents outputs keyed by agent path", () => {
+    const spawn = (callId: string, taskName: string, threadId: string): TranscriptRecord[] => [
+      {
+        timestamp: "2026-07-17T20:43:07.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: JSON.stringify({ task_name: taskName, message: "Do the work" }),
+          call_id: callId,
+        },
+      },
+      {
+        timestamp: "2026-07-17T20:43:08.000Z",
+        type: "event_msg",
+        payload: {
+          type: "sub_agent_activity",
+          event_id: callId,
+          agent_thread_id: threadId,
+          agent_path: `/root/${taskName}`,
+          kind: "started",
+        },
+      },
+      {
+        timestamp: "2026-07-17T20:43:08.100Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify({ task_name: `/root/${taskName}` }),
+        },
+      },
+    ];
+    const parentRecords: TranscriptRecord[] = [
+      ...spawn("call-complete", "complete_task", "complete-thread"),
+      ...spawn("call-errored", "errored_task", "errored-thread"),
+      ...spawn("call-running", "running_task", "running-thread"),
+      {
+        timestamp: "2026-07-17T20:44:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "list_agents",
+          arguments: "{}",
+          call_id: "call-list",
+        },
+      },
+      {
+        timestamp: "2026-07-17T20:44:00.100Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-list",
+          output: JSON.stringify({
+            agents: [
+              { agent_name: "/root", agent_status: "running", last_task_message: "Main thread" },
+              { agent_name: "/root/complete_task", agent_status: { completed: "All done." } },
+              { agent_name: "/root/errored_task", agent_status: { errored: "It broke." } },
+              { agent_name: "/root/running_task", agent_status: "running" },
+            ],
+          }),
+        },
+      },
+    ];
+
+    const parts = deriveSubagentPartsFromTranscriptRecords(
+      parentRecords,
+      new Map<string, TranscriptRecord[]>(),
+    );
+
+    expect(parts.map((part) => [part.subagentId, part.toolState])).toEqual([
+      ["complete-thread", "success"],
+      ["errored-thread", "failure"],
+      ["running-thread", "pending"],
+    ]);
+  });
+
   test("inserts collated subagent parts without reordering existing message parts", () => {
     const merged = mergeSubagentPartsIntoMessageParts(
       [

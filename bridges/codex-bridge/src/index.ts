@@ -2013,6 +2013,46 @@ function buildResumeRecoveryPrompt(
   ].join("\n");
 }
 
+const TURN_SUBAGENT_REFRESH_INTERVAL_MS = 3_000;
+
+/**
+ * Multi-agent v2 collaboration tools (spawn_agent, wait_agent, send_message)
+ * emit no thread items on the SDK stream; child activity is only observable in
+ * rollout transcripts on disk. Rebuild periodically while a turn is running so
+ * subagent cards appear and progress even when the parent streams nothing.
+ */
+function startTurnSubagentRefresh(
+  session: SessionState,
+  isCurrentTurn: () => boolean,
+  intervalMs = TURN_SUBAGENT_REFRESH_INTERVAL_MS,
+): ReturnType<typeof setInterval> {
+  const currentMessage = session.messages.find(
+    (entry) => entry.id === session.currentAssistantMessageId,
+  );
+  let lastFingerprint = currentMessage ? JSON.stringify(currentMessage.parts) : undefined;
+  let refreshing = false;
+
+  return setInterval(() => {
+    if (refreshing) return;
+    refreshing = true;
+    void (async () => {
+      try {
+        if (!isCurrentTurn()) return;
+        const message = await rebuildAssistantMessage(session);
+        if (!message || !isCurrentTurn()) return;
+        const fingerprint = JSON.stringify(message.parts);
+        if (fingerprint === lastFingerprint) return;
+        lastFingerprint = fingerprint;
+        emit({ type: "message.updated", sessionId: session.id, data: { message } });
+      } catch (error) {
+        console.error("[codex-bridge] Failed to refresh subagent activity:", error);
+      } finally {
+        refreshing = false;
+      }
+    })();
+  }, intervalMs);
+}
+
 async function processCodexStream(
   session: SessionState,
   executionInput: Input,
@@ -2040,85 +2080,90 @@ async function processCodexStream(
     threadId: session.threadId ?? null,
   });
 
-  for await (const event of streamed.events) {
+  const subagentRefreshTimer = startTurnSubagentRefresh(session, isCurrentTurn);
+  try {
+    for await (const event of streamed.events) {
+      if (!isCurrentTurn()) {
+        return;
+      }
+
+      await writeCodexRawLog(session.id, {
+        kind: "stream.event",
+        threadId: session.threadId ?? null,
+        eventType: event.type,
+        event: normalizeLogPayload(event),
+      });
+      if (afterStreamEventLogForTesting) {
+        await afterStreamEventLogForTesting(event);
+      }
+
+      if (event.type === "thread.started") {
+        if (!isCurrentTurn()) {
+          return;
+        }
+        session.threadId = event.thread_id;
+        await writeCodexRawLog(session.id, {
+          kind: "thread.started",
+          threadId: session.threadId,
+        });
+        continue;
+      }
+
+      if (event.type === "item.started" || event.type === "item.updated" || event.type === "item.completed") {
+        if (!isCurrentTurn()) {
+          return;
+        }
+        const receivedAt = new Date().toISOString();
+        recordCurrentItem(session, event.item);
+        const message = await rebuildAssistantMessage(session, { receivedAt });
+        emit(message
+          ? { type: "message.updated", sessionId: session.id, data: { message } }
+          : { type: "message.updated", sessionId: session.id });
+        continue;
+      }
+
+      if (event.type === "turn.completed") {
+        if (!isCurrentTurn()) {
+          return;
+        }
+        await finalizeIdleTurn();
+        return;
+      }
+
+      if (event.type === "turn.failed" || event.type === "error") {
+        if (!isCurrentTurn()) {
+          return;
+        }
+        const error =
+          event.type === "turn.failed" ? event.error.message : event.message;
+        if (isMissingRolloutError(error)) {
+          throw new Error(error);
+        }
+        session.status = "error";
+        session.error = error;
+        await rebuildAssistantMessage(session);
+        emit({
+          type: "session.error",
+          sessionId: session.id,
+          data: { error },
+        });
+        await writeCodexRawLog(session.id, {
+          kind: "stream.error",
+          threadId: session.threadId ?? null,
+          error,
+        });
+        return;
+      }
+    }
+
     if (!isCurrentTurn()) {
       return;
     }
 
-    await writeCodexRawLog(session.id, {
-      kind: "stream.event",
-      threadId: session.threadId ?? null,
-      eventType: event.type,
-      event: normalizeLogPayload(event),
-    });
-    if (afterStreamEventLogForTesting) {
-      await afterStreamEventLogForTesting(event);
-    }
-
-    if (event.type === "thread.started") {
-      if (!isCurrentTurn()) {
-        return;
-      }
-      session.threadId = event.thread_id;
-      await writeCodexRawLog(session.id, {
-        kind: "thread.started",
-        threadId: session.threadId,
-      });
-      continue;
-    }
-
-    if (event.type === "item.started" || event.type === "item.updated" || event.type === "item.completed") {
-      if (!isCurrentTurn()) {
-        return;
-      }
-      const receivedAt = new Date().toISOString();
-      recordCurrentItem(session, event.item);
-      const message = await rebuildAssistantMessage(session, { receivedAt });
-      emit(message
-        ? { type: "message.updated", sessionId: session.id, data: { message } }
-        : { type: "message.updated", sessionId: session.id });
-      continue;
-    }
-
-    if (event.type === "turn.completed") {
-      if (!isCurrentTurn()) {
-        return;
-      }
-      await finalizeIdleTurn();
-      return;
-    }
-
-    if (event.type === "turn.failed" || event.type === "error") {
-      if (!isCurrentTurn()) {
-        return;
-      }
-      const error =
-        event.type === "turn.failed" ? event.error.message : event.message;
-      if (isMissingRolloutError(error)) {
-        throw new Error(error);
-      }
-      session.status = "error";
-      session.error = error;
-      await rebuildAssistantMessage(session);
-      emit({
-        type: "session.error",
-        sessionId: session.id,
-        data: { error },
-      });
-      await writeCodexRawLog(session.id, {
-        kind: "stream.error",
-        threadId: session.threadId ?? null,
-        error,
-      });
-      return;
-    }
+    await finalizeIdleTurn();
+  } finally {
+    clearInterval(subagentRefreshTimer);
   }
-
-  if (!isCurrentTurn()) {
-    return;
-  }
-
-  await finalizeIdleTurn();
 }
 
 async function runPrompt(
@@ -2336,6 +2381,11 @@ export const __testing = {
     freshThreadFactoryForTesting = factory;
   },
   startBridgeServerForTesting: startBridgeServer,
+  startTurnSubagentRefreshForTesting: startTurnSubagentRefresh as (
+    session: any,
+    isCurrentTurn: () => boolean,
+    intervalMs?: number,
+  ) => ReturnType<typeof setInterval>,
   createOpenSseWriterForTesting: createOpenSseWriter,
   startSseKeepaliveForTesting: startSseKeepalive,
   sessions: sessions as Map<string, any>,

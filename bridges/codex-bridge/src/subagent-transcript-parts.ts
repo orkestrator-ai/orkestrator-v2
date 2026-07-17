@@ -1,5 +1,6 @@
 import {
   deriveSubagentPartsFromTranscriptRecords,
+  parseSubAgentActivityRecords,
   type TranscriptRecord,
   type TranscriptSubagentPart,
 } from "./subagent-transcript.js";
@@ -104,10 +105,21 @@ export async function deriveTranscriptSubagentPartsForTurn({
     if (outputAgent) outputAgentIdByCallId.set(outputAgent.callId, outputAgent.agentId);
   }
 
+  // Multi-agent v2 spawn outputs only return a task path; the child thread ID
+  // arrives through sub_agent_activity event records keyed by the spawn call.
+  const activityAgentIdByCallId = new Map<string, string>();
+  for (const activity of parseSubAgentActivityRecords(parentRecords)) {
+    if (!activityAgentIdByCallId.has(activity.callId)) {
+      activityAgentIdByCallId.set(activity.callId, activity.agentThreadId);
+    }
+  }
+
   const requestedAgentIds = new Set<string>();
   for (const [spawnIndex, spawnCallId] of spawnCalls.entries()) {
     const fallbackAgentId = asNonEmptyString(fallbackAgentIdsInSpawnOrder[spawnIndex]);
-    const requestedAgentId = outputAgentIdByCallId.get(spawnCallId) ?? fallbackAgentId;
+    const requestedAgentId = activityAgentIdByCallId.get(spawnCallId)
+      ?? outputAgentIdByCallId.get(spawnCallId)
+      ?? fallbackAgentId;
     if (!requestedAgentId) continue;
 
     resolvedAgentIdBySpawnCallId.set(spawnCallId, requestedAgentId);

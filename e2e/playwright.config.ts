@@ -6,7 +6,7 @@ const baseURL = "http://127.0.0.1:1422";
 
 export default defineConfig({
   testDir: import.meta.dirname,
-  testMatch: "CreateEnvironmentDialog.spec.ts",
+  testMatch: "*.spec.ts",
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   reporter: "line",

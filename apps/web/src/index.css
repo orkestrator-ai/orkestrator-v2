@@ -69,6 +69,7 @@
 /* Base styles */
 html {
   color-scheme: dark;
+  scrollbar-color: var(--color-border) var(--color-background);
   height: 100%;
   overflow: hidden;
 }
@@ -159,7 +160,7 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  @apply bg-muted;
+  @apply bg-background;
 }
 
 ::-webkit-scrollbar-thumb {

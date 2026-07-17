@@ -22,6 +22,7 @@ const result = await Bun.build({
   entrypoints: [
     path.join(packageRoot, "electron/main.ts"),
     path.join(packageRoot, "electron/preload.ts"),
+    path.join(packageRoot, "electron/toolchain-bootstrap-preload.ts"),
   ],
   outdir: path.join(output, "electron"),
   target: "node",

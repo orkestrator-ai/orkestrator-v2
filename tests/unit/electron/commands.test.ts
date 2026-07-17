@@ -269,7 +269,11 @@ function createContext(
   return { context, updates, emitted };
 }
 
-async function writeBridgeServer(appRoot: string, bridgeName: "claude-bridge" | "codex-bridge"): Promise<void> {
+async function writeBridgeServer(
+  appRoot: string,
+  bridgeName: "claude-bridge" | "codex-bridge",
+  environmentMarkerPath?: string,
+): Promise<void> {
   const bridgeDist = path.join(appRoot, "bridges", bridgeName, "dist");
   await fs.mkdir(bridgeDist, { recursive: true });
   await fs.writeFile(
@@ -277,6 +281,9 @@ async function writeBridgeServer(appRoot: string, bridgeName: "claude-bridge" | 
     `
       const http = require("node:http");
       const port = Number(process.env.PORT);
+      ${environmentMarkerPath
+        ? `require("node:fs").writeFileSync(${JSON.stringify(environmentMarkerPath)}, process.env.CODEX_PATH ?? "");`
+        : ""}
       http.createServer((req, res) => {
         if (req.url === "/global/health") {
           res.writeHead(200, { "content-type": "application/json" });
@@ -341,12 +348,13 @@ async function createGitWorktreeWithOrigin(): Promise<{ worktree: string; remote
   return { worktree, remote };
 }
 
-// Points the codex binary lookup at an empty dir so `resolveCodexBinary` falls back to the
-// fake `codex` on PATH instead of the real binary bundled at `binaries/codex`.
+// Points the Codex lookup at empty managed/resource roots so it falls back to the
+// fake `codex` on PATH instead of a cached or legacy packaged binary.
 async function isolateCodexBinaryLookup(context: CommandContext): Promise<void> {
   const root = await createTempDir("ork-codex-root-");
   context.appRoot = root;
   context.resourceRoot = root;
+  context.toolchainBinDir = root;
 }
 
 async function createGitRepoOnBranch(branch: string): Promise<string> {
@@ -3536,13 +3544,18 @@ exit 0
 
   test("waits for a local bridge server to pass health before persisting pid and port", async () => {
     const appRoot = await createTempDir("ork-electron-app-");
+    const toolchainBinDir = await createTempDir("ork-electron-toolchain-");
     const worktreePath = await createTempDir("ork-electron-worktree-");
-    await writeBridgeServer(appRoot, "codex-bridge");
+    const markerPath = path.join(appRoot, "codex-path.log");
+    const managedCodexPath = path.join(toolchainBinDir, "codex");
+    await fs.writeFile(managedCodexPath, "managed codex");
+    await writeBridgeServer(appRoot, "codex-bridge", markerPath);
 
     const environment = createEnvironment({ worktreePath });
     const { context, updates } = createContext(environment);
     context.appRoot = appRoot;
     context.resourceRoot = appRoot;
+    context.toolchainBinDir = toolchainBinDir;
 
     const commands = createCommandRegistry();
     const result = await commands.get("start_local_codex_server_cmd")?.({ environmentId: environment.id }, context) as {
@@ -3556,6 +3569,7 @@ exit 0
     expect(result.pid).toBeGreaterThan(0);
     expect(updates).toContainEqual({ localCodexPort: result.port, codexBridgePid: result.pid });
     await expect(requestOk(result.port, "/global/health")).resolves.toBe(true);
+    expect(await fs.readFile(markerPath, "utf8")).toBe(managedCodexPath);
 
     await commands.get("stop_local_codex_server_cmd")?.({ environmentId: environment.id }, context);
   });
@@ -3603,15 +3617,13 @@ exit 0
     }
   });
 
-  test("launches the local opencode server through the bundled opencode binary in resources", async () => {
+  test("launches the local opencode server through the managed toolchain cache", async () => {
     const appRoot = await createTempDir("ork-electron-app-opencode-");
-    const resourceRoot = await createTempDir("ork-electron-res-opencode-");
+    const toolchainBinDir = await createTempDir("ork-electron-tools-opencode-");
     const worktreePath = await createTempDir("ork-electron-worktree-opencode-");
 
-    const markerPath = path.join(resourceRoot, "opencode-was-used.log");
-    const opencodeWrapperDir = path.join(resourceRoot, "bin");
-    const opencodeWrapperPath = path.join(opencodeWrapperDir, "opencode");
-    await fs.mkdir(opencodeWrapperDir, { recursive: true });
+    const markerPath = path.join(toolchainBinDir, "opencode-was-used.log");
+    const opencodeWrapperPath = path.join(toolchainBinDir, "opencode");
     await fs.writeFile(
       opencodeWrapperPath,
       `#!/bin/sh
@@ -3639,7 +3651,8 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
     const environment = createEnvironment({ worktreePath });
     const { context, updates } = createContext(environment);
     context.appRoot = appRoot;
-    context.resourceRoot = resourceRoot;
+    context.resourceRoot = appRoot;
+    context.toolchainBinDir = toolchainBinDir;
 
     const commands = createCommandRegistry();
     await expect(commands.get("check_opencode_cli")?.({}, context)).resolves.toBe(true);
@@ -3740,11 +3753,13 @@ exit 0
   test("starts local terminal sessions through a PTY and forwards byte payloads", async () => {
     const worktreePath = await createTempDir("ork-electron-terminal-");
     const resourceRoot = await createTempDir("ork-electron-terminal-res-");
+    const toolchainBinDir = await createTempDir("ork-electron-terminal-tools-");
     const packagedBinDir = path.join(resourceRoot, "bin");
     await fs.mkdir(packagedBinDir, { recursive: true });
     const environment = createEnvironment({ worktreePath });
     const { context, emitted } = createContext(environment);
     context.resourceRoot = resourceRoot;
+    context.toolchainBinDir = toolchainBinDir;
     const commands = createCommandRegistry();
 
     const sessionId = await commands.get("create_local_terminal_session")?.(
@@ -3762,7 +3777,10 @@ exit 0
       cwd: worktreePath,
     });
     const terminalProcessEnv = spawnCall?.[2]?.env as NodeJS.ProcessEnv | undefined;
-    expect(terminalProcessEnv?.PATH?.split(path.delimiter)[0]).toBe(packagedBinDir);
+    expect(terminalProcessEnv?.PATH?.split(path.delimiter).slice(0, 2)).toEqual([
+      toolchainBinDir,
+      packagedBinDir,
+    ]);
 
     ptyProcesses[0]?.emitData("ready\r\n");
     expect(emitted).toEqual([

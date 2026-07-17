@@ -31,14 +31,14 @@
     "download:opencode": "./scripts/download-opencode.sh",
     "download:codex": "./scripts/download-codex.sh",
     "download:binaries": "bun run download:bun && bun run download:claude && bun run download:opencode && bun run download:codex",
-    "setup": "bun run download:binaries && bun install && bun run build:claude-bridge && bun run build:codex-bridge",
-    "build:all": "bun run download:binaries && turbo --cwd . run build --cache-dir .turbo",
+    "setup": "bun install && bun run build:claude-bridge && bun run build:codex-bridge",
+    "build:all": "turbo --cwd . run build --cache-dir .turbo",
     "preview": "bun run --cwd apps/web preview",
     "test": "bun scripts/test-all.ts",
     "test:ios": "bun scripts/test-ios.ts",
     "test:unit": "bun test tests/unit",
-    "docker:build": "docker build -t orkestrator-v2:latest --no-cache -f docker/Dockerfile .",
-    "package": "bun run build:all && bunx electron-builder && bun scripts/install-packaged-app.ts"
+    "docker:build": "docker build -t orkestrator-v2:latest -f docker/Dockerfile .",
+    "package": "bun run download:bun && bun run build:all && bunx electron-builder && bun scripts/install-packaged-app.ts"
   },
   "build": {
     "appId": "com.orkestrator.v2",
@@ -95,7 +95,7 @@
         "from": "binaries",
         "to": "bin",
         "filter": [
-          "**/*"
+          "bun"
         ]
       }
     ],

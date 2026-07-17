@@ -1547,6 +1547,7 @@ async function resolveBackend(environmentId: string, context: CommandContext): P
 
 function resolveBundledClaudePath(context: CommandContext): string | undefined {
   const candidates = [
+    ...(context.toolchainBinDir ? [path.join(context.toolchainBinDir, "claude")] : []),
     path.join(context.resourceRoot, "bin", "claude"),
     path.join(context.appRoot, "binaries", "claude"),
     path.join(context.appRoot, "bin", "claude"),

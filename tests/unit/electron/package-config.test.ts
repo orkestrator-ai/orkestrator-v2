@@ -33,8 +33,12 @@ describe("Electron packaging configuration", () => {
 
     expect(packageJson.main).toBe("apps/desktop/dist/electron/main.js");
     expect(packageJson.scripts.build).toContain("turbo");
+    expect(packageJson.scripts.package).toContain("bun run download:bun");
     expect(packageJson.scripts.package).toContain("bun run build:all");
     expect(packageJson.scripts.package).toContain("electron-builder");
+    expect(packageJson.scripts.setup).not.toContain("download:binaries");
+    expect(packageJson.scripts["build:all"]).not.toContain("download:binaries");
+    expect(packageJson.scripts["docker:build"]).not.toContain("--no-cache");
     expect(packageJson.devDependencies.electron).toBeDefined();
     expect(packageJson.build.directories).toMatchObject({ buildResources: "apps/desktop/electron/resources", output: "release" });
     expect(packageJson.build.mac.icon).toBe("icon.icns");
@@ -46,7 +50,7 @@ describe("Electron packaging configuration", () => {
       expect.objectContaining({ from: "apps/backend/dist", to: "backend" }),
       expect.objectContaining({ from: "bridges/claude-bridge", to: "claude-bridge" }),
       expect.objectContaining({ from: "bridges/codex-bridge", to: "codex-bridge" }),
-      expect.objectContaining({ from: "binaries", to: "bin" }),
+      expect.objectContaining({ from: "binaries", to: "bin", filter: ["bun"] }),
     ]));
     expect(electronTsconfig.compilerOptions.outDir).toBe("dist");
     expect(electronTsconfig.compilerOptions.rootDir).toBe(".");

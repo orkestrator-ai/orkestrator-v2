@@ -59,6 +59,7 @@ describe("Electron backend process supervisor", () => {
       ORKESTRATOR_TAILSCALE_SERVE: "1",
       ORKESTRATOR_TAILSCALE_SERVE_PORT: "8443",
       ORKESTRATOR_TAILSCALE_BIN: "/tmp/tailscale",
+      ORKESTRATOR_TOOLCHAIN_BIN: "/tmp/untrusted-tools",
     };
 
     const development = createBackendProcessEnvironment(parent, true, "/resources");

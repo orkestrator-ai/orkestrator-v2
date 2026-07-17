@@ -1,13 +1,14 @@
 import type {
+  NativeAgentActivityPart,
+  NativeAgentGroupPart,
   NativeMessage,
   NativeMessagePart,
-  NativeTaskGroupPart,
   NativeToolGroupPart,
 } from "./native-message-types";
 
 function isAgentPart(
   part: NativeMessagePart,
-): part is NativeMessagePart & ({ type: "subagent" } | NativeTaskGroupPart) {
+): part is NativeAgentActivityPart {
   return part.type === "subagent" || part.type === "task-group";
 }
 
@@ -20,7 +21,8 @@ function getAgentPartState(part: NativeMessagePart): string | undefined {
 }
 
 function isActiveAgentPart(part: NativeMessagePart): boolean {
-  return isAgentPart(part) && getAgentPartState(part) !== "success";
+  const state = getAgentPartState(part);
+  return isAgentPart(part) && state !== "success" && state !== "failure";
 }
 
 function getAgentPartKey(part: NativeMessagePart, index: number): string {
@@ -71,6 +73,20 @@ function extractActiveAgentParts(parts: NativeMessagePart[]): {
           ...part,
           parts: extracted.retainedParts,
         } satisfies NativeToolGroupPart);
+      }
+      continue;
+    }
+
+    if (part.type === "agent-group") {
+      const extracted = extractActiveAgentParts(part.parts);
+      pinnedParts.push(...extracted.pinnedParts);
+      const retainedAgentParts = extracted.retainedParts.filter(isAgentPart);
+
+      if (retainedAgentParts.length > 0) {
+        retainedParts.push({
+          ...part,
+          parts: retainedAgentParts,
+        } satisfies NativeAgentGroupPart);
       }
       continue;
     }

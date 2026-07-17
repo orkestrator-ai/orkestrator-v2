@@ -81,6 +81,13 @@ export interface NativeTaskGroupPart extends NativeBasePart {
   childTools: NativeToolInvocationPart[];
 }
 
+export type NativeAgentActivityPart = NativeSubagentPart | NativeTaskGroupPart;
+
+export interface NativeAgentGroupPart extends NativeBasePart {
+  type: "agent-group";
+  parts: NativeAgentActivityPart[];
+}
+
 export type NativeMessagePart =
   | NativeTextPart
   | NativeThinkingPart
@@ -88,6 +95,7 @@ export type NativeMessagePart =
   | NativeToolInvocationPart
   | NativeToolResultPart
   | NativeSubagentPart
+  | NativeAgentGroupPart
   | NativeToolGroupPart
   | NativeTaskGroupPart;
 

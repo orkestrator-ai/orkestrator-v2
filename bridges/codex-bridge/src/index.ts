@@ -19,12 +19,17 @@ import {
   type UserInput,
 } from "@openai/codex-sdk";
 import { summarizeTodoList, mapTodoArgs } from "./todo-helpers.js";
-import {
-  mergeSubagentPartsIntoMessageParts,
-  type TranscriptSubagentPart,
-} from "./subagent-transcript.js";
+import { type TranscriptSubagentPart } from "./subagent-transcript.js";
 import { deriveTranscriptSubagentPartsForTurn } from "./subagent-transcript-parts.js";
 import { readCachedTranscript } from "./transcript-cache.js";
+import {
+  applyCodexCollabStateToSubagentParts,
+  CODEX_TIMELINE_ITEM_PREFIX,
+  CODEX_TIMELINE_SUBAGENT_PREFIX,
+  normalizeCodexCollabToolCallItem,
+  reconcileCodexSubagentTimeline,
+  type CodexCollabToolCallItem,
+} from "./codex-collaboration.js";
 import {
   DEFAULT_REASONING_EFFORT,
   MODEL_REASONING_EFFORTS,
@@ -81,15 +86,22 @@ interface SessionState {
   error?: string;
   abortController?: AbortController;
   currentAssistantMessageId?: string;
-  currentItems: Map<string, ThreadItem>;
+  currentItems: Map<string, BridgeThreadItem>;
   currentItemOrder: string[];
+  currentTimelineOrder: string[];
+  currentSubagentParts: Map<string, NormalizedPart>;
+  currentSubagentFingerprints: Map<string, string>;
+  currentTimelineGeneration: number;
   currentTurnId?: string;
   currentTurnStartedAt?: string;
+  currentAssistantTurnStartedAt?: string;
   fileChangeBaselines: Map<string, string | undefined>;
   fileChangeDiffCache: Map<string, ToolDiffMetadata>;
   pendingAttachments: PromptAttachmentInput[];
   lastAccessed: number;
 }
+
+type BridgeThreadItem = ThreadItem | CodexCollabToolCallItem;
 
 interface ExpiredSessionState {
   id: string;
@@ -200,6 +212,7 @@ function getCodex(fastMode: boolean): Codex {
 }
 let freshThreadFactoryForTesting: ((session: SessionState) => Thread) | null = null;
 let beforePromptExecutionForTesting: (() => Promise<void> | void) | null = null;
+let beforeAssistantMessageCommitForTesting: (() => Promise<void> | void) | null = null;
 function createFreshThreadForSession(session: SessionState): Thread {
   if (freshThreadFactoryForTesting) {
     return freshThreadFactoryForTesting(session);
@@ -379,6 +392,10 @@ function restoreExpiredSession(sessionId: string): SessionState | undefined {
     status: "idle",
     currentItems: new Map(),
     currentItemOrder: [],
+    currentTimelineOrder: [],
+    currentSubagentParts: new Map(),
+    currentSubagentFingerprints: new Map(),
+    currentTimelineGeneration: 0,
     currentTurnStartedAt: undefined,
     fileChangeBaselines: new Map(),
     fileChangeDiffCache: new Map(),
@@ -402,6 +419,24 @@ function ensureFileChangeDiffContext(session: SessionState): FileChangeDiffConte
     baselines: session.fileChangeBaselines,
     cache: session.fileChangeDiffCache,
   };
+}
+
+function ensureCurrentTimelineState(session: SessionState): void {
+  session.currentTimelineOrder ??= session.currentItemOrder.map(
+    (key) => `${CODEX_TIMELINE_ITEM_PREFIX}${key}`,
+  );
+  session.currentSubagentParts ??= new Map();
+  session.currentSubagentFingerprints ??= new Map();
+  session.currentTimelineGeneration ??= 0;
+}
+
+function resetCurrentTurnTimeline(session: SessionState): void {
+  session.currentTimelineGeneration = (session.currentTimelineGeneration ?? 0) + 1;
+  session.currentItems.clear();
+  session.currentItemOrder = [];
+  session.currentTimelineOrder = [];
+  session.currentSubagentParts = new Map();
+  session.currentSubagentFingerprints = new Map();
 }
 
 function cleanupIdleSessions(): void {
@@ -1208,10 +1243,10 @@ function emitLocalAssistantResponse(
 ): void {
   session.status = "idle";
   session.error = undefined;
-  session.currentItems.clear();
-  session.currentItemOrder = [];
+  resetCurrentTurnTimeline(session);
   session.currentTurnId = undefined;
   session.currentTurnStartedAt = undefined;
+  session.currentAssistantTurnStartedAt = undefined;
   session.abortController = undefined;
   session.currentAssistantMessageId = undefined;
 
@@ -1489,7 +1524,7 @@ async function getFileChangeDiffMetadata(
 }
 
 export async function itemToParts(
-  item: ThreadItem,
+  item: BridgeThreadItem,
   cwd: string,
   fileChangeContext?: FileChangeDiffContext,
 ): Promise<NormalizedPart[]> {
@@ -1579,17 +1614,30 @@ export async function itemToParts(
   }
 }
 
+interface AssistantRebuildSnapshot {
+  threadId?: string | null;
+  currentTurnStartedAt?: string;
+  currentAssistantTurnStartedAt?: string;
+  currentItemOrder: string[];
+  currentItems: Map<string, BridgeThreadItem>;
+}
+
 async function buildTranscriptSubagentParts(
-  session: SessionState,
+  snapshot: AssistantRebuildSnapshot,
 ): Promise<NormalizedPart[]> {
   const transcriptParts = await deriveTranscriptSubagentPartsForTurn({
-    threadId: session.threadId,
-    currentTurnStartedAt: session.currentTurnStartedAt,
+    threadId: snapshot.threadId,
+    currentTurnStartedAt:
+      snapshot.currentAssistantTurnStartedAt ?? snapshot.currentTurnStartedAt,
     loadSessionMeta: (threadId) => getPersistedSessionMeta(threadId),
     loadTranscript: (path) => readCachedTranscript(path),
   });
+  const items = snapshot.currentItemOrder
+    .map((id) => snapshot.currentItems.get(id))
+    .filter((item): item is BridgeThreadItem => item !== undefined);
+  const reconciledParts = applyCodexCollabStateToSubagentParts(transcriptParts, items);
 
-  return transcriptParts.map((part: TranscriptSubagentPart) => ({
+  return reconciledParts.map((part: TranscriptSubagentPart) => ({
     type: "subagent",
     content: part.content,
     toolState: part.toolState,
@@ -1630,10 +1678,27 @@ function findLatestCurrentItemKey(
   return undefined;
 }
 
-function recordCurrentItem(session: SessionState, item: ThreadItem): void {
+function normalizeBridgeThreadItem(item: unknown): BridgeThreadItem | null {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+  if ((item as { type?: unknown }).type === "collab_tool_call") {
+    return normalizeCodexCollabToolCallItem(item);
+  }
+  if (typeof (item as { id?: unknown }).id !== "string") return null;
+  return structuredClone(item) as ThreadItem;
+}
+
+function recordCurrentItem(session: SessionState, rawItem: unknown): void {
+  const item = normalizeBridgeThreadItem(rawItem);
+  if (!item) return;
+  ensureCurrentTimelineState(session);
+  // Every accepted stream event versions the rebuild snapshot. Multiple
+  // rebuilds can overlap within one turn (for example an item event and a
+  // foreground /messages rehydration), so reset-only versioning is insufficient.
+  session.currentTimelineGeneration += 1;
   if (item.type !== "todo_list") {
     if (!session.currentItems.has(item.id)) {
       session.currentItemOrder.push(item.id);
+      session.currentTimelineOrder.push(`${CODEX_TIMELINE_ITEM_PREFIX}${item.id}`);
     }
     session.currentItems.set(item.id, item);
     return;
@@ -1647,6 +1712,7 @@ function recordCurrentItem(session: SessionState, item: ThreadItem): void {
 
   if (!previousKey || previous?.type !== "todo_list") {
     session.currentItemOrder.push(item.id);
+    session.currentTimelineOrder.push(`${CODEX_TIMELINE_ITEM_PREFIX}${item.id}`);
     session.currentItems.set(item.id, nextSnapshot);
     return;
   }
@@ -1669,6 +1735,7 @@ function recordCurrentItem(session: SessionState, item: ThreadItem): void {
     snapshotKey = `${item.id}:snapshot:${snapshotIndex}`;
   }
   session.currentItemOrder.push(snapshotKey);
+  session.currentTimelineOrder.push(`${CODEX_TIMELINE_ITEM_PREFIX}${snapshotKey}`);
   session.currentItems.set(snapshotKey, nextSnapshot);
 }
 
@@ -1676,28 +1743,93 @@ async function rebuildAssistantMessage(
   session: SessionState,
   options: { receivedAt?: string } = {},
 ): Promise<NormalizedMessage | null> {
+  ensureCurrentTimelineState(session);
   const messageId = session.currentAssistantMessageId;
   if (!messageId) return null;
   const message = session.messages.find((entry) => entry.id === messageId);
   if (!message) return null;
+  // A later rebuild may observe fresher transcript files even when no stream
+  // item changed. Version rebuild starts as well as item mutations so only the
+  // newest requested snapshot is allowed to commit.
+  session.currentTimelineGeneration += 1;
+  const generation = session.currentTimelineGeneration;
   const cwd = getWorkingDirectory(session.threadOptions.workingDirectory);
 
-  const items = session.currentItemOrder
-    .map((id) => session.currentItems.get(id))
-    .filter((item): item is ThreadItem => item !== undefined);
-
-  const fileChangeContext = ensureFileChangeDiffContext(session);
-  const parts: NormalizedPart[] = [];
-  for (const item of items) {
-    parts.push(...await itemToParts(item, cwd, fileChangeContext));
+  const snapshotItems = new Map<string, BridgeThreadItem>();
+  for (const [key, item] of session.currentItems) {
+    snapshotItems.set(key, structuredClone(item));
   }
-  const subagentParts = await buildTranscriptSubagentParts(session);
+  const snapshot: AssistantRebuildSnapshot = {
+    threadId: session.threadId,
+    currentTurnStartedAt: session.currentTurnStartedAt,
+    currentAssistantTurnStartedAt: session.currentAssistantTurnStartedAt,
+    currentItemOrder: [...session.currentItemOrder],
+    currentItems: snapshotItems,
+  };
+  const timelineOrder = [...session.currentTimelineOrder];
+  const currentSubagentParts = new Map(
+    [...session.currentSubagentParts].map(([key, part]) => [key, structuredClone(part)]),
+  );
+  const currentSubagentFingerprints = new Map(session.currentSubagentFingerprints);
+  const fileChangeBaselines = new Map(session.fileChangeBaselines ?? []);
+  const fileChangeDiffCache = new Map(
+    [...(session.fileChangeDiffCache ?? new Map())].map(
+      ([key, value]) => [key, structuredClone(value)] as const,
+    ),
+  );
+  const items = snapshot.currentItemOrder
+    .map((id) => snapshot.currentItems.get(id))
+    .filter((item): item is BridgeThreadItem => item !== undefined);
+
+  const fileChangeContext: FileChangeDiffContext = {
+    baselines: fileChangeBaselines,
+    cache: fileChangeDiffCache,
+  };
+  const subagentParts = await buildTranscriptSubagentParts(snapshot);
+  reconcileCodexSubagentTimeline(
+    subagentParts,
+    timelineOrder,
+    currentSubagentParts,
+    currentSubagentFingerprints,
+  );
+
+  const parts: NormalizedPart[] = [];
+  for (const timelineKey of timelineOrder) {
+    if (timelineKey.startsWith(CODEX_TIMELINE_ITEM_PREFIX)) {
+      const itemKey = timelineKey.slice(CODEX_TIMELINE_ITEM_PREFIX.length);
+      const item = snapshot.currentItems.get(itemKey);
+      if (item) {
+        parts.push(...await itemToParts(item, cwd, fileChangeContext));
+      }
+      continue;
+    }
+    if (timelineKey.startsWith(CODEX_TIMELINE_SUBAGENT_PREFIX)) {
+      const subagentPart = currentSubagentParts.get(timelineKey);
+      if (subagentPart) parts.push(subagentPart);
+    }
+  }
 
   const finalResponse = items
     .filter((item): item is Extract<ThreadItem, { type: "agent_message" }> => item.type === "agent_message")
     .at(-1)?.text ?? "";
 
-  message.parts = mergeSubagentPartsIntoMessageParts(parts, subagentParts);
+  if (beforeAssistantMessageCommitForTesting) {
+    await beforeAssistantMessageCommitForTesting();
+  }
+  if (
+    session.currentTimelineGeneration !== generation
+    || session.currentAssistantMessageId !== messageId
+    || session.messages.find((entry) => entry.id === messageId) !== message
+  ) {
+    return null;
+  }
+
+  session.currentTimelineOrder = timelineOrder;
+  session.currentSubagentParts = currentSubagentParts;
+  session.currentSubagentFingerprints = currentSubagentFingerprints;
+  session.fileChangeBaselines = fileChangeBaselines;
+  session.fileChangeDiffCache = fileChangeDiffCache;
+  message.parts = parts;
   message.content = finalResponse || parts.find((part) => part.type === "text")?.content || "";
   if (options.receivedAt) {
     message.createdAt = options.receivedAt;
@@ -2011,11 +2143,11 @@ async function runPrompt(
 
   session.status = "running";
   session.error = undefined;
-  session.currentItems.clear();
-  session.currentItemOrder = [];
+  resetCurrentTurnTimeline(session);
   ensureFileChangeDiffContext(session).cache.clear();
   session.currentTurnId = turnId;
   session.currentTurnStartedAt = new Date().toISOString();
+  session.currentAssistantTurnStartedAt = session.currentTurnStartedAt;
   session.abortController = abortController;
 
   const userMessage = createUserMessage(prompt, attachments);
@@ -2056,8 +2188,7 @@ async function runPrompt(
       session.thread = createFreshThreadForSession(session);
       session.threadId = null;
       session.error = undefined;
-      session.currentItems.clear();
-      session.currentItemOrder = [];
+      resetCurrentTurnTimeline(session);
 
       const recoveryInput = buildPromptInput(
         wrapPromptForConversationMode(
@@ -2135,6 +2266,8 @@ export const __testing = {
     session: any,
     options?: { receivedAt?: string },
   ) => Promise<any>,
+  recordCurrentItemForTesting: recordCurrentItem as (session: any, item: unknown) => void,
+  resetCurrentTurnTimelineForTesting: resetCurrentTurnTimeline as (session: any) => void,
   refreshRuntimeEnvironment,
   readPersistedBridgeCache,
   runInlinePromptCommand,
@@ -2142,6 +2275,11 @@ export const __testing = {
   buildResumeRecoveryPromptForTesting: buildResumeRecoveryPrompt,
   setBeforePromptExecutionForTesting: (callback: (() => Promise<void> | void) | null) => {
     beforePromptExecutionForTesting = callback;
+  },
+  setBeforeAssistantMessageCommitForTesting: (
+    callback: (() => Promise<void> | void) | null,
+  ) => {
+    beforeAssistantMessageCommitForTesting = callback;
   },
   setFreshThreadFactoryForTesting: (factory: ((session: SessionState) => Thread) | null) => {
     freshThreadFactoryForTesting = factory;
@@ -2232,6 +2370,10 @@ app.post("/session/create", async (c) => {
     status: "idle",
     currentItems: new Map(),
     currentItemOrder: [],
+    currentTimelineOrder: [],
+    currentSubagentParts: new Map(),
+    currentSubagentFingerprints: new Map(),
+    currentTimelineGeneration: 0,
     currentTurnStartedAt: undefined,
     fileChangeBaselines: new Map(),
     fileChangeDiffCache: new Map(),
@@ -2272,6 +2414,10 @@ app.post("/session/resume", async (c) => {
     status: "idle",
     currentItems: new Map(),
     currentItemOrder: [],
+    currentTimelineOrder: [],
+    currentSubagentParts: new Map(),
+    currentSubagentFingerprints: new Map(),
+    currentTimelineGeneration: 0,
     currentTurnStartedAt: undefined,
     fileChangeBaselines: new Map(),
     fileChangeDiffCache: new Map(),
@@ -2325,7 +2471,14 @@ app.get("/session/:id/messages", async (c) => {
   }
   updateSessionAccess(sessionId);
 
-  if (session.status === "running") {
+  if (
+    session.currentAssistantMessageId
+    && (
+      session.status === "running"
+      || session.currentAssistantTurnStartedAt
+      || session.currentTurnStartedAt
+    )
+  ) {
     await rebuildAssistantMessage(session);
   }
 
@@ -2431,6 +2584,7 @@ app.post("/session/:id/abort", (c) => {
   session.error = undefined;
   session.currentTurnId = undefined;
   session.currentTurnStartedAt = undefined;
+  session.currentAssistantTurnStartedAt = undefined;
   session.abortController = undefined;
   session.pendingAttachments = [];
   emit({ type: "session.idle", sessionId: session.id, data: { title: session.title } });

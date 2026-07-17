@@ -430,6 +430,27 @@ describe("itemToParts", () => {
     expect(parts[0]!.toolArgs).toEqual({});
   });
 
+  test("converts an in-progress mcp_tool_call to a pending invocation", async () => {
+    const item = {
+      id: "mcp-pending",
+      type: "mcp_tool_call" as const,
+      server: "pending-server",
+      tool: "slow_tool",
+      arguments: { value: 1 },
+      status: "in_progress" as const,
+    };
+
+    const parts = await itemToParts(item, DUMMY_CWD);
+
+    expect(parts).toEqual([expect.objectContaining({
+      type: "tool-invocation",
+      toolName: "slow_tool",
+      toolState: "pending",
+      toolTitle: "pending-server:slow_tool",
+      toolArgs: { value: 1 },
+    })]);
+  });
+
   test("returns empty array for unknown item type", async () => {
     const item = { id: "unknown-1", type: "future_type" } as unknown as ThreadItem;
 

@@ -7,7 +7,6 @@ import { NativeMessage } from "@/components/chat/NativeMessage";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
 import { createUuid } from "@/lib/uuid";
-import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useConfigStore, useCodexStore, useEnvironmentStore } from "@/stores";
 import type { BuildPhase, PipelineSession } from "@/stores/buildPipelineStore";
@@ -415,9 +414,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         return true;
       });
 
-      const displayMessages = pinActiveNativeAgentParts(
-        filtered.map(normalizeCodexNativeMessage),
-      );
+      const displayMessages = filtered.map(normalizeCodexNativeMessage);
 
       displayMessages.forEach((message, index) => {
         rows.push({

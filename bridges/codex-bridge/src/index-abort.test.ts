@@ -212,6 +212,7 @@ describe("codex bridge abort handling", () => {
     __testing.sessions.clear();
     __testing.expiredSessions.clear();
     __testing.setBeforePromptExecutionForTesting(null);
+    __testing.setBeforeAssistantMessageCommitForTesting(null);
     __testing.setFreshThreadFactoryForTesting(null);
   });
 
@@ -224,7 +225,7 @@ describe("codex bridge abort handling", () => {
       error: "previous error",
       abortController,
       currentTurnId: "turn-1",
-      currentTurnStartedAt: "2026-04-15T10:00:00.000Z",
+      currentAssistantTurnStartedAt: "2026-04-15T10:00:00.000Z",
       pendingAttachments: [{ type: "image", path: "/tmp/screenshot.png" }],
     });
     __testing.sessions.set(session.id, session);
@@ -342,6 +343,106 @@ describe("codex bridge abort handling", () => {
       new Date(firstStreamTimestamp).getTime(),
     );
     expect(session.status).toBe("idle");
+  });
+
+  test("collaboration stream events rebuild inline agents and reset cleanly for the next turn", async () => {
+    const streams: ReturnType<typeof createStreamController>[] = [];
+    const session = createSession({
+      id: "collaboration-stream-session",
+      thread: {
+        runStreamed: async () => {
+          const stream = createStreamController();
+          streams.push(stream);
+          return { events: stream.events() };
+        },
+      },
+    });
+    __testing.sessions.set(session.id, session);
+
+    const firstRun = __testing.runPrompt(session, "delegate the review");
+    await waitUntil(() => streams.length === 1);
+    streams[0]!.push({
+      type: "item.completed",
+      item: {
+        id: "spawn-1",
+        type: "collab_tool_call",
+        tool: "spawn_agent",
+        prompt: "Review the bridge",
+        receiver_thread_ids: ["agent-1"],
+        agents_states: { "agent-1": { status: "running" } },
+        status: "completed",
+      },
+    });
+    await waitUntil(() => session.messages.some(
+      (message: { role: string; parts: Array<{ subagentId?: string }> }) =>
+        message.role === "assistant"
+        && message.parts.some((part) => part.subagentId === "agent-1"),
+    ));
+    streams[0]!.push({
+      type: "item.completed",
+      item: { id: "reasoning", type: "reasoning", text: "Parent review" },
+    });
+    streams[0]!.push({
+      type: "item.completed",
+      item: {
+        id: "wait-1",
+        type: "collab_tool_call",
+        tool: "wait",
+        receiver_thread_ids: ["agent-1"],
+        agents_states: {
+          "agent-1": { status: "completed", message: "Agent review complete" },
+        },
+        status: "completed",
+      },
+    });
+    streams[0]!.push({ type: "turn.completed", usage: {} });
+    await firstRun;
+
+    const firstAssistant = session.messages.find(
+      (message: { role: string }) => message.role === "assistant",
+    );
+    expect(firstAssistant?.parts).toEqual([
+      { type: "thinking", content: "Parent review" },
+      expect.objectContaining({
+        type: "subagent",
+        subagentId: "agent-1",
+        subagentPrompt: "Review the bridge",
+        toolState: "success",
+        subagentActions: [{ type: "text", content: "Agent review complete" }],
+      }),
+    ]);
+    const messagesResponse = await app.request(`/session/${session.id}/messages`);
+    expect(messagesResponse.status).toBe(200);
+    expect(await messagesResponse.json()).toMatchObject({
+      messages: [
+        expect.any(Object),
+        expect.objectContaining({
+          parts: expect.arrayContaining([
+            expect.objectContaining({ subagentId: "agent-1", toolState: "success" }),
+          ]),
+        }),
+      ],
+    });
+
+    const priorGeneration = session.currentTimelineGeneration;
+    const secondRun = __testing.runPrompt(session, "answer directly");
+    await waitUntil(() => streams.length === 2);
+    expect(session.currentTimelineGeneration).toBeGreaterThan(priorGeneration);
+    expect(session.currentItemOrder).toEqual([]);
+    expect(session.currentTimelineOrder).toEqual([]);
+    expect(session.currentSubagentParts.size).toBe(0);
+    expect(session.currentSubagentFingerprints.size).toBe(0);
+
+    streams[1]!.push({
+      type: "item.completed",
+      item: { id: "answer-2", type: "agent_message", text: "Direct answer" },
+    });
+    streams[1]!.push({ type: "turn.completed", usage: {} });
+    await secondRun;
+    const assistants = session.messages.filter(
+      (message: { role: string }) => message.role === "assistant",
+    );
+    expect(assistants[1]?.parts).toEqual([{ type: "text", content: "Direct answer" }]);
   });
 
   test("runPrompt appends changed todo lists at their stream positions", async () => {
@@ -1305,6 +1406,39 @@ describe("codex bridge abort handling", () => {
     });
   });
 
+  test("messages route reconciles the last assistant message after the turn becomes idle", async () => {
+    const assistantMessage = {
+      id: "assistant-idle",
+      role: "assistant",
+      content: "",
+      parts: [],
+      createdAt: "2026-04-15T10:00:00.000Z",
+    };
+    const session = createSession({
+      id: "idle-messages",
+      status: "idle",
+      currentAssistantMessageId: assistantMessage.id,
+      currentAssistantTurnStartedAt: "2026-04-15T10:00:00.000Z",
+      currentItems: new Map([
+        ["answer", { id: "answer", type: "agent_message", text: "Final response" }],
+      ]),
+      currentItemOrder: ["answer"],
+      messages: [assistantMessage],
+    });
+    __testing.sessions.set(session.id, session);
+
+    const response = await app.request("/session/idle-messages/messages");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      messages: [{
+        id: "assistant-idle",
+        content: "Final response",
+        parts: [{ type: "text", content: "Final response" }],
+      }],
+    });
+  });
+
   test("prompt route filters malformed attachments and accepts the valid image", async () => {
     let observedInput: unknown;
     const session = createSession({
@@ -1571,6 +1705,29 @@ describe("codex bridge abort handling", () => {
     });
   });
 
+  test("model cache persistence contains malformed reads and write failures", async () => {
+    await withBridgeEnv(async ({ codexHome }) => {
+      const cacheDir = join(codexHome, "orkestrator-bridge");
+      const cachePath = join(cacheDir, "models-cache.json");
+      mkdirSync(cacheDir, { recursive: true });
+      writeFileSync(cachePath, "{not-json");
+      await expect(__testing.readPersistedBridgeCache()).resolves.toBeNull();
+
+      rmSync(cacheDir, { recursive: true, force: true });
+      writeFileSync(cacheDir, "blocks directory creation");
+      const warnings: unknown[][] = [];
+      const originalWarn = console.warn;
+      console.warn = (...args: unknown[]) => { warnings.push(args); };
+      try {
+        await expect(__testing.writePersistedBridgeCache([])).resolves.toBeUndefined();
+      } finally {
+        console.warn = originalWarn;
+      }
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]?.[0]).toBe("[codex-bridge] Failed to persist model cache:");
+    });
+  });
+
   test("buildThreadOptions accepts new efforts and rejects unknown values", () => {
     expect(__testing.buildThreadOptions({ modelReasoningEffort: "max" }).modelReasoningEffort)
       .toBe("max");
@@ -1578,6 +1735,74 @@ describe("codex bridge abort handling", () => {
       .toBe("ultra");
     expect(__testing.buildThreadOptions({ modelReasoningEffort: "turbo" }).modelReasoningEffort)
       .toBeUndefined();
+  });
+
+  test("buildThreadOptions normalizes model, mode, and working-directory defaults", () => {
+    const previousCwd = process.env.CWD;
+    process.env.CWD = "/tmp/codex-bridge-working-directory";
+    try {
+      expect(__testing.buildThreadOptions({ mode: "plan", model: "  gpt-test  " }))
+        .toEqual(expect.objectContaining({
+          workingDirectory: "/tmp/codex-bridge-working-directory",
+          approvalPolicy: "never",
+          sandboxMode: "read-only",
+          networkAccessEnabled: true,
+          model: "gpt-test",
+        }));
+      expect(__testing.buildThreadOptions({ mode: "invalid", model: "   " }))
+        .toEqual(expect.objectContaining({
+          sandboxMode: "danger-full-access",
+          model: undefined,
+        }));
+    } finally {
+      if (previousCwd === undefined) delete process.env.CWD;
+      else process.env.CWD = previousCwd;
+    }
+  });
+
+  test("routes use safe defaults for malformed JSON request bodies", async () => {
+    const createResponse = await app.request("/session/create", {
+      method: "POST",
+      body: "{not-json",
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(createResponse.status).toBe(201);
+    const { sessionId } = await createResponse.json();
+    expect(__testing.sessions.get(sessionId)).toMatchObject({
+      conversationMode: "build",
+      fastMode: false,
+      threadOptions: expect.objectContaining({ sandboxMode: "danger-full-access" }),
+    });
+
+    const configResponse = await app.request(`/session/${sessionId}/config`, {
+      method: "POST",
+      body: "{not-json",
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(configResponse.status).toBe(200);
+    expect(__testing.sessions.get(sessionId)).toMatchObject({
+      conversationMode: "build",
+      fastMode: false,
+      threadOptions: expect.objectContaining({ sandboxMode: "danger-full-access" }),
+    });
+
+    const promptResponse = await app.request(`/session/${sessionId}/prompt`, {
+      method: "POST",
+      body: "{not-json",
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(promptResponse.status).toBe(400);
+    expect(await promptResponse.json()).toEqual({
+      error: "Prompt or image attachment is required",
+    });
+
+    const resumeResponse = await app.request("/session/resume", {
+      method: "POST",
+      body: "{not-json",
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(resumeResponse.status).toBe(400);
+    expect(await resumeResponse.json()).toEqual({ error: "threadId is required" });
   });
 
   test("session discovery falls back to archived transcripts and hydration skips invalid records", async () => {

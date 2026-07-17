@@ -449,6 +449,154 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.queryByText("0 updates")).toBeNull();
   });
 
+  test("renders adjacent agents inside a compact shared block", () => {
+    const message = makeMessage([
+      {
+        type: "subagent",
+        content: "Reviewer",
+        subagentName: "Reviewer",
+        toolState: "pending",
+        subagentActions: [],
+      },
+      {
+        type: "subagent",
+        content: "Tester",
+        subagentName: "Tester",
+        toolState: "success",
+        subagentActions: [],
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
+    expect(screen.getByText("Agents")).toBeTruthy();
+    expect(screen.getByText("1 running")).toBeTruthy();
+    expect(screen.getByText("Reviewer")).toBeTruthy();
+    expect(screen.getByText("Tester")).toBeTruthy();
+  });
+
+  test("counts pending task children and undefined states as running but not terminal agents", () => {
+    const message = makeMessage([
+      {
+        type: "task-group",
+        content: "Task reviewer",
+        task: {
+          type: "tool-invocation",
+          content: "Task reviewer",
+          toolUseId: "task-1",
+          toolState: "pending",
+        },
+        childTools: [],
+      },
+      {
+        type: "subagent",
+        content: "Failed reviewer",
+        subagentId: "agent-failed",
+        toolState: "failure",
+      },
+      {
+        type: "subagent",
+        content: "Unreported reviewer",
+        subagentId: "agent-unreported",
+      },
+      {
+        type: "subagent",
+        content: "Finished reviewer",
+        subagentId: "agent-finished",
+        toolState: "success",
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByRole("region", { name: "4 agents" })).toBeTruthy();
+    expect(screen.getByText("2 running")).toBeTruthy();
+    expect(screen.getAllByText("Running")).toHaveLength(2);
+    expect(screen.getByText("Failed")).toBeTruthy();
+    expect(screen.getByText("Success")).toBeTruthy();
+    expect(screen.getAllByText("Waiting for activity.")).toHaveLength(2);
+    expect(screen.getAllByText("No activity captured.")).toHaveLength(2);
+  });
+
+  test("preserves an expanded agent when an adjacent streaming agent creates a group", () => {
+    const firstAgent: NativeMessagePart = {
+      type: "subagent",
+      content: "Reviewer",
+      subagentId: "agent-1",
+      subagentName: "Reviewer",
+      subagentPrompt: "Inspect the original task details",
+      toolState: "pending",
+      subagentActions: [],
+    };
+    const { rerender } = render(
+      <NativeMessage message={makeMessage([firstAgent])} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
+    expect(screen.getByText("Inspect the original task details")).toBeTruthy();
+
+    rerender(
+      <NativeMessage
+        message={makeMessage([
+          firstAgent,
+          {
+            type: "subagent",
+            content: "Tester",
+            subagentId: "agent-2",
+            subagentName: "Tester",
+            toolState: "pending",
+            subagentActions: [],
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
+    expect(screen.getByText("Inspect the original task details")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
+
+  test("propagates the container id through grouped subagent actions", async () => {
+    const message = makeMessage([
+      {
+        type: "subagent",
+        content: "Reviewer",
+        subagentId: "agent-1",
+        subagentName: "Reviewer",
+        toolState: "pending",
+        subagentActions: [
+          {
+            type: "file",
+            content: "relative-preview.png",
+            fileUrl: "relative-preview.png",
+          },
+        ],
+      },
+      {
+        type: "subagent",
+        content: "Tester",
+        subagentId: "agent-2",
+        subagentName: "Tester",
+        toolState: "pending",
+        subagentActions: [],
+      },
+    ]);
+
+    render(<NativeMessage message={message} containerId="container-1" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
+    const previewButton = screen
+      .getAllByRole("button", { name: /relative-preview\.png/i })
+      .at(-1);
+    expect(previewButton).toBeTruthy();
+    fireEvent.click(previewButton!);
+
+    expect(await screen.findByAltText("relative-preview.png")).toBeTruthy();
+  });
+
   test("can render Claude tmux agent usage as tokens only", () => {
     const message = makeMessage([
       {

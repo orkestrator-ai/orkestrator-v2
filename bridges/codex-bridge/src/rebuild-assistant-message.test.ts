@@ -1,9 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 process.env.CODEX_BRIDGE_NO_SERVER = "1";
 
 const { __testing } = await import("./index.js");
 const { rebuildAssistantMessage } = __testing;
+
+afterEach(() => {
+  __testing.setBeforeAssistantMessageCommitForTesting(null);
+});
 
 function createSession(overrides: Record<string, unknown> = {}) {
   return {
@@ -84,5 +88,144 @@ describe("rebuildAssistantMessage", () => {
       receivedAt: "2026-04-15T10:03:00.000Z",
     });
     expect(message.createdAt).toBe("2026-04-15T10:03:00.000Z");
+  });
+
+  test("does not let an older same-turn rebuild overwrite a newer item snapshot", async () => {
+    const message = {
+      id: "assistant-1",
+      role: "assistant",
+      content: "",
+      parts: [],
+      createdAt: "2026-04-15T10:00:00.000Z",
+    };
+    const session = createSession({
+      currentAssistantMessageId: "assistant-1",
+      currentTimelineGeneration: 1,
+      messages: [message],
+      currentItemOrder: ["answer"],
+      currentTimelineOrder: ["item:answer"],
+      currentItems: new Map([
+        ["answer", { id: "answer", type: "agent_message", text: "Older snapshot" }],
+      ]),
+      currentSubagentParts: new Map(),
+      currentSubagentFingerprints: new Map(),
+    });
+    let releaseFirst!: () => void;
+    let enteredFirst!: () => void;
+    const entered = new Promise<void>((resolve) => { enteredFirst = resolve; });
+    const release = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let rebuildCount = 0;
+    __testing.setBeforeAssistantMessageCommitForTesting(async () => {
+      rebuildCount += 1;
+      if (rebuildCount === 1) {
+        enteredFirst();
+        await release;
+      }
+    });
+
+    const olderRebuild = rebuildAssistantMessage(session);
+    await entered;
+    __testing.recordCurrentItemForTesting(session, {
+      id: "answer",
+      type: "agent_message",
+      text: "Newer snapshot",
+    });
+    const newerRebuild = await rebuildAssistantMessage(session);
+    expect(newerRebuild?.content).toBe("Newer snapshot");
+
+    releaseFirst();
+    expect(await olderRebuild).toBeNull();
+    expect(message.content).toBe("Newer snapshot");
+    expect(message.parts).toEqual([{ type: "text", content: "Newer snapshot" }]);
+  });
+
+  test("lets a later rebuild request supersede an overlapping rebuild", async () => {
+    const message = {
+      id: "assistant-1",
+      role: "assistant",
+      content: "",
+      parts: [],
+      createdAt: "2026-04-15T10:00:00.000Z",
+    };
+    const session = createSession({
+      currentAssistantMessageId: message.id,
+      messages: [message],
+      currentItemOrder: ["answer"],
+      currentItems: new Map([
+        ["answer", { id: "answer", type: "agent_message", text: "Same snapshot" }],
+      ]),
+    });
+    let releaseFirst!: () => void;
+    let enteredFirst!: () => void;
+    const entered = new Promise<void>((resolve) => { enteredFirst = resolve; });
+    const release = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let rebuildCount = 0;
+    __testing.setBeforeAssistantMessageCommitForTesting(async () => {
+      rebuildCount += 1;
+      if (rebuildCount === 1) {
+        enteredFirst();
+        await release;
+      }
+    });
+
+    const olderRebuild = rebuildAssistantMessage(session);
+    await entered;
+    expect((await rebuildAssistantMessage(session))?.content).toBe("Same snapshot");
+    releaseFirst();
+    expect(await olderRebuild).toBeNull();
+  });
+
+  test("does not commit a rebuild after a new turn resets the timeline", async () => {
+    const oldMessage = {
+      id: "assistant-old",
+      role: "assistant",
+      content: "",
+      parts: [],
+      createdAt: "2026-04-15T10:00:00.000Z",
+    };
+    const newMessage = {
+      id: "assistant-new",
+      role: "assistant",
+      content: "",
+      parts: [],
+      createdAt: "2026-04-15T10:01:00.000Z",
+    };
+    const session = createSession({
+      currentAssistantMessageId: "assistant-old",
+      currentTimelineGeneration: 1,
+      messages: [oldMessage],
+      currentItemOrder: ["old-answer"],
+      currentTimelineOrder: ["item:old-answer"],
+      currentItems: new Map([
+        ["old-answer", { id: "old-answer", type: "agent_message", text: "Old turn" }],
+      ]),
+      currentSubagentParts: new Map(),
+      currentSubagentFingerprints: new Map(),
+    });
+    let releaseCommit!: () => void;
+    let enteredCommit!: () => void;
+    const entered = new Promise<void>((resolve) => { enteredCommit = resolve; });
+    const release = new Promise<void>((resolve) => { releaseCommit = resolve; });
+    __testing.setBeforeAssistantMessageCommitForTesting(async () => {
+      enteredCommit();
+      await release;
+    });
+
+    const staleRebuild = rebuildAssistantMessage(session);
+    await entered;
+    __testing.resetCurrentTurnTimelineForTesting(session);
+    session.messages.push(newMessage);
+    session.currentAssistantMessageId = "assistant-new";
+    __testing.recordCurrentItemForTesting(session, {
+      id: "new-answer",
+      type: "agent_message",
+      text: "New turn",
+    });
+    releaseCommit();
+
+    expect(await staleRebuild).toBeNull();
+    expect(oldMessage).toMatchObject({ content: "", parts: [] });
+    expect(session.currentItemOrder).toEqual(["new-answer"]);
+    expect(session.currentTimelineOrder).toEqual(["item:new-answer"]);
   });
 });

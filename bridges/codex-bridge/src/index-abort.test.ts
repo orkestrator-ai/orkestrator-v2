@@ -222,6 +222,9 @@ function writeRollout(
 
 describe("codex bridge abort handling", () => {
   beforeEach(() => {
+    for (const session of __testing.sessions.values()) {
+      session.subagentRefreshController?.stop();
+    }
     __testing.sessions.clear();
     __testing.expiredSessions.clear();
     __testing.setBeforePromptExecutionForTesting(null);
@@ -230,8 +233,9 @@ describe("codex bridge abort handling", () => {
     __testing.setFreshThreadFactoryForTesting(null);
   });
 
-  test("abort route aborts the controller and clears active turn state", async () => {
+  test("abort route aborts execution but preserves transcript reconciliation state", async () => {
     const abortController = new AbortController();
+    let settlementCount = 0;
     const session = createSession({
       id: "abort-session",
       title: "Abort me",
@@ -240,6 +244,12 @@ describe("codex bridge abort handling", () => {
       abortController,
       currentTurnId: "turn-1",
       currentAssistantTurnStartedAt: "2026-04-15T10:00:00.000Z",
+      subagentRefreshController: {
+        refreshNow: async () => {},
+        markParentSettled: () => { settlementCount += 1; },
+        stop: () => {},
+        isStopped: () => false,
+      },
       pendingAttachments: [{ type: "image", path: "/tmp/screenshot.png" }],
     });
     __testing.sessions.set(session.id, session);
@@ -255,8 +265,10 @@ describe("codex bridge abort handling", () => {
     expect(session.error).toBeUndefined();
     expect(session.currentTurnId).toBeUndefined();
     expect(session.currentTurnStartedAt).toBeUndefined();
+    expect(session.currentAssistantTurnStartedAt).toBe("2026-04-15T10:00:00.000Z");
     expect(session.abortController).toBeUndefined();
     expect(session.pendingAttachments).toEqual([]);
+    expect(settlementCount).toBe(1);
   });
 
   test("stale stream events cannot overwrite a newer turn after abort", async () => {
@@ -574,6 +586,102 @@ describe("codex bridge abort handling", () => {
       (message: { role: string }) => message.role === "assistant",
     );
     expect(assistants[1]?.parts).toEqual([{ type: "text", content: "Direct answer" }]);
+  });
+
+  test("periodic transcript refresh discovers child activity after the parent settles", async () => {
+    await withBridgeEnv(async ({ codexHome, cwd }) => {
+      const parentThreadId = "settled-parent-thread";
+      const childThreadId = "late-child-thread";
+      writeRollout(codexHome, parentThreadId, [{
+        timestamp: "2026-07-17T17:02:00.000Z",
+        type: "session_meta",
+        payload: { id: parentThreadId, cwd },
+      }]);
+
+      const assistantMessage = {
+        id: "settled-assistant",
+        role: "assistant",
+        content: "",
+        parts: [],
+        createdAt: "2026-07-17T17:02:00.000Z",
+      };
+      const session = createSession({
+        id: "settled-transcript-session",
+        threadId: parentThreadId,
+        status: "idle",
+        currentAssistantMessageId: assistantMessage.id,
+        currentAssistantTurnStartedAt: "2026-07-17T17:02:00.000Z",
+        messages: [assistantMessage],
+        currentItems: new Map(),
+        currentItemOrder: [],
+      });
+      const controller = __testing.startTurnSubagentRefreshForTesting(session, () => false, {
+        intervalMs: 10,
+        settleGraceMs: 500,
+        settleTimeoutMs: 2_000,
+      });
+      controller.markParentSettled();
+
+      try {
+        // Let the scheduled watcher observe the initial transcript before the
+        // late child records arrive; discovery below must come from a later tick.
+        await Bun.sleep(20);
+        writeRollout(codexHome, parentThreadId, [
+          {
+            timestamp: "2026-07-17T17:02:00.000Z",
+            type: "session_meta",
+            payload: { id: parentThreadId, cwd },
+          },
+          {
+            timestamp: "2026-07-17T17:02:01.000Z",
+            type: "response_item",
+            payload: {
+              type: "function_call",
+              name: "spawn_agent",
+              call_id: "late-spawn",
+              arguments: JSON.stringify({ task_name: "late_review", message: "Review late output" }),
+            },
+          },
+          {
+            timestamp: "2026-07-17T17:02:01.100Z",
+            type: "event_msg",
+            payload: {
+              type: "sub_agent_activity",
+              event_id: "late-spawn",
+              agent_thread_id: childThreadId,
+              agent_path: "/root/late_review",
+            },
+          },
+        ]);
+        writeRollout(codexHome, childThreadId, [
+          {
+            timestamp: "2026-07-17T17:02:01.100Z",
+            type: "session_meta",
+            payload: { id: childThreadId, cwd, agent_nickname: "Noether" },
+          },
+          {
+            timestamp: "2026-07-17T17:02:02.000Z",
+            type: "event_msg",
+            payload: { type: "task_complete" },
+          },
+        ]);
+
+        await waitUntil(() => assistantMessage.parts.some(
+          (part: { subagentId?: string }) => part.subagentId === childThreadId,
+        ));
+        expect(assistantMessage.parts).toEqual([
+          expect.objectContaining({
+            type: "subagent",
+            subagentId: childThreadId,
+            subagentName: "Noether",
+            subagentPrompt: "Review late output",
+            toolState: "success",
+          }),
+        ]);
+      } finally {
+        controller.stop();
+      }
+    });
   });
 
   test("rebuilds task-name-only spawns with actions from the streamed child thread ID", async () => {
@@ -2061,10 +2169,17 @@ describe("codex bridge abort handling", () => {
 
   test("delete aborts and removes an active session", async () => {
     const abortController = new AbortController();
+    let stopCount = 0;
     const session = createSession({
       id: "active-delete",
       status: "running",
       abortController,
+      subagentRefreshController: {
+        refreshNow: async () => {},
+        markParentSettled: () => {},
+        stop: () => { stopCount += 1; },
+        isStopped: () => false,
+      },
     });
     __testing.sessions.set(session.id, session);
 
@@ -2073,7 +2188,26 @@ describe("codex bridge abort handling", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "deleted" });
     expect(abortController.signal.aborted).toBe(true);
+    expect(stopCount).toBe(1);
     expect(__testing.sessions.has(session.id)).toBe(false);
+  });
+
+  test("idle cleanup stops transcript watchers before compacting sessions", () => {
+    let stopCount = 0;
+    const session = createRestorableStaleSession("watched-stale-session");
+    session.subagentRefreshController = {
+      refreshNow: async () => {},
+      markParentSettled: () => {},
+      stop: () => { stopCount += 1; },
+      isStopped: () => false,
+    };
+    __testing.sessions.set(session.id, session);
+
+    __testing.cleanupIdleSessions();
+
+    expect(stopCount).toBe(1);
+    expect(__testing.sessions.has(session.id)).toBe(false);
+    expect(__testing.expiredSessions.has(session.id)).toBe(true);
   });
 
   test("idle cleanup compacts sessions that can be restored by the same session id", async () => {

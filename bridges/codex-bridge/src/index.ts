@@ -74,6 +74,13 @@ interface NormalizedMessage {
   planReview?: boolean;
 }
 
+interface TurnSubagentRefreshController {
+  refreshNow(): Promise<void>;
+  markParentSettled(): void;
+  stop(): void;
+  isStopped(): boolean;
+}
+
 interface SessionState {
   id: string;
   title?: string;
@@ -96,6 +103,7 @@ interface SessionState {
   currentTurnId?: string;
   currentTurnStartedAt?: string;
   currentAssistantTurnStartedAt?: string;
+  subagentRefreshController?: TurnSubagentRefreshController;
   fileChangeBaselines: Map<string, string | undefined>;
   fileChangeDiffCache: Map<string, ToolDiffMetadata>;
   pendingAttachments: PromptAttachmentInput[];
@@ -362,6 +370,7 @@ function updateSessionAccess(sessionId: string): void {
 }
 
 function compactSession(session: SessionState, compactedAt: number): ExpiredSessionState {
+  session.subagentRefreshController?.stop();
   return {
     id: session.id,
     title: session.title,
@@ -1274,6 +1283,7 @@ function emitLocalAssistantResponse(
   prompt: string,
   response: string,
 ): void {
+  session.subagentRefreshController?.stop();
   session.status = "idle";
   session.error = undefined;
   resetCurrentTurnTimeline(session);
@@ -2014,43 +2024,127 @@ function buildResumeRecoveryPrompt(
 }
 
 const TURN_SUBAGENT_REFRESH_INTERVAL_MS = 3_000;
+const TURN_SUBAGENT_SETTLE_GRACE_MS = 30_000;
+const TURN_SUBAGENT_SETTLE_TIMEOUT_MS = 5 * 60_000;
+
+interface TurnSubagentRefreshOptions {
+  intervalMs?: number;
+  settleGraceMs?: number;
+  settleTimeoutMs?: number;
+  rebuild?: (session: SessionState) => Promise<NormalizedMessage | null>;
+  emitEvent?: (event: SseEvent) => void;
+  now?: () => number;
+}
 
 /**
  * Multi-agent v2 collaboration tools (spawn_agent, wait_agent, send_message)
  * emit no thread items on the SDK stream; child activity is only observable in
- * rollout transcripts on disk. Rebuild periodically while a turn is running so
- * subagent cards appear and progress even when the parent streams nothing.
+ * rollout transcripts on disk. Rebuild periodically while a turn is running,
+ * then keep watching through a bounded settlement window so child writes that
+ * land after the parent terminal event are not lost.
  */
 function startTurnSubagentRefresh(
   session: SessionState,
   isCurrentTurn: () => boolean,
-  intervalMs = TURN_SUBAGENT_REFRESH_INTERVAL_MS,
-): ReturnType<typeof setInterval> {
+  options: TurnSubagentRefreshOptions = {},
+): TurnSubagentRefreshController {
+  session.subagentRefreshController?.stop();
+
+  const intervalMs = options.intervalMs ?? TURN_SUBAGENT_REFRESH_INTERVAL_MS;
+  const settleGraceMs = options.settleGraceMs ?? TURN_SUBAGENT_SETTLE_GRACE_MS;
+  const settleTimeoutMs = options.settleTimeoutMs ?? TURN_SUBAGENT_SETTLE_TIMEOUT_MS;
+  const rebuild = options.rebuild ?? rebuildAssistantMessage;
+  const emitEvent = options.emitEvent ?? emit;
+  const now = options.now ?? Date.now;
+  const targetMessageId = session.currentAssistantMessageId;
+  const targetStartedAt = session.currentAssistantTurnStartedAt;
   const currentMessage = session.messages.find(
-    (entry) => entry.id === session.currentAssistantMessageId,
+    (entry) => entry.id === targetMessageId,
   );
   let lastFingerprint = currentMessage ? JSON.stringify(currentMessage.parts) : undefined;
+  let lastChangeAt = now();
+  let parentSettledAt: number | undefined;
   let refreshing = false;
+  let stopped = false;
+  let timer: ReturnType<typeof setInterval>;
 
-  return setInterval(() => {
-    if (refreshing) return;
-    refreshing = true;
-    void (async () => {
+  const isTargetCurrent = () =>
+    session.currentAssistantMessageId === targetMessageId
+    && session.currentAssistantTurnStartedAt === targetStartedAt;
+
+  const hasPendingSubagents = () =>
+    Array.from(session.currentSubagentParts.values()).some(
+      (part) => part.type === "subagent" && part.toolState === "pending",
+    );
+
+  const controller: TurnSubagentRefreshController = {
+    async refreshNow() {
+      if (stopped || refreshing || !isTargetCurrent()) {
+        if (!stopped && !isTargetCurrent()) controller.stop();
+        return;
+      }
+      if (parentSettledAt === undefined && !isCurrentTurn()) {
+        return;
+      }
+
+      refreshing = true;
       try {
-        if (!isCurrentTurn()) return;
-        const message = await rebuildAssistantMessage(session);
-        if (!message || !isCurrentTurn()) return;
-        const fingerprint = JSON.stringify(message.parts);
-        if (fingerprint === lastFingerprint) return;
-        lastFingerprint = fingerprint;
-        emit({ type: "message.updated", sessionId: session.id, data: { message } });
+        const message = await rebuild(session);
+        if (stopped || !isTargetCurrent()) {
+          if (!stopped) controller.stop();
+          return;
+        }
+        if (message) {
+          const fingerprint = JSON.stringify(message.parts);
+          if (fingerprint !== lastFingerprint) {
+            lastFingerprint = fingerprint;
+            lastChangeAt = now();
+            emitEvent({ type: "message.updated", sessionId: session.id, data: { message } });
+          }
+        }
       } catch (error) {
         console.error("[codex-bridge] Failed to refresh subagent activity:", error);
       } finally {
         refreshing = false;
+        if (stopped || parentSettledAt === undefined) return;
+
+        const elapsed = now() - parentSettledAt;
+        if (elapsed >= settleTimeoutMs) {
+          controller.stop();
+          return;
+        }
+        if (
+          !hasPendingSubagents()
+          && now() - Math.max(parentSettledAt, lastChangeAt) >= settleGraceMs
+        ) {
+          controller.stop();
+        }
       }
-    })();
+    },
+    markParentSettled() {
+      if (stopped || parentSettledAt !== undefined) return;
+      parentSettledAt = now();
+      void controller.refreshNow();
+    },
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(timer);
+      if (session.subagentRefreshController === controller) {
+        session.subagentRefreshController = undefined;
+      }
+    },
+    isStopped() {
+      return stopped;
+    },
+  };
+
+  timer = setInterval(() => {
+    void controller.refreshNow();
   }, intervalMs);
+  timer.unref?.();
+  session.subagentRefreshController = controller;
+  return controller;
 }
 
 async function processCodexStream(
@@ -2080,7 +2174,7 @@ async function processCodexStream(
     threadId: session.threadId ?? null,
   });
 
-  const subagentRefreshTimer = startTurnSubagentRefresh(session, isCurrentTurn);
+  const subagentRefreshController = startTurnSubagentRefresh(session, isCurrentTurn);
   try {
     for await (const event of streamed.events) {
       if (!isCurrentTurn()) {
@@ -2162,7 +2256,7 @@ async function processCodexStream(
 
     await finalizeIdleTurn();
   } finally {
-    clearInterval(subagentRefreshTimer);
+    subagentRefreshController.markParentSettled();
   }
 }
 
@@ -2181,6 +2275,7 @@ async function runPrompt(
   if (acceptedTurnId && session.currentTurnId !== acceptedTurnId) {
     return;
   }
+  session.subagentRefreshController?.stop();
 
   const cwd = getWorkingDirectory(session.threadOptions.workingDirectory);
   const resolvedSlashCommand = await resolvePromptExecution(session, prompt, cwd);
@@ -2384,8 +2479,8 @@ export const __testing = {
   startTurnSubagentRefreshForTesting: startTurnSubagentRefresh as (
     session: any,
     isCurrentTurn: () => boolean,
-    intervalMs?: number,
-  ) => ReturnType<typeof setInterval>,
+    options?: TurnSubagentRefreshOptions,
+  ) => TurnSubagentRefreshController,
   createOpenSseWriterForTesting: createOpenSseWriter,
   startSseKeepaliveForTesting: startSseKeepalive,
   sessions: sessions as Map<string, any>,
@@ -2680,6 +2775,7 @@ app.post("/session/:id/prompt", async (c) => {
   }
 
   session.pendingAttachments = attachments;
+  session.subagentRefreshController?.stop();
   const acceptedTurnId = crypto.randomUUID();
   session.currentTurnId = acceptedTurnId;
   session.status = "running";
@@ -2701,11 +2797,11 @@ app.post("/session/:id/abort", (c) => {
   updateSessionAccess(sessionId);
 
   session.abortController?.abort();
+  session.subagentRefreshController?.markParentSettled();
   session.status = "idle";
   session.error = undefined;
   session.currentTurnId = undefined;
   session.currentTurnStartedAt = undefined;
-  session.currentAssistantTurnStartedAt = undefined;
   session.abortController = undefined;
   session.pendingAttachments = [];
   emit({ type: "session.idle", sessionId: session.id, data: { title: session.title } });
@@ -2723,6 +2819,7 @@ app.delete("/session/:id", (c) => {
   }
 
   session.abortController?.abort();
+  session.subagentRefreshController?.stop();
   sessions.delete(session.id);
   expiredSessions.delete(session.id);
   return c.json({ status: "deleted" });

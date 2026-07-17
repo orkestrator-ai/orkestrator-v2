@@ -2,12 +2,23 @@ import { describe, expect, test } from "bun:test";
 import {
   deriveSubagentPartsFromTranscriptRecords,
   mergeSubagentPartsIntoMessageParts,
+  parseSubAgentActivityRecords,
   parseTranscriptRecords,
   type TranscriptRecord,
 } from "./subagent-transcript.js";
 
 function recordsFromLines(lines: string[]): TranscriptRecord[] {
   return parseTranscriptRecords(lines);
+}
+
+function validFernetEnvelope(): string {
+  return Buffer.concat([
+    Buffer.from([0x80]),
+    Buffer.alloc(8),
+    Buffer.alloc(16),
+    Buffer.alloc(16),
+    Buffer.alloc(32),
+  ]).toString("base64url");
 }
 
 describe("parseTranscriptRecords", () => {
@@ -56,6 +67,42 @@ describe("parseTranscriptRecords", () => {
       { timestamp: undefined, type: undefined, payload: undefined },
       { timestamp: undefined, type: undefined, payload: undefined },
     ]);
+  });
+});
+
+describe("parseSubAgentActivityRecords", () => {
+  test("ignores malformed activities and keeps the first valid mapping", () => {
+    const activity = (payload: Record<string, unknown>): TranscriptRecord => ({
+      type: "event_msg",
+      payload: { type: "sub_agent_activity", ...payload },
+    });
+    const records: TranscriptRecord[] = [
+      { type: "response_item", payload: { type: "sub_agent_activity", event_id: "wrong-type", agent_thread_id: "child" } },
+      activity({ event_id: "", agent_thread_id: "child" }),
+      activity({ event_id: 12, agent_thread_id: "child" }),
+      activity({ event_id: "call", agent_thread_id: null }),
+      activity({ event_id: "call", agent_thread_id: "child-1", agent_path: 42 }),
+      activity({ event_id: "call", agent_thread_id: "child-2", agent_path: "/root/later" }),
+    ];
+
+    expect(parseSubAgentActivityRecords(records)).toEqual([
+      { callId: "call", agentThreadId: "child-1", agentPath: undefined },
+      { callId: "call", agentThreadId: "child-2", agentPath: "/root/later" },
+    ]);
+
+    const parts = deriveSubagentPartsFromTranscriptRecords([
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          call_id: "call",
+          arguments: JSON.stringify({ message: "Keep the first mapping" }),
+        },
+      },
+      ...records,
+    ], new Map());
+    expect(parts[0]?.subagentId).toBe("child-1");
   });
 });
 
@@ -1038,7 +1085,7 @@ describe("deriveSubagentPartsFromTranscriptRecords", () => {
   });
 
   test("resolves multi-agent v2 spawns through sub_agent_activity records", () => {
-    const opaquePrompt = `gAAAAAB${"x".repeat(120)}`;
+    const opaquePrompt = validFernetEnvelope();
     const parentRecords: TranscriptRecord[] = [
       {
         timestamp: "2026-07-17T20:43:07.000Z",
@@ -1120,7 +1167,7 @@ describe("deriveSubagentPartsFromTranscriptRecords", () => {
         subagentId: "child-thread-v2",
         subagentName: "Ptolemy",
         subagentRole: "correctness_review",
-        subagentPrompt: "Review the branch diff for correctness issues.",
+        subagentPrompt: undefined,
         subagentActionCount: 1,
         toolState: "success",
         subagentActions: [
@@ -1132,6 +1179,50 @@ describe("deriveSubagentPartsFromTranscriptRecords", () => {
           }),
         ],
       }),
+    ]);
+  });
+
+  test("only suppresses structurally valid Fernet prompts and never uses fork history", () => {
+    const prompts = [
+      validFernetEnvelope(),
+      `${validFernetEnvelope()}==`,
+      `${validFernetEnvelope()}=`,
+      `gAAAAAB${"x".repeat(120)}`,
+      "A".repeat(120),
+      `${validFernetEnvelope()}!`,
+      Buffer.concat([Buffer.from([0x80]), Buffer.alloc(71)]).toString("base64url"),
+    ];
+    const parentRecords: TranscriptRecord[] = prompts.map((message, index) => ({
+      type: "response_item",
+      payload: {
+        type: "function_call",
+        name: "spawn_agent",
+        call_id: `call-${index}`,
+        arguments: JSON.stringify({ message }),
+      },
+    }));
+    const resolvedIds = new Map(prompts.map((_, index) => [`call-${index}`, `child-${index}`]));
+    const childRecords = new Map(prompts.map((_, index) => [`child-${index}`, [
+      { type: "event_msg", payload: {} },
+      {
+        type: "event_msg",
+        payload: { type: "user_message", message: "Inherited parent conversation" },
+      },
+      {
+        type: "event_msg",
+        payload: { type: "user_message", message: "A later follow-up" },
+      },
+    ]] satisfies [string, TranscriptRecord[]]));
+
+    const parts = deriveSubagentPartsFromTranscriptRecords(parentRecords, childRecords, resolvedIds);
+    expect(parts.map((part) => part.subagentPrompt)).toEqual([
+      undefined,
+      undefined,
+      prompts[2],
+      prompts[3],
+      prompts[4],
+      prompts[5],
+      prompts[6],
     ]);
   });
 
@@ -1210,6 +1301,79 @@ describe("deriveSubagentPartsFromTranscriptRecords", () => {
       ["errored-thread", "failure"],
       ["running-thread", "pending"],
     ]);
+  });
+
+  test("handles every string agent status and ignores malformed list_agents entries", () => {
+    const statuses = [
+      ["completed", "success"],
+      ["shutdown", "success"],
+      ["errored", "failure"],
+      ["interrupted", "failure"],
+      ["not_found", "failure"],
+      ["running", "pending"],
+      ["unknown", "pending"],
+    ] as const;
+    const parentRecords: TranscriptRecord[] = [];
+    for (const [index, [status]] of statuses.entries()) {
+      parentRecords.push(
+        {
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: "spawn_agent",
+            call_id: `spawn-${index}`,
+            arguments: JSON.stringify({ message: `Task ${index}` }),
+          },
+        },
+        {
+          type: "event_msg",
+          payload: {
+            type: "sub_agent_activity",
+            event_id: `spawn-${index}`,
+            agent_thread_id: `thread-${index}`,
+            agent_path: `/root/task-${index}`,
+          },
+        },
+      );
+    }
+    parentRecords.push(
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "list_agents", call_id: "malformed-list" },
+      },
+      {
+        type: "response_item",
+        payload: { type: "function_call_output", call_id: "malformed-list", output: "not-json" },
+      },
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "list_agents", call_id: "valid-list" },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "valid-list",
+          output: JSON.stringify({
+            agents: [
+              null,
+              "bad entry",
+              { agent_name: "", agent_status: "completed" },
+              { agent_name: 12, agent_status: "completed" },
+              { agent_name: "/root/task-6", agent_status: null },
+              { agent_name: "/root/task-6", agent_status: { running: true } },
+              ...statuses.map(([status], index) => ({
+                agent_name: `/root/task-${index}`,
+                agent_status: status,
+              })),
+            ],
+          }),
+        },
+      },
+    );
+
+    const parts = deriveSubagentPartsFromTranscriptRecords(parentRecords, new Map());
+    expect(parts.map((part) => part.toolState)).toEqual(statuses.map(([, expected]) => expected));
   });
 
   test("inserts collated subagent parts without reordering existing message parts", () => {

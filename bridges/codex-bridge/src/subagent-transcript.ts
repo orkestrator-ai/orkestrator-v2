@@ -57,10 +57,34 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
-// Multi-agent v2 rollouts persist inter-agent prompts as opaque encrypted
-// blobs (a single long base64url token). Suppress those so the child
-// transcript's plaintext user message can be shown instead.
-const OPAQUE_PROMPT_PATTERN = /^[A-Za-z0-9_-]{80,}={0,2}$/;
+// Multi-agent v2 rollouts persist inter-agent prompts as Fernet envelopes.
+// Detect the binary layout instead of treating every long base64url-like task
+// as encrypted: version + timestamp + IV + block ciphertext + HMAC.
+function isOpaquePromptEnvelope(text: string): boolean {
+  if (!/^[A-Za-z0-9_-]+={0,2}$/.test(text)) {
+    return false;
+  }
+
+  const unpadded = text.replace(/=+$/, "");
+  if (unpadded.length % 4 === 1) {
+    return false;
+  }
+  const suppliedPadding = text.slice(unpadded.length);
+  const canonicalPadding = "=".repeat((4 - (unpadded.length % 4)) % 4);
+  if (suppliedPadding && suppliedPadding !== canonicalPadding) {
+    return false;
+  }
+
+  try {
+    const decoded = Buffer.from(unpadded, "base64url");
+    return decoded.toString("base64url") === unpadded
+      && decoded[0] === 0x80
+      && decoded.length >= 73
+      && (decoded.length - 57) % 16 === 0;
+  } catch {
+    return false;
+  }
+}
 
 function asDisplayablePrompt(value: unknown): string | undefined {
   const text = asString(value);
@@ -68,7 +92,7 @@ function asDisplayablePrompt(value: unknown): string | undefined {
     return undefined;
   }
 
-  return OPAQUE_PROMPT_PATTERN.test(text.trim()) ? undefined : text;
+  return isOpaquePromptEnvelope(text.trim()) ? undefined : text;
 }
 
 function parseJson<T>(value: unknown): T | null {
@@ -203,13 +227,6 @@ function parseChildTranscript(
     if (record.type === "session_meta") {
       name = asString(payload.agent_nickname) ?? name;
       role = asString(payload.agent_role) ?? role;
-      continue;
-    }
-
-    // Multi-agent v2 encrypts the spawn prompt in the parent rollout; the
-    // child transcript's first user message carries the plaintext.
-    if (record.type === "event_msg" && payload.type === "user_message") {
-      prompt ??= asString(payload.message);
       continue;
     }
 

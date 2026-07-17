@@ -6,6 +6,16 @@ function transcript(records: TranscriptRecord[]) {
   return { records };
 }
 
+function validFernetEnvelope(): string {
+  return Buffer.concat([
+    Buffer.from([0x80]),
+    Buffer.alloc(8),
+    Buffer.alloc(16),
+    Buffer.alloc(16),
+    Buffer.alloc(32),
+  ]).toString("base64url");
+}
+
 describe("deriveTranscriptSubagentPartsForTurn", () => {
   test("returns empty before loading when required turn identity is missing", async () => {
     let loadCount = 0;
@@ -300,7 +310,7 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
           name: "spawn_agent",
           arguments: JSON.stringify({
             task_name: "coverage_review",
-            message: `gAAAAAB${"y".repeat(120)}`,
+            message: validFernetEnvelope(),
           }),
           call_id: "call-spawn-v2",
         },
@@ -381,7 +391,7 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
         subagentId: "activity-thread-id",
         subagentName: "Hypatia",
         subagentRole: "coverage_review",
-        subagentPrompt: "Audit test coverage.",
+        subagentPrompt: undefined,
         subagentActionCount: 1,
         toolState: "success",
       }),

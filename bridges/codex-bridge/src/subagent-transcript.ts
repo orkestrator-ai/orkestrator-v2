@@ -29,6 +29,12 @@ export interface TranscriptRecord {
   payload?: Record<string, unknown>;
 }
 
+export interface SubAgentActivityRecord {
+  callId: string;
+  agentThreadId: string;
+  agentPath?: string;
+}
+
 interface MergeablePart {
   type: string;
 }
@@ -49,6 +55,44 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+// Multi-agent v2 rollouts persist inter-agent prompts as Fernet envelopes.
+// Detect the binary layout instead of treating every long base64url-like task
+// as encrypted: version + timestamp + IV + block ciphertext + HMAC.
+function isOpaquePromptEnvelope(text: string): boolean {
+  if (!/^[A-Za-z0-9_-]+={0,2}$/.test(text)) {
+    return false;
+  }
+
+  const unpadded = text.replace(/=+$/, "");
+  if (unpadded.length % 4 === 1) {
+    return false;
+  }
+  const suppliedPadding = text.slice(unpadded.length);
+  const canonicalPadding = "=".repeat((4 - (unpadded.length % 4)) % 4);
+  if (suppliedPadding && suppliedPadding !== canonicalPadding) {
+    return false;
+  }
+
+  try {
+    const decoded = Buffer.from(unpadded, "base64url");
+    return decoded.toString("base64url") === unpadded
+      && decoded[0] === 0x80
+      && decoded.length >= 73
+      && (decoded.length - 57) % 16 === 0;
+  } catch {
+    return false;
+  }
+}
+
+function asDisplayablePrompt(value: unknown): string | undefined {
+  const text = asString(value);
+  if (!text) {
+    return undefined;
+  }
+
+  return isOpaquePromptEnvelope(text.trim()) ? undefined : text;
 }
 
 function parseJson<T>(value: unknown): T | null {
@@ -171,6 +215,7 @@ function parseChildTranscript(
 
   let name = base.nickname;
   let role = base.role;
+  let prompt = base.prompt;
   let state: ToolState = "pending";
 
   for (const record of records) {
@@ -272,7 +317,7 @@ function parseChildTranscript(
     subagentId: base.agentId,
     subagentName: name,
     subagentRole: role,
-    subagentPrompt: base.prompt,
+    subagentPrompt: prompt,
     subagentActions: actions,
     subagentActionCount: actionCount,
     toolState: state,
@@ -303,11 +348,85 @@ export function parseTranscriptRecords(lines: string[]): TranscriptRecord[] {
   return records;
 }
 
-function parseWaitAgentOutcomeByAgentId(
+/**
+ * Multi-agent v2 spawn outputs no longer expose the child thread ID; it is
+ * published through sub_agent_activity event records whose event_id matches
+ * the originating collaboration tool call_id.
+ */
+export function parseSubAgentActivityRecords(
+  records: TranscriptRecord[],
+): SubAgentActivityRecord[] {
+  const activities: SubAgentActivityRecord[] = [];
+
+  for (const record of records) {
+    const payload = record.payload;
+    if (!payload || record.type !== "event_msg" || payload.type !== "sub_agent_activity") {
+      continue;
+    }
+
+    const callId = asString(payload.event_id);
+    const agentThreadId = asString(payload.agent_thread_id);
+    if (!callId || !agentThreadId) {
+      continue;
+    }
+
+    activities.push({
+      callId,
+      agentThreadId,
+      agentPath: asString(payload.agent_path),
+    });
+  }
+
+  return activities;
+}
+
+function outcomeFromAgentStatus(status: unknown): SubagentOutcome | undefined {
+  if (typeof status === "string") {
+    if (status === "completed" || status === "shutdown") {
+      return "success";
+    }
+    if (status === "errored" || status === "interrupted" || status === "not_found") {
+      return "failure";
+    }
+    return undefined;
+  }
+
+  if (!isRecord(status)) {
+    return undefined;
+  }
+
+  if (typeof status.completed === "string") {
+    return "success";
+  }
+
+  if (
+    typeof status.failed === "string"
+    || typeof status.error === "string"
+    || typeof status.errored === "string"
+    || status.cancelled === true
+    || status.aborted === true
+  ) {
+    return "failure";
+  }
+
+  return undefined;
+}
+
+function parseCollabOutcomeByAgentId(
   parentRecords: TranscriptRecord[],
+  agentIdByPath: ReadonlyMap<string, string>,
 ): Map<string, SubagentOutcome> {
   const outcomeByAgentId = new Map<string, SubagentOutcome>();
   const waitAgentCallIds = new Set<string>();
+  const listAgentsCallIds = new Set<string>();
+
+  const recordOutcome = (agentKey: string, status: unknown): void => {
+    const outcome = outcomeFromAgentStatus(status);
+    if (!outcome) {
+      return;
+    }
+    outcomeByAgentId.set(agentIdByPath.get(agentKey) ?? agentKey, outcome);
+  };
 
   for (const record of parentRecords) {
     const payload = record.payload;
@@ -316,10 +435,16 @@ function parseWaitAgentOutcomeByAgentId(
     }
 
     const payloadType = asString(payload.type);
-    if (payloadType === "function_call" && asString(payload.name) === "wait_agent") {
+    if (payloadType === "function_call") {
       const callId = asString(payload.call_id);
-      if (callId) {
+      if (!callId) {
+        continue;
+      }
+      const name = asString(payload.name);
+      if (name === "wait_agent") {
         waitAgentCallIds.add(callId);
+      } else if (name === "list_agents") {
+        listAgentsCallIds.add(callId);
       }
       continue;
     }
@@ -329,32 +454,40 @@ function parseWaitAgentOutcomeByAgentId(
     }
 
     const callId = asString(payload.call_id);
-    if (!callId || !waitAgentCallIds.has(callId)) {
+    if (!callId) {
       continue;
     }
 
-    const output = parseJson<Record<string, unknown>>(payload.output);
-    if (!isRecord(output?.status)) {
+    if (waitAgentCallIds.has(callId)) {
+      const output = parseJson<Record<string, unknown>>(payload.output);
+      if (!isRecord(output?.status)) {
+        continue;
+      }
+
+      for (const [agentKey, status] of Object.entries(output.status)) {
+        recordOutcome(agentKey, status);
+      }
       continue;
     }
 
-    for (const [agentId, status] of Object.entries(output.status)) {
-      if (!isRecord(status)) {
+    // Multi-agent v2 wait_agent outputs carry no per-agent status; the
+    // authoritative terminal states appear in list_agents outputs keyed by
+    // agent path.
+    if (listAgentsCallIds.has(callId)) {
+      const output = parseJson<Record<string, unknown>>(payload.output);
+      if (!Array.isArray(output?.agents)) {
         continue;
       }
 
-      if (typeof status.completed === "string") {
-        outcomeByAgentId.set(agentId, "success");
-        continue;
-      }
-
-      if (
-        typeof status.failed === "string"
-        || typeof status.error === "string"
-        || status.cancelled === true
-        || status.aborted === true
-      ) {
-        outcomeByAgentId.set(agentId, "failure");
+      for (const agent of output.agents) {
+        if (!isRecord(agent)) {
+          continue;
+        }
+        const agentName = asString(agent.agent_name);
+        if (!agentName) {
+          continue;
+        }
+        recordOutcome(agentName, agent.agent_status);
       }
     }
   }
@@ -369,7 +502,19 @@ export function deriveSubagentPartsFromTranscriptRecords(
 ): TranscriptSubagentPart[] {
   const spawnedSubagents: SpawnedSubagent[] = [];
   const spawnedSubagentByCallId = new Map<string, SpawnedSubagent>();
-  const waitAgentOutcomeByAgentId = parseWaitAgentOutcomeByAgentId(parentRecords);
+
+  const activityAgentIdByCallId = new Map<string, string>();
+  const agentIdByPath = new Map<string, string>();
+  for (const activity of parseSubAgentActivityRecords(parentRecords)) {
+    if (!activityAgentIdByCallId.has(activity.callId)) {
+      activityAgentIdByCallId.set(activity.callId, activity.agentThreadId);
+    }
+    if (activity.agentPath && !agentIdByPath.has(activity.agentPath)) {
+      agentIdByPath.set(activity.agentPath, activity.agentThreadId);
+    }
+  }
+
+  const collabOutcomeByAgentId = parseCollabOutcomeByAgentId(parentRecords, agentIdByPath);
 
   for (const record of parentRecords) {
     const payload = record.payload;
@@ -387,9 +532,10 @@ export function deriveSubagentPartsFromTranscriptRecords(
       const args = parseJson<Record<string, unknown>>(payload.arguments);
       const spawned: SpawnedSubagent = {
         callId,
-        agentId: resolvedAgentIdBySpawnCallId.get(callId),
-        role: asString(args?.agent_type),
-        prompt: asString(args?.message),
+        agentId: resolvedAgentIdBySpawnCallId.get(callId)
+          ?? activityAgentIdByCallId.get(callId),
+        role: asString(args?.agent_type) ?? asString(args?.task_name),
+        prompt: asDisplayablePrompt(args?.message),
       };
       spawnedSubagents.push(spawned);
       spawnedSubagentByCallId.set(callId, spawned);
@@ -410,6 +556,7 @@ export function deriveSubagentPartsFromTranscriptRecords(
       const output = parseJson<Record<string, unknown>>(payload.output);
       spawned.agentId = asString(output?.agent_id)
         ?? resolvedAgentIdBySpawnCallId.get(callId)
+        ?? activityAgentIdByCallId.get(callId)
         ?? spawned.agentId;
       spawned.nickname = asString(output?.nickname) ?? spawned.nickname;
     }
@@ -419,7 +566,7 @@ export function deriveSubagentPartsFromTranscriptRecords(
     const childRecords = spawned.agentId ? childRecordsByAgentId.get(spawned.agentId) ?? [] : [];
     const part = parseChildTranscript(childRecords, spawned);
     const parentOutcome = spawned.agentId
-      ? waitAgentOutcomeByAgentId.get(spawned.agentId)
+      ? collabOutcomeByAgentId.get(spawned.agentId)
       : undefined;
 
     return {

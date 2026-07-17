@@ -6,6 +6,16 @@ function transcript(records: TranscriptRecord[]) {
   return { records };
 }
 
+function validFernetEnvelope(): string {
+  return Buffer.concat([
+    Buffer.from([0x80]),
+    Buffer.alloc(8),
+    Buffer.alloc(16),
+    Buffer.alloc(16),
+    Buffer.alloc(32),
+  ]).toString("base64url");
+}
+
 describe("deriveTranscriptSubagentPartsForTurn", () => {
   test("returns empty before loading when required turn identity is missing", async () => {
     let loadCount = 0;
@@ -286,6 +296,104 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
             toolOutput: "clean",
           }),
         ],
+      }),
+    ]);
+  });
+
+  test("resolves multi-agent v2 spawns via sub_agent_activity ahead of positional fallbacks", async () => {
+    const parentRecords: TranscriptRecord[] = [
+      {
+        timestamp: "2026-07-17T20:43:07.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: JSON.stringify({
+            task_name: "coverage_review",
+            message: validFernetEnvelope(),
+          }),
+          call_id: "call-spawn-v2",
+        },
+      },
+      {
+        timestamp: "2026-07-17T20:43:08.706Z",
+        type: "event_msg",
+        payload: {
+          type: "sub_agent_activity",
+          event_id: "call-spawn-v2",
+          agent_thread_id: "activity-thread-id",
+          agent_path: "/root/coverage_review",
+          kind: "started",
+        },
+      },
+      {
+        timestamp: "2026-07-17T20:43:08.800Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-spawn-v2",
+          output: JSON.stringify({ task_name: "/root/coverage_review" }),
+        },
+      },
+    ];
+    const childRecords: TranscriptRecord[] = [
+      {
+        timestamp: "2026-07-17T20:43:08.701Z",
+        type: "session_meta",
+        payload: { id: "activity-thread-id", agent_nickname: "Hypatia" },
+      },
+      {
+        timestamp: "2026-07-17T20:43:09.000Z",
+        type: "event_msg",
+        payload: { type: "user_message", message: "Audit test coverage." },
+      },
+      {
+        timestamp: "2026-07-17T20:43:10.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "exec",
+          call_id: "child-call",
+          input: "bun test",
+          status: "completed",
+          output: "all green",
+        },
+      },
+      {
+        timestamp: "2026-07-17T20:44:00.000Z",
+        type: "event_msg",
+        payload: { type: "task_complete" },
+      },
+    ];
+    const requestedThreadIds: string[] = [];
+
+    const parts = await deriveTranscriptSubagentPartsForTurn({
+      threadId: "parent-thread-id",
+      currentTurnStartedAt: "2026-07-17T20:43:00.000Z",
+      fallbackAgentIdsInSpawnOrder: ["stale-fallback-id"],
+      loadSessionMeta: async (id) => {
+        requestedThreadIds.push(id);
+        if (id === "parent-thread-id") {
+          return { transcriptPath: "/tmp/parent.jsonl" };
+        }
+        if (id === "activity-thread-id") {
+          return { transcriptPath: "/tmp/child.jsonl" };
+        }
+        return null;
+      },
+      loadTranscript: async (path) =>
+        path.endsWith("parent.jsonl") ? transcript(parentRecords) : transcript(childRecords),
+    });
+
+    expect(requestedThreadIds).toEqual(["parent-thread-id", "activity-thread-id"]);
+    expect(parts).toEqual([
+      expect.objectContaining({
+        subagentId: "activity-thread-id",
+        subagentName: "Hypatia",
+        subagentRole: "coverage_review",
+        subagentPrompt: undefined,
+        subagentActionCount: 1,
+        toolState: "success",
       }),
     ]);
   });

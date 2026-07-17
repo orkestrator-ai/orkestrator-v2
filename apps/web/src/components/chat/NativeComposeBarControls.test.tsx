@@ -149,6 +149,24 @@ describe("native compose bar controls", () => {
     }
   });
 
+  test("keeps the Codex Fast toggle beside the reasoning selector", () => {
+    const { container } = renderCodexComposeBar();
+    const primary = container.querySelector<HTMLElement>(
+      '[data-native-compose-controls="primary"]',
+    );
+    const secondary = container.querySelector<HTMLElement>(
+      '[data-native-compose-controls="secondary"]',
+    );
+    const reasoning = container.querySelector<HTMLButtonElement>(
+      'button[title="Choose reasoning effort"]',
+    );
+    const fast = container.querySelector<HTMLButtonElement>('button[aria-pressed="false"]');
+
+    expect(primary?.contains(fast ?? null)).toBe(true);
+    expect(secondary?.contains(fast ?? null)).toBe(false);
+    expect(reasoning?.nextElementSibling).toBe(fast);
+  });
+
   test("hides a disabled send button while Stop is visible", () => {
     renderCodexComposeBar(true);
 

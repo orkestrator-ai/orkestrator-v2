@@ -41,6 +41,7 @@ pids/
 # Coverage
 coverage/
 .nyc_output/
+/output/playwright/
 
 # TypeScript
 *.tsbuildinfo

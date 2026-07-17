@@ -161,4 +161,92 @@ describe("deriveTranscriptSubagentPartsForTurn", () => {
       },
     ]);
   });
+
+  test("uses streamed receiver IDs when spawn outputs contain only task names", async () => {
+    const parentRecords: TranscriptRecord[] = [
+      {
+        timestamp: "2026-07-17T17:02:45.778Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: JSON.stringify({ task_name: "review", message: "encrypted" }),
+          call_id: "call-spawn",
+        },
+      },
+      {
+        timestamp: "2026-07-17T17:02:45.922Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-spawn",
+          output: JSON.stringify({ task_name: "/root/review" }),
+        },
+      },
+    ];
+    const childRecords: TranscriptRecord[] = [
+      {
+        timestamp: "2026-07-17T17:02:45.916Z",
+        type: "session_meta",
+        payload: {
+          id: "child-thread-id",
+          agent_nickname: "Ampere",
+        },
+      },
+      {
+        timestamp: "2026-07-17T17:02:46.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "exec",
+          call_id: "child-call",
+          input: "git diff --check",
+          status: "completed",
+          output: "clean",
+        },
+      },
+      {
+        timestamp: "2026-07-17T17:02:47.000Z",
+        type: "event_msg",
+        payload: { type: "task_complete" },
+      },
+    ];
+    const requestedThreadIds: string[] = [];
+
+    const parts = await deriveTranscriptSubagentPartsForTurn({
+      threadId: "parent-thread-id",
+      currentTurnStartedAt: "2026-07-17T17:02:00.000Z",
+      fallbackAgentIdsInSpawnOrder: ["child-thread-id"],
+      loadSessionMeta: async (id) => {
+        requestedThreadIds.push(id);
+        if (id === "parent-thread-id") {
+          return { transcriptPath: "/tmp/parent.jsonl" };
+        }
+        if (id === "child-thread-id") {
+          return { transcriptPath: "/tmp/child.jsonl" };
+        }
+        return null;
+      },
+      loadTranscript: async (path) =>
+        path.endsWith("parent.jsonl") ? transcript(parentRecords) : transcript(childRecords),
+    });
+
+    expect(requestedThreadIds).toEqual(["parent-thread-id", "child-thread-id"]);
+    expect(parts).toEqual([
+      expect.objectContaining({
+        subagentId: "child-thread-id",
+        subagentName: "Ampere",
+        subagentActionCount: 1,
+        toolState: "success",
+        subagentActions: [
+          expect.objectContaining({
+            type: "tool-invocation",
+            toolName: "exec",
+            toolState: "success",
+            toolOutput: "clean",
+          }),
+        ],
+      }),
+    ]);
+  });
 });

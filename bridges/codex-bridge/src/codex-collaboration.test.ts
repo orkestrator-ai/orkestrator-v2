@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { TranscriptSubagentPart } from "./subagent-transcript.js";
 import {
   applyCodexCollabStateToSubagentParts,
+  getCodexSpawnedAgentIdsInOrder,
   isCodexCollabToolCallItem,
   normalizeCodexCollabToolCallItem,
   reconcileCodexSubagentTimeline,
@@ -66,6 +67,29 @@ describe("Codex collaboration payload normalization", () => {
       agents_states: { "agent-1": { message: 42 } },
     })).toBe(false);
     expect(() => applyCodexCollabStateToSubagentParts([], [normalized])).not.toThrow();
+  });
+
+  test("returns spawned receiver thread IDs in invocation order", () => {
+    expect(getCodexSpawnedAgentIdsInOrder([
+      {
+        id: "spawn-1",
+        type: "collab_tool_call",
+        tool: "spawn_agent",
+        receiver_thread_ids: ["agent-1"],
+      },
+      {
+        id: "wait-1",
+        type: "collab_tool_call",
+        tool: "wait",
+        receiver_thread_ids: ["agent-1"],
+      },
+      {
+        id: "spawn-2",
+        type: "collab_tool_call",
+        tool: "spawn",
+        agents_states: { "agent-2": { status: "running" } },
+      },
+    ])).toEqual(["agent-1", "agent-2"]);
   });
 });
 

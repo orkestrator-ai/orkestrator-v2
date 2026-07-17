@@ -26,6 +26,7 @@ import {
   applyCodexCollabStateToSubagentParts,
   CODEX_TIMELINE_ITEM_PREFIX,
   CODEX_TIMELINE_SUBAGENT_PREFIX,
+  getCodexSpawnedAgentIdsInOrder,
   normalizeCodexCollabToolCallItem,
   reconcileCodexSubagentTimeline,
   type CodexCollabToolCallItem,
@@ -1625,16 +1626,17 @@ interface AssistantRebuildSnapshot {
 async function buildTranscriptSubagentParts(
   snapshot: AssistantRebuildSnapshot,
 ): Promise<NormalizedPart[]> {
+  const items = snapshot.currentItemOrder
+    .map((id) => snapshot.currentItems.get(id))
+    .filter((item): item is BridgeThreadItem => item !== undefined);
   const transcriptParts = await deriveTranscriptSubagentPartsForTurn({
     threadId: snapshot.threadId,
     currentTurnStartedAt:
       snapshot.currentAssistantTurnStartedAt ?? snapshot.currentTurnStartedAt,
+    fallbackAgentIdsInSpawnOrder: getCodexSpawnedAgentIdsInOrder(items),
     loadSessionMeta: (threadId) => getPersistedSessionMeta(threadId),
     loadTranscript: (path) => readCachedTranscript(path),
   });
-  const items = snapshot.currentItemOrder
-    .map((id) => snapshot.currentItems.get(id))
-    .filter((item): item is BridgeThreadItem => item !== undefined);
   const reconciledParts = applyCodexCollabStateToSubagentParts(transcriptParts, items);
 
   return reconciledParts.map((part: TranscriptSubagentPart) => ({

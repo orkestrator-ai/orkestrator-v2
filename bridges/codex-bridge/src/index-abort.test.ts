@@ -445,6 +445,123 @@ describe("codex bridge abort handling", () => {
     expect(assistants[1]?.parts).toEqual([{ type: "text", content: "Direct answer" }]);
   });
 
+  test("rebuilds task-name-only spawns with actions from the streamed child thread ID", async () => {
+    await withBridgeEnv(async ({ codexHome, cwd }) => {
+      const parentThreadId = "parent-thread-id";
+      const childThreadId = "child-thread-id";
+      const sessionsDir = join(codexHome, "sessions", "2026", "07", "17");
+      mkdirSync(sessionsDir, { recursive: true });
+      writeFileSync(
+        join(sessionsDir, `rollout-${parentThreadId}.jsonl`),
+        [
+          JSON.stringify({
+            timestamp: "2026-07-17T17:02:00.000Z",
+            type: "session_meta",
+            payload: { id: parentThreadId, cwd },
+          }),
+          JSON.stringify({
+            timestamp: "2026-07-17T17:02:45.778Z",
+            type: "response_item",
+            payload: {
+              type: "function_call",
+              name: "spawn_agent",
+              call_id: "call-spawn",
+              arguments: JSON.stringify({ task_name: "review", message: "encrypted" }),
+            },
+          }),
+          JSON.stringify({
+            timestamp: "2026-07-17T17:02:45.922Z",
+            type: "response_item",
+            payload: {
+              type: "function_call_output",
+              call_id: "call-spawn",
+              output: JSON.stringify({ task_name: "/root/review" }),
+            },
+          }),
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(
+        join(sessionsDir, `rollout-${childThreadId}.jsonl`),
+        [
+          JSON.stringify({
+            timestamp: "2026-07-17T17:02:45.916Z",
+            type: "session_meta",
+            payload: { id: childThreadId, cwd, agent_nickname: "Ampere" },
+          }),
+          JSON.stringify({
+            timestamp: "2026-07-17T17:02:46.000Z",
+            type: "response_item",
+            payload: {
+              type: "custom_tool_call",
+              name: "exec",
+              call_id: "child-call",
+              input: "git diff --check",
+              status: "completed",
+              output: "clean",
+            },
+          }),
+          JSON.stringify({
+            timestamp: "2026-07-17T17:02:47.000Z",
+            type: "event_msg",
+            payload: { type: "task_complete" },
+          }),
+          "",
+        ].join("\n"),
+      );
+
+      const assistantMessage = {
+        id: "assistant-message",
+        role: "assistant",
+        content: "",
+        parts: [],
+        createdAt: "2026-07-17T17:02:00.000Z",
+      };
+      const session = createSession({
+        id: "task-name-spawn-session",
+        threadId: parentThreadId,
+        status: "running",
+        currentAssistantMessageId: assistantMessage.id,
+        currentAssistantTurnStartedAt: "2026-07-17T17:02:00.000Z",
+        messages: [assistantMessage],
+        currentItems: new Map([
+          [
+            "spawn",
+            {
+              id: "spawn",
+              type: "collab_tool_call",
+              tool: "spawn_agent",
+              receiver_thread_ids: [childThreadId],
+              agents_states: { [childThreadId]: { status: "completed" } },
+              status: "completed",
+            },
+          ],
+        ]),
+        currentItemOrder: ["spawn"],
+      });
+
+      await __testing.rebuildAssistantMessage(session);
+
+      expect(assistantMessage.parts).toEqual([
+        expect.objectContaining({
+          type: "subagent",
+          subagentId: childThreadId,
+          subagentName: "Ampere",
+          subagentActionCount: 1,
+          toolState: "success",
+          subagentActions: [
+            expect.objectContaining({
+              type: "tool-invocation",
+              toolName: "exec",
+              toolState: "success",
+              toolOutput: "clean",
+            }),
+          ],
+        }),
+      ]);
+    });
+  });
+
   test("runPrompt appends changed todo lists at their stream positions", async () => {
     const streams: ReturnType<typeof createStreamController>[] = [];
     const session = createSession({

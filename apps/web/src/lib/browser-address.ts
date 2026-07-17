@@ -9,6 +9,22 @@ export interface BrowserAddress {
   iframeUrl: string;
 }
 
+/**
+ * Direct previews keep their real origin (the iframe grants allow-same-origin),
+ * so previewing the renderer's own origin would let previewed code lift its
+ * sandbox and reach the app. Electron's main process already blocks subframe
+ * navigation onto the renderer; this keeps the invariant in browser contexts
+ * that have no main process. A server bound to a loopback port answers on
+ * every loopback alias, so any loopback address sharing the renderer's port
+ * is the renderer.
+ */
+function isRendererServedAddress(previewUrl: URL): boolean {
+  if (typeof window === "undefined") return false;
+  const renderer = window.location;
+  if (renderer.protocol !== "http:" || !LOOPBACK_HOSTS.has(renderer.hostname)) return false;
+  return (renderer.port || "80") === (previewUrl.port || "80");
+}
+
 export function resolveBrowserAddress(value: string): BrowserAddress {
   if (!isGatewayBrowserPreviewSupported()) {
     throw new Error("Browser previews are only available in the desktop app when connected remotely.");
@@ -46,8 +62,9 @@ export function resolveBrowserAddress(value: string): BrowserAddress {
   }
 
   const displayUrl = url.toString();
-  return {
-    displayUrl,
-    iframeUrl: resolveGatewayBrowserPreviewUrl(displayUrl),
-  };
+  const iframeUrl = resolveGatewayBrowserPreviewUrl(displayUrl);
+  if (iframeUrl === displayUrl && isRendererServedAddress(url)) {
+    throw new Error("This address serves the Orkestrator app itself. Enter the address of a service you want to preview.");
+  }
+  return { displayUrl, iframeUrl };
 }

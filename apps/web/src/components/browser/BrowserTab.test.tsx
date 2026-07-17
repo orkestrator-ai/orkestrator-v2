@@ -6,10 +6,12 @@ import { BrowserTab } from "./BrowserTab";
 const happyDOM = (window as unknown as Window & {
   happyDOM: {
     abort: () => Promise<void>;
+    setURL(url: string): void;
     settings: { disableIframePageLoading: boolean };
   };
 }).happyDOM;
 const originalDisableIframePageLoading = happyDOM.settings.disableIframePageLoading;
+const originalHref = window.location.href;
 let consoleErrorSpy: ReturnType<typeof spyOn> | undefined;
 
 function setBrowserTab(url = "") {
@@ -38,6 +40,8 @@ describe("BrowserTab", () => {
   afterEach(async () => {
     cleanup();
     await happyDOM.abort();
+    happyDOM.setURL(originalHref);
+    delete window.orkestratorGateway;
     consoleErrorSpy?.mockRestore();
     consoleErrorSpy = undefined;
   });
@@ -133,6 +137,61 @@ describe("BrowserTab", () => {
     expect(sandbox).not.toContain("allow-popups");
     expect(sandbox).not.toContain("allow-downloads");
     expect(iframe?.hasAttribute("referrerpolicy")).toBe(false);
+  });
+
+  test("refuses to preview the app's own origin", () => {
+    happyDOM.setURL("http://127.0.0.1:5173/");
+    const { container } = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "" }}
+        isActive
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "localhost:5173" } });
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+
+    expect(screen.getByRole("alert").textContent).toContain("Orkestrator app itself");
+    expect(container.querySelector("iframe")).toBeNull();
+  });
+
+  test("stays mounted but hidden while another tab is active", () => {
+    setBrowserTab("http://localhost:3000/");
+    const { container } = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive={false}
+      />,
+    );
+
+    expect(container.firstElementChild?.className).toContain("hidden");
+    expect(container.querySelector("iframe")?.getAttribute("src")).toBe("http://localhost:3000/");
+  });
+
+  test("renders non-Error resolution failures as text", () => {
+    render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "" }}
+        isActive
+      />,
+    );
+    Object.defineProperty(window, "orkestratorGateway", {
+      configurable: true,
+      get() {
+        throw "gateway probe failed";
+      },
+    });
+
+    fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "3000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+
+    expect(screen.getByRole("alert").textContent).toBe("gateway probe failed");
   });
 
   test("moves backward and forward through browser history", () => {

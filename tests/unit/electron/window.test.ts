@@ -160,6 +160,69 @@ describe("createMainWindow", () => {
     expect(openHandler?.()).toEqual({ action: "deny" });
   });
 
+  test("loads the renderer from an explicit rendererRoot and trusts only that location", async () => {
+    const harness = createHarness();
+
+    await createMainWindow({
+      BrowserWindowCtor: harness.FakeBrowserWindow as never,
+      menu: harness.menu,
+      dirname: "/app/apps/desktop/dist/electron",
+      isDev: false,
+      appPath: "/app",
+      rendererRoot: "/custom/renderer",
+    });
+
+    const customIndexUrl = pathToFileURL(path.join("/custom/renderer", "index.html")).href;
+    expect(harness.windows[0].loadFile).toHaveBeenCalledWith(
+      path.join("/custom/renderer", "index.html"),
+    );
+
+    const onWillNavigate = harness.webContentsListeners.get("will-navigate");
+    const trustedNavigation = { url: customIndexUrl, preventDefault: mock(() => undefined) };
+    onWillNavigate?.(trustedNavigation);
+    expect(trustedNavigation.preventDefault).not.toHaveBeenCalled();
+
+    const defaultLocationNavigation = {
+      url: pathToFileURL(path.join("/app", "dist", "index.html")).href,
+      preventDefault: mock(() => undefined),
+    };
+    onWillNavigate?.(defaultLocationNavigation);
+    expect(defaultLocationNavigation.preventDefault).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps preview subframes away from the packaged renderer in production", async () => {
+    const harness = createHarness();
+
+    await createMainWindow({
+      BrowserWindowCtor: harness.FakeBrowserWindow as never,
+      menu: harness.menu,
+      dirname: "/app/apps/desktop/dist/electron",
+      isDev: false,
+      appPath: "/app",
+    });
+
+    for (const eventName of ["will-frame-navigate", "will-redirect"]) {
+      const listener = harness.webContentsListeners.get(eventName);
+      expect(listener).toBeTruthy();
+
+      const rendererFileNavigation = {
+        url: pathToFileURL(path.join("/app", "dist", "index.html")).href,
+        isMainFrame: false,
+        preventDefault: mock(() => undefined),
+      };
+      listener?.(rendererFileNavigation);
+      expect(rendererFileNavigation.preventDefault).toHaveBeenCalledTimes(1);
+
+      const malformedNavigation = {
+        url: "not a URL",
+        isMainFrame: false,
+        preventDefault: mock(() => undefined),
+      };
+      expect(() => listener?.(malformedNavigation)).not.toThrow();
+      expect(malformedNavigation.preventDefault).not.toHaveBeenCalled();
+    }
+  });
+
   test("keeps preview subframes away from the privileged renderer origin", async () => {
     const harness = createHarness();
 

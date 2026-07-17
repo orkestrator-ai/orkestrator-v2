@@ -70,7 +70,7 @@ export function BrowserTab({
   // preview from reaching the parent app or its authenticated gateway routes.
   // They also retain the referrer because gateway routing uses it to recover
   // runtime-built root-relative requests that cannot be statically rewritten.
-  const isDirectPreview = resolved?.iframeUrl === resolved?.displayUrl;
+  const isDirectPreview = resolved !== null && resolved.iframeUrl === resolved.displayUrl;
   const previewSandbox = isDirectPreview
     ? `${OPAQUE_PREVIEW_SANDBOX} allow-same-origin`
     : OPAQUE_PREVIEW_SANDBOX;

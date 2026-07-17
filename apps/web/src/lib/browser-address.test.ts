@@ -1,8 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { resolveBrowserAddress } from "./browser-address";
 
+const happyDOM = (window as unknown as Window & {
+  happyDOM: { setURL(url: string): void };
+}).happyDOM;
+const originalHref = window.location.href;
+
 afterEach(() => {
   delete window.orkestratorGateway;
+  happyDOM.setURL(originalHref);
 });
 
 describe("resolveBrowserAddress", () => {
@@ -51,6 +57,36 @@ describe("resolveBrowserAddress", () => {
   test("supports IPv6 loopback and the default HTTP port", () => {
     expect(resolveBrowserAddress("[::1]:4173/app").displayUrl).toBe("http://[::1]:4173/app");
     expect(resolveBrowserAddress("localhost").displayUrl).toBe("http://localhost/");
+  });
+
+  test("refuses direct previews of the renderer's own origin, including loopback aliases", () => {
+    happyDOM.setURL("http://127.0.0.1:5173/");
+
+    expect(() => resolveBrowserAddress("127.0.0.1:5173")).toThrow("Orkestrator app itself");
+    expect(() => resolveBrowserAddress("localhost:5173/settings")).toThrow("Orkestrator app itself");
+    expect(() => resolveBrowserAddress("[::1]:5173")).toThrow("Orkestrator app itself");
+    expect(resolveBrowserAddress("localhost:3000").displayUrl).toBe("http://localhost:3000/");
+  });
+
+  test("matches the renderer's implicit default HTTP port", () => {
+    happyDOM.setURL("http://localhost/");
+
+    expect(() => resolveBrowserAddress("127.0.0.1:80")).toThrow("Orkestrator app itself");
+    expect(() => resolveBrowserAddress("localhost")).toThrow("Orkestrator app itself");
+    expect(resolveBrowserAddress("localhost:3000").displayUrl).toBe("http://localhost:3000/");
+  });
+
+  test("allows gateway previews sharing the renderer's port, which stay opaque and remote", () => {
+    happyDOM.setURL("http://127.0.0.1:5173/");
+    window.orkestratorGateway = {
+      enabled: true,
+      desktop: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+
+    expect(resolveBrowserAddress("localhost:5173").iframeUrl).toBe(
+      "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/5173/",
+    );
   });
 
   test("rejects embedded credentials, malformed input, and invalid boundary ports", () => {

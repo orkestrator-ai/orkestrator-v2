@@ -353,6 +353,45 @@ describe("Electron tmux backend command registration", () => {
     });
   });
 
+  test("starts local Claude sessions with the managed toolchain binary", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, log }) => {
+      const toolchainBinDir = await createTempDir("ork-tmux-toolchain-");
+      const managedClaude = path.join(toolchainBinDir, "claude");
+      await fs.writeFile(managedClaude, `#!/bin/sh
+case "$1" in
+  --version) printf '2.1.2\n' ;;
+  --help) printf '%s\n' '--session-id <uuid>' ;;
+esac
+exit 0
+`);
+      await fs.chmod(managedClaude, 0o500);
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+        toolchainBinDir,
+      };
+
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-managed", environmentId: environment.id },
+        context,
+      );
+
+      expect(await fs.readFile(log, "utf8")).toContain(managedClaude);
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-managed", environmentId: environment.id },
+        context,
+      );
+    });
+  });
+
   test("starts with installed hooks, reads transcripts, replies to hooks, and maps interactive input", async () => {
     const handlers = createHandlers();
 

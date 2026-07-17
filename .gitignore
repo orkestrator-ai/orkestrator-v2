@@ -13,7 +13,7 @@ out/
 release/
 build/
 
-# Downloaded binaries (downloaded during build)
+# Packaged Bun bootstrap (downloaded only for desktop packaging)
 binaries/
 
 # Package outputs

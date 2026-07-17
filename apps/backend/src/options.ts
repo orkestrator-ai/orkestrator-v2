@@ -9,6 +9,7 @@ export const MACOS_TAILSCALE_APP_CLI = "/Applications/Tailscale.app/Contents/Mac
 
 export type BackendOptions = {
   dataDir: string;
+  toolchainBinDir: string;
   appRoot: string;
   resourceRoot: string;
   rendererRoot: string;
@@ -76,6 +77,7 @@ export function parseOptions(
 ): BackendOptions {
   const sourceRoot = path.resolve(path.dirname(fileURLToPath(sourceUrl)), "../../..");
   const appRoot = path.resolve(valueAfter(args, "--app-root") ?? env.ORKESTRATOR_APP_ROOT ?? sourceRoot);
+  const dataDir = path.resolve(valueAfter(args, "--data-dir") ?? env.ORKESTRATOR_DATA_DIR ?? defaultDataDir(process.platform, env));
   const portValue = valueAfter(args, "--port") ?? env.ORKESTRATOR_GATEWAY_PORT;
   const port = parsePortOption(portValue, "--port");
   const controlPort = parsePortOption(valueAfter(args, "--control-port"), "--control-port");
@@ -87,7 +89,12 @@ export function parseOptions(
     throw new Error("Invalid --tailscale-serve-port value: 0");
   }
   return {
-    dataDir: path.resolve(valueAfter(args, "--data-dir") ?? env.ORKESTRATOR_DATA_DIR ?? defaultDataDir(process.platform, env)),
+    dataDir,
+    toolchainBinDir: path.resolve(
+      valueAfter(args, "--toolchain-bin-dir")
+        ?? env.ORKESTRATOR_TOOLCHAIN_BIN
+        ?? path.join(dataDir, "toolchains", "bin"),
+    ),
     appRoot,
     resourceRoot: path.resolve(valueAfter(args, "--resource-root") ?? env.ORKESTRATOR_RESOURCE_ROOT ?? appRoot),
     rendererRoot: path.resolve(valueAfter(args, "--renderer-root") ?? env.ORKESTRATOR_RENDERER_ROOT ?? path.join(appRoot, "apps", "web", "dist")),

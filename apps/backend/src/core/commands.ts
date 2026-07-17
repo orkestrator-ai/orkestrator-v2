@@ -72,6 +72,7 @@ export type CommandContext = {
   emit: BackendEmit;
   appRoot: string;
   resourceRoot: string;
+  toolchainBinDir?: string;
 };
 
 type CommandHandler = (args: JsonRecord, context: CommandContext) => Promise<unknown> | unknown;
@@ -301,34 +302,36 @@ function makeUniqueEnvironmentSlug(baseSlug: string, existingEnvironments: Envir
   return candidate;
 }
 
-function packagedBinaryCandidates(context: CommandContext, name: string): string[] {
+function managedBinaryCandidates(context: CommandContext, name: string): string[] {
   return [
+    ...(context.toolchainBinDir ? [path.join(context.toolchainBinDir, name)] : []),
     path.join(context.resourceRoot, "bin", name),
     path.join(context.appRoot, "binaries", name),
     path.join(context.appRoot, "bin", name),
   ];
 }
 
-function resolvePackagedBinary(context: CommandContext, name: string): string | undefined {
-  return packagedBinaryCandidates(context, name).find((candidate) => existsSync(candidate));
+function resolveManagedBinary(context: CommandContext, name: string): string | undefined {
+  return managedBinaryCandidates(context, name).find((candidate) => existsSync(candidate));
 }
 
 function resolveCodexBinary(context: CommandContext): string {
-  return resolvePackagedBinary(context, "codex") ?? "codex";
+  return resolveManagedBinary(context, "codex") ?? "codex";
 }
 
 function resolveOpenCodeBinary(context: CommandContext): string {
-  return resolvePackagedBinary(context, "opencode") ?? "opencode";
+  return resolveManagedBinary(context, "opencode") ?? "opencode";
 }
 
 function hasPackagedOrPathBinary(context: CommandContext, name: string): Promise<boolean> {
-  return resolvePackagedBinary(context, name)
+  return resolveManagedBinary(context, name)
     ? Promise.resolve(true)
     : commandExists(name);
 }
 
-function packagedBinaryPathEntries(context: CommandContext): string[] {
+function managedBinaryPathEntries(context: CommandContext): string[] {
   const dirs = [
+    ...(context.toolchainBinDir ? [context.toolchainBinDir] : []),
     path.join(context.resourceRoot, "bin"),
     path.join(context.appRoot, "binaries"),
     path.join(context.appRoot, "bin"),
@@ -336,8 +339,8 @@ function packagedBinaryPathEntries(context: CommandContext): string[] {
   return dirs.filter((dir, index) => existsSync(dir) && dirs.indexOf(dir) === index);
 }
 
-function envWithPackagedBinaries(context: CommandContext, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const entries = packagedBinaryPathEntries(context);
+function envWithManagedBinaries(context: CommandContext, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const entries = managedBinaryPathEntries(context);
   if (entries.length === 0) return { ...env };
   const currentPath = env.PATH ?? "";
   return {
@@ -351,6 +354,7 @@ function envWithPackagedBinaries(context: CommandContext, env: NodeJS.ProcessEnv
 // to a PATH lookup in dev / if the bundled binary is missing.
 function resolveBunBinary(context: CommandContext): string {
   const candidates = [
+    ...(context.toolchainBinDir ? [path.join(context.toolchainBinDir, "bun")] : []),
     path.join(context.resourceRoot, "bin", "bun"),
     path.join(context.appRoot, "binaries", "bun"),
     path.join(context.appRoot, "bin", "bun"),
@@ -1142,7 +1146,7 @@ async function spawnSetupTerminal(
         cwd: environment.worktreePath,
         cols: 80,
         rows: 24,
-        env: envWithPackagedBinaries(context),
+        env: envWithManagedBinaries(context),
       },
       context.emit,
       { onData: tracker.onData, onExit: tracker.onExit },
@@ -2918,7 +2922,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
         cwd: env.worktreePath,
         cols: config.cols,
         rows: config.rows,
-        env: envWithPackagedBinaries(context),
+        env: envWithManagedBinaries(context),
       },
       emit,
     );

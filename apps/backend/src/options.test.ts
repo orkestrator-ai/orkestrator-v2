@@ -32,6 +32,7 @@ describe("standalone backend options", () => {
       "--data-dir", "/tmp/data",
       "--app-root", "/tmp/app",
       "--resource-root", "/tmp/resources",
+      "--toolchain-bin-dir", "/tmp/toolchains/bin",
       "--renderer-root", "/tmp/web",
       "--renderer-dev-server-url", "http://127.0.0.1:1420",
       "--host", "127.0.0.1",
@@ -50,6 +51,7 @@ describe("standalone backend options", () => {
       dataDir: "/tmp/data",
       appRoot: "/tmp/app",
       resourceRoot: "/tmp/resources",
+      toolchainBinDir: "/tmp/toolchains/bin",
       rendererRoot: "/tmp/web",
       rendererDevServerUrl: "http://127.0.0.1:1420",
       host: "127.0.0.1",
@@ -78,6 +80,7 @@ describe("standalone backend options", () => {
     expect(() => parseOptions(["--control-port", "65536"], {})).toThrow("Invalid --control-port value");
     expect(() => parseOptions(["--control-host", "--port", "1"], {})).toThrow("Missing value for --control-host");
     expect(() => parseOptions(["--allowed-origins", "--port", "1"], {})).toThrow("Missing value for --allowed-origins");
+    expect(() => parseOptions(["--toolchain-bin-dir", "--port", "1"], {})).toThrow("Missing value for --toolchain-bin-dir");
     expect(() => parseOptions(["--tailscale-serve-port", "65536"], {})).toThrow("Invalid --tailscale-serve-port value");
     expect(() => parseOptions(["--tailscale-serve-port", "0"], {})).toThrow("Invalid --tailscale-serve-port value");
     expect(() => parseOptions(["--tailscale-bin", "--port", "1"], {})).toThrow("Missing value for --tailscale-bin");
@@ -95,6 +98,15 @@ describe("standalone backend options", () => {
       tailscaleServePort: 9443,
       tailscaleExecutable: "/usr/local/bin/tailscale",
     });
+  });
+
+  test("defaults the managed toolchain to the data directory and supports an environment override", () => {
+    expect(parseOptions(["--data-dir", "/tmp/data"], {}).toolchainBinDir).toBe(
+      path.join("/tmp/data", "toolchains", "bin"),
+    );
+    expect(parseOptions(["--data-dir", "/tmp/data"], {
+      ORKESTRATOR_TOOLCHAIN_BIN: "/opt/orkestrator-tools",
+    }).toolchainBinDir).toBe("/opt/orkestrator-tools");
   });
 
   test("reads allowed origins from the environment and lets CLI values take precedence", () => {

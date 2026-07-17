@@ -28,6 +28,7 @@ const managedWebClient = options.desktopWebClient
   : null;
 const backend = new OrkestratorBackend({
   dataDir: options.dataDir,
+  toolchainBinDir: options.toolchainBinDir,
   appRoot: options.appRoot,
   resourceRoot: options.resourceRoot,
   emit: (event, payload) => gateway?.emit(event, payload),

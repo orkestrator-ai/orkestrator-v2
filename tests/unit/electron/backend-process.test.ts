@@ -59,6 +59,7 @@ describe("Electron backend process supervisor", () => {
       ORKESTRATOR_TAILSCALE_SERVE: "1",
       ORKESTRATOR_TAILSCALE_SERVE_PORT: "8443",
       ORKESTRATOR_TAILSCALE_BIN: "/tmp/tailscale",
+      ORKESTRATOR_TOOLCHAIN_BIN: "/tmp/untrusted-tools",
     };
 
     const development = createBackendProcessEnvironment(parent, true, "/resources");
@@ -213,6 +214,35 @@ describe("Electron backend process supervisor", () => {
     expect(await browserResponse.json()).toEqual({
       result: "Hello, Browser! You've been greeted from the Orkestrator backend!",
     });
+  });
+
+  test("forwards the explicit managed toolchain directory through backend startup", async () => {
+    globalThis.fetch = Bun.fetch;
+    const root = path.resolve(import.meta.dir, "../../..");
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
+    const toolchainBinDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-toolchain-"));
+    directories.push(dataDir, toolchainBinDir);
+    await writeFile(path.join(toolchainBinDir, "codex"), "managed codex");
+    const backendProcess = new BackendProcess();
+    processes.push(backendProcess);
+
+    const client = await backendProcess.start({
+      isDev: true,
+      appRoot: root,
+      resourceRoot: root,
+      dataDir,
+      toolchainBinDir,
+      gatewayHost: "127.0.0.1",
+      gatewayPort: 0,
+      allowNonTailscaleBind: true,
+      onEvent: () => undefined,
+    });
+
+    const child = (backendProcess as unknown as { child: { spawnargs: string[] } }).child;
+    const optionIndex = child.spawnargs.indexOf("--toolchain-bin-dir");
+    expect(optionIndex).toBeGreaterThan(0);
+    expect(child.spawnargs[optionIndex + 1]).toBe(toolchainBinDir);
+    await expect(client.invoke("check_codex_cli")).resolves.toBe(true);
   });
 
   test("manages hosted web access without stopping the Electron backend", async () => {

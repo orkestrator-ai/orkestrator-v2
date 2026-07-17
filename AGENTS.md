@@ -187,13 +187,14 @@ Containers have restricted network access via iptables firewall:
 ## Configuration Storage
 
 Application data is stored in:
-- **macOS**: `~/Library/Application Support/orkestrator-ai/`
-- **Linux**: `~/.config/orkestrator-ai/`
+- **macOS**: `~/Library/Application Support/orkestrator-v2/`
+- **Linux**: `${XDG_CONFIG_HOME:-~/.config}/orkestrator-v2/`
 
 Files:
 - `config.json` - Global and per-repo settings
 - `projects.json` - Repository metadata
 - `environments.json` - Environment metadata and container IDs
+- `toolchains/` - Versioned, hash-verified Codex, OpenCode, and Claude Code executables shared by local environments
 
 ## Testing
 

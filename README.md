@@ -267,8 +267,16 @@ The remote gateway binds only to Tailscale addresses by default and requires a g
 ## Configuration Storage
 
 Application data is stored in:
-- **macOS**: `~/Library/Application Support/orkestrator-ai/`
-- **Linux**: `~/.config/orkestrator-ai/`
+- **macOS**: `~/Library/Application Support/orkestrator-v2/`
+- **Linux**: `${XDG_CONFIG_HOME:-~/.config}/orkestrator-v2/`
+
+On first launch, Orkestrator downloads the pinned Codex, OpenCode, and Claude Code
+executables into the versioned `toolchains/` directory under this location. Each
+archive and extracted executable is checked against hashes embedded in the signed
+desktop application before it is activated. The cache is shared by all local
+worktree environments and reused across application upgrades. Bun remains bundled
+with the desktop application so the backend can always start and report download
+or recovery errors.
 
 ## Tech Stack
 

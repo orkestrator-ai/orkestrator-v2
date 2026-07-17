@@ -45,6 +45,7 @@ export function createBackendProcessEnvironment(
   delete env.ORKESTRATOR_TAILSCALE_SERVE;
   delete env.ORKESTRATOR_TAILSCALE_SERVE_PORT;
   delete env.ORKESTRATOR_TAILSCALE_BIN;
+  delete env.ORKESTRATOR_TOOLCHAIN_BIN;
   return env;
 }
 
@@ -165,6 +166,7 @@ export class BackendProcess {
     appRoot: string;
     resourceRoot: string;
     dataDir: string;
+    toolchainBinDir?: string;
     rendererDevServerUrl?: string;
     gatewayHost?: string;
     gatewayPort?: number;
@@ -188,6 +190,7 @@ export class BackendProcess {
     appRoot: string;
     resourceRoot: string;
     dataDir: string;
+    toolchainBinDir?: string;
     rendererDevServerUrl?: string;
     gatewayHost?: string;
     gatewayPort?: number;
@@ -206,6 +209,7 @@ export class BackendProcess {
       "--control-host", "127.0.0.1", "--control-port", "0",
       "--data-dir", options.dataDir, "--app-root", options.appRoot, "--resource-root", options.resourceRoot,
       "--renderer-root", options.isDev ? path.join(options.appRoot, "apps", "web", "dist") : path.join(options.resourceRoot, "web")];
+    if (options.toolchainBinDir) args.push("--toolchain-bin-dir", options.toolchainBinDir);
     if (options.desktopWebClient) {
       args.push(
         "--desktop-web-client",

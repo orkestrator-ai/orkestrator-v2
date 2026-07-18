@@ -1,4 +1,11 @@
-import type { ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  type MouseEvent,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
 import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -11,8 +18,12 @@ interface MessageShellProps {
   className?: string;
   contentClassName?: string;
   actions?: ReactNode;
+  onUserLongPress?: () => void | Promise<void>;
   children: ReactNode;
 }
+
+const LONG_PRESS_DELAY_MS = 500;
+const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
 
 export function MessageShell({
   isUser,
@@ -23,11 +34,72 @@ export function MessageShell({
   className,
   contentClassName,
   actions,
+  onUserLongPress,
   children,
 }: MessageShellProps) {
   const metadata = [timestampLabel, durationLabel].filter(Boolean).join(" · ");
   const showUserActionRow = isUser && (metadata || actions);
   const showAssistantActionRow = !isUser && (metadata || actions);
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressStartRef = useRef<{ x: number; y: number } | null>(null);
+  const longPressReadyRef = useRef(false);
+  const suppressNextClickRef = useRef(false);
+
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    longPressStartRef.current = null;
+    longPressReadyRef.current = false;
+  }, []);
+
+  useEffect(() => cancelLongPress, [cancelLongPress]);
+
+  const handleUserPointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      suppressNextClickRef.current = false;
+      if (!onUserLongPress || event.pointerType !== "touch" || !event.isPrimary) {
+        return;
+      }
+
+      cancelLongPress();
+      longPressStartRef.current = { x: event.clientX, y: event.clientY };
+      longPressTimerRef.current = window.setTimeout(() => {
+        longPressTimerRef.current = null;
+        longPressReadyRef.current = true;
+      }, LONG_PRESS_DELAY_MS);
+    },
+    [cancelLongPress, onUserLongPress],
+  );
+
+  const handleUserPointerMove = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    const start = longPressStartRef.current;
+    if (!start) return;
+
+    if (
+      Math.abs(event.clientX - start.x) > LONG_PRESS_MOVE_TOLERANCE_PX ||
+      Math.abs(event.clientY - start.y) > LONG_PRESS_MOVE_TOLERANCE_PX
+    ) {
+      cancelLongPress();
+    }
+  }, [cancelLongPress]);
+
+  const handleUserPointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    const shouldCopy = event.pointerType === "touch" && longPressReadyRef.current;
+    cancelLongPress();
+    if (shouldCopy) {
+      suppressNextClickRef.current = true;
+      void onUserLongPress?.();
+    }
+  }, [cancelLongPress, onUserLongPress]);
+
+  const handleUserClickCapture = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    if (!suppressNextClickRef.current) return;
+    suppressNextClickRef.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
 
   return (
     <div
@@ -51,6 +123,16 @@ export function MessageShell({
                 ? "rounded-xl border border-border/70 bg-zinc-800/80 px-3.5 py-1.5 shadow-sm [&_.prose_p]:my-0"
                 : "w-full",
             )}
+            onPointerDown={isUser ? handleUserPointerDown : undefined}
+            onPointerMove={isUser ? handleUserPointerMove : undefined}
+            onPointerUp={isUser ? handleUserPointerUp : undefined}
+            onPointerCancel={isUser ? cancelLongPress : undefined}
+            onClickCapture={isUser ? handleUserClickCapture : undefined}
+            style={
+              isUser && onUserLongPress
+                ? { WebkitTouchCallout: "none", touchAction: "pan-y" }
+                : undefined
+            }
           >
             {showHeader && isUser ? (
               <div className="sr-only">

@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { render, screen } from "@testing-library/react";
+import { describe, expect, mock, test } from "bun:test";
+import { fireEvent, render, screen } from "@testing-library/react";
 import {
   MessageShell,
   MessageErrorAlert,
@@ -54,6 +54,43 @@ describe("MessageShell", () => {
     expect(bubble).not.toBeNull();
     expect(bubble.className).toContain("rounded-xl");
     expect(bubble.className).toContain("bg-zinc-800/80");
+  });
+
+  test("cancels a touch long press when the finger moves to scroll", async () => {
+    const onUserLongPress = mock(() => {});
+    render(
+      <MessageShell
+        isUser={true}
+        authorLabel="You"
+        timestampLabel="1:00 PM"
+        onUserLongPress={onUserLongPress}
+      >
+        <p>Scrollable user message</p>
+      </MessageShell>,
+    );
+
+    const message = screen.getByText("Scrollable user message");
+    fireEvent.pointerDown(message, {
+      pointerType: "touch",
+      isPrimary: true,
+      clientX: 20,
+      clientY: 20,
+    });
+    fireEvent.pointerMove(message, {
+      pointerType: "touch",
+      isPrimary: true,
+      clientX: 20,
+      clientY: 40,
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 550));
+    fireEvent.pointerUp(message, {
+      pointerType: "touch",
+      isPrimary: true,
+      clientX: 20,
+      clientY: 40,
+    });
+
+    expect(onUserLongPress).not.toHaveBeenCalled();
   });
 
   test("places user metadata and actions in a hidden row below the bubble", () => {

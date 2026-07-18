@@ -4,10 +4,12 @@ import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
 
 const toastErrorMock = mock(() => {});
+const toastSuccessMock = mock(() => {});
 
 mock.module("sonner", () => ({
   toast: {
     error: toastErrorMock,
+    success: toastSuccessMock,
   },
 }));
 
@@ -34,6 +36,7 @@ describe("NativeMessage task list rendering", () => {
   afterEach(() => {
     cleanup();
     toastErrorMock.mockClear();
+    toastSuccessMock.mockClear();
   });
 
   test("renders task list in a collapsible thinking block that expands on click", () => {
@@ -127,6 +130,40 @@ describe("NativeMessage task list rendering", () => {
       expect(mockWriteText).toHaveBeenCalledWith("Copy this answer");
     });
     expect(screen.getByRole("button", { name: "Copied text" })).toBeTruthy();
+  });
+
+  test("copies a user prompt and confirms it after a touch long press", async () => {
+    mockWriteText.mockClear();
+    mockWriteText.mockImplementation(async () => {});
+    const message = makeMessage(
+      [
+        { type: "text", content: "First part" },
+        { type: "text", content: "Second part" },
+      ],
+      { role: "user", id: "user-1" },
+    );
+
+    render(<NativeMessage message={message} />);
+
+    const prompt = screen.getByText("First part");
+    fireEvent.pointerDown(prompt, {
+      pointerType: "touch",
+      isPrimary: true,
+      clientX: 20,
+      clientY: 20,
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 550));
+    fireEvent.pointerUp(prompt, {
+      pointerType: "touch",
+      isPrimary: true,
+      clientX: 20,
+      clientY: 20,
+    });
+
+    await waitFor(() => {
+      expect(mockWriteText).toHaveBeenCalledWith("First part\n\nSecond part");
+      expect(toastSuccessMock).toHaveBeenCalledWith("copied");
+    });
   });
 
   test("uses uniform part spacing for tool and text blocks", () => {

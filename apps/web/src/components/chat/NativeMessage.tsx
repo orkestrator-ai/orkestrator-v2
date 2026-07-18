@@ -9,6 +9,7 @@ import {
   type AnchorHTMLAttributes,
 } from "react";
 import { createPortal } from "react-dom";
+import { toast } from "sonner";
 import {
   Brain,
   FileText,
@@ -56,6 +57,7 @@ import {
   type NativeToolGroupPart,
 } from "@/lib/chat/native-message-types";
 import { normalizeNativeMessage } from "@/lib/chat/native-message-adapters";
+import { writeText } from "@/lib/native/clipboard";
 
 /** Custom link component that opens URLs in the system browser */
 function ExternalLink({
@@ -1521,6 +1523,17 @@ export const NativeMessage = memo(function NativeMessage({
           .trim() || message.content
       )
     : "";
+  const handleUserLongPress = useCallback(async () => {
+    if (!userCopyContent) return;
+
+    try {
+      await writeText(userCopyContent);
+      toast.success("copied");
+    } catch (error) {
+      console.error("[NativeMessage] Failed to copy user prompt:", error);
+      toast.error("Failed to copy message text");
+    }
+  }, [userCopyContent]);
   const durationLabel = useMemo(() => {
     if (isUser || isError || isSystem || previousMessage?.role !== "user") {
       return null;
@@ -1561,6 +1574,7 @@ export const NativeMessage = memo(function NativeMessage({
         durationLabel={durationLabel}
         showHeader={!isContinuation}
         className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
+        onUserLongPress={isUser && userCopyContent ? handleUserLongPress : undefined}
         actions={
           (isUser ? userCopyContent : assistantCopyContent) ? (
             <MessageCopyButton

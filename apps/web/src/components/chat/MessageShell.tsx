@@ -42,6 +42,7 @@ export function MessageShell({
   const showAssistantActionRow = !isUser && (metadata || actions);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressStartRef = useRef<{ x: number; y: number } | null>(null);
+  const longPressPointerIdRef = useRef<number | null>(null);
   const longPressReadyRef = useRef(false);
   const suppressNextClickRef = useRef(false);
 
@@ -51,6 +52,7 @@ export function MessageShell({
       longPressTimerRef.current = null;
     }
     longPressStartRef.current = null;
+    longPressPointerIdRef.current = null;
     longPressReadyRef.current = false;
   }, []);
 
@@ -58,13 +60,18 @@ export function MessageShell({
 
   const handleUserPointerDown = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
-      suppressNextClickRef.current = false;
+      // If the browser omitted the synthetic click after a previous long press,
+      // a new primary interaction must not inherit that stale suppression state.
+      if (event.isPrimary) {
+        suppressNextClickRef.current = false;
+      }
       if (!onUserLongPress || event.pointerType !== "touch" || !event.isPrimary) {
         return;
       }
 
       cancelLongPress();
       longPressStartRef.current = { x: event.clientX, y: event.clientY };
+      longPressPointerIdRef.current = event.pointerId;
       longPressTimerRef.current = window.setTimeout(() => {
         longPressTimerRef.current = null;
         longPressReadyRef.current = true;
@@ -74,6 +81,8 @@ export function MessageShell({
   );
 
   const handleUserPointerMove = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (event.pointerId !== longPressPointerIdRef.current) return;
+
     const start = longPressStartRef.current;
     if (!start) return;
 
@@ -86,13 +95,21 @@ export function MessageShell({
   }, [cancelLongPress]);
 
   const handleUserPointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    const shouldCopy = event.pointerType === "touch" && longPressReadyRef.current;
+    if (event.pointerId !== longPressPointerIdRef.current) return;
+
+    const shouldCopy = longPressReadyRef.current;
     cancelLongPress();
     if (shouldCopy) {
       suppressNextClickRef.current = true;
       void onUserLongPress?.();
     }
   }, [cancelLongPress, onUserLongPress]);
+
+  const handleUserPointerCancel = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (event.pointerId === longPressPointerIdRef.current) {
+      cancelLongPress();
+    }
+  }, [cancelLongPress]);
 
   const handleUserClickCapture = useCallback((event: MouseEvent<HTMLDivElement>) => {
     if (!suppressNextClickRef.current) return;
@@ -126,11 +143,11 @@ export function MessageShell({
             onPointerDown={isUser ? handleUserPointerDown : undefined}
             onPointerMove={isUser ? handleUserPointerMove : undefined}
             onPointerUp={isUser ? handleUserPointerUp : undefined}
-            onPointerCancel={isUser ? cancelLongPress : undefined}
+            onPointerCancel={isUser ? handleUserPointerCancel : undefined}
             onClickCapture={isUser ? handleUserClickCapture : undefined}
             style={
               isUser && onUserLongPress
-                ? { WebkitTouchCallout: "none", touchAction: "pan-y" }
+                ? { WebkitTouchCallout: "none" }
                 : undefined
             }
           >

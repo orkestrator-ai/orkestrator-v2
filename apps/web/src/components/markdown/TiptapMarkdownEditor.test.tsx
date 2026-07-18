@@ -99,12 +99,11 @@ describe("TiptapMarkdownEditor", () => {
       inputType: "insertText",
     });
 
-    await waitFor(
-      () => {
-        expect(onChange).toHaveBeenCalledWith("Updated in rendered mode");
-      },
-      { timeout: 1_500 },
-    );
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 350));
+    });
+
+    expect(onChange).toHaveBeenCalledWith("Updated in rendered mode");
   });
 
   test("flushes a pending rich edit on save", async () => {

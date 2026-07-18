@@ -6,6 +6,13 @@ const ZOOM_MIN = 50;
 const ZOOM_MAX = 200;
 const ZOOM_STEP = 10;
 const ZOOM_DEFAULT = 100;
+const RECENT_PROJECT_LIMIT = 5;
+
+const addRecentProject = (recentProjectIds: string[], projectId: string): string[] =>
+  [projectId, ...recentProjectIds.filter((id) => id !== projectId)].slice(
+    0,
+    RECENT_PROJECT_LIMIT,
+  );
 
 export type ProjectBoardTab = "kanban" | "linear" | "features";
 
@@ -13,6 +20,8 @@ interface UIState {
   // Sidebar state
   selectedProjectId: string | null;
   selectedEnvironmentId: string | null;
+  /** Most recently opened project IDs, newest first. */
+  recentProjectIds: string[];
   projectBoardTab: ProjectBoardTab;
   projectBoardNotesOpen: boolean;
   sidebarWidth: number;
@@ -65,6 +74,7 @@ export const useUIStore = create<UIState>()(
       // Initial state
       selectedProjectId: null,
       selectedEnvironmentId: null,
+      recentProjectIds: [],
       projectBoardTab: "kanban",
       projectBoardNotesOpen: false,
       sidebarWidth: 280,
@@ -75,11 +85,14 @@ export const useUIStore = create<UIState>()(
 
       // Actions
       selectProject: (projectId) =>
-        set({
+        set((state) => ({
           selectedProjectId: projectId,
           selectedEnvironmentId: null,
           selectedEnvironmentIds: [],
-        }),
+          recentProjectIds: projectId
+            ? addRecentProject(state.recentProjectIds, projectId)
+            : state.recentProjectIds,
+        })),
 
       selectEnvironment: (environmentId) =>
         set({ selectedEnvironmentId: environmentId }),
@@ -91,10 +104,11 @@ export const useUIStore = create<UIState>()(
         set({ projectBoardNotesOpen: open }),
 
       selectProjectAndEnvironment: (projectId, environmentId) =>
-        set({
+        set((state) => ({
           selectedProjectId: projectId,
           selectedEnvironmentId: environmentId,
-        }),
+          recentProjectIds: addRecentProject(state.recentProjectIds, projectId),
+        })),
 
       setSidebarWidth: (width) => set({ sidebarWidth: width }),
 
@@ -172,6 +186,7 @@ export const useUIStore = create<UIState>()(
       partialize: (state) => ({
         sidebarWidth: state.sidebarWidth,
         collapsedProjects: state.collapsedProjects,
+        recentProjectIds: state.recentProjectIds,
         zoomLevel: state.zoomLevel,
       }),
     }

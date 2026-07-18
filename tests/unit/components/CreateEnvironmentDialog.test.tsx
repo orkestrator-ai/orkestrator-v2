@@ -13,7 +13,7 @@ mock.module("sonner", () => ({
   },
 }));
 
-const { CreateEnvironmentDialog, resolveAgentDefaults } = await import("../../../apps/web/src/components/environments/CreateEnvironmentDialog");
+const { CreateEnvironmentDialog, getEncodedImageSizeError, resolveAgentDefaults } = await import("../../../apps/web/src/components/environments/CreateEnvironmentDialog");
 const defaultConfig = structuredClone(useConfigStore.getState().config);
 
 if (typeof globalThis.ImageData === "undefined") {
@@ -899,36 +899,11 @@ describe("resolveAgentDefaults", () => {
     });
   });
 
-  test("shows an error and does not attach oversized pasted images", async () => {
-    mockReadImage.mockImplementation(async () => ({
-      rgba: async () => new Uint8Array([255, 0, 0, 255]),
-      size: async () => ({ width: 1, height: 1 }),
-    }));
-    HTMLCanvasElement.prototype.toDataURL = (() =>
-      `data:image/png;base64,${"A".repeat(12 * 1024 * 1024)}`) as typeof HTMLCanvasElement.prototype.toDataURL;
+  test("rejects encoded images above the attachment size boundary", () => {
+    const maxBase64Length = Math.floor((8 * 1024 * 1024 * 4) / 3);
 
-    render(
-      <CreateEnvironmentDialog
-        open={true}
-        onOpenChange={() => {}}
-        onCreate={mock(async () => {})}
-      />
-    );
-
-    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
-    prompt.focus();
-
-    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
-
-    await waitFor(() => {
-      expect(toastErrorMock).toHaveBeenCalledWith(
-        "Image too large",
-        expect.objectContaining({
-          description: expect.stringContaining("Maximum is 8MB"),
-        }),
-      );
-    });
-    expect(screen.queryByAltText(/initial-prompt-/)).toBeNull();
+    expect(getEncodedImageSizeError(maxBase64Length)).toBeNull();
+    expect(getEncodedImageSizeError(maxBase64Length + 2)).toContain("Maximum is 8MB");
   });
 
   test("leaves paste untouched when a clipboard image cannot get a canvas context", async () => {

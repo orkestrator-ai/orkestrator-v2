@@ -119,7 +119,7 @@ function ToolbarContextMenuTrigger({
     },
     onFocus: (event: ReactFocusEvent<HTMLElement>) => {
       child.props.onFocus?.(event);
-      if (tooltipsEnabled) tooltipState.show();
+      if (tooltipsEnabled) tooltipState.showImmediately();
     },
     onMouseEnter: (event: ReactMouseEvent<HTMLElement>) => {
       child.props.onMouseEnter?.(event);
@@ -167,7 +167,7 @@ function ToolbarTooltipTrigger({
       ref={tooltipAnchorRef}
       className="inline-flex"
       onBlur={tooltipState.hide}
-      onFocus={tooltipsEnabled ? tooltipState.show : undefined}
+      onFocus={tooltipsEnabled ? tooltipState.showImmediately : undefined}
       onMouseEnter={tooltipsEnabled ? tooltipState.show : undefined}
       onMouseLeave={tooltipState.hide}
     >

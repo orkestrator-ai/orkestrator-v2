@@ -1,5 +1,10 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { useProjectStore } from "../../../apps/web/src/stores/projectStore";
+import {
+  applyProjectSnapshot,
+  getProjectMutationVersion,
+  invalidateProjectSnapshots,
+  useProjectStore,
+} from "../../../apps/web/src/stores/projectStore";
 import type { Project } from "../../../apps/web/src/types";
 
 describe("projectStore", () => {
@@ -109,5 +114,97 @@ describe("projectStore", () => {
 
     useProjectStore.getState().setError(null);
     expect(useProjectStore.getState().error).toBeNull();
+  });
+
+  test("setProjects sorts the backend result by order", () => {
+    const later = {
+      id: "later",
+      name: "later",
+      gitUrl: "git@github.com:test/later.git",
+      localPath: null,
+      addedAt: new Date().toISOString(),
+      order: 2,
+    } satisfies Project;
+    const earlier = { ...later, id: "earlier", name: "earlier", order: 1 };
+
+    useProjectStore.getState().setProjects([later, earlier]);
+
+    expect(useProjectStore.getState().projects.map((project) => project.id)).toEqual([
+      "earlier",
+      "later",
+    ]);
+  });
+
+  test("reorderProjects updates order and drops IDs that are not in the store", () => {
+    const first = {
+      id: "first",
+      name: "first",
+      gitUrl: "git@github.com:test/first.git",
+      localPath: null,
+      addedAt: new Date().toISOString(),
+      order: 0,
+    } satisfies Project;
+    const second = { ...first, id: "second", name: "second", order: 1 };
+    useProjectStore.getState().setProjects([first, second]);
+
+    useProjectStore.getState().reorderProjects(["second", "missing", "first"]);
+
+    expect(useProjectStore.getState().projects).toEqual([
+      { ...second, order: 0 },
+      { ...first, order: 2 },
+    ]);
+  });
+
+  test("rejects snapshots captured before every project mutation", () => {
+    const original = {
+      id: "original",
+      name: "original",
+      gitUrl: "git@github.com:test/original.git",
+      localPath: null,
+      addedAt: new Date().toISOString(),
+      order: 0,
+    } satisfies Project;
+    const replacement = { ...original, id: "stale", name: "stale" };
+
+    const assertMutationRejectsSnapshot = (mutate: () => void) => {
+      useProjectStore.getState().setProjects([original]);
+      const snapshotVersion = getProjectMutationVersion();
+      mutate();
+
+      expect(applyProjectSnapshot([replacement], snapshotVersion)).toBe(false);
+      expect(useProjectStore.getState().projects.some((project) => project.id === "stale")).toBe(
+        false
+      );
+    };
+
+    assertMutationRejectsSnapshot(() =>
+      useProjectStore.getState().addProject({ ...original, id: "added", name: "added", order: 1 })
+    );
+    assertMutationRejectsSnapshot(() => useProjectStore.getState().removeProject("original"));
+    assertMutationRejectsSnapshot(() =>
+      useProjectStore.getState().updateProject("original", { name: "updated" })
+    );
+    assertMutationRejectsSnapshot(() => useProjectStore.getState().reorderProjects(["original"]));
+    assertMutationRejectsSnapshot(() => useProjectStore.getState().setProjects([]));
+    assertMutationRejectsSnapshot(() => invalidateProjectSnapshots());
+  });
+
+  test("applies and sorts a snapshot when its mutation version is current", () => {
+    const currentVersion = getProjectMutationVersion();
+    const later = {
+      id: "later",
+      name: "later",
+      gitUrl: "git@github.com:test/later.git",
+      localPath: null,
+      addedAt: new Date().toISOString(),
+      order: 3,
+    } satisfies Project;
+    const earlier = { ...later, id: "earlier", name: "earlier", order: 1 };
+
+    expect(applyProjectSnapshot([later, earlier], currentVersion)).toBe(true);
+    expect(useProjectStore.getState().projects.map((project) => project.id)).toEqual([
+      "earlier",
+      "later",
+    ]);
   });
 });

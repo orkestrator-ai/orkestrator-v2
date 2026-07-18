@@ -309,6 +309,7 @@ export function createEnvironment(
     portMappings?: PortMapping[];
     environmentType?: EnvironmentType;
     entryPort?: number;
+    pendingRenamePrompt?: string;
   } = {},
 ): Environment {
   const rawName =
@@ -349,6 +350,7 @@ export function createEnvironment(
     codexMode: undefined,
     setupScriptsComplete: false,
     initialPrompt: options.initialPrompt,
+    pendingRenamePrompt: options.pendingRenamePrompt,
   };
 }
 
@@ -747,6 +749,7 @@ export class StorageService {
         "opencodeMode",
         "codexMode",
         "initialPrompt",
+        "pendingRenamePrompt",
         "createdFromCommit",
       ] as const;
       for (const field of stringFields) {

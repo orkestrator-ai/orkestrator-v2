@@ -347,6 +347,20 @@ describe("sortable sidebar items", () => {
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   });
 
+  test("SortableProjectGroup keeps the delete confirmation open after deletion fails", async () => {
+    const onDeleteProject = mock(async () => {
+      throw new Error("delete failed");
+    });
+    renderProjectGroup({ onDeleteProject });
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /Project One/i }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Project" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(onDeleteProject).toHaveBeenCalledWith("project-1"));
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+  });
+
   test("SortableProjectGroup add action does not also trigger project selection", () => {
     const onCreateEnvironment = mock(() => {});
     const onSelectProject = mock(() => {});

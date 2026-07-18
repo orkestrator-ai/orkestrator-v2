@@ -531,6 +531,15 @@ async function waitForPtyProcessCount(count: number): Promise<void> {
   throw new Error(`Timed out waiting for ${count} PTY process(es), saw ${ptyProcesses.length}`);
 }
 
+async function waitForCondition(condition: () => boolean, description: string): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < 1_000) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${description}`);
+}
+
 // Fake `docker` that reports the container as running and succeeds on exec,
 // returning a deterministic HEAD commit for `git rev-parse`.
 const RUNNING_CONTAINER_DOCKER_SCRIPT = `#!/bin/sh
@@ -652,8 +661,170 @@ exit 42
       expect(result.name).toBe("20260415-123456");
       expect(result.branch).toBe("20260415-123456");
       expect(result.initialPrompt).toBeUndefined();
+      expect(result.pendingRenamePrompt).toBe("Build task\n\nShip the feature\n\nAll checks green");
       await expect(fs.readFile(logPath, "utf8")).rejects.toThrow();
     });
+  });
+
+  test("does not persist a naming prompt when an explicit environment name is provided", async () => {
+    const { context } = createContext([]);
+    const commands = createCommandRegistry();
+
+    const result = await commands.get("create_environment")?.(
+      {
+        projectId: "project-1",
+        name: "Manual Name",
+        namingPrompt: "This should not replace the manual name",
+        environmentType: "local",
+      },
+      context,
+    ) as Environment;
+
+    expect(result.name).toBe("manual-name");
+    expect(result.pendingRenamePrompt).toBeUndefined();
+  });
+
+  test("clears a pending prompt when the user manually renames the environment", async () => {
+    const environment = createEnvironment({
+      pendingRenamePrompt: "Generate a name after startup",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await commands.get("rename_environment")?.(
+      { environmentId: environment.id, name: "Manual Choice" },
+      context,
+    );
+
+    expect(environment.name).toBe("manual-choice");
+    expect(environment.branch).toBe("manual-choice");
+    expect(environment.pendingRenamePrompt).toBeUndefined();
+  });
+
+  test("completes a persisted prompt rename in the backend after startup", async () => {
+    const worktreePath = await createGitRepoOnBranch("timestamp-name");
+    const environment = createEnvironment({
+      id: "env-pending-rename",
+      name: "timestamp-name",
+      branch: "timestamp-name",
+      environmentType: "local",
+      worktreePath,
+      status: "stopped",
+      setupScriptsComplete: true,
+      pendingRenamePrompt: "Please review the OAuth callback flow",
+    });
+    const { context, emitted } = createContext(environment);
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+      await expect(commands.get("start_environment")?.(
+        { environmentId: environment.id },
+        context,
+      )).resolves.toEqual(expect.objectContaining({
+        setupManagedByBackend: true,
+        setupStarted: false,
+      }));
+
+      // The caller does not issue a separate rename command. The backend-owned
+      // task survives a renderer reload and emits the normal rehydration event.
+      await waitForCondition(
+        () => emitted.some(({ event }) => event === "environment-renamed"),
+        "pending environment rename",
+      );
+
+      expect(environment.name).toBe("review-oauth-flow");
+      expect(environment.branch).toBe("review-oauth-flow");
+      expect(environment.pendingRenamePrompt).toBeUndefined();
+      expect(await currentGitBranch(worktreePath)).toBe("review-oauth-flow");
+    });
+  });
+
+  test("retains a failed pending rename so a later backend start can retry it", async () => {
+    const worktreePath = await createGitRepoOnBranch("timestamp-name");
+    const environment = createEnvironment({
+      id: "env-pending-rename-retry",
+      name: "timestamp-name",
+      branch: "timestamp-name",
+      environmentType: "local",
+      worktreePath,
+      status: "stopped",
+      setupScriptsComplete: true,
+      pendingRenamePrompt: "Please review the OAuth callback flow",
+    });
+    const { context, emitted } = createContext(environment);
+    await isolateCodexBinaryLookup(context);
+    const originalConsoleWarn = console.warn;
+    const consoleWarnMock = mock(() => undefined);
+    console.warn = consoleWarnMock as typeof console.warn;
+
+    try {
+      await withFakeCodex(`#!/bin/sh
+printf 'codex auth required\\n' >&2
+exit 1
+`, async () => {
+        const firstRegistry = createCommandRegistry();
+        await firstRegistry.get("start_environment")?.({ environmentId: environment.id }, context);
+        await waitForCondition(
+          () => consoleWarnMock.mock.calls.some(([message]) =>
+            message === "[ElectronBackend] Failed to rename environment from pending prompt:"
+          ),
+          "failed pending rename to settle",
+        );
+      });
+
+      expect(environment.pendingRenamePrompt).toBe("Please review the OAuth callback flow");
+      expect(emitted.some(({ event }) => event === "environment-renamed")).toBe(false);
+
+      await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+        // A fresh registry represents the backend process rebuilding its in-memory
+        // task state while retaining the persisted environment snapshot.
+        const restartedRegistry = createCommandRegistry();
+        await restartedRegistry.get("start_environment")?.({ environmentId: environment.id }, context);
+        await waitForCondition(
+          () => emitted.some(({ event }) => event === "environment-renamed"),
+          "retried pending environment rename",
+        );
+      });
+
+      expect(environment.name).toBe("review-oauth-flow");
+      expect(environment.pendingRenamePrompt).toBeUndefined();
+    } finally {
+      console.warn = originalConsoleWarn;
+    }
+  });
+
+  test("resumes a persisted rename while rehydrating an already-running environment", async () => {
+    const worktreePath = await createGitRepoOnBranch("timestamp-name");
+    const environment = createEnvironment({
+      id: "env-pending-rename-rehydrate",
+      name: "timestamp-name",
+      branch: "timestamp-name",
+      environmentType: "local",
+      worktreePath,
+      status: "running",
+      setupScriptsComplete: true,
+      pendingRenamePrompt: "Reconcile the background session state",
+    });
+    const { context, emitted } = createContext(environment);
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(codexSlugScript("Reconcile Session State"), async () => {
+      await expect(commands.get("get_environments")?.(
+        { projectId: environment.projectId },
+        context,
+      )).resolves.toEqual([expect.objectContaining({ id: environment.id, status: "running" })]);
+
+      await waitForCondition(
+        () => emitted.some(({ event }) => event === "environment-renamed"),
+        "rehydrated pending environment rename",
+      );
+    });
+
+    expect(environment.name).toBe("reconcile-session-state");
+    expect(environment.pendingRenamePrompt).toBeUndefined();
+    expect(await currentGitBranch(worktreePath)).toBe("reconcile-session-state");
   });
 
   test("does not run codex exec for initial-prompt-only environment naming", async () => {

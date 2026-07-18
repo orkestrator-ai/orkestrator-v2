@@ -6,6 +6,7 @@ import { AppShell } from "@/components/layout";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TerminalContainer } from "@/components/terminal";
 import { KanbanBoard } from "@/components/kanban";
+import { ProjectLauncher } from "@/components/projects";
 import { LinearPipelineCompletionMonitor } from "@/components/linear";
 import { TerminalProvider } from "@/contexts";
 import {
@@ -53,7 +54,9 @@ function App() {
   const config = useConfigStore((state) => state.config);
   const setClaudeOptions = useClaudeOptionsStore((state) => state.setOptions);
   const clearClaudeOptions = useClaudeOptionsStore((state) => state.clearOptions);
-  const { startEnvironment } = useEnvironments(null, { listenForRenameEvents: false });
+  const { startEnvironment, createEnvironment, updateEnvironment } = useEnvironments(null, {
+    listenForRenameEvents: false,
+  });
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null);
   const [isCheckingDocker, setIsCheckingDocker] = useState(false);
 
@@ -529,14 +532,11 @@ function App() {
           ) : selectedProjectId ? (
             <KanbanBoard projectId={selectedProjectId} />
           ) : (
-            <div className="flex h-full items-center justify-center bg-background">
-              <div className="text-center text-muted-foreground">
-                <h2 className="mb-2 text-lg font-medium">Welcome to Orkestrator AI</h2>
-                <p className="text-sm">
-                  Add a project to get started, then create an environment to begin coding.
-                </p>
-              </div>
-            </div>
+            <ProjectLauncher
+              createEnvironment={createEnvironment}
+              updateEnvironment={updateEnvironment}
+              startEnvironment={startEnvironment}
+            />
           )}
 
           {/* Background pipeline environments: kept mounted (but hidden) so their

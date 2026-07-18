@@ -105,6 +105,8 @@ export interface Environment {
   setupScriptsComplete?: boolean;
   /** Initial prompt used when this environment was created. */
   initialPrompt?: string;
+  /** Prompt awaiting a backend-owned rename after the environment starts. */
+  pendingRenamePrompt?: string;
 }
 
 /** Result of testing a domain for DNS resolution */

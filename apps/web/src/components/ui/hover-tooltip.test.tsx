@@ -100,6 +100,27 @@ function OpenTooltipWithoutAnchor() {
   );
 }
 
+function FocusTooltipWithDelay({ openDelay }: { openDelay: number }) {
+  const anchorRef = useRef<HTMLButtonElement>(null);
+  const tooltip = useHoverTooltip(openDelay);
+
+  return (
+    <>
+      <button
+        ref={anchorRef}
+        onFocus={tooltip.showImmediately}
+        onMouseEnter={tooltip.show}
+        type="button"
+      >
+        Focus me
+      </button>
+      <HoverTooltipContent anchorRef={anchorRef} open={tooltip.open}>
+        Focus tooltip
+      </HoverTooltipContent>
+    </>
+  );
+}
+
 describe("HoverTooltipContent", () => {
   afterEach(() => {
     cleanup();
@@ -126,6 +147,18 @@ describe("HoverTooltipContent", () => {
     await waitFor(() => {
       expect(screen.getByText("Run command")).toBeTruthy();
     });
+  });
+
+  test("shows immediately on keyboard focus when requested", () => {
+    render(<FocusTooltipWithDelay openDelay={10_000} />);
+
+    const button = screen.getByRole("button", { name: "Focus me" });
+    fireEvent.mouseEnter(button);
+    expect(screen.queryByText("Focus tooltip")).toBeNull();
+
+    fireEvent.focus(button);
+
+    expect(screen.getByText("Focus tooltip")).toBeTruthy();
   });
 
   test("cancels a pending tooltip when the cursor leaves before the delay", async () => {

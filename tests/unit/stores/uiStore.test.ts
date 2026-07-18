@@ -3,10 +3,12 @@ import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 
 describe("uiStore", () => {
   beforeEach(() => {
+    localStorage.clear();
     // Reset store between tests
     useUIStore.setState({
       selectedProjectId: null,
       selectedEnvironmentId: null,
+      recentProjectIds: [],
       projectBoardTab: "kanban",
       projectBoardNotesOpen: false,
       sidebarWidth: 280,
@@ -21,6 +23,7 @@ describe("uiStore", () => {
     const state = useUIStore.getState();
     expect(state.selectedProjectId).toBeNull();
     expect(state.selectedEnvironmentId).toBeNull();
+    expect(state.recentProjectIds).toEqual([]);
     expect(state.projectBoardTab).toBe("kanban");
     expect(state.projectBoardNotesOpen).toBe(false);
     expect(state.sidebarWidth).toBe(280);
@@ -30,14 +33,19 @@ describe("uiStore", () => {
     expect(state.zoomLevel).toBe(100);
   });
 
-  test("selectProject sets project and clears environment", () => {
-    useUIStore.setState({ selectedEnvironmentId: "env-1" });
+  test("selectProject sets project and clears environment and multi-selection", () => {
+    useUIStore.setState({
+      selectedEnvironmentId: "env-1",
+      selectedEnvironmentIds: ["env-1", "env-2"],
+    });
 
     useUIStore.getState().selectProject("project-1");
 
     const state = useUIStore.getState();
     expect(state.selectedProjectId).toBe("project-1");
     expect(state.selectedEnvironmentId).toBeNull();
+    expect(state.selectedEnvironmentIds).toEqual([]);
+    expect(state.recentProjectIds).toEqual(["project-1"]);
   });
 
   test("selectProject with null clears selection", () => {
@@ -96,6 +104,30 @@ describe("uiStore", () => {
     const state = useUIStore.getState();
     expect(state.selectedProjectId).toBe("project-1");
     expect(state.selectedEnvironmentId).toBe("env-1");
+    expect(state.recentProjectIds).toEqual(["project-1"]);
+  });
+
+  test("keeps the five most recently opened projects without duplicates", () => {
+    for (const projectId of ["p1", "p2", "p3", "p4", "p5", "p6", "p3"]) {
+      useUIStore.getState().selectProject(projectId);
+    }
+
+    expect(useUIStore.getState().recentProjectIds).toEqual([
+      "p3",
+      "p6",
+      "p5",
+      "p4",
+      "p2",
+    ]);
+
+    useUIStore.getState().selectProject(null);
+    expect(useUIStore.getState().recentProjectIds).toEqual([
+      "p3",
+      "p6",
+      "p5",
+      "p4",
+      "p2",
+    ]);
   });
 
   test("toggleProjectCollapse adds and removes", () => {
@@ -190,5 +222,43 @@ describe("uiStore", () => {
     expect(collapsed).toContain("project-1");
     expect(collapsed).toContain("project-3");
     expect(collapsed).not.toContain("project-2");
+  });
+
+  test("collapseEmptyProjects is a no-op when every empty project is already collapsed", () => {
+    useUIStore.setState({ collapsedProjects: ["project-1"] });
+    const before = useUIStore.getState();
+
+    useUIStore.getState().collapseEmptyProjects(
+      ["project-1", "project-2"],
+      new Set(["project-2"]),
+    );
+
+    expect(useUIStore.getState()).toBe(before);
+    expect(useUIStore.getState().collapsedProjects).toEqual(["project-1"]);
+  });
+
+  test("persists and rehydrates recent project history without transient selection", async () => {
+    useUIStore.getState().selectProject("project-1");
+    useUIStore.getState().selectProject("project-2");
+
+    const persistedRaw = localStorage.getItem("ui-storage") ?? "{}";
+    const persisted = JSON.parse(persistedRaw) as {
+      state?: Record<string, unknown>;
+    };
+    expect(persisted.state).toMatchObject({
+      recentProjectIds: ["project-2", "project-1"],
+    });
+    expect(persisted.state).not.toHaveProperty("selectedProjectId");
+
+    useUIStore.setState({
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+      recentProjectIds: [],
+    });
+    localStorage.setItem("ui-storage", persistedRaw);
+    await useUIStore.persist.rehydrate();
+
+    expect(useUIStore.getState().recentProjectIds).toEqual(["project-2", "project-1"]);
+    expect(useUIStore.getState().selectedProjectId).toBeNull();
   });
 });

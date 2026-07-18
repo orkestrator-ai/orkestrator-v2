@@ -305,9 +305,10 @@ describe("HierarchicalSidebar", () => {
         "Use this screenshot",
         undefined,
         "containerized",
+        "Use this screenshot",
       );
       expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled();
-      expect(renameEnvironmentFromPromptMock).toHaveBeenCalledWith("env-created", "Use this screenshot");
+      expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
       expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "Use this screenshot");
       expect(useClaudeOptionsStore.getState().getOptions("env-created")).toEqual(
         expect.objectContaining({
@@ -352,15 +353,30 @@ describe("HierarchicalSidebar", () => {
     resolveStart?.();
   });
 
-  test("auto-starts while initial-prompt rename is still running", async () => {
-    let resolveRename: (() => void) | undefined;
-    renameEnvironmentFromPromptMock.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveRename = resolve;
-        }),
+  test("disables create controls while environment creation is pending", async () => {
+    let resolveCreate: ((environment: Environment) => void) | undefined;
+    createEnvironmentMock.mockImplementationOnce(
+      () => new Promise<Environment>((resolve) => { resolveCreate = resolve; }),
     );
+    render(<HierarchicalSidebar />);
 
+    fireEvent.click(screen.getByTitle("Create environment"));
+    const createButton = await screen.findByRole("button", { name: "Create Environment" });
+    fireEvent.click(createButton);
+
+    await waitFor(() => {
+      expect(createButton.hasAttribute("disabled")).toBe(true);
+      expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(true);
+    });
+
+    await act(async () => {
+      resolveCreate?.(createdEnvironment);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByText("Create Ork (Environment)")).toBeNull());
+  });
+
+  test("persists prompt naming intent before auto-starting", async () => {
     render(<HierarchicalSidebar />);
 
     fireEvent.click(screen.getByTitle("Create environment"));
@@ -369,41 +385,19 @@ describe("HierarchicalSidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => {
+      expect(createEnvironmentMock).toHaveBeenCalledWith(
+        "project-1",
+        undefined,
+        "full",
+        "Implement billing exports",
+        undefined,
+        "containerized",
+        "Implement billing exports",
+      );
       expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "Implement billing exports");
-      expect(renameEnvironmentFromPromptMock).toHaveBeenCalledWith("env-created", "Implement billing exports");
+      expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
       expect(screen.queryByText("Create Ork (Environment)")).toBeNull();
     });
-
-    resolveRename?.();
-  });
-
-  test("starts the environment when initial-prompt rename fails", async () => {
-    const originalConsoleError = console.error;
-    const consoleErrorMock = mock(() => undefined);
-    console.error = consoleErrorMock as unknown as typeof console.error;
-    renameEnvironmentFromPromptMock.mockImplementationOnce(async () => {
-      throw new Error("codex unavailable");
-    });
-
-    try {
-      render(<HierarchicalSidebar />);
-
-      fireEvent.click(screen.getByTitle("Create environment"));
-      const prompt = await screen.findByLabelText(/Initial Prompt/i);
-      fireEvent.change(prompt, { target: { value: "Use fallback startup" } });
-      fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
-
-      await waitFor(() => {
-        expect(renameEnvironmentFromPromptMock).toHaveBeenCalledWith("env-created", "Use fallback startup");
-        expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "Use fallback startup");
-      });
-      expect(consoleErrorMock).toHaveBeenCalledWith(
-        "Failed to rename environment from initial prompt:",
-        expect.any(Error),
-      );
-    } finally {
-      console.error = originalConsoleError;
-    }
   });
 
   test("keeps the create dialog open when environment creation fails", async () => {
@@ -428,6 +422,23 @@ describe("HierarchicalSidebar", () => {
     } finally {
       console.error = originalConsoleError;
     }
+  });
+
+  test("clears and restores the create target when the dialog is cancelled and reopened", async () => {
+    render(<HierarchicalSidebar />);
+
+    fireEvent.click(screen.getByTitle("Create environment"));
+    await screen.findByText("Create Ork (Environment)");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByText("Create Ork (Environment)")).toBeNull());
+
+    fireEvent.click(screen.getByTitle("Create environment"));
+    await screen.findByText("Create Ork (Environment)");
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => expect(createEnvironmentMock).toHaveBeenCalledWith(
+      "project-1", undefined, "full", undefined, undefined, "containerized", undefined,
+    ));
   });
 
   test("does not select or start a partially configured environment", async () => {
@@ -456,7 +467,7 @@ describe("HierarchicalSidebar", () => {
     }
   });
 
-  test("closes the dialog but skips prompt renaming when auto-start fails", async () => {
+  test("closes the dialog with persisted naming intent when auto-start fails", async () => {
     startEnvironmentMock.mockImplementationOnce(async () => {
       throw new Error("start failed");
     });
@@ -475,6 +486,15 @@ describe("HierarchicalSidebar", () => {
         "Failed to auto-start environment:", expect.any(Error),
       ));
       expect(screen.queryByText("Create Ork (Environment)")).toBeNull();
+      expect(createEnvironmentMock).toHaveBeenCalledWith(
+        "project-1",
+        undefined,
+        "full",
+        "Rename after startup",
+        undefined,
+        "containerized",
+        "Rename after startup",
+      );
       expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
       expect(useUIStore.getState().selectedEnvironmentId).toBe("env-created");
     } finally {
@@ -553,6 +573,31 @@ describe("HierarchicalSidebar", () => {
     await waitFor(() => expect(loadEnvironmentsMock).toHaveBeenCalledWith("project-1"));
   });
 
+  test("continues loading other projects when one environment snapshot fails", async () => {
+    projectsValue = [project, { ...project, id: "project-2", name: "Project Two", order: 1 }];
+    loadEnvironmentsMock.mockImplementationOnce(async () => {
+      throw new Error("snapshot failed");
+    });
+    const originalConsoleError = console.error;
+    const consoleErrorMock = mock(() => undefined);
+    console.error = consoleErrorMock as typeof console.error;
+
+    try {
+      render(<HierarchicalSidebar />);
+
+      await waitFor(() => {
+        expect(loadEnvironmentsMock).toHaveBeenCalledWith("project-1");
+        expect(loadEnvironmentsMock).toHaveBeenCalledWith("project-2");
+      });
+      expect(consoleErrorMock).toHaveBeenCalledWith(
+        "Failed to load environments for project project-1:",
+        expect.any(Error),
+      );
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
   test("selects environment ranges, toggles members, and auto-starts an uninitialized local environment", async () => {
     environmentsValue = [
       { ...createdEnvironment, id: "env-1", name: "Environment One", order: 0 },
@@ -611,6 +656,34 @@ describe("HierarchicalSidebar", () => {
     } finally {
       console.error = originalConsoleError;
     }
+  });
+
+  test("does not auto-start local environments that are creating or already have a worktree", () => {
+    environmentsValue = [
+      {
+        ...createdEnvironment,
+        id: "env-worktree",
+        name: "Ready Local",
+        environmentType: "local",
+        worktreePath: "/tmp/project-ready",
+        status: "running",
+      },
+      {
+        ...createdEnvironment,
+        id: "env-creating",
+        name: "Creating Local",
+        environmentType: "local",
+        worktreePath: undefined,
+        status: "creating",
+      },
+    ];
+    render(<HierarchicalSidebar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Ready Local" }));
+    fireEvent.click(screen.getByRole("button", { name: "Creating Local" }));
+
+    expect(startEnvironmentMock).not.toHaveBeenCalled();
+    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-creating");
   });
 
   test("runs bulk stop, restart, and delete actions for eligible selected environments", async () => {
@@ -720,6 +793,32 @@ describe("HierarchicalSidebar", () => {
     });
   });
 
+  test("keeps project deletion available for retry when an environment cannot be deleted", async () => {
+    environmentsValue = [{ ...createdEnvironment, id: "env-1", name: "Environment One" }];
+    deleteEnvironmentMock.mockImplementationOnce(async () => {
+      throw new Error("delete failed");
+    });
+    const originalConsoleError = console.error;
+    const consoleErrorMock = mock(() => undefined);
+    console.error = consoleErrorMock as typeof console.error;
+
+    try {
+      render(<HierarchicalSidebar />);
+      fireEvent.contextMenu(screen.getByRole("button", { name: /Project One/i }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Project" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+
+      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
+        "Failed to delete project:",
+        expect.any(Error),
+      ));
+      expect(removeProjectMock).not.toHaveBeenCalled();
+      expect(screen.getByRole("alertdialog")).toBeTruthy();
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
   test("routes project and environment drag events and ignores cancelled drops", async () => {
     const secondProject = { ...project, id: "project-2", name: "Project Two", order: 1 };
     projectsValue = [project, secondProject];
@@ -763,6 +862,37 @@ describe("HierarchicalSidebar", () => {
     });
     expect(reorderProjectsMock).not.toHaveBeenCalled();
     expect(reorderEnvironmentsMock).not.toHaveBeenCalled();
+  });
+
+  test("reports reorder persistence failures without leaking a rejected event promise", async () => {
+    projectsValue = [project, { ...project, id: "project-2", name: "Project Two", order: 1 }];
+    reorderProjectsMock.mockImplementationOnce(async () => {
+      throw new Error("reorder failed");
+    });
+    const originalConsoleError = console.error;
+    const consoleErrorMock = mock(() => undefined);
+    console.error = consoleErrorMock as typeof console.error;
+
+    try {
+      render(<HierarchicalSidebar />);
+      act(() => {
+        currentDndContextProps().onDragStart?.({ active: { id: "project-1" } } as DragStartEvent);
+      });
+      await act(async () => {
+        currentDndContextProps().onDragEnd?.({
+          active: { id: "project-1" },
+          over: { id: "project-2" },
+        } as DragEndEvent);
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(consoleErrorMock).toHaveBeenCalledWith(
+        "Failed to persist sidebar reorder:",
+        expect.any(Error),
+      ));
+    } finally {
+      console.error = originalConsoleError;
+    }
   });
 
   test("resolves every selection modifier and fallback branch", () => {

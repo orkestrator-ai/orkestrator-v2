@@ -21,6 +21,7 @@ import * as realLayout from "@/components/layout";
 import * as realTooltip from "@/components/ui/tooltip";
 import * as realTerminal from "@/components/terminal";
 import * as realKanban from "@/components/kanban";
+import * as realProjects from "@/components/projects";
 import * as realContexts from "@/contexts";
 import * as realSonnerUi from "@/components/ui/sonner";
 import * as realErrors from "@/components/errors";
@@ -39,6 +40,7 @@ const realLayoutSnapshot = { ...realLayout };
 const realTooltipSnapshot = { ...realTooltip };
 const realTerminalSnapshot = { ...realTerminal };
 const realKanbanSnapshot = { ...realKanban };
+const realProjectsSnapshot = { ...realProjects };
 const realContextsSnapshot = { ...realContexts };
 const realSonnerUiSnapshot = { ...realSonnerUi };
 const realErrorsSnapshot = { ...realErrors };
@@ -54,12 +56,15 @@ const realLucideReactSnapshot = { ...realLucideReact };
 const realProcessSnapshot = { ...realProcess };
 
 const mockStartEnvironment = mock(async () => {});
+const mockCreateEnvironment = mock(async () => makeEnvironment("created", "project-1"));
+const mockUpdateEnvironment = mock(() => {});
 const mockExit = mock(async () => {});
 const mockLinearMonitorRender = mock(() => undefined);
 const mockListen = listen as ReturnType<typeof mock>;
 type AppEventCallback = (event: { payload: any }) => void;
 let appEventCallbacks = new Map<string, AppEventCallback>();
 const mockAppUnlisten = mock(() => {});
+let projectLauncherProps: React.ComponentProps<typeof realProjects.ProjectLauncher> | null = null;
 
 const mockConfig: AppConfig = {
   version: "1.0",
@@ -143,6 +148,14 @@ mock.module("@/components/kanban", () => ({
   KanbanBoard: ({ projectId }: { projectId: string }) => <div data-testid="kanban-board">{projectId}</div>,
 }));
 
+mock.module("@/components/projects", () => ({
+  ...realProjectsSnapshot,
+  ProjectLauncher: (props: React.ComponentProps<typeof realProjects.ProjectLauncher>) => {
+    projectLauncherProps = props;
+    return <div data-testid="project-launcher" />;
+  },
+}));
+
 mock.module("@/contexts", () => ({
   TerminalProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
@@ -193,6 +206,8 @@ mock.module("@/hooks/useGlobalActivityMonitor", () => ({
 mock.module("@/hooks", () => ({
   useEnvironments: () => ({
     startEnvironment: mockStartEnvironment,
+    createEnvironment: mockCreateEnvironment,
+    updateEnvironment: mockUpdateEnvironment,
   }),
 }));
 
@@ -351,6 +366,10 @@ function resetStores({
 function resetAppMocks() {
   mockStartEnvironment.mockClear();
   mockStartEnvironment.mockImplementation(async () => {});
+  mockCreateEnvironment.mockClear();
+  mockCreateEnvironment.mockImplementation(async () => makeEnvironment("created", "project-1"));
+  mockUpdateEnvironment.mockClear();
+  projectLauncherProps = null;
   mockExit.mockClear();
   mockCheckDocker.mockClear();
   mockCheckDocker.mockImplementation(async () => true);
@@ -388,6 +407,7 @@ afterAll(() => {
   mock.module("@/components/ui/tooltip", () => realTooltipSnapshot);
   mock.module("@/components/terminal", () => realTerminalSnapshot);
   mock.module("@/components/kanban", () => realKanbanSnapshot);
+  mock.module("@/components/projects", () => realProjectsSnapshot);
   mock.module("@/contexts", () => realContextsSnapshot);
   mock.module("@/components/ui/sonner", () => realSonnerUiSnapshot);
   mock.module("@/components/errors", () => realErrorsSnapshot);
@@ -450,6 +470,38 @@ describe("App background processing mounts", () => {
 
     expect(await screen.findByTestId("linear-completion-monitor")).toBeTruthy();
     expect(mockLinearMonitorRender).toHaveBeenCalled();
+  });
+
+  test("routes the empty selection to the launcher and forwards environment operations", async () => {
+    resetStores({
+      environments: [],
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+    });
+
+    render(<App />);
+
+    expect(screen.getByTestId("project-launcher")).toBeTruthy();
+    expect(projectLauncherProps).toEqual({
+      createEnvironment: mockCreateEnvironment,
+      updateEnvironment: mockUpdateEnvironment,
+      startEnvironment: mockStartEnvironment,
+    });
+    await waitFor(() => expect(mockCheckDocker).toHaveBeenCalled());
+  });
+
+  test("routes a selected project without an environment to its board", async () => {
+    resetStores({
+      environments: [],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: null,
+    });
+
+    render(<App />);
+
+    expect(screen.getByTestId("kanban-board").textContent).toBe("project-1");
+    expect(screen.queryByTestId("project-launcher")).toBeNull();
+    await waitFor(() => expect(mockCheckDocker).toHaveBeenCalled());
   });
 
   test("starts one pane persistence subscription and flushes it on app teardown", async () => {
@@ -913,6 +965,86 @@ describe("App Docker availability", () => {
       expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(1);
     });
   });
+
+  test("treats startup check failures as unavailable and keeps sync failures non-fatal", async () => {
+    const originalConsoleError = console.error;
+    const consoleError = mock(() => {});
+    console.error = consoleError;
+
+    try {
+      mockCheckDocker.mockImplementationOnce(async () => {
+        throw new Error("docker socket unavailable");
+      });
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      const first = render(<App />);
+
+      expect(await screen.findByText("Docker Required")).toBeTruthy();
+      expect(consoleError).toHaveBeenCalledWith("[App] Docker check failed:", expect.any(Error));
+      first.unmount();
+
+      resetAppMocks();
+      console.error = consoleError;
+      mockSyncAllEnvironmentsWithDocker.mockImplementationOnce(async () => {
+        throw new Error("sync failed");
+      });
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+
+      await waitFor(() => {
+        expect(consoleError).toHaveBeenCalledWith(
+          "[App] Failed to sync environments with Docker:",
+          expect.any(Error),
+        );
+      });
+      expect(screen.getByTestId("app-shell")).toBeTruthy();
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
+  test("handles a rejected retry and exits with a window-close fallback", async () => {
+    const originalConsoleError = console.error;
+    const originalWindowClose = window.close;
+    const consoleError = mock(() => {});
+    const windowClose = mock(() => {});
+    console.error = consoleError;
+    window.close = windowClose;
+    mockCheckDocker.mockImplementationOnce(async () => false);
+    mockCheckDocker.mockImplementationOnce(async () => {
+      throw new Error("retry failed");
+    });
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+      await screen.findByText("Docker Required");
+
+      act(() => screen.getByRole("button", { name: "Retry" }).click());
+      await waitFor(() => {
+        expect(consoleError).toHaveBeenCalledWith(
+          "[App] Docker retry check failed:",
+          expect.any(Error),
+        );
+      });
+
+      act(() => screen.getByRole("button", { name: "Close Application" }).click());
+      await waitFor(() => expect(mockExit).toHaveBeenCalledWith(0));
+      expect(windowClose).not.toHaveBeenCalled();
+
+      mockExit.mockImplementationOnce(async () => {
+        throw new Error("exit failed");
+      });
+      act(() => screen.getByRole("button", { name: "Close Application" }).click());
+      await waitFor(() => expect(windowClose).toHaveBeenCalledTimes(1));
+      expect(consoleError).toHaveBeenCalledWith(
+        "[App] Failed to exit via plugin:",
+        expect.any(Error),
+      );
+    } finally {
+      console.error = originalConsoleError;
+      window.close = originalWindowClose;
+    }
+  });
 });
 
 describe("App startup checks and global events", () => {
@@ -979,6 +1111,35 @@ describe("App startup checks and global events", () => {
     await waitFor(() => {
       expect(screen.getByText("Claude Code Login Required")).toBeTruthy();
     });
+  });
+
+  test("handles initial and retried CLI check rejection", async () => {
+    const originalConsoleError = console.error;
+    const consoleError = mock(() => {});
+    console.error = consoleError;
+    mockCheckClaudeCli.mockImplementation(async () => {
+      throw new Error("cli probe failed");
+    });
+
+    try {
+      resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+      render(<App />);
+
+      expect(await screen.findByText("AI CLI Required")).toBeTruthy();
+      expect(consoleError).toHaveBeenCalledWith("[App] CLI check failed:", expect.any(Error));
+
+      consoleError.mockClear();
+      act(() => screen.getByRole("button", { name: "Retry" }).click());
+      await waitFor(() => {
+        expect(consoleError).toHaveBeenCalledWith(
+          "[App] CLI retry check failed:",
+          expect.any(Error),
+        );
+      });
+      expect(screen.getByText("AI CLI Required")).toBeTruthy();
+    } finally {
+      console.error = originalConsoleError;
+    }
   });
 
   test("shows and dismisses the GitHub CLI warning", async () => {
@@ -1076,6 +1237,47 @@ describe("App startup checks and global events", () => {
       );
     });
   });
+
+  test("handles every zoom shortcut and throttles alternate credential errors", async () => {
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+    render(<App />);
+
+    await waitFor(() => expect(appEventCallbacks.has("menu-zoom")).toBe(true));
+
+    act(() => appEventCallbacks.get("menu-zoom")?.({ payload: "out" }));
+    expect(useUIStore.getState().zoomLevel).toBe(90);
+
+    const keydown = (key: string, modifiers: KeyboardEventInit) => {
+      const event = new KeyboardEvent("keydown", { key, cancelable: true, ...modifiers });
+      window.dispatchEvent(event);
+      return event;
+    };
+
+    act(() => {
+      expect(keydown("=", { metaKey: true }).defaultPrevented).toBe(true);
+      expect(keydown("+", { ctrlKey: true }).defaultPrevented).toBe(true);
+      expect(keydown("-", { ctrlKey: true }).defaultPrevented).toBe(true);
+      expect(keydown("0", { metaKey: true }).defaultPrevented).toBe(true);
+      expect(keydown("=", { metaKey: true, ctrlKey: true }).defaultPrevented).toBe(false);
+      expect(keydown("=", { ctrlKey: true, altKey: true }).defaultPrevented).toBe(false);
+      expect(keydown("=", {}).defaultPrevented).toBe(false);
+    });
+    expect(useUIStore.getState().zoomLevel).toBe(100);
+
+    act(() => {
+      appEventCallbacks.get("claude-credentials-error")?.({
+        payload: { kind: "push_failed", message: "Unable to sync credentials" },
+      });
+      appEventCallbacks.get("claude-credentials-error")?.({
+        payload: { kind: "push_failed", message: "Duplicate" },
+      });
+    });
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+    expect(mockToastError).toHaveBeenCalledWith(
+      "Failed to sync Claude credentials",
+      expect.objectContaining({ description: "Unable to sync credentials" }),
+    );
+  });
 });
 
 describe("App terminal overlay actions", () => {
@@ -1120,6 +1322,29 @@ describe("App terminal overlay actions", () => {
           initialPrompt: "Stand up the Codex session",
         });
     });
+  });
+
+  test("an explicit overlay prompt takes precedence over the stored prompt", async () => {
+    resetStores({
+      environments: [{
+        ...makeEnvironment("env-visible", "project-1"),
+        initialPrompt: "Stored prompt",
+      }],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    render(<App />);
+    act(() => screen.getByTestId("start-prompt-env-visible").click());
+
+    await waitFor(() => {
+      expect(mockStartEnvironment).toHaveBeenCalledWith(
+        "env-visible",
+        "Prompt from terminal",
+      );
+    });
+    expect(useClaudeOptionsStore.getState().getOptions("env-visible"))
+      .toMatchObject({ initialPrompt: "Prompt from terminal" });
   });
 
   test("rehydration keeps an existing agentType over the environment default", async () => {
@@ -1278,5 +1503,28 @@ describe("App terminal overlay actions", () => {
     } finally {
       console.error = originalConsoleError;
     }
+  });
+
+  test("create-script overlay retains launch options after successful startup", async () => {
+    resetStores({
+      environments: [makeEnvironment("env-visible", "project-1")],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    render(<App />);
+    act(() => screen.getByTestId("create-script-env-visible").click());
+
+    await waitFor(() => {
+      expect(mockStartEnvironment).toHaveBeenCalledWith(
+        "env-visible",
+        "Create setup script",
+      );
+    });
+    expect(useClaudeOptionsStore.getState().getOptions("env-visible"))
+      .toMatchObject({
+        launchAgent: true,
+        initialPrompt: "Create setup script",
+      });
   });
 });

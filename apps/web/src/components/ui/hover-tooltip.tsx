@@ -63,6 +63,12 @@ export function useHoverTooltip(openDelay = 500, closeDelay = 100) {
     }, openDelay);
   }, [clearCloseTimer, open, openDelay]);
 
+  const showImmediately = useCallback(() => {
+    clearOpenTimer();
+    clearCloseTimer();
+    setOpen(true);
+  }, [clearCloseTimer, clearOpenTimer]);
+
   const hide = useCallback(() => {
     clearOpenTimer();
     clearCloseTimer();
@@ -79,7 +85,7 @@ export function useHoverTooltip(openDelay = 500, closeDelay = 100) {
     };
   }, [clearOpenTimer, clearCloseTimer]);
 
-  return { open, show, hide };
+  return { open, show, showImmediately, hide };
 }
 
 export function HoverTooltipContent({

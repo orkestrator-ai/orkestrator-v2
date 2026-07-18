@@ -59,6 +59,8 @@ export interface Environment {
   codexMode?: CodexMode;
   setupScriptsComplete?: boolean;
   initialPrompt?: string;
+  /** Prompt awaiting a backend-owned rename after the environment starts. */
+  pendingRenamePrompt?: string;
 }
 
 export type SessionType = "plain" | "claude" | "opencode" | "codex" | "root";

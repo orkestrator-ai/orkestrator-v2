@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { renameEnvironmentFromPrompt, updateEnvironmentAgentSettings } from "@/lib/backend";
+import { updateEnvironmentAgentSettings } from "@/lib/backend";
 import { useClaudeOptionsStore, useConfigStore, useUIStore } from "@/stores";
 import type {
   Environment,
@@ -17,6 +17,7 @@ export interface CreateEnvironmentFlowOperations {
     initialPrompt?: string,
     portMappings?: PortMapping[],
     environmentType?: EnvironmentType,
+    namingPrompt?: string,
   ) => Promise<Environment>;
   updateEnvironment: (environmentId: string, updates: Partial<Environment>) => void;
   startEnvironment: (environmentId: string, initialPrompt?: string) => Promise<unknown>;
@@ -26,6 +27,29 @@ interface CreateEnvironmentFlowDialogProps extends CreateEnvironmentFlowOperatio
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string | null;
+}
+
+export function resolveEnvironmentCreateRequest(options: ClaudeOptions) {
+  const initialPromptForNaming = options.initialPrompt.trim();
+  return {
+    name: options.environmentName || undefined,
+    networkAccessMode: options.networkAccessMode,
+    initialPrompt: options.initialPrompt || undefined,
+    portMappings: options.portMappings.length > 0 ? options.portMappings : undefined,
+    environmentType: options.environmentType,
+    namingPrompt: !options.environmentName.trim() && initialPromptForNaming
+      ? initialPromptForNaming
+      : undefined,
+  };
+}
+
+export function resolveEnvironmentAgentSettings(options: ClaudeOptions) {
+  return {
+    defaultAgent: options.agentType,
+    claudeMode: options.agentType === "claude" ? options.claudeMode : null,
+    opencodeMode: options.agentType === "opencode" ? options.opencodeMode : null,
+    codexMode: options.agentType === "codex" ? options.codexMode : null,
+  };
 }
 
 /**
@@ -53,22 +77,25 @@ export function CreateEnvironmentFlowDialog({
 
     setIsCreating(true);
     try {
+      const request = resolveEnvironmentCreateRequest(options);
       const environment = await createEnvironment(
         projectId,
-        options.environmentName || undefined,
-        options.networkAccessMode,
-        options.initialPrompt || undefined,
-        options.portMappings.length > 0 ? options.portMappings : undefined,
-        options.environmentType,
+        request.name,
+        request.networkAccessMode,
+        request.initialPrompt,
+        request.portMappings,
+        request.environmentType,
+        request.namingPrompt,
       );
 
+      const agentSettings = resolveEnvironmentAgentSettings(options);
       const configuredEnvironment = await updateEnvironmentAgentSettings(
         environment.id,
-        options.agentType,
-        options.agentType === "claude" ? options.claudeMode : null,
+        agentSettings.defaultAgent,
+        agentSettings.claudeMode,
         null,
-        options.agentType === "opencode" ? options.opencodeMode : null,
-        options.agentType === "codex" ? options.codexMode : null,
+        agentSettings.opencodeMode,
+        agentSettings.codexMode,
       );
       updateEnvironment(environment.id, configuredEnvironment);
 
@@ -86,29 +113,9 @@ export function CreateEnvironmentFlowDialog({
       // and prompt-based naming can continue without blocking the UI.
       onOpenChange(false);
 
-      const initialPromptForNaming = options.initialPrompt.trim();
-      const shouldRenameFromInitialPrompt =
-        !options.environmentName.trim() && initialPromptForNaming.length > 0;
-
-      void (async () => {
-        try {
-          await startEnvironment(configuredEnvironment.id, options.initialPrompt);
-        } catch (startError) {
-          console.error("Failed to auto-start environment:", startError);
-          return;
-        }
-
-        if (shouldRenameFromInitialPrompt) {
-          try {
-            await renameEnvironmentFromPrompt(
-              configuredEnvironment.id,
-              initialPromptForNaming,
-            );
-          } catch (renameError) {
-            console.error("Failed to rename environment from initial prompt:", renameError);
-          }
-        }
-      })();
+      void startEnvironment(configuredEnvironment.id, options.initialPrompt).catch((startError) => {
+        console.error("Failed to auto-start environment:", startError);
+      });
     } finally {
       setIsCreating(false);
     }

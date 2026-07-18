@@ -572,7 +572,7 @@ describe("ActionBar grid presentation", () => {
     expect(screen.queryByText("New Tab with Claude")).toBeNull();
   });
 
-  test("keeps context-menu tooltips enabled in the desktop bar", async () => {
+  test("keeps context-menu tooltips enabled on desktop hover", async () => {
     render(<ActionBar />);
 
     const claudeButton = screen.getByRole("button", { name: "New tab with Claude" });
@@ -586,11 +586,15 @@ describe("ActionBar grid presentation", () => {
     await waitFor(() => {
       expect(screen.queryByText("New Tab with Claude")).toBeNull();
     });
+  });
 
+  test("keeps context-menu tooltips enabled on desktop keyboard focus", async () => {
+    render(<ActionBar />);
+
+    const claudeButton = screen.getByRole("button", { name: "New tab with Claude" });
     fireEvent.focus(claudeButton);
-    await waitFor(() => {
-      expect(screen.getByText("New Tab with Claude")).toBeTruthy();
-    });
+    expect(screen.getByText("New Tab with Claude")).toBeTruthy();
+
     fireEvent.blur(claudeButton);
     await waitFor(() => {
       expect(screen.queryByText("New Tab with Claude")).toBeNull();

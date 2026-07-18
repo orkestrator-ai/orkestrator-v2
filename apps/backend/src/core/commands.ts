@@ -446,6 +446,50 @@ async function renameLiveGitBranch(environment: Environment, oldBranch: string, 
   return true;
 }
 
+async function renameEnvironmentFromPrompt(
+  environmentId: string,
+  prompt: string,
+  context: CommandContext,
+  expectedPendingPrompt?: string,
+): Promise<void> {
+  if (!await context.storage.getEnvironment(environmentId)) {
+    throw new Error(`Environment not found: ${environmentId}`);
+  }
+
+  const generatedName = await generateEnvironmentNameWithCodexExec(prompt, context);
+  const environment = await context.storage.getEnvironment(environmentId);
+  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  if (
+    expectedPendingPrompt !== undefined &&
+    environment.pendingRenamePrompt?.trim() !== expectedPendingPrompt
+  ) {
+    return;
+  }
+  const oldBranch = environment.branch;
+  const project = await context.storage.getProject(environment.projectId);
+  const siblingEnvironments = (await context.storage.getEnvironmentsByProject(environment.projectId))
+    .filter((candidate) => candidate.id !== environmentId);
+  const existingGitBranches = project?.localPath
+    ? (await listGitBranchesAtPath(project.localPath, false)).filter((branch) => branch !== oldBranch)
+    : [];
+  const newName = makeUniqueEnvironmentSlug(generatedName, siblingEnvironments, existingGitBranches);
+  const newBranch = sanitizeBranchName(newName);
+  const branchChanged = oldBranch !== newBranch;
+
+  // Rename any live git branch before persisting, and only advance the stored branch
+  // (and clear stale PR metadata) when that rename succeeds, so storage never diverges
+  // from the real git branch.
+  const persistBranch = branchChanged && (await renameLiveGitBranch(environment, oldBranch, newBranch));
+
+  const updated = await context.storage.updateEnvironment(environmentId, {
+    name: newName,
+    ...(persistBranch ? { branch: newBranch, prUrl: null, prState: null, hasMergeConflicts: null } : {}),
+    ...(environment.pendingRenamePrompt !== undefined ? { pendingRenamePrompt: undefined } : {}),
+  });
+
+  context.emit("environment-renamed", { environment_id: updated.id, new_name: updated.name, new_branch: updated.branch });
+}
+
 type PrDetectionResult = {
   url: string;
   state: PrState;
@@ -2254,6 +2298,30 @@ async function startContainerServer(containerId: string, port: number, processNa
 export function createCommandRegistry(): Map<string, CommandHandler> {
   const commands = new Map<string, CommandHandler>();
   const register = (name: string, handler: CommandHandler) => commands.set(name, handler);
+  const pendingEnvironmentRenameTasks = new Map<string, Promise<void>>();
+
+  const schedulePendingEnvironmentRename = (environmentId: string, context: CommandContext): void => {
+    if (pendingEnvironmentRenameTasks.has(environmentId)) return;
+
+    const task = (async () => {
+      const environment = await context.storage.getEnvironment(environmentId);
+      const prompt = environment?.pendingRenamePrompt?.trim();
+      if (!prompt) return;
+      await renameEnvironmentFromPrompt(environmentId, prompt, context, prompt);
+    })()
+      .catch((error) => {
+        // Keep the persisted prompt so another successful start can retry without
+        // relying on renderer state surviving for the lifetime of the operation.
+        console.warn("[ElectronBackend] Failed to rename environment from pending prompt:", error);
+      })
+      .finally(() => {
+        if (pendingEnvironmentRenameTasks.get(environmentId) === task) {
+          pendingEnvironmentRenameTasks.delete(environmentId);
+        }
+      });
+
+    pendingEnvironmentRenameTasks.set(environmentId, task);
+  };
 
   register("greet", ({ name }) => `Hello, ${asString(name, "name")}! You've been greeted from the Orkestrator backend!`);
   // File pickers belong to the connected client. Browser clients cannot expose
@@ -2381,22 +2449,35 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   });
   register("get_log_directory", (_args, { storage }) => storage.getLogDirectory());
 
-  register("get_environments", async ({ projectId }, { storage }) => {
+  register("get_environments", async ({ projectId }, context) => {
+    const { storage } = context;
     const environments = await storage.getEnvironmentsByProject(asString(projectId, "projectId"));
-    return Promise.all(environments.map((environment) => syncStoredEnvironmentStatus(environment, storage)));
+    const synced = await Promise.all(
+      environments.map((environment) => syncStoredEnvironmentStatus(environment, storage)),
+    );
+    // Rehydration is also the recovery path after a backend restart. If startup
+    // completed before the process exited, resume any persisted rename intent
+    // without requiring the user to stop and start the environment again.
+    for (const environment of synced) {
+      if (environment.status === "running" && environment.pendingRenamePrompt?.trim()) {
+        schedulePendingEnvironmentRename(environment.id, context);
+      }
+    }
+    return synced;
   });
   register("get_environment_snapshots", ({ projectId }, { storage }) =>
     storage.getEnvironmentsByProject(asString(projectId, "projectId"))
   );
   register("get_environment", ({ environmentId }, { storage }) => storage.getEnvironment(asString(environmentId, "environmentId")));
   register("reorder_environments", ({ projectId, environmentIds }, { storage }) => storage.reorderEnvironments(asString(projectId, "projectId"), asStringArray(environmentIds)));
-  register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType }, context) => {
+  register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt }, context) => {
     const { storage } = context;
     const project = await storage.getProject(asString(projectId, "projectId"));
     if (!project) throw new Error(`Project not found: ${projectId}`);
     const repoConfig = await storage.getRepositoryConfig(project.id);
     const explicitName = asOptionalString(name)?.trim();
     const initialPromptText = asOptionalString(initialPrompt);
+    const pendingRenamePrompt = explicitName ? undefined : asOptionalString(namingPrompt)?.trim() || undefined;
     const baseName = explicitName
       ? sanitizeEnvironmentName(explicitName)
       : defaultEnvironmentName();
@@ -2412,6 +2493,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       portMappings: asPortMappings(portMappings),
       environmentType: asEnvironmentType(environmentType),
       entryPort: repoConfig.entryPort,
+      pendingRenamePrompt,
     });
     await storage.updateRepositoryConfig(project.id, { ...repoConfig, lastEnvironmentType: env.environmentType });
     return storage.addEnvironment(env);
@@ -2429,36 +2511,15 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   });
   register("rename_environment", ({ environmentId, name }, { storage }) => {
     const newName = sanitizeEnvironmentName(asString(name, "name"));
-    return storage.updateEnvironment(asString(environmentId, "environmentId"), { name: newName, branch: sanitizeBranchName(newName) });
+    return storage.updateEnvironment(asString(environmentId, "environmentId"), {
+      name: newName,
+      branch: sanitizeBranchName(newName),
+      pendingRenamePrompt: undefined,
+    });
   });
   register("rename_environment_from_prompt", async ({ environmentId, prompt }, context) => {
     const envId = asString(environmentId, "environmentId");
-    const environment = await context.storage.getEnvironment(envId);
-    if (!environment) throw new Error(`Environment not found: ${envId}`);
-
-    const generatedName = await generateEnvironmentNameWithCodexExec(asString(prompt, "prompt"), context);
-    const oldBranch = environment.branch;
-    const project = await context.storage.getProject(environment.projectId);
-    const siblingEnvironments = (await context.storage.getEnvironmentsByProject(environment.projectId))
-      .filter((candidate) => candidate.id !== envId);
-    const existingGitBranches = project?.localPath
-      ? (await listGitBranchesAtPath(project.localPath, false)).filter((branch) => branch !== oldBranch)
-      : [];
-    const newName = makeUniqueEnvironmentSlug(generatedName, siblingEnvironments, existingGitBranches);
-    const newBranch = sanitizeBranchName(newName);
-    const branchChanged = oldBranch !== newBranch;
-
-    // Rename any live git branch before persisting, and only advance the stored branch
-    // (and clear stale PR metadata) when that rename succeeds, so storage never diverges
-    // from the real git branch.
-    const persistBranch = branchChanged && (await renameLiveGitBranch(environment, oldBranch, newBranch));
-
-    const updated = await context.storage.updateEnvironment(envId, {
-      name: newName,
-      ...(persistBranch ? { branch: newBranch, prUrl: null, prState: null, hasMergeConflicts: null } : {}),
-    });
-
-    context.emit("environment-renamed", { environment_id: updated.id, new_name: updated.name, new_branch: updated.branch });
+    await renameEnvironmentFromPrompt(envId, asString(prompt, "prompt"), context);
   });
   register("get_environment_status", async ({ environmentId }, { storage }) => {
     const environment = await storage.getEnvironment(asString(environmentId, "environmentId"));
@@ -2493,7 +2554,9 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       if (environment.environmentType === "local") {
         if (environment.worktreePath && await pathExists(environment.worktreePath)) {
           const running = await storage.updateEnvironment(environment.id, { status: "running" });
-          return startEnvironmentSetup(running, context);
+          const result = await startEnvironmentSetup(running, context);
+          schedulePendingEnvironmentRename(environment.id, context);
+          return result;
         }
         const project = await storage.getProject(environment.projectId);
         if (!project?.localPath) throw new Error("Project has no local path - cannot create a local worktree");
@@ -2511,7 +2574,9 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
           createdFromCommit: worktree.createdFromCommit,
           status: "running",
         });
-        return startEnvironmentSetup(updated, context);
+        const result = await startEnvironmentSetup(updated, context);
+        schedulePendingEnvironmentRename(environment.id, context);
+        return result;
       }
 
       let containerId = environment.containerId;
@@ -2526,7 +2591,9 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
         entryPort: environment.entryPort ?? null,
         hostEntryPort,
       });
-      return startEnvironmentSetup(updated, context);
+      const result = await startEnvironmentSetup(updated, context);
+      schedulePendingEnvironmentRename(environment.id, context);
+      return result;
     } catch (error) {
       await storage.updateEnvironment(environment.id, { status: "error" }).catch(() => undefined);
       throw error;

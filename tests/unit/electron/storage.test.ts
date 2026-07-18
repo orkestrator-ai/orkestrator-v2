@@ -216,6 +216,7 @@ describe("Electron StorageService", () => {
       allowedDomains: ["example.com", 42],
       setupScriptsComplete: true,
       networkAccessMode: "full",
+      pendingRenamePrompt: "Name this after startup",
       entryPort: Number.NaN,
     });
     expect(updated).toMatchObject({
@@ -223,8 +224,11 @@ describe("Electron StorageService", () => {
       allowedDomains: ["example.com"],
       setupScriptsComplete: true,
       networkAccessMode: "full",
+      pendingRenamePrompt: "Name this after startup",
       entryPort: undefined,
     });
+    await storage.updateEnvironment(firstEnvironment.id, { pendingRenamePrompt: undefined });
+    expect((await storage.getEnvironment(firstEnvironment.id))?.pendingRenamePrompt).toBeUndefined();
     await expect(storage.updateEnvironment("missing", {})).rejects.toThrow("Environment not found");
     expect((await storage.reorderEnvironments(firstProject.id, [secondEnvironment.id])).map((environment) => environment.id)).toEqual([
       secondEnvironment.id,

@@ -83,6 +83,12 @@ const MOBILE_TAB_CONTENT_CLASSES = "create-environment-mobile-tab-panel mt-0 dat
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 const MAX_RGBA_SIZE = 32 * 1024 * 1024;
 
+export function getEncodedImageSizeError(base64Length: number): string | null {
+  const estimatedSize = (base64Length * 3) / 4;
+  if (estimatedSize <= MAX_IMAGE_SIZE) return null;
+  return `Image is ${(estimatedSize / 1024 / 1024).toFixed(1)}MB. Maximum is 8MB.`;
+}
+
 type MobileSection = "prompt" | "environment" | "agent" | "access" | "ports";
 type MobileTabTransitionDirection = "forward" | "backward";
 
@@ -233,15 +239,22 @@ export function CreateEnvironmentDialog({
       canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
 
       const previewUrl = canvas.toDataURL("image/png");
-      const base64Data = previewUrl.split(",")[1] || "";
-      const estimatedSize = (base64Data.length * 3) / 4;
-      if (estimatedSize > MAX_IMAGE_SIZE) {
+      const base64SeparatorIndex = previewUrl.indexOf(",");
+      if (base64SeparatorIndex < 0) return;
+
+      // Check the encoded payload length before slicing it out of the data URL.
+      // Oversized clipboard images can contain many megabytes of base64, and
+      // allocating a second copy here delays both the rejection and its toast.
+      const base64Length = previewUrl.length - base64SeparatorIndex - 1;
+      const sizeError = getEncodedImageSizeError(base64Length);
+      if (sizeError) {
         toast.error("Image too large", {
-          description: `Image is ${(estimatedSize / 1024 / 1024).toFixed(1)}MB. Maximum is 8MB.`,
+          description: sizeError,
         });
         return;
       }
 
+      const base64Data = previewUrl.slice(base64SeparatorIndex + 1);
       canvas.width = 0;
       canvas.height = 0;
       if (!base64Data) return;

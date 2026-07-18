@@ -224,7 +224,14 @@ export function HierarchicalSidebar() {
       for (const project of projects) {
         if (!loadedProjectIdsRef.current.has(project.id)) {
           loadedProjectIdsRef.current.add(project.id);
-          await loadEnvironments(project.id);
+          try {
+            await loadEnvironments(project.id);
+          } catch (err) {
+            // Keep later projects loading and allow this project to be retried
+            // after the project list or environment store changes.
+            loadedProjectIdsRef.current.delete(project.id);
+            console.error(`Failed to load environments for project ${project.id}:`, err);
+          }
         }
       }
     };
@@ -296,8 +303,12 @@ export function HierarchicalSidebar() {
       projects,
       allEnvironments,
     );
-    if (reorder?.type === "project") await reorderProjects(reorder.ids);
-    if (reorder?.type === "environment") await reorderEnvironments(reorder.projectId, reorder.ids);
+    try {
+      if (reorder?.type === "project") await reorderProjects(reorder.ids);
+      if (reorder?.type === "environment") await reorderEnvironments(reorder.projectId, reorder.ids);
+    } catch (err) {
+      console.error("Failed to persist sidebar reorder:", err);
+    }
   };
 
   const handleAddProject = async (gitUrl: string, localPath?: string) => {

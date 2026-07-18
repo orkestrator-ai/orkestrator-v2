@@ -50,7 +50,7 @@ interface SortableProjectGroupProps {
   selectedEnvironmentId: string | null;
   onSelectProject: () => void;
   onSelectEnvironment: (environmentId: string, modifiers?: { shiftKey?: boolean; metaKey?: boolean }) => void;
-  onDeleteProject: (projectId: string) => void;
+  onDeleteProject: (projectId: string) => void | Promise<void>;
   onOpenSettings: () => void;
   onDeleteEnvironment: (environmentId: string) => void;
   onStartEnvironment: (environmentId: string) => void;
@@ -101,9 +101,17 @@ export function SortableProjectGroup({
     transition,
   };
 
-  const confirmDelete = () => {
-    onDeleteProject(project.id);
-    setShowDeleteDialog(false);
+  const confirmDelete = async (event: React.MouseEvent) => {
+    // Radix closes alert dialogs on action clicks by default. Defer closing
+    // until the asynchronous deletion has actually succeeded.
+    event.preventDefault();
+    try {
+      await onDeleteProject(project.id);
+      setShowDeleteDialog(false);
+    } catch {
+      // The parent owns error reporting. Keep the confirmation open so the
+      // user can retry instead of producing an unhandled promise rejection.
+    }
   };
 
   const handleAddEnvironment = (e: React.MouseEvent<HTMLButtonElement>) => {

@@ -60,7 +60,7 @@ function asString(value: unknown): string | undefined {
 // Multi-agent v2 rollouts persist inter-agent prompts as Fernet envelopes.
 // Detect the binary layout instead of treating every long base64url-like task
 // as encrypted: version + timestamp + IV + block ciphertext + HMAC.
-function isOpaquePromptEnvelope(text: string): boolean {
+function isOpaqueMessageEnvelope(text: string): boolean {
   if (!/^[A-Za-z0-9_-]+={0,2}$/.test(text)) {
     return false;
   }
@@ -92,7 +92,7 @@ function asDisplayablePrompt(value: unknown): string | undefined {
     return undefined;
   }
 
-  return isOpaquePromptEnvelope(text.trim()) ? undefined : text;
+  return isOpaqueMessageEnvelope(text.trim()) ? undefined : text;
 }
 
 function parseJson<T>(value: unknown): T | null {
@@ -119,14 +119,52 @@ function normalizeTranscriptToolArgs(
       : undefined;
   }
 
-  if (toolName === "exec_command" && typeof parsed.cmd === "string") {
+  let normalized = parsed;
+
+  // Multi-agent v2 marks message-bearing collaboration parameters as
+  // encrypted. Rollouts retain the Fernet envelope rather than plaintext, so
+  // never expose that opaque implementation detail as thousands of characters
+  // of tool input. The readable final_answer event is added as a text action by
+  // parseChildTranscript below.
+  if (
+    typeof parsed.message === "string"
+    && isOpaqueMessageEnvelope(parsed.message.trim())
+  ) {
+    normalized = { ...parsed };
+    delete normalized.message;
+  }
+
+  if (toolName === "exec_command" && typeof normalized.cmd === "string") {
     return {
-      ...parsed,
-      command: parsed.cmd,
+      ...normalized,
+      command: normalized.cmd,
     };
   }
 
-  return parsed;
+  return normalized;
+}
+
+function appendTextAction(
+  actions: TranscriptActionPart[],
+  value: unknown,
+): void {
+  const content = asString(value);
+  if (!content) return;
+  if (actions.some((action) => action.type === "text" && action.content === content)) {
+    return;
+  }
+  actions.push({ type: "text", content });
+}
+
+function messageContentText(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const text = value
+    .filter(isRecord)
+    .map((part) => asString(part.text))
+    .filter((part): part is string => part !== undefined)
+    .join("\n");
+  return text.length > 0 ? text : undefined;
 }
 
 function stringifyOutput(value: unknown): string | undefined {
@@ -242,12 +280,14 @@ function parseChildTranscript(
 
     if (record.type === "event_msg" && payload.type === "agent_message") {
       const phase = asString(payload.phase);
-      const message = asString(payload.message);
-      if (phase === "commentary" && message) {
-        actions.push({
-          type: "text",
-          content: message,
-        });
+      if (phase === "commentary") {
+        const content = asString(payload.message);
+        if (content) actions.push({ type: "text", content });
+      } else if (phase === "final_answer") {
+        appendTextAction(actions, payload.message);
+      }
+      if (phase === "final_answer") {
+        state = "success";
       }
       continue;
     }
@@ -304,6 +344,7 @@ function parseChildTranscript(
     }
 
     if (payloadType === "message" && asString(payload.phase) === "final_answer") {
+      appendTextAction(actions, messageContentText(payload.content));
       state = "success";
     }
   }

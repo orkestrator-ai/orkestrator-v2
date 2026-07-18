@@ -1011,6 +1011,65 @@ describe("deriveSubagentPartsFromTranscriptRecords", () => {
     ])?.toolState).toBe("success");
   });
 
+  test("renders the readable final answer and hides encrypted collaboration messages", () => {
+    const finalAnswer = "Found one correctness issue and sent the details to the parent.";
+    const [part] = deriveSubagentPartsFromTranscriptRecords([
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "spawn_agent", call_id: "spawn" },
+      },
+    ], new Map([["agent", [
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "send_message",
+          call_id: "send",
+          arguments: JSON.stringify({
+            target: "/root",
+            message: validFernetEnvelope(),
+          }),
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "send",
+          output: "",
+        },
+      },
+      {
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          phase: "final_answer",
+          message: finalAnswer,
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          phase: "final_answer",
+          content: [{ type: "output_text", text: finalAnswer }],
+        },
+      },
+    ]]]), new Map([["spawn", "agent"]]));
+
+    expect(part?.toolState).toBe("success");
+    expect(part?.subagentActionCount).toBe(1);
+    expect(part?.subagentActions).toEqual([
+      expect.objectContaining({
+        type: "tool-invocation",
+        toolName: "send_message",
+        toolArgs: { target: "/root" },
+        toolOutput: "",
+      }),
+      { type: "text", content: finalAnswer },
+    ]);
+  });
+
   test("handles wait errors, aborts, malformed outputs, and success precedence", () => {
     const spawn = (agentId: string): TranscriptRecord[] => [
       {

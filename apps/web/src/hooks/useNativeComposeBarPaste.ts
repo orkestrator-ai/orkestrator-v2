@@ -2,6 +2,7 @@ import { useCallback, useEffect, type RefObject } from "react";
 import { readImage } from "@/lib/native/clipboard";
 import { toast } from "sonner";
 import {
+  encodeCanvasAsPngWithinSize,
   MAX_IMAGE_DIMENSION,
   resizeCanvasIfNeeded,
   resizeCanvasToMaxDimension,
@@ -111,15 +112,15 @@ export function useNativeComposeBarPaste({
         canvas = resizeCanvasToMaxDimension(canvas, MAX_IMAGE_DIMENSION);
         canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
 
-        const dataUrl = canvas.toDataURL("image/png");
-        const base64Data = dataUrl.split(",")[1] || "";
-        const estimatedSize = (base64Data.length * 3) / 4;
-        if (estimatedSize > MAX_IMAGE_SIZE) {
+        const encodedImage = encodeCanvasAsPngWithinSize(canvas, MAX_IMAGE_SIZE);
+        if (!encodedImage) {
           toast.error("Image too large", {
-            description: `Image is ${(estimatedSize / 1024 / 1024).toFixed(1)}MB. Maximum is 8MB.`,
+            description: "The image could not be resized below the 8MB attachment limit.",
           });
           return;
         }
+        canvas = encodedImage.canvas;
+        const { dataUrl, base64Data } = encodedImage;
 
         canvas.width = 0;
         canvas.height = 0;

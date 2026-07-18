@@ -854,6 +854,43 @@ describe("resolveAgentDefaults", () => {
     expect(pasteEvent.defaultPrevented).toBe(true);
   });
 
+  test("resizes a wide initial-prompt image before attaching it", async () => {
+    const drawImage = mock(() => {});
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 4000, height: 1000 }),
+    }));
+    HTMLCanvasElement.prototype.getContext = (() => ({
+      putImageData,
+      drawImage,
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+
+    render(
+      <CreateEnvironmentDialog
+        open={true}
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />,
+    );
+    screen.getByLabelText(/Initial Prompt/i).focus();
+
+    document.dispatchEvent(
+      new Event("paste", { bubbles: true, cancelable: true }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByAltText(/initial-prompt-/)).toBeTruthy();
+    });
+    expect(drawImage).toHaveBeenCalledWith(
+      expect.objectContaining({ width: 0, height: 0 }),
+      0,
+      0,
+      2000,
+      500,
+    );
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
   test("removes a pasted initial prompt image before submitting", async () => {
     mockReadImage.mockImplementation(async () => ({
       rgba: async () => new Uint8Array([255, 0, 0, 255]),

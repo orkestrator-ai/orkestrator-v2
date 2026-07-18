@@ -43,7 +43,12 @@ import {
 import { ClaudeIcon, CodexIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
 import { cn } from "@/lib/utils";
 import { readImage } from "@/lib/native/clipboard";
-import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
+import {
+  encodeCanvasAsPngWithinSize,
+  MAX_IMAGE_DIMENSION,
+  resizeCanvasIfNeeded,
+  resizeCanvasToMaxDimension,
+} from "@/lib/canvas-utils";
 import { createUuid } from "@/lib/uuid";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
 import { toast } from "sonner";
@@ -243,28 +248,20 @@ export function CreateEnvironmentDialog({
 
       const imageData = new ImageData(new Uint8ClampedArray(rgba), width, height);
       ctx.putImageData(imageData, 0, 0);
+      canvas = resizeCanvasToMaxDimension(canvas, MAX_IMAGE_DIMENSION);
       canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
 
-      const previewUrl = canvas.toDataURL("image/png");
-      const base64SeparatorIndex = previewUrl.indexOf(",");
-      if (base64SeparatorIndex < 0) return;
-
-      // Check the encoded payload length before slicing it out of the data URL.
-      // Oversized clipboard images can contain many megabytes of base64, and
-      // allocating a second copy here delays both the rejection and its toast.
-      const base64Length = previewUrl.length - base64SeparatorIndex - 1;
-      const sizeError = getEncodedImageSizeError(base64Length);
-      if (sizeError) {
+      const encodedImage = encodeCanvasAsPngWithinSize(canvas, MAX_IMAGE_SIZE);
+      if (!encodedImage) {
         toast.error("Image too large", {
-          description: sizeError,
+          description: "The image could not be resized below the 8MB attachment limit.",
         });
         return;
       }
-
-      const base64Data = previewUrl.slice(base64SeparatorIndex + 1);
+      canvas = encodedImage.canvas;
+      const { dataUrl: previewUrl, base64Data } = encodedImage;
       canvas.width = 0;
       canvas.height = 0;
-      if (!base64Data) return;
 
       if (!pastedBlob) {
         event.preventDefault();

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
+  encodeCanvasAsPngWithinSize,
   releaseCanvas,
   resizeCanvasIfNeeded,
   resizeCanvasToMaxDimension,
@@ -52,5 +53,32 @@ describe("canvas utilities", () => {
     expect(resizeCanvasToMaxDimension(source, 2000)).toBe(source);
     releaseCanvas(source);
     expect([source.width, source.height]).toEqual([0, 0]);
+  });
+
+  test("downscales an encoded PNG until it fits the attachment size", () => {
+    const drawImage = mock(() => undefined);
+    const source = {
+      width: 2000,
+      height: 1000,
+      toDataURL: () => `data:image/png;base64,${"A".repeat(1200)}`,
+    } as HTMLCanvasElement;
+    const target = {
+      width: 0,
+      height: 0,
+      getContext: () => ({ drawImage }),
+      toDataURL: () => "data:image/png;base64,QUJD",
+    } as unknown as HTMLCanvasElement;
+    document.createElement = mock(() => target) as typeof document.createElement;
+
+    const encoded = encodeCanvasAsPngWithinSize(source, 600);
+
+    expect(encoded).toMatchObject({
+      canvas: target,
+      dataUrl: "data:image/png;base64,QUJD",
+      base64Data: "QUJD",
+    });
+    expect(target.width).toBeLessThan(2000);
+    expect(target.height).toBeLessThan(1000);
+    expect(drawImage).toHaveBeenCalled();
   });
 });

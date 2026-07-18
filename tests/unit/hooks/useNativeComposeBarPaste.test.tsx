@@ -285,10 +285,46 @@ describe("useNativeComposeBarPaste", () => {
       expect(toastError).toHaveBeenCalledWith(
         "Image too large",
         expect.objectContaining({
-          description: expect.stringContaining("Maximum is 8MB."),
+          description: expect.stringContaining("could not be resized below the 8MB"),
         }),
       );
     });
+  });
+
+  test("downscales an oversized encoded image and still attaches it", async () => {
+    const drawImage = mock(() => {});
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 2000, height: 1000 }),
+    }));
+    HTMLCanvasElement.prototype.getContext = (() => ({
+      putImageData,
+      drawImage,
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.toDataURL = function () {
+      return this.width === 2000
+        ? `data:image/png;base64,${"A".repeat(12 * 1024 * 1024)}`
+        : "data:image/png;base64,QUJD";
+    };
+
+    const { getByTestId } = render(<HookHarness containerId="container-1" />);
+    setActiveElement(getByTestId("compose-input"));
+
+    document.dispatchEvent(
+      new Event("paste", { bubbles: true, cancelable: true }),
+    );
+
+    await waitFor(() => expect(onAttach).toHaveBeenCalledTimes(1));
+    expect(drawImage).toHaveBeenCalled();
+    expect(onAttach.mock.calls[0]?.[0]).toMatchObject({
+      previewUrl: "data:image/png;base64,QUJD",
+    });
+    expect(mockWriteContainerFile).toHaveBeenCalledWith(
+      "container-1",
+      expect.any(String),
+      "QUJD",
+    );
+    expect(toastError).not.toHaveBeenCalled();
   });
 
   test("logs unexpected write failures without emitting an attachment", async () => {

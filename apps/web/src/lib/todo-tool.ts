@@ -242,11 +242,12 @@ export function isTodoTool(toolName?: string): boolean {
 export function getTodoToolLabel(toolName?: string): string {
   const normalized = normalizeToolName(toolName);
 
+  if (normalized === "todowrite") return "Todo Write";
   if (normalized === "todo_list") return "Todo List";
   if (normalized === "taskcreate" || normalized === "task_create") return "Task Create";
   if (normalized === "taskupdate" || normalized === "task_update") return "Task Update";
   if (normalized === "taskget" || normalized === "task_get") return "Task Get";
   if (normalized === "tasklist" || normalized === "task_list") return "Task List";
 
-  return toolName || "TodoWrite";
+  return toolName || "Todo Write";
 }

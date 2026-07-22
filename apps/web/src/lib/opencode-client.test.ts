@@ -792,6 +792,32 @@ describe("opencode-client streaming part normalization", () => {
     });
   });
 
+  test("removes OpenCode's surrounding bold markers from reasoning", () => {
+    const part = normalizeOpenCodePart({
+      id: "part-r-bold",
+      messageID: "message-1",
+      type: "reasoning",
+      text: "**Planning next changes**",
+    });
+
+    expect(part).toEqual({
+      type: "thinking",
+      content: "Planning next changes",
+      sourcePartId: "part-r-bold",
+      sourceMessageId: "message-1",
+    });
+  });
+
+  test("removes an opening bold marker while reasoning is still streaming", () => {
+    const part = normalizeOpenCodePart({
+      id: "part-r-streaming",
+      type: "reasoning",
+      text: "**Planning next",
+    });
+
+    expect(part?.content).toBe("Planning next");
+  });
+
   test("drops reasoning parts with empty text", () => {
     expect(
       normalizeOpenCodePart({ id: "part-r", type: "reasoning", text: "" }),

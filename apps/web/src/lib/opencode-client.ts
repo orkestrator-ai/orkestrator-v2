@@ -544,6 +544,12 @@ export function mergeOpenCodeSubagentTranscript(
   return changed ? nextMessages : messages;
 }
 
+function stripOpenCodeReasoningBoldMarkers(content: string): string {
+  return content
+    .replace(/^(\s*)\*\*/, "$1")
+    .replace(/\*\*(\s*)$/, "$1");
+}
+
 export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const p = part as any;
@@ -558,7 +564,7 @@ export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null
     if (!reasoningContent) return null;
     return {
       type: "thinking",
-      content: reasoningContent,
+      content: stripOpenCodeReasoningBoldMarkers(reasoningContent),
       sourcePartId,
       sourceMessageId,
     };

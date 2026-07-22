@@ -77,6 +77,7 @@ describe("NativeMessage task list rendering", () => {
 
     const { container } = render(<NativeMessage message={message} />);
 
+    expect(screen.getByText("Thinking")).toBeTruthy();
     expect(container.textContent).toContain(
       "Let me analyze the code structure here",
     );
@@ -1149,7 +1150,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     const { container } = render(<NativeMessage message={message} />);
 
     // Should render the TodoToolPart with completion count
-    expect(container.textContent).toContain("TodoWrite");
+    expect(container.textContent).toContain("Todo Write");
     expect(container.textContent).toContain("1/2 complete");
     expect(container.textContent).toContain("success");
   });

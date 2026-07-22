@@ -10,7 +10,7 @@ describe("TodoToolPart", () => {
   test("renders tool name and completion count from args", () => {
     const { container } = render(
       <TodoToolPart
-        toolName="TodoWrite"
+        toolName="todowrite"
         toolState="success"
         toolArgs={{
           todos: [
@@ -22,11 +22,11 @@ describe("TodoToolPart", () => {
       />,
     );
 
-    expect(container.textContent).toContain("TodoWrite");
+    expect(container.textContent).toContain("Todo Write");
     expect(container.textContent).toContain("1/3 complete");
     expect(container.textContent).toContain("success");
     expect(
-      screen.getByRole("button", { name: /todowrite/i }).parentElement?.className,
+      screen.getByRole("button", { name: /todo write/i }).parentElement?.className,
     ).toContain("my-0");
   });
 
@@ -93,12 +93,12 @@ describe("TodoToolPart", () => {
     expect(container.textContent).toContain("#7 Verify output fallback");
   });
 
-  test("falls back to 'TodoWrite' when toolName is undefined", () => {
+  test("falls back to 'Todo Write' when toolName is undefined", () => {
     const { container } = render(
       <TodoToolPart toolState="success" toolOutput='[{"content":"a","status":"pending"}]' />,
     );
 
-    expect(container.textContent).toContain("TodoWrite");
+    expect(container.textContent).toContain("Todo Write");
   });
 
   test("expands to show todo items with checkboxes on click", () => {

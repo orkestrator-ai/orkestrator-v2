@@ -299,6 +299,8 @@ describe("todo-tool", () => {
 
   describe("getTodoToolLabel", () => {
     test("returns friendly labels for todo-like task tools", () => {
+      expect(getTodoToolLabel("todowrite")).toBe("Todo Write");
+      expect(getTodoToolLabel("TodoWrite")).toBe("Todo Write");
       expect(getTodoToolLabel("todo_list")).toBe("Todo List");
       expect(getTodoToolLabel("TaskCreate")).toBe("Task Create");
       expect(getTodoToolLabel("TaskUpdate")).toBe("Task Update");

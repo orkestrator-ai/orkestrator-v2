@@ -167,7 +167,7 @@ function ThinkingPart({ content }: { content: string }) {
             )}
           />
           <Brain className="h-3.5 w-3.5 shrink-0" />
-          <span className="font-medium shrink-0">thinking</span>
+          <span className="font-medium shrink-0">Thinking</span>
           {!isOpen && (
             <span className="font-mono text-muted-foreground/80 truncate min-w-0">
               task list
@@ -191,7 +191,7 @@ function ThinkingPart({ content }: { content: string }) {
   return (
     <div className="my-0 flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md">
       <Brain className="w-3.5 h-3.5 shrink-0" />
-      <span className="font-medium shrink-0">thinking</span>
+      <span className="font-medium shrink-0">Thinking</span>
       <span className="font-mono text-muted-foreground/80 truncate min-w-0">
         {content}
       </span>

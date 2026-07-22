@@ -23,6 +23,19 @@ function extractDocumentedPrompt(markdown: string): string {
   return markdown.slice(start + startMarker.length, end);
 }
 
+function extractLevelTwoHeadings(markdown: string): string[] {
+  let inFence = false;
+
+  return markdown.split("\n").flatMap((line) => {
+    if (line.startsWith("```")) {
+      inFence = !inFence;
+      return [];
+    }
+
+    return !inFence && line.startsWith("## ") ? [line] : [];
+  });
+}
+
 describe("buildReviewBody", () => {
   test("renders interactive and automated variants from the same shared body", () => {
     const interactive = buildReviewBody({
@@ -50,18 +63,45 @@ describe("buildReviewBody", () => {
       expect(body).toContain("### 1. [P0|P1|P2][conf:NN][category]\n#### Short title");
       expect(body).not.toContain("## Findings");
       expect(body.match(/^## What Changed$/gm)).toHaveLength(2);
-
-      const reviewScopeIndex = body.indexOf("## Review Scope");
-      const whatChangedIndex = body.indexOf("## What Changed");
-      const riskProfileIndex = body.indexOf("## Risk Profile");
-      expect(reviewScopeIndex).toBeGreaterThan(-1);
-      expect(whatChangedIndex).toBeGreaterThan(reviewScopeIndex);
-      expect(riskProfileIndex).toBeGreaterThan(whatChangedIndex);
+      expect(extractLevelTwoHeadings(body)).toEqual([
+        "## Security and instruction hierarchy",
+        "## Step 1: Commit Changes (rollback point)",
+        "## Step 2: Run Tests",
+        "## Step 3: Code Review",
+        "## Step 4: Test Coverage Review",
+        "## Output Format",
+        "## Review Scope",
+        "## What Changed",
+        "## Risk Profile",
+        "## Test Results",
+        "## Strengths",
+        "## Issues",
+        "## Test Coverage Gaps",
+        "## Verdict",
+        "## Summary",
+      ]);
     }
 
-    expect(interactive).toContain("Ask clarifying questions if needed");
-    expect(automated).toContain("Do not ask clarifying questions");
+    expect(interactive).toContain("8. Ask clarifying questions if needed about unclear changes.");
+    expect(automated).toContain(
+      "8. Do not ask clarifying questions — this is an automated pipeline.",
+    );
   });
+
+  for (const [label, targetBranch] of [
+    ["slash and Unicode", "feature/na\u00efve-\ud83d\ude80"],
+    ["empty", ""],
+    ["backtick", "release`candidate"],
+    ["newline", "release\ncandidate"],
+  ] as const) {
+    test(`interpolates a ${label} target branch in every documented location`, () => {
+      const body = buildReviewBody({ targetBranch, allowClarifyingQuestions: true });
+
+      expect(body).toContain(`git diff origin/${targetBranch}...HEAD`);
+      expect(body).toContain(`- Target branch: ${targetBranch}`);
+      expect(body).toContain(`- Base ref: origin/${targetBranch}...HEAD`);
+    });
+  }
 
   test("keeps the documented current review prompt in sync with createReviewPrompt", () => {
     const documentation = read("docs/current-review-prompt.md");
@@ -76,5 +116,58 @@ describe("buildReviewBody", () => {
     expect(documentation).toContain(
       "| Output | Markdown sections: Review Scope, What Changed, Risk Profile, Test Results",
     );
+  });
+
+  test("documents the prompt sources, invocation, related workflows, and maintenance steps", () => {
+    const documentation = read("docs/current-review-prompt.md");
+    const headings = extractLevelTwoHeadings(documentation);
+
+    expect(headings.slice(0, 5)).toEqual([
+      "## Source",
+      "## How it is invoked",
+      "## Custom prompt setting",
+      "## Dynamic parameter",
+      "## Full prompt text",
+    ]);
+    expect(headings.slice(-3)).toEqual([
+      "## Workflow summary",
+      "## Related prompts (not this button)",
+      "## Maintenance",
+    ]);
+
+    for (const expected of [
+      "| Prompt generator | `apps/web/src/prompts/git-workflows.ts` → `createReviewPrompt(targetBranch, customPrompt?)` |",
+      "| Shared body | `apps/web/src/prompts/review-shared.ts` → `buildReviewBody(opts)` |",
+      "| Export | `apps/web/src/prompts/index.ts` |",
+      "| UI trigger | `apps/web/src/components/layout/ActionBar.tsx` → `handleReview()` |",
+      "| Tests | `apps/web/src/prompts/git-workflows.test.ts` |",
+      "`handleReview(agentOverride?)` runs:",
+      "Calls `createReviewPrompt(targetBranch, config.global.reviewPrompt)`.",
+      'Opens a new agent tab via `createTab(agent, { initialPrompt: reviewPrompt, displayTitle: "Review" })`.',
+      "**Right-click context menu**: explicit override — Claude, OpenCode, or Codex.",
+      "**Keyboard**: `⌘R` (same as click; requires `canCreateTab` and `selectedProjectId`).",
+      "The prompt is passed as `initialPrompt` on the new tab and sent automatically",
+      "- Compare command: `` git diff origin/${targetBranch}...HEAD ``",
+      "- Base ref line in Review Scope: `Base ref: origin/${targetBranch}...HEAD`",
+      "- Target branch line in Review Scope: `Target branch: ${targetBranch}`",
+      "| Preamble | Security/instruction hierarchy",
+      "| 1 | Commit only files that clearly belong to the change",
+      "| 2 | Run full project test suite; record failures |",
+      "| 3 | Diff against `origin/<targetBranch>...HEAD`",
+      "| 4 | Audit test coverage for all impacted files",
+      "| Build pipeline review phase | `createBuildReviewPrompt()`",
+      "| Create PR button | `createPRPrompt()`",
+      "| Claude compose `/review` | Claude CLI slash command |",
+      "| `docs/second-opinion.md` | Standalone review rubric |",
+      "| `docs/code-review-prompt-enhancement-spec.md` | Spec that drove these changes |",
+      "1. `buildReviewBody()` in `apps/web/src/prompts/review-shared.ts`",
+      "2. `createReviewPrompt()` in `apps/web/src/prompts/git-workflows.ts`",
+      "3. `createBuildReviewPrompt()` in `apps/web/src/prompts/build-pipeline.ts`",
+      "4. Assertions in `apps/web/src/prompts/git-workflows.test.ts` and `apps/web/src/prompts/build-pipeline.test.ts`.",
+      "5. This file so it stays in sync with the generated template",
+      "regenerate with `bun -e",
+    ]) {
+      expect(documentation).toContain(expected);
+    }
   });
 });

@@ -1657,6 +1657,17 @@ describe("ActionBar successful cleanup and merge actions", () => {
     expect(screen.queryByRole("button", { name: "Delete Environment" })).toBeNull();
   });
 
+  test("discloses that draft pull requests are marked ready before merging", () => {
+    currentEnvironment = { ...selectedEnvironment, prState: "open" };
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
+
+    expect(screen.getByTestId("alert-dialog-content").textContent).toContain(
+      "If the pull request is a draft, it will be marked ready for review first.",
+    );
+  });
+
   test("merges a container PR and persists its merged state", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     render(<ActionBar />);

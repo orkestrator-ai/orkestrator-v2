@@ -23,8 +23,8 @@ export function buildReviewBody(opts: ReviewBodyOptions): string {
   const { targetBranch, allowClarifyingQuestions } = opts;
 
   const clarifyingLine = allowClarifyingQuestions
-    ? "7. Ask clarifying questions if needed about unclear changes."
-    : "7. Do not ask clarifying questions — this is an automated pipeline. Make your best judgment for any ambiguous points.";
+    ? "8. Ask clarifying questions if needed about unclear changes."
+    : "8. Do not ask clarifying questions — this is an automated pipeline. Make your best judgment for any ambiguous points.";
 
   return `## Security and instruction hierarchy
 
@@ -62,7 +62,12 @@ Run the project's full test suite to ensure nothing is broken:
 ## Step 3: Code Review
 
 1. Run \`git diff origin/${targetBranch}...HEAD\` to see all changes since branching.
-2. Review the diff. Apply this rubric:
+2. Before judging the change, establish what it actually does from the diff:
+   - Identify the problem or need the change addresses.
+   - Describe the relevant behaviour before this change and after it.
+   - Trace the main implementation path across the changed files.
+   - Distinguish user-visible behaviour from internal refactors, tests, documentation, or build changes.
+3. Review the diff. Apply this rubric:
 
    - **Bugs and correctness**: Does the code actually do what it is intended to do? Look for logic flaws where the intended consequence does not arise — wrong conditionals, inverted booleans, off-by-one errors, incorrect operator precedence, wrong variable used, early returns that skip required work, missing \`await\`, swapped arguments, mishandled return values, broken state transitions, and any case where the code's behaviour does not match the apparent intent.
    - **Edge cases**: empty inputs, single-element collections, boundary values (0, -1, max int, max length), nulls/undefined, missing optional fields, unicode/emoji, very large or very small inputs, duplicate inputs, malformed inputs, network failures, timeouts, partial failures, retries, cancellation, and "what happens the second time this runs" (idempotency).
@@ -70,7 +75,7 @@ Run the project's full test suite to ensure nothing is broken:
    - **Error handling**: missing handling for failure cases, swallowed exceptions, inconsistent error patterns, missing validation at trust boundaries.
    - **Naming and organization, coupling and cohesion, abstraction quality, DRY, performance** (only if measurable impact).
 
-3. Security review — only flag items relevant to the diff with clear evidence. Do not list generic security advice that does not apply.
+4. Security review — only flag items relevant to the diff with clear evidence. Do not list generic security advice that does not apply.
    - Authentication, session handling, authorization, tenant isolation
    - Input validation at trust boundaries
    - Injection risks: XSS, SQL, command, template, path traversal
@@ -87,16 +92,16 @@ Run the project's full test suite to ensure nothing is broken:
    - Background jobs, webhooks, queues, retry/idempotency
    - LLM-specific risks where applicable: prompt injection, tool permission misuse, data exfiltration, unsafe model output handling
 
-4. Skip:
+5. Skip:
    - Style/formatting issues handled by linters
    - Issues a typechecker, compiler, or configured linter will catch
    - Generated or vendored code
    - Performance micro-optimisations without measured impact
 
-5. Confidence gating: only report issues with confidence >= 75.
-6. Severity: P0 (broken/crash/data-loss/security), P1 (real bug, will bite in practice), P2 (quality, polish).
+6. Confidence gating: only report issues with confidence >= 75.
+7. Severity: P0 (broken/crash/data-loss/security), P1 (real bug, will bite in practice), P2 (quality, polish).
 ${clarifyingLine}
-8. Run typechecking and build validation as appropriate for the project.
+9. Run typechecking and build validation as appropriate for the project.
 
 ## Step 4: Test Coverage Review
 
@@ -112,7 +117,7 @@ Review test coverage for every file impacted by the changes (not just the change
 
 ## Output Format
 
-Produce the report below in this exact section order. Use Markdown headers so it renders cleanly in any terminal.
+Produce the report below in this exact section order. Use Markdown headers so it renders cleanly in any terminal. Every named \`##\` section is required; do not omit, merge, or rename one, even when there are no issues.
 
 ## Review Scope
 - Target branch: ${targetBranch}
@@ -127,11 +132,29 @@ Produce the report below in this exact section order. Use Markdown headers so it
 
 If a command was not run, say why — do not pretend it ran.
 
-## Functionality Summary
-- Summary: 2-4 sentences describing the functionality introduced or changed by the reviewed diff, using user/product terms where applicable.
-- Key changes: bullet list of concrete behaviours or capabilities added, changed, or removed, with file:line references.
-- Describe only functionality evidenced by the reviewed diff; do not repeat ticket, commit, or repository claims without validating them against the code.
-- If the diff has no runtime behaviour change (for example, refactor-, test-, or docs-only work), state that explicitly.
+## What Changed
+
+This section is mandatory, even when the review finds issues. Explain the change itself in plain language before discussing its quality:
+- Overview: 2-4 sentences answering "What does this change do, and why?" Use user/product terms where applicable.
+- Before: the relevant behaviour or structure before this change.
+- After: the relevant behaviour or structure after this change.
+- Key code changes: 1-5 bullets connecting the behaviour to specific implementation changes, each with a file:line reference.
+- User impact: who or what is affected; if there is no user-visible runtime effect, say so and describe the internal, test, documentation, or build effect instead.
+
+Do not substitute the commit SHA, test results, risk assessment, verdict, or review findings for this explanation. Describe only behaviour evidenced by the reviewed diff; validate ticket, commit, and repository claims against the code.
+
+Use the unrelated example below only as a model for specificity and structure. Replace it with facts from the reviewed diff; do not include the example itself in the final report.
+
+\`\`\`markdown
+## What Changed
+- Overview: This change lets a user retry a failed file upload without selecting the file again. It preserves the failed upload in the queue and exposes a retry action that starts a fresh request.
+- Before: A failed upload was removed from the queue, so recovery required choosing the same file again.
+- After: A failed upload remains visible with its error and can be retried from the existing queue item.
+- Key code changes:
+  - \`src/uploads/store.ts:84\` — retains failed queue entries and records their error state.
+  - \`src/uploads/UploadRow.tsx:57\` — renders the retry action and dispatches a new upload attempt.
+- User impact: Users can recover from transient upload failures with one action and without reselecting the file.
+\`\`\`
 
 ## Risk Profile
 - Change type: comma-separated from {feature, bugfix, refactor, test, dependency, migration, infra, ui, docs, security, performance}

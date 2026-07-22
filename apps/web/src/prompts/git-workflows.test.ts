@@ -83,8 +83,11 @@ describe("createReviewPrompt", () => {
     const result = createReviewPrompt("main");
     expect(result).toContain("## Output Format");
     expect(result).toContain("## Review Scope");
-    expect(result).toContain("## Functionality Summary");
-    expect(result).toContain("Key changes: bullet list of concrete behaviours or capabilities");
+    expect(result).toContain("## What Changed");
+    expect(result).toContain("This section is mandatory");
+    expect(result.match(/^## What Changed$/gm)).toHaveLength(2);
+    expect(result).toContain("Before: the relevant behaviour or structure before this change");
+    expect(result).toContain("After: the relevant behaviour or structure after this change");
     expect(result).toContain("## Risk Profile");
     expect(result).toContain("Overall risk: low | medium | high");
     expect(result).toContain("## Test Results");

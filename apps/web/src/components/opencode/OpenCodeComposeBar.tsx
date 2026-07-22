@@ -642,7 +642,11 @@ export function OpenCodeComposeBar({
                 <span className="min-w-0 max-w-full truncate sm:max-w-[200px]">{selectedModelName}</span>
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-[calc(100vw-1rem)] sm:w-[320px]">
+            <DropdownMenuContent
+              align="start"
+              collisionPadding={{ top: 52, right: 8, bottom: 8, left: 8 }}
+              className="w-[calc(100vw-1rem)] sm:w-[320px]"
+            >
               {/* Search input and refresh button */}
               <div className="p-2 pb-1">
                 <div className="flex items-center gap-1">

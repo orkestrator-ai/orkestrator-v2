@@ -14,7 +14,12 @@ describe("mobile responsive layout contracts", () => {
     ["apps/web/src/components/claude/ClaudeComposeBar.tsx", "overflow-x-auto", "sm:min-w-[340px]"],
     ["apps/web/src/components/claude/ClaudeTmuxChatTab.tsx", "overflow-x-auto", "sm:w-[min(calc(100%_-_2rem),56rem)]"],
     ["apps/web/src/components/codex/CodexComposeBar.tsx", "overflow-x-auto", "w-[calc(100vw-1rem)]"],
-    ["apps/web/src/components/opencode/OpenCodeComposeBar.tsx", "overflow-x-auto", "w-[calc(100vw-1rem)]"],
+    [
+      "apps/web/src/components/opencode/OpenCodeComposeBar.tsx",
+      "overflow-x-auto",
+      "w-[calc(100vw-1rem)]",
+      "collisionPadding={{ top: 52, right: 8, bottom: 8, left: 8 }}",
+    ],
     ["apps/web/src/components/docker/DockerStatsDialog.tsx", "grid-cols-1 gap-3 sm:grid-cols-3"],
     [
       "apps/web/src/components/environments/CreateEnvironmentDialog.tsx",

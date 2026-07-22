@@ -2,14 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
-
-const toastErrorMock = mock(() => {});
-
-mock.module("sonner", () => ({
-  toast: {
-    error: toastErrorMock,
-  },
-}));
+import { mockToastError as toastErrorMock } from "../../../../../tests/mocks/sonner";
 
 import { NativeMessage } from "./NativeMessage";
 

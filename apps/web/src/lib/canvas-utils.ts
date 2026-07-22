@@ -32,8 +32,8 @@ export function resizeCanvasIfNeeded(
 
   // Calculate scale factor to fit within limit
   const scale = Math.sqrt(maxRgbaSize / rgbaSize);
-  const newWidth = Math.floor(width * scale);
-  const newHeight = Math.floor(height * scale);
+  const newWidth = Math.max(1, Math.floor(width * scale));
+  const newHeight = Math.max(1, Math.floor(height * scale));
 
   // Create resized canvas
   const resizedCanvas = document.createElement("canvas");
@@ -44,6 +44,7 @@ export function resizeCanvasIfNeeded(
   if (!ctx) {
     // Cannot resize - return original canvas unchanged
     console.error("[canvas-utils] Failed to get 2D context for resized canvas");
+    releaseCanvas(resizedCanvas);
     return canvas;
   }
 
@@ -76,8 +77,8 @@ export function resizeCanvasToMaxDimension(
   if (width <= maxDimension && height <= maxDimension) return canvas;
 
   const scale = Math.min(maxDimension / width, maxDimension / height);
-  const newWidth = Math.floor(width * scale);
-  const newHeight = Math.floor(height * scale);
+  const newWidth = Math.max(1, Math.floor(width * scale));
+  const newHeight = Math.max(1, Math.floor(height * scale));
 
   const resizedCanvas = document.createElement("canvas");
   resizedCanvas.width = newWidth;
@@ -86,6 +87,7 @@ export function resizeCanvasToMaxDimension(
 
   if (!ctx) {
     console.error("[canvas-utils] Failed to get 2D context for dimension-resized canvas");
+    releaseCanvas(resizedCanvas);
     return canvas;
   }
 
@@ -110,10 +112,11 @@ export function encodeCanvasAsPngWithinSize(
   canvas: HTMLCanvasElement,
   maxEncodedSize: number,
 ): EncodedPng | null {
+  const maxAttempts = 6;
   let currentCanvas = canvas;
   let previousEncodedSize = Number.POSITIVE_INFINITY;
 
-  for (let attempt = 0; attempt < 6; attempt += 1) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const dataUrl = currentCanvas.toDataURL("image/png");
     const separatorIndex = dataUrl.indexOf(",");
     if (separatorIndex < 0) {
@@ -121,30 +124,36 @@ export function encodeCanvasAsPngWithinSize(
       return null;
     }
 
-    const base64Length = dataUrl.length - separatorIndex - 1;
-    const estimatedSize = (base64Length * 3) / 4;
-    if (base64Length > 0 && estimatedSize <= maxEncodedSize) {
+    const base64Start = separatorIndex + 1;
+    const encodedSize = getBase64DecodedSize(dataUrl, base64Start);
+    if (encodedSize !== null && encodedSize <= maxEncodedSize) {
       return {
         canvas: currentCanvas,
         dataUrl,
-        base64Data: dataUrl.slice(separatorIndex + 1),
+        // Only copy the payload after it has passed the size check. Oversized
+        // PNG data URLs can be many megabytes and are retried several times.
+        base64Data: dataUrl.slice(base64Start),
       };
     }
 
-    // A browser that cannot produce a smaller payload should fail cleanly
-    // instead of repeatedly allocating the same large data URL.
     if (
-      estimatedSize >= previousEncodedSize ||
-      (currentCanvas.width <= 1 && currentCanvas.height <= 1)
+      encodedSize === null ||
+      (currentCanvas.width <= 1 && currentCanvas.height <= 1) ||
+      attempt === maxAttempts - 1
     ) {
       releaseCanvas(currentCanvas);
       return null;
     }
-    previousEncodedSize = estimatedSize;
+
+    // PNG compression is not monotonic as dimensions change. If one resize
+    // does not reduce the encoded payload, make a larger step and keep trying
+    // rather than rejecting an image that may fit at a smaller dimension.
+    const didNotShrink = encodedSize >= previousEncodedSize;
+    previousEncodedSize = encodedSize;
 
     const scale = Math.min(
-      0.9,
-      Math.sqrt(maxEncodedSize / Math.max(estimatedSize, 1)) * 0.9,
+      didNotShrink ? 0.75 : 0.9,
+      Math.sqrt(maxEncodedSize / Math.max(encodedSize, 1)) * 0.9,
     );
     const longestDimension = Math.max(currentCanvas.width, currentCanvas.height);
     const nextMaxDimension = Math.max(1, Math.floor(longestDimension * scale));
@@ -161,6 +170,28 @@ export function encodeCanvasAsPngWithinSize(
 
   releaseCanvas(currentCanvas);
   return null;
+}
+
+function getBase64DecodedSize(dataUrl: string, base64Start: number): number | null {
+  const base64Length = dataUrl.length - base64Start;
+  if (base64Length === 0 || base64Length % 4 !== 0) return null;
+
+  const padding = dataUrl.endsWith("==")
+    ? 2
+    : dataUrl.endsWith("=")
+      ? 1
+      : 0;
+
+  // Padding is only valid at the end of a base64 payload.
+  const firstPaddingIndex = dataUrl.indexOf("=", base64Start);
+  if (
+    firstPaddingIndex >= 0 &&
+    firstPaddingIndex < dataUrl.length - padding
+  ) {
+    return null;
+  }
+
+  return Math.floor((base64Length * 3) / 4) - padding;
 }
 
 /**

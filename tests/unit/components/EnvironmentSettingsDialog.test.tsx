@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { useConfigStore } from "@/stores/configStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import type { Environment } from "@/types";
+import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 
 let mockSection = "agent";
 const mockUpdateEnvironmentAgentSettings = mock(async (
@@ -21,8 +22,6 @@ const mockUpdateEnvironmentAgentSettings = mock(async (
   opencodeMode: opencodeMode ?? undefined,
   codexMode: codexMode ?? undefined,
 }));
-const mockToastSuccess = mock(() => {});
-const mockToastError = mock(() => {});
 const actualBackend = await import("../../../apps/web/src/lib/backend");
 
 mock.module("@/lib/backend", () => ({
@@ -33,13 +32,6 @@ mock.module("@/lib/backend", () => ({
   updatePortMappings: mock(async () => makeEnvironment()),
   syncEnvironmentStatus: mock(async () => makeEnvironment()),
   testDomainResolution: mock(async () => []),
-}));
-
-mock.module("sonner", () => ({
-  toast: {
-    success: mockToastSuccess,
-    error: mockToastError,
-  },
 }));
 
 mock.module("@/components/settings/FullscreenSettingsLayout", () => ({

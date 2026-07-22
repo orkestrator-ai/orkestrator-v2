@@ -1,9 +1,11 @@
 import { afterEach, describe, test, expect, mock, beforeEach } from "bun:test";
 import { cleanup, render, fireEvent, waitFor } from "@testing-library/react";
 import type { Environment } from "../../../apps/web/src/types";
+import {
+  mockToastError as toastErrorMock,
+  mockToastSuccess as toastSuccessMock,
+} from "../../mocks/sonner";
 
-const toastSuccessMock = mock(() => {});
-const toastErrorMock = mock(() => {});
 const settingsDialogPropsMock = mock(() => {});
 
 // Mock UI components that require providers.
@@ -70,13 +72,6 @@ mock.module("@/components/ui/alert-dialog", () => ({
 
 mock.module("@/components/ui/checkbox", () => ({
   Checkbox: () => <input type="checkbox" />,
-}));
-
-mock.module("sonner", () => ({
-  toast: {
-    success: toastSuccessMock,
-    error: toastErrorMock,
-  },
 }));
 
 mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({

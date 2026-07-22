@@ -39,10 +39,6 @@ mock.module("@/lib/backend", () => ({
   getLocalFileTree: async () => [],
 }));
 
-mock.module("sonner", () => ({
-  toast: { success: () => {}, error: () => {} },
-}));
-
 // @/lib/native/clipboard is centrally mocked in tests/setup.ts.
 // Re-mocking here would replace the shared mock functions and break
 // terminal-paste tests that rely on them.

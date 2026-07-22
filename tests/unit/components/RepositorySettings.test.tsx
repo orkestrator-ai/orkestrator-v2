@@ -1,5 +1,7 @@
-import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, mock, beforeEach, afterEach, afterAll } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import * as realSelect from "@/components/ui/select";
+import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 
 // ---------------------------------------------------------------------------
 // Mocks — must be declared BEFORE importing the component under test
@@ -25,8 +27,7 @@ const mockOpenDialog = mock(async () => {
   }
   return nextDialogResult;
 });
-const mockToastSuccess = mock(() => {});
-const mockToastError = mock(() => {});
+const realSelectSnapshot = { ...realSelect };
 
 mock.module("@/lib/backend", () => ({
   updateRepositoryConfig: mockUpdateRepositoryConfig,
@@ -35,13 +36,6 @@ mock.module("@/lib/backend", () => ({
 
 mock.module("@/lib/native/dialog", () => ({
   open: mockOpenDialog,
-}));
-
-mock.module("sonner", () => ({
-  toast: {
-    success: mockToastSuccess,
-    error: mockToastError,
-  },
 }));
 
 mock.module("@/components/settings/FullscreenSettingsLayout", () => ({
@@ -136,6 +130,10 @@ mock.module("@/components/ui/select", () => ({
   }) => <>{children}</>,
   SelectValue: ({ placeholder }: { placeholder?: string }) => placeholder ? <option value="">{placeholder}</option> : null,
 }));
+
+afterAll(() => {
+  mock.module("@/components/ui/select", () => realSelectSnapshot);
+});
 
 // ---------------------------------------------------------------------------
 // Imports (after mocks)

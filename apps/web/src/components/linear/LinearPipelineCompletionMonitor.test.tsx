@@ -1,13 +1,12 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, render, waitFor } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
-import * as realSonner from "sonner";
+import { mockToastError as toastErrorMock } from "../../../../../tests/mocks/sonner";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores";
 import type { Environment } from "@/types";
 
 const realBackendSnapshot = { ...realBackend };
-const realSonnerSnapshot = { ...realSonner };
 
 const postLinearCompletionCommentMock = mock<(
   pipelineId: string,
@@ -18,19 +17,10 @@ const postLinearCompletionCommentMock = mock<(
   commentId: "comment-1",
   postedAt: "2026-06-28T12:00:00.000Z",
 }));
-const toastErrorMock = mock(() => undefined);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   postLinearCompletionComment: postLinearCompletionCommentMock,
-}));
-
-mock.module("sonner", () => ({
-  ...realSonnerSnapshot,
-  toast: {
-    ...realSonnerSnapshot.toast,
-    error: toastErrorMock,
-  },
 }));
 
 const { LinearPipelineCompletionMonitor } = await import("./LinearPipelineCompletionMonitor");
@@ -53,7 +43,6 @@ const environment: Environment = {
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
-  mock.module("sonner", () => realSonnerSnapshot);
 });
 
 function seedLinearPipeline(phase: "complete" | "failed" = "complete"): string {

@@ -2,7 +2,7 @@ import { afterAll, afterEach, describe, expect, it, mock } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { listen } from "@/lib/native/events";
 import * as realBackend from "@/lib/backend";
-import * as realSonner from "sonner";
+import { mockToastError as toastErrorMock } from "../../../../tests/mocks/sonner";
 
 const getTerminalSessionMock = mock(async (_sessionId: string) => ({ id: "session-old", running: true }));
 const createLocalTerminalSessionMock = mock(async (_environmentId: string, _cols: number, _rows: number) => "session-new-local");
@@ -16,10 +16,8 @@ const resizeLocalTerminalMock = mock(async (_sessionId: string, _cols: number, _
 const resizeTerminalMock = mock(async (_sessionId: string, _cols: number, _rows: number) => undefined);
 const writeLocalTerminalMock = mock(async (_sessionId: string, _data: string) => undefined);
 const writeTerminalMock = mock(async (_sessionId: string, _data: string) => undefined);
-const toastErrorMock = mock(() => {});
 
 const realBackendSnapshot = { ...realBackend };
-const realSonnerSnapshot = { ...realSonner };
 mock.module("@/lib/backend", () => ({
   getTerminalSession: getTerminalSessionMock,
   createLocalTerminalSession: createLocalTerminalSessionMock,
@@ -35,12 +33,6 @@ mock.module("@/lib/backend", () => ({
   writeTerminal: writeTerminalMock,
 }));
 
-mock.module("sonner", () => ({
-  toast: {
-    error: toastErrorMock,
-  },
-}));
-
 const listenMock = listen as ReturnType<typeof mock>;
 const unlistenMock = mock(() => undefined);
 
@@ -48,7 +40,6 @@ const { useTerminal } = await import("./useTerminal");
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
-  mock.module("sonner", () => realSonnerSnapshot);
 });
 
 describe("useTerminal reconnect behavior", () => {

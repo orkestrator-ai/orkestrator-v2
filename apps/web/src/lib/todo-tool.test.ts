@@ -18,6 +18,18 @@ describe("todo-tool", () => {
     ).toBe(true);
   });
 
+  test("rejects malformed todo items", () => {
+    expect(isTodoItem(null)).toBe(false);
+    expect(isTodoItem(undefined)).toBe(false);
+    expect(isTodoItem("todo")).toBe(false);
+    expect(isTodoItem([])).toBe(false);
+    expect(isTodoItem({ status: "pending" })).toBe(false);
+    expect(isTodoItem({ content: 42, status: "pending" })).toBe(false);
+    expect(isTodoItem({ content: "Missing status" })).toBe(false);
+    expect(isTodoItem({ content: "Wrong status type", status: 1 })).toBe(false);
+    expect(isTodoItem({ content: "Unknown status", status: "done" })).toBe(false);
+  });
+
   test("parses todos from nested output payload", () => {
     const output = JSON.stringify({
       todos: [
@@ -185,6 +197,30 @@ describe("todo-tool", () => {
     expect(todos).toEqual([{ content: "#1 Removed task", status: "cancelled" }]);
   });
 
+  test("normalizes task status aliases", () => {
+    const todos = getTodoItems(
+      {
+        tasks: [
+          { content: "Completed alias", status: "complete" },
+          { content: "Running alias", status: "running" },
+          { content: "Active alias", status: "active" },
+          { content: "Pending alias", status: "todo" },
+          { content: "Cancelled alias", status: "canceled" },
+        ],
+      },
+      undefined,
+      "TaskList",
+    );
+
+    expect(todos).toEqual([
+      { content: "Completed alias", status: "completed" },
+      { content: "Running alias", status: "in_progress" },
+      { content: "Active alias", status: "in_progress" },
+      { content: "Pending alias", status: "pending" },
+      { content: "Cancelled alias", status: "cancelled" },
+    ]);
+  });
+
   test("adds task ID prefix even when content contains the ID mid-string", () => {
     const todos = getTodoItems(
       { id: "1", subject: "Fix PR #1 merge conflict" },
@@ -251,6 +287,54 @@ describe("todo-tool", () => {
     ]);
   });
 
+  test("parses snake-case new_todos output", () => {
+    expect(
+      parseTodosFromOutput(
+        JSON.stringify({
+          new_todos: [
+            { content: "Review snake-case payload", status: "pending" },
+          ],
+        }),
+      ),
+    ).toEqual([
+      { content: "Review snake-case payload", status: "pending" },
+    ]);
+  });
+
+  test("parses task items output alias", () => {
+    const todos = getTodoItems(
+      undefined,
+      JSON.stringify({
+        items: [
+          { id: "8", title: "Read items payload", status: "running" },
+        ],
+      }),
+      "TaskList",
+    );
+
+    expect(todos).toEqual([
+      { content: "#8 Read items payload", status: "in_progress" },
+    ]);
+  });
+
+  test("parses a nested single task output", () => {
+    const todos = getTodoItems(
+      undefined,
+      JSON.stringify({
+        task: {
+          task_id: "9",
+          subject: "Read nested task payload",
+          status: "complete",
+        },
+      }),
+      "TaskGet",
+    );
+
+    expect(todos).toEqual([
+      { content: "#9 Read nested task payload", status: "completed" },
+    ]);
+  });
+
   describe("isTaskTodoTool", () => {
     test("recognizes only task todo tool names", () => {
       expect(isTaskTodoTool("TaskCreate")).toBe(true);
@@ -299,12 +383,24 @@ describe("todo-tool", () => {
 
   describe("getTodoToolLabel", () => {
     test("returns friendly labels for todo-like task tools", () => {
+      expect(getTodoToolLabel("todowrite")).toBe("Todo Write");
+      expect(getTodoToolLabel("TodoWrite")).toBe("Todo Write");
       expect(getTodoToolLabel("todo_list")).toBe("Todo List");
       expect(getTodoToolLabel("TaskCreate")).toBe("Task Create");
       expect(getTodoToolLabel("TaskUpdate")).toBe("Task Update");
       expect(getTodoToolLabel("TaskList")).toBe("Task List");
       expect(getTodoToolLabel("TaskGet")).toBe("Task Get");
       expect(getTodoToolLabel("task_get")).toBe("Task Get");
+    });
+
+    test("passes unknown names through unchanged", () => {
+      expect(getTodoToolLabel("CustomTodoTool")).toBe("CustomTodoTool");
+    });
+
+    test("falls back to Todo Write for blank and missing names", () => {
+      expect(getTodoToolLabel("")).toBe("Todo Write");
+      expect(getTodoToolLabel("   ")).toBe("Todo Write");
+      expect(getTodoToolLabel()).toBe("Todo Write");
     });
   });
 });

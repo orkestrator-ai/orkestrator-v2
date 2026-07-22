@@ -22,6 +22,8 @@ describe("tool name helpers", () => {
     expect(getToolDisplayName("apply_patch")).toBe("Apply Patch");
     expect(getToolDisplayName("exec_command")).toBe("Exec Command");
     expect(getToolDisplayName("web_search")).toBe("Web Search");
+    expect(getToolDisplayName("todowrite")).toBe("Todo Write");
+    expect(getToolDisplayName("TodoWrite")).toBe("Todo Write");
     expect(getToolDisplayName("edit")).toBe("Edit");
     expect(getToolDisplayName("Read")).toBe("Read");
   });
@@ -32,7 +34,6 @@ describe("tool name helpers", () => {
   });
 
   test("preserves CamelCase identifiers without splitting them", () => {
-    expect(getToolDisplayName("TodoWrite")).toBe("TodoWrite");
     expect(getToolDisplayName("WebFetch")).toBe("WebFetch");
     expect(getToolDisplayName("MultiEdit")).toBe("MultiEdit");
   });

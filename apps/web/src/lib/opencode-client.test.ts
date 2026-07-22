@@ -377,6 +377,130 @@ describe("opencode-client getModelsWithDefaults", () => {
     expect(result.defaults.modelId).toBe("openai/gpt-5-codex");
   });
 
+  test("filters disabled variants and orders enabled variants consistently", async () => {
+    const client = {
+      provider: {
+        list: async () => ({
+          data: {
+            all: [
+              {
+                id: "openai",
+                models: {
+                  "gpt-5": {
+                    id: "gpt-5",
+                    variants: {
+                      zeta: {},
+                      disabled: { disabled: true },
+                      high: {},
+                      alpha: {},
+                      minimal: {},
+                      beta: null,
+                      legacy: "enabled",
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        }),
+      },
+    } as unknown as OpencodeClient;
+
+    const result = await getModelsWithDefaults(client);
+
+    expect(result.models).toEqual([
+      {
+        id: "openai/gpt-5",
+        name: "gpt-5",
+        provider: "openai",
+        variants: ["minimal", "high", "alpha", "zeta"],
+      },
+    ]);
+  });
+
+  test("maps cost aliases and skips malformed model entries", async () => {
+    const client = {
+      provider: {
+        list: async () => ({
+          data: {
+            all: [
+              {
+                id: "openai",
+                models: [
+                  null,
+                  "invalid",
+                  {},
+                  { id: 42, name: "Invalid id" },
+                  { id: "nested", name: 42, cost: { input: 0, output: 2 } },
+                  { id: "camel", inputCost: 3, outputCost: 4 },
+                  { id: "snake", input_cost: 5, output_cost: 6 },
+                  { id: "invalid-cost", inputCost: "7", output_cost: null },
+                ],
+              },
+              null,
+              "invalid",
+              { models: [{ id: "missing-provider" }] },
+            ],
+          },
+        }),
+      },
+    } as unknown as OpencodeClient;
+
+    const result = await getModelsWithDefaults(client);
+
+    expect(result.models).toEqual([
+      {
+        id: "openai/nested",
+        name: "nested",
+        provider: "openai",
+        inputCost: 0,
+        outputCost: 2,
+      },
+      {
+        id: "openai/camel",
+        name: "camel",
+        provider: "openai",
+        inputCost: 3,
+        outputCost: 4,
+      },
+      {
+        id: "openai/snake",
+        name: "snake",
+        provider: "openai",
+        inputCost: 5,
+        outputCost: 6,
+      },
+      {
+        id: "openai/invalid-cost",
+        name: "invalid-cost",
+        provider: "openai",
+      },
+    ]);
+  });
+
+  test("ignores malformed variant collections", async () => {
+    const client = {
+      provider: {
+        list: async () => ({
+          data: {
+            all: [
+              {
+                id: "openai",
+                models: {
+                  "gpt-5": { id: "gpt-5", variants: "high" },
+                },
+              },
+            ],
+          },
+        }),
+      },
+    } as unknown as OpencodeClient;
+
+    const result = await getModelsWithDefaults(client);
+
+    expect(result.models[0]?.variants).toBeUndefined();
+  });
+
   test("returns empty models when both provider.list and config.providers fail", async () => {
     const client = {
       ...noProviderCatalog,
@@ -792,6 +916,77 @@ describe("opencode-client streaming part normalization", () => {
     });
   });
 
+  test("removes OpenCode's surrounding bold markers from reasoning", () => {
+    const part = normalizeOpenCodePart({
+      id: "part-r-bold",
+      messageID: "message-1",
+      type: "reasoning",
+      text: "**Planning next changes**",
+    });
+
+    expect(part).toEqual({
+      type: "thinking",
+      content: "Planning next changes",
+      sourcePartId: "part-r-bold",
+      sourceMessageId: "message-1",
+    });
+  });
+
+  test("removes an opening bold marker while reasoning is still streaming", () => {
+    const part = normalizeOpenCodePart({
+      id: "part-r-streaming",
+      type: "reasoning",
+      text: "**Planning next",
+      time: { start: 1 },
+    });
+
+    expect(part?.content).toBe("Planning next");
+  });
+
+  test("preserves an unmatched opening marker when reasoning is not streaming", () => {
+    expect(
+      normalizeOpenCodePart({
+        type: "reasoning",
+        text: "**Planning next",
+        time: { start: 1, end: 2 },
+      })?.content,
+    ).toBe("**Planning next");
+    expect(
+      normalizeOpenCodePart({ type: "reasoning", text: "**Planning next" })
+        ?.content,
+    ).toBe("**Planning next");
+  });
+
+  test("preserves inline, trailing, and completed prefix bold Markdown", () => {
+    for (const content of [
+      "Use **care** when editing",
+      "Planning ends with **care**",
+      "**Planning** then inspect",
+      "**Planning**\n- inspect files",
+      "**Planning** then **care**",
+      "Planning next**",
+    ]) {
+      expect(
+        normalizeOpenCodePart({ type: "reasoning", text: content })?.content,
+      ).toBe(content);
+    }
+  });
+
+  test("preserves surrounding whitespace while removing an outer bold wrapper", () => {
+    const part = normalizeOpenCodePart({
+      type: "reasoning",
+      text: " \n**Planning next changes** \n",
+    });
+
+    expect(part?.content).toBe(" \nPlanning next changes \n");
+  });
+
+  test("drops reasoning that is empty after marker normalization", () => {
+    for (const content of ["****", "  **  ", " \n\t "]) {
+      expect(normalizeOpenCodePart({ type: "reasoning", text: content })).toBeNull();
+    }
+  });
+
   test("drops reasoning parts with empty text", () => {
     expect(
       normalizeOpenCodePart({ id: "part-r", type: "reasoning", text: "" }),
@@ -1034,6 +1229,33 @@ describe("opencode-client streaming part normalization", () => {
       sourcePartId: "part-f",
       sourceMessageId: "message-1",
       fileUrl: "file:///tmp/photo.png",
+    });
+  });
+
+  test("uses the URL when a file part has no filename", () => {
+    const part = normalizeOpenCodePart({
+      type: "file",
+      url: "file:///tmp/attachment.txt",
+    });
+
+    expect(part).toEqual({
+      type: "file",
+      content: "file:///tmp/attachment.txt",
+      sourcePartId: undefined,
+      sourceMessageId: undefined,
+      fileUrl: "file:///tmp/attachment.txt",
+    });
+  });
+
+  test("normalizes an empty file part with safe fallbacks", () => {
+    const part = normalizeOpenCodePart({ type: "file" });
+
+    expect(part).toEqual({
+      type: "file",
+      content: "",
+      sourcePartId: undefined,
+      sourceMessageId: undefined,
+      fileUrl: undefined,
     });
   });
 

@@ -32,6 +32,14 @@ import {
   type CodexCollabToolCallItem,
 } from "./codex-collaboration.js";
 import {
+  buildFallbackSessionTitle,
+  generateSessionTitleWithCodexExec,
+  persistSessionTitle,
+  readPersistedSessionTitleEntries,
+  shutdownSessionTitleGeneration,
+  type PersistedSessionTitleSource,
+} from "./session-titles.js";
+import {
   DEFAULT_REASONING_EFFORT,
   MODEL_REASONING_EFFORTS,
   ModelCatalogCache,
@@ -84,6 +92,9 @@ interface TurnSubagentRefreshController {
 interface SessionState {
   id: string;
   title?: string;
+  titleSource?: "codex" | PersistedSessionTitleSource;
+  titleGenerationAttempted?: boolean;
+  titleGenerationToken?: symbol;
   conversationMode: ConversationMode;
   fastMode: boolean;
   thread: Thread;
@@ -115,6 +126,8 @@ type BridgeThreadItem = ThreadItem | CodexCollabToolCallItem;
 interface ExpiredSessionState {
   id: string;
   title?: string;
+  titleSource?: "codex" | PersistedSessionTitleSource;
+  titleGenerationAttempted?: boolean;
   conversationMode: ConversationMode;
   fastMode: boolean;
   threadOptions: ThreadOptions;
@@ -151,6 +164,7 @@ interface PersistedSessionIndexEntry {
 interface PersistedSessionMeta {
   id: string;
   title?: string;
+  titleSource?: "codex" | PersistedSessionTitleSource;
   updatedAt: string;
   cwd?: string;
   transcriptPath?: string;
@@ -223,6 +237,7 @@ let freshThreadFactoryForTesting: ((session: SessionState) => Thread) | null = n
 let beforePromptExecutionForTesting: (() => Promise<void> | void) | null = null;
 let beforeAssistantMessageCommitForTesting: (() => Promise<void> | void) | null = null;
 let afterStreamEventLogForTesting: ((event: ThreadEvent) => Promise<void> | void) | null = null;
+let sessionTitleGeneratorForTesting: ((prompt: string) => Promise<string>) | null = null;
 function createFreshThreadForSession(session: SessionState): Thread {
   if (freshThreadFactoryForTesting) {
     return freshThreadFactoryForTesting(session);
@@ -374,6 +389,8 @@ function compactSession(session: SessionState, compactedAt: number): ExpiredSess
   return {
     id: session.id,
     title: session.title,
+    titleSource: session.titleSource,
+    titleGenerationAttempted: session.titleGenerationAttempted,
     conversationMode: session.conversationMode,
     fastMode: session.fastMode,
     threadOptions: session.threadOptions,
@@ -397,6 +414,8 @@ function restoreExpiredSession(sessionId: string): SessionState | undefined {
   const session: SessionState = {
     id: expired.id,
     title: expired.title,
+    titleSource: expired.titleSource,
+    titleGenerationAttempted: expired.titleGenerationAttempted,
     conversationMode: expired.conversationMode,
     fastMode: expired.fastMode,
     thread,
@@ -478,10 +497,15 @@ function createShutdownHandler(
   timer: ReturnType<typeof setInterval>,
   clearTimer: (timer: ReturnType<typeof setInterval>) => void = clearInterval,
   exit: (code: number) => void = (code) => process.exit(code),
+  shutdownTitles: () => Promise<void> = shutdownSessionTitleGeneration,
 ): () => void {
   return () => {
     clearTimer(timer);
-    exit(0);
+    void shutdownTitles()
+      .catch((error) => {
+        console.warn("[codex-bridge] Failed to stop session-title generation:", error);
+      })
+      .finally(() => exit(0));
   };
 }
 
@@ -590,9 +614,60 @@ function createMessageId(): string {
   return `msg-${crypto.randomUUID()}`;
 }
 
-function buildSessionTitle(prompt: string): string {
-  const words = prompt.trim().split(/\s+/).filter(Boolean).slice(0, 5);
-  return words.length > 0 ? words.join(" ") : "Codex";
+async function persistSessionTitleSafely(
+  threadId: string,
+  title: string,
+  source: PersistedSessionTitleSource,
+): Promise<void> {
+  try {
+    await persistSessionTitle(getCodexHomeDir(), threadId, title, { source });
+  } catch (error) {
+    console.warn("[codex-bridge] Failed to persist session title:", error);
+  }
+}
+
+function scheduleGeneratedSessionTitle(session: SessionState, prompt: string): void {
+  if (process.env.CODEX_BRIDGE_NO_SERVER === "1" && !sessionTitleGeneratorForTesting) {
+    return;
+  }
+
+  const generate = sessionTitleGeneratorForTesting
+    ?? ((sourcePrompt: string) => generateSessionTitleWithCodexExec(codexPathOverride, sourcePrompt));
+  const generationToken = Symbol("session-title-generation");
+  session.titleGenerationAttempted = true;
+  session.titleGenerationToken = generationToken;
+
+  void generate(prompt)
+    .then(async (title) => {
+      if (
+        sessions.get(session.id) !== session
+        || session.titleGenerationToken !== generationToken
+      ) {
+        return;
+      }
+      session.title = title;
+      session.titleSource = "generated";
+      if (session.threadId) {
+        await persistSessionTitleSafely(session.threadId, title, "generated");
+      }
+      if (
+        sessions.get(session.id) === session
+        && session.titleGenerationToken === generationToken
+      ) {
+        session.titleGenerationToken = undefined;
+        emit({
+          type: "session.title-updated",
+          sessionId: session.id,
+          data: { title },
+        });
+      }
+    })
+    .catch(() => {
+      if (session.titleGenerationToken === generationToken) {
+        session.titleGenerationToken = undefined;
+      }
+      console.warn("[codex-bridge] Failed to generate session title; using prompt fallback");
+    });
 }
 
 function resolveConversationMode(body: Record<string, unknown>): ConversationMode {
@@ -776,9 +851,26 @@ async function getSessionMetaFromTranscriptPath(
     return null;
   }
 
+  let firstUserText: string | null = null;
+  for (const record of records) {
+    if (
+      record.type !== "response_item"
+      || record.payload?.type !== "message"
+      || record.payload?.role !== "user"
+    ) {
+      continue;
+    }
+    firstUserText = extractPersistedMessageText(record.payload.content, "user");
+    if (firstUserText) break;
+  }
+  const transcriptTitle = firstUserText
+    ? buildFallbackSessionTitle(firstUserText)
+    : undefined;
+
   return {
     id,
-    title: fallbackTitle,
+    title: fallbackTitle ?? transcriptTitle,
+    titleSource: fallbackTitle ? "codex" : (transcriptTitle ? "prompt" : undefined),
     updatedAt:
       typeof payload.timestamp === "string"
         ? payload.timestamp
@@ -842,6 +934,7 @@ async function getPersistedSessionMeta(
       ? {
           id: threadId,
           title: fallbackTitle,
+          titleSource: fallbackTitle ? "codex" : undefined,
           updatedAt: fallbackUpdatedAt,
         }
       : null;
@@ -851,7 +944,8 @@ async function getPersistedSessionMeta(
   const meta = cachedMeta
     ? {
         ...cachedMeta,
-        title: cachedMeta.title ?? fallbackTitle,
+        title: fallbackTitle ?? cachedMeta.title,
+        titleSource: fallbackTitle ? "codex" as const : cachedMeta.titleSource,
         updatedAt: cachedMeta.updatedAt || fallbackUpdatedAt || new Date().toISOString(),
       }
     : await getSessionMetaFromTranscriptPath(
@@ -863,6 +957,7 @@ async function getPersistedSessionMeta(
     return {
       id: threadId,
       title: fallbackTitle,
+      titleSource: fallbackTitle ? "codex" : undefined,
       updatedAt: fallbackUpdatedAt || new Date().toISOString(),
       transcriptPath,
     };
@@ -870,10 +965,6 @@ async function getPersistedSessionMeta(
 
   if (meta.id !== threadId) {
     meta.id = threadId;
-  }
-
-  if (!meta.title && fallbackTitle) {
-    meta.title = fallbackTitle;
   }
 
   return meta;
@@ -940,6 +1031,15 @@ async function listPersistedSessionsForCwd(cwd: string): Promise<PersistedSessio
     mergePersistedSessionMeta(sessions, meta);
   }
 
+  const generatedTitles = await readPersistedSessionTitleEntries(getCodexHomeDir());
+  for (const session of sessions.values()) {
+    const generatedTitle = generatedTitles.get(session.id);
+    if (generatedTitle && session.titleSource !== "codex") {
+      session.title = generatedTitle.title;
+      session.titleSource = generatedTitle.source;
+    }
+  }
+
   return Array.from(sessions.values()).sort(
     (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
   );
@@ -1002,10 +1102,16 @@ function extractPersistedMessageText(
 
 async function hydrateMessagesFromPersistedSession(
   threadId: string,
-): Promise<{ messages: NormalizedMessage[]; title?: string }> {
-  const meta = await getPersistedSessionMeta(threadId);
+): Promise<{
+  messages: NormalizedMessage[];
+  title?: string;
+  titleSource?: PersistedSessionMeta["titleSource"];
+}> {
+  const meta = (await listPersistedSessionsForCwd(getWorkingDirectory()))
+    .find((session) => session.id === threadId)
+    ?? await getPersistedSessionMeta(threadId);
   if (!meta?.transcriptPath) {
-    return { messages: [], title: meta?.title };
+    return { messages: [], title: meta?.title, titleSource: meta?.titleSource };
   }
 
   const lines = await readTranscriptLines(meta.transcriptPath);
@@ -1056,6 +1162,7 @@ async function hydrateMessagesFromPersistedSession(
   return {
     messages,
     title: meta.title,
+    titleSource: meta.titleSource,
   };
 }
 
@@ -1298,7 +1405,8 @@ function emitLocalAssistantResponse(
   session.messages.push(assistantMessage);
 
   if (!session.title) {
-    session.title = buildSessionTitle(prompt);
+    session.title = buildFallbackSessionTitle(prompt);
+    session.titleSource = "prompt";
     emit({
       type: "session.title-updated",
       sessionId: session.id,
@@ -2200,6 +2308,12 @@ async function processCodexStream(
           kind: "thread.started",
           threadId: session.threadId,
         });
+        if (
+          session.title
+          && (session.titleSource === "generated" || session.titleSource === "explicit")
+        ) {
+          await persistSessionTitleSafely(session.threadId, session.title, session.titleSource);
+        }
         continue;
       }
 
@@ -2316,6 +2430,8 @@ async function runPrompt(
   session.abortController = abortController;
 
   const userMessage = createUserMessage(prompt, attachments);
+  const shouldGenerateTitle = session.titleGenerationAttempted !== true
+    && (!session.title || session.titleSource === "prompt");
   session.messages.push(userMessage);
   session.pendingAttachments = [];
   const assistantMessage = createAssistantMessage({ planReview: isPlanReviewTurn });
@@ -2323,12 +2439,16 @@ async function runPrompt(
   session.messages.push(assistantMessage);
 
   if (!session.title) {
-    session.title = buildSessionTitle(prompt);
+    session.title = buildFallbackSessionTitle(prompt);
+    session.titleSource = "prompt";
     emit({
       type: "session.title-updated",
       sessionId: session.id,
       data: { title: session.title },
     });
+  }
+  if (shouldGenerateTitle) {
+    scheduleGeneratedSessionTitle(session, prompt);
   }
 
   emit({ type: "message.updated", sessionId: session.id, data: { message: assistantMessage } });
@@ -2472,6 +2592,11 @@ export const __testing = {
   ) => {
     afterStreamEventLogForTesting = callback;
   },
+  setSessionTitleGeneratorForTesting: (
+    callback: ((prompt: string) => Promise<string>) | null,
+  ) => {
+    sessionTitleGeneratorForTesting = callback;
+  },
   setFreshThreadFactoryForTesting: (factory: ((session: SessionState) => Thread) | null) => {
     freshThreadFactoryForTesting = factory;
   },
@@ -2569,6 +2694,8 @@ app.post("/session/create", async (c) => {
   sessions.set(sessionId, {
     id: sessionId,
     title,
+    titleSource: title ? "explicit" : undefined,
+    titleGenerationAttempted: Boolean(title),
     conversationMode,
     fastMode,
     thread,
@@ -2613,6 +2740,8 @@ app.post("/session/resume", async (c) => {
   sessions.set(sessionId, {
     id: sessionId,
     title: hydrated.title,
+    titleSource: hydrated.titleSource,
+    titleGenerationAttempted: true,
     conversationMode,
     fastMode,
     thread,

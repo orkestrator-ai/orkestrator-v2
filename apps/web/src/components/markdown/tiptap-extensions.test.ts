@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { Editor } from "@tiptap/react";
 import { marked } from "marked";
 import {
@@ -7,13 +9,21 @@ import {
 } from "./tiptap-extensions";
 
 let editor: Editor | null = null;
+const REPOSITORY_ROOT = resolve(import.meta.dir, "../../../../..");
 
 function roundTrip(markdown: string): string {
+  let contentError: Error | null = null;
   editor = new Editor({
     extensions: createMarkdownExtensions(),
     content: markdown,
     contentType: "markdown",
+    enableContentCheck: true,
+    onContentError: ({ error }) => {
+      contentError = error;
+    },
   });
+
+  if (contentError) throw contentError;
   return editor.getMarkdown();
 }
 
@@ -32,6 +42,46 @@ describe("Markdown Tiptap extensions", () => {
     expect(result).toContain("**bold**");
     expect(result).toContain("*italic*");
     expect(result).toContain("```ts\nconst value = 1\n```");
+  });
+
+  test("round-trips inline code nested in other marks", () => {
+    const markdown = [
+      "**`bold code`**",
+      "*`italic code`*",
+      "~~`struck code`~~",
+      "[`linked code`](https://example.com)",
+      "**before `mixed code` after**",
+    ].join("\n\n");
+
+    expect(roundTrip(markdown)).toBe(markdown);
+    expect(editor?.getHTML()).toContain("<strong><code>bold code</code></strong>");
+    expect(editor?.getHTML()).toContain("<a");
+    expect(editor?.getHTML()).toContain("<code>linked code</code>");
+  });
+
+  test("accepts the repository Markdown files that previously failed", () => {
+    const expectedMarkdown = new Map([
+      [
+        "AGENTS.md",
+        "**Always use v2 of the `@opencode-ai/sdk` package.**",
+      ],
+      [
+        "README.md",
+        "[`orkestrator.dev`](https://www.orkestrator.dev)",
+      ],
+    ]);
+
+    for (const [fileName, expected] of expectedMarkdown) {
+      const markdown = readFileSync(resolve(REPOSITORY_ROOT, fileName), "utf8");
+
+      expect(assessMarkdownForRichEditing(markdown)).toEqual({
+        safe: true,
+        reason: null,
+      });
+      expect(roundTrip(markdown)).toContain(expected);
+      editor?.destroy();
+      editor = null;
+    }
   });
 
   test("round-trips GFM tables", () => {
@@ -99,6 +149,14 @@ describe("Markdown Tiptap extensions", () => {
     expect(editor.getHTML()).not.toContain("src=");
   });
 
+  test("keeps a standalone Markdown image in a schema-valid paragraph", () => {
+    const markdown = "![diagram](assets/diagram.png)";
+
+    expect(roundTrip(markdown)).toBe(markdown);
+    expect(editor?.getHTML()).toContain("<p>");
+    expect(editor?.getHTML()).toContain("data-markdown-image");
+  });
+
   test("allows supported tables, images, and links in Rendered mode", () => {
     const markdown = [
       "[Docs](https://example.com)",
@@ -109,6 +167,20 @@ describe("Markdown Tiptap extensions", () => {
       "| --- | --- |",
       "| one | two |",
     ].join("\n");
+
+    expect(assessMarkdownForRichEditing(markdown)).toEqual({
+      safe: true,
+      reason: null,
+    });
+  });
+
+  test("allows inline code nested in supported marks", () => {
+    const markdown = [
+      "**`bold code`**",
+      "*`italic code`*",
+      "~~`struck code`~~",
+      "[`linked code`](https://example.com)",
+    ].join("\n\n");
 
     expect(assessMarkdownForRichEditing(markdown)).toEqual({
       safe: true,

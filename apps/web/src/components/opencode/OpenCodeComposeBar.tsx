@@ -644,7 +644,7 @@ export function OpenCodeComposeBar({
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="start"
-              collisionPadding={{ top: 42, right: 8, bottom: 8, left: 8 }}
+              collisionPadding={{ top: 52, right: 8, bottom: 8, left: 8 }}
               className="w-[calc(100vw-1rem)] sm:w-[320px]"
             >
               {/* Search input and refresh button */}

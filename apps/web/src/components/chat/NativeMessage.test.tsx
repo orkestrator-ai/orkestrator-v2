@@ -2,7 +2,10 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
-import { mockToastError as toastErrorMock } from "../../../../../tests/mocks/sonner";
+import {
+  mockToastError as toastErrorMock,
+  mockToastSuccess as toastSuccessMock,
+} from "../../../../../tests/mocks/sonner";
 
 import { NativeMessage } from "./NativeMessage";
 
@@ -12,13 +15,14 @@ function makeMessage(
     id: string;
     role: "user" | "assistant";
     content: string;
+    createdAt: string;
   }>,
 ) {
   return {
     id: overrides?.id ?? "assistant-1",
     role: overrides?.role ?? ("assistant" as const),
     content: overrides?.content ?? "",
-    createdAt: "2026-03-21T10:00:00.000Z",
+    createdAt: overrides?.createdAt ?? "2026-03-21T10:00:00.000Z",
     parts,
   };
 }
@@ -27,6 +31,7 @@ describe("NativeMessage task list rendering", () => {
   afterEach(() => {
     cleanup();
     toastErrorMock.mockClear();
+    toastSuccessMock.mockClear();
   });
 
   test("renders task list in a collapsible thinking block that expands on click", () => {
@@ -120,6 +125,291 @@ describe("NativeMessage task list rendering", () => {
       expect(mockWriteText).toHaveBeenCalledWith("Copy this answer");
     });
     expect(screen.getByRole("button", { name: "Copied text" })).toBeTruthy();
+  });
+
+  test("copies a user prompt and confirms it after a touch long press", async () => {
+    mockWriteText.mockClear();
+    mockWriteText.mockImplementation(async () => {});
+    const message = makeMessage(
+      [
+        { type: "text", content: "First part" },
+        { type: "text", content: "Second part" },
+      ],
+      { role: "user", id: "user-1" },
+    );
+
+    render(<NativeMessage message={message} />);
+
+    const prompt = screen.getByText("First part");
+    fireEvent.pointerDown(prompt, {
+      pointerType: "touch",
+      isPrimary: true,
+      clientX: 20,
+      clientY: 20,
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 550));
+    fireEvent.pointerUp(prompt, {
+      pointerType: "touch",
+      isPrimary: true,
+      clientX: 20,
+      clientY: 20,
+    });
+
+    await waitFor(() => {
+      expect(mockWriteText).toHaveBeenCalledWith("First part\n\nSecond part");
+      expect(toastSuccessMock).toHaveBeenCalledWith("copied");
+    });
+  });
+
+  test("falls back to message content when long-pressing a user prompt without text parts", async () => {
+    mockWriteText.mockClear();
+    mockWriteText.mockImplementation(async () => {});
+    const message = makeMessage([], {
+      role: "user",
+      id: "user-content-fallback",
+      content: "Fallback prompt content",
+    });
+
+    render(<NativeMessage message={message} />);
+
+    const prompt = screen.getByText("Fallback prompt content");
+    fireEvent.pointerDown(prompt, {
+      pointerType: "touch",
+      isPrimary: true,
+      pointerId: 7,
+      clientX: 20,
+      clientY: 20,
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 550));
+    fireEvent.pointerUp(prompt, {
+      pointerType: "touch",
+      isPrimary: true,
+      pointerId: 7,
+      clientX: 20,
+      clientY: 20,
+    });
+
+    await waitFor(() => {
+      expect(mockWriteText).toHaveBeenCalledWith("Fallback prompt content");
+      expect(toastSuccessMock).toHaveBeenCalledWith("copied");
+    });
+  });
+
+  test("reports clipboard failures from a user prompt long press", async () => {
+    const clipboardError = new Error("clipboard denied");
+    const consoleErrorMock = mock(() => {});
+    const originalConsoleError = console.error;
+    console.error = consoleErrorMock as typeof console.error;
+    mockWriteText.mockClear();
+    mockWriteText.mockImplementation(async () => {
+      throw clipboardError;
+    });
+    const message = makeMessage(
+      [{ type: "text", content: "Prompt that cannot be copied" }],
+      { role: "user", id: "user-copy-error" },
+    );
+
+    try {
+      render(<NativeMessage message={message} />);
+
+      const prompt = screen.getByText("Prompt that cannot be copied");
+      fireEvent.pointerDown(prompt, {
+        pointerType: "touch",
+        isPrimary: true,
+        pointerId: 8,
+        clientX: 20,
+        clientY: 20,
+      });
+      await new Promise((resolve) => window.setTimeout(resolve, 550));
+      fireEvent.pointerUp(prompt, {
+        pointerType: "touch",
+        isPrimary: true,
+        pointerId: 8,
+        clientX: 20,
+        clientY: 20,
+      });
+
+      await waitFor(() => {
+        expect(toastErrorMock).toHaveBeenCalledWith("Failed to copy message text");
+      });
+      expect(consoleErrorMock).toHaveBeenCalledWith(
+        "[NativeMessage] Failed to copy user prompt:",
+        clipboardError,
+      );
+      expect(toastSuccessMock).not.toHaveBeenCalled();
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
+  test("shows the response duration for an assistant reply to a user", () => {
+    const previousMessage = makeMessage(
+      [{ type: "text", content: "Question" }],
+      {
+        id: "user-duration-start",
+        role: "user",
+        createdAt: "2026-03-21T10:00:00.000Z",
+      },
+    );
+    const message = makeMessage(
+      [{ type: "text", content: "Answer" }],
+      { createdAt: "2026-03-21T10:00:45.000Z" },
+    );
+
+    render(<NativeMessage message={message} previousMessage={previousMessage} />);
+
+    expect(screen.getByText(/responded in 45s/)).toBeTruthy();
+  });
+
+  test("rounds a positive sub-second response duration up to one second", () => {
+    const previousMessage = makeMessage([], {
+      id: "user-subsecond-start",
+      role: "user",
+      createdAt: "2026-03-21T10:00:00.100Z",
+    });
+    const message = makeMessage([{ type: "text", content: "Fast answer" }], {
+      createdAt: "2026-03-21T10:00:00.400Z",
+    });
+
+    render(<NativeMessage message={message} previousMessage={previousMessage} />);
+
+    expect(screen.getByText(/responded in 1s/)).toBeTruthy();
+  });
+
+  test("omits response duration for equal, reversed, and invalid timestamps", () => {
+    const cases = [
+      {
+        name: "equal",
+        start: "2026-03-21T10:00:00.000Z",
+        end: "2026-03-21T10:00:00.000Z",
+      },
+      {
+        name: "reversed",
+        start: "2026-03-21T10:00:01.000Z",
+        end: "2026-03-21T10:00:00.000Z",
+      },
+      {
+        name: "invalid start",
+        start: "not-a-date",
+        end: "2026-03-21T10:00:01.000Z",
+      },
+      {
+        name: "invalid end",
+        start: "2026-03-21T10:00:00.000Z",
+        end: "not-a-date",
+      },
+    ];
+    const first = cases[0]!;
+    const { container, rerender } = render(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: first.name }], {
+          createdAt: first.end,
+        })}
+        previousMessage={makeMessage([], {
+          id: `user-${first.name}`,
+          role: "user",
+          createdAt: first.start,
+        })}
+      />,
+    );
+
+    for (const durationCase of cases) {
+      rerender(
+        <NativeMessage
+          message={makeMessage([{ type: "text", content: durationCase.name }], {
+            createdAt: durationCase.end,
+          })}
+          previousMessage={makeMessage([], {
+            id: `user-${durationCase.name}`,
+            role: "user",
+            createdAt: durationCase.start,
+          })}
+        />,
+      );
+
+      expect(container.textContent).not.toContain("responded in");
+    }
+  });
+
+  test("formats durations at the minute boundary and across midnight", () => {
+    const previousMessage = makeMessage([], {
+      id: "user-minute-boundary",
+      role: "user",
+      createdAt: "2026-03-21T10:00:00.000Z",
+    });
+    const { rerender } = render(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Minute answer" }], {
+          createdAt: "2026-03-21T10:01:00.000Z",
+        })}
+        previousMessage={previousMessage}
+      />,
+    );
+
+    expect(screen.getByText(/responded in 1m 0s/)).toBeTruthy();
+
+    rerender(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Midnight answer" }], {
+          createdAt: "2026-03-22T00:00:30.000Z",
+        })}
+        previousMessage={makeMessage([], {
+          id: "user-midnight-boundary",
+          role: "user",
+          createdAt: "2026-03-21T23:59:30.000Z",
+        })}
+      />,
+    );
+
+    expect(screen.getByText(/responded in 1m 0s/)).toBeTruthy();
+  });
+
+  test("compacts only assistant continuations within the same calendar minute", () => {
+    const previousMessage = makeMessage([{ type: "text", content: "First chunk" }], {
+      id: "assistant-continuation-start",
+      createdAt: "2026-03-21T10:00:10.000Z",
+    });
+    const { container, rerender } = render(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Same-minute chunk" }], {
+          createdAt: "2026-03-21T10:00:55.000Z",
+        })}
+        previousMessage={previousMessage}
+      />,
+    );
+
+    expect(container.firstElementChild?.className).toContain("pt-0");
+    expect(container.firstElementChild?.className).toContain("pb-3");
+
+    rerender(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Next-minute chunk" }], {
+          createdAt: "2026-03-21T10:01:00.000Z",
+        })}
+        previousMessage={makeMessage([], {
+          id: "assistant-minute-boundary",
+          createdAt: "2026-03-21T10:00:59.000Z",
+        })}
+      />,
+    );
+
+    expect(container.firstElementChild?.className).toContain("py-3");
+    expect(container.firstElementChild?.className).not.toContain("pt-0");
+
+    rerender(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Next-day chunk" }], {
+          createdAt: "2026-03-22T00:00:01.000Z",
+        })}
+        previousMessage={makeMessage([], {
+          id: "assistant-day-boundary",
+          createdAt: "2026-03-21T23:59:59.000Z",
+        })}
+      />,
+    );
+
+    expect(container.firstElementChild?.className).toContain("py-3");
+    expect(container.firstElementChild?.className).not.toContain("pt-0");
   });
 
   test("uses uniform part spacing for tool and text blocks", () => {

@@ -1,12 +1,15 @@
-import { TaskItem, TaskList } from "@tiptap/extension-list";
+import { getSchema } from "@tiptap/core";
+import { Code } from "@tiptap/extension-code";
 import { Image } from "@tiptap/extension-image";
+import { TaskItem, TaskList } from "@tiptap/extension-list";
+import { Paragraph } from "@tiptap/extension-paragraph";
 import {
   Table,
   TableCell,
   TableHeader,
   TableRow,
 } from "@tiptap/extension-table";
-import { Markdown } from "@tiptap/markdown";
+import { Markdown, MarkdownManager } from "@tiptap/markdown";
 import StarterKit from "@tiptap/starter-kit";
 import { marked } from "marked";
 
@@ -35,6 +38,38 @@ const RICH_MARKDOWN_TOKEN_TYPES = new Set([
 
 const FRONTMATTER_PATTERN = /^(?:\uFEFF)?(?:---|\+\+\+)\r?\n[\s\S]*?\r?\n(?:---|\+\+\+|\.\.\.)[ \t]*(?:\r?\n|$)/;
 
+// Tiptap's default Code mark excludes every other mark. Markdown permits
+// inline code inside emphasis and links, so allow those combinations in the
+// rich-editing schema instead of producing invalid parsed JSON.
+const MarkdownCode = Code.extend({
+  excludes: "",
+});
+
+// The stock Markdown paragraph parser unwraps a paragraph containing only an
+// image because Image is block-level by default. Our image placeholder is
+// intentionally inline so images can also appear within prose; retain the
+// paragraph wrapper to keep standalone images valid with that schema.
+const MarkdownParagraph = Paragraph.extend({
+  parseMarkdown: (token, helpers) => {
+    const tokens = token.tokens || [];
+    const content = helpers.parseInline(tokens);
+    const firstToken = tokens[0];
+    const hasExplicitEmptyParagraphMarker =
+      tokens.length === 1 &&
+      firstToken?.type === "text" &&
+      (firstToken.raw === "&nbsp;" ||
+        firstToken.text === "&nbsp;" ||
+        firstToken.raw === "\u00A0" ||
+        firstToken.text === "\u00A0");
+
+    if (hasExplicitEmptyParagraphMarker) {
+      return helpers.createNode("paragraph", undefined, []);
+    }
+
+    return helpers.createNode("paragraph", undefined, content);
+  },
+});
+
 export interface MarkdownRichEditingAssessment {
   safe: boolean;
   reason: string | null;
@@ -59,6 +94,27 @@ function findUnsupportedTokenTypes(value: unknown, unsupported: Set<string>): vo
   Object.values(record).forEach((item) =>
     findUnsupportedTokenTypes(item, unsupported),
   );
+}
+
+let markdownValidator:
+  | {
+      manager: MarkdownManager;
+      schema: ReturnType<typeof getSchema>;
+    }
+  | undefined;
+
+function validateMarkdownSchema(markdown: string): void {
+  if (!markdownValidator) {
+    const extensions = createMarkdownExtensions();
+    markdownValidator = {
+      manager: new MarkdownManager({ extensions }),
+      schema: getSchema(extensions),
+    };
+  }
+
+  const documentJson = markdownValidator.manager.parse(markdown);
+  const document = markdownValidator.schema.nodeFromJSON(documentJson);
+  document.check();
 }
 
 /**
@@ -88,6 +144,11 @@ export function assessMarkdownForRichEditing(
           "This file uses Markdown constructs that Rendered mode cannot preserve. Continue editing in Raw mode.",
       };
     }
+
+    // Token types can be supported individually while still producing an
+    // invalid combination for the configured ProseMirror schema. Validate the
+    // actual Markdown projection so preflight and editor creation agree.
+    validateMarkdownSchema(markdown);
 
     return { safe: true, reason: null };
   } catch {
@@ -122,7 +183,12 @@ const MarkdownImage = Image.extend({
 
 export function createMarkdownExtensions() {
   return [
-    StarterKit,
+    StarterKit.configure({
+      code: false,
+      paragraph: false,
+    }),
+    MarkdownCode,
+    MarkdownParagraph,
     Markdown.configure({
       markedOptions: {
         gfm: true,

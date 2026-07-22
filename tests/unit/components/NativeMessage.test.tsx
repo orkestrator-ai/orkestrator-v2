@@ -263,6 +263,38 @@ describe("NativeMessage", () => {
     expect(mockOpenInBrowser).toHaveBeenCalledWith("https://example.com/docs");
   });
 
+  test("reports system-browser failures without throwing from link clicks", async () => {
+    const consoleError = console.error;
+    const mockConsoleError = mock(() => {});
+    console.error = mockConsoleError as typeof console.error;
+    mockOpenInBrowser.mockImplementationOnce(async () => {
+      throw new Error("browser unavailable");
+    });
+    const message: NativeMessageType = {
+      id: "msg-link-error",
+      role: "assistant",
+      content: "Read [the docs](https://example.com/docs).",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        { type: "text", content: "Read [the docs](https://example.com/docs)." },
+      ],
+    };
+
+    try {
+      render(<NativeMessage message={message} />);
+      fireEvent.click(screen.getByRole("link", { name: "the docs" }));
+
+      await waitFor(() => {
+        expect(mockConsoleError).toHaveBeenCalledWith(
+          "[NativeMessage] Failed to open link:",
+          expect.any(Error),
+        );
+      });
+    } finally {
+      console.error = consoleError;
+    }
+  });
+
   test("preserves chronological order for interleaved text and tool parts", () => {
     const message: NativeMessageType = {
       id: "msg-chronological-order",
@@ -473,6 +505,79 @@ describe("NativeMessage", () => {
     });
   });
 
+  test("reopens a cached local image preview without reading the file again", async () => {
+    const message: NativeMessageType = {
+      id: "msg-cached-local-file-preview",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "/tmp/cached.png" }],
+    };
+
+    render(<NativeMessage message={message} />);
+    const attachment = screen.getByRole("button", { name: /cached\.png/i });
+
+    fireEvent.click(attachment);
+    await screen.findByAltText("cached.png");
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByAltText("cached.png")).toBeNull());
+
+    fireEvent.click(attachment);
+
+    expect(await screen.findByAltText("cached.png")).toBeTruthy();
+    expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
+  });
+
+  test("closes image previews from the backdrop and close button but not the image panel", async () => {
+    const message: NativeMessageType = {
+      id: "msg-overlay-controls",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "/tmp/overlay.png" }],
+    };
+
+    render(<NativeMessage message={message} />);
+    const attachment = screen.getByRole("button", { name: /overlay\.png/i });
+    fireEvent.click(attachment);
+
+    let image = await screen.findByAltText("overlay.png");
+    const panel = image.parentElement as HTMLElement;
+    const backdrop = panel.parentElement as HTMLElement;
+    fireEvent.click(panel);
+    expect(screen.getByAltText("overlay.png")).toBeTruthy();
+
+    fireEvent.click(backdrop);
+    await waitFor(() => expect(screen.queryByAltText("overlay.png")).toBeNull());
+
+    fireEvent.click(attachment);
+    image = await screen.findByAltText("overlay.png");
+    const closeButton = image.parentElement?.querySelector(
+      "button",
+    ) as HTMLButtonElement;
+    expect(closeButton).toBeTruthy();
+    fireEvent.click(closeButton);
+    await waitFor(() => expect(screen.queryByAltText("overlay.png")).toBeNull());
+  });
+
+  test("keeps non-image attachments disabled and does not perform file reads", () => {
+    const message: NativeMessageType = {
+      id: "msg-text-attachment",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "/tmp/notes.txt" }],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    const attachment = screen.getByRole("button", { name: /notes\.txt/i });
+    expect((attachment as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(attachment);
+    expect(mockReadFileBase64).not.toHaveBeenCalled();
+    expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
+  });
+
   test("loads safe container image previews through the container reader", async () => {
     const message: NativeMessageType = {
       id: "msg-container-file-preview",
@@ -529,6 +634,44 @@ describe("NativeMessage", () => {
       expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
       expect(mockReadFileBase64).not.toHaveBeenCalled();
       expect(screen.queryByAltText("passwd.png")).toBeNull();
+    } finally {
+      console.error = consoleError;
+    }
+  });
+
+  test("rejects traversal and control-character variants in container image paths", async () => {
+    const consoleError = console.error;
+    console.error = mock(() => {}) as typeof console.error;
+    const unsafePaths = [
+      "/workspace/../secrets.png",
+      "/workspace\\..\\secrets.png",
+      "/workspace/bad\0name.png",
+      "/workspace/bad\nname.png",
+      "/workspace/bad\rname.png",
+    ];
+
+    try {
+      for (const [index, unsafePath] of unsafePaths.entries()) {
+        const message: NativeMessageType = {
+          id: `msg-unsafe-container-variant-${index}`,
+          role: "assistant",
+          content: "",
+          createdAt: "2026-03-07T12:00:00.000Z",
+          parts: [{ type: "file", content: unsafePath }],
+        };
+        const { container, unmount } = render(
+          <NativeMessage message={message} containerId="container-1" />,
+        );
+
+        fireEvent.click(container.querySelector("button") as HTMLButtonElement);
+        await waitFor(() => {
+          expect(container.textContent).toContain("(error)");
+        });
+        unmount();
+      }
+
+      expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
+      expect(mockReadFileBase64).not.toHaveBeenCalled();
     } finally {
       console.error = consoleError;
     }
@@ -637,6 +780,59 @@ describe("NativeMessage", () => {
     expect(mockReadFileBase64).toHaveBeenCalledWith(
       "//server/share/folder/network-shot.png",
     );
+  });
+
+  test("falls back to absolute attachment paths for malformed local file URLs", async () => {
+    const malformedUrls = [
+      "file:///tmp/bad%ZZ.png",
+      "file://[invalid-host]/bad.png",
+    ];
+
+    for (const [index, fileUrl] of malformedUrls.entries()) {
+      const path = `/tmp/fallback-${index}.png`;
+      const message: NativeMessageType = {
+        id: `msg-malformed-file-url-${index}`,
+        role: "assistant",
+        content: "",
+        createdAt: "2026-03-07T12:00:00.000Z",
+        parts: [{ type: "file", content: path, fileUrl }],
+      };
+      const { unmount } = render(<NativeMessage message={message} />);
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: new RegExp(`fallback-${index}`),
+        }),
+      );
+      await screen.findByAltText(`fallback-${index}.png`);
+      expect(mockReadFileBase64).toHaveBeenLastCalledWith(path);
+      unmount();
+    }
+
+    expect(mockReadFileBase64).toHaveBeenCalledTimes(malformedUrls.length);
+  });
+
+  test("shows an error for a relative local image without a container", async () => {
+    const consoleError = console.error;
+    console.error = mock(() => {}) as typeof console.error;
+    const message: NativeMessageType = {
+      id: "msg-relative-local-image",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "screenshots/relative.png" }],
+    };
+
+    try {
+      render(<NativeMessage message={message} />);
+      fireEvent.click(screen.getByRole("button", { name: /relative\.png/i }));
+
+      await waitFor(() => expect(screen.getByText("(error)")).toBeTruthy());
+      expect(mockReadFileBase64).not.toHaveBeenCalled();
+      expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
+    } finally {
+      console.error = consoleError;
+    }
   });
 
   test("shows an error state when local image preview loading fails", async () => {
@@ -829,6 +1025,157 @@ describe("NativeMessage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /edit failure/i }));
     expect(screen.getByText("Patch failed to apply")).toBeTruthy();
+  });
+
+  test("uses precomputed edit additions and deletions in the collapsed summary", () => {
+    const message: NativeMessageType = {
+      id: "msg-edit-precomputed-stats",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "success",
+          toolDiff: {
+            filePath: "/workspace/src/stats.ts",
+            additions: 7,
+            deletions: 3,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TerminalContextHarness>
+        <NativeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+
+    const trigger = screen.getByRole("button", {
+      name: /edit stats\.ts \+7 -3 success/i,
+    });
+    expect((trigger as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  test("renders before-only and after-only edit metadata", () => {
+    const message: NativeMessageType = {
+      id: "msg-edit-one-sided-diffs",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "success",
+          toolDiff: {
+            filePath: "/workspace/src/deleted.ts",
+            before: "removed only",
+          },
+        },
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Write",
+          toolState: "success",
+          toolDiff: {
+            filePath: "/workspace/src/created.ts",
+            after: "created only",
+          },
+        },
+      ],
+    };
+
+    render(
+      <TerminalContextHarness>
+        <NativeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /edit deleted\.ts -1 success/i }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /write created\.ts \+1 success/i }),
+    );
+
+    expect(screen.getByText("-removed only")).toBeTruthy();
+    expect(screen.getByText("+created only")).toBeTruthy();
+  });
+
+  test("falls back from diff metadata without change markers to before and after", () => {
+    const message: NativeMessageType = {
+      id: "msg-edit-metadata-fallback",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "success",
+          toolDiff: {
+            filePath: "/workspace/src/fallback.ts",
+            diff: "diff metadata without plus or minus markers",
+            before: "old fallback",
+            after: "new fallback",
+          },
+        },
+      ],
+    };
+
+    render(
+      <TerminalContextHarness>
+        <NativeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /edit fallback\.ts/i }));
+
+    expect(screen.getByText("-old fallback")).toBeTruthy();
+    expect(screen.getByText("+new fallback")).toBeTruthy();
+    expect(
+      screen.queryByText("diff metadata without plus or minus markers"),
+    ).toBeNull();
+  });
+
+  test("disables edit rows that have no expandable details", () => {
+    const createFileTab = mock(() => {});
+    const message: NativeMessageType = {
+      id: "msg-edit-no-details",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "success",
+          toolDiff: { filePath: "/workspace/src/no-details.ts" },
+        },
+      ],
+    };
+
+    render(
+      <TerminalContextHarness createFileTab={createFileTab}>
+        <NativeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+
+    expect(
+      (
+        screen.getByRole("button", {
+          name: /edit no-details\.ts success/i,
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(screen.queryByTitle("Open diff in new tab")).toBeNull();
+    expect(createFileTab).not.toHaveBeenCalled();
   });
 
   test("shows shell commands in collapsed Claude Bash tool rows", () => {
@@ -1158,6 +1505,123 @@ describe("NativeMessage", () => {
 
     expect(screen.getByText("Run Command")).toBeTruthy();
     expect(screen.queryByText("bash")).toBeNull();
+  });
+
+  test("uses the latest task child title when no command is available", () => {
+    const message: NativeMessageType = {
+      id: "msg-task-latest-child-title",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "task-group",
+          content: "",
+          task: {
+            type: "tool-invocation",
+            content: "",
+            toolName: "task",
+            toolState: "success",
+            toolUseId: "task-latest-child-title",
+            toolArgs: { agent_name: "Reviewer" },
+          },
+          childTools: [
+            {
+              type: "tool-invocation",
+              content: "",
+              toolName: "glob",
+              toolTitle: "Search files",
+              toolState: "success",
+              toolArgs: { pattern: "src/**/*.ts" },
+            },
+          ],
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByText("Reviewer")).toBeTruthy();
+    expect(screen.getByText("Search files")).toBeTruthy();
+  });
+
+  test("falls back safely for empty and malformed task metadata", () => {
+    const message: NativeMessageType = {
+      id: "msg-task-malformed-metadata",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "task-group",
+          content: "",
+          task: {
+            type: "tool-invocation",
+            content: "",
+            toolName: "task",
+            toolState: "pending",
+            toolUseId: "task-malformed-metadata",
+            toolArgs: {
+              description: 42,
+              prompt: "   ",
+              subagent_type: false,
+              agent_name: "",
+            },
+          },
+          childTools: [],
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    const trigger = screen.getByRole("button", { name: /Subagent Running/i });
+    expect(screen.getByText("Waiting for activity.")).toBeTruthy();
+    expect(screen.getByText("0 tools")).toBeTruthy();
+    expect(screen.getByText("0 updates")).toBeTruthy();
+
+    fireEvent.click(trigger);
+    expect(screen.getByText("No child actions yet.")).toBeTruthy();
+    expect(screen.queryByText("42")).toBeNull();
+  });
+
+  test("removes an agent expansion key when the group is closed", () => {
+    const message: NativeMessageType = {
+      id: "msg-task-expansion-close",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "task-group",
+          content: "",
+          task: {
+            type: "tool-invocation",
+            content: "",
+            toolName: "task",
+            toolState: "pending",
+            toolUseId: "task-expansion-close",
+            toolArgs: {
+              agent_name: "Closer",
+              prompt: "Inspect expansion state",
+            },
+          },
+          childTools: [],
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+    const trigger = screen.getByRole("button", { name: /Closer Running/i });
+
+    fireEvent.click(trigger);
+    expect(screen.getByText("Inspect expansion state")).toBeTruthy();
+
+    fireEvent.click(trigger);
+    expect(screen.queryByText("Inspect expansion state")).toBeNull();
+
+    fireEvent.click(trigger);
+    expect(screen.getByText("Inspect expansion state")).toBeTruthy();
   });
 
   test("uses display names for task-group titles when no tool title is present", () => {

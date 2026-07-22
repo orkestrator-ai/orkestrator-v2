@@ -14,7 +14,9 @@ import {
   getPendingQuestions,
   getSessionMessages,
   getSessionStatus,
+  hasOpenCodeSubagentSession,
   listSessions,
+  mergeOpenCodeSubagentTranscript,
   normalizeOpenCodeMessage,
   normalizeOpenCodePart,
   rejectQuestion,
@@ -830,6 +832,178 @@ describe("opencode-client streaming part normalization", () => {
     });
   });
 
+  test("normalizes Task tools into shared subagent parts", () => {
+    const part = normalizeOpenCodePart({
+      id: "part-task",
+      messageID: "message-1",
+      type: "tool",
+      tool: "Task",
+      state: {
+        status: "running",
+        title: "Review import scheduling",
+        input: {
+          description: "Review import scheduling",
+          prompt: "Inspect the scheduling implementation",
+          subagent_type: "general",
+        },
+        metadata: {
+          parentSessionId: "session-parent",
+          sessionId: "session-child",
+        },
+      },
+    });
+
+    expect(part).toMatchObject({
+      type: "subagent",
+      content: "Review import scheduling",
+      sourcePartId: "part-task",
+      sourceMessageId: "message-1",
+      toolState: "pending",
+      subagentId: "session-child",
+      subagentName: "Review import scheduling",
+      subagentRole: "general",
+      subagentPrompt: "Inspect the scheduling implementation",
+      subagentActions: [],
+      subagentActionCount: 0,
+    });
+  });
+
+  test("uses the Task output envelope as a child id and background state fallback", () => {
+    const part = normalizeOpenCodePart({
+      id: "part-task",
+      messageID: "message-1",
+      type: "tool",
+      tool: "task",
+      state: {
+        status: "completed",
+        input: { description: "Background review" },
+        output: '<task id="session-background" state="running">\n<task_result>Working</task_result>\n</task>',
+      },
+    });
+
+    expect(part).toMatchObject({
+      type: "subagent",
+      subagentId: "session-background",
+      toolState: "pending",
+    });
+  });
+
+  test("supports agent aliases, alternate metadata keys, and Task display fallbacks", () => {
+    const sessionIdPart = normalizeOpenCodePart({
+      type: "tool",
+      tool: "agent",
+      state: {
+        status: "pending",
+        title: "Fallback title",
+        input: { agent: "explore", prompt: "Inspect it" },
+        metadata: { sessionID: "session-uppercase" },
+      },
+    });
+    expect(sessionIdPart).toMatchObject({
+      type: "subagent",
+      content: "Fallback title",
+      subagentId: "session-uppercase",
+      subagentRole: "explore",
+      subagentPrompt: "Inspect it",
+    });
+
+    const jobIdPart = normalizeOpenCodePart({
+      type: "tool",
+      tool: "Task",
+      metadata: { jobId: "job-child" },
+      state: { status: "running", input: {} },
+    });
+    expect(jobIdPart).toMatchObject({
+      type: "subagent",
+      content: "Task",
+      subagentId: "job-child",
+    });
+  });
+
+  test("uses completed and error Task envelopes as authoritative terminal states", () => {
+    for (const [envelopeState, expectedState] of [
+      ["completed", "success"],
+      ["error", "failure"],
+    ] as const) {
+      const part = normalizeOpenCodePart({
+        type: "tool",
+        tool: "task",
+        state: {
+          status: "running",
+          input: { description: envelopeState },
+          output: `<task id="${envelopeState}-child" state="${envelopeState}">result</task>`,
+        },
+      });
+      expect(part).toMatchObject({
+        type: "subagent",
+        subagentId: `${envelopeState}-child`,
+        toolState: expectedState,
+      });
+    }
+  });
+
+  test("parses edit counts from metadata, unified diffs, output diffs, and one-sided content", () => {
+    const cases = [
+      {
+        part: {
+          type: "tool", tool: "write", state: {
+            status: "completed",
+            input: { file_path: "a.ts", old_string: "old", new_string: "new" },
+            metadata: { additions: 7, deletions: 3 },
+          },
+        },
+        expected: { filePath: "a.ts", additions: 7, deletions: 3, before: "old", after: "new" },
+      },
+      {
+        part: {
+          type: "tool", tool: "edit", state: {
+            status: "completed", input: { path: "b.ts" },
+            metadata: { diff: "--- a/b.ts\n+++ b/b.ts\n@@ -1 +1,2 @@\n-old\n+new\n+more" },
+          },
+        },
+        expected: { filePath: "b.ts", additions: 2, deletions: 1 },
+      },
+      {
+        part: {
+          type: "tool", tool: "patch", state: {
+            status: "completed", input: { file: "c.ts" },
+            output: "@@ -1 +1 @@\n-old\n+new",
+          },
+        },
+        expected: { filePath: "c.ts", additions: 1, deletions: 1 },
+      },
+      {
+        part: {
+          type: "tool", tool: "write", state: {
+            status: "completed", input: { filePath: "new.ts", content: "one\ntwo" },
+          },
+        },
+        expected: { filePath: "new.ts", additions: 2, deletions: 0 },
+      },
+      {
+        part: {
+          type: "tool", tool: "edit", state: {
+            status: "completed", input: { filePath: "old.ts", oldString: "one\ntwo" },
+          },
+        },
+        expected: { filePath: "old.ts", additions: 0, deletions: 2 },
+      },
+      {
+        part: {
+          type: "tool", tool: "edit", state: {
+            status: "completed", input: {},
+            metadata: { filediff: { file: "meta.ts", before: "a", after: "b\nc" } },
+          },
+        },
+        expected: { filePath: "meta.ts", additions: 2, deletions: 1, before: "a", after: "b\nc" },
+      },
+    ];
+
+    for (const { part, expected } of cases) {
+      expect(normalizeOpenCodePart(part)?.toolDiff).toMatchObject(expected);
+    }
+  });
+
   test("maps tool error status to failure state and stringifies error payloads", () => {
     const part = normalizeOpenCodePart({
       id: "part-t",
@@ -895,9 +1069,497 @@ describe("opencode-client normalizeOpenCodeMessage", () => {
     });
   });
 
+  test("retains only a safe assistant-error marker", () => {
+    const message = normalizeOpenCodeMessage({
+      info: {
+        id: "failed-message",
+        role: "assistant",
+        error: { message: "secret failure detail", token: "sensitive" },
+      },
+      parts: [],
+    });
+
+    expect(message?.hasError).toBe(true);
+    expect(message).not.toHaveProperty("error");
+    expect(JSON.stringify(message)).not.toContain("secret failure detail");
+  });
+
   test("returns null for non-object input", () => {
     expect(normalizeOpenCodeMessage(null)).toBeNull();
     expect(normalizeOpenCodeMessage(42)).toBeNull();
+  });
+});
+
+describe("OpenCode subagent transcript hydration", () => {
+  test("loads child messages and exposes their tool calls as agent actions", async () => {
+    const client = {
+      session: {
+        messages: mock(async ({ sessionID }: { sessionID: string }) => ({
+          data: sessionID === "session-parent"
+            ? [
+                {
+                  info: { id: "parent-message", role: "assistant", time: { created: 1 } },
+                  parts: [
+                    {
+                      id: "task-part",
+                      messageID: "parent-message",
+                      type: "tool",
+                      tool: "task",
+                      state: {
+                        status: "running",
+                        input: {
+                          description: "Inspect imports",
+                          prompt: "Review imports",
+                          subagent_type: "general",
+                        },
+                        metadata: { sessionId: "session-child" },
+                      },
+                    },
+                  ],
+                },
+              ]
+            : [
+                {
+                  info: { id: "child-message", role: "assistant", time: { created: 2 } },
+                  parts: [
+                    {
+                      id: "child-tool",
+                      messageID: "child-message",
+                      type: "tool",
+                      tool: "bash",
+                      state: {
+                        status: "completed",
+                        title: "Read imports",
+                        input: { command: "rg import src" },
+                        output: "src/index.ts",
+                        metadata: {},
+                      },
+                    },
+                    {
+                      id: "child-text",
+                      messageID: "child-message",
+                      type: "text",
+                      text: "Review complete",
+                    },
+                  ],
+                },
+              ],
+        })),
+        children: mock(async () => ({ data: [] })),
+      },
+    } as unknown as OpencodeClient;
+
+    const messages = await getSessionMessages(client, "session-parent");
+    const task = messages[0]?.parts[0];
+
+    expect(task).toMatchObject({
+      type: "subagent",
+      subagentId: "session-child",
+      subagentActionCount: 1,
+      subagentActions: [
+        {
+          type: "tool-invocation",
+          toolName: "bash",
+          toolState: "success",
+          toolArgs: { command: "rg import src" },
+          toolOutput: "src/index.ts",
+        },
+        { type: "text", content: "Review complete" },
+      ],
+    });
+    expect(hasOpenCodeSubagentSession(messages, "session-child")).toBe(true);
+  });
+
+  test("settles a completed background child from the session status snapshot", async () => {
+    const client = {
+      session: {
+        messages: mock(async ({ sessionID }: { sessionID: string }) => ({
+          data: sessionID === "session-parent"
+            ? [
+                {
+                  info: { id: "parent-message", role: "assistant", time: { created: 1 } },
+                  parts: [
+                    {
+                      id: "task-part",
+                      messageID: "parent-message",
+                      type: "tool",
+                      tool: "task",
+                      state: {
+                        status: "completed",
+                        input: { description: "Background review" },
+                        output: '<task id="background-child" state="running">Working</task>',
+                      },
+                    },
+                  ],
+                },
+              ]
+            : [
+                {
+                  info: { id: "child-message", role: "assistant", time: { created: 2 } },
+                  parts: [
+                    {
+                      id: "child-text",
+                      messageID: "child-message",
+                      type: "text",
+                      text: "Finished in the background",
+                    },
+                  ],
+                },
+              ],
+        })),
+        status: mock(async () => ({
+          data: { "background-child": { type: "idle" } },
+        })),
+      },
+    } as unknown as OpencodeClient;
+
+    const messages = await getSessionMessages(client, "session-parent");
+    expect(messages[0]?.parts[0]).toMatchObject({
+      type: "subagent",
+      subagentId: "background-child",
+      toolState: "success",
+      subagentActions: [
+        { type: "text", content: "Finished in the background" },
+      ],
+    });
+  });
+
+  test("discovers legacy Task children through session.children", async () => {
+    const client = {
+      session: {
+        messages: mock(async ({ sessionID }: { sessionID: string }) => ({
+          data: sessionID === "session-parent"
+            ? [
+                {
+                  info: { id: "parent-message", role: "assistant", time: { created: 1 } },
+                  parts: [
+                    {
+                      id: "task-part",
+                      messageID: "parent-message",
+                      type: "tool",
+                      tool: "Task",
+                      state: {
+                        status: "running",
+                        input: { description: "Review database", subagent_type: "explore" },
+                      },
+                    },
+                  ],
+                },
+              ]
+            : [],
+        })),
+        children: mock(async () => ({
+          data: [
+            {
+              id: "legacy-child",
+              title: "Review database (@explore subagent)",
+              agent: "explore",
+            },
+          ],
+        })),
+      },
+    } as unknown as OpencodeClient;
+
+    const messages = await getSessionMessages(client, "session-parent");
+    expect(messages[0]?.parts[0]).toMatchObject({
+      type: "subagent",
+      subagentId: "legacy-child",
+      subagentRole: "explore",
+    });
+  });
+
+  test("merges live child state into nested agent rows", () => {
+    const messages: OpenCodeMessage[] = [
+      {
+        id: "parent-message",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-07-22T12:00:00.000Z",
+        parts: [
+          {
+            type: "subagent",
+            content: "Outer",
+            subagentId: "outer-child",
+            subagentActions: [
+              {
+                type: "subagent",
+                content: "Nested",
+                subagentId: "nested-child",
+                subagentActions: [],
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    const childMessages: OpenCodeMessage[] = [
+      {
+        id: "child-message",
+        role: "assistant",
+        content: "Done",
+        createdAt: "2026-07-22T12:00:01.000Z",
+        parts: [{ type: "text", content: "Done" }],
+      },
+    ];
+
+    const merged = mergeOpenCodeSubagentTranscript(
+      messages,
+      "nested-child",
+      childMessages,
+      "success",
+    );
+    const outer = merged[0]?.parts[0];
+    expect(outer?.type).toBe("subagent");
+    expect(outer?.subagentActions?.[0]).toMatchObject({
+      type: "subagent",
+      toolState: "success",
+      subagentActions: [{ type: "text", content: "Done" }],
+    });
+  });
+
+  test("detects nested sessions and leaves non-matching transcripts unchanged", () => {
+    const messages: OpenCodeMessage[] = [{
+      id: "parent", role: "assistant", content: "", createdAt: "now",
+      parts: [{
+        type: "subagent", content: "outer", subagentId: "outer",
+        subagentActions: [{ type: "subagent", content: "inner", subagentId: "inner" }],
+      }],
+    }];
+
+    expect(hasOpenCodeSubagentSession(messages, "inner")).toBe(true);
+    expect(hasOpenCodeSubagentSession(messages, "missing")).toBe(false);
+    expect(mergeOpenCodeSubagentTranscript(messages, "missing", [], "success")).toBe(messages);
+  });
+
+  test("updates every matching row, ignores user actions, counts nested tools, and preserves terminal precedence", () => {
+    const messages: OpenCodeMessage[] = [{
+      id: "parent", role: "assistant", content: "", createdAt: "now",
+      parts: [
+        { type: "subagent", content: "first", subagentId: "child", toolState: "success" },
+        { type: "subagent", content: "second", subagentId: "child", toolState: "failure" },
+      ],
+    }];
+    const childMessages: OpenCodeMessage[] = [
+      {
+        id: "user", role: "user", content: "hidden", createdAt: "now",
+        parts: [{ type: "tool-invocation", content: "user-tool" }],
+      },
+      {
+        id: "assistant", role: "assistant", content: "", createdAt: "now",
+        parts: [
+          { type: "tool-invocation", content: "top" },
+          {
+            type: "subagent", content: "nested", subagentActions: [
+              { type: "tool-invocation", content: "nested-tool" },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const pending = mergeOpenCodeSubagentTranscript(messages, "child", childMessages, "pending");
+    expect(pending[0]?.parts[0]).toMatchObject({
+      toolState: "success",
+      subagentActionCount: 2,
+      subagentActions: [{ type: "tool-invocation", content: "top" }, { type: "subagent" }],
+    });
+    expect(pending[0]?.parts[1]).toMatchObject({ toolState: "failure", subagentActionCount: 2 });
+
+    const failed = mergeOpenCodeSubagentTranscript(messages, "child", [], "failure");
+    expect(failed[0]?.parts[0]?.toolState).toBe("failure");
+    expect(failed[0]?.parts[1]?.toolState).toBe("failure");
+  });
+
+  test("fails the whole snapshot when a child transcript cannot be read", async () => {
+    const messages = mock(async ({ sessionID }: { sessionID: string }) => {
+      if (sessionID === "child") throw new Error("child offline");
+      return {
+        data: [{
+          info: { id: "parent", role: "assistant" },
+          parts: [{
+            type: "tool", tool: "Task",
+            state: { status: "running", input: { description: "Child" }, metadata: { sessionId: "child" } },
+          }],
+        }],
+      };
+    });
+    const client = { session: { messages } } as unknown as OpencodeClient;
+
+    expect(await getSessionMessages(client, "parent")).toEqual([]);
+    await expect(getSessionMessages(client, "parent", { throwOnError: true })).rejects.toThrow("child offline");
+  });
+
+  test("continues without a status snapshot in non-strict mode and propagates it in strict mode", async () => {
+    const client = {
+      session: {
+        messages: async ({ sessionID }: { sessionID: string }) => ({
+          data: sessionID === "parent"
+            ? [{
+                info: { id: "parent", role: "assistant" },
+                parts: [{
+                  type: "tool", tool: "Task",
+                  state: { status: "running", input: { description: "Child" }, metadata: { sessionId: "child" } },
+                }],
+              }]
+            : [{ info: { id: "child", role: "assistant" }, parts: [{ type: "text", text: "done" }] }],
+        }),
+        status: async () => { throw new Error("status offline"); },
+      },
+    } as unknown as OpencodeClient;
+
+    expect((await getSessionMessages(client, "parent"))[0]?.parts[0]).toMatchObject({
+      subagentActions: [{ type: "text", content: "done" }],
+    });
+    await expect(getSessionMessages(client, "parent", { throwOnError: true })).rejects.toThrow("status offline");
+  });
+
+  test("handles resolved status errors and malformed status payloads", async () => {
+    const messages = async ({ sessionID }: { sessionID: string }) => ({
+      data: sessionID === "parent"
+        ? [{
+            info: { id: "parent", role: "assistant" },
+            parts: [{
+              type: "tool", tool: "Task",
+              state: { status: "running", input: { description: "Child" }, metadata: { sessionId: "child" } },
+            }],
+          }]
+        : [],
+    });
+    const resolvedFailure = {
+      session: {
+        messages,
+        status: async () => ({ data: undefined, error: { message: "no statuses" } }),
+      },
+    } as unknown as OpencodeClient;
+    expect(await getSessionMessages(resolvedFailure, "parent")).toHaveLength(1);
+    await expect(getSessionMessages(resolvedFailure, "parent", { throwOnError: true })).rejects.toThrow("no statuses");
+
+    const malformed = {
+      session: { messages, status: async () => ({ data: [] }) },
+    } as unknown as OpencodeClient;
+    expect(await getSessionMessages(malformed, "parent")).toHaveLength(1);
+  });
+
+  test("handles failed and malformed child discovery responses", async () => {
+    const parentData = [{
+      info: { id: "parent", role: "assistant" },
+      parts: [{
+        type: "tool", tool: "Task",
+        state: { status: "running", input: { description: "Legacy" } },
+      }],
+    }];
+    const failed = {
+      session: {
+        messages: async () => ({ data: parentData }),
+        children: async () => { throw new Error("children offline"); },
+      },
+    } as unknown as OpencodeClient;
+    expect((await getSessionMessages(failed, "parent"))[0]?.parts[0]?.subagentId).toBeUndefined();
+    await expect(getSessionMessages(failed, "parent", { throwOnError: true })).rejects.toThrow("children offline");
+
+    const malformed = {
+      session: {
+        messages: async () => ({ data: parentData }),
+        children: async () => ({ data: { id: "not-an-array" } }),
+      },
+    } as unknown as OpencodeClient;
+    expect((await getSessionMessages(malformed, "parent"))[0]?.parts[0]?.subagentId).toBeUndefined();
+  });
+
+  test("assigns duplicate legacy titles to distinct children", async () => {
+    const client = {
+      session: {
+        messages: async ({ sessionID }: { sessionID: string }) => ({
+          data: sessionID === "parent"
+            ? [{
+                info: { id: "parent", role: "assistant" },
+                parts: ["one", "two"].map((id) => ({
+                  id, type: "tool", tool: "Task",
+                  state: { status: "running", input: { description: "Duplicate" } },
+                })),
+              }]
+            : [],
+        }),
+        children: async () => ({ data: [
+          { id: "child-one", title: "Duplicate" },
+          { id: "child-two", title: "Duplicate" },
+        ] }),
+      },
+    } as unknown as OpencodeClient;
+
+    const messages = await getSessionMessages(client, "parent");
+    expect(messages[0]?.parts.map((part) => part.subagentId)).toEqual(["child-one", "child-two"]);
+  });
+
+  test("hydrates grandchildren once and terminates recursive session cycles", async () => {
+    const task = (id: string, child: string) => ({
+      id, type: "tool", tool: "Task",
+      state: { status: "running", input: { description: child }, metadata: { sessionId: child } },
+    });
+    const bySession: Record<string, unknown[]> = {
+      parent: [{ info: { id: "p", role: "assistant" }, parts: [task("p-task", "child")] }],
+      child: [{ info: { id: "c", role: "assistant" }, parts: [
+        { type: "tool", tool: "bash", state: { status: "completed", input: {} } },
+        task("c-task", "grandchild"),
+      ] }],
+      grandchild: [{ info: { id: "g", role: "assistant" }, parts: [
+        task("g-task", "child"),
+        { type: "text", text: "complete" },
+      ] }],
+    };
+    const calls: string[] = [];
+    const client = {
+      session: {
+        messages: async ({ sessionID }: { sessionID: string }) => {
+          calls.push(sessionID);
+          return { data: bySession[sessionID] };
+        },
+        status: async () => ({ data: { child: { type: "idle" }, grandchild: { type: "idle" } } }),
+      },
+    } as unknown as OpencodeClient;
+
+    const messages = await getSessionMessages(client, "parent");
+    expect(calls).toEqual(["parent", "child", "grandchild"]);
+    expect(messages[0]?.parts[0]).toMatchObject({
+      toolState: "success",
+      subagentActions: [
+        { type: "tool-invocation", toolName: "bash" },
+        { type: "subagent", subagentId: "grandchild", toolState: "success", subagentActions: [
+          { type: "subagent", subagentId: "child", subagentActions: [] },
+          { type: "text", content: "complete" },
+        ] },
+      ],
+    });
+  });
+
+  test("maps busy, retry, idle-empty, and assistant-error snapshots to terminal states", async () => {
+    const ids = ["busy-child", "retry-child", "empty-child", "failed-child"];
+    const client = {
+      session: {
+        messages: async ({ sessionID }: { sessionID: string }) => ({
+          data: sessionID === "parent"
+            ? [{
+                info: { id: "parent", role: "assistant" },
+                parts: ids.map((id) => ({
+                  type: "tool", tool: "Task",
+                  state: { status: "running", input: { description: id }, metadata: { sessionId: id } },
+                })),
+              }]
+            : sessionID === "failed-child"
+              ? [{ info: { id: "failure", role: "assistant", error: { message: "failed" } }, parts: [] }]
+              : [],
+        }),
+        status: async () => ({ data: {
+          "busy-child": { type: "busy" },
+          "retry-child": { type: "retry" },
+          "empty-child": { type: "idle" },
+          "failed-child": { type: "idle" },
+        } }),
+      },
+    } as unknown as OpencodeClient;
+
+    const states = (await getSessionMessages(client, "parent"))[0]?.parts.map((part) => part.toolState);
+    expect(states).toEqual(["pending", "pending", "success", "failure"]);
   });
 });
 
@@ -1029,6 +1691,31 @@ describe("opencode-client formatOpenCodeError", () => {
     expect(errorText).not.toContain("top-secret-token");
     expect(errorText).not.toContain("sk-secret-key");
     expect(errorText).not.toContain("refresh-secret");
+  });
+
+  test("formats primitive, Error, and headline-only fallbacks", () => {
+    expect(formatOpenCodeError("Bearer private-value")).toBe("Bearer [REDACTED]");
+    expect(formatOpenCodeError(null)).toBe("An unknown error occurred");
+    expect(formatOpenCodeError(new Error("offline"))).toContain("offline");
+    expect(formatOpenCodeError({ data: { type: "TimeoutError" } })).toContain("TimeoutError");
+    expect(formatOpenCodeError({
+      data: { errorType: "RateLimit", message: "Try later" },
+    })).toStartWith("RateLimit: Try later");
+  });
+
+  test("handles circular details and truncates oversized raw errors", () => {
+    const circular: Record<string, unknown> = { message: "circular failure" };
+    circular.self = circular;
+    const circularText = formatOpenCodeError(circular);
+    expect(circularText).toContain("circular failure");
+    expect(circularText).toContain("[Circular]");
+
+    const oversized = formatOpenCodeError({
+      message: "large failure",
+      detailBlob: "x".repeat(5_000),
+    });
+    expect(oversized).toContain("... (details truncated)");
+    expect(oversized.length).toBeLessThan(4_200);
   });
 });
 

@@ -6,6 +6,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
+import * as realOpenCodeClient from "@/lib/opencode-client";
 
 // Snapshot the real sibling modules before we install stubs so we can restore
 // them when this file finishes. Without this, Bun's global mock.module cache
@@ -26,6 +27,7 @@ const realSlashCommandDirectorySnapshot = { ...realSlashCommandDirectory };
 const realSlashCommandRegistrySnapshot = { ...realSlashCommandRegistry };
 const realHooksSnapshot = { ...realHooks };
 const realVirtualizedMessageListSnapshot = { ...realVirtualizedMessageList };
+const realOpenCodeClientSnapshot = { ...realOpenCodeClient };
 const mockScrollToBottom = mock(() => {});
 let mockIsAtBottom = true;
 let lastVirtualizedMessages: any[] = [];
@@ -38,7 +40,7 @@ const mockCreateSession = mock(async () => ({
   createdAt: "2026-04-15T10:00:00.000Z",
 }));
 const mockGetSessionMessages = mock<
-  (_client: unknown, _sessionId: string) => Promise<NativeMessage[]>
+  (_client: unknown, _sessionId: string, _options?: unknown) => Promise<NativeMessage[]>
 >(async () => []);
 const mockGetSessionStatus = mock(
   async () => null as "idle" | "busy" | "retry" | null,
@@ -48,6 +50,19 @@ const mockGetPendingPermissions = mock(async (): Promise<PermissionRequest[]> =>
 const mockListSessions = mock(async () => [
   { id: "session-1", createdAt: "2026-04-15T10:00:00.000Z" },
 ]);
+const mockSubscribeToEvents = mock(
+  async () => (async function* () {})() as AsyncGenerator<any>,
+);
+const mockGetAvailableSlashCommands = mock(async () => [] as any[]);
+const mockCreateClient = mock(() => MOCK_CLIENT as any);
+const mockStartOpenCodeServer = mock(async () => ({ hostPort: 9999 }));
+const mockGetOpenCodeServerStatus = mock(async () => ({ running: true, hostPort: 9999 }));
+const mockGetOpenCodeServerLog = mock(async () => "");
+const mockStartLocalOpencodeServer = mock(async () => ({ running: true, port: 9999, pid: 1234 }));
+const mockGetLocalOpencodeServerStatus = mock(async () => ({ running: true, port: 9999, pid: 1234 }));
+const mockResolveSlashCommandDirectory = mock(() => undefined as string | undefined);
+const mockShouldLoadSlashCommands = mock(() => false);
+const mockGetNativeSlashCommands = mock((commands: any[]) => commands);
 import type {
   OpenCodeModel,
   OpenCodeModelDefaults,
@@ -72,7 +87,8 @@ const mockGetOpencodeModelPreferences = mock<
 }));
 
 mock.module("@/lib/opencode-client", () => ({
-  createClient: mock(() => ({ baseUrl: "http://127.0.0.1:9999" })),
+  ...realOpenCodeClientSnapshot,
+  createClient: mockCreateClient,
   getModelsWithDefaults: mockGetModelsWithDefaults,
   createSession: mockCreateSession,
   getSessionMessages: mockGetSessionMessages,
@@ -80,22 +96,22 @@ mock.module("@/lib/opencode-client", () => ({
   listSessions: mockListSessions,
   getPendingPermissions: mockGetPendingPermissions,
   getPendingQuestions: mockGetPendingQuestions,
-  getAvailableSlashCommands: mock(async () => []),
+  getAvailableSlashCommands: mockGetAvailableSlashCommands,
   sendPrompt: mockSendPrompt,
   formatOpenCodeError: mock((error) => String(error)),
   abortSession: mockAbortSession,
-  subscribeToEvents: mock(() => (async function* () {})()),
+  subscribeToEvents: mockSubscribeToEvents,
   ERROR_MESSAGE_PREFIX: "error-",
   SYSTEM_MESSAGE_PREFIX: "system-",
 }));
 
 mock.module("@/lib/backend", () => ({
-  startOpenCodeServer: mock(async () => ({ hostPort: 9999 })),
-  getOpenCodeServerStatus: mock(async () => ({ running: true, hostPort: 9999 })),
-  getOpenCodeServerLog: mock(async () => ""),
+  startOpenCodeServer: mockStartOpenCodeServer,
+  getOpenCodeServerStatus: mockGetOpenCodeServerStatus,
+  getOpenCodeServerLog: mockGetOpenCodeServerLog,
   getOpencodeModelPreferences: mockGetOpencodeModelPreferences,
-  startLocalOpencodeServer: mock(async () => ({ running: true, port: 9999, pid: 1234 })),
-  getLocalOpencodeServerStatus: mock(async () => ({ running: true, port: 9999, pid: 1234 })),
+  startLocalOpencodeServer: mockStartLocalOpencodeServer,
+  getLocalOpencodeServerStatus: mockGetLocalOpencodeServerStatus,
   renameEnvironmentFromPrompt: mockRenameEnvironmentFromPrompt,
 }));
 
@@ -196,12 +212,12 @@ mock.module("./OpenCodeResumeSessionDialog", () => ({
 }));
 
 mock.module("./slash-command-directory", () => ({
-  resolveSlashCommandDirectory: mock(() => undefined),
-  shouldLoadSlashCommands: mock(() => false),
+  resolveSlashCommandDirectory: mockResolveSlashCommandDirectory,
+  shouldLoadSlashCommands: mockShouldLoadSlashCommands,
 }));
 
 mock.module("./slash-command-registry", () => ({
-  getNativeSlashCommands: mock(() => []),
+  getNativeSlashCommands: mockGetNativeSlashCommands,
 }));
 
 mock.module("@/hooks", () => ({
@@ -344,9 +360,54 @@ function resetStores(name = "20260415-123456") {
   seedPaneLayout();
 }
 
+function eventChannel() {
+  const queue: any[] = [];
+  let wake = deferred<void>();
+  let closed = false;
+  const stream = (async function* () {
+    while (!closed) {
+      if (queue.length === 0) await wake.promise;
+      while (queue.length > 0) yield queue.shift();
+    }
+  })();
+  return {
+    stream,
+    push(event: any) {
+      queue.push(event);
+      wake.resolve();
+      wake = deferred<void>();
+    },
+    close() {
+      closed = true;
+      wake.resolve();
+    },
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function nativeMessage(id: string, content = id): NativeMessage {
+  return {
+    id,
+    role: "assistant",
+    content,
+    parts: [{ type: "text", content }],
+    createdAt: "2026-07-16T12:00:00.000Z",
+  };
+}
+
 // Restore the real sibling modules once this file's tests finish so later
 // test files see the real modules.
 afterAll(() => {
+  mock.module("@/lib/opencode-client", () => realOpenCodeClientSnapshot);
   mock.module("./OpenCodeComposeBar", () => realOpenCodeComposeBarSnapshot);
   mock.module("./OpenCodePermissionCard", () => realOpenCodePermissionCardSnapshot);
   mock.module("./OpenCodeQuestionCard", () => realOpenCodeQuestionCardSnapshot);
@@ -385,6 +446,30 @@ describe("OpenCodeChatTab", () => {
     mockListSessions.mockImplementation(async () => [
       { id: "session-1", createdAt: "2026-04-15T10:00:00.000Z" },
     ]);
+    mockSubscribeToEvents.mockReset();
+    mockSubscribeToEvents.mockImplementation(
+      async () => (async function* () {})() as AsyncGenerator<any>,
+    );
+    mockGetAvailableSlashCommands.mockReset();
+    mockGetAvailableSlashCommands.mockResolvedValue([]);
+    mockCreateClient.mockReset();
+    mockCreateClient.mockImplementation(() => MOCK_CLIENT as any);
+    mockStartOpenCodeServer.mockReset();
+    mockStartOpenCodeServer.mockResolvedValue({ hostPort: 9999 });
+    mockGetOpenCodeServerStatus.mockReset();
+    mockGetOpenCodeServerStatus.mockResolvedValue({ running: true, hostPort: 9999 });
+    mockGetOpenCodeServerLog.mockReset();
+    mockGetOpenCodeServerLog.mockResolvedValue("");
+    mockStartLocalOpencodeServer.mockReset();
+    mockStartLocalOpencodeServer.mockResolvedValue({ running: true, port: 9999, pid: 1234 });
+    mockGetLocalOpencodeServerStatus.mockReset();
+    mockGetLocalOpencodeServerStatus.mockResolvedValue({ running: true, port: 9999, pid: 1234 });
+    mockResolveSlashCommandDirectory.mockReset();
+    mockResolveSlashCommandDirectory.mockReturnValue(undefined);
+    mockShouldLoadSlashCommands.mockReset();
+    mockShouldLoadSlashCommands.mockReturnValue(false);
+    mockGetNativeSlashCommands.mockReset();
+    mockGetNativeSlashCommands.mockImplementation((commands) => commands);
     mockGetModelsWithDefaults.mockClear();
     mockGetModelsWithDefaults.mockImplementation(async () => ({
       models: [],
@@ -403,6 +488,7 @@ describe("OpenCodeChatTab", () => {
   });
 
   afterEach(() => {
+    useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
     cleanup();
     Date.now = ORIGINAL_DATE_NOW;
     globalThis.setInterval = ORIGINAL_SET_INTERVAL;
@@ -586,6 +672,140 @@ describe("OpenCodeChatTab", () => {
     });
   });
 
+  describe("fast reconnect hydration", () => {
+    test("hydrates a non-empty transcript and busy status", async () => {
+      const serverMessage = nativeMessage("server-reconnect");
+      mockGetSessionMessages.mockResolvedValue([serverMessage]);
+      mockGetSessionStatus.mockResolvedValue("busy");
+
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+          messages: [serverMessage],
+          isLoading: true,
+        });
+      });
+    });
+
+    test("preserves existing messages when the server returns an empty snapshot", async () => {
+      const existingMessage = nativeMessage("existing-reconnect");
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [existingMessage]);
+      mockGetSessionMessages.mockResolvedValue([]);
+      mockGetSessionStatus.mockResolvedValue("idle");
+
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() => expect(mockGetSessionStatus).toHaveBeenCalled());
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        messages: [existingMessage],
+        isLoading: false,
+      });
+    });
+
+    test("does not replace a live mutation with an older non-empty snapshot", async () => {
+      const snapshot = deferred<NativeMessage[]>();
+      mockGetSessionMessages.mockImplementation(() => snapshot.promise);
+      mockGetSessionStatus.mockResolvedValue("busy");
+      const liveMessage = nativeMessage("live-during-reconnect");
+
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+      act(() => useOpenCodeStore.getState().addMessage(SESSION_KEY, liveMessage));
+
+      await act(async () => {
+        snapshot.resolve([nativeMessage("stale-reconnect")]);
+        await snapshot.promise;
+      });
+
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
+          liveMessage,
+        ]);
+      });
+    });
+
+    test("ignores a reconnect response after unmount", async () => {
+      const snapshot = deferred<NativeMessage[]>();
+      mockGetSessionMessages.mockImplementation(() => snapshot.promise);
+      mockGetSessionStatus.mockResolvedValue("busy");
+      const view = render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+
+      view.unmount();
+      await act(async () => {
+        snapshot.resolve([nativeMessage("after-unmount")]);
+        await snapshot.promise;
+      });
+
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        messages: [],
+        isLoading: false,
+      });
+    });
+
+    test("ignores a response after the client is replaced", async () => {
+      const snapshot = deferred<NativeMessage[]>();
+      mockGetSessionMessages.mockImplementation(() => snapshot.promise);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+
+      act(() => {
+        useOpenCodeStore.setState((state) => ({
+          clients: new Map(state.clients).set(ENVIRONMENT_ID, { baseUrl: "replacement" } as any),
+        }));
+      });
+      await act(async () => {
+        snapshot.resolve([nativeMessage("wrong-client")]);
+        await snapshot.promise;
+      });
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([]);
+    });
+
+    test("ignores a response after the session is replaced", async () => {
+      const snapshot = deferred<NativeMessage[]>();
+      mockGetSessionMessages.mockImplementation(() => snapshot.promise);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockGetSessionMessages).toHaveBeenCalled());
+
+      act(() => {
+        useOpenCodeStore.getState().setSession(SESSION_KEY, {
+          sessionId: "replacement-session",
+          messages: [],
+          isLoading: false,
+        });
+      });
+      await act(async () => {
+        snapshot.resolve([nativeMessage("wrong-session")]);
+        await snapshot.promise;
+      });
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        sessionId: "replacement-session",
+        messages: [],
+      });
+    });
+
+    test("logs a rejected reconnect without changing the snapshot", async () => {
+      const originalWarn = console.warn;
+      const consoleWarn = mock(() => {});
+      console.warn = consoleWarn as unknown as typeof console.warn;
+      mockGetSessionMessages.mockRejectedValue(new Error("reconnect unavailable"));
+
+      try {
+        render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+        await waitFor(() => {
+          expect(consoleWarn).toHaveBeenCalledWith(
+            "[OpenCodeChatTab] Fast reconnect rehydration failed:",
+            expect.any(Error),
+          );
+        });
+        expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([]);
+      } finally {
+        console.warn = originalWarn;
+      }
+    });
+  });
+
   test("rehydrates the session id saved in a restored pane tab", async () => {
     const restoredSessionId = "restored-opencode-session";
     useOpenCodeStore.setState({ sessions: new Map() });
@@ -696,6 +916,118 @@ describe("OpenCodeChatTab", () => {
         .toBe("session-1");
     });
     expect(mockCreateSession).toHaveBeenCalledTimes(1);
+  });
+
+  describe("cold server startup", () => {
+    beforeEach(() => {
+      useOpenCodeStore.setState((state) => ({
+        ...state,
+        clients: new Map(),
+        sessions: new Map(),
+      }));
+      seedPaneLayout();
+    });
+
+    test("starts a stopped container server and connects to its mapped port", async () => {
+      mockGetOpenCodeServerStatus.mockResolvedValue({ running: false, hostPort: null } as any);
+      mockStartOpenCodeServer.mockResolvedValue({ hostPort: 4321 });
+
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() => expect(mockCreateClient).toHaveBeenCalledWith("http://127.0.0.1:4321"));
+      expect(mockStartOpenCodeServer).toHaveBeenCalledWith("container-1");
+      expect(useOpenCodeStore.getState().serverStatus.get(ENVIRONMENT_ID)).toEqual({
+        running: true,
+        hostPort: 4321,
+      });
+    });
+
+    test("starts a stopped local server and connects to its port", async () => {
+      useEnvironmentStore.setState({ setupCommandsResolved: new Set([ENVIRONMENT_ID]) });
+      mockGetLocalOpencodeServerStatus.mockResolvedValue({ running: false, port: null, pid: null } as any);
+      mockStartLocalOpencodeServer.mockResolvedValue({ running: true, port: 5432, pid: 99 } as any);
+
+      render(
+        <OpenCodeChatTab
+          tabId={TAB_ID}
+          data={createData({ isLocal: true, containerId: undefined })}
+          isActive
+        />,
+      );
+
+      await waitFor(() => expect(mockCreateClient).toHaveBeenCalledWith("http://127.0.0.1:5432"));
+      expect(mockStartLocalOpencodeServer).toHaveBeenCalledWith(ENVIRONMENT_ID);
+      expect(mockGetOpenCodeServerStatus).not.toHaveBeenCalled();
+    });
+
+    test("reports a local server that starts without a port", async () => {
+      useEnvironmentStore.setState({ setupCommandsResolved: new Set([ENVIRONMENT_ID]) });
+      mockGetLocalOpencodeServerStatus.mockResolvedValue({ running: false, port: null, pid: null } as any);
+      mockStartLocalOpencodeServer.mockResolvedValue({ running: true, port: 0, pid: 99 } as any);
+
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData({ isLocal: true })} isActive />);
+
+      expect(await screen.findByText("Error: Local server started but no port available")).toBeTruthy();
+      expect(mockCreateClient).not.toHaveBeenCalled();
+    });
+
+    test("reports a container server that starts without a port", async () => {
+      mockGetOpenCodeServerStatus.mockResolvedValue({ running: false, hostPort: null } as any);
+      mockStartOpenCodeServer.mockResolvedValue({ hostPort: 0 });
+
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      expect(await screen.findByText("Error: Server started but no port available")).toBeTruthy();
+      expect(mockCreateClient).not.toHaveBeenCalled();
+    });
+
+    test("rejects a container environment without a container id", async () => {
+      render(
+        <OpenCodeChatTab
+          tabId={TAB_ID}
+          data={createData({ containerId: undefined })}
+          isActive
+        />,
+      );
+
+      expect(await screen.findByText("Error: Container ID is required for containerized environments")).toBeTruthy();
+      expect(mockGetOpenCodeServerStatus).not.toHaveBeenCalled();
+    });
+
+    test("loads and reveals container logs for timeout failures", async () => {
+      mockGetOpenCodeServerStatus.mockRejectedValue(new Error("timeout waiting for OpenCode"));
+      mockGetOpenCodeServerLog.mockResolvedValue("redacted server diagnostics");
+
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await screen.findByText("Error: timeout waiting for OpenCode");
+      const showLog = await screen.findByRole("button", { name: "Show Log" });
+      fireEvent.click(showLog);
+      expect(screen.getByText("redacted server diagnostics")).toBeTruthy();
+      expect(mockGetOpenCodeServerLog).toHaveBeenCalledWith("container-1");
+    });
+
+    test("keeps the timeout error visible when fetching container logs fails", async () => {
+      const originalError = console.error;
+      const consoleError = mock(() => {});
+      console.error = consoleError as unknown as typeof console.error;
+      mockGetOpenCodeServerStatus.mockRejectedValue(new Error("timeout waiting for OpenCode"));
+      mockGetOpenCodeServerLog.mockRejectedValue(new Error("log unavailable"));
+
+      try {
+        render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+        expect(await screen.findByText("Error: timeout waiting for OpenCode")).toBeTruthy();
+        await waitFor(() => {
+          expect(consoleError).toHaveBeenCalledWith(
+            "[OpenCodeChatTab] Failed to fetch server log:",
+            expect.any(Error),
+          );
+        });
+        expect(screen.queryByRole("button", { name: "Show Log" })).toBeNull();
+      } finally {
+        console.error = originalError;
+      }
+    });
   });
 
   test("writes a manually resumed session id and transcript to both stores", async () => {
@@ -1409,6 +1741,398 @@ describe("OpenCodeChatTab", () => {
     } finally {
       console.error = originalError;
     }
+  });
+
+  describe("shared SSE event handling", () => {
+    function seedSubagent(state: "pending" | "success" | "failure" = "pending") {
+      const parent: NativeMessage = {
+        ...nativeMessage("parent-agent", ""),
+        parts: [
+          {
+            type: "subagent",
+            content: "Worker",
+            subagentId: "child-session",
+            subagentName: "Worker",
+            toolState: state,
+            subagentActions: [],
+          },
+        ],
+      };
+      useOpenCodeStore.getState().setMessages(SESSION_KEY, [parent]);
+    }
+
+    function childMessage(content: string): NativeMessage {
+      return {
+        ...nativeMessage(`child-${content}`, content),
+        parts: [{ type: "text", content }],
+      };
+    }
+
+    test("applies streaming parts, parent refreshes, idle state, errors, and context usage", async () => {
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+      mockGetSessionMessages.mockClear();
+
+      channel.push({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-1",
+            messageID: "stream-message",
+            sessionID: "session-1",
+            type: "text",
+            text: "Streaming response",
+          },
+        },
+      });
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages[0]).toMatchObject({
+          id: "stream-message",
+          content: "Streaming response",
+        });
+      });
+
+      const refreshed = nativeMessage("authoritative-parent");
+      mockGetSessionMessages.mockResolvedValue([refreshed]);
+      channel.push({
+        type: "message.updated",
+        properties: { info: { sessionID: "session-1" } },
+      });
+      await waitFor(() => {
+        expect(mockGetSessionMessages).toHaveBeenCalledWith(
+          MOCK_CLIENT,
+          "session-1",
+          { throwOnError: true },
+        );
+      });
+
+      act(() => useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true));
+      channel.push({
+        type: "session.idle",
+        properties: {
+          sessionID: "session-1",
+          usage: { inputTokens: 30, outputTokens: 20 },
+          maxContextTokens: 1_000,
+        },
+      });
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+        expect(useOpenCodeStore.getState().contextUsage.get(SESSION_KEY)).toEqual({
+          usedTokens: 50,
+          totalTokens: 1_000,
+          percentUsed: 5,
+          modelId: "openai/gpt-5",
+        });
+      });
+
+      channel.push({
+        type: "session.error",
+        properties: { sessionID: "session-1", error: new Error("event failed") },
+      });
+      await waitFor(() => {
+        expect(
+          useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+            (message) => message.id.startsWith("error-") && message.content === "Error: event failed",
+          ),
+        ).toBe(true);
+      });
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("adds and removes permission and question requests", async () => {
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      channel.push({
+        type: "permission.asked",
+        properties: {
+          id: "permission-sse",
+          sessionID: "session-1",
+          permission: "edit",
+          patterns: ["src/**"],
+          metadata: { source: "tool" },
+          always: ["src/generated/**"],
+          tool: { messageID: "message-1", callID: "call-1" },
+        },
+      });
+      channel.push({
+        type: "question.asked",
+        properties: {
+          id: "question-sse",
+          sessionID: "session-1",
+          questions: [{ question: "Continue?", header: "Confirm", options: [] }],
+        },
+      });
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().pendingPermissions.get("permission-sse")).toMatchObject({
+          sessionID: "session-1",
+          permission: "edit",
+          patterns: ["src/**"],
+        });
+        expect(useOpenCodeStore.getState().pendingQuestions.has("question-sse")).toBe(true);
+      });
+
+      channel.push({ type: "permission.replied", properties: { requestID: "permission-sse" } });
+      channel.push({ type: "question.replied", properties: { requestID: "question-sse" } });
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().pendingPermissions.has("permission-sse")).toBe(false);
+        expect(useOpenCodeStore.getState().pendingQuestions.has("question-sse")).toBe(false);
+      });
+
+      useOpenCodeStore.getState().addPendingQuestion({
+        id: "question-rejected",
+        sessionID: "session-1",
+        questions: [],
+      });
+      channel.push({ type: "question.rejected", properties: { requestID: "question-rejected" } });
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().pendingQuestions.has("question-rejected")).toBe(false);
+      });
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("refreshes a Task child and records success and failure terminal states", async () => {
+      seedSubagent();
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      mockGetSessionMessages.mockImplementation(async (_client, sessionId) =>
+        sessionId === "child-session" ? [childMessage("child action")] : []
+      );
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      channel.push({
+        type: "message.updated",
+        properties: { info: { sessionID: "child-session" } },
+      });
+      await waitFor(() => {
+        const part = useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages[0]?.parts[0];
+        expect(part).toMatchObject({
+          type: "subagent",
+          toolState: "pending",
+          subagentActions: [{ type: "text", content: "child action" }],
+        });
+      });
+
+      channel.push({ type: "session.idle", properties: { sessionID: "child-session" } });
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages[0]?.parts[0]).toMatchObject({
+          toolState: "success",
+        });
+      });
+
+      channel.push({
+        type: "session.error",
+        properties: { sessionID: "child-session", error: new Error("child failed") },
+      });
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages[0]?.parts[0]).toMatchObject({
+          toolState: "failure",
+        });
+      });
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("refreshes child transcripts after message and part removals", async () => {
+      seedSubagent();
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      mockGetSessionMessages.mockImplementation(async (_client, sessionId) =>
+        sessionId === "child-session" ? [childMessage("after removal")] : []
+      );
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+      mockGetSessionMessages.mockClear();
+
+      for (const type of ["message.part.removed", "message.removed"]) {
+        channel.push({ type, properties: { sessionID: "child-session" } });
+        await waitFor(() => {
+          expect(mockGetSessionMessages.mock.calls.filter((call) => call[1] === "child-session").length)
+            .toBe(type === "message.part.removed" ? 1 : 2);
+        });
+      }
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("discards an older overlapping child refresh that resolves last", async () => {
+      seedSubagent();
+      const channel = eventChannel();
+      const first = deferred<NativeMessage[]>();
+      const second = deferred<NativeMessage[]>();
+      let childCall = 0;
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      mockGetSessionMessages.mockImplementation(async (_client, sessionId) => {
+        if (sessionId !== "child-session") return [];
+        childCall += 1;
+        return childCall === 1 ? first.promise : second.promise;
+      });
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+      channel.push({ type: "message.updated", properties: { info: { sessionID: "child-session" } } });
+      await waitFor(() => expect(childCall).toBe(1));
+      channel.push({ type: "session.idle", properties: { sessionID: "child-session" } });
+      await waitFor(() => expect(childCall).toBe(2));
+
+      await act(async () => {
+        second.resolve([childMessage("newest child")]);
+        await second.promise;
+      });
+      await act(async () => {
+        first.resolve([childMessage("stale child")]);
+        await first.promise;
+      });
+
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages[0]?.parts[0]).toMatchObject({
+          toolState: "success",
+          subagentActions: [{ type: "text", content: "newest child" }],
+        });
+      });
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.close();
+    });
+
+    test("stops applying events after the shared subscription is aborted", async () => {
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockResolvedValue(channel.stream);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+      useOpenCodeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+      channel.push({ type: "session.error", properties: { sessionID: "session-1", error: "late" } });
+      channel.close();
+
+      await act(async () => await Promise.resolve());
+      expect(useOpenCodeStore.getState().eventSubscriptions.has(ENVIRONMENT_ID)).toBe(false);
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([]);
+    });
+  });
+
+  describe("slash command loading", () => {
+    beforeEach(() => {
+      mockResolveSlashCommandDirectory.mockReturnValue("/workspace");
+      mockShouldLoadSlashCommands.mockReturnValue(true);
+      mockGetNativeSlashCommands.mockImplementation((commands) => [
+        { name: "/native", description: "Built in" },
+        ...commands,
+      ]);
+    });
+
+    test("stores discovered and native slash commands", async () => {
+      mockGetAvailableSlashCommands.mockResolvedValue([
+        { name: "/project", description: "Project command" },
+      ]);
+
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() => {
+        expect(useOpenCodeStore.getState().slashCommands.get(ENVIRONMENT_ID)).toEqual([
+          { name: "/native", description: "Built in" },
+          { name: "/project", description: "Project command" },
+        ]);
+      });
+      expect(mockGetAvailableSlashCommands).toHaveBeenCalledWith(MOCK_CLIENT, "/workspace");
+    });
+
+    test("falls back to native commands when discovery rejects", async () => {
+      const originalWarn = console.warn;
+      const consoleWarn = mock(() => {});
+      console.warn = consoleWarn as unknown as typeof console.warn;
+      mockGetAvailableSlashCommands.mockRejectedValue(new Error("command endpoint unavailable"));
+
+      try {
+        render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+        await waitFor(() => {
+          expect(useOpenCodeStore.getState().slashCommands.get(ENVIRONMENT_ID)).toEqual([
+            { name: "/native", description: "Built in" },
+          ]);
+        });
+        expect(consoleWarn).toHaveBeenCalledWith(
+          "[OpenCodeChatTab] Failed to load slash commands:",
+          expect.any(Error),
+        );
+      } finally {
+        console.warn = originalWarn;
+      }
+    });
+
+    test("does not store commands after the loading effect is cancelled", async () => {
+      const commands = deferred<any[]>();
+      mockGetAvailableSlashCommands.mockImplementation(() => commands.promise);
+      const view = render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockGetAvailableSlashCommands).toHaveBeenCalled());
+
+      view.unmount();
+      await act(async () => {
+        commands.resolve([{ name: "/late", description: "Late" }]);
+        await commands.promise;
+      });
+
+      expect(useOpenCodeStore.getState().slashCommands.has(ENVIRONMENT_ID)).toBe(false);
+    });
+
+    test("skips discovery when the environment has no usable directory", async () => {
+      mockShouldLoadSlashCommands.mockReturnValue(false);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await act(async () => await Promise.resolve());
+      expect(mockGetAvailableSlashCommands).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Escape stop shortcut", () => {
+    test("stops an active loading session and prevents the browser action", async () => {
+      useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true);
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      const event = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+
+      act(() => window.dispatchEvent(event));
+
+      await waitFor(() => expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, "session-1"));
+      expect(event.defaultPrevented).toBe(true);
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+    });
+
+    test("ignores Escape when inactive, modified, repeated, composing, or already prevented", async () => {
+      useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true);
+      const view = render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+      act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+      view.rerender(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      const ignored = [
+        new KeyboardEvent("keydown", { key: "Enter" }),
+        new KeyboardEvent("keydown", { key: "Escape", repeat: true }),
+        new KeyboardEvent("keydown", { key: "Escape", metaKey: true }),
+        new KeyboardEvent("keydown", { key: "Escape", ctrlKey: true }),
+        new KeyboardEvent("keydown", { key: "Escape", altKey: true }),
+        new KeyboardEvent("keydown", { key: "Escape", isComposing: true }),
+      ];
+      const prevented = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+      prevented.preventDefault();
+      ignored.push(prevented);
+      act(() => ignored.forEach((event) => window.dispatchEvent(event)));
+
+      await act(async () => await Promise.resolve());
+      expect(mockAbortSession).not.toHaveBeenCalled();
+    });
+
+    test("removes the key listener after loading ends and after unmount", async () => {
+      useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, true);
+      const view = render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      act(() => useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, false));
+      act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+      view.unmount();
+      act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+      await act(async () => await Promise.resolve());
+      expect(mockAbortSession).not.toHaveBeenCalled();
+    });
   });
 
   describe("refreshModels", () => {

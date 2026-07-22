@@ -44,10 +44,6 @@ mock.module("@/components/ui/separator", () => ({
   Separator: () => <hr />,
 }));
 
-mock.module("@/lib/context-usage", () => ({
-  extractContextUsage: () => null,
-}));
-
 mock.module("@/lib/backend", () => ({
   detectPr: mock(async () => null),
   detectPrLocal: mock(async () => null),

@@ -43,11 +43,14 @@ import {
   subscribeToEvents,
   normalizeOpenCodePart,
   buildOpenCodeMessageFromPart,
+  hasOpenCodeSubagentSession,
+  mergeOpenCodeSubagentTranscript,
   ERROR_MESSAGE_PREFIX,
   SYSTEM_MESSAGE_PREFIX,
   type PermissionRequest,
   type QuestionRequest,
   type OpenCodeConversationMode,
+  type OpenCodeMessage,
   type OpenCodeSlashCommand,
   type OpenCodeModel,
   type OpenCodeModelDefaults,
@@ -611,6 +614,39 @@ export function OpenCodeChatTab({
           if (!hasActiveEventSubscription(environmentId)) {
             startSharedEventSubscription(existingClient);
           }
+
+          // The subscription may have progressed while this React tree was
+          // inactive. Rehydrate from the authoritative parent and child
+          // session transcripts without delaying the fast reconnect UI.
+          const reconnectSequence = ++manualRefreshSequenceRef.current;
+          void Promise.all([
+            getSessionMessages(existingClient, existingSession.sessionId, {
+              throwOnError: true,
+            }),
+            getSessionStatus(existingClient, existingSession.sessionId, {
+              throwOnError: true,
+            }),
+          ]).then(([messages, status]) => {
+            if (
+              !mounted ||
+              reconnectSequence !== manualRefreshSequenceRef.current
+            ) return;
+            const currentState = useOpenCodeStore.getState();
+            const currentSession = currentState.sessions.get(sessionKey);
+            if (
+              currentState.clients.get(environmentId) !== existingClient ||
+              currentSession?.sessionId !== existingSession.sessionId ||
+              currentSession !== existingSession
+            ) {
+              return;
+            }
+            // An empty reconnect response must not erase a transcript that
+            // received a live update after this request started.
+            if (messages.length > 0) setMessages(sessionKey, messages);
+            if (status) setSessionLoading(sessionKey, status !== "idle");
+          }).catch((error) => {
+            console.warn("[OpenCodeChatTab] Fast reconnect rehydration failed:", error);
+          });
           return;
         }
 
@@ -974,6 +1010,19 @@ export function OpenCodeChatTab({
       }
 
       const { abortController } = subscriptionState;
+      const lastReloadTimeBySession = new Map<string, number>();
+      const pendingReloads = new Map<string, NodeJS.Timeout>();
+      const reloadGenerationByKey = new Map<string, number>();
+
+      const beginReloadGeneration = (reloadKey: string) => {
+        const generation = (reloadGenerationByKey.get(reloadKey) ?? 0) + 1;
+        reloadGenerationByKey.set(reloadKey, generation);
+        return generation;
+      };
+
+      const isCurrentReload = (reloadKey: string, generation: number) =>
+        !abortController.signal.aborted &&
+        reloadGenerationByKey.get(reloadKey) === generation;
 
       try {
         const eventStream = await subscribeToEvents(sdkClient);
@@ -984,10 +1033,81 @@ export function OpenCodeChatTab({
         // Store stream reference in the store for cleanup
         setEventStream(environmentId, eventStream);
 
-        // Track last reload time to debounce rapid updates per session
-        const lastReloadTimeBySession = new Map<string, number>();
         const DEBOUNCE_MS = 200; // Debounce all message fetches
-        const pendingReloads = new Map<string, NodeJS.Timeout>(); // Track pending debounced reloads
+
+        const refreshSubagentTranscript = async (
+          childSessionId: string,
+          reloadKey: string,
+          generation: number,
+          state?: "success" | "failure" | "pending",
+        ) => {
+          let childMessages: OpenCodeMessage[];
+          try {
+            childMessages = await getSessionMessages(sdkClient, childSessionId, {
+              throwOnError: true,
+            });
+          } catch (error) {
+            console.warn(
+              "[OpenCodeChatTab] Failed to refresh subagent transcript:",
+              error,
+            );
+            return;
+          }
+          if (!isCurrentReload(reloadKey, generation)) return;
+
+          const sessions = useOpenCodeStore.getState().sessions;
+          for (const [sessionTabId, sessionState] of sessions) {
+            if (!hasOpenCodeSubagentSession(sessionState.messages, childSessionId)) {
+              continue;
+            }
+            const messages = mergeOpenCodeSubagentTranscript(
+              sessionState.messages,
+              childSessionId,
+              childMessages,
+              state,
+            );
+            if (messages !== sessionState.messages) {
+              setMessages(sessionTabId, messages);
+            }
+          }
+        };
+
+        const fetchSubagentMessagesDebounced = (
+          childSessionId: string,
+          immediate = false,
+          state?: "success" | "failure" | "pending",
+        ) => {
+          const reloadKey = `subagent:${childSessionId}`;
+          const generation = beginReloadGeneration(reloadKey);
+          const pendingTimeout = pendingReloads.get(reloadKey);
+          if (pendingTimeout) {
+            clearTimeout(pendingTimeout);
+            pendingReloads.delete(reloadKey);
+          }
+
+          const doFetch = () => {
+            pendingReloads.delete(reloadKey);
+            lastReloadTimeBySession.set(reloadKey, Date.now());
+            void refreshSubagentTranscript(
+              childSessionId,
+              reloadKey,
+              generation,
+              state,
+            );
+          };
+          if (immediate) {
+            doFetch();
+            return;
+          }
+
+          const lastTime = lastReloadTimeBySession.get(reloadKey) || 0;
+          if (Date.now() - lastTime > DEBOUNCE_MS) {
+            doFetch();
+          } else {
+            const timeout = setTimeout(doFetch, DEBOUNCE_MS);
+            pendingReloads.set(reloadKey, timeout);
+          }
+        };
 
         // Helper to fetch messages with debouncing
         // Note: sessionKey is the session key from the sessions Map (e.g., "env-{envId}:{tabId}")
@@ -996,18 +1116,35 @@ export function OpenCodeChatTab({
           sessionKey: string,
           immediate = false,
         ) => {
+          const reloadKey = `session:${sessionId}:${sessionKey}`;
+          const generation = beginReloadGeneration(reloadKey);
           // Clear any pending reload for this session
-          const pendingTimeout = pendingReloads.get(sessionId);
+          const pendingTimeout = pendingReloads.get(reloadKey);
           if (pendingTimeout) {
             clearTimeout(pendingTimeout);
-            pendingReloads.delete(sessionId);
+            pendingReloads.delete(reloadKey);
           }
 
           const doFetch = async () => {
+            pendingReloads.delete(reloadKey);
             const now = Date.now();
-            lastReloadTimeBySession.set(sessionId, now);
-            const messages = await getSessionMessages(sdkClient, sessionId);
-            setMessages(sessionKey, messages);
+            lastReloadTimeBySession.set(reloadKey, now);
+            try {
+              const messages = await getSessionMessages(sdkClient, sessionId, {
+                throwOnError: true,
+              });
+              if (!isCurrentReload(reloadKey, generation)) return;
+              const currentSession = useOpenCodeStore
+                .getState()
+                .sessions.get(sessionKey);
+              if (currentSession?.sessionId !== sessionId) return;
+              setMessages(sessionKey, messages);
+            } catch (error) {
+              console.warn(
+                "[OpenCodeChatTab] Failed to refresh session transcript:",
+                error,
+              );
+            }
           };
 
           if (immediate) {
@@ -1016,14 +1153,14 @@ export function OpenCodeChatTab({
           } else {
             // For streaming events, debounce
             const now = Date.now();
-            const lastTime = lastReloadTimeBySession.get(sessionId) || 0;
+            const lastTime = lastReloadTimeBySession.get(reloadKey) || 0;
             if (now - lastTime > DEBOUNCE_MS) {
               // Enough time has passed, fetch now
               doFetch();
             } else {
               // Schedule a fetch after debounce period
               const timeout = setTimeout(doFetch, DEBOUNCE_MS);
-              pendingReloads.set(sessionId, timeout);
+              pendingReloads.set(reloadKey, timeout);
             }
           }
         };
@@ -1032,10 +1169,10 @@ export function OpenCodeChatTab({
           sessionTabId: string,
           rawPart: unknown,
           delta?: string,
-        ): boolean => {
+        ) => {
           const part = normalizeOpenCodePart(rawPart);
           if (!part?.sourceMessageId) {
-            return false;
+            return null;
           }
 
           const sessionState = useOpenCodeStore.getState().sessions.get(sessionTabId);
@@ -1051,7 +1188,7 @@ export function OpenCodeChatTab({
               delta,
             ),
           );
-          return true;
+          return part;
         };
 
         for await (const event of eventStream) {
@@ -1110,29 +1247,38 @@ export function OpenCodeChatTab({
               eventType === "session.idle" ||
               (eventType === "session.status" &&
                 props?.status?.type === "idle");
+            const isRemovalEvent =
+              eventType === "message.removed" ||
+              eventType === "message.part.removed";
 
             if (eventType === "message.part.updated") {
-              const applied = applyPartUpdate(
+              const appliedPart = applyPartUpdate(
                 sessionTabId,
                 props?.part,
                 typeof props?.delta === "string" ? props.delta : undefined,
               );
-              if (!applied) {
+              if (!appliedPart) {
                 fetchMessagesDebounced(
                   eventSessionId,
                   sessionTabId,
                   false,
                 );
+              } else if (
+                appliedPart.type === "subagent" &&
+                appliedPart.subagentId
+              ) {
+                fetchSubagentMessagesDebounced(appliedPart.subagentId);
               }
             } else if (
               eventType === "message.updated" ||
               eventType === "session.updated" ||
+              isRemovalEvent ||
               isFinalEvent
             ) {
               fetchMessagesDebounced(
                 eventSessionId,
                 sessionTabId,
-                isFinalEvent,
+                isFinalEvent || isRemovalEvent,
               );
             }
 
@@ -1166,6 +1312,37 @@ export function OpenCodeChatTab({
                 createdAt: new Date().toISOString(),
               };
               addMessage(sessionTabId, errorMessage);
+            }
+          }
+
+          if (eventSessionId) {
+            const hasMatchingSubagent = Array.from(
+              useOpenCodeStore.getState().sessions.values(),
+            ).some((sessionState) =>
+              hasOpenCodeSubagentSession(sessionState.messages, eventSessionId),
+            );
+            if (hasMatchingSubagent) {
+              const isChildIdle =
+                eventType === "session.idle" ||
+                (eventType === "session.status" && props?.status?.type === "idle");
+              const isChildError = eventType === "session.error";
+              const isChildRemoval =
+                eventType === "message.removed" ||
+                eventType === "message.part.removed";
+              if (
+                eventType === "message.part.updated" ||
+                eventType === "message.updated" ||
+                eventType === "session.updated" ||
+                isChildRemoval ||
+                isChildIdle ||
+                isChildError
+              ) {
+                fetchSubagentMessagesDebounced(
+                  eventSessionId,
+                  isChildIdle || isChildError || isChildRemoval,
+                  isChildError ? "failure" : isChildIdle ? "success" : undefined,
+                );
+              }
             }
           }
 
@@ -1238,6 +1415,11 @@ export function OpenCodeChatTab({
           console.error("[OpenCodeChatTab] Event subscription error:", error);
         }
       } finally {
+        for (const timeout of pendingReloads.values()) {
+          clearTimeout(timeout);
+        }
+        pendingReloads.clear();
+        reloadGenerationByKey.clear();
         // Clear the stream reference when loop ends
         setEventStream(environmentId, null);
 

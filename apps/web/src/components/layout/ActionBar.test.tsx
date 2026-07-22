@@ -12,8 +12,11 @@ import * as realHooks from "@/hooks";
 import * as realContexts from "@/contexts";
 import * as realBackend from "@/lib/backend";
 import * as realKanbanStore from "@/stores/kanbanStore";
-import * as realSonner from "sonner";
 import type { Environment, Project } from "@/types";
+import {
+  mockToastError as toastErrorMock,
+  mockToastSuccess as toastSuccessMock,
+} from "../../../../../tests/mocks/sonner";
 
 const realAlertDialogSnapshot = { ...realAlertDialog };
 const realContextMenuSnapshot = { ...realContextMenu };
@@ -26,7 +29,6 @@ const realHooksSnapshot = { ...realHooks };
 const realContextsSnapshot = { ...realContexts };
 const realBackendSnapshot = { ...realBackend };
 const realKanbanStoreSnapshot = { ...realKanbanStore };
-const realSonnerSnapshot = { ...realSonner };
 
 type MergeOutcome = { outcome: "merged" | "pending" | "unknown" };
 
@@ -55,8 +57,6 @@ const setEnvironmentPRStoreMock = mock(() => {});
 const createTabMock = mock((_agent: string, _options?: unknown) => {});
 const selectTabMock = mock((_index: number) => {});
 const closeActiveTabMock = mock(() => {});
-const toastSuccessMock = mock(() => {});
-const toastErrorMock = mock(() => {});
 const setProjectBoardTabMock = mock((_tab: string) => {});
 const setProjectBoardNotesOpenMock = mock((_open: boolean) => {});
 const toggleFilesPanelMock = mock(() => {});
@@ -458,13 +458,6 @@ mock.module("@/stores/kanbanStore", () => ({
   findTaskForEnvironment: () => currentTaskAssociation,
 }));
 
-mock.module("sonner", () => ({
-  toast: {
-    success: toastSuccessMock,
-    error: toastErrorMock,
-  },
-}));
-
 const { ActionBar } = await import("./ActionBar");
 
 afterAll(() => {
@@ -479,7 +472,6 @@ afterAll(() => {
   mock.module("@/contexts", () => realContextsSnapshot);
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@/stores/kanbanStore", () => realKanbanStoreSnapshot);
-  mock.module("sonner", () => realSonnerSnapshot);
 });
 
 beforeEach(() => {

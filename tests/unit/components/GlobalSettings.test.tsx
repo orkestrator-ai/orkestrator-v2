@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { useConfigStore } from "@/stores/configStore";
 import { mockWriteText } from "../../mocks/clipboard";
 import { REVIEW_PROMPT_MAX_LENGTH } from "../../../packages/protocol/src/review-prompt";
+import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 
 const mockUpdateGlobalConfig = mock(async (globalConfig: unknown) => ({
   version: "1.0",
@@ -45,8 +46,6 @@ const mockSetGatewayToken = mock(async (token: string) => ({
 const mockOpenInBrowser = mock(async () => undefined);
 const mockTestDomainResolution = mock(async () => []);
 const mockRevealInFileManager = mock(async (_path: string) => {});
-const mockToastSuccess = mock(() => {});
-const mockToastError = mock(() => {});
 const actualBackend = await import("../../../apps/web/src/lib/backend");
 
 mock.module("@/lib/backend", () => ({
@@ -62,13 +61,6 @@ mock.module("@/lib/backend", () => ({
   openInBrowser: mockOpenInBrowser,
   testDomainResolution: mockTestDomainResolution,
   revealInFileManager: mockRevealInFileManager,
-}));
-
-mock.module("sonner", () => ({
-  toast: {
-    success: mockToastSuccess,
-    error: mockToastError,
-  },
 }));
 
 const { GlobalSettings } = await import("../../../apps/web/src/components/settings/GlobalSettings");

@@ -16,6 +16,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { AppConfig, Environment } from "@/types";
+import { mockToastError } from "../../../tests/mocks/sonner";
 
 import * as realLayout from "@/components/layout";
 import * as realTooltip from "@/components/ui/tooltip";
@@ -32,7 +33,6 @@ import * as realPrMonitorService from "@/hooks/usePrMonitorService";
 import * as realGlobalActivityMonitor from "@/hooks/useGlobalActivityMonitor";
 import * as realHooks from "@/hooks";
 import * as realBackend from "@/lib/backend";
-import * as realSonner from "sonner";
 import * as realLucideReact from "lucide-react";
 import * as realProcess from "@/lib/native/process";
 
@@ -51,7 +51,6 @@ const realPrMonitorServiceSnapshot = { ...realPrMonitorService };
 const realGlobalActivityMonitorSnapshot = { ...realGlobalActivityMonitor };
 const realHooksSnapshot = { ...realHooks };
 const realBackendSnapshot = { ...realBackend };
-const realSonnerSnapshot = { ...realSonner };
 const realLucideReactSnapshot = { ...realLucideReact };
 const realProcessSnapshot = { ...realProcess };
 
@@ -240,14 +239,6 @@ mock.module("@/lib/backend", () => ({
   syncAllEnvironmentsWithDocker: mockSyncAllEnvironmentsWithDocker,
 }));
 
-const mockToastError = mock(() => {});
-
-mock.module("sonner", () => ({
-  toast: {
-    error: mockToastError,
-  },
-}));
-
 mock.module("lucide-react", () => ({
   Loader2: (props: React.SVGProps<SVGSVGElement>) => <svg {...props} />,
 }));
@@ -418,7 +409,6 @@ afterAll(() => {
   mock.module("@/hooks/useGlobalActivityMonitor", () => realGlobalActivityMonitorSnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/lib/backend", () => realBackendSnapshot);
-  mock.module("sonner", () => realSonnerSnapshot);
   mock.module("lucide-react", () => realLucideReactSnapshot);
   mock.module("@/lib/native/process", () => realProcessSnapshot);
 });

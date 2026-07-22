@@ -1,7 +1,8 @@
-import { useCallback, useEffect, type RefObject } from "react";
+import { useEffect, type RefObject } from "react";
 import { readImage } from "@/lib/native/clipboard";
 import { toast } from "sonner";
 import {
+  encodeCanvasAsPngWithinSize,
   MAX_IMAGE_DIMENSION,
   resizeCanvasIfNeeded,
   resizeCanvasToMaxDimension,
@@ -65,6 +66,77 @@ function isExpectedClipboardError(error: unknown): boolean {
   );
 }
 
+function isDesktopRenderer(): boolean {
+  return (
+    window.orkestratorGateway?.desktop === true ||
+    (Boolean(window.orkestrator) && window.orkestratorGateway?.enabled !== true)
+  );
+}
+
+function dispatchRestoredPasteInput(target: HTMLElement, text: string): void {
+  const event = typeof InputEvent === "function"
+    ? new InputEvent("input", {
+        bubbles: true,
+        data: text,
+        inputType: "insertFromPaste",
+      })
+    : new Event("input", { bubbles: true });
+  target.dispatchEvent(event);
+}
+
+function captureTextPasteFallback(
+  event: ClipboardEvent,
+  target: Element,
+): (() => void) | null {
+  const clipboardData = event.clipboardData;
+  if (!clipboardData) return null;
+
+  let text: string;
+  try {
+    text = clipboardData.getData("text/plain");
+  } catch {
+    return null;
+  }
+  if (!text) return null;
+
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+    const selectionStart = target.selectionStart ?? target.value.length;
+    const selectionEnd = target.selectionEnd ?? selectionStart;
+    return () => {
+      target.setRangeText(text, selectionStart, selectionEnd, "end");
+      dispatchRestoredPasteInput(target, text);
+    };
+  }
+
+  if (target instanceof HTMLElement && target.isContentEditable) {
+    const selection = window.getSelection();
+    const selectedRange = selection?.rangeCount
+      ? selection.getRangeAt(0)
+      : null;
+    const range = selectedRange && target.contains(selectedRange.commonAncestorContainer)
+      ? selectedRange.cloneRange()
+      : null;
+
+    return () => {
+      const textNode = document.createTextNode(text);
+      if (range) {
+        range.deleteContents();
+        range.insertNode(textNode);
+        range.setStartAfter(textNode);
+        range.collapse(true);
+        const currentSelection = window.getSelection();
+        currentSelection?.removeAllRanges();
+        currentSelection?.addRange(range);
+      } else {
+        target.append(textNode);
+      }
+      dispatchRestoredPasteInput(target, text);
+    };
+  }
+
+  return null;
+}
+
 /**
  * Document-level paste handler shared by the native compose bars (Claude,
  * Codex, OpenCode). Reads an image from a browser/iOS paste event or the
@@ -80,8 +152,8 @@ export function useNativeComposeBarPaste({
   onAttach,
   logLabel,
 }: UseNativeComposeBarPasteOptions): void {
-  const handlePaste = useCallback(
-    async (event: ClipboardEvent) => {
+  useEffect(() => {
+    const handlePaste = async (event: ClipboardEvent) => {
       const activeEl = document.activeElement;
       if (!activeEl || !inputContainerRef.current?.contains(activeEl)) return;
 
@@ -89,13 +161,27 @@ export function useNativeComposeBarPaste({
       // the event itself. Claim an image paste synchronously so the editable
       // input cannot also insert a filename, URL, or empty text payload.
       const pastedBlob = getPastedImageBlob(event);
-      if (pastedBlob) {
+      const nativePaste = !pastedBlob && isDesktopRenderer();
+      const restoreTextPaste = nativePaste
+        ? captureTextPasteFallback(event, activeEl)
+        : null;
+      if (pastedBlob || nativePaste) {
         event.preventDefault();
         event.stopPropagation();
       }
 
+      let image: Awaited<ReturnType<typeof readImage>>;
       try {
-        const image = await readImage(pastedBlob);
+        image = await readImage(pastedBlob);
+      } catch (error) {
+        restoreTextPaste?.();
+        if (!isExpectedClipboardError(error)) {
+          console.error(`[${logLabel}] Unexpected paste error:`, error);
+        }
+        return;
+      }
+
+      try {
         const rgba = await image.rgba();
         const { width, height } = await image.size();
 
@@ -103,7 +189,9 @@ export function useNativeComposeBarPaste({
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext("2d");
-        if (!ctx) return;
+        if (!ctx) {
+          return;
+        }
 
         const imageData = new ImageData(new Uint8ClampedArray(rgba), width, height);
         ctx.putImageData(imageData, 0, 0);
@@ -111,23 +199,18 @@ export function useNativeComposeBarPaste({
         canvas = resizeCanvasToMaxDimension(canvas, MAX_IMAGE_DIMENSION);
         canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
 
-        const dataUrl = canvas.toDataURL("image/png");
-        const base64Data = dataUrl.split(",")[1] || "";
-        const estimatedSize = (base64Data.length * 3) / 4;
-        if (estimatedSize > MAX_IMAGE_SIZE) {
+        const encodedImage = encodeCanvasAsPngWithinSize(canvas, MAX_IMAGE_SIZE);
+        if (!encodedImage) {
           toast.error("Image too large", {
-            description: `Image is ${(estimatedSize / 1024 / 1024).toFixed(1)}MB. Maximum is 8MB.`,
+            description: "The image could not be resized below the 8MB attachment limit.",
           });
           return;
         }
+        canvas = encodedImage.canvas;
+        const { dataUrl, base64Data } = encodedImage;
 
         canvas.width = 0;
         canvas.height = 0;
-
-        if (!pastedBlob) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
 
         const filename = generateImageFilename();
         const filePath = `.orkestrator/clipboard/${filename}`;
@@ -155,18 +238,13 @@ export function useNativeComposeBarPaste({
           name: filename,
         });
       } catch (error) {
-        if (!isExpectedClipboardError(error)) {
-          console.error(`[${logLabel}] Unexpected paste error:`, error);
-        }
+        console.error(`[${logLabel}] Unexpected paste error:`, error);
       }
-    },
-    [inputContainerRef, containerId, worktreePath, onAttach, logLabel],
-  );
+    };
 
-  useEffect(() => {
     document.addEventListener("paste", handlePaste, { capture: true });
     return () => {
       document.removeEventListener("paste", handlePaste, { capture: true });
     };
-  }, [handlePaste]);
+  }, [inputContainerRef, containerId, worktreePath, onAttach, logLabel]);
 }

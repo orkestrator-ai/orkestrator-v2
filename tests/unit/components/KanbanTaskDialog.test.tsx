@@ -2,6 +2,10 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { Environment } from "@/types";
+import {
+  mockToastError as toastErrorMock,
+  mockToastSuccess as toastSuccessMock,
+} from "../../mocks/sonner";
 
 type KanbanTaskUpdates = Partial<
   Pick<
@@ -18,8 +22,6 @@ type KanbanTaskUpdates = Partial<
   >
 >;
 
-const toastSuccessMock = mock(() => {});
-const toastErrorMock = mock(() => {});
 const startBuildMock = mock(async () => {});
 const navigateToBuildMock = mock(() => {});
 const getKanbanImageDataMock = mock(async () => "");
@@ -38,13 +40,6 @@ const addCommentMock = mock(async (_taskId: string, _text: string) => {});
 const deleteCommentMock = mock(async (_taskId: string, _commentId: string) => {});
 const addImageMock = mock(async (_taskId: string, _filename: string, _data: string) => {});
 const deleteImageMock = mock(async (_taskId: string, _imageId: string) => {});
-
-mock.module("sonner", () => ({
-  toast: {
-    success: toastSuccessMock,
-    error: toastErrorMock,
-  },
-}));
 
 // Snapshot-and-restore the narrow app modules we stub so the global Bun module
 // cache doesn't leak these fakes into sibling suites that need the real ones.

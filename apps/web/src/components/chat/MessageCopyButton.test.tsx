@@ -2,14 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
-
-const toastErrorMock = mock(() => {});
-
-mock.module("sonner", () => ({
-  toast: {
-    error: toastErrorMock,
-  },
-}));
+import { mockToastError as toastErrorMock } from "../../../../../tests/mocks/sonner";
 
 describe("MessageCopyButton", () => {
   afterEach(() => {

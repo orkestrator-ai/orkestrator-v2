@@ -15,11 +15,10 @@ import type {
   PrDetectionResult,
 } from "../../../apps/web/src/lib/backend";
 import type { BuildPipeline } from "../../../apps/web/src/stores/buildPipelineStore";
-import * as realSonner from "../../../apps/web/node_modules/sonner";
+import { mockToastSuccess as toastSuccessMock } from "../../mocks/sonner";
 import type { Environment } from "../../../apps/web/src/types";
 
 const realBackendSnapshot = { ...realBackend };
-const realSonnerSnapshot = { ...realSonner };
 const detectPrMock = mock(
   async (_containerId: string, _branch: string): Promise<PrDetectionResult | null> => null
 );
@@ -35,7 +34,6 @@ const setEnvironmentPrMock = mock(
   ) => {}
 );
 const clearEnvironmentPrMock = mock(async (_environmentId: string) => {});
-const toastSuccessMock = mock(() => {});
 const moveTaskMock = mock(async (_taskId: string, _status: KanbanStatus) => {});
 const updateTaskMock = mock(
   async (_taskId: string, _updates: Partial<KanbanTask>) => {}
@@ -48,14 +46,6 @@ mock.module("@/lib/backend", () => ({
   detectPrLocal: detectPrLocalMock,
   setEnvironmentPr: setEnvironmentPrMock,
   clearEnvironmentPr: clearEnvironmentPrMock,
-}));
-
-mock.module("sonner", () => ({
-  ...realSonnerSnapshot,
-  toast: {
-    ...realSonnerSnapshot.toast,
-    success: toastSuccessMock,
-  },
 }));
 
 // Import every stateful dependency after installing module mocks. Bun can create
@@ -252,7 +242,6 @@ beforeEach(() => {
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
-  mock.module("sonner", () => realSonnerSnapshot);
 });
 
 afterEach(() => {

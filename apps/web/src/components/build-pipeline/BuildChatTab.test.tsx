@@ -61,11 +61,6 @@ mock.module("@/lib/context-usage", () => ({
   extractContextUsage: () => null,
 }));
 
-// Mock sonner (toast) used by transitive UI deps.
-mock.module("sonner", () => ({
-  toast: { success: () => {}, error: () => {} },
-}));
-
 // Mock heavy UI components so rendering is fast.
 // Snapshot the real modules first so afterAll can restore them — Bun caches
 // mock.module factories globally, so without restoration these stubs leak

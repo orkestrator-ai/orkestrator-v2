@@ -9,6 +9,10 @@ import { useKanbanStore } from "@/stores/kanbanStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { ClaudeMode, CodexMode, DefaultAgent, Environment, OpenCodeMode } from "@/types";
 import type { LinearIssueDetail } from "@/types/linear";
+import {
+  mockToastError,
+  mockToastSuccess,
+} from "../../../../tests/mocks/sonner";
 
 const mockCreateEnvironment = mock<() => Promise<Environment>>(async () => ({
   id: "env-build",
@@ -75,16 +79,7 @@ const mockUpdateEnvironmentAgentSettings = mock<(
   opencodeMode: opencodeMode ?? undefined,
   codexMode: codexMode ?? undefined,
 }));
-const mockToastSuccess = mock(() => {});
-const mockToastError = mock(() => {});
 const actualBackend = await import("../lib/backend");
-
-mock.module("sonner", () => ({
-  toast: {
-    success: mockToastSuccess,
-    error: mockToastError,
-  },
-}));
 
 mock.module("@/lib/backend", () => ({
   ...actualBackend,

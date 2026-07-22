@@ -2,16 +2,10 @@ import { afterEach, beforeEach, describe, test, expect, mock } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import { mockReadImage } from "../../mocks/clipboard";
-
-const toastSuccessMock = mock(() => {});
-const toastErrorMock = mock(() => {});
-
-mock.module("sonner", () => ({
-  toast: {
-    success: toastSuccessMock,
-    error: toastErrorMock,
-  },
-}));
+import {
+  mockToastError as toastErrorMock,
+  mockToastSuccess as toastSuccessMock,
+} from "../../mocks/sonner";
 
 const { CreateEnvironmentDialog, getEncodedImageSizeError, resolveAgentDefaults } = await import("../../../apps/web/src/components/environments/CreateEnvironmentDialog");
 const defaultConfig = structuredClone(useConfigStore.getState().config);
@@ -33,6 +27,18 @@ if (typeof globalThis.ImageData === "undefined") {
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
 const putImageData = mock(() => {});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function rgbaBuffer(width: number, height: number): Uint8Array {
+  return new Uint8Array(width * height * 4);
+}
 
 describe("resolveAgentDefaults", () => {
   beforeEach(() => {
@@ -332,6 +338,24 @@ describe("resolveAgentDefaults", () => {
         .closest('[role="tabpanel"]')
         ?.getAttribute("data-mobile-transition"),
     ).toBeNull();
+  });
+
+  test("clears the delayed prompt autofocus when the dialog unmounts", async () => {
+    const { unmount } = render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />,
+    );
+    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    const focus = mock(() => {});
+    prompt.focus = focus;
+
+    unmount();
+    await new Promise((resolve) => setTimeout(resolve, 75));
+
+    expect(focus).not.toHaveBeenCalled();
   });
 
   test("saves a trimmed draft on cancel, resets other fields, and restores the draft", async () => {
@@ -794,11 +818,13 @@ describe("resolveAgentDefaults", () => {
     const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
     prompt.focus();
 
-    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+    const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+    document.dispatchEvent(pasteEvent);
 
     await waitFor(() => {
       expect(screen.getByAltText(/initial-prompt-/)).toBeTruthy();
     });
+    expect(pasteEvent.defaultPrevented).toBe(true);
 
     fireEvent.change(prompt, {
       target: { value: "Use this screenshot" },
@@ -852,6 +878,119 @@ describe("resolveAgentDefaults", () => {
       expect(screen.getByAltText(/initial-prompt-/)).toBeTruthy();
     });
     expect(pasteEvent.defaultPrevented).toBe(true);
+  });
+
+  test("resizes a wide initial-prompt image before attaching it", async () => {
+    const drawImage = mock(() => {});
+    const width = 2001;
+    const height = 1;
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => rgbaBuffer(width, height),
+      size: async () => ({ width, height }),
+    }));
+    HTMLCanvasElement.prototype.getContext = (() => ({
+      putImageData,
+      drawImage,
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+
+    render(
+      <CreateEnvironmentDialog
+        open={true}
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />,
+    );
+    screen.getByLabelText(/Initial Prompt/i).focus();
+
+    document.dispatchEvent(
+      new Event("paste", { bubbles: true, cancelable: true }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByAltText(/initial-prompt-/)).toBeTruthy();
+    });
+    expect(drawImage).toHaveBeenCalledWith(
+      expect.objectContaining({ width: 0, height: 0 }),
+      0,
+      0,
+      2000,
+      1,
+    );
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  test("downscales an oversized encoded image before attaching it", async () => {
+    const width = 100;
+    const height = 100;
+    const oversizedDataUrl = `data:image/png;base64,${"A".repeat(12 * 1024 * 1024)}`;
+    const drawImage = mock(() => {});
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => rgbaBuffer(width, height),
+      size: async () => ({ width, height }),
+    }));
+    HTMLCanvasElement.prototype.getContext = (() => ({
+      putImageData,
+      drawImage,
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.toDataURL = function () {
+      return this.width === width
+        ? oversizedDataUrl
+        : "data:image/png;base64,QUJD";
+    };
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />,
+    );
+    screen.getByLabelText(/Initial Prompt/i).focus();
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+
+    await waitFor(() => expect(screen.getByAltText(/initial-prompt-/)).toBeTruthy());
+    expect(drawImage).toHaveBeenCalled();
+    expect((screen.getByAltText(/initial-prompt-/) as HTMLImageElement).src).toBe(
+      "data:image/png;base64,QUJD",
+    );
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  test("shows an error when an oversized encoded image cannot be reduced", async () => {
+    const width = 100;
+    const height = 100;
+    const oversizedDataUrl = `data:image/png;base64,${"A".repeat(12 * 1024 * 1024)}`;
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => rgbaBuffer(width, height),
+      size: async () => ({ width, height }),
+    }));
+    HTMLCanvasElement.prototype.getContext = (() => ({
+      putImageData,
+      drawImage: mock(() => {}),
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.toDataURL = (() =>
+      oversizedDataUrl) as typeof HTMLCanvasElement.prototype.toDataURL;
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />,
+    );
+    screen.getByLabelText(/Initial Prompt/i).focus();
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+
+    await waitFor(() => {
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        "Image too large",
+        expect.objectContaining({
+          description: expect.stringContaining("could not be resized below the 8MB"),
+        }),
+      );
+    });
+    expect(screen.queryByAltText(/initial-prompt-/)).toBeNull();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
   });
 
   test("removes a pasted initial prompt image before submitting", async () => {
@@ -932,7 +1071,7 @@ describe("resolveAgentDefaults", () => {
     expect(screen.queryByAltText(/initial-prompt-/)).toBeNull();
   });
 
-  test("leaves paste untouched when clipboard image encoding is empty", async () => {
+  test("shows an error and leaves paste untouched when clipboard image encoding is empty", async () => {
     mockReadImage.mockImplementation(async () => ({
       rgba: async () => new Uint8Array([255, 0, 0, 255]),
       size: async () => ({ width: 1, height: 1 }),
@@ -955,6 +1094,12 @@ describe("resolveAgentDefaults", () => {
     await waitFor(() => expect(mockReadImage).toHaveBeenCalled());
     expect(wasNotCancelled).toBe(true);
     expect(pasteEvent.defaultPrevented).toBe(false);
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Image too large",
+      expect.objectContaining({
+        description: expect.stringContaining("could not be resized below the 8MB"),
+      }),
+    );
     expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(screen.queryByAltText(/initial-prompt-/)).toBeNull();
   });
@@ -1084,6 +1229,131 @@ describe("resolveAgentDefaults", () => {
     expect(toastSuccessMock).not.toHaveBeenCalled();
   });
 
+  test("cancels an in-flight clipboard image while reading RGBA data", async () => {
+    const pendingRgba = deferred<Uint8Array>();
+    const rgba = mock(() => pendingRgba.promise);
+    const size = mock(async () => ({ width: 1, height: 1 }));
+    mockReadImage.mockImplementation(async () => ({ rgba, size }));
+    const onOpenChange = mock(() => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={onOpenChange}
+        onCreate={mock(async () => {})}
+      />,
+    );
+    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    prompt.focus();
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+    await waitFor(() => expect(rgba).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    pendingRgba.resolve(new Uint8Array([255, 0, 0, 255]));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(size).not.toHaveBeenCalled();
+    expect(screen.queryByAltText(/initial-prompt-/)).toBeNull();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+  });
+
+  test("cancels an in-flight clipboard image while reading its dimensions", async () => {
+    const pendingSize = deferred<{ width: number; height: number }>();
+    const rgba = mock(async () => new Uint8Array([255, 0, 0, 255]));
+    const size = mock(() => pendingSize.promise);
+    mockReadImage.mockImplementation(async () => ({ rgba, size }));
+    const onOpenChange = mock(() => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={onOpenChange}
+        onCreate={mock(async () => {})}
+      />,
+    );
+    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    prompt.focus();
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+    await waitFor(() => expect(size).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    pendingSize.resolve({ width: 1, height: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(screen.queryByAltText(/initial-prompt-/)).toBeNull();
+    expect(putImageData).not.toHaveBeenCalled();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+  });
+
+  test("cancels an in-flight clipboard image when focus leaves the prompt", async () => {
+    const pendingImage = deferred<{
+      rgba: () => Promise<Uint8Array>;
+      size: () => Promise<{ width: number; height: number }>;
+    }>();
+    const rgba = mock(async () => new Uint8Array([255, 0, 0, 255]));
+    const size = mock(async () => ({ width: 1, height: 1 }));
+    mockReadImage.mockImplementation(() => pendingImage.promise);
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />,
+    );
+    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    prompt.focus();
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+    await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
+
+    screen.getByLabelText(/Environment Name/i).focus();
+    pendingImage.resolve({ rgba, size });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(rgba).not.toHaveBeenCalled();
+    expect(size).not.toHaveBeenCalled();
+    expect(screen.queryByAltText(/initial-prompt-/)).toBeNull();
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+  });
+
+  test("lets a second paste supersede an earlier in-flight clipboard read", async () => {
+    const firstImage = deferred<{
+      rgba: () => Promise<Uint8Array>;
+      size: () => Promise<{ width: number; height: number }>;
+    }>();
+    const firstRgba = mock(async () => new Uint8Array([255, 0, 0, 255]));
+    const firstSize = mock(async () => ({ width: 1, height: 1 }));
+    let readCount = 0;
+    mockReadImage.mockImplementation(() => {
+      readCount += 1;
+      if (readCount === 1) return firstImage.promise;
+      return Promise.resolve({
+        rgba: async () => new Uint8Array([0, 255, 0, 255]),
+        size: async () => ({ width: 1, height: 1 }),
+      });
+    });
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />,
+    );
+    const prompt = screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement;
+    prompt.focus();
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+    await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
+
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+    await waitFor(() => expect(screen.getAllByAltText(/initial-prompt-/)).toHaveLength(1));
+    firstImage.resolve({ rgba: firstRgba, size: firstSize });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(firstRgba).not.toHaveBeenCalled();
+    expect(firstSize).not.toHaveBeenCalled();
+    expect(screen.getAllByAltText(/initial-prompt-/)).toHaveLength(1);
+    expect(toastSuccessMock).toHaveBeenCalledTimes(1);
+  });
+
   test("adds, validates, updates, and removes port mappings", async () => {
     const onCreate = mock(async () => {});
     render(
@@ -1123,6 +1393,31 @@ describe("resolveAgentDefaults", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ portMappings: [] }));
+    });
+  });
+
+  test("submits a UDP port mapping", async () => {
+    const onCreate = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+        defaultPortMappings={[{ containerPort: 5353, hostPort: 5353, protocol: "tcp" }]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("combobox"));
+    const udpOption = await screen.findByRole("option", { name: "UDP" });
+    fireEvent.click(udpOption);
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          portMappings: [{ containerPort: 5353, hostPort: 5353, protocol: "udp" }],
+        }),
+      );
     });
   });
 

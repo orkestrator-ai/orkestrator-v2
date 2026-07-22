@@ -37,9 +37,19 @@ describe("buildReviewBody", () => {
     for (const body of [interactive, automated]) {
       expect(body).toContain("Security and instruction hierarchy");
       expect(body).toContain("git diff origin/develop...HEAD");
+      expect(body).toContain("## Functionality Summary");
+      expect(body).toContain("functionality introduced or changed by the reviewed diff");
+      expect(body).toContain("If the diff has no runtime behaviour change");
       expect(body).toContain("## Issues");
       expect(body).toContain("### 1. [P0|P1|P2][conf:NN][category]\n#### Short title");
       expect(body).not.toContain("## Findings");
+
+      const reviewScopeIndex = body.indexOf("## Review Scope");
+      const functionalitySummaryIndex = body.indexOf("## Functionality Summary");
+      const riskProfileIndex = body.indexOf("## Risk Profile");
+      expect(reviewScopeIndex).toBeGreaterThan(-1);
+      expect(functionalitySummaryIndex).toBeGreaterThan(reviewScopeIndex);
+      expect(riskProfileIndex).toBeGreaterThan(functionalitySummaryIndex);
     }
 
     expect(interactive).toContain("Ask clarifying questions if needed");
@@ -56,5 +66,8 @@ describe("buildReviewBody", () => {
     expect(documentation).toContain("100,000 characters");
     expect(documentation).toContain("malformed, blank, or oversized persisted overrides");
     expect(documentation).toContain("{{targetBranch}}");
+    expect(documentation).toContain(
+      "| Output | Markdown sections: Review Scope, Functionality Summary, Risk Profile, Test Results",
+    );
   });
 });

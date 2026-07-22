@@ -49,6 +49,12 @@ interface SpawnedSubagent {
 
 type SubagentOutcome = ToolState;
 
+const COLLABORATION_MESSAGE_TOOLS = new Set([
+  "followup_task",
+  "send_message",
+  "spawn_agent",
+]);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object";
 }
@@ -75,15 +81,13 @@ function isOpaqueMessageEnvelope(text: string): boolean {
     return false;
   }
 
-  try {
-    const decoded = Buffer.from(unpadded, "base64url");
-    return decoded.toString("base64url") === unpadded
-      && decoded[0] === 0x80
-      && decoded.length >= 73
-      && (decoded.length - 57) % 16 === 0;
-  } catch {
-    return false;
-  }
+  // The alphabet and padding checks above guarantee a canonical base64url
+  // string, so Buffer.from cannot hit a recoverable decode-error branch here.
+  const decoded = Buffer.from(unpadded, "base64url");
+  return decoded.toString("base64url") === unpadded
+    && decoded[0] === 0x80
+    && decoded.length >= 73
+    && (decoded.length - 57) % 16 === 0;
 }
 
 function asDisplayablePrompt(value: unknown): string | undefined {
@@ -127,7 +131,8 @@ function normalizeTranscriptToolArgs(
   // of tool input. The readable final_answer event is added as a text action by
   // parseChildTranscript below.
   if (
-    typeof parsed.message === "string"
+    COLLABORATION_MESSAGE_TOOLS.has(toolName)
+    && typeof parsed.message === "string"
     && isOpaqueMessageEnvelope(parsed.message.trim())
   ) {
     normalized = { ...parsed };
@@ -161,6 +166,7 @@ function messageContentText(value: unknown): string | undefined {
 
   const text = value
     .filter(isRecord)
+    .filter((part) => part.type === "output_text")
     .map((part) => asString(part.text))
     .filter((part): part is string => part !== undefined)
     .join("\n");

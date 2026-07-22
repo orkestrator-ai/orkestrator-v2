@@ -249,5 +249,5 @@ export function getTodoToolLabel(toolName?: string): string {
   if (normalized === "taskget" || normalized === "task_get") return "Task Get";
   if (normalized === "tasklist" || normalized === "task_list") return "Task List";
 
-  return toolName || "Todo Write";
+  return normalized && toolName ? toolName : "Todo Write";
 }

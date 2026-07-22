@@ -544,10 +544,39 @@ export function mergeOpenCodeSubagentTranscript(
   return changed ? nextMessages : messages;
 }
 
-function stripOpenCodeReasoningBoldMarkers(content: string): string {
-  return content
-    .replace(/^(\s*)\*\*/, "$1")
-    .replace(/\*\*(\s*)$/, "$1");
+function isOpenCodeReasoningInProgress(part: Record<string, unknown>): boolean {
+  if (!part.time || typeof part.time !== "object") return false;
+
+  const time = part.time as Record<string, unknown>;
+  if (typeof time.start === "number") return time.end === undefined;
+  return false;
+}
+
+function stripOpenCodeReasoningBoldMarkers(
+  content: string,
+  allowStreamingOpeningMarker: boolean,
+): string {
+  if (!content.replace(/\*\*/g, "").trim()) return "";
+
+  const leadingMarker = content.match(/^(\s*)\*\*/);
+  if (!leadingMarker) return content;
+
+  const markerCount = content.match(/\*\*/g)?.length ?? 0;
+  const trailingMarker = content.match(/\*\*(\s*)$/);
+
+  // OpenCode wraps completed reasoning in a balanced outer bold pair. Remove
+  // both delimiters together so inline or trailing Markdown is not corrupted.
+  if (trailingMarker && markerCount === 2) {
+    return `${leadingMarker[1]}${content.slice(
+      leadingMarker[0].length,
+      content.length - trailingMarker[0].length,
+    )}${trailingMarker[1]}`;
+  }
+
+  // During streaming, the first delimiter can arrive before its closing pair.
+  return allowStreamingOpeningMarker && markerCount === 1
+    ? `${leadingMarker[1]}${content.slice(leadingMarker[0].length)}`
+    : content;
 }
 
 export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null {
@@ -562,9 +591,14 @@ export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null
   if (partType === "reasoning") {
     const reasoningContent = typeof p.text === "string" ? p.text : "";
     if (!reasoningContent) return null;
+    const normalizedContent = stripOpenCodeReasoningBoldMarkers(
+      reasoningContent,
+      isOpenCodeReasoningInProgress(p),
+    );
+    if (!normalizedContent.trim()) return null;
     return {
       type: "thinking",
-      content: stripOpenCodeReasoningBoldMarkers(reasoningContent),
+      content: normalizedContent,
       sourcePartId,
       sourceMessageId,
     };
@@ -978,7 +1012,7 @@ export async function getModelsWithDefaults(client: OpencodeClient): Promise<Ope
 
           const variants = variantEntries
             .filter(([, variantConfig]) => {
-              if (!variantConfig || typeof variantConfig !== "object") return true;
+              if (!variantConfig || typeof variantConfig !== "object") return false;
               return variantConfig.disabled !== true;
             })
             .map(([variantName]) => variantName)

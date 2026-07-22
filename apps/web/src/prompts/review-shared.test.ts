@@ -37,19 +37,26 @@ describe("buildReviewBody", () => {
     for (const body of [interactive, automated]) {
       expect(body).toContain("Security and instruction hierarchy");
       expect(body).toContain("git diff origin/develop...HEAD");
-      expect(body).toContain("## Functionality Summary");
-      expect(body).toContain("functionality introduced or changed by the reviewed diff");
-      expect(body).toContain("If the diff has no runtime behaviour change");
+      expect(body).toContain("## What Changed");
+      expect(body).toContain('answering "What does this change do, and why?"');
+      expect(body).toContain("Before: the relevant behaviour or structure before this change");
+      expect(body).toContain("After: the relevant behaviour or structure after this change");
+      expect(body).toContain("This section is mandatory");
+      expect(body).toContain("do not omit, merge, or rename one");
+      expect(body).toContain("do not include the example itself in the final report");
+      expect(body).toContain("retry a failed file upload");
+      expect(body).toContain("if there is no user-visible runtime effect");
       expect(body).toContain("## Issues");
       expect(body).toContain("### 1. [P0|P1|P2][conf:NN][category]\n#### Short title");
       expect(body).not.toContain("## Findings");
+      expect(body.match(/^## What Changed$/gm)).toHaveLength(2);
 
       const reviewScopeIndex = body.indexOf("## Review Scope");
-      const functionalitySummaryIndex = body.indexOf("## Functionality Summary");
+      const whatChangedIndex = body.indexOf("## What Changed");
       const riskProfileIndex = body.indexOf("## Risk Profile");
       expect(reviewScopeIndex).toBeGreaterThan(-1);
-      expect(functionalitySummaryIndex).toBeGreaterThan(reviewScopeIndex);
-      expect(riskProfileIndex).toBeGreaterThan(functionalitySummaryIndex);
+      expect(whatChangedIndex).toBeGreaterThan(reviewScopeIndex);
+      expect(riskProfileIndex).toBeGreaterThan(whatChangedIndex);
     }
 
     expect(interactive).toContain("Ask clarifying questions if needed");
@@ -67,7 +74,7 @@ describe("buildReviewBody", () => {
     expect(documentation).toContain("malformed, blank, or oversized persisted overrides");
     expect(documentation).toContain("{{targetBranch}}");
     expect(documentation).toContain(
-      "| Output | Markdown sections: Review Scope, Functionality Summary, Risk Profile, Test Results",
+      "| Output | Markdown sections: Review Scope, What Changed, Risk Profile, Test Results",
     );
   });
 });

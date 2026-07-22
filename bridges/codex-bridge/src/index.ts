@@ -32,6 +32,12 @@ import {
   type CodexCollabToolCallItem,
 } from "./codex-collaboration.js";
 import {
+  buildFallbackSessionTitle,
+  generateSessionTitleWithCodexExec,
+  persistSessionTitle,
+  readPersistedSessionTitles,
+} from "./session-titles.js";
+import {
   DEFAULT_REASONING_EFFORT,
   MODEL_REASONING_EFFORTS,
   ModelCatalogCache,
@@ -151,6 +157,7 @@ interface PersistedSessionIndexEntry {
 interface PersistedSessionMeta {
   id: string;
   title?: string;
+  titleSource?: "codex" | "generated" | "prompt";
   updatedAt: string;
   cwd?: string;
   transcriptPath?: string;
@@ -223,6 +230,7 @@ let freshThreadFactoryForTesting: ((session: SessionState) => Thread) | null = n
 let beforePromptExecutionForTesting: (() => Promise<void> | void) | null = null;
 let beforeAssistantMessageCommitForTesting: (() => Promise<void> | void) | null = null;
 let afterStreamEventLogForTesting: ((event: ThreadEvent) => Promise<void> | void) | null = null;
+let sessionTitleGeneratorForTesting: ((prompt: string) => Promise<string>) | null = null;
 function createFreshThreadForSession(session: SessionState): Thread {
   if (freshThreadFactoryForTesting) {
     return freshThreadFactoryForTesting(session);
@@ -590,9 +598,39 @@ function createMessageId(): string {
   return `msg-${crypto.randomUUID()}`;
 }
 
-function buildSessionTitle(prompt: string): string {
-  const words = prompt.trim().split(/\s+/).filter(Boolean).slice(0, 5);
-  return words.length > 0 ? words.join(" ") : "Codex";
+async function persistSessionTitleSafely(threadId: string, title: string): Promise<void> {
+  try {
+    await persistSessionTitle(getCodexHomeDir(), threadId, title);
+  } catch (error) {
+    console.warn("[codex-bridge] Failed to persist session title:", error);
+  }
+}
+
+function scheduleGeneratedSessionTitle(session: SessionState, prompt: string): void {
+  if (process.env.CODEX_BRIDGE_NO_SERVER === "1" && !sessionTitleGeneratorForTesting) {
+    return;
+  }
+
+  const generate = sessionTitleGeneratorForTesting
+    ?? ((sourcePrompt: string) => generateSessionTitleWithCodexExec(codexPathOverride, sourcePrompt));
+
+  void generate(prompt)
+    .then(async (title) => {
+      session.title = title;
+      if (session.threadId) {
+        await persistSessionTitleSafely(session.threadId, title);
+      }
+      if (sessions.get(session.id) === session) {
+        emit({
+          type: "session.title-updated",
+          sessionId: session.id,
+          data: { title },
+        });
+      }
+    })
+    .catch(() => {
+      console.warn("[codex-bridge] Failed to generate session title; using prompt fallback");
+    });
 }
 
 function resolveConversationMode(body: Record<string, unknown>): ConversationMode {
@@ -776,9 +814,26 @@ async function getSessionMetaFromTranscriptPath(
     return null;
   }
 
+  let firstUserText: string | null = null;
+  for (const record of records) {
+    if (
+      record.type !== "response_item"
+      || record.payload?.type !== "message"
+      || record.payload?.role !== "user"
+    ) {
+      continue;
+    }
+    firstUserText = extractPersistedMessageText(record.payload.content, "user");
+    if (firstUserText) break;
+  }
+  const transcriptTitle = firstUserText
+    ? buildFallbackSessionTitle(firstUserText)
+    : undefined;
+
   return {
     id,
-    title: fallbackTitle,
+    title: fallbackTitle ?? transcriptTitle,
+    titleSource: fallbackTitle ? "codex" : (transcriptTitle ? "prompt" : undefined),
     updatedAt:
       typeof payload.timestamp === "string"
         ? payload.timestamp
@@ -842,6 +897,7 @@ async function getPersistedSessionMeta(
       ? {
           id: threadId,
           title: fallbackTitle,
+          titleSource: fallbackTitle ? "codex" : undefined,
           updatedAt: fallbackUpdatedAt,
         }
       : null;
@@ -851,7 +907,8 @@ async function getPersistedSessionMeta(
   const meta = cachedMeta
     ? {
         ...cachedMeta,
-        title: cachedMeta.title ?? fallbackTitle,
+        title: fallbackTitle ?? cachedMeta.title,
+        titleSource: fallbackTitle ? "codex" as const : cachedMeta.titleSource,
         updatedAt: cachedMeta.updatedAt || fallbackUpdatedAt || new Date().toISOString(),
       }
     : await getSessionMetaFromTranscriptPath(
@@ -863,6 +920,7 @@ async function getPersistedSessionMeta(
     return {
       id: threadId,
       title: fallbackTitle,
+      titleSource: fallbackTitle ? "codex" : undefined,
       updatedAt: fallbackUpdatedAt || new Date().toISOString(),
       transcriptPath,
     };
@@ -874,6 +932,7 @@ async function getPersistedSessionMeta(
 
   if (!meta.title && fallbackTitle) {
     meta.title = fallbackTitle;
+    meta.titleSource = "codex";
   }
 
   return meta;
@@ -938,6 +997,15 @@ async function listPersistedSessionsForCwd(cwd: string): Promise<PersistedSessio
       continue;
     }
     mergePersistedSessionMeta(sessions, meta);
+  }
+
+  const generatedTitles = await readPersistedSessionTitles(getCodexHomeDir());
+  for (const session of sessions.values()) {
+    const generatedTitle = generatedTitles.get(session.id);
+    if (generatedTitle && session.titleSource !== "codex") {
+      session.title = generatedTitle;
+      session.titleSource = "generated";
+    }
   }
 
   return Array.from(sessions.values()).sort(
@@ -1298,7 +1366,7 @@ function emitLocalAssistantResponse(
   session.messages.push(assistantMessage);
 
   if (!session.title) {
-    session.title = buildSessionTitle(prompt);
+    session.title = buildFallbackSessionTitle(prompt);
     emit({
       type: "session.title-updated",
       sessionId: session.id,
@@ -2200,6 +2268,9 @@ async function processCodexStream(
           kind: "thread.started",
           threadId: session.threadId,
         });
+        if (session.title) {
+          await persistSessionTitleSafely(session.threadId, session.title);
+        }
         continue;
       }
 
@@ -2316,6 +2387,7 @@ async function runPrompt(
   session.abortController = abortController;
 
   const userMessage = createUserMessage(prompt, attachments);
+  const shouldGenerateTitle = !session.title && session.messages.length === 0;
   session.messages.push(userMessage);
   session.pendingAttachments = [];
   const assistantMessage = createAssistantMessage({ planReview: isPlanReviewTurn });
@@ -2323,12 +2395,15 @@ async function runPrompt(
   session.messages.push(assistantMessage);
 
   if (!session.title) {
-    session.title = buildSessionTitle(prompt);
+    session.title = buildFallbackSessionTitle(prompt);
     emit({
       type: "session.title-updated",
       sessionId: session.id,
       data: { title: session.title },
     });
+  }
+  if (shouldGenerateTitle) {
+    scheduleGeneratedSessionTitle(session, prompt);
   }
 
   emit({ type: "message.updated", sessionId: session.id, data: { message: assistantMessage } });
@@ -2471,6 +2546,11 @@ export const __testing = {
     callback: ((event: ThreadEvent) => Promise<void> | void) | null,
   ) => {
     afterStreamEventLogForTesting = callback;
+  },
+  setSessionTitleGeneratorForTesting: (
+    callback: ((prompt: string) => Promise<string>) | null,
+  ) => {
+    sessionTitleGeneratorForTesting = callback;
   },
   setFreshThreadFactoryForTesting: (factory: ((session: SessionState) => Thread) | null) => {
     freshThreadFactoryForTesting = factory;

@@ -208,6 +208,7 @@ describe("codex bridge private boundary coverage", () => {
     )).resolves.toEqual({
       id: "missing",
       title: "Fallback",
+      titleSource: "codex",
       updatedAt: "2026-07-17T11:00:00.000Z",
     });
     await expect(__testing.getPersistedSessionMetaForTesting(

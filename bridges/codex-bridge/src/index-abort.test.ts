@@ -230,6 +230,7 @@ describe("codex bridge abort handling", () => {
     __testing.setBeforePromptExecutionForTesting(null);
     __testing.setBeforeAssistantMessageCommitForTesting(null);
     __testing.setAfterStreamEventLogForTesting(null);
+    __testing.setSessionTitleGeneratorForTesting(null);
     __testing.setFreshThreadFactoryForTesting(null);
   });
 
@@ -2648,6 +2649,101 @@ describe("codex bridge abort handling", () => {
           expect.objectContaining({ content: "Recovered without metadata" }),
         ],
       });
+    });
+  });
+
+  test("session discovery derives titles from the first user prompt when Codex has no name", async () => {
+    await withBridgeEnv(async ({ codexHome, cwd }) => {
+      writeRollout(codexHome, "unnamed-thread", [
+        {
+          type: "session_meta",
+          payload: {
+            id: "unnamed-thread",
+            cwd,
+            timestamp: "2026-07-17T10:00:00.000Z",
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{
+              type: "input_text",
+              text: "# AGENTS.md instructions for /workspace\nInternal repository guidance",
+            }],
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{
+              type: "input_text",
+              text: "Investigate why background Codex sessions lose their status updates",
+            }],
+          },
+        },
+      ]);
+
+      const response = await app.request("/session/list");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        sessions: [expect.objectContaining({
+          id: "unnamed-thread",
+          title: "Investigate why background Codex sessions lose their",
+        })],
+      });
+    });
+  });
+
+  test("generates and persists an AI title after the first prompt", async () => {
+    await withBridgeEnv(async ({ codexHome }) => {
+      const events: unknown[] = [];
+      const session = createSession({
+        id: "generated-title-session",
+        thread: {
+          runStreamed: async () => ({
+            events: (async function* () {
+              yield { type: "thread.started", thread_id: "generated-title-thread" };
+              yield {
+                type: "turn.completed",
+                usage: {
+                  input_tokens: 1,
+                  cached_input_tokens: 0,
+                  output_tokens: 1,
+                  reasoning_output_tokens: 0,
+                },
+              };
+            })(),
+          }),
+        },
+      });
+      __testing.sessions.set(session.id, session);
+      __testing.setSessionTitleGeneratorForTesting(async () => "Improve Codex session names");
+      const unsubscribe = __testing.subscribeForTesting((event: unknown) => {
+        events.push(event);
+      });
+
+      try {
+        await __testing.runPrompt(session, "Show useful names instead of hashes");
+        await waitUntil(() => session.title === "Improve Codex session names");
+      } finally {
+        unsubscribe();
+      }
+
+      expect(events).toContainEqual({
+        type: "session.title-updated",
+        sessionId: session.id,
+        data: { title: "Improve Codex session names" },
+      });
+      const persisted = readFileSync(
+        join(codexHome, "orkestrator-bridge", "session-titles.jsonl"),
+        "utf8",
+      );
+      expect(persisted).toContain('"threadId":"generated-title-thread"');
+      expect(persisted).toContain('"title":"Improve Codex session names"');
     });
   });
 

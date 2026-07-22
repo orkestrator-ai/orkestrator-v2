@@ -127,6 +127,12 @@ Produce the report below in this exact section order. Use Markdown headers so it
 
 If a command was not run, say why — do not pretend it ran.
 
+## Functionality Summary
+- Summary: 2-4 sentences describing the functionality introduced or changed by the reviewed diff, using user/product terms where applicable.
+- Key changes: bullet list of concrete behaviours or capabilities added, changed, or removed, with file:line references.
+- Describe only functionality evidenced by the reviewed diff; do not repeat ticket, commit, or repository claims without validating them against the code.
+- If the diff has no runtime behaviour change (for example, refactor-, test-, or docs-only work), state that explicitly.
+
 ## Risk Profile
 - Change type: comma-separated from {feature, bugfix, refactor, test, dependency, migration, infra, ui, docs, security, performance}
 - Risk areas: comma-separated from {auth, authorization, data-loss, privacy, billing, payments, external-io, database, migration, concurrency, public-api, background-jobs, llm, supply-chain, deployment} (add free-form labels if none fit)

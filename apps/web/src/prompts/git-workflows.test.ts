@@ -83,6 +83,8 @@ describe("createReviewPrompt", () => {
     const result = createReviewPrompt("main");
     expect(result).toContain("## Output Format");
     expect(result).toContain("## Review Scope");
+    expect(result).toContain("## Functionality Summary");
+    expect(result).toContain("Key changes: bullet list of concrete behaviours or capabilities");
     expect(result).toContain("## Risk Profile");
     expect(result).toContain("Overall risk: low | medium | high");
     expect(result).toContain("## Test Results");

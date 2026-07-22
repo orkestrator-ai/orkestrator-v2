@@ -37,6 +37,9 @@ describe("buildReviewBody", () => {
     for (const body of [interactive, automated]) {
       expect(body).toContain("Security and instruction hierarchy");
       expect(body).toContain("git diff origin/develop...HEAD");
+      expect(body).toContain("## Functionality Summary");
+      expect(body).toContain("functionality introduced or changed by the reviewed diff");
+      expect(body).toContain("If the diff has no runtime behaviour change");
       expect(body).toContain("## Issues");
       expect(body).toContain("### 1. [P0|P1|P2][conf:NN][category]\n#### Short title");
       expect(body).not.toContain("## Findings");

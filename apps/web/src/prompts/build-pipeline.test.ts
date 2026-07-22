@@ -19,6 +19,8 @@ describe("createBuildReviewPrompt", () => {
     expect(result).toContain("## Step 3: Code Review");
     expect(result).toContain("## Step 4: Test Coverage Review");
     expect(result).toContain("## Review Scope");
+    expect(result).toContain("## Functionality Summary");
+    expect(result).toContain("Key changes: bullet list of concrete behaviours or capabilities");
     expect(result).toContain("## Risk Profile");
     expect(result).toContain("## Issues");
     expect(result).toContain("### 1. [P0|P1|P2][conf:NN][category]\n#### Short title");

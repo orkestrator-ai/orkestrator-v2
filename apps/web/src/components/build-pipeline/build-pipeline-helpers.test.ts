@@ -202,6 +202,8 @@ describe("createBuildReviewPrompt", () => {
   test("includes structured output format", () => {
     const result = createBuildReviewPrompt(baseTask, "");
     expect(result).toContain("## Output Format");
+    expect(result).toContain("## Functionality Summary");
+    expect(result).toContain("functionality introduced or changed by the reviewed diff");
     expect(result).toContain("## Issues");
     expect(result).toContain("### 1. [P0|P1|P2][conf:NN][category]\n#### Short title");
     expect(result).toContain("File: path/to/file.ts:LINE");

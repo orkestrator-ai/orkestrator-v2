@@ -43,6 +43,8 @@ import {
   subscribeToEvents,
   normalizeOpenCodePart,
   buildOpenCodeMessageFromPart,
+  hasOpenCodeSubagentSession,
+  mergeOpenCodeSubagentTranscript,
   ERROR_MESSAGE_PREFIX,
   SYSTEM_MESSAGE_PREFIX,
   type PermissionRequest,
@@ -611,6 +613,34 @@ export function OpenCodeChatTab({
           if (!hasActiveEventSubscription(environmentId)) {
             startSharedEventSubscription(existingClient);
           }
+
+          // The subscription may have progressed while this React tree was
+          // inactive. Rehydrate from the authoritative parent and child
+          // session transcripts without delaying the fast reconnect UI.
+          const reconnectSequence = ++manualRefreshSequenceRef.current;
+          void Promise.all([
+            getSessionMessages(existingClient, existingSession.sessionId),
+            getSessionStatus(existingClient, existingSession.sessionId),
+          ]).then(([messages, status]) => {
+            if (
+              !mounted ||
+              reconnectSequence !== manualRefreshSequenceRef.current
+            ) return;
+            const currentState = useOpenCodeStore.getState();
+            const currentSession = currentState.sessions.get(sessionKey);
+            if (
+              currentState.clients.get(environmentId) !== existingClient ||
+              currentSession?.sessionId !== existingSession.sessionId
+            ) {
+              return;
+            }
+            // An empty reconnect response must not erase a transcript that
+            // received a live update after this request started.
+            if (messages.length > 0) setMessages(sessionKey, messages);
+            if (status) setSessionLoading(sessionKey, status !== "idle");
+          }).catch((error) => {
+            console.warn("[OpenCodeChatTab] Fast reconnect rehydration failed:", error);
+          });
           return;
         }
 
@@ -989,6 +1019,58 @@ export function OpenCodeChatTab({
         const DEBOUNCE_MS = 200; // Debounce all message fetches
         const pendingReloads = new Map<string, NodeJS.Timeout>(); // Track pending debounced reloads
 
+        const refreshSubagentTranscript = async (
+          childSessionId: string,
+          state?: "success" | "failure" | "pending",
+        ) => {
+          const childMessages = await getSessionMessages(sdkClient, childSessionId);
+          const sessions = useOpenCodeStore.getState().sessions;
+          for (const [sessionTabId, sessionState] of sessions) {
+            if (!hasOpenCodeSubagentSession(sessionState.messages, childSessionId)) {
+              continue;
+            }
+            const messages = mergeOpenCodeSubagentTranscript(
+              sessionState.messages,
+              childSessionId,
+              childMessages,
+              state,
+            );
+            if (messages !== sessionState.messages) {
+              setMessages(sessionTabId, messages);
+            }
+          }
+        };
+
+        const fetchSubagentMessagesDebounced = (
+          childSessionId: string,
+          immediate = false,
+          state?: "success" | "failure" | "pending",
+        ) => {
+          const reloadKey = `subagent:${childSessionId}`;
+          const pendingTimeout = pendingReloads.get(reloadKey);
+          if (pendingTimeout) {
+            clearTimeout(pendingTimeout);
+            pendingReloads.delete(reloadKey);
+          }
+
+          const doFetch = () => {
+            lastReloadTimeBySession.set(reloadKey, Date.now());
+            void refreshSubagentTranscript(childSessionId, state);
+          };
+          if (immediate) {
+            doFetch();
+            return;
+          }
+
+          const lastTime = lastReloadTimeBySession.get(reloadKey) || 0;
+          if (Date.now() - lastTime > DEBOUNCE_MS) {
+            doFetch();
+          } else {
+            const timeout = setTimeout(doFetch, DEBOUNCE_MS);
+            pendingReloads.set(reloadKey, timeout);
+          }
+        };
+
         // Helper to fetch messages with debouncing
         // Note: sessionKey is the session key from the sessions Map (e.g., "env-{envId}:{tabId}")
         const fetchMessagesDebounced = (
@@ -1032,10 +1114,10 @@ export function OpenCodeChatTab({
           sessionTabId: string,
           rawPart: unknown,
           delta?: string,
-        ): boolean => {
+        ) => {
           const part = normalizeOpenCodePart(rawPart);
           if (!part?.sourceMessageId) {
-            return false;
+            return null;
           }
 
           const sessionState = useOpenCodeStore.getState().sessions.get(sessionTabId);
@@ -1051,7 +1133,7 @@ export function OpenCodeChatTab({
               delta,
             ),
           );
-          return true;
+          return part;
         };
 
         for await (const event of eventStream) {
@@ -1112,17 +1194,22 @@ export function OpenCodeChatTab({
                 props?.status?.type === "idle");
 
             if (eventType === "message.part.updated") {
-              const applied = applyPartUpdate(
+              const appliedPart = applyPartUpdate(
                 sessionTabId,
                 props?.part,
                 typeof props?.delta === "string" ? props.delta : undefined,
               );
-              if (!applied) {
+              if (!appliedPart) {
                 fetchMessagesDebounced(
                   eventSessionId,
                   sessionTabId,
                   false,
                 );
+              } else if (
+                appliedPart.type === "subagent" &&
+                appliedPart.subagentId
+              ) {
+                fetchSubagentMessagesDebounced(appliedPart.subagentId);
               }
             } else if (
               eventType === "message.updated" ||
@@ -1166,6 +1253,33 @@ export function OpenCodeChatTab({
                 createdAt: new Date().toISOString(),
               };
               addMessage(sessionTabId, errorMessage);
+            }
+          }
+
+          if (eventSessionId) {
+            const hasMatchingSubagent = Array.from(
+              useOpenCodeStore.getState().sessions.values(),
+            ).some((sessionState) =>
+              hasOpenCodeSubagentSession(sessionState.messages, eventSessionId),
+            );
+            if (hasMatchingSubagent) {
+              const isChildIdle =
+                eventType === "session.idle" ||
+                (eventType === "session.status" && props?.status?.type === "idle");
+              const isChildError = eventType === "session.error";
+              if (
+                eventType === "message.part.updated" ||
+                eventType === "message.updated" ||
+                eventType === "session.updated" ||
+                isChildIdle ||
+                isChildError
+              ) {
+                fetchSubagentMessagesDebounced(
+                  eventSessionId,
+                  isChildIdle || isChildError,
+                  isChildError ? "failure" : isChildIdle ? "success" : undefined,
+                );
+              }
             }
           }
 

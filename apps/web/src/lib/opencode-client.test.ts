@@ -14,7 +14,9 @@ import {
   getPendingQuestions,
   getSessionMessages,
   getSessionStatus,
+  hasOpenCodeSubagentSession,
   listSessions,
+  mergeOpenCodeSubagentTranscript,
   normalizeOpenCodeMessage,
   normalizeOpenCodePart,
   rejectQuestion,
@@ -830,6 +832,62 @@ describe("opencode-client streaming part normalization", () => {
     });
   });
 
+  test("normalizes Task tools into shared subagent parts", () => {
+    const part = normalizeOpenCodePart({
+      id: "part-task",
+      messageID: "message-1",
+      type: "tool",
+      tool: "Task",
+      state: {
+        status: "running",
+        title: "Review import scheduling",
+        input: {
+          description: "Review import scheduling",
+          prompt: "Inspect the scheduling implementation",
+          subagent_type: "general",
+        },
+        metadata: {
+          parentSessionId: "session-parent",
+          sessionId: "session-child",
+        },
+      },
+    });
+
+    expect(part).toMatchObject({
+      type: "subagent",
+      content: "Review import scheduling",
+      sourcePartId: "part-task",
+      sourceMessageId: "message-1",
+      toolState: "pending",
+      subagentId: "session-child",
+      subagentName: "Review import scheduling",
+      subagentRole: "general",
+      subagentPrompt: "Inspect the scheduling implementation",
+      subagentActions: [],
+      subagentActionCount: 0,
+    });
+  });
+
+  test("uses the Task output envelope as a child id and background state fallback", () => {
+    const part = normalizeOpenCodePart({
+      id: "part-task",
+      messageID: "message-1",
+      type: "tool",
+      tool: "task",
+      state: {
+        status: "completed",
+        input: { description: "Background review" },
+        output: '<task id="session-background" state="running">\n<task_result>Working</task_result>\n</task>',
+      },
+    });
+
+    expect(part).toMatchObject({
+      type: "subagent",
+      subagentId: "session-background",
+      toolState: "pending",
+    });
+  });
+
   test("maps tool error status to failure state and stringifies error payloads", () => {
     const part = normalizeOpenCodePart({
       id: "part-t",
@@ -898,6 +956,234 @@ describe("opencode-client normalizeOpenCodeMessage", () => {
   test("returns null for non-object input", () => {
     expect(normalizeOpenCodeMessage(null)).toBeNull();
     expect(normalizeOpenCodeMessage(42)).toBeNull();
+  });
+});
+
+describe("OpenCode subagent transcript hydration", () => {
+  test("loads child messages and exposes their tool calls as agent actions", async () => {
+    const client = {
+      session: {
+        messages: mock(async ({ sessionID }: { sessionID: string }) => ({
+          data: sessionID === "session-parent"
+            ? [
+                {
+                  info: { id: "parent-message", role: "assistant", time: { created: 1 } },
+                  parts: [
+                    {
+                      id: "task-part",
+                      messageID: "parent-message",
+                      type: "tool",
+                      tool: "task",
+                      state: {
+                        status: "running",
+                        input: {
+                          description: "Inspect imports",
+                          prompt: "Review imports",
+                          subagent_type: "general",
+                        },
+                        metadata: { sessionId: "session-child" },
+                      },
+                    },
+                  ],
+                },
+              ]
+            : [
+                {
+                  info: { id: "child-message", role: "assistant", time: { created: 2 } },
+                  parts: [
+                    {
+                      id: "child-tool",
+                      messageID: "child-message",
+                      type: "tool",
+                      tool: "bash",
+                      state: {
+                        status: "completed",
+                        title: "Read imports",
+                        input: { command: "rg import src" },
+                        output: "src/index.ts",
+                        metadata: {},
+                      },
+                    },
+                    {
+                      id: "child-text",
+                      messageID: "child-message",
+                      type: "text",
+                      text: "Review complete",
+                    },
+                  ],
+                },
+              ],
+        })),
+        children: mock(async () => ({ data: [] })),
+      },
+    } as unknown as OpencodeClient;
+
+    const messages = await getSessionMessages(client, "session-parent");
+    const task = messages[0]?.parts[0];
+
+    expect(task).toMatchObject({
+      type: "subagent",
+      subagentId: "session-child",
+      subagentActionCount: 1,
+      subagentActions: [
+        {
+          type: "tool-invocation",
+          toolName: "bash",
+          toolState: "success",
+          toolArgs: { command: "rg import src" },
+          toolOutput: "src/index.ts",
+        },
+        { type: "text", content: "Review complete" },
+      ],
+    });
+    expect(hasOpenCodeSubagentSession(messages, "session-child")).toBe(true);
+  });
+
+  test("settles a completed background child from the session status snapshot", async () => {
+    const client = {
+      session: {
+        messages: mock(async ({ sessionID }: { sessionID: string }) => ({
+          data: sessionID === "session-parent"
+            ? [
+                {
+                  info: { id: "parent-message", role: "assistant", time: { created: 1 } },
+                  parts: [
+                    {
+                      id: "task-part",
+                      messageID: "parent-message",
+                      type: "tool",
+                      tool: "task",
+                      state: {
+                        status: "completed",
+                        input: { description: "Background review" },
+                        output: '<task id="background-child" state="running">Working</task>',
+                      },
+                    },
+                  ],
+                },
+              ]
+            : [
+                {
+                  info: { id: "child-message", role: "assistant", time: { created: 2 } },
+                  parts: [
+                    {
+                      id: "child-text",
+                      messageID: "child-message",
+                      type: "text",
+                      text: "Finished in the background",
+                    },
+                  ],
+                },
+              ],
+        })),
+        status: mock(async () => ({
+          data: { "background-child": { type: "idle" } },
+        })),
+      },
+    } as unknown as OpencodeClient;
+
+    const messages = await getSessionMessages(client, "session-parent");
+    expect(messages[0]?.parts[0]).toMatchObject({
+      type: "subagent",
+      subagentId: "background-child",
+      toolState: "success",
+      subagentActions: [
+        { type: "text", content: "Finished in the background" },
+      ],
+    });
+  });
+
+  test("discovers legacy Task children through session.children", async () => {
+    const client = {
+      session: {
+        messages: mock(async ({ sessionID }: { sessionID: string }) => ({
+          data: sessionID === "session-parent"
+            ? [
+                {
+                  info: { id: "parent-message", role: "assistant", time: { created: 1 } },
+                  parts: [
+                    {
+                      id: "task-part",
+                      messageID: "parent-message",
+                      type: "tool",
+                      tool: "Task",
+                      state: {
+                        status: "running",
+                        input: { description: "Review database", subagent_type: "explore" },
+                      },
+                    },
+                  ],
+                },
+              ]
+            : [],
+        })),
+        children: mock(async () => ({
+          data: [
+            {
+              id: "legacy-child",
+              title: "Review database (@explore subagent)",
+              agent: "explore",
+            },
+          ],
+        })),
+      },
+    } as unknown as OpencodeClient;
+
+    const messages = await getSessionMessages(client, "session-parent");
+    expect(messages[0]?.parts[0]).toMatchObject({
+      type: "subagent",
+      subagentId: "legacy-child",
+      subagentRole: "explore",
+    });
+  });
+
+  test("merges live child state into nested agent rows", () => {
+    const messages: OpenCodeMessage[] = [
+      {
+        id: "parent-message",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-07-22T12:00:00.000Z",
+        parts: [
+          {
+            type: "subagent",
+            content: "Outer",
+            subagentId: "outer-child",
+            subagentActions: [
+              {
+                type: "subagent",
+                content: "Nested",
+                subagentId: "nested-child",
+                subagentActions: [],
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    const childMessages: OpenCodeMessage[] = [
+      {
+        id: "child-message",
+        role: "assistant",
+        content: "Done",
+        createdAt: "2026-07-22T12:00:01.000Z",
+        parts: [{ type: "text", content: "Done" }],
+      },
+    ];
+
+    const merged = mergeOpenCodeSubagentTranscript(
+      messages,
+      "nested-child",
+      childMessages,
+      "success",
+    );
+    const outer = merged[0]?.parts[0];
+    expect(outer?.type).toBe("subagent");
+    expect(outer?.subagentActions?.[0]).toMatchObject({
+      type: "subagent",
+      toolState: "success",
+      subagentActions: [{ type: "text", content: "Done" }],
+    });
   });
 });
 

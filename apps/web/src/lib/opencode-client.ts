@@ -411,6 +411,135 @@ function parseOpenCodeCreatedAt(value: unknown): string {
   return new Date().toISOString();
 }
 
+function isOpenCodeTaskTool(toolName: string): boolean {
+  const normalized = toolName.trim().toLowerCase();
+  return normalized === "task" || normalized === "agent";
+}
+
+function stringRecordValue(
+  value: unknown,
+  ...keys: string[]
+): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+  return undefined;
+}
+
+function parseTaskEnvelope(output: string | undefined): {
+  sessionId?: string;
+  state?: "running" | "completed" | "error";
+} {
+  if (!output) return {};
+  const match = output.match(
+    /<task\s+id=["']([^"']+)["'](?:\s+state=["'](running|completed|error)["'])?/i,
+  );
+  if (!match) return {};
+  return {
+    sessionId: match[1],
+    state: match[2]?.toLowerCase() as "running" | "completed" | "error" | undefined,
+  };
+}
+
+function countOpenCodeToolActions(parts: OpenCodeMessagePart[]): number {
+  let count = 0;
+  for (const part of parts) {
+    if (part.type === "tool-invocation") count++;
+    if (part.type === "subagent" && part.subagentActions) {
+      count += countOpenCodeToolActions(part.subagentActions);
+    }
+  }
+  return count;
+}
+
+function flattenOpenCodeSubagentActions(messages: OpenCodeMessage[]): OpenCodeMessagePart[] {
+  return messages.flatMap((message) =>
+    message.role === "assistant" ? message.parts : [],
+  );
+}
+
+function mapOpenCodeParts(
+  parts: OpenCodeMessagePart[],
+  mapper: (part: OpenCodeMessagePart) => OpenCodeMessagePart,
+): { parts: OpenCodeMessagePart[]; changed: boolean } {
+  let changed = false;
+  const nextParts = parts.map((part) => {
+    let nextPart = mapper(part);
+    if (nextPart.type === "subagent" && nextPart.subagentActions?.length) {
+      const nested = mapOpenCodeParts(nextPart.subagentActions, mapper);
+      if (nested.changed) {
+        nextPart = { ...nextPart, subagentActions: nested.parts };
+      }
+    }
+    if (nextPart !== part) changed = true;
+    return nextPart;
+  });
+  return { parts: changed ? nextParts : parts, changed };
+}
+
+/** Return true when a transcript contains an OpenCode Task backed by this child session. */
+export function hasOpenCodeSubagentSession(
+  messages: OpenCodeMessage[],
+  childSessionId: string,
+): boolean {
+  return messages.some((message) => {
+    let found = false;
+    mapOpenCodeParts(message.parts, (part) => {
+      if (part.type === "subagent" && part.subagentId === childSessionId) {
+        found = true;
+      }
+      return part;
+    });
+    return found;
+  });
+}
+
+/**
+ * Attach an authoritative child-session transcript to every matching Task part.
+ * Nested Tasks are traversed as well, so child SSE events can update their
+ * corresponding yellow Agent row without rebuilding the parent transcript.
+ */
+export function mergeOpenCodeSubagentTranscript(
+  messages: OpenCodeMessage[],
+  childSessionId: string,
+  childMessages: OpenCodeMessage[],
+  state?: "success" | "failure" | "pending",
+): OpenCodeMessage[] {
+  const actions = flattenOpenCodeSubagentActions(childMessages);
+  const actionCount = countOpenCodeToolActions(actions);
+  let changed = false;
+
+  const nextMessages = messages.map((message) => {
+    const mapped = mapOpenCodeParts(message.parts, (part) => {
+      if (part.type !== "subagent" || part.subagentId !== childSessionId) {
+        return part;
+      }
+      const nextState =
+        state === "failure" || part.toolState === "failure"
+          ? "failure"
+          : part.toolState === "success"
+            ? "success"
+            : state ?? part.toolState;
+      return {
+        ...part,
+        toolState: nextState,
+        subagentActions: actions,
+        subagentActionCount: actionCount,
+      };
+    });
+    if (!mapped.changed) return message;
+    changed = true;
+    return { ...message, parts: mapped.parts };
+  });
+
+  return changed ? nextMessages : messages;
+}
+
 export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const p = part as any;
@@ -452,6 +581,42 @@ export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null
     const toolTitle = p.state?.title as string | undefined;
     const toolOutput = stringifyToolPayload(p.state?.output);
     const toolError = stringifyToolPayload(p.state?.error);
+
+    if (isOpenCodeTaskTool(toolName)) {
+      const input = p.state?.input;
+      const metadata = p.state?.metadata ?? p.metadata;
+      const taskEnvelope = parseTaskEnvelope(toolOutput);
+      const subagentId =
+        stringRecordValue(metadata, "sessionId", "sessionID", "jobId") ??
+        taskEnvelope.sessionId;
+      const description =
+        stringRecordValue(input, "description") ?? toolTitle ?? toolName;
+      const role = stringRecordValue(input, "subagent_type", "agent");
+      const prompt = stringRecordValue(input, "prompt");
+
+      if (taskEnvelope.state === "running") mappedState = "pending";
+      else if (taskEnvelope.state === "completed") mappedState = "success";
+      else if (taskEnvelope.state === "error") mappedState = "failure";
+
+      return {
+        type: "subagent",
+        content: description,
+        sourcePartId,
+        sourceMessageId,
+        toolName,
+        toolArgs: input,
+        toolState: mappedState,
+        toolTitle,
+        toolOutput,
+        toolError,
+        subagentId,
+        subagentName: description,
+        subagentRole: role,
+        subagentPrompt: prompt,
+        subagentActions: [],
+        subagentActionCount: 0,
+      };
+    }
 
     let toolDiff: ToolDiffMetadata | undefined;
     if (isEditTool(toolName)) {
@@ -990,7 +1155,7 @@ export async function createSession(
 export async function getSessionMessages(
   client: OpencodeClient,
   sessionId: string,
-  options: { throwOnError?: boolean } = {},
+  options: { throwOnError?: boolean; includeSubagents?: boolean } = {},
 ): Promise<OpenCodeMessage[]> {
   try {
     const response = await client.session.messages({
@@ -1009,9 +1174,13 @@ export async function getSessionMessages(
       return [];
     }
 
-    const messages = response.data
+    let messages = response.data
       .map((msg) => normalizeOpenCodeMessage(msg))
       .filter((message): message is OpenCodeMessage => message !== null);
+
+    if (options.includeSubagents !== false) {
+      messages = await hydrateOpenCodeSubagentTranscripts(client, sessionId, messages);
+    }
 
     return messages;
   } catch (error) {
@@ -1023,6 +1192,156 @@ export async function getSessionMessages(
     }
     return [];
   }
+}
+
+type OpenCodeChildSession = {
+  id: string;
+  title?: string;
+  agent?: string;
+};
+
+type OpenCodeSessionStatusMap = Record<
+  string,
+  { type?: "idle" | "busy" | "retry" }
+>;
+
+function findUnidentifiedTaskParts(messages: OpenCodeMessage[]): OpenCodeMessagePart[] {
+  const result: OpenCodeMessagePart[] = [];
+  for (const message of messages) {
+    mapOpenCodeParts(message.parts, (part) => {
+      if (part.type === "subagent" && !part.subagentId) result.push(part);
+      return part;
+    });
+  }
+  return result;
+}
+
+async function getOpenCodeChildSessions(
+  client: OpencodeClient,
+  parentSessionId: string,
+): Promise<OpenCodeChildSession[]> {
+  try {
+    const response = await client.session.children({ sessionID: parentSessionId });
+    return Array.isArray(response.data) ? response.data : [];
+  } catch (error) {
+    console.warn("[opencode-client] Failed to get child sessions:", error);
+    return [];
+  }
+}
+
+function assignOpenCodeChildSessionIds(
+  messages: OpenCodeMessage[],
+  children: OpenCodeChildSession[],
+): OpenCodeMessage[] {
+  const claimed = new Set<string>();
+  for (const message of messages) {
+    mapOpenCodeParts(message.parts, (part) => {
+      if (part.type === "subagent" && part.subagentId) claimed.add(part.subagentId);
+      return part;
+    });
+  }
+
+  let changed = false;
+  const nextMessages = messages.map((message) => {
+    const mapped = mapOpenCodeParts(message.parts, (part) => {
+      if (part.type !== "subagent" || part.subagentId) return part;
+      const child = children.find((candidate) => {
+        if (claimed.has(candidate.id)) return false;
+        const title = candidate.title?.trim();
+        if (!title) return false;
+        return title === part.content || title.startsWith(`${part.content} (@`);
+      });
+      if (!child) return part;
+      claimed.add(child.id);
+      return {
+        ...part,
+        subagentId: child.id,
+        subagentRole: part.subagentRole ?? child.agent,
+      };
+    });
+    if (!mapped.changed) return message;
+    changed = true;
+    return { ...message, parts: mapped.parts };
+  });
+  return changed ? nextMessages : messages;
+}
+
+async function getOpenCodeSessionStatusMap(
+  client: OpencodeClient,
+): Promise<OpenCodeSessionStatusMap | undefined> {
+  const status = (client.session as unknown as {
+    status?: () => Promise<{ data?: OpenCodeSessionStatusMap }>;
+  }).status;
+  if (typeof status !== "function") return undefined;
+  try {
+    const response = await status.call(client.session);
+    return response.data;
+  } catch (error) {
+    console.warn("[opencode-client] Failed to get subagent session statuses:", error);
+    return undefined;
+  }
+}
+
+async function hydrateOpenCodeSubagentTranscripts(
+  client: OpencodeClient,
+  parentSessionId: string,
+  initialMessages: OpenCodeMessage[],
+  ancestors: Set<string> = new Set([parentSessionId]),
+  statusMap?: OpenCodeSessionStatusMap,
+): Promise<OpenCodeMessage[]> {
+  let messages = initialMessages;
+  if (findUnidentifiedTaskParts(messages).length > 0) {
+    const children = await getOpenCodeChildSessions(client, parentSessionId);
+    messages = assignOpenCodeChildSessionIds(messages, children);
+  }
+
+  const childIds = new Set<string>();
+  for (const message of messages) {
+    mapOpenCodeParts(message.parts, (part) => {
+      if (part.type === "subagent" && part.subagentId && !ancestors.has(part.subagentId)) {
+        childIds.add(part.subagentId);
+      }
+      return part;
+    });
+  }
+
+  const resolvedStatusMap =
+    statusMap ??
+    (childIds.size > 0 ? await getOpenCodeSessionStatusMap(client) : undefined);
+
+  const transcripts = await Promise.all(
+    Array.from(childIds, async (childSessionId) => {
+      const childMessages = await getSessionMessages(client, childSessionId, {
+        includeSubagents: false,
+      });
+      const hydrated = await hydrateOpenCodeSubagentTranscripts(
+        client,
+        childSessionId,
+        childMessages,
+        new Set([...ancestors, childSessionId]),
+        resolvedStatusMap,
+      );
+      return { childSessionId, messages: hydrated };
+    }),
+  );
+
+  for (const transcript of transcripts) {
+    const childStatus = resolvedStatusMap?.[transcript.childSessionId]?.type;
+    const hasActivity = flattenOpenCodeSubagentActions(transcript.messages).length > 0;
+    const state =
+      childStatus === "busy" || childStatus === "retry"
+        ? "pending"
+        : childStatus === "idle" && hasActivity
+          ? "success"
+          : undefined;
+    messages = mergeOpenCodeSubagentTranscript(
+      messages,
+      transcript.childSessionId,
+      transcript.messages,
+      state,
+    );
+  }
+  return messages;
 }
 
 export type OpenCodeSessionStatus = "idle" | "busy" | "retry";

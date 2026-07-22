@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TransformStream } from "node:stream/web";
 import type { BridgeModel } from "./models-cache.js";
+import {
+  persistSessionTitle,
+  readPersistedSessionTitles,
+} from "./session-titles.js";
 
 process.env.CODEX_BRIDGE_NO_SERVER = "1";
 globalThis.TransformStream = TransformStream as typeof globalThis.TransformStream;
@@ -2744,6 +2748,312 @@ describe("codex bridge abort handling", () => {
       );
       expect(persisted).toContain('"threadId":"generated-title-thread"');
       expect(persisted).toContain('"title":"Improve Codex session names"');
+    });
+  });
+
+  test("generated titles survive list, resume, and status while Codex names retain precedence", async () => {
+    await withBridgeEnv(async ({ codexHome, cwd }) => {
+      const records = [
+        {
+          type: "session_meta",
+          payload: {
+            id: "generated-round-trip",
+            cwd,
+            timestamp: "2026-07-17T10:00:00.000Z",
+          },
+        },
+        {
+          type: "response_item",
+          timestamp: "2026-07-17T10:01:00.000Z",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Fallback prompt title" }],
+          },
+        },
+      ];
+      writeRollout(codexHome, "generated-round-trip", records);
+      await persistSessionTitle(
+        codexHome,
+        "generated-round-trip",
+        "Generated round trip title",
+        { source: "generated" },
+      );
+
+      const listResponse = await app.request("/session/list");
+      expect(await listResponse.json()).toMatchObject({
+        sessions: [expect.objectContaining({
+          id: "generated-round-trip",
+          title: "Generated round trip title",
+        })],
+      });
+      const resumeResponse = await app.request("/session/resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threadId: "generated-round-trip" }),
+      });
+      const resumed = await resumeResponse.json() as { sessionId: string; title: string };
+      expect(resumed.title).toBe("Generated round trip title");
+      const statusResponse = await app.request(`/session/${resumed.sessionId}/status`);
+      expect(await statusResponse.json()).toMatchObject({
+        status: "idle",
+        title: "Generated round trip title",
+      });
+
+      writeFileSync(
+        join(codexHome, "session_index.jsonl"),
+        `${JSON.stringify({
+          id: "generated-round-trip",
+          thread_name: "Codex authoritative title",
+          updated_at: "2026-07-17T10:02:00.000Z",
+        })}\n`,
+      );
+      const codexList = await app.request("/session/list");
+      expect(await codexList.json()).toMatchObject({
+        sessions: [expect.objectContaining({ title: "Codex authoritative title" })],
+      });
+      const codexResume = await app.request("/session/resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threadId: "generated-round-trip" }),
+      });
+      expect(await codexResume.json()).toMatchObject({ title: "Codex authoritative title" });
+    });
+  });
+
+  test("a local help response remains eligible for one substantive title generation", async () => {
+    await withBridgeEnv(async ({ codexHome }) => {
+      const prompts: string[] = [];
+      let threadCounter = 0;
+      const session = createSession({
+        id: "help-title-session",
+        thread: {
+          runStreamed: async () => ({
+            events: (async function* () {
+              threadCounter += 1;
+              yield { type: "thread.started", thread_id: `help-title-thread-${threadCounter}` };
+              yield {
+                type: "turn.completed",
+                usage: {
+                  input_tokens: 1,
+                  cached_input_tokens: 0,
+                  output_tokens: 1,
+                  reasoning_output_tokens: 0,
+                },
+              };
+            })(),
+          }),
+        },
+      });
+      __testing.sessions.set(session.id, session);
+      __testing.setSessionTitleGeneratorForTesting(async (prompt: string) => {
+        prompts.push(prompt);
+        return "Generated substantive title";
+      });
+
+      await __testing.runPrompt(session, "/help");
+      expect(session.title).toBe("/help");
+      expect(session.titleSource).toBe("prompt");
+      expect(prompts).toEqual([]);
+
+      await __testing.runPrompt(session, "Investigate the background lifecycle");
+      await waitUntil(() => session.title === "Generated substantive title");
+      await __testing.runPrompt(session, "Continue the investigation");
+
+      expect(prompts).toEqual(["Investigate the background lifecycle"]);
+      expect(session.titleSource).toBe("generated");
+      expect(Array.from((await readPersistedSessionTitles(codexHome)).values()))
+        .toContain("Generated substantive title");
+    });
+  });
+
+  test("explicit titles are never replaced by generated titles", async () => {
+    const prompts: string[] = [];
+    const session = createSession({
+      id: "explicit-title-session",
+      title: "Explicit title",
+      titleSource: "explicit",
+      titleGenerationAttempted: true,
+      thread: {
+        runStreamed: async () => ({
+          events: (async function* () {
+            yield {
+              type: "turn.completed",
+              usage: {
+                input_tokens: 1,
+                cached_input_tokens: 0,
+                output_tokens: 1,
+                reasoning_output_tokens: 0,
+              },
+            };
+          })(),
+        }),
+      },
+    });
+    __testing.sessions.set(session.id, session);
+    __testing.setSessionTitleGeneratorForTesting(async (prompt: string) => {
+      prompts.push(prompt);
+      return "Unexpected generated title";
+    });
+
+    await __testing.runPrompt(session, "Do work");
+    expect(prompts).toEqual([]);
+    expect(session.title).toBe("Explicit title");
+  });
+
+  test("stale title completion cannot mutate, persist, or emit after session replacement", async () => {
+    await withBridgeEnv(async ({ codexHome }) => {
+      let resolveTitle!: (title: string) => void;
+      const generated = new Promise<string>((resolve) => {
+        resolveTitle = resolve;
+      });
+      const events: unknown[] = [];
+      const session = createSession({
+        id: "stale-title-session",
+        thread: {
+          runStreamed: async () => ({
+            events: (async function* () {
+              yield { type: "thread.started", thread_id: "stale-title-thread" };
+              yield {
+                type: "turn.completed",
+                usage: {
+                  input_tokens: 1,
+                  cached_input_tokens: 0,
+                  output_tokens: 1,
+                  reasoning_output_tokens: 0,
+                },
+              };
+            })(),
+          }),
+        },
+      });
+      const replacement = createSession({ id: session.id, title: "Replacement title" });
+      __testing.sessions.set(session.id, session);
+      __testing.setSessionTitleGeneratorForTesting(() => generated);
+      const unsubscribe = __testing.subscribeForTesting((event: unknown) => events.push(event));
+      try {
+        await __testing.runPrompt(session, "Original prompt fallback");
+        __testing.sessions.set(session.id, replacement);
+        resolveTitle("Stale generated title");
+        await Bun.sleep(0);
+      } finally {
+        unsubscribe();
+      }
+
+      expect(session.title).toBe("Original prompt fallback");
+      expect(replacement.title).toBe("Replacement title");
+      expect(await readPersistedSessionTitles(codexHome)).toEqual(new Map());
+      expect(events).not.toContainEqual(expect.objectContaining({
+        type: "session.title-updated",
+        data: { title: "Stale generated title" },
+      }));
+    });
+  });
+
+  test("generation after thread start persists the generated title", async () => {
+    await withBridgeEnv(async ({ codexHome }) => {
+      let resolveTitle!: (title: string) => void;
+      const generated = new Promise<string>((resolve) => {
+        resolveTitle = resolve;
+      });
+      const stream = createStreamController();
+      const session = createSession({
+        id: "late-title-session",
+        thread: { runStreamed: async () => ({ events: stream.events() }) },
+      });
+      __testing.sessions.set(session.id, session);
+      __testing.setSessionTitleGeneratorForTesting(() => generated);
+
+      const promptRun = __testing.runPrompt(session, "Late generated title prompt");
+      stream.push({ type: "thread.started", thread_id: "late-title-thread" });
+      await waitUntil(() => session.threadId === "late-title-thread");
+      resolveTitle("Late generated title");
+      await waitUntil(() => session.title === "Late generated title");
+      stream.push({
+        type: "turn.completed",
+        usage: {
+          input_tokens: 1,
+          cached_input_tokens: 0,
+          output_tokens: 1,
+          reasoning_output_tokens: 0,
+        },
+      });
+      await promptRun;
+      await waitUntil(() => existsSync(
+        join(codexHome, "orkestrator-bridge", "session-titles.jsonl"),
+      ));
+
+      expect(await readPersistedSessionTitles(codexHome)).toEqual(new Map([
+        ["late-title-thread", "Late generated title"],
+      ]));
+    });
+  });
+
+  test("generation rejection preserves the fallback and is attempted only once", async () => {
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args);
+    let attempts = 0;
+    const session = createSession({ id: "rejected-title-session" });
+    __testing.sessions.set(session.id, session);
+    __testing.setSessionTitleGeneratorForTesting(async () => {
+      attempts += 1;
+      throw new Error("model unavailable");
+    });
+    try {
+      await __testing.runPrompt(session, "Keep this fallback title");
+      await Bun.sleep(0);
+      await __testing.runPrompt(session, "Do not retry title generation");
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    expect(attempts).toBe(1);
+    expect(session.title).toBe("Keep this fallback title");
+    expect(warnings).toContainEqual([
+      "[codex-bridge] Failed to generate session title; using prompt fallback",
+    ]);
+  });
+
+  test("title persistence failures are contained without failing the prompt", async () => {
+    await withBridgeEnv(async ({ codexHome }) => {
+      writeFileSync(join(codexHome, "orkestrator-bridge"), "blocked");
+      const warnings: unknown[][] = [];
+      const originalWarn = console.warn;
+      console.warn = (...args: unknown[]) => warnings.push(args);
+      const session = createSession({
+        id: "persistence-failure-session",
+        title: "Explicit persisted title",
+        titleSource: "explicit",
+        titleGenerationAttempted: true,
+        thread: {
+          runStreamed: async () => ({
+            events: (async function* () {
+              yield { type: "thread.started", thread_id: "persistence-failure-thread" };
+              yield {
+                type: "turn.completed",
+                usage: {
+                  input_tokens: 1,
+                  cached_input_tokens: 0,
+                  output_tokens: 1,
+                  reasoning_output_tokens: 0,
+                },
+              };
+            })(),
+          }),
+        },
+      });
+      __testing.sessions.set(session.id, session);
+      try {
+        await expect(__testing.runPrompt(session, "Continue safely")).resolves.toBeUndefined();
+      } finally {
+        console.warn = originalWarn;
+      }
+      expect(session.status).toBe("idle");
+      expect(warnings).toContainEqual([
+        "[codex-bridge] Failed to persist session title:",
+        expect.any(Error),
+      ]);
     });
   });
 

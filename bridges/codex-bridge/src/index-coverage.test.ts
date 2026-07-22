@@ -81,20 +81,56 @@ describe("codex bridge private boundary coverage", () => {
     ]);
   });
 
-  test("creates a shutdown handler that clears its timer before exiting", () => {
+  test("creates a shutdown handler that clears its timer and title jobs before exiting", async () => {
     const timer = { id: "cleanup" } as unknown as ReturnType<typeof setInterval>;
     const calls: unknown[] = [];
     const handler = __testing.createShutdownHandlerForTesting(
       timer,
       (value: unknown) => calls.push(["clear", value]),
       (code: number) => calls.push(["exit", code]),
+      async () => {
+        calls.push(["shutdown-titles"]);
+      },
     );
 
     handler();
+    await Bun.sleep(0);
+
+    expect(calls).toEqual([
+      ["clear", timer],
+      ["shutdown-titles"],
+      ["exit", 0],
+    ]);
+  });
+
+  test("exits after a title-job shutdown failure and reports the error", async () => {
+    const timer = { id: "cleanup" } as unknown as ReturnType<typeof setInterval>;
+    const calls: unknown[] = [];
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args);
+    try {
+      const handler = __testing.createShutdownHandlerForTesting(
+        timer,
+        (value: unknown) => calls.push(["clear", value]),
+        (code: number) => calls.push(["exit", code]),
+        async () => {
+          throw new Error("shutdown failed");
+        },
+      );
+
+      handler();
+      await Bun.sleep(0);
+    } finally {
+      console.warn = originalWarn;
+    }
 
     expect(calls).toEqual([
       ["clear", timer],
       ["exit", 0],
+    ]);
+    expect(warnings).toEqual([
+      ["[codex-bridge] Failed to stop session-title generation:", expect.any(Error)],
     ]);
   });
 

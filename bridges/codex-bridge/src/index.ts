@@ -1063,7 +1063,9 @@ function mergePersistedSessionMeta(
 function isSyntheticPersistedUserText(text: string): boolean {
   const trimmed = text.trim();
   return trimmed.startsWith("# AGENTS.md instructions for ")
-    || trimmed.startsWith("<recommended_plugins>");
+    || trimmed.startsWith(
+      "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
+    );
 }
 
 function extractPersistedMessageText(

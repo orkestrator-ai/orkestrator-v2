@@ -225,6 +225,14 @@ describe("codex bridge private boundary coverage", () => {
         text: "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
       },
     ], "user")).toBeNull();
+    expect(extract([
+      {
+        type: "input_text",
+        text: "<recommended_plugins>\nPlease compare these plugin recommendations.",
+      },
+    ], "user")).toBe(
+      "<recommended_plugins>\nPlease compare these plugin recommendations.",
+    );
     expect(extract([{ type: "input_text", text: "user prompt" }], "user"))
       .toBe("user prompt");
   });

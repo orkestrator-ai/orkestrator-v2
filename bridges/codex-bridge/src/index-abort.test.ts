@@ -2523,6 +2523,18 @@ describe("codex bridge abort handling", () => {
           JSON.stringify({ type: "response_item", payload: { type: "message", role: "tool" } }),
           JSON.stringify({
             type: "response_item",
+            timestamp: "2026-04-15T09:00:30.000Z",
+            payload: {
+              type: "message",
+              role: "user",
+              content: [{
+                type: "input_text",
+                text: "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
+              }],
+            },
+          }),
+          JSON.stringify({
+            type: "response_item",
             timestamp: "2026-04-15T09:01:00.000Z",
             payload: {
               type: "message",
@@ -2675,6 +2687,17 @@ describe("codex bridge abort handling", () => {
             content: [{
               type: "input_text",
               text: "# AGENTS.md instructions for /workspace\nInternal repository guidance",
+            }],
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{
+              type: "input_text",
+              text: "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
             }],
           },
         },

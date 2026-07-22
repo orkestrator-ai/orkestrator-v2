@@ -219,6 +219,12 @@ describe("codex bridge private boundary coverage", () => {
     expect(extract([
       { type: "input_text", text: "# AGENTS.md instructions for /tmp/repo\nignored" },
     ], "user")).toBeNull();
+    expect(extract([
+      {
+        type: "input_text",
+        text: "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
+      },
+    ], "user")).toBeNull();
     expect(extract([{ type: "input_text", text: "user prompt" }], "user"))
       .toBe("user prompt");
   });

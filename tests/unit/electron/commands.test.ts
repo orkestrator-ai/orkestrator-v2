@@ -3308,6 +3308,10 @@ if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
   printf '%s\\n' 'https://github.com/acme/repo/pull/42'
   exit 0
 fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'isDraft' '--jq' '.isDraft'" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$command" = "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--squash'" ]; then
   exit 0
 fi
@@ -3329,6 +3333,48 @@ exit 1
     });
   });
 
+  test("marks a draft container PR ready before merging it", async () => {
+    const { context } = createContext(createEnvironment());
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+command=""
+for arg in "$@"; do command="$arg"; done
+if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
+  printf '%s\\n' 'https://github.com/acme/repo/pull/42'
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'isDraft' '--jq' '.isDraft'" ]; then
+  printf '%s\\n' 'true'
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'ready' 'https://github.com/acme/repo/pull/42'" ]; then
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--squash'" ]; then
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'state' '--jq' '.state'" ]; then
+  printf '%s\\n' 'MERGED'
+  exit 0
+fi
+printf 'unexpected docker command: %s\\n' "$command" >&2
+exit 1
+`, async (logs) => {
+      await expect(commands.get("merge_pr")?.(
+        { containerId: "container-1", method: "squash", deleteBranch: false },
+        context,
+      )).resolves.toEqual({ outcome: "merged" });
+
+      const execLog = await fs.readFile(logs.exec, "utf8");
+      const readyCommand = "'gh' 'pr' 'ready' 'https://github.com/acme/repo/pull/42'";
+      const mergeCommand = "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--squash'";
+      expect(execLog).toContain(readyCommand);
+      expect(execLog.indexOf(readyCommand)).toBeLessThan(execLog.indexOf(mergeCommand));
+    });
+  });
+
   test("reports a queued container PR as pending when the captured PR remains open", async () => {
     const { context } = createContext(createEnvironment());
     const commands = createCommandRegistry();
@@ -3338,6 +3384,10 @@ command=""
 for arg in "$@"; do command="$arg"; done
 if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
   printf '%s\\n' 'https://github.com/acme/repo/pull/42'
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'isDraft' '--jq' '.isDraft'" ]; then
+  printf '%s\\n' 'false'
   exit 0
 fi
 if [ "$command" = "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--rebase' '--delete-branch'" ]; then
@@ -3368,6 +3418,10 @@ if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
   printf '%s\\n' 'https://github.com/acme/repo/pull/42'
   exit 0
 fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'isDraft' '--jq' '.isDraft'" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$command" = "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--merge'" ]; then
   exit 0
 fi
@@ -3396,6 +3450,10 @@ exit 1
 
     await withFakeGh(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ] && [ "$3" = "--method" ] && [ "$4" = "PUT" ]; then
   printf '%s\\n' '{"merged":true}'
   exit 0
@@ -3415,6 +3473,44 @@ exit 1
     });
   });
 
+  test("marks a draft local PR ready before merging it through the GitHub API", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-draft-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
+  printf '%s\\n' 'true'
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "ready" ]; then
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
+  printf '%s\\n' '{"merged":true}'
+  exit 0
+fi
+printf 'unexpected gh args: %s\\n' "$*" >&2
+exit 1
+`, async (logPath) => {
+      await expect(commands.get("merge_pr_local")?.(
+        { environmentId: environment.id, method: "squash", deleteBranch: false },
+        context,
+      )).resolves.toEqual({ outcome: "merged" });
+
+      const ghLog = await fs.readFile(logPath, "utf8");
+      const readyCommand = "pr ready https://github.com/acme/repo/pull/42";
+      const mergeCommand = "api repos/acme/repo/pulls/42/merge";
+      expect(ghLog).toContain(readyCommand);
+      expect(ghLog.indexOf(readyCommand)).toBeLessThan(ghLog.indexOf(mergeCommand));
+    });
+  });
+
   test("deletes the remote head branch after local API merge when requested", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-delete-worktree-");
     const environment = createEnvironment({
@@ -3426,6 +3522,10 @@ exit 1
 
     await withFakeGh(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ] && [ "$3" = "" ]; then
   printf '%s\\n' '{"head":{"ref":"feature/local-work","repo":{"full_name":"acme/repo"}}}'
   exit 0
@@ -3464,6 +3564,10 @@ exit 1
 
     await withFakeGh(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ] && [ "$3" = "--method" ] && [ "$4" = "PUT" ]; then
   printf '%s\\n' '{"merged":true}'
   exit 0
@@ -3492,6 +3596,10 @@ exit 1
 
     await withFakeGh(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
   printf '%s\\n' '{"merged":false,"message":"Merge is pending"}'
   exit 0
@@ -3516,6 +3624,10 @@ exit 1
     const commands = createCommandRegistry();
 
     await withFakeGh(`#!/bin/sh
+if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
   printf '%s\\n' 'not-json'
   exit 0
@@ -3581,6 +3693,10 @@ exit 1
 
     await withFakeGh(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ] && [ "$3" = "" ]; then
   printf '%s\\n' '{"head":{"ref":"feature/already-deleted","repo":{"full_name":"acme/repo"}}}'
   exit 0
@@ -3617,6 +3733,10 @@ exit 1
 
     await withFakeGh(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ] && [ "$3" = "" ]; then
   printf '%s\\n' '{"head":{"ref":"feature/protected","repo":{"full_name":"acme/repo"}}}'
   exit 0

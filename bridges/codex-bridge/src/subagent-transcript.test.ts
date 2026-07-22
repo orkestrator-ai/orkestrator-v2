@@ -21,6 +21,23 @@ function validFernetEnvelope(): string {
   ]).toString("base64url");
 }
 
+function deriveSingleSubagent(
+  childRecords: TranscriptRecord[],
+  spawnArgs: Record<string, unknown> = {},
+) {
+  return deriveSubagentPartsFromTranscriptRecords([
+    {
+      type: "response_item",
+      payload: {
+        type: "function_call",
+        name: "spawn_agent",
+        call_id: "spawn",
+        arguments: JSON.stringify(spawnArgs),
+      },
+    },
+  ], new Map([["agent", childRecords]]), new Map([["spawn", "agent"]]))[0];
+}
+
 describe("parseTranscriptRecords", () => {
   test("skips invalid lines and non-object payloads", () => {
     const records = parseTranscriptRecords([
@@ -1011,6 +1028,222 @@ describe("deriveSubagentPartsFromTranscriptRecords", () => {
     ])?.toolState).toBe("success");
   });
 
+  test("renders an event final answer without requiring a response-item copy", () => {
+    const part = deriveSingleSubagent([
+      {
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          phase: "final_answer",
+          message: "Event-only final answer",
+        },
+      },
+    ]);
+
+    expect(part?.toolState).toBe("success");
+    expect(part?.subagentActions).toEqual([
+      { type: "text", content: "Event-only final answer" },
+    ]);
+  });
+
+  test("renders only valid multipart output text from a response final answer", () => {
+    const part = deriveSingleSubagent([
+      {
+        type: "response_item",
+        payload: { type: "message", phase: "final_answer", content: null },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          phase: "final_answer",
+          content: [
+            null,
+            "invalid part",
+            { type: "input_text", text: "Do not render input" },
+            { type: "output_text" },
+            { type: "output_text", text: 42 },
+            { type: "output_text", text: " " },
+            { type: "output_text", text: "First paragraph" },
+            { type: "output_text", text: "Second paragraph" },
+          ],
+        },
+      },
+    ]);
+
+    expect(part?.toolState).toBe("success");
+    expect(part?.subagentActions).toEqual([
+      { type: "text", content: "First paragraph\nSecond paragraph" },
+    ]);
+  });
+
+  test("renders the readable final answer and hides encrypted collaboration messages", () => {
+    const finalAnswer = "Found one correctness issue and sent the details to the parent.";
+    const [part] = deriveSubagentPartsFromTranscriptRecords([
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "spawn_agent", call_id: "spawn" },
+      },
+    ], new Map([["agent", [
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "send_message",
+          call_id: "send",
+          arguments: JSON.stringify({
+            target: "/root",
+            message: validFernetEnvelope(),
+          }),
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "send",
+          output: "",
+        },
+      },
+      {
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          phase: "final_answer",
+          message: finalAnswer,
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          phase: "final_answer",
+          content: [{ type: "output_text", text: finalAnswer }],
+        },
+      },
+    ]]]), new Map([["spawn", "agent"]]));
+
+    expect(part?.toolState).toBe("success");
+    expect(part?.subagentActionCount).toBe(1);
+    expect(part?.subagentActions).toEqual([
+      expect.objectContaining({
+        type: "tool-invocation",
+        toolName: "send_message",
+        toolArgs: { target: "/root" },
+        toolOutput: "",
+      }),
+      { type: "text", content: finalAnswer },
+    ]);
+  });
+
+  test("redacts opaque messages only for collaboration tools", () => {
+    const opaqueMessage = validFernetEnvelope();
+    const part = deriveSingleSubagent([
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "send_message",
+          arguments: JSON.stringify({ target: "/root", message: opaqueMessage }),
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "followup_task",
+          arguments: JSON.stringify({ target: "/root/reviewer", message: opaqueMessage }),
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: JSON.stringify({ task_name: "reviewer", message: opaqueMessage }),
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "transport_message",
+          arguments: JSON.stringify({ message: opaqueMessage }),
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "send_message",
+          arguments: JSON.stringify({ target: "/root", message: "Readable update" }),
+        },
+      },
+    ]);
+
+    expect(part?.subagentActions.map((action) => action.toolArgs)).toEqual([
+      { target: "/root" },
+      { target: "/root/reviewer" },
+      { task_name: "reviewer" },
+      { message: opaqueMessage },
+      { target: "/root", message: "Readable update" },
+    ]);
+  });
+
+  test("keeps malformed child calls visible and applies duplicate outputs to the latest call", () => {
+    const part = deriveSingleSubagent([
+      {
+        type: "response_item",
+        payload: { type: "function_call", arguments: "{}" },
+      },
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: " ", arguments: "{}" },
+      },
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "missing_id", arguments: "{}" },
+      },
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "blank_id", call_id: " ", arguments: "{}" },
+      },
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "first_duplicate", call_id: "duplicate", arguments: "{}" },
+      },
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "second_duplicate", call_id: "duplicate", arguments: "{}" },
+      },
+      {
+        type: "response_item",
+        payload: { type: "function_call_output", call_id: "duplicate", output: "latest output" },
+      },
+      {
+        type: "response_item",
+        payload: { type: "function_call_output", output: "ignored missing ID" },
+      },
+      {
+        type: "response_item",
+        payload: { type: "function_call_output", call_id: " ", output: "ignored blank ID" },
+      },
+    ]);
+
+    expect(part?.subagentActionCount).toBe(6);
+    expect(part?.subagentActions.map((action) => ({
+      name: action.toolName,
+      output: action.toolOutput,
+    }))).toEqual([
+      { name: "tool", output: undefined },
+      { name: "tool", output: undefined },
+      { name: "missing_id", output: undefined },
+      { name: "blank_id", output: undefined },
+      { name: "first_duplicate", output: undefined },
+      { name: "second_duplicate", output: "latest output" },
+    ]);
+  });
+
   test("handles wait errors, aborts, malformed outputs, and success precedence", () => {
     const spawn = (agentId: string): TranscriptRecord[] => [
       {
@@ -1224,6 +1457,173 @@ describe("deriveSubagentPartsFromTranscriptRecords", () => {
       prompts[5],
       prompts[6],
     ]);
+  });
+
+  test("uses stable session metadata and the complete display-name fallback chain", () => {
+    const parentRecords: TranscriptRecord[] = [
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          call_id: "named",
+          arguments: JSON.stringify({ agent_type: "base-role", message: "Named prompt" }),
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "named",
+          output: JSON.stringify({ agent_id: "named-id", nickname: "Base name" }),
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          call_id: "role-only",
+          arguments: JSON.stringify({ task_name: "role-name" }),
+        },
+      },
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "spawn_agent", call_id: "id-only" },
+      },
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "spawn_agent", call_id: "fallback" },
+      },
+    ];
+    const childRecords = new Map<string, TranscriptRecord[]>([[
+      "named-id",
+      [
+        {
+          type: "session_meta",
+          payload: { agent_nickname: "Session name", agent_role: "session-role" },
+        },
+        {
+          type: "session_meta",
+          payload: { agent_nickname: " ", agent_role: 42 },
+        },
+      ],
+    ]]);
+
+    const parts = deriveSubagentPartsFromTranscriptRecords(
+      parentRecords,
+      childRecords,
+      new Map([
+        ["role-only", "role-id"],
+        ["id-only", "agent-id"],
+      ]),
+    );
+
+    expect(parts.map((part) => ({
+      content: part.content,
+      id: part.subagentId,
+      name: part.subagentName,
+      role: part.subagentRole,
+      prompt: part.subagentPrompt,
+    }))).toEqual([
+      {
+        content: "Session name",
+        id: "named-id",
+        name: "Session name",
+        role: "session-role",
+        prompt: "Named prompt",
+      },
+      { content: "role-name", id: "role-id", name: undefined, role: "role-name", prompt: undefined },
+      { content: "agent-id", id: "agent-id", name: undefined, role: undefined, prompt: undefined },
+      { content: "subagent", id: undefined, name: undefined, role: undefined, prompt: undefined },
+    ]);
+  });
+
+  test("lets the latest terminal wait and list status win while ignoring later nonterminal refreshes", () => {
+    const spawn = (callId: string, agentId: string, agentPath?: string): TranscriptRecord[] => [
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "spawn_agent", call_id: callId },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify({ agent_id: agentId }),
+        },
+      },
+      ...(agentPath ? [{
+        type: "event_msg",
+        payload: {
+          type: "sub_agent_activity",
+          event_id: callId,
+          agent_thread_id: agentId,
+          agent_path: agentPath,
+        },
+      } satisfies TranscriptRecord] : []),
+    ];
+    const wait = (callId: string, status: Record<string, unknown>): TranscriptRecord[] => [
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "wait_agent", call_id: callId },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify({ status }),
+        },
+      },
+    ];
+    const list = (callId: string, statuses: Array<[string, unknown]>): TranscriptRecord[] => [
+      {
+        type: "response_item",
+        payload: { type: "function_call", name: "list_agents", call_id: callId },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify({
+            agents: statuses.map(([agent_name, agent_status]) => ({ agent_name, agent_status })),
+          }),
+        },
+      },
+    ];
+    const parentRecords = [
+      ...spawn("spawn-wait-success", "wait-success"),
+      ...spawn("spawn-wait-failure", "wait-failure"),
+      ...spawn("spawn-list-failure", "list-failure", "/root/list-failure"),
+      ...spawn("spawn-list-success", "list-success", "/root/list-success"),
+      ...spawn("spawn-list-sticky", "list-sticky", "/root/list-sticky"),
+      ...wait("wait-failure-first", { "wait-success": { failed: "first" } }),
+      ...wait("wait-success-last", { "wait-success": { completed: "last" } }),
+      ...wait("wait-success-first", { "wait-failure": { completed: "first" } }),
+      ...wait("wait-failure-last", { "wait-failure": { failed: "last" } }),
+      ...list("list-first", [
+        ["/root/list-failure", "completed"],
+        ["/root/list-success", "errored"],
+        ["/root/list-sticky", "completed"],
+      ]),
+      ...list("list-last", [
+        ["/root/list-failure", "errored"],
+        ["/root/list-success", "completed"],
+        ["/root/list-sticky", "running"],
+      ]),
+    ];
+
+    const parts = deriveSubagentPartsFromTranscriptRecords(parentRecords, new Map());
+
+    expect(Object.fromEntries(parts.map((part) => [part.subagentId, part.toolState]))).toEqual({
+      "wait-success": "success",
+      "wait-failure": "failure",
+      "list-failure": "failure",
+      "list-success": "success",
+      "list-sticky": "success",
+    });
   });
 
   test("derives terminal states from list_agents outputs keyed by agent path", () => {

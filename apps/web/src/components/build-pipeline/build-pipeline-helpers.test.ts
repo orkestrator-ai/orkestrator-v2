@@ -298,6 +298,16 @@ describe("createBuildPrompt", () => {
     expect(result).toContain("2. Support system preference");
   });
 
+  test("includes attached image context when present", () => {
+    const task = {
+      ...baseTask,
+      images: [{ filename: "dark-mode-reference.png", data: "base64data" }],
+    };
+    const result = createBuildPrompt(task, "");
+    expect(result).toContain("**Attached Images** (1): dark-mode-reference.png");
+    expect(result).toContain("Refer to them when implementing the feature.");
+  });
+
   test("includes project notes when provided", () => {
     const result = createBuildPrompt(baseTask, "We use Tailwind for styling");
     expect(result).toContain("**Project Notes**:");
@@ -361,6 +371,22 @@ describe("createVerificationPrompt", () => {
     const result = createVerificationPrompt(baseTask, "");
     expect(result).toContain("git branch --show-current");
   });
+
+  test("includes optional context while omitting empty ticket fields", () => {
+    const task = {
+      ...baseTask,
+      description: "",
+      acceptanceCriteria: "",
+      comments: [{ text: "Verify keyboard navigation." }],
+      images: [{ filename: "search-results.png", data: "base64data" }],
+    };
+    const result = createVerificationPrompt(task, "Search uses SQLite FTS.");
+    expect(result).not.toContain("**Description**:");
+    expect(result).not.toContain("**Acceptance Criteria**:");
+    expect(result).toContain("**Comments**:\n1. Verify keyboard navigation.");
+    expect(result).toContain("**Attached Images** (1): search-results.png");
+    expect(result).toContain("**Project Notes**:\nSearch uses SQLite FTS.");
+  });
 });
 
 // --- createFixPrompt ---
@@ -390,6 +416,22 @@ describe("createFixPrompt", () => {
   test("includes project notes", () => {
     const result = createFixPrompt(baseTask, "Auth uses JWT tokens", "Session not persisted");
     expect(result).toContain("Auth uses JWT tokens");
+  });
+
+  test("includes comments and images while omitting empty ticket fields", () => {
+    const task = {
+      ...baseTask,
+      description: "",
+      acceptanceCriteria: "",
+      comments: [{ text: "The failure only occurs with SSO." }],
+      images: [{ filename: "login-error.png", data: "base64data" }],
+    };
+    const result = createFixPrompt(task, "", "The SSO callback still fails.");
+    expect(result).not.toContain("**Description**:");
+    expect(result).not.toContain("**Acceptance Criteria**:");
+    expect(result).toContain("**Comments**:\n1. The failure only occurs with SSO.");
+    expect(result).toContain("**Attached Images** (1): login-error.png");
+    expect(result).toContain("The SSO callback still fails.");
   });
 });
 

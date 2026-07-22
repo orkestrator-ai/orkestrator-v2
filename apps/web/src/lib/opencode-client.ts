@@ -106,7 +106,10 @@ function resolveDefaultVariant(defaultConfig: unknown): string | undefined {
 
 export type ToolDiffMetadata = NativeToolDiffMetadata;
 export type OpenCodeMessagePart = NativeMessagePart;
-export type OpenCodeMessage = NativeMessage;
+export type OpenCodeMessage = NativeMessage & {
+  /** Whether the SDK marked this assistant message as failed. Raw error data is intentionally not retained. */
+  hasError?: boolean;
+};
 
 
 export interface OpenCodeSession {
@@ -469,13 +472,14 @@ function mapOpenCodeParts(
 ): { parts: OpenCodeMessagePart[]; changed: boolean } {
   let changed = false;
   const nextParts = parts.map((part) => {
-    let nextPart = mapper(part);
-    if (nextPart.type === "subagent" && nextPart.subagentActions?.length) {
-      const nested = mapOpenCodeParts(nextPart.subagentActions, mapper);
+    let nextPart = part;
+    if (part.type === "subagent" && part.subagentActions?.length) {
+      const nested = mapOpenCodeParts(part.subagentActions, mapper);
       if (nested.changed) {
-        nextPart = { ...nextPart, subagentActions: nested.parts };
+        nextPart = { ...part, subagentActions: nested.parts };
       }
     }
+    nextPart = mapper(nextPart);
     if (nextPart !== part) changed = true;
     return nextPart;
   });
@@ -753,6 +757,9 @@ export function normalizeOpenCodeMessage(rawMessage: unknown): OpenCodeMessage |
     content: textContent,
     parts: parsedParts,
     createdAt,
+    ...(info?.error !== undefined && info?.error !== null
+      ? { hasError: true }
+      : {}),
   };
 }
 
@@ -1179,7 +1186,14 @@ export async function getSessionMessages(
       .filter((message): message is OpenCodeMessage => message !== null);
 
     if (options.includeSubagents !== false) {
-      messages = await hydrateOpenCodeSubagentTranscripts(client, sessionId, messages);
+      messages = await hydrateOpenCodeSubagentTranscripts(
+        client,
+        sessionId,
+        messages,
+        new Set([sessionId]),
+        undefined,
+        options.throwOnError === true,
+      );
     }
 
     return messages;
@@ -1219,12 +1233,23 @@ function findUnidentifiedTaskParts(messages: OpenCodeMessage[]): OpenCodeMessage
 async function getOpenCodeChildSessions(
   client: OpencodeClient,
   parentSessionId: string,
+  throwOnError = false,
 ): Promise<OpenCodeChildSession[]> {
   try {
-    const response = await client.session.children({ sessionID: parentSessionId });
+    const response = await client.session.children(
+      { sessionID: parentSessionId },
+      { throwOnError },
+    );
+    if (!response.data && throwOnError) {
+      throw openCodeResponseError(
+        "Failed to get OpenCode child sessions",
+        response.error,
+      );
+    }
     return Array.isArray(response.data) ? response.data : [];
   } catch (error) {
     console.warn("[opencode-client] Failed to get child sessions:", error);
+    if (throwOnError) throw error;
     return [];
   }
 }
@@ -1268,18 +1293,38 @@ function assignOpenCodeChildSessionIds(
 
 async function getOpenCodeSessionStatusMap(
   client: OpencodeClient,
+  throwOnError = false,
 ): Promise<OpenCodeSessionStatusMap | undefined> {
   const status = (client.session as unknown as {
-    status?: () => Promise<{ data?: OpenCodeSessionStatusMap }>;
+    status?: (
+      parameters?: unknown,
+      options?: { throwOnError?: boolean },
+    ) => Promise<{ data?: OpenCodeSessionStatusMap; error?: unknown }>;
   }).status;
   if (typeof status !== "function") return undefined;
   try {
-    const response = await status.call(client.session);
-    return response.data;
+    const response = await status.call(client.session, undefined, { throwOnError });
+    if (!response.data) {
+      if (throwOnError) {
+        throw openCodeResponseError(
+          "Failed to get OpenCode subagent session statuses",
+          response.error,
+        );
+      }
+      return undefined;
+    }
+    return isRecord(response.data) && !Array.isArray(response.data)
+      ? response.data as OpenCodeSessionStatusMap
+      : undefined;
   } catch (error) {
     console.warn("[opencode-client] Failed to get subagent session statuses:", error);
+    if (throwOnError) throw error;
     return undefined;
   }
+}
+
+function hasOpenCodeAssistantError(messages: OpenCodeMessage[]): boolean {
+  return messages.some((message) => message.role === "assistant" && message.hasError === true);
 }
 
 async function hydrateOpenCodeSubagentTranscripts(
@@ -1288,10 +1333,11 @@ async function hydrateOpenCodeSubagentTranscripts(
   initialMessages: OpenCodeMessage[],
   ancestors: Set<string> = new Set([parentSessionId]),
   statusMap?: OpenCodeSessionStatusMap,
+  throwOnError = false,
 ): Promise<OpenCodeMessage[]> {
   let messages = initialMessages;
   if (findUnidentifiedTaskParts(messages).length > 0) {
-    const children = await getOpenCodeChildSessions(client, parentSessionId);
+    const children = await getOpenCodeChildSessions(client, parentSessionId, throwOnError);
     messages = assignOpenCodeChildSessionIds(messages, children);
   }
 
@@ -1307,12 +1353,15 @@ async function hydrateOpenCodeSubagentTranscripts(
 
   const resolvedStatusMap =
     statusMap ??
-    (childIds.size > 0 ? await getOpenCodeSessionStatusMap(client) : undefined);
+    (childIds.size > 0
+      ? await getOpenCodeSessionStatusMap(client, throwOnError)
+      : undefined);
 
   const transcripts = await Promise.all(
     Array.from(childIds, async (childSessionId) => {
       const childMessages = await getSessionMessages(client, childSessionId, {
         includeSubagents: false,
+        throwOnError: true,
       });
       const hydrated = await hydrateOpenCodeSubagentTranscripts(
         client,
@@ -1320,6 +1369,7 @@ async function hydrateOpenCodeSubagentTranscripts(
         childMessages,
         new Set([...ancestors, childSessionId]),
         resolvedStatusMap,
+        throwOnError,
       );
       return { childSessionId, messages: hydrated };
     }),
@@ -1327,11 +1377,12 @@ async function hydrateOpenCodeSubagentTranscripts(
 
   for (const transcript of transcripts) {
     const childStatus = resolvedStatusMap?.[transcript.childSessionId]?.type;
-    const hasActivity = flattenOpenCodeSubagentActions(transcript.messages).length > 0;
     const state =
-      childStatus === "busy" || childStatus === "retry"
+      hasOpenCodeAssistantError(transcript.messages)
+        ? "failure"
+        : childStatus === "busy" || childStatus === "retry"
         ? "pending"
-        : childStatus === "idle" && hasActivity
+        : childStatus === "idle"
           ? "success"
           : undefined;
     messages = mergeOpenCodeSubagentTranscript(

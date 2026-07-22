@@ -57,10 +57,6 @@ mock.module("@/lib/claude-client", () => ({
 // global bun module cache and breaks useScrollLock.test.ts. The real hook
 // returns safe defaults (isAtBottom: true) when no viewport is found.
 
-mock.module("@/lib/context-usage", () => ({
-  extractContextUsage: () => null,
-}));
-
 // Mock heavy UI components so rendering is fast.
 // Snapshot the real modules first so afterAll can restore them — Bun caches
 // mock.module factories globally, so without restoration these stubs leak

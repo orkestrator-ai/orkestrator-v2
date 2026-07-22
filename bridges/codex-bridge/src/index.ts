@@ -1060,9 +1060,12 @@ function mergePersistedSessionMeta(
   }
 }
 
-function shouldSkipHydratedUserText(text: string): boolean {
+function isSyntheticPersistedUserText(text: string): boolean {
   const trimmed = text.trim();
-  return trimmed.startsWith("# AGENTS.md instructions for ");
+  return trimmed.startsWith("# AGENTS.md instructions for ")
+    || trimmed.startsWith(
+      "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
+    );
 }
 
 function extractPersistedMessageText(
@@ -1093,7 +1096,7 @@ function extractPersistedMessageText(
     return null;
   }
 
-  if (role === "user" && shouldSkipHydratedUserText(text)) {
+  if (role === "user" && isSyntheticPersistedUserText(text)) {
     return null;
   }
 

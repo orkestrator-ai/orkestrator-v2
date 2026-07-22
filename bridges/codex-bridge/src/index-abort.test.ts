@@ -2523,6 +2523,30 @@ describe("codex bridge abort handling", () => {
           JSON.stringify({ type: "response_item", payload: { type: "message", role: "tool" } }),
           JSON.stringify({
             type: "response_item",
+            timestamp: "2026-04-15T09:00:15.000Z",
+            payload: {
+              type: "message",
+              role: "user",
+              content: [{
+                type: "input_text",
+                text: "<recommended_plugins>\nPlease compare these plugin recommendations.",
+              }],
+            },
+          }),
+          JSON.stringify({
+            type: "response_item",
+            timestamp: "2026-04-15T09:00:30.000Z",
+            payload: {
+              type: "message",
+              role: "user",
+              content: [{
+                type: "input_text",
+                text: "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
+              }],
+            },
+          }),
+          JSON.stringify({
+            type: "response_item",
             timestamp: "2026-04-15T09:01:00.000Z",
             payload: {
               type: "message",
@@ -2572,6 +2596,7 @@ describe("codex bridge abort handling", () => {
       expect(resumeResponse.status).toBe(201);
       const resumeBody = await resumeResponse.json();
       expect(resumeBody.messages.map((message: { content: string }) => message.content)).toEqual([
+        "<recommended_plugins>\nPlease compare these plugin recommendations.",
         "Real archived prompt",
         "Real archived answer",
       ]);
@@ -2675,6 +2700,17 @@ describe("codex bridge abort handling", () => {
             content: [{
               type: "input_text",
               text: "# AGENTS.md instructions for /workspace\nInternal repository guidance",
+            }],
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{
+              type: "input_text",
+              text: "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
             }],
           },
         },

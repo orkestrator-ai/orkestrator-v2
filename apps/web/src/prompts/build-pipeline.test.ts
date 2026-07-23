@@ -27,6 +27,12 @@ describe("createBuildReviewPrompt", () => {
     expect(result).toContain("### 1. [P0|P1|P2][conf:NN][category]\n#### Short title");
     expect(result).not.toContain("## Findings");
     expect(result).toContain("## Verdict");
+    expect(result).toContain("## Summary of change");
+    expect(result).toContain(
+      "Write a couple of paragraphs describing what the change being reviewed involves.",
+    );
+    expect(result).toContain("## Review summary");
+    expect(result).not.toContain("## Summary\n");
   });
 
   test("includes expanded rubric and security checklist", () => {

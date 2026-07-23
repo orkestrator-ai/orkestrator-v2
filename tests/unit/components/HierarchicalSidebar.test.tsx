@@ -110,6 +110,8 @@ mock.module("@/lib/backend", () => ({
 const {
   HierarchicalSidebar,
   animateActivityRowMovement,
+  createEnvironmentUpdateHandler,
+  createProjectUpdateHandler,
   deleteProjectAndEnvironments,
   resolveSidebarReorder,
   resolveSidebarSelection,
@@ -298,8 +300,25 @@ describe("HierarchicalSidebar", () => {
     expect(screen.getByTestId("sidebar-list-content").className).toBe("pb-2");
     expect(screen.getByTestId("activity-controls-bar").className).toContain("h-10");
     expect(screen.getByTestId("activity-controls-bar").className).toContain("md:h-8");
+    expect(screen.getByTestId("activity-controls-bar").className).not.toContain("mb-1");
     expect(screen.getByTestId("activity-environment-rows").className).toContain("px-1");
     expect(screen.getByTestId("activity-environment-rows").className).toContain("pt-2");
+  });
+
+  test("keeps outer vertical padding for project, empty, and loading states", () => {
+    const view = render(<HierarchicalSidebar />);
+    expect(screen.getByTestId("sidebar-list-content").className).toBe("py-2");
+
+    projectsValue = [];
+    act(() => useUIStore.getState().setEnvironmentSortMode("activity"));
+    view.rerender(<HierarchicalSidebar />);
+    expect(screen.getByTestId("sidebar-list-content").className).toBe("py-2");
+    expect(screen.getByText("No projects yet")).toBeTruthy();
+
+    projectsLoadingValue = true;
+    view.rerender(<HierarchicalSidebar />);
+    expect(screen.getByTestId("sidebar-list-content").className).toBe("py-2");
+    expect(screen.getByText("Loading projects...")).toBeTruthy();
   });
 
   test("shows ordered project creation, environment count, and waiting count in the activity bar", async () => {
@@ -404,6 +423,14 @@ describe("HierarchicalSidebar", () => {
     animate.mockClear();
     expect(animateActivityRowMovement(row, 100, true)).toBe(20);
     expect(animate).not.toHaveBeenCalled();
+
+    expect(animateActivityRowMovement(row, null, false)).toBe(20);
+    expect(animateActivityRowMovement(row, 20, false)).toBe(20);
+    expect(animate).not.toHaveBeenCalled();
+
+    const rowWithoutAnimate = document.createElement("div");
+    rowWithoutAnimate.getBoundingClientRect = row.getBoundingClientRect;
+    expect(animateActivityRowMovement(rowWithoutAnimate, 100, false)).toBe(20);
   });
 
   test("sorts missing or equal activity timestamps by the existing sidebar order", () => {
@@ -431,6 +458,21 @@ describe("HierarchicalSidebar", () => {
       "env-unknown-b",
       "env-unknown-a",
     ]);
+  });
+
+  test("sorts exact activity and order ties by id and handles collection boundaries", () => {
+    const tiedEnvironments = [
+      { ...createdEnvironment, id: "env-b", lastActivityAt: "2026-07-22T10:00:00.000Z" },
+      { ...createdEnvironment, id: "env-a", lastActivityAt: "2026-07-22T10:00:00.000Z" },
+    ];
+
+    expect(sortEnvironmentsByActivity([], [project])).toEqual([]);
+    expect(sortEnvironmentsByActivity([createdEnvironment], [project])).toEqual([
+      createdEnvironment,
+    ]);
+    expect(sortEnvironmentsByActivity(tiedEnvironments, [project]).map((env) => env.id))
+      .toEqual(["env-a", "env-b"]);
+    expect(tiedEnvironments.map((env) => env.id)).toEqual(["env-b", "env-a"]);
   });
 
   test("selects a range using the displayed activity order", () => {
@@ -1015,6 +1057,26 @@ describe("HierarchicalSidebar", () => {
     });
   });
 
+  test("forwards project changes through the project hook contract", async () => {
+    const handler = createProjectUpdateHandler(updateProjectMock);
+    const updatedProject = { ...project, name: "Renamed Project" };
+
+    await handler(updatedProject);
+
+    expect(updateProjectMock).toHaveBeenCalledWith(updatedProject);
+  });
+
+  test("forwards environment changes through the environment hook contract", () => {
+    const handler = createEnvironmentUpdateHandler(updateEnvironmentMock);
+
+    handler(createdEnvironment);
+
+    expect(updateEnvironmentMock).toHaveBeenCalledWith(
+      createdEnvironment.id,
+      createdEnvironment,
+    );
+  });
+
   test("deletes a project through its confirmation dialog", async () => {
     environmentsValue = [{ ...createdEnvironment, id: "env-1", name: "Environment One" }];
     render(<HierarchicalSidebar />);
@@ -1141,6 +1203,11 @@ describe("HierarchicalSidebar", () => {
       type: "range",
       ids: ["env-2"],
     });
+    expect(resolveSidebarSelection("env-3", { shiftKey: true }, orderedIds, null, ["env-1"]))
+      .toEqual({
+        type: "range",
+        ids: ["env-1", "env-2", "env-3"],
+      });
     expect(resolveSidebarSelection("env-2", { shiftKey: true }, orderedIds, "missing", ["env-1"])).toEqual({
       type: "range",
       ids: ["env-2"],

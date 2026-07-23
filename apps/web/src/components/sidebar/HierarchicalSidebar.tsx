@@ -224,6 +224,20 @@ export function resolveSidebarReorder(
   return null;
 }
 
+export function createEnvironmentUpdateHandler(
+  updateEnvironment: (environmentId: string, environment: Environment) => void,
+): (environment: Environment) => void {
+  return (environment) => updateEnvironment(environment.id, environment);
+}
+
+export function createProjectUpdateHandler(
+  updateProject: (project: Project) => Promise<unknown>,
+): (project: Project) => Promise<void> {
+  return async (project) => {
+    await updateProject(project);
+  };
+}
+
 export async function deleteProjectAndEnvironments(
   projectId: string,
   environments: Environment[],
@@ -586,18 +600,14 @@ export function HierarchicalSidebar() {
     })
     .filter(Boolean) as { id: string; name: string }[];
 
-  const handleUpdateEnvironment = (environment: Environment) => {
-    updateEnvironment(environment.id, environment);
-  };
+  const handleUpdateEnvironment = createEnvironmentUpdateHandler(updateEnvironment);
 
   const handleOpenSettings = (projectId: string) => {
     setSettingsProjectId(projectId);
     setShowSettingsDialog(true);
   };
 
-  const handleUpdateProject = async (project: Project) => {
-    await updateProject(project);
-  };
+  const handleUpdateProject = createProjectUpdateHandler(updateProject);
 
   // Get the project for the settings dialog
   const settingsProject = settingsProjectId

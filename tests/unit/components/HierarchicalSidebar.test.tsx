@@ -109,9 +109,11 @@ mock.module("@/lib/backend", () => ({
 
 const {
   HierarchicalSidebar,
+  animateActivityRowMovement,
   deleteProjectAndEnvironments,
   resolveSidebarReorder,
   resolveSidebarSelection,
+  sortEnvironmentsByActivity,
 } = await import("../../../apps/web/src/components/sidebar/HierarchicalSidebar");
 
 afterAll(() => {
@@ -183,6 +185,8 @@ describe("HierarchicalSidebar", () => {
       collapsedProjects: [],
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],
+      environmentSortMode: "project",
+      unreadEnvironmentIds: [],
       zoomLevel: 100,
     });
     useConfigStore.setState((state) => ({
@@ -234,6 +238,225 @@ describe("HierarchicalSidebar", () => {
       cleanup();
       window.orkestrator = originalApi;
     }
+  });
+
+  test("offers project and activity sorting next to refresh and persists the selection", async () => {
+    render(<HierarchicalSidebar />);
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Sort environments: By project" }));
+    expect(await screen.findByRole("menuitemradio", { name: "By project" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "By activity" }));
+
+    await waitFor(() => {
+      expect(useUIStore.getState().environmentSortMode).toBe("activity");
+      expect(screen.getByRole("button", { name: "Sort environments: By activity" })).toBeTruthy();
+    });
+  });
+
+  test("renders the activity view as newest-first two-line environment rows", () => {
+    const secondProject = { ...project, id: "project-2", name: "Project Two", order: 1 };
+    projectsValue = [project, secondProject];
+    environmentsValue = [
+      {
+        ...createdEnvironment,
+        id: "env-older",
+        name: "Older environment",
+        lastActivityAt: "2026-07-20T10:00:00.000Z",
+      },
+      {
+        ...createdEnvironment,
+        id: "env-newer",
+        projectId: "project-2",
+        name: "Newer environment",
+        lastActivityAt: "2026-07-22T10:00:00.000Z",
+      },
+    ];
+    useUIStore.getState().setEnvironmentSortMode("activity");
+
+    render(<HierarchicalSidebar />);
+
+    expect(screen.getByRole("button", { name: "Create environment" })).toBeTruthy();
+    const rows = Array.from(
+      screen.getByTestId("activity-environment-list").querySelectorAll("[data-environment-id]"),
+    );
+    expect(rows.map((row) => row.getAttribute("data-environment-id"))).toEqual([
+      "env-newer",
+      "env-older",
+    ]);
+    expect(rows[0]?.textContent).toContain("Newer environment");
+    expect(rows[0]?.textContent).toContain("Project Two");
+    expect(rows[1]?.textContent).toContain("Older environment");
+    expect(rows[1]?.textContent).toContain("Project One");
+  });
+
+  test("shows ordered project creation, environment count, and waiting count in the activity bar", async () => {
+    const secondProject = { ...project, id: "project-2", name: "Project Two", order: 1 };
+    projectsValue = [project, secondProject];
+    environmentsValue = [
+      {
+        ...createdEnvironment,
+        id: "env-running",
+        lastActivityAt: "2026-07-22T10:00:00.000Z",
+      },
+      {
+        ...createdEnvironment,
+        id: "env-stopped",
+        status: "stopped",
+        lastActivityAt: "2026-07-21T10:00:00.000Z",
+      },
+      {
+        ...createdEnvironment,
+        id: "env-local",
+        projectId: secondProject.id,
+        environmentType: "local",
+        containerId: null,
+        status: "stopped",
+        lastActivityAt: "2026-07-20T10:00:00.000Z",
+      },
+    ];
+    useUIStore.setState({
+      environmentSortMode: "activity",
+      unreadEnvironmentIds: ["env-running", "missing-environment"],
+    });
+
+    render(<HierarchicalSidebar />);
+
+    expect(screen.getByLabelText("3 environments")).toBeTruthy();
+    expect(screen.getByLabelText("1 waiting environment")).toBeTruthy();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Create environment" }));
+    const projectItems = await screen.findAllByRole("menuitem");
+    expect(projectItems.map((item) => item.textContent)).toEqual([
+      "Project One",
+      "Project Two",
+    ]);
+
+    fireEvent.click(projectItems[1]!);
+    expect(await screen.findByRole("heading", { name: "Create Ork (Environment)" })).toBeTruthy();
+  });
+
+  test("shows completed activity on its row and clears it when the environment is opened", () => {
+    environmentsValue = [{
+      ...createdEnvironment,
+      id: "env-waiting",
+      name: "Waiting environment",
+      lastActivityAt: "2026-07-22T10:00:00.000Z",
+    }];
+    useUIStore.setState({
+      environmentSortMode: "activity",
+      unreadEnvironmentIds: ["env-waiting"],
+    });
+
+    render(<HierarchicalSidebar />);
+
+    expect(screen.getByLabelText("New completed activity")).toBeTruthy();
+    const row = screen.getByTestId("activity-environment-list")
+      .querySelector('[data-environment-id="env-waiting"] [role="button"]');
+    expect(row).toBeTruthy();
+    fireEvent.click(row!);
+
+    expect(useUIStore.getState().unreadEnvironmentIds).toEqual([]);
+    expect(screen.queryByLabelText("New completed activity")).toBeNull();
+    expect(screen.getByLabelText("0 waiting environments")).toBeTruthy();
+  });
+
+  test("animates activity row movement with a reduced-motion escape hatch", () => {
+    const row = document.createElement("div");
+    const animate = mock(() => ({} as Animation));
+    row.getBoundingClientRect = () => ({
+      bottom: 60,
+      height: 40,
+      left: 0,
+      right: 200,
+      top: 20,
+      width: 200,
+      x: 0,
+      y: 20,
+      toJSON: () => ({}),
+    });
+    row.animate = animate;
+
+    expect(animateActivityRowMovement(row, 100, false)).toBe(20);
+    expect(animate).toHaveBeenCalledWith(
+      [
+        { transform: "translateY(80px)" },
+        { transform: "translateY(0)" },
+      ],
+      {
+        duration: 280,
+        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+      },
+    );
+
+    animate.mockClear();
+    expect(animateActivityRowMovement(row, 100, true)).toBe(20);
+    expect(animate).not.toHaveBeenCalled();
+  });
+
+  test("sorts missing or equal activity timestamps by the existing sidebar order", () => {
+    const secondProject = { ...project, id: "project-2", order: 1 };
+    const environments = [
+      { ...createdEnvironment, id: "env-2", order: 1 },
+      { ...createdEnvironment, id: "env-3", projectId: "project-2", order: 0 },
+      { ...createdEnvironment, id: "env-1", order: 0 },
+      { ...createdEnvironment, id: "env-unknown-b", projectId: "missing", order: 1 },
+      {
+        ...createdEnvironment,
+        id: "env-unknown-a",
+        projectId: "missing",
+        order: 0,
+        lastActivityAt: "not-a-date",
+      },
+    ];
+
+    expect(sortEnvironmentsByActivity(environments, [project, secondProject]).map((env) => env.id))
+      .toEqual(["env-1", "env-2", "env-3", "env-unknown-a", "env-unknown-b"]);
+    expect(environments.map((env) => env.id)).toEqual([
+      "env-2",
+      "env-3",
+      "env-1",
+      "env-unknown-b",
+      "env-unknown-a",
+    ]);
+  });
+
+  test("selects a range using the displayed activity order", () => {
+    environmentsValue = [
+      {
+        ...createdEnvironment,
+        id: "env-oldest",
+        name: "Oldest environment",
+        lastActivityAt: "2026-07-20T10:00:00.000Z",
+      },
+      {
+        ...createdEnvironment,
+        id: "env-newest",
+        name: "Newest environment",
+        lastActivityAt: "2026-07-22T10:00:00.000Z",
+      },
+      {
+        ...createdEnvironment,
+        id: "env-middle",
+        name: "Middle environment",
+        lastActivityAt: "2026-07-21T10:00:00.000Z",
+      },
+    ];
+    useUIStore.setState({
+      environmentSortMode: "activity",
+      selectedEnvironmentId: "env-newest",
+    });
+
+    render(<HierarchicalSidebar />);
+    fireEvent.click(
+      screen.getByRole("button", { name: /Oldest environment/ }),
+      { shiftKey: true },
+    );
+
+    expect(useUIStore.getState().selectedEnvironmentIds).toEqual([
+      "env-newest",
+      "env-middle",
+      "env-oldest",
+    ]);
   });
 
   test("reloads the workspace from the refresh button", () => {

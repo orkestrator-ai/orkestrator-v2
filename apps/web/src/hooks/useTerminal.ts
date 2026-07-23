@@ -23,6 +23,8 @@ interface UseTerminalOptions {
   replayOutputBuffer?: boolean;
   /** Attach only to an existing backend-owned PTY; never create a replacement session. */
   attachExistingOnly?: boolean;
+  /** Persist prompt and settled-output activity for this environment-owned agent PTY. */
+  trackEnvironmentActivity?: boolean;
 }
 
 interface UseTerminalReturn {
@@ -48,6 +50,7 @@ export function useTerminal({
   user,
   replayOutputBuffer = false,
   attachExistingOnly = false,
+  trackEnvironmentActivity = false,
 }: UseTerminalOptions): UseTerminalReturn {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -229,17 +232,17 @@ export function useTerminal({
           shouldStartSession = false;
         } else if (isLocal && environmentId) {
           console.log("[useTerminal] Existing terminal session is stale, creating a new local session");
-          targetSessionId = await backend.createLocalTerminalSession(environmentId, cols, rows);
+          targetSessionId = await backend.createLocalTerminalSession(environmentId, cols, rows, trackEnvironmentActivity);
           console.log("[useTerminal] Got replacement local sessionId:", targetSessionId);
         } else {
           console.log("[useTerminal] Existing terminal session is stale, creating a new container session");
-          targetSessionId = await backend.createTerminalSession(containerId!, cols, rows, user);
+          targetSessionId = await backend.createTerminalSession(containerId!, cols, rows, user, trackEnvironmentActivity);
           console.log("[useTerminal] Got replacement sessionId:", targetSessionId);
         }
       } else if (isLocal && environmentId) {
         // Create new local session
         console.log("[useTerminal] Creating local terminal session for environment:", environmentId);
-        targetSessionId = await backend.createLocalTerminalSession(environmentId, cols, rows);
+        targetSessionId = await backend.createLocalTerminalSession(environmentId, cols, rows, trackEnvironmentActivity);
         if (!isCurrentConnect()) {
           await backend.closeLocalTerminalSession(targetSessionId).catch(() => {});
           return;
@@ -248,7 +251,7 @@ export function useTerminal({
       } else {
         // Create new container session
         console.log("[useTerminal] Calling createTerminalSession...");
-        targetSessionId = await backend.createTerminalSession(containerId!, cols, rows, user);
+        targetSessionId = await backend.createTerminalSession(containerId!, cols, rows, user, trackEnvironmentActivity);
         if (!isCurrentConnect()) {
           await backend.detachTerminal(targetSessionId).catch(() => {});
           return;
@@ -418,13 +421,13 @@ export function useTerminal({
         let newSessionId: string | null = null;
         try {
           if (isLocal && environmentId) {
-            newSessionId = await backend.createLocalTerminalSession(environmentId, cols, rows);
+            newSessionId = await backend.createLocalTerminalSession(environmentId, cols, rows, trackEnvironmentActivity);
             if (!isCurrentConnect()) {
               await backend.closeLocalTerminalSession(newSessionId).catch(() => {});
               return;
             }
           } else {
-            newSessionId = await backend.createTerminalSession(containerId!, cols, rows, user);
+            newSessionId = await backend.createTerminalSession(containerId!, cols, rows, user, trackEnvironmentActivity);
             if (!isCurrentConnect()) {
               await backend.detachTerminal(newSessionId).catch(() => {});
               return;
@@ -550,7 +553,7 @@ export function useTerminal({
         setIsConnecting(false);
       }
     }
-  }, [containerId, environmentId, isLocal, cols, rows, existingSessionId, user, replayOutputBuffer, attachExistingOnly, cleanupEventListener]);
+  }, [containerId, environmentId, isLocal, cols, rows, existingSessionId, user, replayOutputBuffer, attachExistingOnly, trackEnvironmentActivity, cleanupEventListener]);
 
   const disconnect = useCallback(async () => {
     if (!sessionId) return;

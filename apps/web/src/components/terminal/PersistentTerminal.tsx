@@ -477,6 +477,7 @@ export function PersistentTerminal({
 
   // Determine user based on tab type - root tabs connect as orkroot
   const terminalUser = tabType === "root" ? ROOT_TERMINAL_USER : undefined;
+  const trackEnvironmentActivity = tabType === "claude" || tabType === "opencode" || tabType === "codex";
 
   const { sessionId, isConnected, isConnecting, connect, resize, write } =
     useTerminal({
@@ -489,6 +490,7 @@ export function PersistentTerminal({
       user: terminalUser,
       replayOutputBuffer: shouldReplayBackendOutputBuffer,
       attachExistingOnly: isBackendManagedSetupTab,
+      trackEnvironmentActivity,
     });
 
   // Keep connect ref up to date to avoid stale closures in effects

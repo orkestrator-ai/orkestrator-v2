@@ -98,6 +98,7 @@ mock.module("@/lib/backend", () => ({
 
 import { EnvironmentItem } from "../../../apps/web/src/components/environments/EnvironmentItem";
 import { useAgentActivityStore } from "../../../apps/web/src/stores/agentActivityStore";
+import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 
 function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
   return {
@@ -179,6 +180,7 @@ beforeEach(() => {
     containerRefCounts: {},
     stateChangeCallbacks: new Map(),
   });
+  useUIStore.setState({ unreadEnvironmentIds: [], selectedEnvironmentId: null });
 });
 
 afterEach(() => {
@@ -481,5 +483,44 @@ describe("EnvironmentItem menu actions and selection", () => {
       shiftKey: true,
       metaKey: false,
     });
+  });
+});
+
+describe("EnvironmentItem unread activity indicator", () => {
+  test("does not render the unread bell when the environment has no unread activity", () => {
+    const { container } = renderItem(makeEnvironment());
+
+    expect(container.querySelector('[aria-label="New completed activity"]')).toBeNull();
+  });
+
+  test("renders the unread bell when the environment is marked unread", () => {
+    useUIStore.setState({ unreadEnvironmentIds: ["env-1"] });
+
+    const { container } = renderItem(makeEnvironment({ id: "env-1" }));
+
+    expect(container.querySelector('[aria-label="New completed activity"]')).not.toBeNull();
+  });
+
+  test("only marks the matching environment unread, not its siblings", () => {
+    useUIStore.setState({ unreadEnvironmentIds: ["env-other"] });
+
+    const { container } = renderItem(makeEnvironment({ id: "env-1" }));
+
+    expect(container.querySelector('[aria-label="New completed activity"]')).toBeNull();
+  });
+
+  test("shows the unread bell for local environments too (independent of container status)", () => {
+    useUIStore.setState({ unreadEnvironmentIds: ["env-1"] });
+
+    const { container } = renderItem(
+      makeEnvironment({
+        id: "env-1",
+        environmentType: "local",
+        containerId: null,
+        status: "stopped",
+      }),
+    );
+
+    expect(container.querySelector('[aria-label="New completed activity"]')).not.toBeNull();
   });
 });

@@ -20,6 +20,8 @@ const backendWrappers = await import(wrapperModulePath) as typeof import("./back
 const {
   connectLinear,
   createEnvironment,
+  createLocalTerminalSession,
+  createTerminalSession,
   disconnectLinear,
   ensureEnvironmentSetup,
   deletePaneLayout,
@@ -33,6 +35,7 @@ const {
   getWebClientStatus,
   postLinearCompletionComment,
   openInBrowser,
+  recordEnvironmentActivity,
   runEnvironmentSetup,
   resetWebClientServe,
   savePaneLayout,
@@ -118,6 +121,46 @@ describe("backend setup wrappers", () => {
     await expect(getEnvironmentSnapshots("project-1")).resolves.toEqual([]);
     expect(invokeMock.mock.calls).toEqual([
       ["get_environment_snapshots", { projectId: "project-1" }],
+    ]);
+  });
+
+  test("records environment activity with the supplied occurrence time", async () => {
+    const occurredAt = "2026-07-23T11:12:13.000Z";
+    await recordEnvironmentActivity("env-1", occurredAt);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["record_environment_activity", { environmentId: "env-1", occurredAt }],
+    ]);
+  });
+
+  test("creates environment-tracked local and container terminal sessions", async () => {
+    invokeMock.mockResolvedValueOnce("local-session");
+    await expect(createLocalTerminalSession("env-local", 100, 30, true))
+      .resolves.toBe("local-session");
+
+    invokeMock.mockResolvedValueOnce("container-session");
+    await expect(createTerminalSession(
+      "container-1",
+      120,
+      40,
+      undefined,
+      true,
+    )).resolves.toBe("container-session");
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["create_local_terminal_session", {
+        environmentId: "env-local",
+        cols: 100,
+        rows: 30,
+        trackEnvironmentActivity: true,
+      }],
+      ["create_terminal_session", {
+        containerId: "container-1",
+        cols: 120,
+        rows: 40,
+        user: undefined,
+        trackEnvironmentActivity: true,
+      }],
     ]);
   });
 

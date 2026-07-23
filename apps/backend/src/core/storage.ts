@@ -328,6 +328,7 @@ export function createEnvironment(
     prState: null,
     hasMergeConflicts: null,
     createdAt: nowIso(),
+    lastActivityAt: undefined,
     createdFromCommit: undefined,
     networkAccessMode: options.networkAccessMode ?? (environmentType === "local" ? "full" : "restricted"),
     allowedDomains: undefined,
@@ -751,6 +752,7 @@ export class StorageService {
         "initialPrompt",
         "pendingRenamePrompt",
         "createdFromCommit",
+        "lastActivityAt",
       ] as const;
       for (const field of stringFields) {
         if (field in updates) {
@@ -777,6 +779,31 @@ export class StorageService {
         environment.networkAccessMode = updates.networkAccessMode;
       }
 
+      await this.saveJson(this.environmentsFile(), environments);
+      return environment;
+    });
+  }
+
+  async recordEnvironmentActivity(environmentId: string, occurredAt: string): Promise<Environment> {
+    const activityTime = Date.parse(occurredAt);
+    if (!Number.isFinite(activityTime)) {
+      throw new Error("occurredAt must be a valid ISO timestamp");
+    }
+    const normalizedActivityAt = new Date(activityTime).toISOString();
+
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+
+      const previousTime = environment.lastActivityAt
+        ? Date.parse(environment.lastActivityAt)
+        : Number.NEGATIVE_INFINITY;
+      if (Number.isFinite(previousTime) && previousTime >= activityTime) {
+        return environment;
+      }
+
+      environment.lastActivityAt = normalizedActivityAt;
       await this.saveJson(this.environmentsFile(), environments);
       return environment;
     });

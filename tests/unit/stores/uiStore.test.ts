@@ -15,6 +15,8 @@ describe("uiStore", () => {
       collapsedProjects: [],
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],
+      environmentSortMode: "project",
+      unreadEnvironmentIds: [],
       zoomLevel: 100,
     });
   });
@@ -30,6 +32,8 @@ describe("uiStore", () => {
     expect(state.collapsedProjects).toEqual([]);
     expect(state.selectedEnvironmentIds).toEqual([]);
     expect(state.expandedSessionsEnvironments).toEqual([]);
+    expect(state.environmentSortMode).toBe("project");
+    expect(state.unreadEnvironmentIds).toEqual([]);
     expect(state.zoomLevel).toBe(100);
   });
 
@@ -62,8 +66,10 @@ describe("uiStore", () => {
   });
 
   test("selectEnvironment sets environment id", () => {
+    useUIStore.setState({ unreadEnvironmentIds: ["env-1", "env-2"] });
     useUIStore.getState().selectEnvironment("env-1");
     expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    expect(useUIStore.getState().unreadEnvironmentIds).toEqual(["env-2"]);
   });
 
   test("selectEnvironment with null clears environment", () => {
@@ -99,12 +105,14 @@ describe("uiStore", () => {
   });
 
   test("selectProjectAndEnvironment sets both", () => {
+    useUIStore.setState({ unreadEnvironmentIds: ["env-1", "env-2"] });
     useUIStore.getState().selectProjectAndEnvironment("project-1", "env-1");
 
     const state = useUIStore.getState();
     expect(state.selectedProjectId).toBe("project-1");
     expect(state.selectedEnvironmentId).toBe("env-1");
     expect(state.recentProjectIds).toEqual(["project-1"]);
+    expect(state.unreadEnvironmentIds).toEqual(["env-2"]);
   });
 
   test("keeps the five most recently opened projects without duplicates", () => {
@@ -179,6 +187,31 @@ describe("uiStore", () => {
     expect(useUIStore.getState().isSessionsExpanded("env-1")).toBe(false);
   });
 
+  test("sets and persists the environment sort mode", () => {
+    useUIStore.getState().setEnvironmentSortMode("activity");
+
+    expect(useUIStore.getState().environmentSortMode).toBe("activity");
+    const persisted = JSON.parse(localStorage.getItem("ui-storage") ?? "{}") as {
+      state?: Record<string, unknown>;
+    };
+    expect(persisted.state?.environmentSortMode).toBe("activity");
+  });
+
+  test("deduplicates, clears, and persists unread environment activity", () => {
+    useUIStore.getState().markEnvironmentUnread("env-1");
+    useUIStore.getState().markEnvironmentUnread("env-1");
+    useUIStore.getState().markEnvironmentUnread("env-2");
+
+    expect(useUIStore.getState().unreadEnvironmentIds).toEqual(["env-1", "env-2"]);
+    const persisted = JSON.parse(localStorage.getItem("ui-storage") ?? "{}") as {
+      state?: Record<string, unknown>;
+    };
+    expect(persisted.state?.unreadEnvironmentIds).toEqual(["env-1", "env-2"]);
+
+    useUIStore.getState().clearEnvironmentUnread("env-1");
+    expect(useUIStore.getState().unreadEnvironmentIds).toEqual(["env-2"]);
+  });
+
   test("setZoomLevel clamps to 50-200", () => {
     useUIStore.getState().setZoomLevel(150);
     expect(useUIStore.getState().zoomLevel).toBe(150);
@@ -240,6 +273,7 @@ describe("uiStore", () => {
   test("persists and rehydrates recent project history without transient selection", async () => {
     useUIStore.getState().selectProject("project-1");
     useUIStore.getState().selectProject("project-2");
+    useUIStore.getState().setEnvironmentSortMode("activity");
 
     const persistedRaw = localStorage.getItem("ui-storage") ?? "{}";
     const persisted = JSON.parse(persistedRaw) as {
@@ -247,6 +281,7 @@ describe("uiStore", () => {
     };
     expect(persisted.state).toMatchObject({
       recentProjectIds: ["project-2", "project-1"],
+      environmentSortMode: "activity",
     });
     expect(persisted.state).not.toHaveProperty("selectedProjectId");
 
@@ -254,11 +289,13 @@ describe("uiStore", () => {
       selectedProjectId: null,
       selectedEnvironmentId: null,
       recentProjectIds: [],
+      environmentSortMode: "project",
     });
     localStorage.setItem("ui-storage", persistedRaw);
     await useUIStore.persist.rehydrate();
 
     expect(useUIStore.getState().recentProjectIds).toEqual(["project-2", "project-1"]);
     expect(useUIStore.getState().selectedProjectId).toBeNull();
+    expect(useUIStore.getState().environmentSortMode).toBe("activity");
   });
 });

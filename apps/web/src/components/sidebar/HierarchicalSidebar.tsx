@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import {
   DndContext,
   closestCenter,
@@ -16,7 +16,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { Button } from "@/components/ui/button";
-import { Plus, FolderGit2, Square, Trash2, RotateCw, RefreshCw } from "lucide-react";
+import { ArrowUpDown, Bell, Boxes, Plus, FolderGit2, Square, Trash2, RotateCw, RefreshCw } from "lucide-react";
 import { SortableProjectGroup } from "./SortableProjectGroup";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
 import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
@@ -38,6 +38,18 @@ import { RepositorySettings } from "@/components/settings/RepositorySettings";
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
 import type { Environment, Project } from "@/types";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
+import { cn } from "@/lib/utils";
 
 export type SidebarReorderResult =
   | { type: "project"; ids: string[] }
@@ -47,6 +59,93 @@ export type SidebarSelectionResult =
   | { type: "toggle"; environmentId: string }
   | { type: "range"; ids: string[] }
   | { type: "single"; environmentId: string };
+
+function parseActivityTime(value: string | undefined): number {
+  if (!value) return Number.NEGATIVE_INFINITY;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
+}
+
+/** Most recent activity first, with the existing project/environment order as a stable fallback. */
+export function sortEnvironmentsByActivity(
+  environments: Environment[],
+  projects: Project[],
+): Environment[] {
+  const projectOrder = new Map(projects.map((project) => [project.id, project.order]));
+  return [...environments].sort((left, right) => {
+    const leftActivity = parseActivityTime(left.lastActivityAt);
+    const rightActivity = parseActivityTime(right.lastActivityAt);
+    if (leftActivity !== rightActivity) return rightActivity - leftActivity;
+
+    const projectDifference =
+      (projectOrder.get(left.projectId) ?? Number.MAX_SAFE_INTEGER) -
+      (projectOrder.get(right.projectId) ?? Number.MAX_SAFE_INTEGER);
+    if (projectDifference !== 0) return projectDifference;
+    if (left.order !== right.order) return left.order - right.order;
+    return left.id.localeCompare(right.id);
+  });
+}
+
+export function animateActivityRowMovement(
+  element: HTMLElement,
+  previousTop: number | null,
+  reduceMotion: boolean,
+): number {
+  const nextTop = element.getBoundingClientRect().top;
+  const offset = previousTop === null ? 0 : previousTop - nextTop;
+  if (
+    offset !== 0 &&
+    !reduceMotion &&
+    typeof element.animate === "function"
+  ) {
+    element.animate(
+      [
+        { transform: `translateY(${offset}px)` },
+        { transform: "translateY(0)" },
+      ],
+      {
+        duration: 280,
+        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+      },
+    );
+  }
+  return nextTop;
+}
+
+function AnimatedActivityRow({
+  environmentId,
+  className,
+  children,
+}: {
+  environmentId: string;
+  className: string;
+  children: ReactNode;
+}) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const previousTopRef = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    if (!row) return;
+    const reduceMotion = typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    previousTopRef.current = animateActivityRowMovement(
+      row,
+      previousTopRef.current,
+      reduceMotion,
+    );
+  });
+
+  return (
+    <div
+      ref={rowRef}
+      data-environment-id={environmentId}
+      className={className}
+    >
+      {children}
+    </div>
+  );
+}
 
 export function resolveSidebarSelection(
   environmentId: string,
@@ -188,7 +287,24 @@ export function HierarchicalSidebar() {
     setMultiSelection,
     clearMultiSelection,
     collapseEmptyProjects,
+    environmentSortMode,
+    setEnvironmentSortMode,
+    unreadEnvironmentIds,
   } = useUIStore();
+
+  const activityEnvironments = useMemo(
+    () => sortEnvironmentsByActivity(allEnvironments, projects),
+    [allEnvironments, projects],
+  );
+  const projectsById = useMemo(
+    () => new Map(projects.map((project) => [project.id, project])),
+    [projects],
+  );
+  const totalEnvironmentCount = activityEnvironments.length;
+  const waitingEnvironmentCount = useMemo(() => {
+    const environmentIds = new Set(allEnvironments.map((environment) => environment.id));
+    return unreadEnvironmentIds.filter((id) => environmentIds.has(id)).length;
+  }, [allEnvironments, unreadEnvironmentIds]);
 
   const isMultiSelectMode = selectedEnvironmentIds.length >= 1;
 
@@ -340,6 +456,10 @@ export function HierarchicalSidebar() {
   // Build a flat ordered list of visible environment IDs in display order
   // Only includes environments from expanded (non-collapsed) projects
   const getOrderedEnvironmentIds = useCallback((): string[] => {
+    if (environmentSortMode === "activity") {
+      return activityEnvironments.map((environment) => environment.id);
+    }
+
     const orderedIds: string[] = [];
     for (const project of projects) {
       // Skip collapsed projects - their environments aren't visible
@@ -352,7 +472,7 @@ export function HierarchicalSidebar() {
       }
     }
     return orderedIds;
-  }, [projects, getProjectEnvironments, collapsedProjects]);
+  }, [activityEnvironments, environmentSortMode, projects, getProjectEnvironments, collapsedProjects]);
 
   const handleSelectEnvironment = (
     environmentId: string,
@@ -531,6 +651,38 @@ export function HierarchicalSidebar() {
           <>
             <ServerConnectionSwitcher />
             <div className="flex items-center gap-1">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={cn(
+                      "h-7 w-7",
+                      environmentSortMode === "activity" && "bg-zinc-800 text-foreground",
+                    )}
+                    title="Sort environments"
+                    aria-label={`Sort environments: ${environmentSortMode === "project" ? "By project" : "By activity"}`}
+                  >
+                    <ArrowUpDown className="h-4 w-4" aria-hidden="true" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-44">
+                  <DropdownMenuLabel className="text-xs text-muted-foreground">
+                    Sort environments
+                  </DropdownMenuLabel>
+                  <DropdownMenuRadioGroup
+                    value={environmentSortMode}
+                    onValueChange={(value) => {
+                      if (value === "project" || value === "activity") {
+                        setEnvironmentSortMode(value);
+                      }
+                    }}
+                  >
+                    <DropdownMenuRadioItem value="project">By project</DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="activity">By activity</DropdownMenuRadioItem>
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button
                 variant="ghost"
                 size="icon"
@@ -574,6 +726,120 @@ export function HierarchicalSidebar() {
               >
                 Add your first project
               </Button>
+            </div>
+          ) : environmentSortMode === "activity" ? (
+            <div data-testid="activity-environment-list">
+              <div className="sticky top-0 z-10 mb-1 flex h-9 items-center border-b border-border/60 bg-[#1d1d20]/95 px-2 backdrop-blur-sm">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-zinc-400 hover:bg-zinc-800 hover:text-foreground"
+                      aria-label="Create environment"
+                      title="Create environment"
+                    >
+                      <Plus className="h-4 w-4" aria-hidden="true" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-56">
+                    <DropdownMenuLabel className="text-xs text-muted-foreground">
+                      New environment in
+                    </DropdownMenuLabel>
+                    {projects.map((project) => (
+                      <DropdownMenuItem
+                        key={project.id}
+                        onSelect={() => handleOpenCreateEnvDialog(project.id)}
+                      >
+                        <FolderGit2 className="h-4 w-4" aria-hidden="true" />
+                        <span className="truncate">{project.name}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <div className="ml-auto flex items-center gap-1">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div
+                        className="flex h-7 items-center gap-1.5 rounded-md px-2 font-mono text-[11px] tabular-nums text-zinc-400"
+                        aria-label={`${totalEnvironmentCount} ${
+                          totalEnvironmentCount === 1 ? "environment" : "environments"
+                        }`}
+                      >
+                        <Boxes className="h-3.5 w-3.5 text-emerald-500" aria-hidden="true" />
+                        <span>{totalEnvironmentCount}</span>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" sideOffset={5}>
+                      Environments
+                    </TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div
+                        className={cn(
+                          "flex h-7 min-w-9 items-center justify-center gap-1.5 rounded-md px-2 font-mono text-[11px] tabular-nums",
+                          waitingEnvironmentCount > 0
+                            ? "bg-amber-500/10 text-amber-400"
+                            : "text-zinc-600",
+                        )}
+                        aria-label={`${waitingEnvironmentCount} waiting ${
+                          waitingEnvironmentCount === 1 ? "environment" : "environments"
+                        }`}
+                      >
+                        <Bell
+                          className={cn(
+                            "h-3.5 w-3.5",
+                            waitingEnvironmentCount > 0 && "fill-amber-400/20",
+                          )}
+                          aria-hidden="true"
+                        />
+                        <span>{waitingEnvironmentCount}</span>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" sideOffset={5}>
+                      Waiting environments
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+              </div>
+              {activityEnvironments.length === 0 ? (
+                <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                  No environments yet
+                </div>
+              ) : (
+                <div className="space-y-0.5 px-1">
+                  {activityEnvironments.map((environment) => (
+                    <AnimatedActivityRow
+                      key={environment.id}
+                      environmentId={environment.id}
+                      className={cn(
+                        "mx-1 flex items-center rounded-lg border transition-colors will-change-transform",
+                        selectedEnvironmentId === environment.id && !isMultiSelectMode
+                          ? "border-zinc-700/70 bg-zinc-800/85"
+                          : "border-transparent hover:bg-zinc-800/55",
+                      )}
+                    >
+                      <div className="min-w-0 flex-1 pl-2">
+                        <EnvironmentItem
+                          environment={environment}
+                          subtitle={projectsById.get(environment.projectId)?.name ?? "Unknown project"}
+                          isSelected={selectedEnvironmentId === environment.id}
+                          onSelect={handleSelectEnvironment}
+                          onDelete={deleteEnvironment}
+                          onStart={startEnvironment}
+                          onStop={stopEnvironment}
+                          onRestart={restartEnvironment}
+                          onUpdate={handleUpdateEnvironment}
+                          isMultiSelectMode={isMultiSelectMode}
+                          isChecked={selectedEnvironmentIds.includes(environment.id)}
+                        />
+                      </div>
+                    </AnimatedActivityRow>
+                  ))}
+                </div>
+              )}
             </div>
           ) : (
             <DndContext

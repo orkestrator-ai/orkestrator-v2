@@ -92,6 +92,14 @@ export async function getEnvironment(environmentId: string): Promise<Environment
   return invoke<Environment | null>("get_environment", { environmentId });
 }
 
+/** Persist the latest prompt/completion activity for activity-based sorting. */
+export async function recordEnvironmentActivity(
+  environmentId: string,
+  occurredAt: string,
+): Promise<Environment> {
+  return invoke<Environment>("record_environment_activity", { environmentId, occurredAt });
+}
+
 export async function createEnvironment(
   projectId: string,
   name?: string,
@@ -170,9 +178,16 @@ export async function createTerminalSession(
   containerId: string,
   cols: number,
   rows: number,
-  user?: string
+  user?: string,
+  trackEnvironmentActivity = false,
 ): Promise<string> {
-  return invoke<string>("create_terminal_session", { containerId, cols, rows, user });
+  return invoke<string>("create_terminal_session", {
+    containerId,
+    cols,
+    rows,
+    user,
+    trackEnvironmentActivity,
+  });
 }
 
 export async function startTerminalSession(sessionId: string): Promise<void> {
@@ -1225,9 +1240,15 @@ export async function getLocalCodexServerStatus(environmentId: string): Promise<
 export async function createLocalTerminalSession(
   environmentId: string,
   cols: number,
-  rows: number
+  rows: number,
+  trackEnvironmentActivity = false,
 ): Promise<string> {
-  return invoke<string>("create_local_terminal_session", { environmentId, cols, rows });
+  return invoke<string>("create_local_terminal_session", {
+    environmentId,
+    cols,
+    rows,
+    trackEnvironmentActivity,
+  });
 }
 
 /** Start a local terminal session and begin forwarding output */

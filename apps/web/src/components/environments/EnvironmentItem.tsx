@@ -18,10 +18,10 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { Trash2, Play, Square, Container, Laptop, Shield, Globe, Settings2, RotateCw, Loader2, Network, Copy } from "lucide-react";
+import { Bell, Trash2, Play, Square, Container, Laptop, Shield, Globe, Settings2, RotateCw, Loader2, Network, Copy } from "lucide-react";
 import { toast } from "sonner";
 import type { Environment } from "@/types";
-import { useAgentActivityStore, useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore } from "@/stores";
+import { useAgentActivityStore, useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore, useUIStore } from "@/stores";
 import { EnvironmentSettingsDialog } from "./EnvironmentSettingsDialog";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
@@ -38,6 +38,8 @@ interface EnvironmentItemProps {
   onUpdate?: (environment: Environment) => void;
   isMultiSelectMode?: boolean;
   isChecked?: boolean;
+  /** Optional secondary label used by the flat activity view. */
+  subtitle?: string;
 }
 
 export function EnvironmentItem({
@@ -51,6 +53,7 @@ export function EnvironmentItem({
   onUpdate,
   isMultiSelectMode = false,
   isChecked = false,
+  subtitle,
 }: EnvironmentItemProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
@@ -74,6 +77,9 @@ export function EnvironmentItem({
 
   // Check if this is a build pipeline environment (O(1) Set lookup, stable reference)
   const isBuildEnvironment = useBuildPipelineStore((s) => s.buildEnvironmentIds.has(environment.id));
+  const hasUnreadActivity = useUIStore((s) =>
+    s.unreadEnvironmentIds.includes(environment.id)
+  );
 
   const isLocalEnvironment = environment.environmentType === "local";
   // Local environments are always considered "running" - they exist or they don't
@@ -179,6 +185,7 @@ export function EnvironmentItem({
             onBlur={tooltip.hide}
             className={cn(
               "group flex w-full cursor-pointer items-center gap-2 py-1.5 pr-2 text-left text-[13px] transition-colors",
+              subtitle && "py-2",
               isSelected && !isMultiSelectMode
                 ? "text-foreground"
                 : "text-muted-foreground hover:text-foreground",
@@ -219,8 +226,23 @@ export function EnvironmentItem({
                 )} />
               )
             )}
-            <span className={cn("flex-1 truncate font-medium", isBuildEnvironment && "text-yellow-400")}>
-              {isBuildEnvironment ? environment.name.replace(/^Build:\s*/, "") : environment.name}
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className={cn("truncate font-medium leading-4", isBuildEnvironment && "text-yellow-400")}>
+                  {isBuildEnvironment ? environment.name.replace(/^Build:\s*/, "") : environment.name}
+                </span>
+                {hasUnreadActivity && (
+                  <Bell
+                    className="h-3 w-3 shrink-0 fill-amber-400/20 text-amber-400"
+                    aria-label="New completed activity"
+                  />
+                )}
+              </span>
+              {subtitle && (
+                <span className="truncate text-[11px] font-normal leading-4 text-zinc-500">
+                  {subtitle}
+                </span>
+              )}
             </span>
             {diffStats && (diffStats.additions > 0 || diffStats.deletions > 0 || diffStats.filesChanged > 0) && (
               <span className="ml-1 flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums">

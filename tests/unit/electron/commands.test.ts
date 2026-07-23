@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, promises as fs } from "node:fs";
@@ -75,6 +75,7 @@ const { createCommandRegistry, resolveBrowserOpenCommand } = await import("../..
 const tempDirs: string[] = [];
 const SETUP_DONE_OSC = "\u001b]9999;setup_done\u0007";
 const SETUP_FAILED_OSC = "\u001b]9999;setup_failed\u0007";
+const TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS = 850;
 
 describe("resolveBrowserOpenCommand", () => {
   test("uses direct platform launchers without a command interpreter", () => {
@@ -241,6 +242,22 @@ function createContext(
       updateEnvironment: mock(async (environmentId: string, update: Record<string, unknown>) => {
         const environment = environments.find((candidate) => candidate.id === environmentId);
         if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+        updates.push(update);
+        Object.assign(environment, update);
+        return environment;
+      }),
+      recordEnvironmentActivity: mock(async (environmentId: string, occurredAt: string) => {
+        const activityTime = Date.parse(occurredAt);
+        if (!Number.isFinite(activityTime)) {
+          throw new Error("occurredAt must be a valid ISO timestamp");
+        }
+        const environment = environments.find((candidate) => candidate.id === environmentId);
+        if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+        const previousTime = environment.lastActivityAt
+          ? Date.parse(environment.lastActivityAt)
+          : Number.NEGATIVE_INFINITY;
+        if (Number.isFinite(previousTime) && previousTime >= activityTime) return environment;
+        const update = { lastActivityAt: new Date(activityTime).toISOString() };
         updates.push(update);
         Object.assign(environment, update);
         return environment;
@@ -1250,6 +1267,42 @@ printf '%s\\n' '{}' > "$out"
       context,
     )).resolves.toEqual([environment]);
     expect(updates).toHaveLength(0);
+  });
+
+  test("records only newer environment activity timestamps", async () => {
+    const environment = createEnvironment({
+      lastActivityAt: "2026-07-22T10:00:00.000Z",
+    });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("record_environment_activity")?.(
+      { environmentId: environment.id, occurredAt: "2026-07-23T10:00:00.000Z" },
+      context,
+    )).resolves.toMatchObject({ lastActivityAt: "2026-07-23T10:00:00.000Z" });
+    expect(updates).toEqual([{ lastActivityAt: "2026-07-23T10:00:00.000Z" }]);
+
+    await expect(commands.get("record_environment_activity")?.(
+      { environmentId: environment.id, occurredAt: "2026-07-21T10:00:00.000Z" },
+      context,
+    )).resolves.toBe(environment);
+    expect(updates).toHaveLength(1);
+
+    await expect(commands.get("record_environment_activity")?.(
+      { environmentId: environment.id, occurredAt: "2026-07-23T10:00:00.000Z" },
+      context,
+    )).resolves.toBe(environment);
+    expect(updates).toHaveLength(1);
+
+    await expect(commands.get("record_environment_activity")?.(
+      { environmentId: environment.id, occurredAt: "not-a-date" },
+      context,
+    )).rejects.toThrow("occurredAt must be a valid ISO timestamp");
+
+    await expect(commands.get("record_environment_activity")?.(
+      { environmentId: "missing", occurredAt: "2026-07-24T10:00:00.000Z" },
+      context,
+    )).rejects.toThrow("Environment not found: missing");
   });
 
   test("preserves container identity when Docker status reconciliation fails transiently", async () => {
@@ -4366,6 +4419,263 @@ exit 0
     await commands.get("close_local_terminal_session")?.({ sessionId }, context);
     expect(ptyProcesses[0]?.kill).toHaveBeenCalled();
     expect(commands.get("get_terminal_session")?.({ sessionId }, context)).toEqual({ id: sessionId, running: false });
+  });
+
+  test("records prompt and settled-output activity for tracked local agent terminals", async () => {
+    const worktreePath = await createTempDir("ork-electron-local-agent-activity-");
+    const environment = createEnvironment({
+      id: "env-local-agent-activity",
+      worktreePath,
+      lastActivityAt: "2026-07-23T09:00:00.000Z",
+    });
+    const { context, emitted } = createContext(environment);
+    const commands = createCommandRegistry();
+    const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
+
+    const sessionId = await commands.get("create_local_terminal_session")?.(
+      {
+        environmentId: environment.id,
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity: true,
+      },
+      context,
+    ) as string;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+
+    await withFixedDate("2026-07-23T10:00:00.000Z", () =>
+      commands.get("local_terminal_write")?.({ sessionId, data: "opencode\r" }, context),
+    );
+    expect(recordActivity).toHaveBeenLastCalledWith(
+      environment.id,
+      "2026-07-23T10:00:00.000Z",
+    );
+
+    await withFixedDate("2026-07-23T10:05:00.000Z", async () => {
+      ptyProcesses[0]?.emitData("work complete\r\n");
+      await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+    });
+    expect(recordActivity).toHaveBeenLastCalledWith(
+      environment.id,
+      "2026-07-23T10:05:00.000Z",
+    );
+    expect(environment.lastActivityAt).toBe("2026-07-23T10:05:00.000Z");
+    await waitForCondition(
+      () => emitted.some(({ event, payload }) =>
+        event === "environment-activity-recorded" &&
+        (payload as { environment_id?: string; occurred_at?: string; activity_kind?: string }).environment_id === environment.id &&
+        (payload as { environment_id?: string; occurred_at?: string; activity_kind?: string }).occurred_at === "2026-07-23T10:05:00.000Z" &&
+        (payload as { environment_id?: string; occurred_at?: string; activity_kind?: string }).activity_kind === "completed"
+      ),
+      "the terminal activity event",
+    );
+    expect(emitted).toContainEqual({
+      event: "environment-activity-recorded",
+      payload: {
+        environment_id: environment.id,
+        occurred_at: "2026-07-23T10:00:00.000Z",
+        activity_kind: "prompt",
+      },
+    });
+    await commands.get("close_local_terminal_session")?.({ sessionId }, context);
+  });
+
+  test("debounces repeated output and ignores writes without a submitted prompt", async () => {
+    const worktreePath = await createTempDir("ork-electron-local-agent-debounce-");
+    const environment = createEnvironment({
+      id: "env-local-agent-debounce",
+      worktreePath,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
+
+    const sessionId = await commands.get("create_local_terminal_session")?.(
+      {
+        environmentId: environment.id,
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity: true,
+      },
+      context,
+    ) as string;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+
+    await commands.get("local_terminal_write")?.({ sessionId, data: "unfinished" }, context);
+    ptyProcesses[0]?.emitData("shell echo");
+    await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+    expect(recordActivity).not.toHaveBeenCalled();
+
+    await commands.get("local_terminal_write")?.({ sessionId, data: "\r" }, context);
+    expect(recordActivity).toHaveBeenCalledTimes(1);
+    recordActivity.mockClear();
+
+    ptyProcesses[0]?.emitData("first chunk");
+    await Bun.sleep(400);
+    ptyProcesses[0]?.emitData("second chunk");
+    await Bun.sleep(500);
+    expect(recordActivity).not.toHaveBeenCalled();
+
+    await Bun.sleep(400);
+    expect(recordActivity).toHaveBeenCalledTimes(1);
+    recordActivity.mockClear();
+    ptyProcesses[0]?.emitData("background output after completion");
+    await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+    expect(recordActivity).not.toHaveBeenCalled();
+    await commands.get("close_local_terminal_session")?.({ sessionId }, context);
+  });
+
+  test("logs terminal activity persistence failures without emitting a success event", async () => {
+    const worktreePath = await createTempDir("ork-electron-local-agent-persistence-failure-");
+    const environment = createEnvironment({
+      id: "env-local-agent-persistence-failure",
+      worktreePath,
+    });
+    const { context, emitted } = createContext(environment);
+    const commands = createCommandRegistry();
+    const persistenceError = new Error("activity storage unavailable");
+    const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
+    recordActivity.mockRejectedValueOnce(persistenceError);
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const sessionId = await commands.get("create_local_terminal_session")?.(
+        {
+          environmentId: environment.id,
+          cols: 80,
+          rows: 24,
+          trackEnvironmentActivity: true,
+        },
+        context,
+      ) as string;
+      await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+      await commands.get("local_terminal_write")?.({ sessionId, data: "codex\r" }, context);
+
+      await waitForCondition(
+        () => consoleError.mock.calls.length > 0,
+        "the terminal activity persistence error",
+      );
+      expect(consoleError).toHaveBeenCalledWith(
+        "Failed to record terminal environment activity",
+        {
+          environmentId: environment.id,
+          error: persistenceError.message,
+        },
+      );
+      expect(emitted.some(({ event }) => event === "environment-activity-recorded")).toBe(false);
+      await commands.get("close_local_terminal_session")?.({ sessionId }, context);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  test("cancels pending settled-output activity when a tracked terminal is explicitly closed", async () => {
+    const worktreePath = await createTempDir("ork-electron-local-agent-close-");
+    const environment = createEnvironment({
+      id: "env-local-agent-close",
+      worktreePath,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
+
+    const sessionId = await commands.get("create_local_terminal_session")?.(
+      {
+        environmentId: environment.id,
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity: true,
+      },
+      context,
+    ) as string;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+    await commands.get("local_terminal_write")?.({ sessionId, data: "claude\r" }, context);
+    recordActivity.mockClear();
+
+    ptyProcesses[0]?.emitData("work in progress");
+    await commands.get("close_local_terminal_session")?.({ sessionId }, context);
+    await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+
+    expect(recordActivity).not.toHaveBeenCalled();
+    expect(ptyProcesses[0]?.kill).toHaveBeenCalled();
+  });
+
+  test("records prompt and settled-output activity for tracked container agent terminals", async () => {
+    const environment = createEnvironment({
+      id: "env-container-agent-activity",
+      environmentType: "containerized",
+      containerId: "container-activity",
+      worktreePath: undefined,
+      lastActivityAt: "2026-07-23T09:00:00.000Z",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
+
+    const sessionId = await commands.get("create_terminal_session")?.(
+      {
+        containerId: environment.containerId,
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity: true,
+      },
+      context,
+    ) as string;
+    await commands.get("start_terminal_session")?.({ sessionId }, context);
+
+    await withFixedDate("2026-07-23T11:00:00.000Z", () =>
+      commands.get("terminal_write")?.({ sessionId, data: "codex\r" }, context),
+    );
+    await withFixedDate("2026-07-23T11:02:00.000Z", () => {
+      ptyProcesses[0]?.emitData("waiting for input\r\n");
+      ptyProcesses[0]?.emitExit({ exitCode: 0 });
+    });
+
+    expect(recordActivity.mock.calls).toEqual([
+      [environment.id, "2026-07-23T11:00:00.000Z"],
+      [environment.id, "2026-07-23T11:02:00.000Z"],
+    ]);
+    expect(environment.lastActivityAt).toBe("2026-07-23T11:02:00.000Z");
+  });
+
+  test("rejects activity tracking for a container outside the stored environment set", async () => {
+    const environment = createEnvironment({
+      id: "env-known-container",
+      environmentType: "containerized",
+      containerId: "container-known",
+      worktreePath: undefined,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("create_terminal_session")?.(
+      {
+        containerId: "container-unrelated",
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity: true,
+      },
+      context,
+    )).rejects.toThrow("Tracked terminal container is not associated with an environment");
+  });
+
+  test("does not record shell activity for untracked terminal tabs", async () => {
+    const worktreePath = await createTempDir("ork-electron-untracked-terminal-");
+    const environment = createEnvironment({ id: "env-untracked-terminal", worktreePath });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
+
+    const sessionId = await commands.get("create_local_terminal_session")?.(
+      { environmentId: environment.id, cols: 80, rows: 24 },
+      context,
+    ) as string;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+    await commands.get("local_terminal_write")?.({ sessionId, data: "pwd\r" }, context);
+    ptyProcesses[0]?.emitData("/tmp/worktree\r\n");
+    ptyProcesses[0]?.emitExit({ exitCode: 0 });
+
+    expect(recordActivity).not.toHaveBeenCalled();
   });
 
   test("rejects local terminal start when the worktree path is missing", async () => {

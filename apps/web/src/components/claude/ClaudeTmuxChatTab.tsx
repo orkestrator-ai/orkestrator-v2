@@ -241,8 +241,8 @@ function fallbackEffort(options: ClaudeEffortLevel[]): ClaudeEffortLevel {
 
 /**
  * Prefer the live model list the Claude bridge fetched from the Agent SDK
- * (shared via the claude store) over the static fallback. The launch-only
- * "default" sentinel is guaranteed to be present either way.
+ * (shared via the claude store) over the static fallback. The "default"
+ * sentinel is guaranteed to be present either way.
  */
 function tmuxModelList(sdkModels: ClaudeModel[]): ClaudeModel[] {
   if (sdkModels.length === 0) return TMUX_FALLBACK_MODELS;
@@ -1041,10 +1041,9 @@ export function ClaudeTmuxChatTab({
   ) => {
     try {
       await answerPreToolUse(tabId, eventId, decision, undefined, environmentId);
+      removePendingApproval(storeKey, eventId);
     } catch (e) {
       setError(String(e));
-    } finally {
-      removePendingApproval(storeKey, eventId);
     }
   };
 

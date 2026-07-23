@@ -171,6 +171,7 @@ describe("Electron StorageService", () => {
 
     expect(environment.name).toMatch(/^\d{8}-\d{6}$/);
     expect(environment.branch).toBe(environment.name);
+    expect(environment.lastActivityAt).toBe(environment.createdAt);
   });
 
   test("recovers JSON from a rotated backup when the primary file is malformed", async () => {
@@ -373,7 +374,9 @@ describe("Electron StorageService", () => {
     await Promise.all([firstStorage.init(), secondStorage.init()]);
 
     const environment = await firstStorage.addEnvironment(createEnvironment("project-1"));
-    expect((await secondStorage.getEnvironment(environment.id))?.lastActivityAt).toBeUndefined();
+    expect((await secondStorage.getEnvironment(environment.id))?.lastActivityAt)
+      .toBe(environment.createdAt);
+    await firstStorage.updateEnvironment(environment.id, { lastActivityAt: undefined });
 
     await expect(firstStorage.recordEnvironmentActivity(
       environment.id,

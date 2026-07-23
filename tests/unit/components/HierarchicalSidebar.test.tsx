@@ -393,6 +393,93 @@ describe("HierarchicalSidebar", () => {
     expect(animate).not.toHaveBeenCalled();
   });
 
+  test("animates only rows whose activity position changes", () => {
+    const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      if (this.dataset.environmentId && this.parentElement) {
+        const rows = Array.from(
+          this.parentElement.querySelectorAll<HTMLElement>("[data-environment-id]"),
+        );
+        const top = rows.indexOf(this) * 40;
+        return {
+          bottom: top + 40,
+          height: 40,
+          left: 0,
+          right: 200,
+          top,
+          width: 200,
+          x: 0,
+          y: top,
+          toJSON: () => ({}),
+        };
+      }
+      return originalGetBoundingClientRect.call(this);
+    };
+
+    try {
+      environmentsValue = [
+        {
+          ...createdEnvironment,
+          id: "env-first",
+          lastActivityAt: "2026-07-23T12:00:00.000Z",
+        },
+        {
+          ...createdEnvironment,
+          id: "env-second",
+          lastActivityAt: "2026-07-23T11:00:00.000Z",
+        },
+        {
+          ...createdEnvironment,
+          id: "env-unchanged",
+          lastActivityAt: "2026-07-23T10:00:00.000Z",
+        },
+      ];
+      useUIStore.getState().setEnvironmentSortMode("activity");
+
+      const view = render(<HierarchicalSidebar />);
+      const list = screen.getByTestId("activity-environment-list");
+      const firstRow = list.querySelector<HTMLElement>('[data-environment-id="env-first"]')!;
+      const secondRow = list.querySelector<HTMLElement>('[data-environment-id="env-second"]')!;
+      const unchangedRow = list.querySelector<HTMLElement>('[data-environment-id="env-unchanged"]')!;
+      const firstAnimate = mock(() => ({} as Animation));
+      const secondAnimate = mock(() => ({} as Animation));
+      const unchangedAnimate = mock(() => ({} as Animation));
+      firstRow.animate = firstAnimate;
+      secondRow.animate = secondAnimate;
+      unchangedRow.animate = unchangedAnimate;
+
+      // A content-only update should not restart any row movement.
+      environmentsValue = environmentsValue.map((environment) => (
+        environment.id === "env-unchanged"
+          ? { ...environment, status: "stopped" as const }
+          : environment
+      ));
+      view.rerender(<HierarchicalSidebar />);
+      expect(firstAnimate).not.toHaveBeenCalled();
+      expect(secondAnimate).not.toHaveBeenCalled();
+      expect(unchangedAnimate).not.toHaveBeenCalled();
+
+      // Moving the second row to the top shifts only the first and second rows.
+      environmentsValue = environmentsValue.map((environment) => (
+        environment.id === "env-second"
+          ? { ...environment, lastActivityAt: "2026-07-23T13:00:00.000Z" }
+          : environment
+      ));
+      view.rerender(<HierarchicalSidebar />);
+
+      const orderedIds = Array.from(
+        list.querySelectorAll<HTMLElement>("[data-environment-id]"),
+        (row) => row.dataset.environmentId,
+      );
+      expect(orderedIds).toEqual(["env-second", "env-first", "env-unchanged"]);
+      expect(firstAnimate).toHaveBeenCalledTimes(1);
+      expect(secondAnimate).toHaveBeenCalledTimes(1);
+      expect(unchangedAnimate).not.toHaveBeenCalled();
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect;
+    }
+  });
+
   test("sorts missing or equal activity timestamps by the existing sidebar order", () => {
     const secondProject = { ...project, id: "project-2", order: 1 };
     const environments = [

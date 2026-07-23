@@ -114,10 +114,12 @@ export function animateActivityRowMovement(
 
 function AnimatedActivityRow({
   environmentId,
+  position,
   className,
   children,
 }: {
   environmentId: string;
+  position: number;
   className: string;
   children: ReactNode;
 }) {
@@ -127,6 +129,10 @@ function AnimatedActivityRow({
   useLayoutEffect(() => {
     const row = rowRef.current;
     if (!row) return;
+
+    // Activity, unread, and status updates all re-render the sidebar. Only run
+    // the FLIP animation when this row's actual list position changes so those
+    // unrelated updates cannot restart transforms across the whole list.
     const reduceMotion = typeof window.matchMedia === "function" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     previousTopRef.current = animateActivityRowMovement(
@@ -134,7 +140,7 @@ function AnimatedActivityRow({
       previousTopRef.current,
       reduceMotion,
     );
-  });
+  }, [position]);
 
   return (
     <div
@@ -810,10 +816,11 @@ export function HierarchicalSidebar() {
                 </div>
               ) : (
                 <div className="space-y-0.5 px-1">
-                  {activityEnvironments.map((environment) => (
+                  {activityEnvironments.map((environment, position) => (
                     <AnimatedActivityRow
                       key={environment.id}
                       environmentId={environment.id}
+                      position={position}
                       className={cn(
                         "mx-1 flex items-center rounded-lg border transition-colors will-change-transform",
                         selectedEnvironmentId === environment.id && !isMultiSelectMode

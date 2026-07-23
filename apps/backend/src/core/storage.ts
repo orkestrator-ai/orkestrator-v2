@@ -316,6 +316,7 @@ export function createEnvironment(
     options.name?.trim() || defaultEnvironmentName();
   const name = sanitizeEnvironmentName(rawName);
   const environmentType = options.environmentType ?? "containerized";
+  const createdAt = nowIso();
 
   return {
     id: randomUUID(),
@@ -327,8 +328,10 @@ export function createEnvironment(
     prUrl: null,
     prState: null,
     hasMergeConflicts: null,
-    createdAt: nowIso(),
-    lastActivityAt: undefined,
+    createdAt,
+    // Creation is itself recent environment activity. Persisting the same
+    // timestamp makes a new environment immediately lead the activity view.
+    lastActivityAt: createdAt,
     createdFromCommit: undefined,
     networkAccessMode: options.networkAccessMode ?? (environmentType === "local" ? "full" : "restricted"),
     allowedDomains: undefined,

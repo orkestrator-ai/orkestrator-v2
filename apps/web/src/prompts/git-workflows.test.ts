@@ -98,7 +98,12 @@ describe("createReviewPrompt", () => {
     expect(result).toContain("Symbol:");
     expect(result).toContain("## Test Coverage Gaps");
     expect(result).toContain("## Verdict");
-    expect(result).toContain("## Summary");
+    expect(result).toContain("## Summary of change");
+    expect(result).toContain(
+      "Write a couple of paragraphs describing what the change being reviewed involves.",
+    );
+    expect(result).toContain("## Review summary");
+    expect(result).not.toContain("## Summary\n");
   });
 
   test("uses safer no-issues wording", () => {

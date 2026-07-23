@@ -2300,7 +2300,7 @@ Running 1 Explore agent...
     expect(screen.getByRole("button", { name: /Fable/ })).toBeTruthy();
   });
 
-  test("persists the launch-only Default model sentinel without switching a running tmux session", async () => {
+  test("switches a running tmux session to the Default model", async () => {
     useClaudeTmuxStore
       .getState()
       .setRunning("tab-1", true, {
@@ -2332,7 +2332,13 @@ Running 1 Explore agent...
       await Promise.resolve();
     });
 
-    expect(switchModelMock).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(switchModelMock).toHaveBeenCalledWith(
+        "tab-1",
+        "default",
+        "env-1",
+      );
+    });
     await waitFor(() => {
       expect(updateGlobalConfigMock).toHaveBeenCalledWith(
         expect.objectContaining({ claudeModel: "default" }),
@@ -2443,12 +2449,12 @@ Running 1 Explore agent...
       expect(startSessionMock).toHaveBeenCalledWith(
         "tab-1",
         "env-1",
-        expect.objectContaining({ model: undefined }),
+        expect.objectContaining({ model: "default" }),
       );
     });
   });
 
-  test("uses Claude Code's own model default when persisted tmux model is Default", async () => {
+  test("passes the persisted Default model explicitly when starting Claude Code", async () => {
     seedPane();
     useConfigStore.setState((state) => ({
       ...state,
@@ -2477,7 +2483,7 @@ Running 1 Explore agent...
     await waitFor(() => {
       expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
         initialPrompt: undefined,
-        model: undefined,
+        model: "default",
         effort: "high",
         resumeSessionId: undefined,
       });

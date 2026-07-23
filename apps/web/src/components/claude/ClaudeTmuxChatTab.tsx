@@ -213,10 +213,6 @@ function resolveTmuxModelPreference(
     : DEFAULT_MODEL;
 }
 
-function selectedModelForLaunch(modelId: string): string | undefined {
-  return modelId === "default" ? undefined : modelId;
-}
-
 function getTmuxModel(id: string, models: ClaudeModel[]): ClaudeModel {
   return (
     models.find((m) => m.id === id) ??
@@ -807,7 +803,7 @@ export function ClaudeTmuxChatTab({
       startedRef.current = true;
       startSession(tabId, environmentId, {
         initialPrompt,
-        model: selectedModelForLaunch(selectedModel),
+        model: selectedModel,
         effort: effortOptions.length > 0 ? effectiveEffort : undefined,
         resumeSessionId,
       })
@@ -1212,9 +1208,7 @@ export function ClaudeTmuxChatTab({
   const handleSelectModel = async (modelId: string) => {
     if (modelId === selectedModel || modelSwitching || effortSwitching) return;
 
-    // "default" means no explicit --model flag; can't send /model default to a
-    // running session, so just update the stored preference for the next launch.
-    if (modelId === "default" || !hasStarted || !running) {
+    if (!hasStarted || !running) {
       setSelectedModel(modelId);
       clampEffortToModel(modelId);
       void persistSelectedModel(modelId);

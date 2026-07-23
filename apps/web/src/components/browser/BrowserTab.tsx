@@ -61,6 +61,12 @@ export function BrowserTab({
   refreshRequestId = 0,
 }: BrowserTabProps) {
   const updateTabBrowserUrl = usePaneLayoutStore((state) => state.updateTabBrowserUrl);
+  const activePaneId = usePaneLayoutStore(
+    (state) => state.environments.get(environmentId)?.activePaneId,
+  );
+  const owningPaneId = usePaneLayoutStore(
+    (state) => state.findPaneWithTab(tabId, environmentId)?.id,
+  );
   const nativeBrowserPreview = hasNativeBrowserPreview();
   const [address, setAddress] = useState(data.url);
   const [currentUrl, setCurrentUrl] = useState(data.url);
@@ -71,6 +77,7 @@ export function BrowserTab({
   const [error, setError] = useState<string | null>(null);
   const previousRefreshRequestId = useRef(refreshRequestId);
   const locallyPersistedUrl = useRef<string | null>(null);
+  const addressInputRef = useRef<HTMLInputElement | null>(null);
   const previewHostRef = useRef<HTMLDivElement | null>(null);
   const nativeAttachedRef = useRef(false);
   const [nativeState, setNativeState] = useState<BrowserPreviewState | null>(null);
@@ -123,6 +130,43 @@ export function BrowserTab({
     if (!nativeBrowserPreview) return;
     return window.orkestrator?.listen<BrowserPreviewState>("browser-preview-state", applyNativeState);
   }, [applyNativeState, nativeBrowserPreview]);
+
+  const focusAddressBar = useCallback(() => {
+    addressInputRef.current?.focus();
+    addressInputRef.current?.select();
+  }, []);
+
+  useEffect(() => {
+    if (!isActive) return;
+
+    return window.orkestrator?.listen<string>(
+      "browser-preview-focus-address",
+      (requestedTabId) => {
+        if (requestedTabId === tabId) focusAddressBar();
+      },
+    );
+  }, [focusAddressBar, isActive, tabId]);
+
+  useEffect(() => {
+    if (!isActive || activePaneId !== owningPaneId) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isAddressShortcut =
+        event.key.toLowerCase() === "l"
+        && (event.metaKey || event.ctrlKey)
+        && !event.altKey
+        && !event.shiftKey;
+      if (!isAddressShortcut) return;
+
+      event.preventDefault();
+      focusAddressBar();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [activePaneId, focusAddressBar, isActive, owningPaneId]);
 
   useEffect(() => {
     if (!nativeBrowserPreview) return;
@@ -332,6 +376,7 @@ export function BrowserTab({
               Backend
             </div>
             <input
+              ref={addressInputRef}
               value={address}
               onChange={(event) => setAddress(event.target.value)}
               className="h-full min-w-0 flex-1 bg-transparent px-2.5 font-mono text-xs text-foreground outline-none placeholder:font-sans placeholder:text-muted-foreground"

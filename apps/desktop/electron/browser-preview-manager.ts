@@ -30,6 +30,7 @@ export interface BrowserPreviewManagerOptions {
   menu: MenuLike;
   getWindow: () => BrowserWindow | null;
   emitState: (state: BrowserPreviewState) => void;
+  focusAddressBar: (tabId: string) => void;
 }
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
@@ -201,6 +202,18 @@ export class BrowserPreviewManager {
   private installListeners(tabId: string, preview: ManagedPreview): void {
     const contents = preview.view.webContents;
     contents.setWindowOpenHandler(() => ({ action: "deny" }));
+    contents.on("before-input-event", (event, input) => {
+      const isAddressShortcut =
+        input.type === "keyDown"
+        && input.key.toLowerCase() === "l"
+        && (input.meta || input.control)
+        && !input.alt
+        && !input.shift;
+      if (!isAddressShortcut) return;
+
+      event.preventDefault();
+      this.options.focusAddressBar(tabId);
+    });
     contents.on("context-menu", (_event, params: ContextMenuParams) => {
       const window = this.options.getWindow();
       if (!window || window.isDestroyed()) return;

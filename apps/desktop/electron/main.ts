@@ -192,6 +192,12 @@ async function startApplication(): Promise<void> {
     menu: Menu,
     getWindow: () => mainWindow,
     emitState: (state) => emitToRenderers("browser-preview-state", state),
+    focusAddressBar: (tabId) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.focus();
+      }
+      emitToRenderers("browser-preview-focus-address", tabId);
+    },
     getAuthorization: (url) => connectionManager?.getRendererRequestAuthorization(url) ?? null,
   });
   browserPreviewManager = browserPreviewRuntime.manager;

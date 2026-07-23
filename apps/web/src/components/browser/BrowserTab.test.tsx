@@ -48,6 +48,7 @@ function previewState(overrides: Partial<BrowserPreviewState> = {}): BrowserPrev
 
 function installNativePreview(overrides: Record<string, unknown> = {}) {
   let stateListener: ((state: BrowserPreviewState) => void) | undefined;
+  let focusAddressListener: ((tabId: string) => void) | undefined;
   const unsubscribe = mock(() => {});
   const state = previewState();
   const browserPreview = {
@@ -64,12 +65,30 @@ function installNativePreview(overrides: Record<string, unknown> = {}) {
   };
   window.orkestrator = {
     listen: (event: string, callback: (payload: unknown) => void) => {
-      if (event === "browser-preview-state") stateListener = callback as (state: BrowserPreviewState) => void;
-      return unsubscribe;
+      if (event === "browser-preview-state") {
+        stateListener = callback as (state: BrowserPreviewState) => void;
+      }
+      if (event === "browser-preview-focus-address") {
+        focusAddressListener = callback as (tabId: string) => void;
+      }
+      return () => {
+        unsubscribe();
+        if (event === "browser-preview-state" && stateListener === callback) {
+          stateListener = undefined;
+        }
+        if (event === "browser-preview-focus-address" && focusAddressListener === callback) {
+          focusAddressListener = undefined;
+        }
+      };
     },
     browserPreview,
   } as never;
-  return { browserPreview, emitState: (next: BrowserPreviewState) => stateListener?.(next), unsubscribe };
+  return {
+    browserPreview,
+    emitState: (next: BrowserPreviewState) => stateListener?.(next),
+    focusAddress: (tabId: string) => focusAddressListener?.(tabId),
+    unsubscribe,
+  };
 }
 
 describe("BrowserTab", () => {
@@ -132,6 +151,136 @@ describe("BrowserTab", () => {
     expect(form?.className).toContain("basis-full");
     expect(form?.className).toContain("@md/browser:flex-1");
     expect(backendLabel?.className).toContain("@lg/browser:flex");
+  });
+
+  test("focuses and selects the address with Cmd+L or Ctrl+L only while active", () => {
+    const view = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/docs" }}
+        isActive
+      />,
+    );
+    const address = screen.getByRole("textbox", { name: "Browser address" }) as HTMLInputElement;
+
+    const commandEvent = new KeyboardEvent("keydown", {
+      key: "l",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(commandEvent);
+    expect(commandEvent.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(address);
+    expect(address.selectionStart).toBe(0);
+    expect(address.selectionEnd).toBe(address.value.length);
+
+    address.blur();
+    view.rerender(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/docs" }}
+        isActive={false}
+      />,
+    );
+    const inactiveEvent = new KeyboardEvent("keydown", {
+      key: "l",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(inactiveEvent);
+    expect(inactiveEvent.defaultPrevented).toBe(false);
+    expect(document.activeElement).not.toBe(address);
+  });
+
+  test("focuses the browser address in the focused pane when two previews are visible", () => {
+    usePaneLayoutStore.setState({
+      activeEnvironmentId: "env-1",
+      environments: new Map([
+        ["env-1", {
+          root: {
+            kind: "split",
+            id: "split-1",
+            direction: "horizontal",
+            sizes: [50, 50],
+            depth: 1,
+            children: [
+              {
+                kind: "leaf",
+                id: "pane-left",
+                tabs: [{ id: "browser-left", type: "browser", browserData: { url: "http://localhost:3000/" } }],
+                activeTabId: "browser-left",
+              },
+              {
+                kind: "leaf",
+                id: "pane-right",
+                tabs: [{ id: "browser-right", type: "browser", browserData: { url: "http://localhost:4000/" } }],
+                activeTabId: "browser-right",
+              },
+            ],
+          },
+          activePaneId: "pane-right",
+          containerId: "container-1",
+        }],
+      ]),
+    });
+
+    render(
+      <>
+        <BrowserTab
+          tabId="browser-left"
+          environmentId="env-1"
+          data={{ url: "http://localhost:3000/" }}
+          isActive
+        />
+        <BrowserTab
+          tabId="browser-right"
+          environmentId="env-1"
+          data={{ url: "http://localhost:4000/" }}
+          isActive
+        />
+      </>,
+    );
+    const addresses = screen.getAllByRole("textbox", { name: "Browser address" });
+
+    fireEvent.keyDown(window, { key: "l", metaKey: true });
+
+    expect(document.activeElement).toBe(addresses[1]!);
+  });
+
+  test("focuses the active address bar when Cmd+L comes from its native preview", () => {
+    const native = installNativePreview();
+    const view = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/docs" }}
+        isActive
+      />,
+    );
+    const address = screen.getByRole("textbox", { name: "Browser address" }) as HTMLInputElement;
+
+    native.focusAddress("another-browser");
+    expect(document.activeElement).not.toBe(address);
+    native.focusAddress("browser-1");
+    expect(document.activeElement).toBe(address);
+    expect(address.selectionStart).toBe(0);
+    expect(address.selectionEnd).toBe(address.value.length);
+
+    address.blur();
+    view.rerender(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/docs" }}
+        isActive={false}
+      />,
+    );
+    native.focusAddress("browser-1");
+    expect(document.activeElement).not.toBe(address);
   });
 
   test("normalizes, loads, and persists a submitted backend-local address", async () => {
@@ -580,6 +729,7 @@ describe("BrowserTab", () => {
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
     );
     await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
+    await waitFor(() => expect(view.container.querySelector(".animate-spin")).toBeNull());
 
     native.emitState(previewState({
       tabId: "browser-other",

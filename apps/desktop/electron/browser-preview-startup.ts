@@ -14,6 +14,7 @@ export interface InitializeBrowserPreviewsOptions {
   menu: BrowserPreviewManagerOptions["menu"];
   getWindow: () => BrowserWindow | null;
   emitState: (state: BrowserPreviewState) => void;
+  focusAddressBar: (tabId: string) => void;
   getAuthorization: (url: string) => string | null;
 }
 
@@ -28,6 +29,7 @@ export function initializeBrowserPreviews({
   menu,
   getWindow,
   emitState,
+  focusAddressBar,
   getAuthorization,
 }: InitializeBrowserPreviewsOptions): BrowserPreviewRuntime {
   const browserSession = fromPartition(BROWSER_PREVIEW_PARTITION);
@@ -40,6 +42,7 @@ export function initializeBrowserPreviews({
     menu,
     getWindow,
     emitState,
+    focusAddressBar,
   });
   installRemoteGatewayRequestAuth(
     browserSession.webRequest,

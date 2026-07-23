@@ -1,14 +1,18 @@
 import type {
   BrowserWindow,
   ContextMenuParams,
+  InputEvent,
+  MenuItemConstructorOptions,
   Rectangle,
   Session,
+  WebContents,
   WebContentsView,
   WebContentsViewConstructorOptions,
 } from "electron";
 import type {
   BrowserPreviewAttachInput,
   BrowserPreviewBounds,
+  BrowserPreviewOpenLinkEvent,
   BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
 import { createContextMenuTemplate, type MenuLike } from "./context-menu.js";
@@ -30,10 +34,29 @@ export interface BrowserPreviewManagerOptions {
   menu: MenuLike;
   getWindow: () => BrowserWindow | null;
   emitState: (state: BrowserPreviewState) => void;
+  emitOpenLink: (event: BrowserPreviewOpenLinkEvent) => void;
+  openExternal: (url: string) => void;
+  writeClipboardText: (text: string) => void;
+  focusAddressBar: (tabId: string) => void;
 }
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
-const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(?:\/|$)/;
+const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(\/.*)?$/;
+const CLIPBOARD_USER_ACTIVATION_WINDOW_MS = 5_000;
+const CLIPBOARD_USER_ACTIVATION_INPUTS = new Set<InputEvent["type"]>([
+  "mouseDown",
+  "pointerDown",
+  "touchStart",
+  "rawKeyDown",
+  "keyDown",
+]);
+
+function gatewayPreviewMatch(url: URL): RegExpExecArray | null {
+  const match = GATEWAY_PREVIEW_PATH.exec(url.pathname);
+  if (!match) return null;
+  const port = Number(match[1]);
+  return Number.isInteger(port) && port >= 1 && port <= 65_535 ? match : null;
+}
 
 function previewNavigationScope(value: string): string | null {
   let url: URL;
@@ -48,8 +71,53 @@ function previewNavigationScope(value: string): string | null {
   }
 
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-  const gatewayMatch = GATEWAY_PREVIEW_PATH.exec(url.pathname);
+  const gatewayMatch = gatewayPreviewMatch(url);
   return gatewayMatch ? `gateway:${url.origin}:${gatewayMatch[1]}` : null;
+}
+
+function browserTabUrlFromPreviewLink(value: string, sourcePreviewUrl: string): string | null {
+  let url: URL;
+  let sourceUrl: URL;
+  try {
+    url = new URL(value);
+    sourceUrl = new URL(sourcePreviewUrl);
+  } catch {
+    return null;
+  }
+
+  if (url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname)) {
+    return url.toString();
+  }
+
+  const gatewayMatch = gatewayPreviewMatch(url);
+  const sourceGatewayMatch = gatewayPreviewMatch(sourceUrl);
+  if (
+    url.protocol !== "https:" ||
+    !gatewayMatch ||
+    sourceUrl.protocol !== "https:" ||
+    !sourceGatewayMatch ||
+    url.origin !== sourceUrl.origin
+  ) {
+    return null;
+  }
+
+  try {
+    return new URL(
+      `${gatewayMatch[2] ?? "/"}${url.search}${url.hash}`,
+      `http://localhost:${gatewayMatch[1]}`,
+    ).toString();
+  } catch {
+    return null;
+  }
+}
+
+function isExternalBrowserUrl(value: string): boolean {
+  try {
+    const protocol = new URL(value).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function isNavigationWithinScope(value: string, expectedScope: string): boolean {
@@ -75,6 +143,7 @@ function validateBounds(bounds: BrowserPreviewBounds): Rectangle {
 
 export class BrowserPreviewManager {
   private readonly previews = new Map<string, ManagedPreview>();
+  private readonly clipboardUserActivations = new WeakMap<WebContents, number>();
 
   constructor(private readonly options: BrowserPreviewManagerOptions) {}
 
@@ -88,6 +157,7 @@ export class BrowserPreviewManager {
     if (!preview) {
       preview = this.createPreview(input.tabId, input.url, navigationScope);
     } else if (preview.requestedUrl !== input.url) {
+      this.clipboardUserActivations.delete(preview.view.webContents);
       preview.requestedUrl = input.url;
       preview.navigationScope = navigationScope;
       preview.error = null;
@@ -95,7 +165,9 @@ export class BrowserPreviewManager {
     }
 
     preview.view.setBounds(bounds);
-    preview.view.setVisible(input.visible && bounds.width > 0 && bounds.height > 0);
+    const visible = input.visible && bounds.width > 0 && bounds.height > 0;
+    preview.view.setVisible(visible);
+    if (!visible) this.clipboardUserActivations.delete(preview.view.webContents);
     return this.snapshot(input.tabId, preview);
   }
 
@@ -103,6 +175,9 @@ export class BrowserPreviewManager {
     const preview = this.get(tabId);
     const normalized = validateBounds(bounds);
     preview.view.setBounds(normalized);
+    if (normalized.width <= 0 || normalized.height <= 0) {
+      this.clipboardUserActivations.delete(preview.view.webContents);
+    }
     return this.snapshot(tabId, preview);
   }
 
@@ -111,14 +186,43 @@ export class BrowserPreviewManager {
     const preview = this.previews.get(tabId);
     if (!preview) return null;
     const bounds = preview.view.getBounds();
-    preview.view.setVisible(visible && bounds.width > 0 && bounds.height > 0);
+    const nextVisible = visible && bounds.width > 0 && bounds.height > 0;
+    preview.view.setVisible(nextVisible);
+    if (!nextVisible) this.clipboardUserActivations.delete(preview.view.webContents);
     return this.snapshot(tabId, preview);
+  }
+
+  consumeClipboardWriteUserActivation(
+    webContents: WebContents,
+    requestingUrl: string,
+  ): boolean {
+    if (webContents.isDestroyed()) return false;
+    const preview = [...this.previews.values()].find(
+      (candidate) => candidate.view.webContents === webContents,
+    );
+    if (!preview || !preview.view.getVisible()) return false;
+    const bounds = preview.view.getBounds();
+    if (bounds.width <= 0 || bounds.height <= 0) return false;
+    if (
+      !isNavigationWithinScope(webContents.getURL(), preview.navigationScope) ||
+      !isNavigationWithinScope(requestingUrl, preview.navigationScope)
+    ) {
+      return false;
+    }
+
+    const activatedAt = this.clipboardUserActivations.get(webContents);
+    if (activatedAt === undefined) return false;
+    this.clipboardUserActivations.delete(webContents);
+    const activationAge = Date.now() - activatedAt;
+    return activationAge >= 0
+      && activationAge <= CLIPBOARD_USER_ACTIVATION_WINDOW_MS;
   }
 
   async navigate(tabId: string, url: string): Promise<BrowserPreviewState> {
     const preview = this.get(tabId);
     const navigationScope = previewNavigationScope(url);
     if (!navigationScope) throw new Error("Browser previews require a loopback or authenticated gateway-preview URL");
+    this.clipboardUserActivations.delete(preview.view.webContents);
     preview.requestedUrl = url;
     preview.navigationScope = navigationScope;
     preview.error = null;
@@ -152,6 +256,7 @@ export class BrowserPreviewManager {
     const preview = this.previews.get(tabId);
     if (!preview) return;
     this.previews.delete(tabId);
+    this.clipboardUserActivations.delete(preview.view.webContents);
     const window = this.options.getWindow();
     if (window && !window.isDestroyed()) {
       window.contentView.removeChildView(preview.view);
@@ -201,11 +306,58 @@ export class BrowserPreviewManager {
   private installListeners(tabId: string, preview: ManagedPreview): void {
     const contents = preview.view.webContents;
     contents.setWindowOpenHandler(() => ({ action: "deny" }));
+    contents.on("before-input-event", (event, input) => {
+      const isAddressShortcut =
+        input.type === "keyDown"
+        && input.key.toLowerCase() === "l"
+        && (input.meta || input.control)
+        && !input.alt
+        && !input.shift;
+      if (!isAddressShortcut) return;
+
+      event.preventDefault();
+      this.options.focusAddressBar(tabId);
+    });
+    contents.on("input-event", (_event, input: InputEvent) => {
+      if (CLIPBOARD_USER_ACTIVATION_INPUTS.has(input.type)) {
+        this.clipboardUserActivations.set(contents, Date.now());
+      }
+    });
     contents.on("context-menu", (_event, params: ContextMenuParams) => {
       const window = this.options.getWindow();
       if (!window || window.isDestroyed()) return;
 
-      const template = createContextMenuTemplate(params);
+      const template: MenuItemConstructorOptions[] = [];
+      if (params.linkURL) {
+        const browserTabUrl = browserTabUrlFromPreviewLink(params.linkURL, preview.requestedUrl);
+        const externalBrowserUrl = isExternalBrowserUrl(params.linkURL);
+        template.push(
+          {
+            label: "Open Link in New Tab",
+            enabled: browserTabUrl !== null,
+            click: () => {
+              if (browserTabUrl) this.options.emitOpenLink({ tabId, url: browserTabUrl });
+            },
+          },
+          {
+            label: "Open in External Browser",
+            enabled: externalBrowserUrl,
+            click: () => {
+              if (externalBrowserUrl) this.options.openExternal(params.linkURL);
+            },
+          },
+          {
+            label: "Copy Link Address",
+            click: () => this.options.writeClipboardText(params.linkURL),
+          },
+        );
+      }
+
+      const defaultTemplate = createContextMenuTemplate(params);
+      if (defaultTemplate.length > 0) {
+        if (template.length > 0) template.push({ type: "separator" });
+        template.push(...defaultTemplate);
+      }
       if (template.length > 0) template.push({ type: "separator" });
       template.push({
         label: "Interrogate",
@@ -216,9 +368,11 @@ export class BrowserPreviewManager {
       this.options.menu.buildFromTemplate(template).popup({ window });
     });
     contents.on("will-navigate", (event) => {
+      this.clipboardUserActivations.delete(contents);
       if (!isNavigationWithinScope(event.url, preview.navigationScope)) event.preventDefault();
     });
     contents.on("will-redirect", (event) => {
+      if (event.isMainFrame) this.clipboardUserActivations.delete(contents);
       if (event.isMainFrame && !isNavigationWithinScope(event.url, preview.navigationScope)) {
         event.preventDefault();
       }
@@ -233,6 +387,7 @@ export class BrowserPreviewManager {
       this.emit(tabId, preview);
     });
     contents.on("did-navigate", (_event, url) => {
+      this.clipboardUserActivations.delete(contents);
       if (isNavigationWithinScope(url, preview.navigationScope)) preview.requestedUrl = url;
       this.emit(tabId, preview);
     });
@@ -296,6 +451,7 @@ export class BrowserPreviewManager {
     preview.navigationScope = navigationScope;
     preview.error = null;
     preview.loadGeneration += 1;
+    this.clipboardUserActivations.delete(preview.view.webContents);
     if (offset === -1) history.goBack();
     else history.goForward();
     return this.snapshot(tabId, preview);

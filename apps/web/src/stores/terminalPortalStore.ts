@@ -5,6 +5,10 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { openInBrowser } from "@/lib/backend";
 import { DEFAULT_TERMINAL_APPEARANCE, DEFAULT_TERMINAL_SCROLLBACK } from "@/constants/terminal";
+import {
+  getTerminalLinkTarget,
+  requestTerminalBrowserTab,
+} from "@/lib/terminal-links";
 
 /**
  * Data for a persistent terminal instance that survives tab moves.
@@ -121,11 +125,12 @@ interface TerminalPortalState {
  */
 function createXtermTerminal(
   appearance: {
-  fontFamily?: string;
-  fontSize?: number;
-  backgroundColor?: string;
+    fontFamily?: string;
+    fontSize?: number;
+    backgroundColor?: string;
   },
-  scrollback?: number
+  scrollback: number | undefined,
+  linkSource: Pick<CreateTerminalOptions, "environmentId" | "tabId">,
 ): { terminal: Terminal; fitAddon: FitAddon; serializeAddon: SerializeAddon; webLinksAddon: WebLinksAddon } {
   const {
     fontFamily = DEFAULT_TERMINAL_APPEARANCE.fontFamily,
@@ -173,9 +178,17 @@ function createXtermTerminal(
   const fitAddon = new FitAddon();
   const serializeAddon = new SerializeAddon();
   const webLinksAddon = new WebLinksAddon((event: MouseEvent, uri: string) => {
-    // Only open links when Cmd (macOS) or Ctrl (Windows/Linux) is pressed
-    if (event.metaKey || event.ctrlKey) {
-      openInBrowser(uri).catch((err) => {
+    const target = getTerminalLinkTarget(event);
+    if (target === "browser-tab") {
+      requestTerminalBrowserTab({
+        environmentId: linkSource.environmentId,
+        sourceTabId: linkSource.tabId,
+        url: uri,
+      });
+      return;
+    }
+    if (target === "external") {
+      void openInBrowser(uri).catch((err) => {
         console.error("[terminalPortalStore] Failed to open URL:", err);
       });
     }
@@ -224,7 +237,11 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
       return existing;
     }
 
-    const { terminal, fitAddon, serializeAddon, webLinksAddon } = createXtermTerminal(appearance, options.scrollback);
+    const { terminal, fitAddon, serializeAddon, webLinksAddon } =
+      createXtermTerminal(appearance, options.scrollback, {
+        environmentId,
+        tabId,
+      });
 
     const portalElement = document.createElement("div");
     portalElement.className = "absolute inset-0 pointer-events-auto";
@@ -386,7 +403,8 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
         fontSize: existing.terminal.options.fontSize ?? DEFAULT_TERMINAL_APPEARANCE.fontSize,
         backgroundColor: existing.terminal.options.theme?.background ?? DEFAULT_TERMINAL_APPEARANCE.backgroundColor,
       },
-      existing.terminal.options.scrollback ?? DEFAULT_TERMINAL_SCROLLBACK
+      existing.terminal.options.scrollback ?? DEFAULT_TERMINAL_SCROLLBACK,
+      { environmentId, tabId },
     );
 
     // Create new portal element

@@ -86,19 +86,33 @@ export function sortEnvironmentsByActivity(
   });
 }
 
+export function measureActivityRowLayoutTop(element: HTMLElement): number {
+  const getOffsetTop = (node: HTMLElement | null): number => {
+    let top = 0;
+    let current = node;
+    while (current) {
+      top += current.offsetTop;
+      current = current.offsetParent as HTMLElement | null;
+    }
+    return top;
+  };
+  return getOffsetTop(element) - getOffsetTop(element.parentElement);
+}
+
 export function animateActivityRowMovement(
   element: HTMLElement,
   previousTop: number | null,
   reduceMotion: boolean,
-): number {
-  const nextTop = element.getBoundingClientRect().top;
+): { top: number; animation: Animation | null } {
+  const nextTop = measureActivityRowLayoutTop(element);
   const offset = previousTop === null ? 0 : previousTop - nextTop;
+  let animation: Animation | null = null;
   if (
     offset !== 0 &&
     !reduceMotion &&
     typeof element.animate === "function"
   ) {
-    element.animate(
+    animation = element.animate(
       [
         { transform: `translateY(${offset}px)` },
         { transform: "translateY(0)" },
@@ -109,31 +123,66 @@ export function animateActivityRowMovement(
       },
     );
   }
-  return nextTop;
+  return { top: nextTop, animation };
 }
 
 function AnimatedActivityRow({
   environmentId,
+  position,
   className,
   children,
 }: {
   environmentId: string;
+  position: number;
   className: string;
   children: ReactNode;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
   const previousTopRef = useRef<number | null>(null);
+  const previousPositionRef = useRef(position);
+  const animationRef = useRef<Animation | null>(null);
 
   useLayoutEffect(() => {
     const row = rowRef.current;
     if (!row) return;
+
+    // Activity, unread, and status updates all re-render the sidebar. Only run
+    // the FLIP animation when this row's actual list position changes so those
+    // unrelated updates cannot restart transforms across the whole list.
+    if (previousTopRef.current !== null && previousPositionRef.current === position) {
+      // A preceding row may have changed height without changing this row's
+      // numeric position. Refresh the transform-independent layout baseline,
+      // but leave any in-flight animation alone.
+      previousTopRef.current = measureActivityRowLayoutTop(row);
+      return;
+    }
+
+    let previousTop = previousTopRef.current;
+    const activeAnimation = animationRef.current;
+    if (
+      activeAnimation &&
+      activeAnimation.playState === "running"
+    ) {
+      // Preserve the row's current visual position when activity changes again
+      // before the prior movement finishes. Cancelling first would otherwise
+      // make the row jump to its new layout position.
+      const parentTop = row.parentElement?.getBoundingClientRect().top ?? 0;
+      const transformedTop = row.getBoundingClientRect().top - parentTop;
+      activeAnimation.cancel();
+      const layoutTop = row.getBoundingClientRect().top - parentTop;
+      previousTop = (previousTopRef.current ?? layoutTop) + (transformedTop - layoutTop);
+    }
+
     const reduceMotion = typeof window.matchMedia === "function" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    previousTopRef.current = animateActivityRowMovement(
+    const result = animateActivityRowMovement(
       row,
-      previousTopRef.current,
+      previousTop,
       reduceMotion,
     );
+    previousTopRef.current = result.top;
+    previousPositionRef.current = position;
+    animationRef.current = result.animation;
   });
 
   return (
@@ -222,6 +271,20 @@ export function resolveSidebarReorder(
     };
   }
   return null;
+}
+
+export function createEnvironmentUpdateHandler(
+  updateEnvironment: (environmentId: string, environment: Environment) => void,
+): (environment: Environment) => void {
+  return (environment) => updateEnvironment(environment.id, environment);
+}
+
+export function createProjectUpdateHandler(
+  updateProject: (project: Project) => Promise<unknown>,
+): (project: Project) => Promise<void> {
+  return async (project) => {
+    await updateProject(project);
+  };
 }
 
 export async function deleteProjectAndEnvironments(
@@ -586,18 +649,14 @@ export function HierarchicalSidebar() {
     })
     .filter(Boolean) as { id: string; name: string }[];
 
-  const handleUpdateEnvironment = (environment: Environment) => {
-    updateEnvironment(environment.id, environment);
-  };
+  const handleUpdateEnvironment = createEnvironmentUpdateHandler(updateEnvironment);
 
   const handleOpenSettings = (projectId: string) => {
     setSettingsProjectId(projectId);
     setShowSettingsDialog(true);
   };
 
-  const handleUpdateProject = async (project: Project) => {
-    await updateProject(project);
-  };
+  const handleUpdateProject = createProjectUpdateHandler(updateProject);
 
   // Get the project for the settings dialog
   const settingsProject = settingsProjectId
@@ -709,7 +768,14 @@ export function HierarchicalSidebar() {
 
       {/* Projects List */}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="py-2">
+        <div
+          data-testid="sidebar-list-content"
+          className={
+            environmentSortMode === "activity" && projects.length > 0
+              ? "pb-2"
+              : "py-2"
+          }
+        >
           {projectsLoading && projects.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
               <FolderGit2 className="h-8 w-8 mb-2 opacity-50" />
@@ -729,7 +795,10 @@ export function HierarchicalSidebar() {
             </div>
           ) : environmentSortMode === "activity" ? (
             <div data-testid="activity-environment-list">
-              <div className="sticky top-0 z-10 mb-1 flex h-9 items-center border-b border-border/60 bg-[#1d1d20]/95 px-2 backdrop-blur-sm">
+              <div
+                data-testid="activity-controls-bar"
+                className="sticky top-0 z-10 flex h-10 items-center border-b border-border/60 bg-[#1d1d20]/95 px-2 backdrop-blur-sm md:h-8"
+              >
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -809,11 +878,15 @@ export function HierarchicalSidebar() {
                   No environments yet
                 </div>
               ) : (
-                <div className="space-y-0.5 px-1">
-                  {activityEnvironments.map((environment) => (
+                <div
+                  data-testid="activity-environment-rows"
+                  className="space-y-0.5 px-1 pt-2"
+                >
+                  {activityEnvironments.map((environment, position) => (
                     <AnimatedActivityRow
                       key={environment.id}
                       environmentId={environment.id}
+                      position={position}
                       className={cn(
                         "mx-1 flex items-center rounded-lg border transition-colors will-change-transform",
                         selectedEnvironmentId === environment.id && !isMultiSelectMode

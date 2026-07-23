@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, safeStorage, session, WebContentsView } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, safeStorage, session, shell, WebContentsView } from "electron";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
@@ -14,10 +14,12 @@ import { createToolchainBootstrapWindow, reportToolchainProgress } from "./toolc
 import { createToolchainProgressController, preparePinnedToolchains } from "./toolchain-startup.js";
 import type { BrowserPreviewManager } from "./browser-preview-manager.js";
 import {
+  createBrowserPreviewAddressFocusHandler,
   initializeBrowserPreviews,
   registerBrowserPreviewWindowActivation,
   registerBrowserPreviewWindowCleanup,
 } from "./browser-preview-startup.js";
+import { createBrowserPreviewMainAdapters } from "./browser-preview-main-adapters.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -186,12 +188,23 @@ async function startApplication(): Promise<void> {
   await connectionManager.initialize();
   await backend.invoke("get_config");
 
+  const browserPreviewMainAdapters = createBrowserPreviewMainAdapters({
+    emitToRenderers,
+    openExternal: (url) => shell.openExternal(url),
+    writeClipboardText: (text) => clipboard.writeText(text),
+    logError: (message, error) => console.error(message, error),
+  });
   const browserPreviewRuntime = initializeBrowserPreviews({
     fromPartition: (partition) => session.fromPartition(partition),
     WebContentsViewCtor: WebContentsView,
     menu: Menu,
     getWindow: () => mainWindow,
-    emitState: (state) => emitToRenderers("browser-preview-state", state),
+    ...browserPreviewMainAdapters,
+    focusAddressBar: createBrowserPreviewAddressFocusHandler({
+      getWindow: () => mainWindow,
+      emitFocus: (tabId) =>
+        emitToRenderers("browser-preview-focus-address", tabId),
+    }),
     getAuthorization: (url) => connectionManager?.getRendererRequestAuthorization(url) ?? null,
   });
   browserPreviewManager = browserPreviewRuntime.manager;

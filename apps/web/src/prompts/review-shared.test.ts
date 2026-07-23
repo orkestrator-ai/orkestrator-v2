@@ -78,8 +78,13 @@ describe("buildReviewBody", () => {
         "## Issues",
         "## Test Coverage Gaps",
         "## Verdict",
-        "## Summary",
+        "## Summary of change",
+        "## Review summary",
       ]);
+      expect(body).toContain(
+        "Write a couple of paragraphs describing what the change being reviewed involves.",
+      );
+      expect(body).not.toContain("## Summary\n");
     }
 
     expect(interactive).toContain("8. Ask clarifying questions if needed about unclear changes.");
@@ -116,6 +121,7 @@ describe("buildReviewBody", () => {
     expect(documentation).toContain(
       "| Output | Markdown sections: Review Scope, What Changed, Risk Profile, Test Results",
     );
+    expect(documentation).toContain("Summary of change, Review summary");
   });
 
   test("documents the prompt sources, invocation, related workflows, and maintenance steps", () => {

@@ -4,7 +4,12 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { readImage } from "@/lib/native/clipboard";
 import { writeContainerFile, writeLocalFile } from "@/lib/backend";
-import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
+import {
+  encodeCanvasAsPngWithinSize,
+  MAX_IMAGE_DIMENSION,
+  resizeCanvasIfNeeded,
+  resizeCanvasToMaxDimension,
+} from "@/lib/canvas-utils";
 import { toast } from "sonner";
 import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
@@ -66,8 +71,37 @@ export function ComposeBar({
   const clearComposeDraft = useTerminalSessionStore((state) => state.clearComposeDraft);
 
   const [isSending, setIsSending] = useState(false);
+  const [pendingPasteCount, setPendingPasteCount] = useState(0);
   const [previewImage, setPreviewImage] = useState<ImageAttachment | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const isMountedRef = useRef(true);
+  const isSendingRef = useRef(false);
+  const pasteLifecycleRef = useRef(0);
+  const pendingPasteCountRef = useRef(0);
+  const pasteQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  const resetPasteLifecycle = useCallback(() => {
+    pasteLifecycleRef.current += 1;
+    pendingPasteCountRef.current = 0;
+    pasteQueueRef.current = Promise.resolve();
+    if (isMountedRef.current) {
+      setPendingPasteCount(0);
+    }
+  }, []);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      pasteLifecycleRef.current += 1;
+    };
+  }, []);
+
+  // A paste belongs only to the open compose session that received it.
+  useEffect(() => {
+    resetPasteLifecycle();
+    return resetPasteLifecycle;
+  }, [isOpen, sessionKey, resetPasteLifecycle]);
 
   // Focus textarea when bar opens
   useEffect(() => {
@@ -78,7 +112,7 @@ export function ComposeBar({
 
   // Handle paste events when compose bar is open
   const handlePaste = useCallback(async (event: ClipboardEvent) => {
-    if (!isOpen) return;
+    if (!isOpen || isSendingRef.current) return;
 
     // Only handle paste if THIS compose bar's textarea has focus
     if (document.activeElement !== textareaRef.current) return;
@@ -89,65 +123,97 @@ export function ComposeBar({
       event.stopPropagation();
     }
 
-    // Browser/iOS provide a blob on the event; Electron remains the fallback.
-    try {
-      const image = await readImage(pastedBlob);
-      const rgba = await image.rgba();
-      const { width, height } = await image.size();
+    const pasteLifecycle = pasteLifecycleRef.current;
+    pendingPasteCountRef.current += 1;
+    setPendingPasteCount((count) => count + 1);
 
-      // Convert RGBA to PNG via canvas
-      let canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
+    // Start decoding immediately so multiple pastes can process concurrently.
+    const processing = (async (): Promise<ImageAttachment | "too-large" | null> => {
+      // Browser/iOS provide a blob on the event; Electron remains the fallback.
+      try {
+        const image = await readImage(pastedBlob);
+        const rgba = await image.rgba();
+        const { width, height } = await image.size();
 
-      const imageDataObj = new ImageData(new Uint8ClampedArray(rgba), width, height);
-      ctx.putImageData(imageDataObj, 0, 0);
+        // Convert RGBA to PNG via canvas
+        let canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return null;
 
-      // Resize if needed to fit within RGBA size limit
-      canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
+        const imageDataObj = new ImageData(new Uint8ClampedArray(rgba), width, height);
+        ctx.putImageData(imageDataObj, 0, 0);
 
-      const dataUrl = canvas.toDataURL("image/png");
-      const base64Data = dataUrl.split(",")[1] || "";
+        canvas = resizeCanvasToMaxDimension(canvas, MAX_IMAGE_DIMENSION);
+        canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
 
-      // Check final PNG size
-      const estimatedSize = (base64Data.length * 3) / 4;
-      if (estimatedSize > MAX_IMAGE_SIZE) {
-        console.error("[ComposeBar] Image too large after encoding");
+        const encodedImage = encodeCanvasAsPngWithinSize(canvas, MAX_IMAGE_SIZE);
+        if (!encodedImage) {
+          console.error("[ComposeBar] Image could not be resized below the attachment limit");
+          return "too-large";
+        }
+        canvas = encodedImage.canvas;
+        const { dataUrl, base64Data } = encodedImage;
+
+        // Store final dimensions before cleanup
+        const finalWidth = canvas.width;
+        const finalHeight = canvas.height;
+
+        // Release canvas memory
+        canvas.width = 0;
+        canvas.height = 0;
+
+        return {
+          id: Math.random().toString(36).substring(2, 9),
+          dataUrl,
+          base64Data,
+          width: finalWidth,
+          height: finalHeight,
+        };
+      } catch {
+        // No image in clipboard - this is expected when pasting text.
+        // Let the paste event propagate to native text handling.
+        return null;
+      }
+    })();
+
+    const queuedPaste = pasteQueueRef.current.then(async () => {
+      const result = await processing;
+      const isCurrentPaste =
+        isMountedRef.current &&
+        isOpen &&
+        pasteLifecycleRef.current === pasteLifecycle;
+      if (!isCurrentPaste || !result) return;
+
+      if (result === "too-large") {
         toast.error("Image too large", {
-          description: `Image is ${(estimatedSize / 1024 / 1024).toFixed(1)}MB. Maximum is 8MB.`,
+          description: "The image could not be resized below the 8MB attachment limit.",
         });
         return;
       }
 
-      // Store final dimensions before cleanup
-      const finalWidth = canvas.width;
-      const finalHeight = canvas.height;
-
-      // Release canvas memory
-      canvas.width = 0;
-      canvas.height = 0;
-
-      // Prevent default behavior when we have an image
+      // Prevent default behavior when the Electron fallback found an image.
       if (!pastedBlob) {
         event.preventDefault();
         event.stopPropagation();
       }
+      appendComposeDraftImage(sessionKey, result);
+    });
 
-      // Add to images - use final canvas dimensions after potential resize
-      const newImage: ImageAttachment = {
-        id: Math.random().toString(36).substring(2, 9),
-        dataUrl,
-        base64Data,
-        width: finalWidth,
-        height: finalHeight,
-      };
-      appendComposeDraftImage(sessionKey, newImage);
-    } catch {
-      // No image in clipboard - this is expected when pasting text.
-      // Let the paste event propagate to native text handling.
-    }
+    pasteQueueRef.current = queuedPaste
+      .catch((error) => {
+        console.error("[ComposeBar] Failed to add pasted image:", error);
+      })
+      .finally(() => {
+        if (pasteLifecycleRef.current !== pasteLifecycle) return;
+        pendingPasteCountRef.current -= 1;
+        if (isMountedRef.current) {
+          setPendingPasteCount((count) => Math.max(0, count - 1));
+        }
+      });
+
+    await pasteQueueRef.current;
   }, [isOpen, sessionKey, appendComposeDraftImage]);
 
   // Listen for paste events
@@ -161,6 +227,11 @@ export function ComposeBar({
     };
   }, [isOpen, handlePaste]);
 
+  const handleClose = useCallback(() => {
+    resetPasteLifecycle();
+    onClose();
+  }, [onClose, resetPasteLifecycle]);
+
   // Handle keyboard events in textarea
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     const isMeta = event.metaKey;
@@ -169,7 +240,7 @@ export function ComposeBar({
     // Cmd+I / Ctrl+I - close compose bar
     if ((isMeta || isCtrl) && event.key.toLowerCase() === "i") {
       event.preventDefault();
-      onClose();
+      handleClose();
       return;
     }
 
@@ -180,7 +251,7 @@ export function ComposeBar({
     } else if (event.key === "Escape") {
       // Escape - close
       event.preventDefault();
-      onClose();
+      handleClose();
     }
     // Shift+Enter falls through and creates a new line normally
   };
@@ -190,17 +261,42 @@ export function ComposeBar({
   };
 
   const handleSend = async () => {
-    if (isSending) return;
-    if (images.length === 0 && !text.trim()) return;
+    if (isSendingRef.current) return;
 
+    const initialDraft = useTerminalSessionStore.getState();
+    if (
+      initialDraft.getComposeDraftImages(sessionKey).length === 0 &&
+      !initialDraft.getComposeDraftText(sessionKey).trim() &&
+      pendingPasteCountRef.current === 0
+    ) {
+      return;
+    }
+
+    const sendLifecycle = pasteLifecycleRef.current;
+    isSendingRef.current = true;
     setIsSending(true);
     try {
+      // Include every paste queued before send began. New paste events are
+      // ignored while sending, so clearing cannot race a late attachment.
+      await pasteQueueRef.current;
+      if (
+        !isMountedRef.current ||
+        pasteLifecycleRef.current !== sendLifecycle
+      ) {
+        return;
+      }
+
+      const currentDraft = useTerminalSessionStore.getState();
+      const draftImages = currentDraft.getComposeDraftImages(sessionKey);
+      const draftText = currentDraft.getComposeDraftText(sessionKey).trim();
+      if (draftImages.length === 0 && !draftText) return;
+
       // Save images to container or local worktree and get file paths.
       // Note: We reuse the ImageAttachment type but repurpose the `id` field to store
       // the file path. This path is then written to the terminal by the caller.
       const savedImages: ImageAttachment[] = [];
       if (containerId || worktreePath) {
-        for (const img of images) {
+        for (const img of draftImages) {
           try {
             const filename = generateImageFilename();
             const filePath = `.orkestrator/clipboard/${filename}`;
@@ -219,15 +315,26 @@ export function ComposeBar({
         }
       }
 
-      // Only send if we have saved images or text
-      if (savedImages.length > 0 || text.trim()) {
-        onSend(savedImages, text.trim());
+      if (
+        !isMountedRef.current ||
+        pasteLifecycleRef.current !== sendLifecycle
+      ) {
+        return;
       }
+
+      // Only send if we have saved images or text
+      if (savedImages.length > 0 || draftText) {
+        onSend(savedImages, draftText);
+      }
+      pasteLifecycleRef.current += 1;
       clearComposeDraft(sessionKey);
     } catch (error) {
       console.error("[ComposeBar] Failed to send:", error);
     } finally {
-      setIsSending(false);
+      isSendingRef.current = false;
+      if (isMountedRef.current) {
+        setIsSending(false);
+      }
     }
   };
 
@@ -308,7 +415,10 @@ export function ComposeBar({
           size="icon-sm"
           variant="default"
           onClick={handleSend}
-          disabled={isSending || (images.length === 0 && !text.trim())}
+          disabled={
+            isSending ||
+            (pendingPasteCount === 0 && images.length === 0 && !text.trim())
+          }
           className="shrink-0 h-7 w-7"
         >
           <Send className="w-3.5 h-3.5" />

@@ -14,7 +14,14 @@ interface Window {
     clipboard: {
       readText(): Promise<string>;
       writeText(text: string): Promise<void>;
-      readImage(): Promise<{ width: number; height: number; dataUrl: string } | null>;
+      readImage(): Promise<{
+        width: number;
+        height: number;
+        /** Electron transport. Browser gateways return the original Blob. */
+        dataUrl?: string;
+        /** Browser-only transport, retained to allow bounded bitmap decoding. */
+        blob?: Blob;
+      } | null>;
       writeImage(dataUrl: string): Promise<void>;
     };
     dialog: {

@@ -451,8 +451,8 @@ describe("web gateway browser API", () => {
 
     const api = createBrowserGatewayApi();
     const result = await api.clipboard.readImage();
-    expect(result).toMatchObject({ width: 32, height: 18 });
-    expect(result?.dataUrl).toStartWith("data:image/png;base64,");
+    expect(result).toEqual({ width: 32, height: 18, blob: imageBlob });
+    expect(result).not.toHaveProperty("dataUrl");
     expect(read).toHaveBeenCalledTimes(1);
     expect(getType).toHaveBeenCalledWith("image/png");
   });
@@ -473,7 +473,7 @@ describe("web gateway browser API", () => {
     expect(getType).not.toHaveBeenCalled();
   });
 
-  test("rejects oversized browser clipboard image metadata before data URL encoding", async () => {
+  test("allows large browser clipboard images through for renderer resizing", async () => {
     const getType = mock(async () => pngBlob(9000, 1));
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -485,6 +485,27 @@ describe("web gateway browser API", () => {
     });
 
     const api = createBrowserGatewayApi();
-    await expect(api.clipboard.readImage()).rejects.toMatchObject({ code: "too-large" });
+    await expect(api.clipboard.readImage()).resolves.toMatchObject({
+      width: 9000,
+      height: 1,
+      blob: expect.any(Blob),
+    });
+  });
+
+  test("rejects pathological browser clipboard dimensions", async () => {
+    const getType = mock(async () => pngBlob(40000, 1));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        read: mock(async () => [
+          { types: ["image/png"], getType } as unknown as ClipboardItem,
+        ]),
+      },
+    });
+
+    const api = createBrowserGatewayApi();
+    await expect(api.clipboard.readImage()).rejects.toMatchObject({
+      code: "too-large",
+    });
   });
 });

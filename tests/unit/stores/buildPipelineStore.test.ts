@@ -1,6 +1,14 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
-import type { BuildPipeline, PipelineSession } from "../../../apps/web/src/stores/buildPipelineStore";
+import {
+  isActiveBuildPhase,
+  useBuildPipelineStore,
+} from "../../../apps/web/src/stores/buildPipelineStore";
+import type {
+  BuildPhase,
+  PipelinePromptAttempt,
+  PipelineReconnectAttempt,
+  PipelineSession,
+} from "../../../apps/web/src/stores/buildPipelineStore";
 import type { TaskSnapshot } from "../../../apps/web/src/prompts";
 
 const defaultTaskSnapshot: TaskSnapshot = {
@@ -36,6 +44,34 @@ function createMockSession(overrides: Partial<PipelineSession> = {}): PipelineSe
   };
 }
 
+function createReconnectAttempt(
+  overrides: Partial<PipelineReconnectAttempt> = {},
+): PipelineReconnectAttempt {
+  return {
+    id: "attempt-1",
+    phase: "building",
+    kind: "prompt-dispatch",
+    sessionId: "session-123",
+    startedAt: "2026-07-23T08:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function createPromptAttempt(
+  overrides: Partial<PipelinePromptAttempt> = {},
+): PipelinePromptAttempt {
+  return {
+    id: "prompt-attempt-1",
+    sessionId: "session-123",
+    requestId: "request-123",
+    phase: "building",
+    prompt: "Build the requested change",
+    useTaskImages: true,
+    startedAt: "2026-07-23T08:00:00.000Z",
+    ...overrides,
+  };
+}
+
 describe("buildPipelineStore", () => {
   beforeEach(() => {
     useBuildPipelineStore.setState({
@@ -49,6 +85,43 @@ describe("buildPipelineStore", () => {
       const state = useBuildPipelineStore.getState();
       expect(state.pipelines.size).toBe(0);
       expect(state.buildEnvironmentIds.size).toBe(0);
+    });
+  });
+
+  describe("isActiveBuildPhase", () => {
+    test("classifies every build phase", () => {
+      const phases: BuildPhase[] = [
+        "creating-environment",
+        "starting-environment",
+        "waiting-for-setup",
+        "building",
+        "reviewing",
+        "addressing",
+        "verifying",
+        "fixing",
+        "creating-pr",
+        "resolving-conflicts",
+        "paused",
+        "complete",
+        "failed",
+      ];
+      const expected: Record<BuildPhase, boolean> = {
+        "creating-environment": true,
+        "starting-environment": true,
+        "waiting-for-setup": true,
+        building: true,
+        reviewing: true,
+        addressing: true,
+        verifying: true,
+        fixing: true,
+        "creating-pr": true,
+        "resolving-conflicts": true,
+        paused: false,
+        complete: false,
+        failed: false,
+      };
+
+      expect(Object.fromEntries(phases.map((phase) => [phase, isActiveBuildPhase(phase)]))).toEqual(expected);
     });
   });
 
@@ -133,6 +206,28 @@ describe("buildPipelineStore", () => {
       expect(pipeline.phase).toBe("complete");
       expect(pipeline.completionCommentStatus).toBe("failed");
       expect(pipeline.completionCommentError).toBe("Linear API unavailable");
+      expect(pipeline.completionCommentId).toBe("comment-1");
+      expect(pipeline.completionCommentPostedAt).toBe("2026-06-28T12:00:00.000Z");
+    });
+
+    test("clears a previous failure when posting or posted succeeds", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().setCompletionCommentStatus(id, "failed", {
+        error: "Linear API unavailable",
+      });
+
+      useBuildPipelineStore.getState().setCompletionCommentStatus(id, "posting");
+      expect(useBuildPipelineStore.getState().pipelines.get(id)!.completionCommentError).toBeUndefined();
+
+      useBuildPipelineStore.getState().setCompletionCommentStatus(id, "posted", {
+        commentId: "comment-2",
+        postedAt: "2026-07-23T08:00:00.000Z",
+      });
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.completionCommentStatus).toBe("posted");
+      expect(pipeline.completionCommentError).toBeUndefined();
+      expect(pipeline.completionCommentId).toBe("comment-2");
+      expect(pipeline.completionCommentPostedAt).toBe("2026-07-23T08:00:00.000Z");
     });
 
     test("clears completion comment state so a failed Linear comment can be retried", () => {
@@ -150,6 +245,30 @@ describe("buildPipelineStore", () => {
       expect(pipeline.completionCommentError).toBeUndefined();
       expect(pipeline.completionCommentId).toBeUndefined();
       expect(pipeline.completionCommentPostedAt).toBeUndefined();
+    });
+
+    test("no-ops completion comment actions for an unknown pipeline", () => {
+      const before = useBuildPipelineStore.getState().pipelines;
+
+      useBuildPipelineStore.getState().setCompletionCommentStatus("missing", "posting");
+      useBuildPipelineStore.getState().clearCompletionCommentStatus("missing");
+
+      expect(useBuildPipelineStore.getState().pipelines).toBe(before);
+    });
+
+    test("no-ops idempotently for identical or already-cleared comment state", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setCompletionCommentStatus(id, "failed", { error: "Unavailable" });
+      const afterFailure = useBuildPipelineStore.getState().pipelines;
+
+      store.setCompletionCommentStatus(id, "failed", { error: "Unavailable" });
+      expect(useBuildPipelineStore.getState().pipelines).toBe(afterFailure);
+
+      store.clearCompletionCommentStatus(id);
+      const afterClear = useBuildPipelineStore.getState().pipelines;
+      store.clearCompletionCommentStatus(id);
+      expect(useBuildPipelineStore.getState().pipelines).toBe(afterClear);
     });
   });
 
@@ -206,6 +325,18 @@ describe("buildPipelineStore", () => {
     test("no-ops for unknown pipeline ID", () => {
       useBuildPipelineStore.getState().removePipeline("missing");
       expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+    });
+
+    test("invalidates prompt ownership by removing its pipeline", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(id, "building");
+      store.beginPromptAttempt(id, createPromptAttempt());
+
+      store.removePipeline(id);
+
+      expect(store.completePromptAttempt(id, "prompt-attempt-1")).toBe(false);
+      expect(useBuildPipelineStore.getState().pipelines.has(id)).toBe(false);
     });
   });
 
@@ -342,6 +473,18 @@ describe("buildPipelineStore", () => {
       useBuildPipelineStore.getState().markSessionIdle("nonexistent", "s1");
       expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
     });
+
+    test("no-ops for an unknown or already idle session", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().addSession(id, createMockSession({ status: "idle" }));
+      const before = useBuildPipelineStore.getState().pipelines;
+
+      useBuildPipelineStore.getState().markSessionIdle(id, "missing");
+      useBuildPipelineStore.getState().markSessionIdle(id, "session-123");
+
+      expect(useBuildPipelineStore.getState().pipelines).toBe(before);
+    });
+
   });
 
   describe("setCurrentSessionIndex", () => {
@@ -350,6 +493,21 @@ describe("buildPipelineStore", () => {
       useBuildPipelineStore.getState().setCurrentSessionIndex(id, 5);
 
       expect(useBuildPipelineStore.getState().pipelines.get(id)!.currentSessionIndex).toBe(5);
+    });
+
+    test("no-ops for unknown pipeline ID", () => {
+      const before = useBuildPipelineStore.getState().pipelines;
+      useBuildPipelineStore.getState().setCurrentSessionIndex("missing", 5);
+      expect(useBuildPipelineStore.getState().pipelines).toBe(before);
+    });
+
+    test("no-ops idempotently when the index is unchanged", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const before = useBuildPipelineStore.getState().pipelines;
+
+      useBuildPipelineStore.getState().setCurrentSessionIndex(id, -1);
+
+      expect(useBuildPipelineStore.getState().pipelines).toBe(before);
     });
   });
 
@@ -370,6 +528,22 @@ describe("buildPipelineStore", () => {
       const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
       expect(pipeline.verificationResult).toBe("fail");
       expect(pipeline.verificationFeedback).toBe("2 tests failed");
+    });
+
+    test("no-ops for unknown pipeline ID", () => {
+      const before = useBuildPipelineStore.getState().pipelines;
+      useBuildPipelineStore.getState().setVerificationResult("missing", "fail", "failure");
+      expect(useBuildPipelineStore.getState().pipelines).toBe(before);
+    });
+
+    test("no-ops idempotently when result and feedback are unchanged", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().setVerificationResult(id, "pass", "All tests pass");
+      const before = useBuildPipelineStore.getState().pipelines;
+
+      useBuildPipelineStore.getState().setVerificationResult(id, "pass", "All tests pass");
+
+      expect(useBuildPipelineStore.getState().pipelines).toBe(before);
     });
   });
 
@@ -392,7 +566,7 @@ describe("buildPipelineStore", () => {
   });
 
   describe("setPipelineError", () => {
-    test("sets phase to failed and stores error message", () => {
+    test("sets phase to failed and captures the exact failed phase", () => {
       const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
       useBuildPipelineStore.getState().setPhase(id, "building");
 
@@ -401,11 +575,542 @@ describe("buildPipelineStore", () => {
       const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
       expect(pipeline.phase).toBe("failed");
       expect(pipeline.error).toBe("Container crashed");
+      expect(pipeline.failureContext).toEqual({
+        phase: "building",
+        kind: "stage-transition",
+      });
+    });
+
+    test("stores explicit prompt failure context", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().setPhase(id, "reviewing");
+
+      useBuildPipelineStore.getState().setPipelineError(id, "Dispatch failed", {
+        phase: "reviewing",
+        kind: "prompt-dispatch",
+        sessionId: "review-session",
+      });
+
+      expect(useBuildPipelineStore.getState().pipelines.get(id)!.failureContext).toEqual({
+        phase: "reviewing",
+        kind: "prompt-dispatch",
+        sessionId: "review-session",
+      });
+    });
+
+    test("preserves existing context when an already failed pipeline gets a new error", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().setPhase(id, "verifying");
+      useBuildPipelineStore.getState().setPipelineError(id, "First failure", {
+        phase: "verifying",
+        kind: "stage-transition",
+      });
+
+      useBuildPipelineStore.getState().setPipelineError(id, "More detail");
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.error).toBe("More detail");
+      expect(pipeline.failureContext).toEqual({
+        phase: "verifying",
+        kind: "stage-transition",
+      });
+    });
+
+    test("allows terminal semantic failures to opt out of reconnect", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().setPhase(id, "verifying");
+
+      useBuildPipelineStore.getState().setPipelineError(id, "Max iterations reached", null);
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.phase).toBe("failed");
+      expect(pipeline.error).toBe("Max iterations reached");
+      expect(pipeline.failureContext).toBeUndefined();
+    });
+
+    test("allows an explicit terminal failure to replace a paused state", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(id, "building");
+      store.pausePipeline(id);
+
+      store.setPipelineError(id, "Unattended pipeline requires input", null);
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.phase).toBe("failed");
+      expect(pipeline.error).toBe("Unattended pipeline requires input");
+      expect(pipeline.failureContext).toBeUndefined();
+    });
+
+    test("ignores late errors after pause or completion", () => {
+      const pausedId = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const completedId = useBuildPipelineStore.getState().createPipeline(createPipelineParams({ taskId: "task-2" }));
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(pausedId, "building");
+      store.pausePipeline(pausedId);
+      store.setPhase(completedId, "complete");
+
+      store.setPipelineError(pausedId, "Late rejection");
+      store.setPipelineError(completedId, "Late rejection");
+
+      expect(useBuildPipelineStore.getState().pipelines.get(pausedId)!.phase).toBe("paused");
+      expect(useBuildPipelineStore.getState().pipelines.get(completedId)!.phase).toBe("complete");
+    });
+
+    test("ignores an explicitly owned error after the phase has advanced", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(id, "reviewing");
+
+      store.setPipelineError(id, "Late build rejection", {
+        phase: "building",
+        kind: "prompt-dispatch",
+        sessionId: "build-session",
+      });
+
+      expect(useBuildPipelineStore.getState().pipelines.get(id)!.phase).toBe("reviewing");
+      expect(useBuildPipelineStore.getState().pipelines.get(id)!.error).toBeUndefined();
+    });
+
+    test("ignores a stale error from a different failed operation", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(id, "reviewing");
+      store.setPipelineError(id, "Review failed", {
+        phase: "reviewing",
+        kind: "prompt-dispatch",
+        sessionId: "review-session",
+      });
+
+      store.setPipelineError(id, "Late build failure", {
+        phase: "building",
+        kind: "prompt-dispatch",
+        sessionId: "build-session",
+      });
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.error).toBe("Review failed");
+      expect(pipeline.failureContext?.sessionId).toBe("review-session");
+    });
+
+    test("clears paused and reconnect state", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.setState((state) => {
+        const newMap = new Map(state.pipelines);
+        const pipeline = newMap.get(id)!;
+        newMap.set(id, {
+          ...pipeline,
+          phase: "building",
+          pausedFromPhase: "reviewing",
+          reconnectAttempt: createReconnectAttempt(),
+        });
+        return { pipelines: newMap };
+      });
+
+      useBuildPipelineStore.getState().setPipelineError(id, "Failed again");
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.pausedFromPhase).toBeUndefined();
+      expect(pipeline.reconnectAttempt).toBeUndefined();
+    });
+
+    test("no-ops idempotently for the same error and context", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const context = { phase: "building", kind: "prompt-dispatch", sessionId: "session-1" } as const;
+      useBuildPipelineStore.getState().setPhase(id, "building");
+      useBuildPipelineStore.getState().setPipelineError(id, "Connection lost", context);
+      const before = useBuildPipelineStore.getState().pipelines;
+
+      useBuildPipelineStore.getState().setPipelineError(id, "Connection lost", { ...context });
+
+      expect(useBuildPipelineStore.getState().pipelines).toBe(before);
     });
 
     test("no-ops for unknown pipeline ID", () => {
       useBuildPipelineStore.getState().setPipelineError("nonexistent", "error");
       expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+    });
+  });
+
+  describe("reconnect ownership", () => {
+    test("begins a reconnect only when the attempt exactly matches failure context", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().setPhase(id, "addressing");
+      useBuildPipelineStore.getState().setPipelineError(id, "Connection dropped", {
+        phase: "addressing",
+        kind: "prompt-dispatch",
+        sessionId: "session-123",
+      });
+      useBuildPipelineStore.setState((state) => {
+        const newMap = new Map(state.pipelines);
+        newMap.set(id, { ...newMap.get(id)!, pausedFromPhase: "reviewing" });
+        return { pipelines: newMap };
+      });
+      const attempt = createReconnectAttempt({ phase: "addressing" });
+
+      const started = useBuildPipelineStore.getState().beginReconnect(id, attempt);
+
+      expect(started).toBe(true);
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.phase).toBe("addressing");
+      expect(pipeline.error).toBeUndefined();
+      expect(pipeline.pausedFromPhase).toBeUndefined();
+      expect(pipeline.failureContext).toEqual({
+        phase: "addressing",
+        kind: "prompt-dispatch",
+        sessionId: "session-123",
+      });
+      expect(pipeline.reconnectAttempt).toEqual(attempt);
+    });
+
+    test("rejects unknown, active, mismatched, and duplicate attempts", () => {
+      const store = useBuildPipelineStore.getState();
+      expect(store.beginReconnect("missing", createReconnectAttempt())).toBe(false);
+
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      expect(store.beginReconnect(id, createReconnectAttempt())).toBe(false);
+
+      store.setPhase(id, "reviewing");
+      store.setPipelineError(id, "Connection dropped", {
+        phase: "reviewing",
+        kind: "prompt-dispatch",
+        sessionId: "review-session",
+      });
+      expect(store.beginReconnect(id, createReconnectAttempt())).toBe(false);
+      expect(store.beginReconnect(id, createReconnectAttempt({
+        phase: "reviewing",
+        sessionId: "wrong-session",
+      }))).toBe(false);
+      expect(store.beginReconnect(id, createReconnectAttempt({
+        phase: "reviewing",
+        kind: "stage-transition",
+        sessionId: "review-session",
+      }))).toBe(false);
+
+      const matching = createReconnectAttempt({
+        phase: "reviewing",
+        sessionId: "review-session",
+      });
+      expect(store.beginReconnect(id, matching)).toBe(true);
+      expect(store.beginReconnect(id, { ...matching, id: "attempt-2" })).toBe(false);
+      expect(useBuildPipelineStore.getState().pipelines.get(id)!.reconnectAttempt?.id).toBe("attempt-1");
+    });
+
+    test("completes only the owned attempt and retains retry provenance", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(id, "building");
+      store.setPipelineError(id, "Connection dropped", {
+        phase: "building",
+        kind: "prompt-dispatch",
+        sessionId: "session-123",
+      });
+      store.beginReconnect(id, createReconnectAttempt());
+
+      expect(store.completeReconnect("missing", "attempt-1")).toBe(false);
+      expect(store.completeReconnect(id, "stale-attempt")).toBe(false);
+      expect(store.completeReconnect(id, "attempt-1")).toBe(true);
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.phase).toBe("building");
+      expect(pipeline.failureContext).toEqual({
+        phase: "building",
+        kind: "prompt-dispatch",
+        sessionId: "session-123",
+      });
+      expect(pipeline.activePromptContext).toEqual({
+        phase: "building",
+        kind: "prompt-dispatch",
+        sessionId: "session-123",
+      });
+      expect(pipeline.reconnectAttempt).toBeUndefined();
+      expect(store.completeReconnect(id, "attempt-1")).toBe(false);
+    });
+
+    test("retains prompt provenance when reconnect reconciles an already running turn", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(id, "building");
+      const context = {
+        phase: "building",
+        kind: "prompt-dispatch",
+        sessionId: "session-123",
+        prompt: "Build the requested change",
+        useTaskImages: true,
+        requestId: "request-123",
+      } as const;
+      store.setPipelineError(id, "Response lost", context);
+      store.beginReconnect(id, createReconnectAttempt({
+        ...context,
+        id: "running-reconnect",
+      }));
+      store.completeReconnect(id, "running-reconnect");
+      store.setPhase(id, "building");
+
+      store.setPipelineError(id, "Remote turn later failed");
+
+      expect(useBuildPipelineStore.getState().pipelines.get(id)!.failureContext).toEqual(context);
+    });
+
+    test("fails only the owned attempt and preserves failure context for another retry", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(id, "building");
+      store.setPipelineError(id, "Connection dropped", {
+        phase: "building",
+        kind: "prompt-dispatch",
+        sessionId: "session-123",
+      });
+      store.beginReconnect(id, createReconnectAttempt());
+
+      expect(store.failReconnect("missing", "attempt-1", "retry failed")).toBe(false);
+      expect(store.failReconnect(id, "stale-attempt", "retry failed")).toBe(false);
+      expect(store.failReconnect(id, "attempt-1", "retry failed")).toBe(true);
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.phase).toBe("failed");
+      expect(pipeline.error).toBe("retry failed");
+      expect(pipeline.failureContext).toEqual({
+        phase: "building",
+        kind: "prompt-dispatch",
+        sessionId: "session-123",
+      });
+      expect(pipeline.reconnectAttempt).toBeUndefined();
+      expect(store.failReconnect(id, "attempt-1", "late failure")).toBe(false);
+    });
+
+    test("reconnect dispatch failure preserves the exact prompt for another retry", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(id, "building");
+      const context = {
+        phase: "building",
+        kind: "prompt-dispatch",
+        sessionId: "session-123",
+        prompt: "Build the requested change",
+        useTaskImages: true,
+        requestId: "request-123",
+      } as const;
+      store.setPipelineError(id, "Response lost", context);
+      store.beginReconnect(id, createReconnectAttempt({ ...context }));
+      store.beginPromptAttempt(id, createPromptAttempt());
+
+      expect(store.failReconnect(id, "attempt-1", "Dispatch failed again")).toBe(true);
+
+      expect(useBuildPipelineStore.getState().pipelines.get(id)!.failureContext).toEqual(context);
+    });
+
+    test("pause cancels attempt ownership so a late failure cannot overwrite Stop", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(id, "building");
+      store.setPipelineError(id, "Connection dropped", {
+        phase: "building",
+        kind: "prompt-dispatch",
+        sessionId: "session-123",
+      });
+      store.beginReconnect(id, createReconnectAttempt());
+
+      store.pausePipeline(id);
+
+      const paused = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(paused.phase).toBe("paused");
+      expect(paused.pausedFromPhase).toBe("building");
+      expect(paused.reconnectAttempt).toBeUndefined();
+      expect(store.failReconnect(id, "attempt-1", "late failure")).toBe(false);
+      expect(useBuildPipelineStore.getState().pipelines.get(id)!.phase).toBe("paused");
+    });
+
+    test("a different phase transition cancels reconnect ownership", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(id, "building");
+      store.setPipelineError(id, "Connection dropped", {
+        phase: "building",
+        kind: "prompt-dispatch",
+        sessionId: "session-123",
+      });
+      store.beginReconnect(id, createReconnectAttempt());
+
+      store.setPhase(id, "reviewing");
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.phase).toBe("reviewing");
+      expect(pipeline.failureContext).toBeUndefined();
+      expect(pipeline.reconnectAttempt).toBeUndefined();
+      expect(store.failReconnect(id, "attempt-1", "late failure")).toBe(false);
+    });
+
+    test("setting the same retry phase preserves attempt ownership", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(id, "building");
+      store.setPipelineError(id, "Connection dropped", {
+        phase: "building",
+        kind: "prompt-dispatch",
+        sessionId: "session-123",
+      });
+      store.beginReconnect(id, createReconnectAttempt());
+
+      store.setPhase(id, "building");
+
+      expect(useBuildPipelineStore.getState().pipelines.get(id)!.reconnectAttempt?.id).toBe("attempt-1");
+    });
+  });
+
+  describe("prompt attempt ownership", () => {
+    test("persists pending and active prompt context while dispatch is in flight", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(id, "building");
+      const attempt = createPromptAttempt();
+
+      expect(store.beginPromptAttempt(id, attempt)).toBe(true);
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.pendingPromptAttempt).toEqual(attempt);
+      expect(pipeline.activePromptContext).toEqual({
+        phase: "building",
+        kind: "prompt-dispatch",
+        sessionId: "session-123",
+        requestId: "request-123",
+        prompt: "Build the requested change",
+        useTaskImages: true,
+      });
+    });
+
+    test("rejects unknown, wrong-phase, and duplicate prompt attempts", () => {
+      const store = useBuildPipelineStore.getState();
+      expect(store.beginPromptAttempt("missing", createPromptAttempt())).toBe(false);
+
+      const id = store.createPipeline(createPipelineParams());
+      expect(store.beginPromptAttempt(id, createPromptAttempt())).toBe(false);
+      store.setPhase(id, "building");
+      expect(store.beginPromptAttempt(id, createPromptAttempt())).toBe(true);
+      expect(store.beginPromptAttempt(id, createPromptAttempt({ id: "prompt-attempt-2" }))).toBe(false);
+      expect(useBuildPipelineStore.getState().pipelines.get(id)!.pendingPromptAttempt?.id).toBe("prompt-attempt-1");
+    });
+
+    test("completes only the owned dispatch and retains active prompt provenance", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(id, "building");
+      store.beginPromptAttempt(id, createPromptAttempt());
+
+      expect(store.completePromptAttempt("missing", "prompt-attempt-1")).toBe(false);
+      expect(store.completePromptAttempt(id, "stale-attempt")).toBe(false);
+      expect(store.completePromptAttempt(id, "prompt-attempt-1")).toBe(true);
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.pendingPromptAttempt).toBeUndefined();
+      expect(pipeline.activePromptContext?.prompt).toBe("Build the requested change");
+      expect(store.completePromptAttempt(id, "prompt-attempt-1")).toBe(false);
+    });
+
+    test("uses active prompt provenance for a later remote session error", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(id, "building");
+      store.beginPromptAttempt(id, createPromptAttempt());
+      store.completePromptAttempt(id, "prompt-attempt-1");
+
+      store.setPipelineError(id, "Remote execution failed");
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.failureContext).toEqual({
+        phase: "building",
+        kind: "prompt-dispatch",
+        sessionId: "session-123",
+        requestId: "request-123",
+        prompt: "Build the requested change",
+        useTaskImages: true,
+      });
+      expect(pipeline.activePromptContext).toBeUndefined();
+    });
+
+    test("marking the owning session idle clears active prompt provenance", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(id, "building");
+      store.addSession(id, createMockSession());
+      store.beginPromptAttempt(id, createPromptAttempt());
+      store.completePromptAttempt(id, "prompt-attempt-1");
+
+      store.markSessionIdle(id, "session-123");
+
+      expect(useBuildPipelineStore.getState().pipelines.get(id)!.activePromptContext).toBeUndefined();
+    });
+
+    test("marking the owning session idle clears retained reconnect provenance", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(id, "building");
+      store.addSession(id, createMockSession());
+      store.setPipelineError(id, "Response lost", {
+        phase: "building",
+        kind: "prompt-dispatch",
+        sessionId: "session-123",
+      });
+      store.beginReconnect(id, createReconnectAttempt());
+      store.completeReconnect(id, "attempt-1");
+
+      store.markSessionIdle(id, "session-123");
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.activePromptContext).toBeUndefined();
+      expect(pipeline.failureContext).toBeUndefined();
+    });
+
+    test("a new prompt supersedes prior active prompt provenance", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const store = useBuildPipelineStore.getState();
+      store.setPhase(id, "building");
+      store.beginPromptAttempt(id, createPromptAttempt());
+      store.completePromptAttempt(id, "prompt-attempt-1");
+      useBuildPipelineStore.setState((state) => {
+        const newMap = new Map(state.pipelines);
+        newMap.set(id, {
+          ...newMap.get(id)!,
+          failureContext: {
+            phase: "building",
+            kind: "prompt-dispatch",
+            sessionId: "old-session",
+          },
+        });
+        return { pipelines: newMap };
+      });
+
+      store.beginPromptAttempt(id, createPromptAttempt({
+        id: "prompt-attempt-2",
+        requestId: "request-456",
+        prompt: "Address the follow-up",
+        useTaskImages: false,
+      }));
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.activePromptContext?.requestId).toBe("request-456");
+      expect(pipeline.activePromptContext?.prompt).toBe("Address the follow-up");
+      expect(pipeline.activePromptContext?.useTaskImages).toBe(false);
+      expect(pipeline.failureContext).toBeUndefined();
+    });
+
+    test("pause and phase changes clear pending and active prompt state", () => {
+      const firstId = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const secondId = useBuildPipelineStore.getState().createPipeline(createPipelineParams({ taskId: "task-2" }));
+      const store = useBuildPipelineStore.getState();
+      for (const id of [firstId, secondId]) {
+        store.setPhase(id, "building");
+        store.beginPromptAttempt(id, createPromptAttempt({ id: `attempt-${id}` }));
+      }
+
+      store.pausePipeline(firstId);
+      store.setPhase(secondId, "reviewing");
+
+      for (const id of [firstId, secondId]) {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+        expect(pipeline.pendingPromptAttempt).toBeUndefined();
+        expect(pipeline.activePromptContext).toBeUndefined();
+      }
     });
   });
 
@@ -500,6 +1205,22 @@ describe("buildPipelineStore", () => {
       expect(resumedPhase).toBeUndefined();
       expect(useBuildPipelineStore.getState().pipelines.get(id)!.phase).toBe("building");
     });
+
+    test("no-ops for unknown pipelines and paused pipelines without a resume phase", () => {
+      const store = useBuildPipelineStore.getState();
+      expect(store.resumePipeline("missing", "building")).toBeUndefined();
+
+      const id = store.createPipeline(createPipelineParams());
+      useBuildPipelineStore.setState((state) => {
+        const newMap = new Map(state.pipelines);
+        newMap.set(id, { ...newMap.get(id)!, phase: "paused", pausedFromPhase: undefined });
+        return { pipelines: newMap };
+      });
+      const before = useBuildPipelineStore.getState().pipelines;
+
+      expect(store.resumePipeline(id)).toBeUndefined();
+      expect(useBuildPipelineStore.getState().pipelines).toBe(before);
+    });
   });
 
   describe("markSessionRunning", () => {
@@ -540,6 +1261,16 @@ describe("buildPipelineStore", () => {
 
       const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
       expect(pipeline.sessions[0]!.status).toBe("idle");
+    });
+
+    test("no-ops idempotently for an already running session", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().addSession(id, createMockSession({ status: "running" }));
+      const before = useBuildPipelineStore.getState().pipelines;
+
+      useBuildPipelineStore.getState().markSessionRunning(id, "session-123");
+
+      expect(useBuildPipelineStore.getState().pipelines).toBe(before);
     });
   });
 

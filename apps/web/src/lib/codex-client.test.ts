@@ -426,7 +426,7 @@ describe("codex-client getSessionStatus", () => {
 describe("codex-client sendPrompt", () => {
   afterEach(restoreFetch);
 
-  test("posts prompt attachments and returns true on ok response", async () => {
+  test("posts prompt attachments and an idempotency key and returns true on ok response", async () => {
     mockFetch(async () => new Response(null, { status: 202 }));
 
     await expect(sendPrompt(client, "session-1", "Review this", {
@@ -436,6 +436,7 @@ describe("codex-client sendPrompt", () => {
         dataUrl: "data:image/png;base64,abc",
         filename: "screenshot.png",
       }],
+      requestId: "request-1",
     })).resolves.toBe(true);
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
@@ -450,6 +451,7 @@ describe("codex-client sendPrompt", () => {
             dataUrl: "data:image/png;base64,abc",
             filename: "screenshot.png",
           }],
+          requestId: "request-1",
         }),
       }),
     );

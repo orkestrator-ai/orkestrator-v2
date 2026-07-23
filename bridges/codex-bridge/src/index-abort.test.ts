@@ -1936,6 +1936,119 @@ describe("codex bridge abort handling", () => {
     session.abortController?.abort();
   });
 
+  test("prompt route accepts an idempotent retry without starting a duplicate turn", async () => {
+    let runCount = 0;
+    const session = createSession({
+      id: "idempotent-route-session",
+      thread: {
+        runStreamed: async () => {
+          runCount += 1;
+          return {
+            events: (async function* () {
+              await new Promise(() => {});
+            })(),
+          };
+        },
+      },
+    });
+    __testing.sessions.set(session.id, session);
+
+    const request = {
+      method: "POST",
+      body: JSON.stringify({ prompt: "first prompt", requestId: "request-1" }),
+      headers: { "Content-Type": "application/json" },
+    };
+    const firstResponse = await app.request("/session/idempotent-route-session/prompt", request);
+    const duplicateWhileRunning = await app.request("/session/idempotent-route-session/prompt", request);
+
+    expect(firstResponse.status).toBe(202);
+    expect(duplicateWhileRunning.status).toBe(202);
+    expect(await duplicateWhileRunning.json()).toEqual({
+      status: "processing",
+      duplicate: true,
+    });
+    await waitUntil(() => runCount === 1);
+    expect(runCount).toBe(1);
+
+    session.status = "idle";
+    session.currentTurnId = undefined;
+    const duplicateAfterCompletion = await app.request("/session/idempotent-route-session/prompt", request);
+    expect(duplicateAfterCompletion.status).toBe(202);
+    expect(await duplicateAfterCompletion.json()).toEqual({
+      status: "already-processed",
+      duplicate: true,
+    });
+    expect(runCount).toBe(1);
+    session.abortController?.abort();
+  });
+
+  test("prompt route allows the same request ID to run again after execution errors", async () => {
+    let runCount = 0;
+    const session = createSession({
+      id: "errored-idempotent-route-session",
+      thread: {
+        runStreamed: async () => {
+          runCount += 1;
+          return { events: (async function* () {})() };
+        },
+      },
+    });
+    __testing.sessions.set(session.id, session);
+    __testing.setBeforePromptExecutionForTesting(() => {
+      throw new Error("first execution failed");
+    });
+
+    const request = {
+      method: "POST",
+      body: JSON.stringify({ prompt: "retryable prompt", requestId: "request-after-error" }),
+      headers: { "Content-Type": "application/json" },
+    };
+    const errors: unknown[][] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => { errors.push(args); };
+    try {
+      const firstResponse = await app.request(
+        "/session/errored-idempotent-route-session/prompt",
+        request,
+      );
+      expect(firstResponse.status).toBe(202);
+      await waitUntil(() => session.status === "error");
+      expect(session.error).toBe("first execution failed");
+      expect(runCount).toBe(0);
+
+      __testing.setBeforePromptExecutionForTesting(null);
+      const retryResponse = await app.request(
+        "/session/errored-idempotent-route-session/prompt",
+        request,
+      );
+
+      expect(retryResponse.status).toBe(202);
+      expect(await retryResponse.json()).toEqual({ status: "processing" });
+      await waitUntil(() => runCount === 1);
+      expect(session.error).toBeUndefined();
+    } finally {
+      console.error = originalError;
+      __testing.setBeforePromptExecutionForTesting(null);
+    }
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.[0]).toBe("[codex-bridge] Prompt failed:");
+  });
+
+  test("prompt route validates idempotency keys", async () => {
+    const session = createSession({ id: "invalid-request-id-session" });
+    __testing.sessions.set(session.id, session);
+
+    for (const requestId of ["", "x".repeat(201), 123]) {
+      const response = await app.request("/session/invalid-request-id-session/prompt", {
+        method: "POST",
+        body: JSON.stringify({ prompt: "first prompt", requestId }),
+        headers: { "Content-Type": "application/json" },
+      });
+      expect(response.status).toBe(400);
+    }
+  });
+
   test("prompt route ignores stale async setup failures after a newer turn starts", async () => {
     let rejectPromptSetup: ((error: Error) => void) | undefined;
     __testing.setBeforePromptExecutionForTesting(
@@ -2262,6 +2375,40 @@ describe("codex bridge abort handling", () => {
     expect(
       __testing.sessions.get("message-session")?.threadOptions.modelReasoningEffort,
     ).toBe("ultra");
+  });
+
+  test("restored compacted sessions preserve prompt duplicate suppression", async () => {
+    const staleSession = createRestorableStaleSession("idempotent-compacted-session");
+    staleSession.lastAcceptedPromptRequestId = "compacted-request";
+    __testing.sessions.set(staleSession.id, staleSession);
+    __testing.cleanupIdleSessions();
+
+    expect(__testing.sessions.has(staleSession.id)).toBe(false);
+    expect(__testing.expiredSessions.get(staleSession.id)?.lastAcceptedPromptRequestId)
+      .toBe("compacted-request");
+
+    const response = await app.request(
+      "/session/idempotent-compacted-session/prompt",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          prompt: "Previously accepted prompt",
+          requestId: "compacted-request",
+        }),
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({
+      status: "already-processed",
+      duplicate: true,
+    });
+    expect(__testing.expiredSessions.has(staleSession.id)).toBe(false);
+    expect(__testing.sessions.get(staleSession.id)).toMatchObject({
+      status: "idle",
+      lastAcceptedPromptRequestId: "compacted-request",
+    });
   });
 
   test("prompt and abort routes restore compacted sessions before handling requests", async () => {

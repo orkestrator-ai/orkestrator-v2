@@ -112,6 +112,7 @@ interface SessionState {
   currentSubagentFingerprints: Map<string, string>;
   currentTimelineGeneration: number;
   currentTurnId?: string;
+  lastAcceptedPromptRequestId?: string;
   currentTurnStartedAt?: string;
   currentAssistantTurnStartedAt?: string;
   subagentRefreshController?: TurnSubagentRefreshController;
@@ -133,6 +134,7 @@ interface ExpiredSessionState {
   threadOptions: ThreadOptions;
   threadId?: string | null;
   messages: NormalizedMessage[];
+  lastAcceptedPromptRequestId?: string;
   lastAccessed: number;
   compactedAt: number;
 }
@@ -396,6 +398,7 @@ function compactSession(session: SessionState, compactedAt: number): ExpiredSess
     threadOptions: session.threadOptions,
     threadId: session.threadId,
     messages: session.messages,
+    lastAcceptedPromptRequestId: session.lastAcceptedPromptRequestId,
     lastAccessed: session.lastAccessed,
     compactedAt,
   };
@@ -422,6 +425,7 @@ function restoreExpiredSession(sessionId: string): SessionState | undefined {
     threadOptions: expired.threadOptions,
     threadId: expired.threadId,
     messages: expired.messages,
+    lastAcceptedPromptRequestId: expired.lastAcceptedPromptRequestId,
     status: "idle",
     currentItems: new Map(),
     currentItemOrder: [],
@@ -2873,6 +2877,7 @@ app.post("/session/:id/prompt", async (c) => {
 
   const body = await c.req.json().catch(() => ({}));
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+  const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
   const attachments = Array.isArray(body.attachments)
     ? body.attachments
         .map((entry: unknown) => {
@@ -2902,6 +2907,21 @@ app.post("/session/:id/prompt", async (c) => {
     return c.json({ error: "Prompt or image attachment is required" }, 400);
   }
 
+  if (body.requestId !== undefined && (!requestId || requestId.length > 200)) {
+    return c.json({ error: "requestId must be a non-empty string of at most 200 characters" }, 400);
+  }
+
+  if (
+    requestId
+    && session.lastAcceptedPromptRequestId === requestId
+    && session.status !== "error"
+  ) {
+    return c.json({
+      status: session.status === "running" ? "processing" : "already-processed",
+      duplicate: true,
+    }, 202);
+  }
+
   if (session.status === "running") {
     return c.json({ error: "Session is already running" }, 409);
   }
@@ -2910,6 +2930,7 @@ app.post("/session/:id/prompt", async (c) => {
   session.subagentRefreshController?.stop();
   const acceptedTurnId = crypto.randomUUID();
   session.currentTurnId = acceptedTurnId;
+  session.lastAcceptedPromptRequestId = requestId || undefined;
   session.status = "running";
   session.error = undefined;
   emit({ type: "session.updated", sessionId: session.id });

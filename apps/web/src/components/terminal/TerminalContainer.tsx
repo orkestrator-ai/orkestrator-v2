@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState, type MouseEvent } from "react";
+import type { BrowserPreviewOpenLinkEvent } from "@orkestrator/protocol/browser-preview";
 import {
   DndContext,
   pointerWithin,
@@ -80,32 +81,44 @@ const isTabOrTabbar = (collision: Collision): boolean => {
  * When multiple collisions are found, prioritize tabbars/tabs over edge zones
  * to prevent accidental splits when trying to combine tabs.
  */
-export const customCollisionDetection: CollisionDetection = (args) => {
-  // First, check if the pointer is directly over any droppable
-  const pointerCollisions = pointerWithin(args);
-  if (pointerCollisions.length > 0) {
-    // Prioritize tabbars and tabs over edge zones
-    const tabCollisions = pointerCollisions.filter(isTabOrTabbar);
-    if (tabCollisions.length > 0) {
-      return tabCollisions;
+export function createTerminalCollisionDetection({
+  pointerDetection = pointerWithin,
+  rectangleDetection = rectIntersection,
+  nearestDetection = closestCenter,
+}: {
+  pointerDetection?: CollisionDetection;
+  rectangleDetection?: CollisionDetection;
+  nearestDetection?: CollisionDetection;
+} = {}): CollisionDetection {
+  return (args) => {
+    // First, check if the pointer is directly over any droppable
+    const pointerCollisions = pointerDetection(args);
+    if (pointerCollisions.length > 0) {
+      // Prioritize tabbars and tabs over edge zones
+      const tabCollisions = pointerCollisions.filter(isTabOrTabbar);
+      if (tabCollisions.length > 0) {
+        return tabCollisions;
+      }
+      return pointerCollisions;
     }
-    return pointerCollisions;
-  }
 
-  // Try rect intersection for nearby targets
-  const rectCollisions = rectIntersection(args);
-  if (rectCollisions.length > 0) {
-    // Prioritize tabbars and tabs over edge zones
-    const tabCollisions = rectCollisions.filter(isTabOrTabbar);
-    if (tabCollisions.length > 0) {
-      return tabCollisions;
+    // Try rect intersection for nearby targets
+    const rectCollisions = rectangleDetection(args);
+    if (rectCollisions.length > 0) {
+      // Prioritize tabbars and tabs over edge zones
+      const tabCollisions = rectCollisions.filter(isTabOrTabbar);
+      if (tabCollisions.length > 0) {
+        return tabCollisions;
+      }
+      return rectCollisions;
     }
-    return rectCollisions;
-  }
 
-  // Last resort: use closestCenter to find the nearest target
-  return closestCenter(args);
-};
+    // Last resort: use closestCenter to find the nearest target
+    return nearestDetection(args);
+  };
+}
+
+export const customCollisionDetection = createTerminalCollisionDetection();
 
 let tabIdCounter = 0;
 
@@ -1463,6 +1476,22 @@ export function TerminalContainer({
     },
     [containerId, isEnvironmentRunning, activePaneId, addTab, getAllTabs, environmentId, opencodeMode, claudeMode, claudeNativeBackend, codexMode, isLocalEnvironmentReady, createBrowserTab]
   );
+
+  useEffect(() => {
+    if (!isActive || !window.orkestrator) return;
+
+    return window.orkestrator.listen<BrowserPreviewOpenLinkEvent>(
+      "browser-preview-open-link",
+      ({ tabId, url }) => {
+        const sourcePane = usePaneLayoutStore.getState().findPaneWithTab(tabId, environmentId);
+        const sourceTab = sourcePane?.tabs.find((tab) => tab.id === tabId);
+        if (!sourcePane || sourceTab?.type !== "browser") return;
+        if (createBrowserTab(url, sourcePane.id)) {
+          usePaneLayoutStore.getState().setActivePane(sourcePane.id, environmentId);
+        }
+      },
+    );
+  }, [createBrowserTab, environmentId, isActive]);
 
   // Handler for creating file viewer tabs
   const handleCreateFileTab = useCallback(

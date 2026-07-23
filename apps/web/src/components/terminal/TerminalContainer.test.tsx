@@ -17,6 +17,7 @@ import * as realDndKitCore from "@dnd-kit/core";
 const realBackendSnapshot = { ...realBackend };
 const realSetupCommandsSnapshot = { ...realSetupCommands };
 const realDndKitCoreSnapshot = { ...realDndKitCore };
+const originalOrkestrator = window.orkestrator;
 
 type DndContextHarnessProps = {
   children: ReactNode;
@@ -143,6 +144,7 @@ const {
 
 describe("TerminalContainer", () => {
   afterAll(() => {
+    window.orkestrator = originalOrkestrator;
     mock.module("@/lib/setup-commands", () => realSetupCommandsSnapshot);
     mock.module("@/lib/backend", () => realBackendSnapshot);
     mock.module("@dnd-kit/core", () => realDndKitCoreSnapshot);
@@ -150,6 +152,7 @@ describe("TerminalContainer", () => {
 
   beforeEach(() => {
     cleanup();
+    window.orkestrator = originalOrkestrator;
     latestDndContextProps = null;
     pointerWithinMock.mockReset();
     pointerWithinMock.mockReturnValue([]);
@@ -3239,6 +3242,88 @@ describe("TerminalContainer", () => {
 
         expect(leftPane.tabs.find((tab) => tab.type === "browser")?.browserData).toEqual({
           url: "http://localhost:3000/docs",
+        });
+        expect(rightPane.tabs.some((tab) => tab.type === "browser")).toBe(false);
+        expect(environment.activePaneId).toBe("left");
+      });
+    });
+
+    test("opens a native preview link in a browser tab beside its source preview", async () => {
+      let openLinkListener:
+        | ((event: { tabId: string; url: string }) => void)
+        | undefined;
+      window.orkestrator = {
+        listen: (event: string, callback: (payload: unknown) => void) => {
+          if (event === "browser-preview-open-link") {
+            openLinkListener = callback as (payload: { tabId: string; url: string }) => void;
+          }
+          return () => undefined;
+        },
+      } as never;
+      usePaneLayoutStore.setState((state) => ({
+        environments: new Map(state.environments).set("env-visible", {
+          root: {
+            kind: "split",
+            id: "split",
+            direction: "horizontal",
+            sizes: [50, 50],
+            depth: 1,
+            children: [
+              {
+                kind: "leaf",
+                id: "left",
+                tabs: [{
+                  id: "browser-source",
+                  type: "browser",
+                  browserData: { url: "http://localhost:3000/" },
+                }],
+                activeTabId: "browser-source",
+              },
+              {
+                kind: "leaf",
+                id: "right",
+                tabs: [{ id: "right-tab", type: "plain" }],
+                activeTabId: "right-tab",
+              },
+            ],
+          },
+          activePaneId: "right",
+          containerId: "container-visible",
+        }),
+      }));
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => expect(openLinkListener).toBeDefined());
+      act(() => {
+        openLinkListener?.({
+          tabId: "browser-source",
+          url: "http://localhost:3000/docs",
+        });
+      });
+
+      await waitFor(() => {
+        const environment = usePaneLayoutStore.getState().environments.get("env-visible");
+        if (!environment || environment.root.kind !== "split") {
+          throw new Error("expected split layout");
+        }
+        const leftPane = environment.root.children[0];
+        const rightPane = environment.root.children[1];
+        if (leftPane?.kind !== "leaf" || rightPane?.kind !== "leaf") {
+          throw new Error("expected leaf panes");
+        }
+        expect(leftPane.tabs.find((tab) => tab.id !== "browser-source")).toMatchObject({
+          type: "browser",
+          browserData: { url: "http://localhost:3000/docs" },
         });
         expect(rightPane.tabs.some((tab) => tab.type === "browser")).toBe(false);
         expect(environment.activePaneId).toBe("left");

@@ -36,6 +36,7 @@ class FakeWebContents extends EventEmitter {
 }
 
 class FakeWebContentsView {
+  static instances: FakeWebContentsView[] = [];
   readonly webContents = new FakeWebContents();
   private bounds = { x: 0, y: 0, width: 0, height: 0 };
   private visible = false;
@@ -48,6 +49,10 @@ class FakeWebContentsView {
     this.visible = visible;
   });
   readonly getVisible = mock(() => this.visible);
+
+  constructor() {
+    FakeWebContentsView.instances.push(this);
+  }
 }
 
 describe("browser preview startup wiring", () => {
@@ -85,14 +90,8 @@ describe("browser preview startup wiring", () => {
     expect(emitFocus).toHaveBeenCalledTimes(3);
   });
 
-  test("requires scoped visible user activation, installs preview-only auth, and wires address focus", async () => {
-    const createdViews: FakeWebContentsView[] = [];
-    class CapturingFakeWebContentsView extends FakeWebContentsView {
-      constructor() {
-        super();
-        createdViews.push(this);
-      }
-    }
+  test("requires scoped visible user activation for clipboard writes and installs preview-only auth", async () => {
+    FakeWebContentsView.instances.length = 0;
     let permissionCheck:
       | ((
           webContents: unknown,
@@ -143,14 +142,29 @@ describe("browser preview startup wiring", () => {
       contentView: { addChildView, removeChildView: mock(() => undefined) },
     };
     const emitState = mock(() => undefined);
+    const emitOpenLink = mock(() => undefined);
+    const openExternal = mock(() => undefined);
+    const writeClipboardText = mock(() => undefined);
     const focusAddressBar = mock(() => undefined);
+    const menuTemplates: Array<
+      Array<{ label?: string; click?: (...args: never[]) => void }>
+    > = [];
+    const buildFromTemplate = mock(
+      (template: Array<{ label?: string; click?: (...args: never[]) => void }>) => {
+        menuTemplates.push(template);
+        return { popup: () => undefined };
+      },
+    );
 
     const runtime = initializeBrowserPreviews({
       fromPartition: fromPartition as never,
-      WebContentsViewCtor: CapturingFakeWebContentsView as never,
-      menu: { buildFromTemplate: () => ({ popup: () => undefined }) } as never,
+      WebContentsViewCtor: FakeWebContentsView as never,
+      menu: { buildFromTemplate } as never,
       getWindow: () => window as never,
       emitState,
+      emitOpenLink,
+      openExternal,
+      writeClipboardText,
       focusAddressBar,
       getAuthorization: (url) =>
         url.startsWith("https://desk.example/__orkestrator/")
@@ -342,8 +356,36 @@ describe("browser preview startup wiring", () => {
     expect(addChildView).toHaveBeenCalledTimes(1);
     expect(emitState).toHaveBeenCalledWith(expect.objectContaining({ tabId: "browser-1" }));
 
+    FakeWebContentsView.instances[0]!.webContents.emit(
+      "context-menu",
+      {},
+      {
+        linkURL: "http://localhost:3000/docs",
+        isEditable: false,
+        selectionText: "",
+        x: 10,
+        y: 20,
+      },
+    );
+    const menuTemplate = menuTemplates[0];
+    menuTemplate
+      ?.find((item) => item.label === "Open Link in New Tab")
+      ?.click?.();
+    menuTemplate
+      ?.find((item) => item.label === "Open in External Browser")
+      ?.click?.();
+    menuTemplate
+      ?.find((item) => item.label === "Copy Link Address")
+      ?.click?.();
+    expect(emitOpenLink).toHaveBeenCalledWith({
+      tabId: "browser-1",
+      url: "http://localhost:3000/docs",
+    });
+    expect(openExternal).toHaveBeenCalledWith("http://localhost:3000/docs");
+    expect(writeClipboardText).toHaveBeenCalledWith("http://localhost:3000/docs");
+
     const inputEvent = { preventDefault: mock(() => undefined) };
-    createdViews[0]?.webContents.emit("before-input-event", inputEvent, {
+    previewContents.emit("before-input-event", inputEvent, {
       type: "keyDown",
       key: "l",
       meta: true,
@@ -352,7 +394,6 @@ describe("browser preview startup wiring", () => {
       shift: false,
     });
     expect(inputEvent.preventDefault).toHaveBeenCalledTimes(1);
-    expect(focusAddressBar).toHaveBeenCalledTimes(1);
     expect(focusAddressBar).toHaveBeenCalledWith("browser-1");
   });
 

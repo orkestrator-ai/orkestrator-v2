@@ -487,38 +487,43 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
       label: string,
     ): Promise<{ sessionKey: string; sdkSessionId: string } | null> => {
       if (isPipelinePaused()) return null;
-      const activeClient = client ?? await initializeClient();
-      if (isPipelinePaused()) return null;
+      try {
+        const activeClient = client ?? await initializeClient();
+        if (isPipelinePaused()) return null;
 
-      const newSession = await createSession(activeClient);
-      if (isPipelinePaused()) {
-        try {
-          await abortSession(activeClient, newSession.id);
-        } catch {
-          // Best effort; the session was never attached to the pipeline.
+        const newSession = await createSession(activeClient);
+        if (isPipelinePaused()) {
+          try {
+            await abortSession(activeClient, newSession.id);
+          } catch {
+            // Best effort; the session was never attached to the pipeline.
+          }
+          return null;
         }
+
+        const tabIdForSession = `build-${phase}-${iteration}-${Date.now()}`;
+        const sessionKey = createOpenCodeSessionKey(environmentId, tabIdForSession);
+
+        setSession(sessionKey, {
+          sessionId: newSession.id,
+          messages: [],
+          isLoading: true,
+        });
+
+        addPipelineSession(pipelineId, {
+          phase,
+          iteration,
+          sessionKey,
+          sdkSessionId: newSession.id,
+          status: "running",
+          startedAt: new Date().toISOString(),
+          label,
+        });
+
+        return { sessionKey, sdkSessionId: newSession.id };
+      } catch {
         return null;
       }
-      const tabIdForSession = `build-${phase}-${iteration}-${Date.now()}`;
-      const sessionKey = createOpenCodeSessionKey(environmentId, tabIdForSession);
-
-      setSession(sessionKey, {
-        sessionId: newSession.id,
-        messages: [],
-        isLoading: true,
-      });
-
-      addPipelineSession(pipelineId, {
-        phase,
-        iteration,
-        sessionKey,
-        sdkSessionId: newSession.id,
-        status: "running",
-        startedAt: new Date().toISOString(),
-        label,
-      });
-
-      return { sessionKey, sdkSessionId: newSession.id };
     },
     [addPipelineSession, client, environmentId, initializeClient, isPipelinePaused, pipelineId, setSession],
   );

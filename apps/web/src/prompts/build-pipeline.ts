@@ -84,12 +84,19 @@ export function createBuildPrompt(task: TaskSnapshot | null, projectNotes: strin
 export function createAddressIssuesPrompt(): string {
   return `Please address all the above issues and test coverage gaps, without asking questions. Make sensible assumptions. Run typechecking and build validation to ensure the changes are valid as appropriate for the project.
 
-Before finishing, run \`git status --porcelain\`. If there are any uncommitted changes, stage and commit them so they are included in the branch diff used by the verification step. Use a conventional-commit message, do not use \`--no-verify\`, and do not finish until \`git status --porcelain\` is clean.`;
+Before finishing:
+1. Run \`git status --porcelain\` and \`git diff HEAD\`.
+2. Stage only files that clearly belong to the review fixes and test coverage changes you made.
+3. Do NOT add secrets, credentials, \`.env*\` files, editor/IDE files, build artifacts, dependency caches (\`node_modules\`, \`target\`, \`dist\`), unrelated changes, or temporary files.
+4. Commit the relevant staged changes with a conventional-commit message so they are included in the branch diff used by verification. Do not use \`--no-verify\`.
+5. If suspicious, sensitive, generated, or unrelated files remain, leave them uncommitted and report them. Do not modify or delete them merely to make the worktree clean. It is acceptable for \`git status --porcelain\` to remain non-empty solely because of those excluded files.
+
+Do not finish while any relevant review fix or test change remains uncommitted.`;
 }
 
 export function createVerificationPrompt(task: TaskSnapshot | null, projectNotes: string, targetBranch: string = "main"): string {
   if (!task) {
-    return `Before verification, run \`git status --porcelain\` and commit any uncommitted changes so they are included in the branch diff. Then determine whether the changes satisfy the acceptance criteria.`;
+    return `Before verification, run \`git status --porcelain\`. Verification is read-only: do not stage, commit, modify, or delete files. If implementation or test changes that belong to the task remain uncommitted, treat verification as incomplete and explain what must be committed. Leave secrets, credentials, \`.env*\` files, generated artifacts, caches, and unrelated changes untouched; they do not require a clean worktree. Then determine whether the committed branch changes satisfy the acceptance criteria.`;
   }
 
   const parts = [
@@ -115,7 +122,7 @@ export function createVerificationPrompt(task: TaskSnapshot | null, projectNotes
 
   parts.push(`\n\nVerify the changes on the current branch against the target branch \`${targetBranch}\`.
 
-1. Run \`git status --porcelain\`. If there are any uncommitted changes, stage and commit them before continuing so they are included in the branch diff. Do not use \`--no-verify\`.
+1. Run \`git status --porcelain\`. Verification is read-only: do not stage, commit, modify, or delete files. If implementation or test changes that belong to this task remain uncommitted, set \`complete\` to false and explain what must be committed. Leave secrets, credentials, \`.env*\` files, editor/IDE files, generated artifacts, dependency caches, and unrelated changes untouched; they do not require a clean worktree.
 2. Run \`git branch --show-current\` to identify the current branch
 3. Run \`git diff origin/${targetBranch}...HEAD\` to see all changes since branching from \`${targetBranch}\`
 4. Review the diff to determine whether ALL acceptance criteria above are satisfied

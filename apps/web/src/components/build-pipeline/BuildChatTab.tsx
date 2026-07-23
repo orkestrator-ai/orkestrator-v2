@@ -792,39 +792,43 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     async (phase: PipelineSession["phase"], iteration: number, label: string): Promise<{ sessionKey: string; sdkSessionId: string } | null> => {
       if (!client || isPipelinePaused()) return null;
 
-      const newSession = await createSession(client);
-      if (!newSession) return null;
-      if (isPipelinePaused()) {
-        try {
-          await abortSession(client, newSession.sessionId);
-        } catch {
-          // Best effort; the session was never attached to the pipeline.
+      try {
+        const newSession = await createSession(client);
+        if (!newSession) return null;
+        if (isPipelinePaused()) {
+          try {
+            await abortSession(client, newSession.sessionId);
+          } catch {
+            // Best effort; the session was never attached to the pipeline.
+          }
+          return null;
         }
+
+        const tabIdForSession = `build-${phase}-${iteration}-${Date.now()}`;
+        const sessionKey = createClaudeSessionKey(environmentId, tabIdForSession);
+
+        setSession(sessionKey, {
+          sessionId: newSession.sessionId,
+          messages: [],
+          isLoading: true,
+        });
+
+        const pSession: PipelineSession = {
+          phase,
+          iteration,
+          sessionKey,
+          sdkSessionId: newSession.sessionId,
+          status: "running",
+          startedAt: new Date().toISOString(),
+          label,
+        };
+
+        addPipelineSession(pipelineId, pSession);
+
+        return { sessionKey, sdkSessionId: newSession.sessionId };
+      } catch {
         return null;
       }
-
-      const tabIdForSession = `build-${phase}-${iteration}-${Date.now()}`;
-      const sessionKey = createClaudeSessionKey(environmentId, tabIdForSession);
-
-      setSession(sessionKey, {
-        sessionId: newSession.sessionId,
-        messages: [],
-        isLoading: true,
-      });
-
-      const pSession: PipelineSession = {
-        phase,
-        iteration,
-        sessionKey,
-        sdkSessionId: newSession.sessionId,
-        status: "running",
-        startedAt: new Date().toISOString(),
-        label,
-      };
-
-      addPipelineSession(pipelineId, pSession);
-
-      return { sessionKey, sdkSessionId: newSession.sessionId };
     },
     [client, environmentId, pipelineId, isPipelinePaused, setSession, addPipelineSession]
   );

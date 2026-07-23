@@ -559,46 +559,50 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       iteration: number,
       label: string,
     ): Promise<{ sessionKey: string; sdkSessionId: string } | null> => {
-      const activeClient = client ?? await initializeClient();
-      if (!pipeline || isPipelinePaused()) return null;
+      try {
+        const activeClient = client ?? await initializeClient();
+        if (!pipeline || isPipelinePaused()) return null;
 
-      const { model, effort } = resolveCodexPreferences(pipeline.projectId);
-      const newSession = await createSession(activeClient, {
-        model,
-        modelReasoningEffort: effort,
-        mode: "build",
-      });
-      if (isPipelinePaused()) {
-        try {
-          await abortSession(activeClient, newSession.sessionId);
-        } catch {
-          // Best effort; the session was never attached to the pipeline.
+        const { model, effort } = resolveCodexPreferences(pipeline.projectId);
+        const newSession = await createSession(activeClient, {
+          model,
+          modelReasoningEffort: effort,
+          mode: "build",
+        });
+        if (isPipelinePaused()) {
+          try {
+            await abortSession(activeClient, newSession.sessionId);
+          } catch {
+            // Best effort; the session was never attached to the pipeline.
+          }
+          return null;
         }
+
+        const tabIdForSession = `build-${phase}-${iteration}-${Date.now()}`;
+        const sessionKey = createCodexSessionKey(environmentId, tabIdForSession);
+        pendingPromptDispatchesRef.current.add(newSession.sessionId);
+
+        setSession(sessionKey, {
+          sessionId: newSession.sessionId,
+          messages: [],
+          isLoading: true,
+          title: newSession.title,
+        });
+
+        addPipelineSession(pipelineId, {
+          phase,
+          iteration,
+          sessionKey,
+          sdkSessionId: newSession.sessionId,
+          status: "running",
+          startedAt: new Date().toISOString(),
+          label,
+        });
+
+        return { sessionKey, sdkSessionId: newSession.sessionId };
+      } catch {
         return null;
       }
-
-      const tabIdForSession = `build-${phase}-${iteration}-${Date.now()}`;
-      const sessionKey = createCodexSessionKey(environmentId, tabIdForSession);
-      pendingPromptDispatchesRef.current.add(newSession.sessionId);
-
-      setSession(sessionKey, {
-        sessionId: newSession.sessionId,
-        messages: [],
-        isLoading: true,
-        title: newSession.title,
-      });
-
-      addPipelineSession(pipelineId, {
-        phase,
-        iteration,
-        sessionKey,
-        sdkSessionId: newSession.sessionId,
-        status: "running",
-        startedAt: new Date().toISOString(),
-        label,
-      });
-
-      return { sessionKey, sdkSessionId: newSession.sessionId };
     },
     [addPipelineSession, client, environmentId, initializeClient, isPipelinePaused, pipeline, pipelineId, resolveCodexPreferences, setSession],
   );

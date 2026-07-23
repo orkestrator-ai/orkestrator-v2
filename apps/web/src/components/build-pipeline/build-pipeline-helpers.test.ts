@@ -331,13 +331,20 @@ describe("createBuildPrompt", () => {
 // --- createAddressIssuesPrompt ---
 
 describe("createAddressIssuesPrompt", () => {
-  test("requires addressed changes to be committed before verification", () => {
+  test("commits only relevant addressed changes before verification", () => {
     const result = createAddressIssuesPrompt();
 
     expect(result).toContain("git status --porcelain");
-    expect(result).toContain("stage and commit them");
-    expect(result).toContain("included in the branch diff used by the verification step");
-    expect(result).toContain("do not finish until `git status --porcelain` is clean");
+    expect(result).toContain("git diff HEAD");
+    expect(result).toContain("Stage only files that clearly belong");
+    expect(result).toContain("included in the branch diff used by verification");
+    expect(result).toContain("conventional-commit message");
+    expect(result).toContain("Do not use `--no-verify`");
+    expect(result).toContain("Do NOT add secrets, credentials, `.env*` files");
+    expect(result).toContain("leave them uncommitted and report them");
+    expect(result).toContain("acceptable for `git status --porcelain` to remain non-empty");
+    expect(result).not.toContain("any uncommitted changes");
+    expect(result).not.toContain("do not finish until `git status --porcelain` is clean");
   });
 });
 
@@ -355,6 +362,10 @@ describe("createVerificationPrompt", () => {
   test("returns fallback when task is null", () => {
     const result = createVerificationPrompt(null, "");
     expect(result).toContain("acceptance criteria");
+    expect(result).toContain("Verification is read-only");
+    expect(result).toContain("do not stage, commit, modify, or delete files");
+    expect(result).toContain("Leave secrets, credentials, `.env*` files");
+    expect(result).not.toContain("commit any uncommitted changes");
   });
 
   test("asks for JSON response format", () => {
@@ -364,13 +375,19 @@ describe("createVerificationPrompt", () => {
     expect(result).toContain("JSON");
   });
 
-  test("commits uncommitted changes before inspecting the verification diff", () => {
+  test("inspects the worktree read-only before inspecting the verification diff", () => {
     const result = createVerificationPrompt(baseTask, "");
     const statusIndex = result.indexOf("git status --porcelain");
     const diffIndex = result.indexOf("git diff origin/main...HEAD");
 
     expect(statusIndex).toBeGreaterThan(-1);
-    expect(result).toContain("stage and commit them before continuing");
+    expect(result).toContain("Verification is read-only");
+    expect(result).toContain("do not stage, commit, modify, or delete files");
+    expect(result).toContain("set `complete` to false");
+    expect(result).toContain("Leave secrets, credentials, `.env*` files");
+    expect(result).toContain("they do not require a clean worktree");
+    expect(result).not.toContain("any uncommitted changes");
+    expect(result).not.toContain("Do not use `--no-verify`");
     expect(diffIndex).toBeGreaterThan(statusIndex);
   });
 

@@ -6,9 +6,11 @@
 export const MAX_CLIPBOARD_IMAGE_BYTES = 64 * 1024 * 1024;
 export const MAX_CLIPBOARD_IMAGE_PIXELS = 64 * 1024 * 1024;
 export const MAX_CLIPBOARD_IMAGE_DIMENSION = 32768;
+export const MAX_CLIPBOARD_IMAGE_DATA_URL_BYTES = 8 * 1024 * 1024;
 
 /** Maximum dimensions exposed to paste consumers after decoding. */
 export const MAX_NORMALIZED_CLIPBOARD_IMAGE_DIMENSION = 2000;
+const MAX_CLIPBOARD_IMAGE_HEADER_BYTES = 512 * 1024;
 
 export type ClipboardImageValidationCode = "too-large" | "unsupported" | "invalid";
 
@@ -148,7 +150,9 @@ function readWebpDimensions(bytes: Uint8Array, view: DataView) {
   return null;
 }
 
-async function readEncodedImageDimensions(blob: Blob): Promise<{ width: number; height: number }> {
+export async function readClipboardImageDimensions(
+  blob: Blob,
+): Promise<{ width: number; height: number }> {
   if (blob.size === 0) {
     throw new ClipboardImageValidationError("Clipboard image is empty", "invalid");
   }
@@ -159,7 +163,9 @@ async function readEncodedImageDimensions(blob: Blob): Promise<{ width: number; 
     );
   }
 
-  const buffer = await blob.arrayBuffer();
+  // Raster dimensions live in format headers. Keep validation memory bounded
+  // even when a large (but otherwise accepted) source is pasted.
+  const buffer = await blob.slice(0, MAX_CLIPBOARD_IMAGE_HEADER_BYTES).arrayBuffer();
   const bytes = new Uint8Array(buffer);
   const view = new DataView(buffer);
   const dimensions =
@@ -194,6 +200,12 @@ export async function readClipboardImageBlob(blob: Blob): Promise<{
   height: number;
   dataUrl: string;
 }> {
-  const dimensions = await readEncodedImageDimensions(blob);
+  if (blob.size > MAX_CLIPBOARD_IMAGE_DATA_URL_BYTES) {
+    throw new ClipboardImageValidationError(
+      "Clipboard image is too large for safe data-URL decoding",
+      "too-large",
+    );
+  }
+  const dimensions = await readClipboardImageDimensions(blob);
   return { ...dimensions, dataUrl: await blobToDataUrl(blob) };
 }

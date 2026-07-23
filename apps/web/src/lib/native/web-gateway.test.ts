@@ -451,8 +451,8 @@ describe("web gateway browser API", () => {
 
     const api = createBrowserGatewayApi();
     const result = await api.clipboard.readImage();
-    expect(result).toMatchObject({ width: 32, height: 18 });
-    expect(result?.dataUrl).toStartWith("data:image/png;base64,");
+    expect(result).toEqual({ width: 32, height: 18, blob: imageBlob });
+    expect(result).not.toHaveProperty("dataUrl");
     expect(read).toHaveBeenCalledTimes(1);
     expect(getType).toHaveBeenCalledWith("image/png");
   });
@@ -488,6 +488,7 @@ describe("web gateway browser API", () => {
     await expect(api.clipboard.readImage()).resolves.toMatchObject({
       width: 9000,
       height: 1,
+      blob: expect.any(Blob),
     });
   });
 

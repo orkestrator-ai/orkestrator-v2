@@ -78,7 +78,9 @@ export type MainIpcDependencies = {
   resetWebClientServe: () => Promise<WebClientStatus>;
   getGatewayTokenSettings: () => Promise<GatewayTokenSettings>;
   setGatewayToken: (token: string) => Promise<GatewayTokenSettings>;
-  listConnections: () => ConnectionList | Promise<ConnectionList>;
+  // Preload bootstrap reads this through sendSync, so this dependency must
+  // remain synchronous even though the invoke-based handler also accepts it.
+  listConnections: () => ConnectionList;
   connectToRemote: (input: ConnectToRemoteInput) => Promise<ConnectionList>;
   useConnection: (connectionId: string) => Promise<ConnectionList>;
   forgetConnection: (connectionId: string) => Promise<ConnectionList>;

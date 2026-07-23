@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -7,6 +8,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { mockReadImage } from "../../mocks/clipboard";
+import { mockToastError } from "../../mocks/sonner";
 
 const mockWriteContainerFile = mock(async () => {});
 const mockWriteLocalFile = mock(async () => "/tmp/file.png");
@@ -109,7 +111,9 @@ function dispatchPaste(clipboardData?: unknown): Event {
   if (clipboardData) {
     Object.defineProperty(event, "clipboardData", { value: clipboardData });
   }
-  document.dispatchEvent(event);
+  act(() => {
+    document.dispatchEvent(event);
+  });
   return event;
 }
 
@@ -268,7 +272,9 @@ describe("Terminal ComposeBar", () => {
       items: [{ kind: "string", type: "text/plain", getAsFile: () => null }],
       files: [],
     });
-    await Promise.resolve();
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     expect(pasteEvent.defaultPrevented).toBe(false);
     expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toEqual([]);
@@ -320,6 +326,9 @@ describe("Terminal ComposeBar", () => {
     await waitFor(() => expect(mockPutImageData).toHaveBeenCalledTimes(1));
 
     expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toEqual([]);
+    expect(mockToastError).toHaveBeenCalledWith("Image too large", {
+      description: "The image could not be resized below the 8MB attachment limit.",
+    });
   });
 
   test("resizes large RGBA images and records the final dimensions", async () => {
@@ -360,6 +369,174 @@ describe("Terminal ComposeBar", () => {
       expect(attached?.base64Data).toBe("QUJD");
     });
     expect(mockDrawImage).toHaveBeenCalled();
+  });
+
+  test("preserves paste order when a later image finishes decoding first", async () => {
+    const firstRgba = deferred<Uint8Array>();
+    const secondRgba = deferred<Uint8Array>();
+    mockReadImage
+      .mockImplementationOnce(async () => ({
+        rgba: () => firstRgba.promise,
+        size: async () => ({ width: 1, height: 1 }),
+      }))
+      .mockImplementationOnce(async () => ({
+        rgba: () => secondRgba.promise,
+        size: async () => ({ width: 2, height: 1 }),
+      }));
+    HTMLCanvasElement.prototype.toDataURL = function () {
+      return this.width === 1
+        ? "data:image/png;base64,RklSU1Q="
+        : "data:image/png;base64,U0VDT05E";
+    };
+    renderComposeBar();
+    getTextarea().focus();
+
+    dispatchPaste();
+    dispatchPaste();
+    await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      secondRgba.resolve(new Uint8Array(8));
+      await secondRgba.promise;
+    });
+    await waitFor(() => expect(mockPutImageData).toHaveBeenCalledTimes(1));
+    expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toEqual([]);
+
+    await act(async () => {
+      firstRgba.resolve(new Uint8Array(4));
+      await firstRgba.promise;
+    });
+    await waitFor(() => {
+      expect(
+        useTerminalSessionStore
+          .getState()
+          .getComposeDraftImages(SESSION_KEY)
+          .map((attachment) => attachment.base64Data),
+      ).toEqual(["RklSU1Q=", "U0VDT05E"]);
+    });
+  });
+
+  test("does not append a pending paste after the compose bar closes", async () => {
+    const rgba = deferred<Uint8Array>();
+    mockReadImage.mockImplementation(async () => ({
+      rgba: () => rgba.promise,
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    const { onClose } = renderComposeBar();
+    getTextarea().focus();
+    dispatchPaste();
+    await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
+
+    fireEvent.keyDown(getTextarea(), { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      rgba.resolve(new Uint8Array(4));
+      await rgba.promise;
+    });
+    await waitFor(() => expect(getSendButton().disabled).toBe(true));
+
+    expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toEqual([]);
+  });
+
+  test("does not append a pending paste after unmount", async () => {
+    const rgba = deferred<Uint8Array>();
+    const sizeRead = deferred<void>();
+    mockReadImage.mockImplementation(async () => ({
+      rgba: () => rgba.promise,
+      size: async () => {
+        sizeRead.resolve();
+        return { width: 1, height: 1 };
+      },
+    }));
+    const { unmount } = renderComposeBar();
+    getTextarea().focus();
+    dispatchPaste();
+    await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
+
+    unmount();
+    await act(async () => {
+      rgba.resolve(new Uint8Array(4));
+      await sizeRead.promise;
+      await Promise.resolve();
+    });
+
+    expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toEqual([]);
+  });
+
+  test("does not move or block a paste after switching sessions", async () => {
+    const rgba = deferred<Uint8Array>();
+    mockReadImage
+      .mockImplementationOnce(async () => ({
+        rgba: () => rgba.promise,
+        size: async () => ({ width: 1, height: 1 }),
+      }))
+      .mockImplementationOnce(async () => ({
+        rgba: async () => new Uint8Array(4),
+        size: async () => ({ width: 1, height: 1 }),
+      }));
+    const { rerender } = renderComposeBar();
+    getTextarea().focus();
+    dispatchPaste();
+    await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
+
+    const nextSessionKey = "container-1:tab-2";
+    rerender(
+      <ComposeBar
+        sessionKey={nextSessionKey}
+        isOpen
+        onClose={() => {}}
+        onSend={() => {}}
+        containerId="container-1"
+      />,
+    );
+    getTextarea().focus();
+    dispatchPaste();
+    await waitFor(() => {
+      expect(
+        useTerminalSessionStore.getState().getComposeDraftImages(nextSessionKey),
+      ).toHaveLength(1);
+    });
+
+    await act(async () => {
+      rgba.resolve(new Uint8Array(4));
+      await rgba.promise;
+    });
+
+    expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toEqual([]);
+    expect(useTerminalSessionStore.getState().getComposeDraftImages(nextSessionKey)).toHaveLength(1);
+  });
+
+  test("contains an attachment-store failure and keeps the paste queue usable", async () => {
+    const rgba = deferred<Uint8Array>();
+    mockReadImage.mockImplementation(async () => ({
+      rgba: () => rgba.promise,
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    const originalAppend = useTerminalSessionStore.getState().appendComposeDraftImage;
+    useTerminalSessionStore.setState({
+      appendComposeDraftImage: () => {
+        throw new Error("draft store unavailable");
+      },
+    });
+    try {
+      renderComposeBar();
+      getTextarea().focus();
+      const event = new Event("paste", { bubbles: true, cancelable: true });
+      await act(async () => {
+        document.dispatchEvent(event);
+        await Promise.resolve();
+        rgba.resolve(new Uint8Array(4));
+        await rgba.promise;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(mockReadImage).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(getSendButton().disabled).toBe(true));
+      expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toEqual([]);
+    } finally {
+      act(() => {
+        useTerminalSessionStore.setState({ appendComposeDraftImage: originalAppend });
+      });
+    }
   });
 
   test("supports previewing, closing, and removing draft images", () => {
@@ -414,6 +591,57 @@ describe("Terminal ComposeBar", () => {
     expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toEqual([]);
   });
 
+  test("waits for a pending paste before sending and clearing the draft", async () => {
+    const rgba = deferred<Uint8Array>();
+    mockReadImage.mockImplementation(async () => ({
+      rgba: () => rgba.promise,
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    seedDraft("caption");
+    const { onSend } = renderComposeBar();
+    getTextarea().focus();
+
+    dispatchPaste();
+    await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
+    fireEvent.click(getSendButton());
+    expect(mockWriteContainerFile).not.toHaveBeenCalled();
+
+    await act(async () => {
+      rgba.resolve(new Uint8Array(4));
+      await rgba.promise;
+    });
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+
+    expect(mockWriteContainerFile).toHaveBeenCalledTimes(1);
+    expect(onSend.mock.calls[0]?.[0]).toHaveLength(1);
+    expect(onSend.mock.calls[0]?.[1]).toBe("caption");
+    expect(useTerminalSessionStore.getState().getComposeDraftText(SESSION_KEY)).toBe("");
+    expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toEqual([]);
+  });
+
+  test("cancels a send waiting on paste when the compose bar closes", async () => {
+    const rgba = deferred<Uint8Array>();
+    mockReadImage.mockImplementation(async () => ({
+      rgba: () => rgba.promise,
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    seedDraft("caption");
+    const { onSend, onClose } = renderComposeBar();
+    getTextarea().focus();
+    dispatchPaste();
+    fireEvent.click(getSendButton());
+    fireEvent.keyDown(getTextarea(), { key: "Escape" });
+
+    await act(async () => {
+      rgba.resolve(new Uint8Array(4));
+      await rgba.promise;
+    });
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(useTerminalSessionStore.getState().getComposeDraftText(SESSION_KEY)).toBe("caption");
+  });
+
   test("writes images to a local worktree when no container is present", async () => {
     seedDraft("", [image("one", "BBBB")]);
     mockWriteLocalFile.mockImplementation(async () =>
@@ -455,6 +683,42 @@ describe("Terminal ComposeBar", () => {
     expect(onSend.mock.calls[0]?.[1]).toBe("caption");
   });
 
+  test("sends text when every image write fails", async () => {
+    seedDraft("caption", [image("one", "AAAA"), image("two", "BBBB")]);
+    mockWriteContainerFile.mockImplementation(async () => {
+      throw new Error("disk full");
+    });
+    const { onSend } = renderComposeBar();
+
+    fireEvent.click(getSendButton());
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(mockWriteContainerFile).toHaveBeenCalledTimes(2);
+    expect(onSend).toHaveBeenCalledWith([], "caption");
+    expect(useTerminalSessionStore.getState().getComposeDraftText(SESSION_KEY)).toBe("");
+    expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toEqual([]);
+  });
+
+  test("handles a rejected local-worktree image write without sending", async () => {
+    seedDraft("", [image("one", "AAAA")]);
+    mockWriteLocalFile.mockImplementation(async () => {
+      throw new Error("read-only worktree");
+    });
+    const { onSend } = renderComposeBar({
+      containerId: null,
+      worktreePath: "/tmp/local repo",
+    });
+
+    fireEvent.click(getSendButton());
+    await waitFor(() => expect(mockWriteLocalFile).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toEqual([]);
+    });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(mockWriteContainerFile).not.toHaveBeenCalled();
+  });
+
   test("does not send unsaved image-only drafts without a persistence target", async () => {
     seedDraft("", [image("one")]);
     const { onSend } = renderComposeBar({ containerId: null, worktreePath: null });
@@ -494,6 +758,26 @@ describe("Terminal ComposeBar", () => {
 
     write.resolve();
     await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  });
+
+  test("does not send or clear after closing during image persistence", async () => {
+    const write = deferred<void>();
+    mockWriteContainerFile.mockImplementation(() => write.promise);
+    seedDraft("caption", [image("one")]);
+    const { onSend, onClose } = renderComposeBar();
+
+    fireEvent.click(getSendButton());
+    await waitFor(() => expect(mockWriteContainerFile).toHaveBeenCalledTimes(1));
+    fireEvent.keyDown(getTextarea(), { key: "Escape" });
+    await act(async () => {
+      write.resolve();
+      await write.promise;
+    });
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(useTerminalSessionStore.getState().getComposeDraftText(SESSION_KEY)).toBe("caption");
+    expect(useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)).toHaveLength(1);
   });
 
   test("preserves the draft when the send callback throws", async () => {

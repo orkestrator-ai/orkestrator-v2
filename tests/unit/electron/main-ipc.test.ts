@@ -294,6 +294,7 @@ describe("main IPC registration", () => {
       activeConnectionId: "local",
     });
     expect(harness.invokeSync("orkestrator:connections:list-sync")).toMatchObject({ activeConnectionId: "local" });
+    expect(harness.listConnections).toHaveBeenCalledTimes(2);
     await harness.invoke("orkestrator:connections:connect", { address: "https://desk.example", token: "gateway-token-123456" });
     expect(harness.connectToRemote).toHaveBeenCalledWith({
       address: "https://desk.example",
@@ -413,6 +414,76 @@ describe("main IPC registration", () => {
     ).resolves.toEqual({
       width: 2000,
       height: 1000,
+      dataUrl: "data:image/png;base64,resized",
+    });
+    expect(harness.clipboardImage.resize).toHaveBeenCalledWith({
+      width: 2000,
+      quality: "best",
+    });
+    expect(harness.clipboardImage.toDataURL).not.toHaveBeenCalled();
+    expect(harness.resizedClipboardImage.toDataURL).toHaveBeenCalledTimes(1);
+  });
+
+  test("resizes portrait clipboard images by height", async () => {
+    const harness = createHarness();
+    harness.clipboardImage.getSize.mockReturnValueOnce({
+      width: 3000,
+      height: 6000,
+    });
+    harness.resizedClipboardImage.getSize.mockReturnValueOnce({
+      width: 1000,
+      height: 2000,
+    });
+
+    await expect(
+      harness.invoke("orkestrator:clipboard:read-image"),
+    ).resolves.toEqual({
+      width: 1000,
+      height: 2000,
+      dataUrl: "data:image/png;base64,resized",
+    });
+    expect(harness.clipboardImage.resize).toHaveBeenCalledWith({
+      height: 2000,
+      quality: "best",
+    });
+    expect(harness.clipboardImage.toDataURL).not.toHaveBeenCalled();
+    expect(harness.resizedClipboardImage.toDataURL).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not resize clipboard images at the transfer dimension boundary", async () => {
+    const harness = createHarness();
+    harness.clipboardImage.getSize.mockReturnValue({
+      width: 2000,
+      height: 2000,
+    });
+
+    await expect(
+      harness.invoke("orkestrator:clipboard:read-image"),
+    ).resolves.toEqual({
+      width: 2000,
+      height: 2000,
+      dataUrl: "data:image/png;base64,abc",
+    });
+    expect(harness.clipboardImage.resize).not.toHaveBeenCalled();
+    expect(harness.clipboardImage.toDataURL).toHaveBeenCalledTimes(1);
+  });
+
+  test("resizes clipboard images one pixel over the transfer dimension boundary", async () => {
+    const harness = createHarness();
+    harness.clipboardImage.getSize.mockReturnValueOnce({
+      width: 2001,
+      height: 2000,
+    });
+    harness.resizedClipboardImage.getSize.mockReturnValueOnce({
+      width: 2000,
+      height: 1999,
+    });
+
+    await expect(
+      harness.invoke("orkestrator:clipboard:read-image"),
+    ).resolves.toEqual({
+      width: 2000,
+      height: 1999,
       dataUrl: "data:image/png;base64,resized",
     });
     expect(harness.clipboardImage.resize).toHaveBeenCalledWith({

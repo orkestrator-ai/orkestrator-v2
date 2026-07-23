@@ -784,6 +784,31 @@ export class StorageService {
     });
   }
 
+  async recordEnvironmentActivity(environmentId: string, occurredAt: string): Promise<Environment> {
+    const activityTime = Date.parse(occurredAt);
+    if (!Number.isFinite(activityTime)) {
+      throw new Error("occurredAt must be a valid ISO timestamp");
+    }
+    const normalizedActivityAt = new Date(activityTime).toISOString();
+
+    return this.enqueueEnvironmentMutation(async () => {
+      const environments = await this.loadEnvironments();
+      const environment = environments.find((candidate) => candidate.id === environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+
+      const previousTime = environment.lastActivityAt
+        ? Date.parse(environment.lastActivityAt)
+        : Number.NEGATIVE_INFINITY;
+      if (Number.isFinite(previousTime) && previousTime >= activityTime) {
+        return environment;
+      }
+
+      environment.lastActivityAt = normalizedActivityAt;
+      await this.saveJson(this.environmentsFile(), environments);
+      return environment;
+    });
+  }
+
   async reorderEnvironments(projectId: string, environmentIds: string[]): Promise<Environment[]> {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();

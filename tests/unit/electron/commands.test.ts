@@ -245,6 +245,22 @@ function createContext(
         Object.assign(environment, update);
         return environment;
       }),
+      recordEnvironmentActivity: mock(async (environmentId: string, occurredAt: string) => {
+        const activityTime = Date.parse(occurredAt);
+        if (!Number.isFinite(activityTime)) {
+          throw new Error("occurredAt must be a valid ISO timestamp");
+        }
+        const environment = environments.find((candidate) => candidate.id === environmentId);
+        if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+        const previousTime = environment.lastActivityAt
+          ? Date.parse(environment.lastActivityAt)
+          : Number.NEGATIVE_INFINITY;
+        if (Number.isFinite(previousTime) && previousTime >= activityTime) return environment;
+        const update = { lastActivityAt: new Date(activityTime).toISOString() };
+        updates.push(update);
+        Object.assign(environment, update);
+        return environment;
+      }),
       removeEnvironment: mock(async (environmentId: string) => {
         const index = environments.findIndex((candidate) => candidate.id === environmentId);
         if (index >= 0) environments.splice(index, 1);
@@ -1272,9 +1288,20 @@ printf '%s\\n' '{}' > "$out"
     expect(updates).toHaveLength(1);
 
     await expect(commands.get("record_environment_activity")?.(
+      { environmentId: environment.id, occurredAt: "2026-07-23T10:00:00.000Z" },
+      context,
+    )).resolves.toBe(environment);
+    expect(updates).toHaveLength(1);
+
+    await expect(commands.get("record_environment_activity")?.(
       { environmentId: environment.id, occurredAt: "not-a-date" },
       context,
     )).rejects.toThrow("occurredAt must be a valid ISO timestamp");
+
+    await expect(commands.get("record_environment_activity")?.(
+      { environmentId: "missing", occurredAt: "2026-07-24T10:00:00.000Z" },
+      context,
+    )).rejects.toThrow("Environment not found: missing");
   });
 
   test("preserves container identity when Docker status reconciliation fails transiently", async () => {

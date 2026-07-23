@@ -252,6 +252,7 @@ describe("uiStore", () => {
   test("persists and rehydrates recent project history without transient selection", async () => {
     useUIStore.getState().selectProject("project-1");
     useUIStore.getState().selectProject("project-2");
+    useUIStore.getState().setEnvironmentSortMode("activity");
 
     const persistedRaw = localStorage.getItem("ui-storage") ?? "{}";
     const persisted = JSON.parse(persistedRaw) as {
@@ -259,6 +260,7 @@ describe("uiStore", () => {
     };
     expect(persisted.state).toMatchObject({
       recentProjectIds: ["project-2", "project-1"],
+      environmentSortMode: "activity",
     });
     expect(persisted.state).not.toHaveProperty("selectedProjectId");
 
@@ -266,11 +268,13 @@ describe("uiStore", () => {
       selectedProjectId: null,
       selectedEnvironmentId: null,
       recentProjectIds: [],
+      environmentSortMode: "project",
     });
     localStorage.setItem("ui-storage", persistedRaw);
     await useUIStore.persist.rehydrate();
 
     expect(useUIStore.getState().recentProjectIds).toEqual(["project-2", "project-1"]);
     expect(useUIStore.getState().selectedProjectId).toBeNull();
+    expect(useUIStore.getState().environmentSortMode).toBe("activity");
   });
 });

@@ -366,6 +366,52 @@ describe("Electron StorageService", () => {
     );
   });
 
+  test("records environment activity atomically and only advances timestamps", async () => {
+    const dataDir = await createTempDir("ork-storage-environment-activity-");
+    const firstStorage = new StorageService(dataDir);
+    const secondStorage = new StorageService(dataDir);
+    await Promise.all([firstStorage.init(), secondStorage.init()]);
+
+    const environment = await firstStorage.addEnvironment(createEnvironment("project-1"));
+    expect((await secondStorage.getEnvironment(environment.id))?.lastActivityAt).toBeUndefined();
+
+    await expect(firstStorage.recordEnvironmentActivity(
+      environment.id,
+      "2026-07-23T11:00:00+01:00",
+    )).resolves.toMatchObject({ lastActivityAt: "2026-07-23T10:00:00.000Z" });
+    await expect(secondStorage.recordEnvironmentActivity(
+      environment.id,
+      "2026-07-23T10:00:00.000Z",
+    )).resolves.toMatchObject({ lastActivityAt: "2026-07-23T10:00:00.000Z" });
+    await expect(secondStorage.recordEnvironmentActivity(
+      environment.id,
+      "2026-07-22T10:00:00.000Z",
+    )).resolves.toMatchObject({ lastActivityAt: "2026-07-23T10:00:00.000Z" });
+
+    await firstStorage.updateEnvironment(environment.id, { lastActivityAt: undefined });
+    expect((await secondStorage.getEnvironment(environment.id))?.lastActivityAt).toBeUndefined();
+
+    const newer = "2026-07-25T10:00:00.000Z";
+    const older = "2026-07-24T10:00:00.000Z";
+    await Promise.all([
+      firstStorage.recordEnvironmentActivity(environment.id, newer),
+      secondStorage.recordEnvironmentActivity(environment.id, older),
+    ]);
+    expect((await firstStorage.getEnvironment(environment.id))?.lastActivityAt).toBe(newer);
+
+    await firstStorage.updateEnvironment(environment.id, { lastActivityAt: undefined });
+    await Promise.all([
+      secondStorage.recordEnvironmentActivity(environment.id, older),
+      firstStorage.recordEnvironmentActivity(environment.id, newer),
+    ]);
+    expect((await secondStorage.getEnvironment(environment.id))?.lastActivityAt).toBe(newer);
+
+    await expect(firstStorage.recordEnvironmentActivity(environment.id, "invalid"))
+      .rejects.toThrow("occurredAt must be a valid ISO timestamp");
+    await expect(firstStorage.recordEnvironmentActivity("missing", newer))
+      .rejects.toThrow("Environment not found: missing");
+  });
+
   test("recovers an abandoned environment mutation lock", async () => {
     const dataDir = await createTempDir("ork-storage-stale-environment-lock-");
     const storage = new StorageService(dataDir);

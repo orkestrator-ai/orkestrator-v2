@@ -9,7 +9,7 @@
  * Terminal mode (containers): manages claude-state polling lifecycle
  * Native mode (Claude/OpenCode/Codex): derives activity from session stores
  */
-import { useEffect, useRef, type MutableRefObject } from "react";
+import { useCallback, useEffect, useRef, type MutableRefObject } from "react";
 import { listen, type UnlistenFn } from "@/lib/native/events";
 import * as backend from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores";
@@ -65,6 +65,7 @@ export function isEnvironmentActivityTransition(
   previousState: AgentActivityState,
   newState: AgentActivityState,
 ): boolean {
+  if (previousState === newState) return false;
   return (
     newState === "working" ||
     newState === "waiting" ||
@@ -114,6 +115,36 @@ function getSessionEnvironmentIds(
   return environmentIds;
 }
 
+function getActivityTransitionEnvironmentIds<T>(
+  currentItems: Map<string, T>,
+  previousItems: Map<string, T>,
+  getEnvironmentId: (
+    key: string,
+    currentItem: T | undefined,
+    previousItem: T | undefined,
+  ) => string | null | undefined,
+  getCurrentState: (item: T | undefined) => AgentActivityState,
+  getPreviousState: (item: T | undefined) => AgentActivityState,
+): Set<string> {
+  const environmentIds = new Set<string>();
+  const keys = new Set([...previousItems.keys(), ...currentItems.keys()]);
+  for (const key of keys) {
+    const previousItem = previousItems.get(key);
+    const currentItem = currentItems.get(key);
+    const environmentId = getEnvironmentId(key, currentItem, previousItem);
+    if (
+      environmentId &&
+      isEnvironmentActivityTransition(
+        getPreviousState(previousItem),
+        getCurrentState(currentItem),
+      )
+    ) {
+      environmentIds.add(environmentId);
+    }
+  }
+  return environmentIds;
+}
+
 function getClaudeTmuxTabEnvironmentId(
   stateKey: string,
   tab: ClaudeTmuxTabs extends Map<string, infer Tab> ? Tab : never,
@@ -141,9 +172,27 @@ function syncClaudeTmuxActivityState(
   previousTabs: ClaudeTmuxTabs | undefined,
   activitySources: MutableRefObject<ActivitySourcesByEnvironment>,
   setContainerState: SetContainerState,
+  recordActivity?: (environmentId: string) => void,
 ): void {
   const desiredByEnvironment = new Map<string, AgentActivityState>();
   const seenEnvironmentIds = new Set<string>();
+
+  if (previousTabs && recordActivity) {
+    const changedEnvironmentIds = getActivityTransitionEnvironmentIds(
+      tabs,
+      previousTabs,
+      (stateKey, currentTab, previousTab) => currentTab
+        ? getClaudeTmuxTabEnvironmentId(stateKey, currentTab)
+        : previousTab
+          ? getClaudeTmuxTabEnvironmentId(stateKey, previousTab)
+          : null,
+      (tab) => tab ? getClaudeTmuxTabActivityState(tab) : "idle",
+      (tab) => tab ? getClaudeTmuxTabActivityState(tab) : "idle",
+    );
+    for (const environmentId of changedEnvironmentIds) {
+      recordActivity(environmentId);
+    }
+  }
 
   for (const sourceTabs of previousTabs ? [previousTabs, tabs] : [tabs]) {
     for (const [stateKey, tab] of sourceTabs) {
@@ -185,10 +234,92 @@ export function useGlobalActivityMonitor(): void {
   const registerStateCallback = useAgentActivityStore((s) => s.registerStateCallback);
   const unregisterStateCallback = useAgentActivityStore((s) => s.unregisterStateCallback);
   const activitySources = useRef<ActivitySourcesByEnvironment>(new Map());
+  const lastIssuedActivityTime = useRef(0);
 
   // Track active pollers and listeners for container environments
   const activePollers = useRef(new Map<string, symbol>());
   const activeListeners = useRef(new Map<string, UnlistenFn>());
+
+  const recordActivity = useCallback((environmentId: string) => {
+    const environmentStore = useEnvironmentStore.getState();
+    const environment = environmentStore.environments.find(
+      (candidate) => candidate.id === environmentId,
+    );
+    if (!environment) return;
+
+    const previousActivityAt = environment.lastActivityAt;
+    const previousActivityTime = previousActivityAt
+      ? Date.parse(previousActivityAt)
+      : Number.NEGATIVE_INFINITY;
+    const occurredTime = Math.max(
+      Date.now(),
+      lastIssuedActivityTime.current + 1,
+      Number.isFinite(previousActivityTime)
+        ? previousActivityTime + 1
+        : Number.NEGATIVE_INFINITY,
+    );
+    lastIssuedActivityTime.current = occurredTime;
+    const occurredAt = new Date(occurredTime).toISOString();
+    environmentStore.updateEnvironment(environment.id, { lastActivityAt: occurredAt });
+    backend.recordEnvironmentActivity(environment.id, occurredAt)
+      .then((updatedEnvironment) => {
+        const persistedAt = updatedEnvironment.lastActivityAt;
+        if (!persistedAt) return;
+        const currentEnvironment = useEnvironmentStore
+          .getState()
+          .environments.find((candidate) => candidate.id === updatedEnvironment.id);
+        const currentTime = currentEnvironment?.lastActivityAt
+          ? Date.parse(currentEnvironment.lastActivityAt)
+          : Number.NEGATIVE_INFINITY;
+        const persistedTime = Date.parse(persistedAt);
+        if (Number.isFinite(persistedTime) && persistedTime >= currentTime) {
+          useEnvironmentStore.getState().updateEnvironment(
+            updatedEnvironment.id,
+            { lastActivityAt: persistedAt },
+          );
+        }
+      })
+      .catch(async (error) => {
+        const currentEnvironment = useEnvironmentStore
+          .getState()
+          .environments.find((candidate) => candidate.id === environment.id);
+        if (currentEnvironment?.lastActivityAt === occurredAt) {
+          try {
+            const snapshots = await backend.getEnvironmentSnapshots(environment.projectId);
+            const persistedEnvironment = snapshots.find(
+              (candidate) => candidate.id === environment.id,
+            );
+            const latestEnvironment = useEnvironmentStore
+              .getState()
+              .environments.find((candidate) => candidate.id === environment.id);
+            if (latestEnvironment?.lastActivityAt === occurredAt) {
+              useEnvironmentStore.getState().updateEnvironment(
+                environment.id,
+                { lastActivityAt: persistedEnvironment?.lastActivityAt },
+              );
+            }
+          } catch (snapshotError) {
+            const latestEnvironment = useEnvironmentStore
+              .getState()
+              .environments.find((candidate) => candidate.id === environment.id);
+            if (latestEnvironment?.lastActivityAt === occurredAt) {
+              useEnvironmentStore.getState().updateEnvironment(
+                environment.id,
+                { lastActivityAt: previousActivityAt },
+              );
+            }
+            console.warn(
+              "[GlobalActivityMonitor] Failed to refresh environment activity:",
+              snapshotError,
+            );
+          }
+        }
+        console.warn(
+          "[GlobalActivityMonitor] Failed to persist environment activity:",
+          error,
+        );
+      });
+  }, []);
 
   // Persist activity independently of whichever sidebar/chat is mounted. The
   // backend timestamp is the source of truth; the optimistic store update
@@ -197,32 +328,15 @@ export function useGlobalActivityMonitor(): void {
     const callbackId = registerStateCallback((activityKey, previousState, newState) => {
       if (!isEnvironmentActivityTransition(previousState, newState)) return;
 
-      const environmentStore = useEnvironmentStore.getState();
-      const environment = environmentStore.environments.find(
-        (candidate) =>
-          candidate.id === activityKey || candidate.containerId === activityKey,
+      const environment = useEnvironmentStore.getState().environments.find(
+        (candidate) => candidate.containerId === activityKey,
       );
       if (!environment) return;
-
-      const occurredAt = new Date().toISOString();
-      environmentStore.updateEnvironment(environment.id, { lastActivityAt: occurredAt });
-      backend.recordEnvironmentActivity(environment.id, occurredAt)
-        .then((updatedEnvironment) => {
-          useEnvironmentStore.getState().updateEnvironment(
-            updatedEnvironment.id,
-            updatedEnvironment,
-          );
-        })
-        .catch((error) => {
-          console.warn(
-            "[GlobalActivityMonitor] Failed to persist environment activity:",
-            error,
-          );
-        });
+      recordActivity(environment.id);
     });
 
     return () => unregisterStateCallback(callbackId);
-  }, [registerStateCallback, unregisterStateCallback]);
+  }, [recordActivity, registerStateCallback, unregisterStateCallback]);
 
   // ── Terminal mode: poll ALL running container environments ──────────
   useEffect(() => {
@@ -326,6 +440,7 @@ export function useGlobalActivityMonitor(): void {
         prevState &&
         state.sessions === prevState.sessions &&
         state.pendingQuestions === prevState.pendingQuestions &&
+        state.pendingPlanApprovals === prevState.pendingPlanApprovals &&
         state.clients === prevState.clients
       ) {
         return;
@@ -335,6 +450,43 @@ export function useGlobalActivityMonitor(): void {
         state.sessions,
         prevState?.sessions,
       );
+
+      if (prevState) {
+        const changedEnvironmentIds = getActivityTransitionEnvironmentIds(
+          state.sessions,
+          prevState.sessions,
+          (sessionKey) => {
+            const envId = extractEnvironmentId(sessionKey);
+            return envId && state.clients.has(envId) ? envId : undefined;
+          },
+          (session) => {
+            if (!session) return "idle";
+            if (session.isLoading) return "working";
+            const waitingForQuestion = Array.from(state.pendingQuestions.values()).some(
+              (question) => question.sessionId === session.sessionId,
+            );
+            const waitingForPlanApproval = Array.from(
+              state.pendingPlanApprovals.values(),
+            ).some((approval) => approval.sessionId === session.sessionId);
+            return waitingForQuestion || waitingForPlanApproval ? "waiting" : "idle";
+          },
+          (session) => {
+            if (!session) return "idle";
+            if (session.isLoading) return "working";
+            const waitingForQuestion = Array.from(
+              prevState.pendingQuestions.values(),
+            ).some(
+              (question) => question.sessionId === session.sessionId,
+            );
+            const waitingForPlanApproval = Array.from(
+              prevState.pendingPlanApprovals.values(),
+            ).some((approval) => approval.sessionId === session.sessionId);
+            return waitingForQuestion || waitingForPlanApproval ? "waiting" : "idle";
+          },
+        );
+        for (const envId of changedEnvironmentIds) recordActivity(envId);
+      }
+
       for (const envId of environmentIds) {
         const hasCurrentSessions = Array.from(state.sessions.keys()).some(
           (sessionKey) => extractEnvironmentId(sessionKey) === envId,
@@ -364,9 +516,12 @@ export function useGlobalActivityMonitor(): void {
           const hasPendingQuestions = Array.from(
             state.pendingQuestions.values()
           ).some((q) => q.sessionId === session.sessionId);
+          const hasPendingPlanApprovals = Array.from(
+            state.pendingPlanApprovals.values()
+          ).some((approval) => approval.sessionId === session.sessionId);
           const sessionState: AgentActivityState = session.isLoading
             ? "working"
-            : hasPendingQuestions
+            : hasPendingQuestions || hasPendingPlanApprovals
               ? "waiting"
               : "idle";
           desiredState = mergeActivityState(desiredState, sessionState);
@@ -386,7 +541,7 @@ export function useGlobalActivityMonitor(): void {
     const unsubscribe = useClaudeStore.subscribe(syncActivity);
 
     return unsubscribe;
-  }, [setContainerState]);
+  }, [recordActivity, setContainerState]);
 
   // ── Claude tmux mode: derive activity from hydrated tmux tab state ──
   // Tmux mode has its own backend lifecycle (`running`) and turn lifecycle
@@ -410,11 +565,12 @@ export function useGlobalActivityMonitor(): void {
         prevState.tabs,
         activitySources,
         setContainerState,
+        recordActivity,
       );
     });
 
     return unsubscribe;
-  }, [setContainerState]);
+  }, [recordActivity, setContainerState]);
 
   // ── Native OpenCode mode: derive activity from session store ───────
   useEffect(() => {
@@ -436,6 +592,43 @@ export function useGlobalActivityMonitor(): void {
         state.sessions,
         prevState?.sessions,
       );
+
+      if (prevState) {
+        const getOpenCodeState = (
+          session: (typeof state.sessions extends Map<string, infer Session> ? Session : never) | undefined,
+          pendingQuestions: typeof state.pendingQuestions,
+          pendingPermissions: typeof state.pendingPermissions,
+        ): AgentActivityState => {
+          if (!session) return "idle";
+          if (session.isLoading) return "working";
+          const waiting = Array.from(pendingQuestions.values()).some(
+            (question) => question.sessionID === session.sessionId,
+          ) || Array.from(pendingPermissions.values()).some(
+            (permission) => permission.sessionID === session.sessionId,
+          );
+          return waiting ? "waiting" : "idle";
+        };
+        const changedEnvironmentIds = getActivityTransitionEnvironmentIds(
+          state.sessions,
+          prevState.sessions,
+          (sessionKey) => {
+            const envId = extractEnvironmentId(sessionKey);
+            return envId && state.clients.has(envId) ? envId : undefined;
+          },
+          (session) => getOpenCodeState(
+            session,
+            state.pendingQuestions,
+            state.pendingPermissions,
+          ),
+          (session) => getOpenCodeState(
+            session,
+            prevState.pendingQuestions,
+            prevState.pendingPermissions,
+          ),
+        );
+        for (const envId of changedEnvironmentIds) recordActivity(envId);
+      }
+
       for (const envId of environmentIds) {
         const hasCurrentSessions = Array.from(state.sessions.keys()).some(
           (sessionKey) => extractEnvironmentId(sessionKey) === envId,
@@ -485,7 +678,7 @@ export function useGlobalActivityMonitor(): void {
     const unsubscribe = useOpenCodeStore.subscribe(syncActivity);
 
     return unsubscribe;
-  }, [setContainerState]);
+  }, [recordActivity, setContainerState]);
 
   // ── Native Codex mode: derive activity from session store ──────────
   // Codex SSE streams close on unmount, so state may go stale for
@@ -508,6 +701,21 @@ export function useGlobalActivityMonitor(): void {
         state.sessions,
         prevState?.sessions,
       );
+
+      if (prevState) {
+        const changedEnvironmentIds = getActivityTransitionEnvironmentIds(
+          state.sessions,
+          prevState.sessions,
+          (sessionKey) => {
+            const envId = extractEnvironmentId(sessionKey);
+            return envId && state.clients.has(envId) ? envId : undefined;
+          },
+          (session) => session?.isLoading ? "working" : "idle",
+          (session) => session?.isLoading ? "working" : "idle",
+        );
+        for (const envId of changedEnvironmentIds) recordActivity(envId);
+      }
+
       for (const envId of environmentIds) {
         const hasCurrentSessions = Array.from(state.sessions.keys()).some(
           (sessionKey) => extractEnvironmentId(sessionKey) === envId,
@@ -548,5 +756,5 @@ export function useGlobalActivityMonitor(): void {
     const unsubscribe = useCodexStore.subscribe(syncActivity);
 
     return unsubscribe;
-  }, [setContainerState]);
+  }, [recordActivity, setContainerState]);
 }

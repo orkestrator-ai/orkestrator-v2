@@ -293,11 +293,64 @@ describe("HierarchicalSidebar", () => {
       { ...createdEnvironment, id: "env-2", order: 1 },
       { ...createdEnvironment, id: "env-3", projectId: "project-2", order: 0 },
       { ...createdEnvironment, id: "env-1", order: 0 },
+      { ...createdEnvironment, id: "env-unknown-b", projectId: "missing", order: 1 },
+      {
+        ...createdEnvironment,
+        id: "env-unknown-a",
+        projectId: "missing",
+        order: 0,
+        lastActivityAt: "not-a-date",
+      },
     ];
 
     expect(sortEnvironmentsByActivity(environments, [project, secondProject]).map((env) => env.id))
-      .toEqual(["env-1", "env-2", "env-3"]);
-    expect(environments.map((env) => env.id)).toEqual(["env-2", "env-3", "env-1"]);
+      .toEqual(["env-1", "env-2", "env-3", "env-unknown-a", "env-unknown-b"]);
+    expect(environments.map((env) => env.id)).toEqual([
+      "env-2",
+      "env-3",
+      "env-1",
+      "env-unknown-b",
+      "env-unknown-a",
+    ]);
+  });
+
+  test("selects a range using the displayed activity order", () => {
+    environmentsValue = [
+      {
+        ...createdEnvironment,
+        id: "env-oldest",
+        name: "Oldest environment",
+        lastActivityAt: "2026-07-20T10:00:00.000Z",
+      },
+      {
+        ...createdEnvironment,
+        id: "env-newest",
+        name: "Newest environment",
+        lastActivityAt: "2026-07-22T10:00:00.000Z",
+      },
+      {
+        ...createdEnvironment,
+        id: "env-middle",
+        name: "Middle environment",
+        lastActivityAt: "2026-07-21T10:00:00.000Z",
+      },
+    ];
+    useUIStore.setState({
+      environmentSortMode: "activity",
+      selectedEnvironmentId: "env-newest",
+    });
+
+    render(<HierarchicalSidebar />);
+    fireEvent.click(
+      screen.getByRole("button", { name: /Oldest environment/ }),
+      { shiftKey: true },
+    );
+
+    expect(useUIStore.getState().selectedEnvironmentIds).toEqual([
+      "env-newest",
+      "env-middle",
+      "env-oldest",
+    ]);
   });
 
   test("reloads the workspace from the refresh button", () => {

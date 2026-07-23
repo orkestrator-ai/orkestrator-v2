@@ -49,6 +49,9 @@ describe("buildReviewBody", () => {
 
     for (const body of [interactive, automated]) {
       expect(body).toContain("Security and instruction hierarchy");
+      expect(body).toContain(
+        "Use subagents / threads to complete the work in parallel where possible.",
+      );
       expect(body).toContain("git diff origin/develop...HEAD");
       expect(body).toContain("## What Changed");
       expect(body).toContain('answering "What does this change do, and why?"');

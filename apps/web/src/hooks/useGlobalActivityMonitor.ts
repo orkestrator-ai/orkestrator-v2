@@ -30,6 +30,11 @@ interface ClaudeStateEvent {
   state: string;
 }
 
+interface EnvironmentActivityRecordedEvent {
+  environment_id: string;
+  occurred_at: string;
+}
+
 /**
  * Extract environmentId from a session key (format: "env-{uuid}:{tabId}")
  */
@@ -757,4 +762,48 @@ export function useGlobalActivityMonitor(): void {
 
     return unsubscribe;
   }, [recordActivity, setContainerState]);
+
+  // Terminal-mode activity is detected by the backend PTY so it continues to
+  // work while an environment's React tree is inactive. Apply the persisted
+  // timestamp event as an incremental update; environment snapshots remain the
+  // source of truth when this listener was not mounted.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: UnlistenFn | null = null;
+
+    void listen<EnvironmentActivityRecordedEvent>(
+      "environment-activity-recorded",
+      (event) => {
+        const { environment_id: environmentId, occurred_at: occurredAt } = event.payload;
+        const occurredTime = Date.parse(occurredAt);
+        if (!Number.isFinite(occurredTime)) return;
+
+        const environment = useEnvironmentStore
+          .getState()
+          .getEnvironmentById(environmentId);
+        if (!environment) return;
+        const currentTime = environment.lastActivityAt
+          ? Date.parse(environment.lastActivityAt)
+          : Number.NEGATIVE_INFINITY;
+        if (Number.isFinite(currentTime) && currentTime >= occurredTime) return;
+
+        useEnvironmentStore.getState().updateEnvironment(environmentId, {
+          lastActivityAt: new Date(occurredTime).toISOString(),
+        });
+      },
+    ).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    }).catch((error) => {
+      console.warn(
+        "[GlobalActivityMonitor] Failed to listen for terminal activity:",
+        error,
+      );
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 }

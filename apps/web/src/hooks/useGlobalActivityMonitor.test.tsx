@@ -522,6 +522,43 @@ describe("useGlobalActivityMonitor terminal activity", () => {
     });
   });
 
+  test("applies newer backend terminal activity events to the live environment list", async () => {
+    const environment = {
+      ...makeEnvironment("env-local", ""),
+      environmentType: "local" as const,
+      containerId: null,
+      lastActivityAt: "2026-07-23T09:00:00.000Z",
+    };
+    useEnvironmentStore.setState({ environments: [environment] });
+    render(<MonitorHarness />);
+
+    await waitFor(() => {
+      expect(eventCallbacks.has("environment-activity-recorded")).toBe(true);
+    });
+
+    act(() => {
+      eventCallbacks.get("environment-activity-recorded")?.({
+        payload: {
+          environment_id: environment.id,
+          occurred_at: "2026-07-23T10:00:00.000Z",
+        },
+      });
+    });
+    expect(useEnvironmentStore.getState().getEnvironmentById(environment.id)?.lastActivityAt)
+      .toBe("2026-07-23T10:00:00.000Z");
+
+    act(() => {
+      eventCallbacks.get("environment-activity-recorded")?.({
+        payload: {
+          environment_id: environment.id,
+          occurred_at: "2026-07-23T08:00:00.000Z",
+        },
+      });
+    });
+    expect(useEnvironmentStore.getState().getEnvironmentById(environment.id)?.lastActivityAt)
+      .toBe("2026-07-23T10:00:00.000Z");
+  });
+
   test("does not let an older persistence response replace newer optimistic activity", async () => {
     const environment = makeEnvironment("env-container", "container-1");
     useEnvironmentStore.setState({ environments: [environment] });
@@ -597,7 +634,9 @@ describe("useGlobalActivityMonitor terminal activity", () => {
       });
 
       await waitFor(() => {
-        expect(mockListen).toHaveBeenCalledTimes(2);
+        expect(mockListen.mock.calls.filter(
+          ([eventName]) => eventName === "claude-state-container-1",
+        )).toHaveLength(2);
         expect(mockInvoke).toHaveBeenCalledWith(
           "start_claude_state_polling",
           { containerId: "container-1" },
@@ -673,7 +712,7 @@ describe("useGlobalActivityMonitor terminal activity", () => {
       await Promise.resolve();
     });
 
-    expect(mockUnlisten).toHaveBeenCalledTimes(1);
+    expect(mockUnlisten).toHaveBeenCalledTimes(2);
     expect(mockInvoke).toHaveBeenCalledWith(
       "stop_claude_state_polling",
       { containerId: "container-1" },
@@ -701,7 +740,7 @@ describe("useGlobalActivityMonitor terminal activity", () => {
       await Promise.resolve();
     });
 
-    expect(mockUnlisten).toHaveBeenCalledTimes(1);
+    expect(mockUnlisten).toHaveBeenCalledTimes(2);
     expect(mockInvoke).not.toHaveBeenCalledWith(
       "start_claude_state_polling",
       { containerId: "container-1" },

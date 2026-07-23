@@ -78,12 +78,28 @@ export type CommandContext = {
 type CommandHandler = (args: JsonRecord, context: CommandContext) => Promise<unknown> | unknown;
 
 type TerminalSessionConfig =
-  | { kind: "container"; containerId: string; cols: number; rows: number; user?: string }
-  | { kind: "local"; environmentId: string; cols: number; rows: number };
+  | {
+    kind: "container";
+    containerId: string;
+    cols: number;
+    rows: number;
+    user?: string;
+    activityEnvironmentId?: string;
+    trackEnvironmentActivity?: boolean;
+  }
+  | {
+    kind: "local";
+    environmentId: string;
+    cols: number;
+    rows: number;
+    trackEnvironmentActivity?: boolean;
+  };
 
 const terminalProcesses = new Map<string, PtyProcess>();
 const terminalSessionConfigs = new Map<string, TerminalSessionConfig>();
 const terminalOutputBuffers = new Map<string, string>();
+const terminalActivityTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const terminalActivityArmed = new Set<string>();
 const localServerProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const CONTAINER_WORKSPACE_SETUP_COMMAND = "if command -v flock >/dev/null 2>&1; then flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh'; else /usr/local/bin/workspace-setup.sh; fi";
 const SETUP_DONE_OSC_SEQUENCE = "\u001b]9999;setup_done\u0007";
@@ -91,6 +107,7 @@ const SETUP_FAILED_OSC_SEQUENCE = "\u001b]9999;setup_failed\u0007";
 const SETUP_DONE_PRINTF_CMD = "printf '\\033]9999;setup_done\\007'";
 const SETUP_FAILED_PRINTF_CMD = "printf '\\033]9999;setup_failed\\007'";
 const MAX_TERMINAL_OUTPUT_BUFFER_CHARS = 500 * 1024;
+const TERMINAL_ACTIVITY_SETTLE_MS = 750;
 
 type EnvironmentSetupSession = {
   environmentId: string;
@@ -853,7 +870,69 @@ function rememberTerminalSession(id: string, config: TerminalSessionConfig): str
   return id;
 }
 
+function getTrackedTerminalEnvironmentId(id: string): string | null {
+  const config = terminalSessionConfigs.get(id);
+  if (!config?.trackEnvironmentActivity) return null;
+  return config.kind === "local"
+    ? config.environmentId
+    : config.activityEnvironmentId ?? null;
+}
+
+function persistTerminalActivity(id: string, context: CommandContext): void {
+  const timer = terminalActivityTimers.get(id);
+  if (timer) clearTimeout(timer);
+  terminalActivityTimers.delete(id);
+
+  if (!terminalActivityArmed.has(id)) return;
+  const environmentId = getTrackedTerminalEnvironmentId(id);
+  if (!environmentId) return;
+
+  const occurredAt = new Date().toISOString();
+  void context.storage.recordEnvironmentActivity(environmentId, occurredAt)
+    .then((environment) => {
+      context.emit("environment-activity-recorded", {
+        environment_id: environment.id,
+        occurred_at: environment.lastActivityAt ?? occurredAt,
+      });
+    })
+    .catch((error) => {
+      console.error("Failed to record terminal environment activity", {
+        environmentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+}
+
+function recordTerminalInputActivity(id: string, data: string, context: CommandContext): void {
+  if (!/[\r\n]/.test(data) || !getTrackedTerminalEnvironmentId(id)) return;
+  terminalActivityArmed.add(id);
+  persistTerminalActivity(id, context);
+}
+
+function scheduleTerminalOutputActivity(id: string, context: CommandContext): void {
+  if (!terminalActivityArmed.has(id) || !getTrackedTerminalEnvironmentId(id)) return;
+  const existingTimer = terminalActivityTimers.get(id);
+  if (existingTimer) clearTimeout(existingTimer);
+  const timer = setTimeout(() => persistTerminalActivity(id, context), TERMINAL_ACTIVITY_SETTLE_MS);
+  timer.unref?.();
+  terminalActivityTimers.set(id, timer);
+}
+
+function trackedTerminalActivityHooks(
+  id: string,
+  context: CommandContext,
+): { onData: () => void; onExit: () => void } {
+  return {
+    onData: () => scheduleTerminalOutputActivity(id, context),
+    onExit: () => persistTerminalActivity(id, context),
+  };
+}
+
 function cleanupTerminalSession(id: string): void {
+  const activityTimer = terminalActivityTimers.get(id);
+  if (activityTimer) clearTimeout(activityTimer);
+  terminalActivityTimers.delete(id);
+  terminalActivityArmed.delete(id);
   terminalProcesses.delete(id);
   terminalSessionConfigs.delete(id);
   // Setup-session buffers are retained intentionally so the renderer can replay
@@ -2936,14 +3015,28 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     storage.deletePaneLayout(asString(environmentId, "environmentId")),
   );
 
-  register("create_terminal_session", ({ containerId, cols, rows, user }) => {
-    const id = `${asString(containerId, "containerId")}:${randomUUID()}`;
+  register("create_terminal_session", async ({ containerId, cols, rows, user, trackEnvironmentActivity }, { storage }) => {
+    const resolvedContainerId = asString(containerId, "containerId");
+    const shouldTrackActivity = asBoolean(trackEnvironmentActivity);
+    const activityEnvironmentId = shouldTrackActivity
+      ? findEnvironmentByContainerId(
+        await storage.loadEnvironments(),
+        resolvedContainerId,
+      )?.id
+      : undefined;
+    if (shouldTrackActivity && !activityEnvironmentId) {
+      throw new Error("Tracked terminal container is not associated with an environment");
+    }
+
+    const id = `${resolvedContainerId}:${randomUUID()}`;
     return rememberTerminalSession(id, {
       kind: "container",
-      containerId: asString(containerId, "containerId"),
+      containerId: resolvedContainerId,
       cols: asTerminalDimension(cols, 80),
       rows: asTerminalDimension(rows, 24),
       user: asOptionalString(user),
+      activityEnvironmentId,
+      trackEnvironmentActivity: shouldTrackActivity,
     });
   });
   register("attach_terminal", ({ containerId, cols, rows, user }, { emit }) => {
@@ -2962,7 +3055,8 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     spawnTerminalProcess(id, "docker", dockerArgs, config, emit);
     return id;
   });
-  register("start_terminal_session", ({ sessionId }, { emit }) => {
+  register("start_terminal_session", ({ sessionId }, context) => {
+    const { emit } = context;
     const id = asString(sessionId, "sessionId");
     const storedConfig = terminalSessionConfigs.get(id);
     const config = storedConfig?.kind === "container" ? storedConfig : {
@@ -2974,9 +3068,16 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const dockerArgs = ["exec", "-it"];
     if (config.user) dockerArgs.push("--user", config.user);
     dockerArgs.push(config.containerId, "zsh", "-l");
-    spawnTerminalProcess(id, "docker", dockerArgs, config, emit);
+    spawnTerminalProcess(id, "docker", dockerArgs, config, emit, trackedTerminalActivityHooks(id, context));
   });
-  register("terminal_write", ({ sessionId, data }) => terminalProcesses.get(asString(sessionId, "sessionId"))?.write(asString(data, "data")));
+  register("terminal_write", ({ sessionId, data }, context) => {
+    const id = asString(sessionId, "sessionId");
+    const terminalData = asString(data, "data");
+    const terminalProcess = terminalProcesses.get(id);
+    if (!terminalProcess) return;
+    terminalProcess.write(terminalData);
+    recordTerminalInputActivity(id, terminalData, context);
+  });
   register("terminal_resize", ({ sessionId, cols, rows }) => terminalProcesses.get(asString(sessionId, "sessionId"))?.resize(
     asTerminalDimension(cols, 80),
     asTerminalDimension(rows, 24),
@@ -3011,13 +3112,14 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     return buffer;
   });
 
-  register("create_local_terminal_session", ({ environmentId, cols, rows }) => {
+  register("create_local_terminal_session", ({ environmentId, cols, rows, trackEnvironmentActivity }) => {
     const id = `${asString(environmentId, "environmentId")}:${randomUUID()}`;
     return rememberTerminalSession(id, {
       kind: "local",
       environmentId: asString(environmentId, "environmentId"),
       cols: asTerminalDimension(cols, 80),
       rows: asTerminalDimension(rows, 24),
+      trackEnvironmentActivity: asBoolean(trackEnvironmentActivity),
     });
   });
   register("start_local_terminal_session", async ({ sessionId }, context) => {
@@ -3045,9 +3147,17 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
         env: envWithManagedBinaries(context),
       },
       emit,
+      trackedTerminalActivityHooks(id, context),
     );
   });
-  register("local_terminal_write", ({ sessionId, data }) => terminalProcesses.get(asString(sessionId, "sessionId"))?.write(asString(data, "data")));
+  register("local_terminal_write", ({ sessionId, data }, context) => {
+    const id = asString(sessionId, "sessionId");
+    const terminalData = asString(data, "data");
+    const terminalProcess = terminalProcesses.get(id);
+    if (!terminalProcess) return;
+    terminalProcess.write(terminalData);
+    recordTerminalInputActivity(id, terminalData, context);
+  });
   register("local_terminal_resize", ({ sessionId, cols, rows }) => terminalProcesses.get(asString(sessionId, "sessionId"))?.resize(
     asTerminalDimension(cols, 80),
     asTerminalDimension(rows, 24),

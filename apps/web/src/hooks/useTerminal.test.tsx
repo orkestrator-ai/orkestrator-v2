@@ -157,7 +157,7 @@ describe("useTerminal reconnect behavior", () => {
 
     await waitFor(() => expect(result.current.sessionId).toBe("session-new-local"));
     expect(getTerminalSessionMock).toHaveBeenCalledWith("session-old");
-    expect(createLocalTerminalSessionMock).toHaveBeenCalledWith("env-1", 80, 24);
+    expect(createLocalTerminalSessionMock).toHaveBeenCalledWith("env-1", 80, 24, false);
     expect(startLocalTerminalSessionMock).toHaveBeenCalledWith("session-new-local");
     expect(listenMock).toHaveBeenCalledWith("terminal-output-session-new-local", expect.any(Function));
   });
@@ -183,6 +183,46 @@ describe("useTerminal reconnect behavior", () => {
     expect(startTerminalSessionMock).toHaveBeenCalledTimes(1);
     expect(listenMock).toHaveBeenCalledTimes(1);
     expect(listenMock).toHaveBeenCalledWith("terminal-output-session-new-container", expect.any(Function));
+  });
+
+  it("forwards environment activity tracking to local and container session creation", async () => {
+    const local = renderHook(() =>
+      useTerminal({
+        containerId: null,
+        environmentId: "env-local",
+        isLocal: true,
+        persistSession: true,
+        trackEnvironmentActivity: true,
+      }),
+    );
+
+    await act(async () => {
+      await local.result.current.connect();
+    });
+    expect(createLocalTerminalSessionMock).toHaveBeenCalledWith("env-local", 80, 24, true);
+    local.unmount();
+
+    const container = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        environmentId: "env-container",
+        isLocal: false,
+        persistSession: true,
+        trackEnvironmentActivity: true,
+      }),
+    );
+
+    await act(async () => {
+      await container.result.current.connect();
+    });
+    expect(createTerminalSessionMock).toHaveBeenCalledWith(
+      "container-1",
+      80,
+      24,
+      undefined,
+      true,
+    );
+    container.unmount();
   });
 
   it("does not attach an event listener from a stale in-flight connect after unmount", async () => {

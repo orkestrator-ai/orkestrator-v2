@@ -26,6 +26,7 @@ type MockUseTerminalOptions = {
   existingSessionId?: string | null;
   replayOutputBuffer?: boolean;
   attachExistingOnly?: boolean;
+  trackEnvironmentActivity?: boolean;
 };
 let lastUseTerminalOptions: MockUseTerminalOptions | undefined;
 let useTerminalOptionsHistory: MockUseTerminalOptions[] = [];
@@ -528,6 +529,33 @@ describe("PersistentTerminal", () => {
 
     await waitFor(() => {
       expect(lastUseTerminalOptions?.user).toBe(ROOT_TERMINAL_USER);
+    });
+  });
+
+  it.each([
+    ["claude", true],
+    ["opencode", true],
+    ["codex", true],
+    ["plain", false],
+    ["root", false],
+  ] as const)("sets environment activity tracking for %s terminal tabs", async (tabType, expected) => {
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType={tabType}
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        paneId="pane-1"
+      />
+    );
+
+    await waitFor(() => {
+      expect(lastUseTerminalOptions?.trackEnvironmentActivity).toBe(expected);
     });
   });
 

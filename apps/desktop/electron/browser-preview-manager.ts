@@ -1,6 +1,7 @@
 import type {
   BrowserWindow,
   ContextMenuParams,
+  MenuItemConstructorOptions,
   Rectangle,
   Session,
   WebContentsView,
@@ -9,6 +10,7 @@ import type {
 import type {
   BrowserPreviewAttachInput,
   BrowserPreviewBounds,
+  BrowserPreviewOpenLinkEvent,
   BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
 import { createContextMenuTemplate, type MenuLike } from "./context-menu.js";
@@ -30,10 +32,13 @@ export interface BrowserPreviewManagerOptions {
   menu: MenuLike;
   getWindow: () => BrowserWindow | null;
   emitState: (state: BrowserPreviewState) => void;
+  emitOpenLink: (event: BrowserPreviewOpenLinkEvent) => void;
+  openExternal: (url: string) => void;
+  writeClipboardText: (text: string) => void;
 }
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
-const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(?:\/|$)/;
+const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(\/.*)?$/;
 
 function previewNavigationScope(value: string): string | null {
   let url: URL;
@@ -50,6 +55,35 @@ function previewNavigationScope(value: string): string | null {
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
   const gatewayMatch = GATEWAY_PREVIEW_PATH.exec(url.pathname);
   return gatewayMatch ? `gateway:${url.origin}:${gatewayMatch[1]}` : null;
+}
+
+function browserTabUrlFromPreviewLink(value: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+
+  if (url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname)) {
+    return url.toString();
+  }
+
+  const gatewayMatch = GATEWAY_PREVIEW_PATH.exec(url.pathname);
+  if (url.protocol !== "https:" || !gatewayMatch) return null;
+  return new URL(
+    `${gatewayMatch[2] ?? "/"}${url.search}${url.hash}`,
+    `http://localhost:${gatewayMatch[1]}`,
+  ).toString();
+}
+
+function isExternalBrowserUrl(value: string): boolean {
+  try {
+    const protocol = new URL(value).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function isNavigationWithinScope(value: string, expectedScope: string): boolean {
@@ -205,7 +239,37 @@ export class BrowserPreviewManager {
       const window = this.options.getWindow();
       if (!window || window.isDestroyed()) return;
 
-      const template = createContextMenuTemplate(params);
+      const template: MenuItemConstructorOptions[] = [];
+      if (params.linkURL) {
+        const browserTabUrl = browserTabUrlFromPreviewLink(params.linkURL);
+        const externalBrowserUrl = isExternalBrowserUrl(params.linkURL);
+        template.push(
+          {
+            label: "Open Link in New Tab",
+            enabled: browserTabUrl !== null,
+            click: () => {
+              if (browserTabUrl) this.options.emitOpenLink({ tabId, url: browserTabUrl });
+            },
+          },
+          {
+            label: "Open in External Browser",
+            enabled: externalBrowserUrl,
+            click: () => {
+              if (externalBrowserUrl) this.options.openExternal(params.linkURL);
+            },
+          },
+          {
+            label: "Copy Link Address",
+            click: () => this.options.writeClipboardText(params.linkURL),
+          },
+        );
+      }
+
+      const defaultTemplate = createContextMenuTemplate(params);
+      if (defaultTemplate.length > 0) {
+        if (template.length > 0) template.push({ type: "separator" });
+        template.push(...defaultTemplate);
+      }
       if (template.length > 0) template.push({ type: "separator" });
       template.push({
         label: "Interrogate",

@@ -69,6 +69,9 @@ describe("browser preview startup wiring", () => {
       contentView: { addChildView, removeChildView: mock(() => undefined) },
     };
     const emitState = mock(() => undefined);
+    const emitOpenLink = mock(() => undefined);
+    const openExternal = mock(() => undefined);
+    const writeClipboardText = mock(() => undefined);
 
     const runtime = initializeBrowserPreviews({
       fromPartition: fromPartition as never,
@@ -76,6 +79,9 @@ describe("browser preview startup wiring", () => {
       menu: { buildFromTemplate: () => ({ popup: () => undefined }) } as never,
       getWindow: () => window as never,
       emitState,
+      emitOpenLink,
+      openExternal,
+      writeClipboardText,
       getAuthorization: () => "Bearer test",
     });
 

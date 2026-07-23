@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState, type MouseEvent } from "react";
+import type { BrowserPreviewOpenLinkEvent } from "@orkestrator/protocol/browser-preview";
 import {
   DndContext,
   pointerWithin,
@@ -1276,9 +1277,44 @@ export function TerminalContainer({
     };
   }, [isActive, setTerminalWrite, activePaneId]);
 
+  const handleCreateBrowserTab = useCallback(
+    (initialUrl: string | undefined, targetPaneId: string, displayTitle?: string) => {
+      if (!isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) return;
+
+      const allTabs = getAllTabs(environmentId);
+      if (allTabs.length >= MAX_TABS) {
+        console.debug("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
+        return;
+      }
+
+      const newTabId = createUniqueTabId("tab");
+      const newTab: TabInfo = {
+        id: newTabId,
+        type: "browser",
+        browserData: { url: initialUrl?.trim() ?? "" },
+        displayTitle,
+      };
+      console.debug("[TerminalContainer] Creating browser tab:", newTabId, "for environment:", environmentId);
+      addTab(targetPaneId, newTab, environmentId);
+    },
+    [
+      addTab,
+      containerId,
+      environmentId,
+      getAllTabs,
+      isEnvironmentRunning,
+      isLocalEnvironmentReady,
+    ],
+  );
+
   // Handler for creating new terminal tabs
   const handleCreateTab = useCallback(
     (type: CreatableTabType, options?: CreateTabOptions) => {
+      if (type === "browser") {
+        handleCreateBrowserTab(options?.initialUrl, activePaneId, options?.displayTitle);
+        return;
+      }
+
       // For local environments, we don't need a containerId but do need worktreePath to be set
       if (!isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) return;
 
@@ -1289,19 +1325,6 @@ export function TerminalContainer({
       }
 
       const newTabId = createUniqueTabId("tab");
-
-      if (type === "browser") {
-        const newTab: TabInfo = {
-          id: newTabId,
-          type,
-          browserData: { url: options?.initialUrl?.trim() ?? "" },
-          displayTitle: options?.displayTitle,
-        };
-        console.debug("[TerminalContainer] Creating browser tab:", newTabId, "for environment:", environmentId);
-        addTab(activePaneId, newTab, environmentId);
-        return;
-      }
-
       const launchModeOverride = options?.agentLaunchMode;
       const shouldUseOpenCodeNative =
         type === "opencode" &&
@@ -1395,8 +1418,22 @@ export function TerminalContainer({
       console.debug("[TerminalContainer] Creating new tab:", newTabId, "type:", type, "for environment:", environmentId);
       addTab(activePaneId, newTab, environmentId);
     },
-    [containerId, isEnvironmentRunning, activePaneId, addTab, getAllTabs, environmentId, opencodeMode, claudeMode, claudeNativeBackend, codexMode, isLocalEnvironmentReady]
+    [containerId, isEnvironmentRunning, activePaneId, addTab, getAllTabs, environmentId, opencodeMode, claudeMode, claudeNativeBackend, codexMode, isLocalEnvironmentReady, handleCreateBrowserTab]
   );
+
+  useEffect(() => {
+    if (!isActive || !window.orkestrator) return;
+
+    return window.orkestrator.listen<BrowserPreviewOpenLinkEvent>(
+      "browser-preview-open-link",
+      ({ tabId, url }) => {
+        const sourcePane = usePaneLayoutStore.getState().findPaneWithTab(tabId, environmentId);
+        const sourceTab = sourcePane?.tabs.find((tab) => tab.id === tabId);
+        if (!sourcePane || sourceTab?.type !== "browser") return;
+        handleCreateBrowserTab(url, sourcePane.id);
+      },
+    );
+  }, [environmentId, handleCreateBrowserTab, isActive]);
 
   // Handler for creating file viewer tabs
   const handleCreateFileTab = useCallback(

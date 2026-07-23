@@ -20,3 +20,8 @@ export interface BrowserPreviewState {
   canGoForward: boolean;
   error: string | null;
 }
+
+export interface BrowserPreviewOpenLinkEvent {
+  tabId: string;
+  url: string;
+}

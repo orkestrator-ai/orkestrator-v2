@@ -1,5 +1,8 @@
 import type { BrowserWindow, Session } from "electron";
-import type { BrowserPreviewState } from "@orkestrator/protocol/browser-preview";
+import type {
+  BrowserPreviewOpenLinkEvent,
+  BrowserPreviewState,
+} from "@orkestrator/protocol/browser-preview";
 import {
   BrowserPreviewManager,
   type BrowserPreviewManagerOptions,
@@ -14,6 +17,9 @@ export interface InitializeBrowserPreviewsOptions {
   menu: BrowserPreviewManagerOptions["menu"];
   getWindow: () => BrowserWindow | null;
   emitState: (state: BrowserPreviewState) => void;
+  emitOpenLink: (event: BrowserPreviewOpenLinkEvent) => void;
+  openExternal: (url: string) => void;
+  writeClipboardText: (text: string) => void;
   getAuthorization: (url: string) => string | null;
 }
 
@@ -28,6 +34,9 @@ export function initializeBrowserPreviews({
   menu,
   getWindow,
   emitState,
+  emitOpenLink,
+  openExternal,
+  writeClipboardText,
   getAuthorization,
 }: InitializeBrowserPreviewsOptions): BrowserPreviewRuntime {
   const browserSession = fromPartition(BROWSER_PREVIEW_PARTITION);
@@ -40,6 +49,9 @@ export function initializeBrowserPreviews({
     menu,
     getWindow,
     emitState,
+    emitOpenLink,
+    openExternal,
+    writeClipboardText,
   });
   installRemoteGatewayRequestAuth(
     browserSession.webRequest,

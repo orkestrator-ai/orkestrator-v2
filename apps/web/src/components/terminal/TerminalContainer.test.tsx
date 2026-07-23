@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect, useRef, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TerminalProvider, useTerminalContext, type CreatableTabType, type CreateTabOptions, type CreateFileTabOptions } from "@/contexts";
@@ -14,6 +14,7 @@ import * as realSetupCommands from "@/lib/setup-commands";
 
 const realBackendSnapshot = { ...realBackend };
 const realSetupCommandsSnapshot = { ...realSetupCommands };
+const originalOrkestrator = window.orkestrator;
 
 const markSetupScriptsCompleteMock = mock(() => {});
 const getSetupCommandsMock = mock(async (): Promise<string[] | null> => null);
@@ -114,6 +115,10 @@ describe("TerminalContainer", () => {
   afterAll(() => {
     mock.module("@/lib/setup-commands", () => realSetupCommandsSnapshot);
     mock.module("@/lib/backend", () => realBackendSnapshot);
+  });
+
+  afterEach(() => {
+    window.orkestrator = originalOrkestrator;
   });
 
   beforeEach(() => {
@@ -2228,6 +2233,82 @@ describe("TerminalContainer", () => {
         expect(right?.tabs.some((tab) => tab.type === "browser")).toBe(true);
         expect(left?.tabs.some((tab) => tab.type === "browser")).toBe(false);
       });
+    });
+
+    test("opens a preview link in a new browser tab beside its source tab", async () => {
+      let openLinkListener:
+        | ((event: { tabId: string; url: string }) => void)
+        | undefined;
+      window.orkestrator = {
+        listen: (event: string, callback: (payload: unknown) => void) => {
+          if (event === "browser-preview-open-link") {
+            openLinkListener = callback as (payload: { tabId: string; url: string }) => void;
+          }
+          return () => {};
+        },
+      } as never;
+      usePaneLayoutStore.setState((state) => ({
+        environments: new Map(state.environments).set("env-visible", {
+          root: {
+            kind: "split",
+            id: "split",
+            direction: "horizontal",
+            sizes: [50, 50],
+            depth: 1,
+            children: [
+              {
+                kind: "leaf",
+                id: "left",
+                tabs: [
+                  {
+                    id: "browser-source",
+                    type: "browser",
+                    browserData: { url: "http://localhost:3000/" },
+                  },
+                ],
+                activeTabId: "browser-source",
+              },
+              {
+                kind: "leaf",
+                id: "right",
+                tabs: [{ id: "right-tab", type: "plain" }],
+                activeTabId: "right-tab",
+              },
+            ],
+          },
+          activePaneId: "right",
+          containerId: "container-visible",
+        }),
+      }));
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => expect(openLinkListener).toBeDefined());
+      act(() => {
+        openLinkListener?.({
+          tabId: "browser-source",
+          url: "http://localhost:3000/docs",
+        });
+      });
+
+      const left = usePaneLayoutStore.getState().getPane("left", "env-visible");
+      const right = usePaneLayoutStore.getState().getPane("right", "env-visible");
+      expect(left?.tabs).toHaveLength(2);
+      expect(left?.tabs[1]).toMatchObject({
+        type: "browser",
+        browserData: { url: "http://localhost:3000/docs" },
+      });
+      expect(left?.activeTabId).toBe(left?.tabs[1]?.id);
+      expect(right?.tabs).toHaveLength(1);
     });
 
     test("claude-native tabs receive displayTitle", async () => {

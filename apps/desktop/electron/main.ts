@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, safeStorage, session, WebContentsView } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, safeStorage, session, shell, WebContentsView } from "electron";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
@@ -192,6 +192,13 @@ async function startApplication(): Promise<void> {
     menu: Menu,
     getWindow: () => mainWindow,
     emitState: (state) => emitToRenderers("browser-preview-state", state),
+    emitOpenLink: (event) => emitToRenderers("browser-preview-open-link", event),
+    openExternal: (url) => {
+      void shell.openExternal(url).catch((error: unknown) => {
+        console.error("[BrowserPreview] Failed to open link externally:", error);
+      });
+    },
+    writeClipboardText: (text) => clipboard.writeText(text),
     getAuthorization: (url) => connectionManager?.getRendererRequestAuthorization(url) ?? null,
   });
   browserPreviewManager = browserPreviewRuntime.manager;

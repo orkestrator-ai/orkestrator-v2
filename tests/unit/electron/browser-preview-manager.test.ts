@@ -72,6 +72,9 @@ function createHarness() {
   let windowDestroyed = false;
   const window = { isDestroyed: () => windowDestroyed, contentView };
   const emitState = mock(() => undefined);
+  const emitOpenLink = mock(() => undefined);
+  const openExternal = mock(() => undefined);
+  const writeClipboardText = mock(() => undefined);
   const popup = mock(() => undefined);
   const menuTemplates: MenuItemConstructorOptions[][] = [];
   const menu = {
@@ -86,12 +89,18 @@ function createHarness() {
     menu,
     getWindow: () => (windowAvailable ? (window as never) : null),
     emitState,
+    emitOpenLink,
+    openExternal,
+    writeClipboardText,
   });
   return {
     manager,
     views,
     contentView,
     emitState,
+    emitOpenLink,
+    openExternal,
+    writeClipboardText,
     menuTemplates,
     popup,
     window,
@@ -255,6 +264,75 @@ describe("BrowserPreviewManager", () => {
 
     expect(contents.inspectElement).toHaveBeenCalledWith(123, 456);
     expect(harness.views).toHaveLength(1);
+  });
+
+  test("offers link actions that open a preview tab, the external browser, and the clipboard", async () => {
+    const harness = createHarness();
+    await harness.manager.attach(input);
+    const contents = harness.views[0]!.webContents;
+    const linkURL = "http://localhost:3000/docs?q=1#intro";
+
+    contents.emit("context-menu", {}, createContextMenuParams({ linkURL }));
+
+    const template = harness.menuTemplates[0]!;
+    expect(template.slice(0, 3).map((item) => item.label)).toEqual([
+      "Open Link in New Tab",
+      "Open in External Browser",
+      "Copy Link Address",
+    ]);
+    const openInTab = template.find((item) => item.label === "Open Link in New Tab");
+    const openExternal = template.find((item) => item.label === "Open in External Browser");
+    const copy = template.find((item) => item.label === "Copy Link Address");
+
+    openInTab?.click?.(undefined as never, undefined as never, undefined as never);
+    openExternal?.click?.(undefined as never, undefined as never, undefined as never);
+    copy?.click?.(undefined as never, undefined as never, undefined as never);
+
+    expect(harness.emitOpenLink).toHaveBeenCalledWith({
+      tabId: input.tabId,
+      url: linkURL,
+    });
+    expect(harness.openExternal).toHaveBeenCalledWith(linkURL);
+    expect(harness.writeClipboardText).toHaveBeenCalledWith(linkURL);
+  });
+
+  test("maps gateway preview links back to backend-local addresses for new tabs", async () => {
+    const harness = createHarness();
+    await harness.manager.attach({
+      ...input,
+      url: "https://desk.example/__orkestrator/browser/loopback/3000/",
+    });
+    const contents = harness.views[0]!.webContents;
+    const linkURL = "https://desk.example/__orkestrator/browser/loopback/3000/docs?q=1#intro";
+
+    contents.emit("context-menu", {}, createContextMenuParams({ linkURL }));
+    const openInTab = harness.menuTemplates[0]!.find(
+      (item) => item.label === "Open Link in New Tab",
+    );
+    openInTab?.click?.(undefined as never, undefined as never, undefined as never);
+
+    expect(harness.emitOpenLink).toHaveBeenCalledWith({
+      tabId: input.tabId,
+      url: "http://localhost:3000/docs?q=1#intro",
+    });
+  });
+
+  test("keeps link actions visible but disables unsafe or unsupported navigation", async () => {
+    const harness = createHarness();
+    await harness.manager.attach(input);
+    const contents = harness.views[0]!.webContents;
+
+    contents.emit("context-menu", {}, createContextMenuParams({ linkURL: "javascript:alert(1)" }));
+
+    const template = harness.menuTemplates[0]!;
+    expect(template.find((item) => item.label === "Open Link in New Tab")?.enabled).toBe(false);
+    expect(template.find((item) => item.label === "Open in External Browser")?.enabled).toBe(false);
+    template.find((item) => item.label === "Copy Link Address")
+      ?.click?.(undefined as never, undefined as never, undefined as never);
+
+    expect(harness.emitOpenLink).not.toHaveBeenCalled();
+    expect(harness.openExternal).not.toHaveBeenCalled();
+    expect(harness.writeClipboardText).toHaveBeenCalledWith("javascript:alert(1)");
   });
 
   test("blocks top-level navigation outside the preview scope", async () => {

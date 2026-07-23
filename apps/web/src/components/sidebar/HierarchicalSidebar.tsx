@@ -300,7 +300,7 @@ export function HierarchicalSidebar() {
     () => new Map(projects.map((project) => [project.id, project])),
     [projects],
   );
-  const activeEnvironmentCount = activityEnvironments.length;
+  const totalEnvironmentCount = activityEnvironments.length;
   const waitingEnvironmentCount = useMemo(() => {
     const environmentIds = new Set(allEnvironments.map((environment) => environment.id));
     return unreadEnvironmentIds.filter((id) => environmentIds.has(id)).length;
@@ -763,14 +763,16 @@ export function HierarchicalSidebar() {
                     <TooltipTrigger asChild>
                       <div
                         className="flex h-7 items-center gap-1.5 rounded-md px-2 font-mono text-[11px] tabular-nums text-zinc-400"
-                        aria-label={`${activeEnvironmentCount} active environments`}
+                        aria-label={`${totalEnvironmentCount} ${
+                          totalEnvironmentCount === 1 ? "environment" : "environments"
+                        }`}
                       >
                         <Boxes className="h-3.5 w-3.5 text-emerald-500" aria-hidden="true" />
-                        <span>{activeEnvironmentCount}</span>
+                        <span>{totalEnvironmentCount}</span>
                       </div>
                     </TooltipTrigger>
                     <TooltipContent side="bottom" sideOffset={5}>
-                      Active environments
+                      Environments
                     </TooltipContent>
                   </Tooltip>
                   <Tooltip>

@@ -607,6 +607,48 @@ describe("useGlobalActivityMonitor terminal activity", () => {
       .toBe("2026-07-23T10:00:00.000Z");
   });
 
+  test("does not re-mark unread when a stale or duplicate completed event arrives", async () => {
+    // Simulates the user having already opened/cleared the environment after an
+    // earlier completion: a redelivered or out-of-order "completed" event whose
+    // timestamp is not newer than what we already have must not re-flag it.
+    const environment = {
+      ...makeEnvironment("env-local", ""),
+      environmentType: "local" as const,
+      containerId: null,
+      lastActivityAt: "2026-07-23T10:00:00.000Z",
+    };
+    useEnvironmentStore.setState({ environments: [environment] });
+    useUIStore.setState({ selectedEnvironmentId: null, unreadEnvironmentIds: [] });
+    render(<MonitorHarness />);
+
+    await waitFor(() => {
+      expect(eventCallbacks.has("environment-activity-recorded")).toBe(true);
+    });
+
+    act(() => {
+      // Equal timestamp (duplicate delivery).
+      eventCallbacks.get("environment-activity-recorded")?.({
+        payload: {
+          environment_id: environment.id,
+          occurred_at: "2026-07-23T10:00:00.000Z",
+          activity_kind: "completed",
+        },
+      });
+      // Older timestamp (out-of-order delivery).
+      eventCallbacks.get("environment-activity-recorded")?.({
+        payload: {
+          environment_id: environment.id,
+          occurred_at: "2026-07-23T09:00:00.000Z",
+          activity_kind: "completed",
+        },
+      });
+    });
+
+    expect(useUIStore.getState().unreadEnvironmentIds).toEqual([]);
+    expect(useEnvironmentStore.getState().getEnvironmentById(environment.id)?.lastActivityAt)
+      .toBe("2026-07-23T10:00:00.000Z");
+  });
+
   test("ignores malformed backend terminal activity events", async () => {
     const environment = {
       ...makeEnvironment("env-local", ""),

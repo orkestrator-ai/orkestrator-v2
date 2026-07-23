@@ -289,7 +289,7 @@ describe("HierarchicalSidebar", () => {
     expect(rows[1]?.textContent).toContain("Project One");
   });
 
-  test("shows ordered project creation, active count, and waiting count in the activity bar", async () => {
+  test("shows ordered project creation, environment count, and waiting count in the activity bar", async () => {
     const secondProject = { ...project, id: "project-2", name: "Project Two", order: 1 };
     projectsValue = [project, secondProject];
     environmentsValue = [
@@ -321,7 +321,7 @@ describe("HierarchicalSidebar", () => {
 
     render(<HierarchicalSidebar />);
 
-    expect(screen.getByLabelText("3 active environments")).toBeTruthy();
+    expect(screen.getByLabelText("3 environments")).toBeTruthy();
     expect(screen.getByLabelText("1 waiting environment")).toBeTruthy();
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Create environment" }));

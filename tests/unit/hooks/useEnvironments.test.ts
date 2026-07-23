@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, mock } from "bun:test";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
+import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, StartEnvironmentResult } from "../../../apps/web/src/types";
 import { createMockEnvironment } from "../utils/testFactories";
 
@@ -69,6 +70,7 @@ describe("useEnvironments", () => {
       setupScriptsRunning: new Set(),
       sessionActivated: new Set(),
     });
+    useUIStore.setState({ unreadEnvironmentIds: [] });
     useConfigStore.setState({
       config: {
         version: "1.0",
@@ -287,6 +289,58 @@ describe("useEnvironments", () => {
     expect(mockDeleteEnvironment).toHaveBeenCalledWith("env-1");
     expect(result.current.allEnvironments).toHaveLength(0);
     expect(result.current.error).toBeNull();
+  });
+
+  test("deleteEnvironment prunes the deleted environment's unread activity marker", async () => {
+    const existingEnv = createMockEnvironment({ id: "env-1", projectId: "project-1", name: "test-env" });
+
+    useEnvironmentStore.setState({
+      environments: [existingEnv],
+      isLoading: false,
+      error: null,
+    });
+    useUIStore.setState({ unreadEnvironmentIds: ["env-1", "env-keep"] });
+
+    mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
+
+    const { result } = renderHook(() => useEnvironments("project-1"));
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.deleteEnvironment("env-1");
+    });
+
+    expect(useUIStore.getState().unreadEnvironmentIds).toEqual(["env-keep"]);
+  });
+
+  test("deleteEnvironment keeps the unread marker when the backend delete fails", async () => {
+    mockDeleteEnvironment.mockImplementation(() => Promise.reject(new Error("Failed to delete")));
+
+    const existingEnv = createMockEnvironment({ id: "env-1", projectId: "project-1", name: "test-env" });
+
+    useEnvironmentStore.setState({
+      environments: [existingEnv],
+      isLoading: false,
+      error: null,
+    });
+    useUIStore.setState({ unreadEnvironmentIds: ["env-1"] });
+
+    mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
+
+    const { result } = renderHook(() => useEnvironments("project-1"));
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await act(async () => {
+      await expect(result.current.deleteEnvironment("env-1")).rejects.toThrow("Failed to delete");
+    });
+
+    expect(useUIStore.getState().unreadEnvironmentIds).toEqual(["env-1"]);
   });
 
   test("deleteEnvironment sets error on failure", async () => {

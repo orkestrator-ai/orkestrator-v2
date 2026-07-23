@@ -24,6 +24,7 @@ import { stopSession as stopClaudeTmuxSession } from "@/lib/claude-tmux-client";
 import { deleteSession as deleteCodexSession } from "@/lib/codex-client";
 import { deleteSession as deleteOpenCodeSession } from "@/lib/opencode-client";
 import { createUuid } from "@/lib/uuid";
+import { destroyBrowserPreview } from "@/lib/native/browser-preview";
 
 /**
  * Per-environment state for pane layout
@@ -158,6 +159,7 @@ interface PaneLayoutState {
   moveTab: (fromPaneId: string, toPaneId: string, tabId: string, toIndex?: number, environmentId?: string) => void;
   reorderTabs: (paneId: string, fromIndex: number, toIndex: number, environmentId?: string) => void;
   clearTabInitialPrompt: (tabId: string, environmentId?: string) => void;
+  clearTabInitialAgentOptions: (tabId: string, environmentId?: string) => void;
   updateTabNativeSessionId: (tabId: string, sessionId: string | undefined, environmentId?: string) => void;
   updateTabBrowserUrl: (tabId: string, url: string, environmentId?: string) => void;
 
@@ -293,6 +295,13 @@ function cleanupClaudeTmuxTab(envId: string, tabId: string) {
 }
 
 function cleanupTabResources(envId: string, containerId: string | null, tab: TabInfo) {
+  if (tab.type === "browser") {
+    destroyBrowserPreview(tab.id).catch((err) => {
+      console.debug("[PaneLayout] Error destroying browser preview:", err);
+    });
+    return;
+  }
+
   if (TERMINAL_TAB_TYPES.has(tab.type)) {
     cleanupTerminalTab(envId, containerId, tab.id);
     return;
@@ -693,6 +702,36 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     console.debug("[PaneLayout] Cleared initialPrompt for tab:", tabId);
   },
 
+  clearTabInitialAgentOptions: (tabId, environmentId) => {
+    const state = get();
+    const envId = environmentId ?? state.activeEnvironmentId;
+    if (!envId) return;
+
+    const envState = state.environments.get(envId);
+    if (!envState) return;
+
+    const paneWithTab = findPaneWithTab(envState.root, tabId);
+    if (!paneWithTab) return;
+
+    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+      ...leaf,
+      tabs: leaf.tabs.map((tab) =>
+        tab.id === tabId
+          ? {
+              ...tab,
+              initialAgentModel: undefined,
+              initialReasoningEffort: undefined,
+            }
+          : tab
+      ),
+    }));
+
+    const newEnvs = new Map(state.environments);
+    newEnvs.set(envId, { ...envState, root: newRoot });
+    set({ environments: newEnvs });
+    console.debug("[PaneLayout] Cleared initial agent options for tab:", tabId);
+  },
+
   updateTabNativeSessionId: (tabId, sessionId, environmentId) => {
     const state = get();
     const envId = environmentId ?? state.activeEnvironmentId;
@@ -989,6 +1028,13 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
       console.debug("[PaneLayout] Cannot close the only pane");
       return;
     }
+
+    const pane = findLeaf(envState.root, paneId);
+    if (!pane) return;
+
+    pane.tabs.forEach((tab) => {
+      cleanupTabResources(envId, envState.containerId, tab);
+    });
 
     // Find the sibling
     const siblingIndex = parentSplit.children[0].id === paneId ? 1 : 0;

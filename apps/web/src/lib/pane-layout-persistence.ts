@@ -29,7 +29,13 @@ export interface PaneLayoutPersistenceOptions {
 }
 
 function sanitizeTab(tab: TabInfo): TabInfo {
-  const { initialPrompt: _initialPrompt, initialCommands: _initialCommands, ...rest } = tab;
+  const {
+    initialPrompt: _initialPrompt,
+    initialCommands: _initialCommands,
+    initialAgentModel: _initialAgentModel,
+    initialReasoningEffort: _initialReasoningEffort,
+    ...rest
+  } = tab;
 
   if (rest.claudeNativeData) {
     const { hostPort: _hostPort, ...data } = rest.claudeNativeData;

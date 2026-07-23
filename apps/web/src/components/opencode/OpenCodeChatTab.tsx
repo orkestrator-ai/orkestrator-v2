@@ -89,6 +89,8 @@ interface OpenCodeChatTabProps {
   /** Initial prompt to send after session creation */
   initialPrompt?: string;
   isReviewTab?: boolean;
+  initialAgentModel?: string;
+  initialReasoningEffort?: string;
   refreshRequestId?: number;
 }
 
@@ -168,6 +170,8 @@ export function OpenCodeChatTab({
   isActive,
   initialPrompt,
   isReviewTab = false,
+  initialAgentModel,
+  initialReasoningEffort,
   refreshRequestId = 0,
 }: OpenCodeChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
@@ -192,6 +196,13 @@ export function OpenCodeChatTab({
   const isInitializedRef = useRef(false);
   // Track if initial prompt has been sent (to prevent duplicate sends)
   const initialPromptSentRef = useRef(false);
+  const initialLaunchOptionsRef = useRef({
+    model: initialAgentModel,
+    reasoningEffort: initialReasoningEffort,
+  });
+  const initialLaunchOptionsPendingRef = useRef(
+    Boolean(initialAgentModel || initialReasoningEffort),
+  );
   // Track when we are currently draining queued prompts
   const isProcessingQueueRef = useRef(false);
   const lastHandledRefreshRequestIdRef = useRef(0);
@@ -244,7 +255,11 @@ export function OpenCodeChatTab({
     pendingQuestions: pendingQuestionsMap,
   } = useOpenCodeStore();
 
-  const { clearTabInitialPrompt, updateTabNativeSessionId } = usePaneLayoutStore();
+  const {
+    clearTabInitialPrompt,
+    clearTabInitialAgentOptions,
+    updateTabNativeSessionId,
+  } = usePaneLayoutStore();
 
   // Create a unique session key that combines environmentId and tabId
   // This prevents session collisions when multiple environments use the same tab IDs (e.g., "default")
@@ -252,6 +267,12 @@ export function OpenCodeChatTab({
     () => createOpenCodeSessionKey(environmentId, tabId),
     [environmentId, tabId],
   );
+
+  useEffect(() => {
+    if (initialLaunchOptionsPendingRef.current) {
+      clearTabInitialAgentOptions(tabId, environmentId);
+    }
+  }, [clearTabInitialAgentOptions, environmentId, tabId]);
 
   // Get client from Map (shared per environment) - subscribing to the Map ensures re-render on changes
   const client = useMemo(
@@ -597,6 +618,24 @@ export function OpenCodeChatTab({
         // reconnect instantly. This makes environment switching near-instant.
         const existingClient = useOpenCodeStore.getState().clients.get(environmentId);
         const existingSession = useOpenCodeStore.getState().sessions.get(sessionKey);
+        if (existingClient && initialLaunchOptionsPendingRef.current) {
+          const availableModels = useOpenCodeStore.getState().getModels(environmentId);
+          if (availableModels.length > 0) {
+            const { model: resolvedModel, variant: resolvedVariant } =
+              resolveModelSelection({
+                availableModels,
+                defaults: {},
+                preferences: EMPTY_MODEL_PREFERENCES,
+                currentModel: initialLaunchOptionsRef.current.model,
+                currentVariant: initialLaunchOptionsRef.current.reasoningEffort,
+              });
+            if (resolvedModel) setSelectedModel(environmentId, resolvedModel);
+            setSelectedVariant(environmentId, resolvedVariant);
+          }
+          // A warm client cannot safely send an unvalidated modal value. If its
+          // model snapshot is empty, retain the store's existing selection.
+          initialLaunchOptionsPendingRef.current = false;
+        }
         if (existingClient && existingSession?.sessionId) {
           console.debug("[OpenCodeChatTab] Fast reconnect - reusing existing client and session", {
             tabId,
@@ -793,8 +832,11 @@ export function OpenCodeChatTab({
         setModelPreferences(preferences);
 
         // Initialize selected model/variant while preserving valid user-selected values.
-        const currentModel = getSelectedModel(environmentId);
-        const currentVariant = getSelectedVariant(environmentId);
+        const pendingInitialOptions = initialLaunchOptionsPendingRef.current
+          ? initialLaunchOptionsRef.current
+          : undefined;
+        const currentModel = pendingInitialOptions?.model ?? getSelectedModel(environmentId);
+        const currentVariant = pendingInitialOptions?.reasoningEffort ?? getSelectedVariant(environmentId);
         const { model: resolvedModel, variant: resolvedVariant } =
           resolveModelSelection({
             availableModels,
@@ -803,12 +845,13 @@ export function OpenCodeChatTab({
             currentModel,
             currentVariant,
           });
+        initialLaunchOptionsPendingRef.current = false;
 
-        if (resolvedModel && resolvedModel !== currentModel) {
+        if (resolvedModel && resolvedModel !== getSelectedModel(environmentId)) {
           setSelectedModel(environmentId, resolvedModel);
         }
 
-        if (resolvedVariant !== currentVariant) {
+        if (resolvedVariant !== getSelectedVariant(environmentId)) {
           setSelectedVariant(environmentId, resolvedVariant);
         }
 
@@ -1478,9 +1521,21 @@ export function OpenCodeChatTab({
     ) => {
       if (!client || !session) return;
 
-      const selectedModel = options?.model ?? getSelectedModel(environmentId);
-      const selectedVariant =
-        options?.variant ?? getSelectedVariant(environmentId);
+      const hasModelOverride = options
+        ? Object.prototype.hasOwnProperty.call(options, "model")
+        : false;
+      const selectedModelValue = hasModelOverride
+        ? options?.model
+        : getSelectedModel(environmentId);
+      const selectedModel = selectedModelValue === "default"
+        ? undefined
+        : selectedModelValue;
+      const hasVariantOverride = options
+        ? Object.prototype.hasOwnProperty.call(options, "variant")
+        : false;
+      const selectedVariant = hasVariantOverride
+        ? options?.variant
+        : getSelectedVariant(environmentId);
       const selectedMode = options?.mode ?? getSelectedMode(sessionKey);
 
       // Add user message optimistically
@@ -1570,7 +1625,10 @@ export function OpenCodeChatTab({
         text,
         attachments,
         model: getSelectedModel(environmentId),
-        variant: getSelectedVariant(environmentId),
+        variant:
+          initialLaunchOptionsRef.current.model === "default"
+            ? undefined
+            : getSelectedVariant(environmentId),
         mode: getSelectedMode(sessionKey),
       });
     },
@@ -1677,7 +1735,14 @@ export function OpenCodeChatTab({
       clearTabInitialPrompt(tabId, environmentId);
       console.debug("[OpenCodeChatTab] Sending initial prompt for tab:", tabId);
       // Use ref to avoid effect re-running when handleSend changes
-      handleSendRef.current?.(initialPrompt, []);
+      const resolvedModel = getSelectedModel(environmentId);
+      handleSendRef.current?.(initialPrompt, [], {
+        model:
+          initialLaunchOptionsRef.current.model === "default" || resolvedModel === "default"
+            ? undefined
+            : resolvedModel,
+        variant: getSelectedVariant(environmentId),
+      });
     }
   }, [
     connectionState,
@@ -1688,6 +1753,8 @@ export function OpenCodeChatTab({
     tabId,
     clearTabInitialPrompt,
     environmentId,
+    getSelectedModel,
+    getSelectedVariant,
   ]);
 
   // Handle retry connection
@@ -1833,10 +1900,10 @@ export function OpenCodeChatTab({
           currentVariant,
         });
 
-      if (resolvedModel && resolvedModel !== currentModel) {
+      if (resolvedModel && resolvedModel !== getSelectedModel(environmentId)) {
         setSelectedModel(environmentId, resolvedModel);
       }
-      if (resolvedVariant !== currentVariant) {
+      if (resolvedVariant !== getSelectedVariant(environmentId)) {
         setSelectedVariant(environmentId, resolvedVariant);
       }
     } catch (error) {

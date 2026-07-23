@@ -4,11 +4,23 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 const mockCreateClient = mock(() => ({ session: {}, event: {} }));
 const mockCreateSession = mock(async () => ({ id: "review-session", createdAt: "2026-04-15T00:00:00.000Z" }));
 const mockGetSessionMessages = mock(async (): Promise<any[]> => []);
-const mockSendPrompt = mock(async () => ({ success: true }));
+const mockSendPrompt = mock(async (
+  _client: unknown,
+  _sessionId: string,
+  _text: string,
+  _options: unknown,
+): Promise<{ success: boolean; error?: string }> => ({ success: true }));
 const mockAbortSession = mock(async () => true);
 const mockSubscribeToEvents = mock(async () => (async function* () {})());
 const mockReplyToPermission = mock(async () => true);
 const mockRejectQuestion = mock(async () => true);
+const mockGetProjectNotes = mock(async () => ({ content: "" }));
+const mockDetectPr = mock(async () => null as {
+  url: string;
+  state: "open" | "closed" | "merged";
+  hasMergeConflicts: boolean;
+} | null);
+const mockDetectPrLocal = mockDetectPr;
 const originalFetch = globalThis.fetch;
 
 mock.module("@/lib/opencode-client", () => ({
@@ -45,11 +57,11 @@ mock.module("@/components/ui/separator", () => ({
 }));
 
 mock.module("@/lib/backend", () => ({
-  detectPr: mock(async () => null),
-  detectPrLocal: mock(async () => null),
+  detectPr: mockDetectPr,
+  detectPrLocal: mockDetectPrLocal,
   getLocalOpencodeServerStatus: mock(async () => ({ running: true, port: 9999, pid: 1234 })),
   getOpenCodeServerStatus: mock(async () => ({ running: true, hostPort: 9999 })),
-  getProjectNotes: mock(async () => ({ content: "" })),
+  getProjectNotes: mockGetProjectNotes,
   startLocalOpencodeServer: mock(async () => ({ port: 9999, pid: 1234 })),
   startOpenCodeServer: mock(async () => ({ hostPort: 9999 })),
 }));
@@ -209,6 +221,30 @@ function seedVerifyPipeline(
   mockGetSessionMessages.mockResolvedValue([verificationMessage]);
 }
 
+function seedPipelineSessionPhase(
+  pipelinePhase: "reviewing" | "addressing",
+  sessionStatus: "running" | "idle",
+  isLoading: boolean,
+) {
+  seedPipeline("building", sessionStatus);
+  useBuildPipelineStore.setState((state) => {
+    const pipelines = new Map(state.pipelines);
+    const pipeline = pipelines.get(PIPELINE_ID)!;
+    pipelines.set(PIPELINE_ID, {
+      ...pipeline,
+      phase: pipelinePhase,
+      sessions: [{
+        ...pipeline.sessions[0]!,
+        phase: "review",
+        label: "Review Session",
+        status: sessionStatus,
+      }],
+    });
+    return { pipelines };
+  });
+  seedOpenCodeStore(isLoading);
+}
+
 function seedPendingPipeline() {
   useBuildPipelineStore.setState({
     pipelines: new Map([
@@ -292,6 +328,40 @@ function expectTextOrder(...labels: string[]) {
   }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function eventChannel() {
+  const queue: any[] = [];
+  let wake = deferred<void>();
+  let closed = false;
+  const stream = (async function* () {
+    while (!closed) {
+      if (queue.length === 0) await wake.promise;
+      while (queue.length > 0) yield queue.shift();
+    }
+  })();
+  return {
+    stream,
+    push(event: any) {
+      queue.push(event);
+      wake.resolve();
+      wake = deferred<void>();
+    },
+    close() {
+      closed = true;
+      wake.resolve();
+    },
+  };
+}
+
 function resetStores() {
   useBuildPipelineStore.setState({
     pipelines: new Map(),
@@ -363,6 +433,18 @@ describe("OpenCodeBuildChatTab", () => {
     mockSubscribeToEvents.mockClear();
     mockReplyToPermission.mockClear();
     mockRejectQuestion.mockClear();
+    mockGetProjectNotes.mockClear();
+    mockDetectPr.mockClear();
+    mockCreateSession.mockImplementation(async () => ({
+      id: "review-session",
+      createdAt: "2026-04-15T00:00:00.000Z",
+    }));
+    mockGetSessionMessages.mockImplementation(async () => []);
+    mockSendPrompt.mockImplementation(async () => ({ success: true }));
+    mockAbortSession.mockImplementation(async () => true);
+    mockSubscribeToEvents.mockImplementation(async () => (async function* () {})());
+    mockGetProjectNotes.mockImplementation(async () => ({ content: "" }));
+    mockDetectPr.mockImplementation(async () => null);
   });
 
   afterEach(() => {
@@ -730,6 +812,62 @@ describe("OpenCodeBuildChatTab", () => {
     });
   });
 
+  test("rehydrates messages and context usage from events and fails on a session error", async () => {
+    const channel = eventChannel();
+    mockSubscribeToEvents.mockResolvedValueOnce(channel.stream as any);
+    seedPipeline("building", "running");
+    seedOpenCodeStore(true);
+    const refreshedMessage: NativeMessage = {
+      id: "refreshed-message",
+      role: "assistant",
+      content: "Authoritative streamed response",
+      parts: [{ type: "text", content: "Authoritative streamed response" }],
+      createdAt: "2026-04-15T00:00:01.000Z",
+    };
+    mockGetSessionMessages.mockResolvedValue([refreshedMessage]);
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+    await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+    channel.push({
+      type: "message.part.updated",
+      properties: {
+        part: { sessionID: SESSION_ID },
+        usage: { inputTokens: 30, outputTokens: 20 },
+        maxContextTokens: 1_000,
+        model: "openai/gpt-5",
+      },
+    });
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([refreshedMessage]);
+      expect(useOpenCodeStore.getState().contextUsage.get(SESSION_KEY)).toEqual({
+        usedTokens: 50,
+        totalTokens: 1_000,
+        percentUsed: 5,
+        modelId: "openai/gpt-5",
+      });
+    });
+
+    channel.push({
+      type: "session.error",
+      properties: { sessionID: SESSION_ID, error: "stream execution failed" },
+    });
+
+    await waitFor(() => {
+      const session = useOpenCodeStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.isLoading).toBe(false);
+      expect(session?.messages.at(-1)?.content).toBe("stream execution failed");
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("failed");
+      expect(pipeline?.error).toBe("stream execution failed");
+    });
+    act(() => {
+      useOpenCodeStore.getState().closeEventSubscription(ENV_ID);
+      channel.close();
+    });
+  });
+
   test("advances an idle build session into review", async () => {
     seedPipeline("building", "running");
     seedOpenCodeStore(false);
@@ -750,6 +888,283 @@ describe("OpenCodeBuildChatTab", () => {
     );
   });
 
+  test("dispatches and records scoped address-issues commit instructions", async () => {
+    seedPipelineSessionPhase("reviewing", "running", false);
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+    });
+
+    const dispatchedPrompt = mockSendPrompt.mock.calls[0]?.[2] as string;
+    const transcriptPrompt = useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.at(-1)?.content;
+    for (const prompt of [dispatchedPrompt, transcriptPrompt]) {
+      expect(prompt).toContain("git status --porcelain");
+      expect(prompt).toContain("Stage only files that clearly belong to the review fixes");
+      expect(prompt).toContain(".env*");
+      expect(prompt).toContain("leave them uncommitted and report them");
+      expect(prompt).toContain("Do not use `--no-verify`");
+      expect(prompt).not.toContain("do not finish until `git status --porcelain` is clean");
+      expect(prompt).not.toContain("If there are any uncommitted changes, stage and commit them");
+    }
+
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+    expect(pipeline?.phase).toBe("addressing");
+    expect(pipeline?.sessions).toHaveLength(1);
+    expect(pipeline?.sessions[0]?.status).toBe("running");
+    expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+  });
+
+  test("does not start verification while the address-issues prompt is being accepted", async () => {
+    seedPipelineSessionPhase("reviewing", "running", false);
+    let resolvePrompt: ((value: { success: boolean }) => void) | undefined;
+    mockSendPrompt.mockImplementationOnce(
+      () => new Promise<{ success: boolean }>((resolve) => {
+        resolvePrompt = resolve;
+      }),
+    );
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+    expect(pipeline?.phase).toBe("addressing");
+    expect(pipeline?.sessions).toHaveLength(1);
+    expect(mockCreateSession).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolvePrompt?.({ success: true });
+    });
+  });
+
+  test("fails the pipeline when the address-issues prompt is rejected", async () => {
+    seedPipelineSessionPhase("reviewing", "running", false);
+    mockSendPrompt.mockResolvedValueOnce({ success: false, error: "address prompt rejected" });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("failed");
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+    });
+
+    const addressSession = useOpenCodeStore.getState().sessions.get(SESSION_KEY);
+    expect(addressSession?.messages.at(-1)?.content).toBe("address prompt rejected");
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("fails without starting verification when addressing ends with a session error", async () => {
+    seedPipelineSessionPhase("addressing", "running", false);
+    setOpenCodeBuildMessages([{
+      id: "error-addressing",
+      role: "assistant",
+      content: "addressing session failed",
+      parts: [{ type: "text", content: "addressing session failed" }],
+      createdAt: "2026-04-15T00:00:01.000Z",
+    }]);
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("failed");
+      expect(pipeline?.error).toBe("addressing session failed");
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+  });
+
+  test("starts read-only verification with notes and task image after addressing completes", async () => {
+    seedPipelineSessionPhase("addressing", "running", false);
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          taskSnapshot: {
+            ...pipeline.taskSnapshot,
+            images: [{ filename: "acceptance.webp", data: "aW1hZ2U=" }],
+          },
+        }),
+      };
+    });
+    mockGetProjectNotes.mockResolvedValueOnce({ content: "Keep verification scoped to the ticket." });
+    mockCreateSession.mockResolvedValueOnce({
+      id: "verify-session",
+      createdAt: "2026-04-15T00:00:02.000Z",
+    });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("verifying");
+      expect(pipeline?.sessions.at(-1)?.phase).toBe("verify");
+    });
+
+    expect(mockCreateSession).toHaveBeenCalledTimes(1);
+    expect(mockSendPrompt).toHaveBeenCalledWith(
+      expect.anything(),
+      "verify-session",
+      expect.stringContaining("Verification is read-only"),
+      {
+        model: "openai/gpt-5",
+        variant: undefined,
+        mode: "build",
+        attachments: [{
+          type: "image",
+          path: "acceptance.webp",
+          dataUrl: "data:image/webp;base64,aW1hZ2U=",
+          filename: "acceptance.webp",
+        }],
+      },
+    );
+    const verificationPrompt = mockSendPrompt.mock.calls[0]?.[2] as string;
+    expect(verificationPrompt).toContain("Keep verification scoped to the ticket.");
+    expect(verificationPrompt).toContain("Leave secrets, credentials, `.env*` files");
+    expect(verificationPrompt).not.toContain("stage and commit them before continuing");
+  });
+
+  test("falls back to empty project notes when starting verification", async () => {
+    seedPipelineSessionPhase("addressing", "running", false);
+    mockGetProjectNotes.mockRejectedValueOnce(new Error("notes unavailable"));
+    mockCreateSession.mockResolvedValueOnce({
+      id: "verify-session",
+      createdAt: "2026-04-15T00:00:02.000Z",
+    });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+    });
+
+    const verificationPrompt = mockSendPrompt.mock.calls[0]?.[2] as string;
+    expect(verificationPrompt).toContain("Verify the changes on the current branch");
+    expect(verificationPrompt).not.toContain("**Project Notes**");
+    expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase).toBe("verifying");
+  });
+
+  test("fails the pipeline when verification session creation is rejected", async () => {
+    seedPipelineSessionPhase("addressing", "running", false);
+    mockCreateSession.mockRejectedValueOnce(new Error("session creation unavailable"));
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("failed");
+      expect(pipeline?.error).toBe("Failed to create verification session");
+    });
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+  });
+
+  test("fails the pipeline when the verification prompt is rejected", async () => {
+    seedPipelineSessionPhase("addressing", "running", false);
+    mockCreateSession.mockResolvedValueOnce({
+      id: "verify-session",
+      createdAt: "2026-04-15T00:00:02.000Z",
+    });
+    mockSendPrompt.mockResolvedValueOnce({ success: false, error: "verification prompt rejected" });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("failed");
+      expect(pipeline?.error).toBe("Failed to send verification prompt");
+    });
+    const verifySession = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions.at(-1);
+    expect(useOpenCodeStore.getState().sessions.get(verifySession!.sessionKey)?.messages.at(-1)?.content).toBe(
+      "verification prompt rejected",
+    );
+  });
+
+  test("resuming verification with an incompatible session starts a new verify session", async () => {
+    seedPipeline("paused", "idle");
+    seedOpenCodeStore(false);
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          pausedFromPhase: "verifying",
+        }),
+      };
+    });
+    mockCreateSession.mockResolvedValueOnce({
+      id: "verify-session",
+      createdAt: "2026-04-15T00:00:02.000Z",
+    });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByText("Resume"));
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("verifying");
+      expect(pipeline?.sessions).toHaveLength(2);
+      expect(pipeline?.sessions.at(-1)?.phase).toBe("verify");
+    });
+    expect(mockSendPrompt).toHaveBeenCalledWith(
+      expect.anything(),
+      "verify-session",
+      expect.stringContaining("Verification is read-only"),
+      expect.objectContaining({ mode: "build" }),
+    );
+  });
+
+  test("restores the paused jump-in state when sending a message fails", async () => {
+    seedPipeline("paused", "idle");
+    seedOpenCodeStore(false);
+    mockSendPrompt.mockResolvedValueOnce({ success: false, error: "jump-in rejected" });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    const textarea = await screen.findByPlaceholderText("Send a message to the agent...");
+    fireEvent.change(textarea, { target: { value: "Try one more focused check." } });
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" });
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("paused");
+      expect(pipeline?.sessions[0]?.status).toBe("idle");
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+    });
+    expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages.at(-1)?.content).toBe(
+      "jump-in rejected",
+    );
+  });
+
+  test("aborts an in-flight paused jump-in without resuming the pipeline", async () => {
+    seedPipeline("paused", "running");
+    seedOpenCodeStore(true);
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    const stopIcon = await waitFor(() => {
+      const icon = document.querySelector("button svg.lucide-circle-stop");
+      expect(icon).toBeTruthy();
+      return icon!;
+    });
+    fireEvent.click(stopIcon.closest("button")!);
+
+    await waitFor(() => {
+      expect(mockAbortSession).toHaveBeenCalledWith(expect.anything(), SESSION_ID);
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+    });
+    expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase).toBe("paused");
+  });
+
   test("starts PR creation after successful verification", async () => {
     seedVerifyPipeline("All acceptance criteria are satisfied", { complete: true });
 
@@ -761,6 +1176,83 @@ describe("OpenCodeBuildChatTab", () => {
       expect(pipeline?.verificationResult).toBe("pass");
       expect(pipeline?.sessions.at(-1)?.phase).toBe("pr");
     });
+  });
+
+  test("starts conflict resolution when the created PR has merge conflicts", async () => {
+    seedPipeline("building", "running");
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          phase: "creating-pr",
+          sessions: [{
+            ...pipeline.sessions[0]!,
+            phase: "pr",
+            label: "PR Creation Session",
+          }],
+        }),
+      };
+    });
+    seedOpenCodeStore(false);
+    mockDetectPr.mockResolvedValueOnce({
+      url: "https://github.com/example/repo/pull/42",
+      state: "open",
+      hasMergeConflicts: true,
+    });
+    mockCreateSession.mockResolvedValueOnce({
+      id: "conflict-session",
+      createdAt: "2026-04-15T00:00:02.000Z",
+    });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("resolving-conflicts");
+      expect(pipeline?.sessions.at(-1)?.phase).toBe("resolve-conflicts");
+    });
+    expect(mockDetectPr).toHaveBeenCalledWith("container-1", "feature/test");
+    expect(mockSendPrompt).toHaveBeenCalledWith(
+      expect.anything(),
+      "conflict-session",
+      expect.stringContaining("resolve"),
+      expect.objectContaining({ mode: "build" }),
+    );
+  });
+
+  test("fails when conflicts remain after the conflict-resolution session", async () => {
+    seedPipeline("building", "running");
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          phase: "resolving-conflicts",
+          sessions: [{
+            ...pipeline.sessions[0]!,
+            phase: "resolve-conflicts",
+            label: "Conflict Resolution Session",
+          }],
+        }),
+      };
+    });
+    seedOpenCodeStore(false);
+    mockDetectPr.mockResolvedValueOnce({
+      url: "https://github.com/example/repo/pull/42",
+      state: "open",
+      hasMergeConflicts: true,
+    });
+
+    render(<OpenCodeBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("failed");
+      expect(pipeline?.error).toBe("Merge conflicts could not be fully resolved automatically");
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockSendPrompt).not.toHaveBeenCalled();
   });
 
   test("starts a fix session after failed verification below the iteration limit", async () => {

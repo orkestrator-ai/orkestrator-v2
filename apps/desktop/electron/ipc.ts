@@ -1,6 +1,11 @@
 import type { BrowserWindow, OpenDialogOptions } from "electron";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import type { ConnectToRemoteInput, ConnectionList } from "@orkestrator/protocol/connections";
+import type {
+  BrowserPreviewAttachInput,
+  BrowserPreviewBounds,
+  BrowserPreviewState,
+} from "@orkestrator/protocol/browser-preview";
 import { isTrustedRendererUrl } from "./window.js";
 
 type BackendInvoker = {
@@ -35,6 +40,18 @@ type NativeImageLike = {
   createFromDataURL(dataUrl: string): unknown;
 };
 
+export type BrowserPreviewController = {
+  attach(input: BrowserPreviewAttachInput): Promise<BrowserPreviewState>;
+  setBounds(tabId: string, bounds: BrowserPreviewBounds): BrowserPreviewState;
+  setVisible(tabId: string, visible: boolean): BrowserPreviewState | null;
+  navigate(tabId: string, url: string): Promise<BrowserPreviewState>;
+  goBack(tabId: string): BrowserPreviewState;
+  goForward(tabId: string): BrowserPreviewState;
+  reload(tabId: string): BrowserPreviewState;
+  openDevTools(tabId: string): BrowserPreviewState;
+  destroy(tabId: string): void;
+};
+
 export type MainIpcDependencies = {
   getBackend: () => BackendInvoker | null;
   getMainWindow: () => BrowserWindow | null;
@@ -52,8 +69,34 @@ export type MainIpcDependencies = {
   connectToRemote: (input: ConnectToRemoteInput) => Promise<ConnectionList>;
   useConnection: (connectionId: string) => Promise<ConnectionList>;
   forgetConnection: (connectionId: string) => Promise<ConnectionList>;
+  browserPreviews?: BrowserPreviewController;
   trustedRendererUrl: string;
 };
+
+function browserPreviewTabId(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 256) {
+    throw new Error("Expected a browser preview tab ID");
+  }
+  return value;
+}
+
+function browserPreviewUrl(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error("Expected a browser preview URL");
+  }
+  return value;
+}
+
+function browserPreviewBounds(value: unknown): BrowserPreviewBounds {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected browser preview bounds");
+  }
+  const { x, y, width, height } = value as Record<string, unknown>;
+  if (![x, y, width, height].every((item) => typeof item === "number" && Number.isFinite(item))) {
+    throw new Error("Expected finite browser preview bounds");
+  }
+  return { x: x as number, y: y as number, width: width as number, height: height as number };
+}
 
 export function registerMainIpc({
   getBackend,
@@ -72,6 +115,7 @@ export function registerMainIpc({
   connectToRemote,
   useConnection,
   forgetConnection,
+  browserPreviews,
   trustedRendererUrl,
 }: MainIpcDependencies): void {
   const isTrustedSender = (event: IpcEventLike): boolean =>
@@ -184,4 +228,43 @@ export function registerMainIpc({
   });
 
   handle("orkestrator:window:start-dragging", () => undefined);
+
+  const previews = (): BrowserPreviewController => {
+    if (!browserPreviews) throw new Error("Native browser previews are unavailable");
+    return browserPreviews;
+  };
+  handle("orkestrator:browser-preview:attach", (_event, value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("Expected browser preview attachment details");
+    }
+    const { tabId, url, bounds, visible } = value as Record<string, unknown>;
+    if (typeof visible !== "boolean") {
+      throw new Error("Expected a browser preview URL and visibility");
+    }
+    return previews().attach({
+      tabId: browserPreviewTabId(tabId),
+      url: browserPreviewUrl(url),
+      bounds: browserPreviewBounds(bounds),
+      visible,
+    });
+  });
+  handle("orkestrator:browser-preview:set-bounds", (_event, tabId: unknown, bounds: unknown) =>
+    previews().setBounds(browserPreviewTabId(tabId), browserPreviewBounds(bounds)));
+  handle("orkestrator:browser-preview:set-visible", (_event, tabId: unknown, visible: unknown) => {
+    if (typeof visible !== "boolean") throw new Error("Expected browser preview visibility");
+    return previews().setVisible(browserPreviewTabId(tabId), visible);
+  });
+  handle("orkestrator:browser-preview:navigate", (_event, tabId: unknown, url: unknown) => {
+    return previews().navigate(browserPreviewTabId(tabId), browserPreviewUrl(url));
+  });
+  handle("orkestrator:browser-preview:go-back", (_event, tabId: unknown) =>
+    previews().goBack(browserPreviewTabId(tabId)));
+  handle("orkestrator:browser-preview:go-forward", (_event, tabId: unknown) =>
+    previews().goForward(browserPreviewTabId(tabId)));
+  handle("orkestrator:browser-preview:reload", (_event, tabId: unknown) =>
+    previews().reload(browserPreviewTabId(tabId)));
+  handle("orkestrator:browser-preview:open-devtools", (_event, tabId: unknown) =>
+    previews().openDevTools(browserPreviewTabId(tabId)));
+  handle("orkestrator:browser-preview:destroy", (_event, tabId: unknown) =>
+    previews().destroy(browserPreviewTabId(tabId)));
 }

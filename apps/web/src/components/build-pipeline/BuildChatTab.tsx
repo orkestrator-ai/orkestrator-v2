@@ -38,6 +38,7 @@ import {
   createResolveConflictsPrompt,
   createBuildReviewPrompt,
   createBuildPrompt,
+  createAddressIssuesPrompt,
   createVerificationPrompt,
   createFixPrompt,
 } from "@/prompts";
@@ -709,11 +710,12 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       // Set loading for the session
       setSessionLoading(reviewSession.sessionKey, true);
 
+      const addressIssuesPrompt = createAddressIssuesPrompt();
       const userMessage: ClaudeMessageType = {
         id: createUuid(),
         role: "user",
-        content: "Please address all the above issues and test coverage gaps, without asking questions. Make sensible assumptions. Run typechecking and build validation to ensure the changes are valid as appropriate for the project.",
-        parts: [{ type: "text", content: "Please address all the above issues and test coverage gaps, without asking questions. Make sensible assumptions. Run typechecking and build validation to ensure the changes are valid as appropriate for the project." }],
+        content: addressIssuesPrompt,
+        parts: [{ type: "text", content: addressIssuesPrompt }],
         timestamp: new Date().toISOString(),
       };
       addMessage(reviewSession.sessionKey, userMessage);
@@ -790,39 +792,43 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     async (phase: PipelineSession["phase"], iteration: number, label: string): Promise<{ sessionKey: string; sdkSessionId: string } | null> => {
       if (!client || isPipelinePaused()) return null;
 
-      const newSession = await createSession(client);
-      if (!newSession) return null;
-      if (isPipelinePaused()) {
-        try {
-          await abortSession(client, newSession.sessionId);
-        } catch {
-          // Best effort; the session was never attached to the pipeline.
+      try {
+        const newSession = await createSession(client);
+        if (!newSession) return null;
+        if (isPipelinePaused()) {
+          try {
+            await abortSession(client, newSession.sessionId);
+          } catch {
+            // Best effort; the session was never attached to the pipeline.
+          }
+          return null;
         }
+
+        const tabIdForSession = `build-${phase}-${iteration}-${Date.now()}`;
+        const sessionKey = createClaudeSessionKey(environmentId, tabIdForSession);
+
+        setSession(sessionKey, {
+          sessionId: newSession.sessionId,
+          messages: [],
+          isLoading: true,
+        });
+
+        const pSession: PipelineSession = {
+          phase,
+          iteration,
+          sessionKey,
+          sdkSessionId: newSession.sessionId,
+          status: "running",
+          startedAt: new Date().toISOString(),
+          label,
+        };
+
+        addPipelineSession(pipelineId, pSession);
+
+        return { sessionKey, sdkSessionId: newSession.sessionId };
+      } catch {
         return null;
       }
-
-      const tabIdForSession = `build-${phase}-${iteration}-${Date.now()}`;
-      const sessionKey = createClaudeSessionKey(environmentId, tabIdForSession);
-
-      setSession(sessionKey, {
-        sessionId: newSession.sessionId,
-        messages: [],
-        isLoading: true,
-      });
-
-      const pSession: PipelineSession = {
-        phase,
-        iteration,
-        sessionKey,
-        sdkSessionId: newSession.sessionId,
-        status: "running",
-        startedAt: new Date().toISOString(),
-        label,
-      };
-
-      addPipelineSession(pipelineId, pSession);
-
-      return { sessionKey, sdkSessionId: newSession.sessionId };
     },
     [client, environmentId, pipelineId, isPipelinePaused, setSession, addPipelineSession]
   );

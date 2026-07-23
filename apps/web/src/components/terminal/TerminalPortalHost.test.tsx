@@ -34,6 +34,8 @@ let lastPersistentTerminalProps:
       isReviewTab?: boolean;
       isSetupTab?: boolean;
       initialCommands?: string[];
+      initialAgentModel?: string;
+      initialReasoningEffort?: string;
     }
   | undefined;
 
@@ -49,6 +51,8 @@ mock.module("./PersistentTerminal", () => ({
     isReviewTab?: boolean;
     isSetupTab?: boolean;
     initialCommands?: string[];
+    initialAgentModel?: string;
+    initialReasoningEffort?: string;
   }) => {
     lastPersistentTerminalProps = props;
     useEffect(() => {
@@ -321,6 +325,8 @@ describe("TerminalPortalHost", () => {
               id: "default",
               type: "plain",
               isReviewTab: true,
+              initialAgentModel: "review-model",
+              initialReasoningEffort: "high",
             },
           ],
         },
@@ -332,6 +338,8 @@ describe("TerminalPortalHost", () => {
 
     await waitFor(() => {
       expect(lastPersistentTerminalProps?.isReviewTab).toBe(true);
+      expect(lastPersistentTerminalProps?.initialAgentModel).toBe("review-model");
+      expect(lastPersistentTerminalProps?.initialReasoningEffort).toBe("high");
     });
   });
 });

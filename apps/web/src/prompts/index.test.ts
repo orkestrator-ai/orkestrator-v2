@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_REVIEW_PROMPT_TEMPLATE,
   REVIEW_PROMPT_TARGET_BRANCH_TOKEN,
+  createAddressIssuesPrompt,
   createReviewPrompt,
 } from "./index";
 
@@ -12,5 +13,6 @@ describe("prompt public exports", () => {
     expect(createReviewPrompt("develop", "Review {{targetBranch}}.")).toBe(
       "Review develop.",
     );
+    expect(createAddressIssuesPrompt()).toContain("Stage only files that clearly belong");
   });
 });

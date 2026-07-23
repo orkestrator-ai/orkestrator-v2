@@ -235,6 +235,8 @@ function createClaudeNativeLikeTab({
   initialPrompt,
   displayTitle,
   isReviewTab,
+  initialAgentModel,
+  initialReasoningEffort,
 }: {
   id: string;
   nativeBackend: ClaudeNativeBackend;
@@ -244,6 +246,8 @@ function createClaudeNativeLikeTab({
   initialPrompt?: string;
   displayTitle?: string;
   isReviewTab?: boolean;
+  initialAgentModel?: string;
+  initialReasoningEffort?: string;
 }): TabInfo {
   if (nativeBackend === "tmux") {
     return {
@@ -257,6 +261,8 @@ function createClaudeNativeLikeTab({
       initialPrompt,
       displayTitle,
       isReviewTab,
+      initialAgentModel,
+      initialReasoningEffort,
     };
   }
 
@@ -271,6 +277,8 @@ function createClaudeNativeLikeTab({
     initialPrompt,
     displayTitle,
     isReviewTab,
+    initialAgentModel,
+    initialReasoningEffort,
   };
 }
 
@@ -1320,6 +1328,8 @@ export function TerminalContainer({
           initialPrompt: options?.initialPrompt,
           displayTitle: options?.displayTitle,
           isReviewTab: options?.isReviewTab,
+          initialAgentModel: options?.initialAgentModel,
+          initialReasoningEffort: options?.initialReasoningEffort,
         };
         console.debug("[TerminalContainer] Creating opencode-native tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
         addTab(activePaneId, newTab, environmentId);
@@ -1343,6 +1353,8 @@ export function TerminalContainer({
           initialPrompt: options?.initialPrompt,
           displayTitle: options?.displayTitle,
           isReviewTab: options?.isReviewTab,
+          initialAgentModel: options?.initialAgentModel,
+          initialReasoningEffort: options?.initialReasoningEffort,
         });
         console.debug("[TerminalContainer] Creating", newTab.type, "tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
         addTab(activePaneId, newTab, environmentId);
@@ -1361,6 +1373,8 @@ export function TerminalContainer({
           initialPrompt: options?.initialPrompt,
           displayTitle: options?.displayTitle,
           isReviewTab: options?.isReviewTab,
+          initialAgentModel: options?.initialAgentModel,
+          initialReasoningEffort: options?.initialReasoningEffort,
         };
         console.debug("[TerminalContainer] Creating codex-native tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
         addTab(activePaneId, newTab, environmentId);
@@ -1374,6 +1388,8 @@ export function TerminalContainer({
         initialCommands: options?.initialCommands,
         displayTitle: options?.displayTitle,
         isReviewTab: options?.isReviewTab,
+        initialAgentModel: options?.initialAgentModel,
+        initialReasoningEffort: options?.initialReasoningEffort,
       };
 
       console.debug("[TerminalContainer] Creating new tab:", newTabId, "type:", type, "for environment:", environmentId);

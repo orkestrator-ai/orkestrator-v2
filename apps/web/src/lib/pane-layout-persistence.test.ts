@@ -54,6 +54,8 @@ describe("pane layout persistence", () => {
       id: "native",
       type: "claude-native",
       initialPrompt: "do not persist",
+      initialAgentModel: "gpt-5.6-sol",
+      initialReasoningEffort: "xhigh",
       initialCommands: ["do not persist"],
       claudeNativeData: {
         environmentId: "env-1",
@@ -66,6 +68,8 @@ describe("pane layout persistence", () => {
     expect(save).toHaveBeenCalledTimes(1);
     const persisted = save.mock.calls[0]?.[1];
     expect(JSON.stringify(persisted)).not.toContain("initialPrompt");
+    expect(JSON.stringify(persisted)).not.toContain("initialAgentModel");
+    expect(JSON.stringify(persisted)).not.toContain("initialReasoningEffort");
     expect(JSON.stringify(persisted)).not.toContain("initialCommands");
     expect(JSON.stringify(persisted)).not.toContain("hostPort");
     expect(JSON.stringify(persisted)).toContain("session-1");

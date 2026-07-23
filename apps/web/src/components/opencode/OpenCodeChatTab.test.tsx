@@ -1622,6 +1622,12 @@ describe("OpenCodeChatTab", () => {
   test("dispatches the initialPrompt while the OpenCode tab is inactive", async () => {
     const initialPrompt = "Run the background OpenCode dispatch";
     composeText = initialPrompt;
+    useOpenCodeStore.getState().setModels(ENVIRONMENT_ID, [{
+      id: "openai/gpt-5.6-sol",
+      name: "GPT 5.6 Sol",
+      provider: "OpenAI",
+      variants: ["medium", "xhigh"],
+    } as any]);
 
     render(
       <OpenCodeChatTab
@@ -1629,6 +1635,8 @@ describe("OpenCodeChatTab", () => {
         data={createData()}
         isActive={false}
         initialPrompt={initialPrompt}
+        initialAgentModel="openai/gpt-5.6-sol"
+        initialReasoningEffort="xhigh"
       />,
     );
 
@@ -1637,8 +1645,120 @@ describe("OpenCodeChatTab", () => {
         MOCK_CLIENT,
         "session-1",
         initialPrompt,
-        expect.objectContaining({ model: "openai/gpt-5", mode: "build" }),
+        expect.objectContaining({
+          model: "openai/gpt-5.6-sol",
+          variant: "xhigh",
+          mode: "build",
+        }),
       );
+    });
+  });
+
+  test("falls back from a stale one-shot model before dispatching the initial prompt", async () => {
+    const initialPrompt = "Review with a valid model";
+    useOpenCodeStore.getState().setModels(ENVIRONMENT_ID, [{
+      id: "openai/gpt-5",
+      name: "GPT 5",
+      provider: "OpenAI",
+      variants: ["fast"],
+    } as any]);
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        initialPrompt={initialPrompt}
+        initialAgentModel="removed/provider-model"
+        initialReasoningEffort="removed-variant"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        "session-1",
+        initialPrompt,
+        expect.objectContaining({
+          model: "openai/gpt-5",
+          variant: undefined,
+        }),
+      );
+    });
+  });
+
+  test("passes the synthetic default model to the SDK as no explicit override", async () => {
+    const initialPrompt = "Review with the server default";
+    useOpenCodeStore.setState((state) => ({
+      ...state,
+      models: new Map(),
+      selectedModel: new Map([[ENVIRONMENT_ID, "default"]]),
+    }));
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        initialPrompt={initialPrompt}
+        initialAgentModel="default"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        "session-1",
+        initialPrompt,
+        expect.objectContaining({ model: undefined, variant: undefined }),
+      );
+    });
+  });
+
+  test("retains later model choices after a one-shot review tab remounts", async () => {
+    useOpenCodeStore.getState().setModels(ENVIRONMENT_ID, [
+      {
+        id: "openai/review-model",
+        name: "Review Model",
+        provider: "OpenAI",
+        variants: ["deep"],
+      },
+      {
+        id: "openai/user-model",
+        name: "User Model",
+        provider: "OpenAI",
+        variants: ["fast"],
+      },
+    ] as any);
+    const firstMount = render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        initialAgentModel="openai/review-model"
+        initialReasoningEffort="deep"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().getSelectedModel(ENVIRONMENT_ID)).toBe("openai/review-model");
+      expect(useOpenCodeStore.getState().getSelectedVariant(ENVIRONMENT_ID)).toBe("deep");
+    });
+    useOpenCodeStore.getState().setSelectedModel(ENVIRONMENT_ID, "openai/user-model");
+    useOpenCodeStore.getState().setSelectedVariant(ENVIRONMENT_ID, "fast");
+    firstMount.unmount();
+
+    render(
+      <OpenCodeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().getSelectedModel(ENVIRONMENT_ID)).toBe("openai/user-model");
+      expect(useOpenCodeStore.getState().getSelectedVariant(ENVIRONMENT_ID)).toBe("fast");
     });
   });
 

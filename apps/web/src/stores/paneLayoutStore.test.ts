@@ -9,6 +9,7 @@ const deleteCodexSession = mock(async (_client: unknown, _sessionId: string) => 
 const deleteOpenCodeSession = mock(async (_client: unknown, _sessionId: string) => true);
 let consoleDebugSpy: ReturnType<typeof spyOn> | undefined;
 let consoleErrorSpy: ReturnType<typeof spyOn> | undefined;
+const originalOrkestrator = window.orkestrator;
 
 const realBackend = await import("@/lib/backend");
 const realBackendSnapshot = { ...realBackend };
@@ -69,6 +70,7 @@ afterAll(() => {
 });
 
 afterEach(() => {
+  window.orkestrator = originalOrkestrator;
   consoleDebugSpy?.mockRestore();
   consoleErrorSpy?.mockRestore();
   consoleDebugSpy = undefined;
@@ -212,6 +214,34 @@ describe("paneLayoutStore tab cleanup", () => {
     expect(stopTmuxSession).toHaveBeenCalledWith("tab-tmux", "env-local");
   });
 
+  test("closing a browser tab destroys its main-process preview", () => {
+    const destroy = mock(async () => {});
+    window.orkestrator = {
+      browserPreview: { destroy },
+    } as never;
+    seedSingleTabEnvironment("env-browser", null, { id: "browser-tab", type: "browser" });
+
+    usePaneLayoutStore.getState().removeTab("default", "browser-tab");
+
+    expect(destroy).toHaveBeenCalledWith("browser-tab");
+  });
+
+  test("logs browser-preview destruction failures after removing local state", async () => {
+    consoleDebugSpy = spyOn(console, "debug").mockImplementation(() => {});
+    const destroy = mock(async () => { throw new Error("destroy failed"); });
+    window.orkestrator = { browserPreview: { destroy } } as never;
+    seedSingleTabEnvironment("env-browser", null, { id: "browser-tab", type: "browser" });
+
+    usePaneLayoutStore.getState().removeTab("default", "browser-tab");
+    await Promise.resolve();
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-browser")).toEqual([]);
+    expect(consoleDebugSpy).toHaveBeenCalledWith(
+      "[PaneLayout] Error destroying browser preview:",
+      expect.objectContaining({ message: "destroy failed" }),
+    );
+  });
+
   test("closing native agent tabs deletes their backend sessions", () => {
     const tabs = [
       { id: "claude-tab", type: "claude-native" },
@@ -274,6 +304,8 @@ describe("paneLayoutStore tab cleanup", () => {
   });
 
   test("reset cleans up all tab resources for the environment", () => {
+    const destroy = mock(async () => {});
+    window.orkestrator = { browserPreview: { destroy } } as never;
     usePaneLayoutStore.setState({
       activeEnvironmentId: "env-reset",
       environments: new Map([
@@ -289,6 +321,7 @@ describe("paneLayoutStore tab cleanup", () => {
                 { id: "terminal-tab", type: "plain" },
                 { id: "tmux-tab", type: "claude-tmux" },
                 { id: "codex-tab", type: "codex-native" },
+                { id: "browser-tab", type: "browser" },
               ] as any,
               activeTabId: "terminal-tab",
             },
@@ -311,7 +344,50 @@ describe("paneLayoutStore tab cleanup", () => {
     expect(closeLocalTerminalSession).toHaveBeenCalledWith("pty-reset");
     expect(stopTmuxSession).toHaveBeenCalledWith("tmux-tab", "env-reset");
     expect(deleteCodexSession).toHaveBeenCalledWith(expect.anything(), "codex-session");
+    expect(destroy).toHaveBeenCalledWith("browser-tab");
     expect(usePaneLayoutStore.getState().getAllTabs("env-reset")).toEqual([]);
+  });
+
+  test("closing a populated pane cleans up every resource in that pane", () => {
+    const destroy = mock(async () => {});
+    window.orkestrator = { browserPreview: { destroy } } as never;
+    seedPaneTree({
+      kind: "split",
+      id: "split",
+      direction: "horizontal",
+      sizes: [50, 50],
+      depth: 1,
+      children: [
+        {
+          kind: "leaf",
+          id: "closing-pane",
+          tabs: [
+            { id: "browser-tab", type: "browser" },
+            { id: "terminal-tab", type: "plain" },
+          ],
+          activeTabId: "browser-tab",
+        },
+        {
+          kind: "leaf",
+          id: "remaining-pane",
+          tabs: [{ id: "remaining-tab", type: "plain" }],
+          activeTabId: "remaining-tab",
+        },
+      ],
+    }, "closing-pane", "env-close-pane");
+    const terminalKey = createSessionKey(null, "terminal-tab", "env-close-pane");
+    useTerminalSessionStore.getState().setSession(terminalKey, { sessionId: "pty-close-pane" });
+
+    usePaneLayoutStore.getState().closePane("closing-pane", "env-close-pane");
+
+    expect(destroy).toHaveBeenCalledWith("browser-tab");
+    expect(closeLocalTerminalSession).toHaveBeenCalledWith("pty-close-pane");
+    expect(useTerminalSessionStore.getState().sessions.has(terminalKey)).toBe(false);
+    expect(usePaneLayoutStore.getState().getRoot("env-close-pane")).toMatchObject({
+      kind: "leaf",
+      id: "remaining-pane",
+    });
+    expect(usePaneLayoutStore.getState().getActivePaneId("env-close-pane")).toBe("remaining-pane");
   });
 
   test("removing the last tab in the root pane keeps an empty leaf", () => {
@@ -1196,6 +1272,31 @@ describe("paneLayoutStore pane and tab actions", () => {
       type: "plain",
       initialPrompt: undefined,
       initialCommands: ["bun test"],
+    }]);
+  });
+
+  test("consumes one-shot agent options without clearing the pending prompt", () => {
+    seedPaneTree({
+      kind: "leaf",
+      id: "default",
+      tabs: [{
+        id: "review-tab",
+        type: "codex-native",
+        initialPrompt: "Review the diff",
+        initialAgentModel: "gpt-5.6-sol",
+        initialReasoningEffort: "xhigh",
+      }],
+      activeTabId: "review-tab",
+    }, "default", "env-review");
+
+    usePaneLayoutStore.getState().clearTabInitialAgentOptions("review-tab", "env-review");
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-review")).toEqual([{
+      id: "review-tab",
+      type: "codex-native",
+      initialPrompt: "Review the diff",
+      initialAgentModel: undefined,
+      initialReasoningEffort: undefined,
     }]);
   });
 

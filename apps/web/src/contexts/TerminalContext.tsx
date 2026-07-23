@@ -32,6 +32,10 @@ export interface CreateTabOptions {
   isReviewTab?: boolean;
   /** Optional one-shot agent launch mode that overrides repository/global defaults. */
   agentLaunchMode?: AgentLaunchModeOverride;
+  /** Optional one-shot model selection for this agent tab. */
+  initialAgentModel?: string;
+  /** Optional one-shot reasoning effort or provider variant for this agent tab. */
+  initialReasoningEffort?: string;
   /** Initial backend-local address for browser tabs. */
   initialUrl?: string;
 }

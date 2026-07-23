@@ -63,6 +63,11 @@ describe("Electron packaging configuration", () => {
     expect(bootstrapPreload).toContain('window.addEventListener("DOMContentLoaded"');
     expect(desktopMain).toContain("createToolchainProgressController");
     expect(desktopMain).toContain("await toolchainProgress.close()");
+    expect(desktopMain).toContain("initializeBrowserPreviews");
+    expect(desktopMain).toContain("browserPreviewManager = browserPreviewRuntime.manager");
+    expect(desktopMain).toContain("browserPreviews: browserPreviewManager ?? undefined");
+    expect(desktopMain).toContain("registerBrowserPreviewWindowCleanup");
+    expect(desktopMain).toContain("registerBrowserPreviewWindowActivation");
   });
 
   test("uses the Bun-based container image before running the simplified workspace setup", async () => {

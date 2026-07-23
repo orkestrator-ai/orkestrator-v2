@@ -92,6 +92,14 @@ export async function getEnvironment(environmentId: string): Promise<Environment
   return invoke<Environment | null>("get_environment", { environmentId });
 }
 
+/** Persist the latest prompt/completion activity for activity-based sorting. */
+export async function recordEnvironmentActivity(
+  environmentId: string,
+  occurredAt: string,
+): Promise<Environment> {
+  return invoke<Environment>("record_environment_activity", { environmentId, occurredAt });
+}
+
 export async function createEnvironment(
   projectId: string,
   name?: string,

@@ -15,6 +15,7 @@ const addRecentProject = (recentProjectIds: string[], projectId: string): string
   );
 
 export type ProjectBoardTab = "kanban" | "linear" | "features";
+export type EnvironmentSortMode = "project" | "activity";
 
 interface UIState {
   // Sidebar state
@@ -31,6 +32,8 @@ interface UIState {
   selectedEnvironmentIds: string[];
   /** Environment IDs that have their sessions section expanded (collapsed by default) */
   expandedSessionsEnvironments: string[];
+  /** How environments are arranged in the sidebar. */
+  environmentSortMode: EnvironmentSortMode;
   /** Zoom level as a percentage (50-200, default 100) */
   zoomLevel: number;
 
@@ -54,6 +57,7 @@ interface UIState {
   clearMultiSelection: () => void;
   /** Toggle the expanded state of sessions for an environment */
   toggleSessionsExpanded: (environmentId: string) => void;
+  setEnvironmentSortMode: (mode: EnvironmentSortMode) => void;
   /** Check if sessions are expanded for an environment */
   isSessionsExpanded: (environmentId: string) => boolean;
   /** Collapse projects that have no environments (used on initial load) */
@@ -81,6 +85,7 @@ export const useUIStore = create<UIState>()(
       collapsedProjects: [],
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],
+      environmentSortMode: "project",
       zoomLevel: ZOOM_DEFAULT,
 
       // Actions
@@ -148,6 +153,9 @@ export const useUIStore = create<UIState>()(
             : [...state.expandedSessionsEnvironments, environmentId],
         })),
 
+      setEnvironmentSortMode: (mode) =>
+        set({ environmentSortMode: mode }),
+
       isSessionsExpanded: (environmentId) =>
         get().expandedSessionsEnvironments.includes(environmentId),
 
@@ -187,6 +195,7 @@ export const useUIStore = create<UIState>()(
         sidebarWidth: state.sidebarWidth,
         collapsedProjects: state.collapsedProjects,
         recentProjectIds: state.recentProjectIds,
+        environmentSortMode: state.environmentSortMode,
         zoomLevel: state.zoomLevel,
       }),
     }

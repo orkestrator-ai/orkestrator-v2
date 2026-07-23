@@ -328,6 +328,7 @@ export function createEnvironment(
     prState: null,
     hasMergeConflicts: null,
     createdAt: nowIso(),
+    lastActivityAt: undefined,
     createdFromCommit: undefined,
     networkAccessMode: options.networkAccessMode ?? (environmentType === "local" ? "full" : "restricted"),
     allowedDomains: undefined,
@@ -751,6 +752,7 @@ export class StorageService {
         "initialPrompt",
         "pendingRenamePrompt",
         "createdFromCommit",
+        "lastActivityAt",
       ] as const;
       for (const field of stringFields) {
         if (field in updates) {

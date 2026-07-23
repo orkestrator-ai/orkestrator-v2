@@ -1252,6 +1252,31 @@ printf '%s\\n' '{}' > "$out"
     expect(updates).toHaveLength(0);
   });
 
+  test("records only newer environment activity timestamps", async () => {
+    const environment = createEnvironment({
+      lastActivityAt: "2026-07-22T10:00:00.000Z",
+    });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("record_environment_activity")?.(
+      { environmentId: environment.id, occurredAt: "2026-07-23T10:00:00.000Z" },
+      context,
+    )).resolves.toMatchObject({ lastActivityAt: "2026-07-23T10:00:00.000Z" });
+    expect(updates).toEqual([{ lastActivityAt: "2026-07-23T10:00:00.000Z" }]);
+
+    await expect(commands.get("record_environment_activity")?.(
+      { environmentId: environment.id, occurredAt: "2026-07-21T10:00:00.000Z" },
+      context,
+    )).resolves.toBe(environment);
+    expect(updates).toHaveLength(1);
+
+    await expect(commands.get("record_environment_activity")?.(
+      { environmentId: environment.id, occurredAt: "not-a-date" },
+      context,
+    )).rejects.toThrow("occurredAt must be a valid ISO timestamp");
+  });
+
   test("preserves container identity when Docker status reconciliation fails transiently", async () => {
     const environment = createEnvironment({
       status: "running",

@@ -48,6 +48,8 @@ export interface Environment {
   /** Whether the PR has merge conflicts with the target branch */
   hasMergeConflicts: boolean | null;
   createdAt: string;
+  /** Last prompt dispatch or agent completion/waiting transition. */
+  lastActivityAt?: string;
   /** Git commit that this environment was originally created from. */
   createdFromCommit?: string;
   /** Network access mode (defaults to "restricted" for security) */

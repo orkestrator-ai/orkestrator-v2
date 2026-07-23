@@ -57,6 +57,21 @@ type ActivitySourcesByEnvironment = Map<
   Map<ActivitySource, AgentActivityState>
 >;
 
+/**
+ * Activity ordering changes when a prompt starts, work finishes, or an agent
+ * stops to ask for input. Pure teardown transitions are intentionally ignored.
+ */
+export function isEnvironmentActivityTransition(
+  previousState: AgentActivityState,
+  newState: AgentActivityState,
+): boolean {
+  return (
+    newState === "working" ||
+    newState === "waiting" ||
+    (previousState === "working" && newState === "idle")
+  );
+}
+
 function setEnvironmentSourceActivity(
   activitySources: MutableRefObject<ActivitySourcesByEnvironment>,
   environmentId: string,
@@ -167,11 +182,47 @@ function syncClaudeTmuxActivityState(
 export function useGlobalActivityMonitor(): void {
   const environments = useEnvironmentStore((s) => s.environments);
   const setContainerState = useAgentActivityStore((s) => s.setContainerState);
+  const registerStateCallback = useAgentActivityStore((s) => s.registerStateCallback);
+  const unregisterStateCallback = useAgentActivityStore((s) => s.unregisterStateCallback);
   const activitySources = useRef<ActivitySourcesByEnvironment>(new Map());
 
   // Track active pollers and listeners for container environments
   const activePollers = useRef(new Map<string, symbol>());
   const activeListeners = useRef(new Map<string, UnlistenFn>());
+
+  // Persist activity independently of whichever sidebar/chat is mounted. The
+  // backend timestamp is the source of truth; the optimistic store update
+  // keeps an activity-sorted sidebar responsive while the write completes.
+  useEffect(() => {
+    const callbackId = registerStateCallback((activityKey, previousState, newState) => {
+      if (!isEnvironmentActivityTransition(previousState, newState)) return;
+
+      const environmentStore = useEnvironmentStore.getState();
+      const environment = environmentStore.environments.find(
+        (candidate) =>
+          candidate.id === activityKey || candidate.containerId === activityKey,
+      );
+      if (!environment) return;
+
+      const occurredAt = new Date().toISOString();
+      environmentStore.updateEnvironment(environment.id, { lastActivityAt: occurredAt });
+      backend.recordEnvironmentActivity(environment.id, occurredAt)
+        .then((updatedEnvironment) => {
+          useEnvironmentStore.getState().updateEnvironment(
+            updatedEnvironment.id,
+            updatedEnvironment,
+          );
+        })
+        .catch((error) => {
+          console.warn(
+            "[GlobalActivityMonitor] Failed to persist environment activity:",
+            error,
+          );
+        });
+    });
+
+    return () => unregisterStateCallback(callbackId);
+  }, [registerStateCallback, unregisterStateCallback]);
 
   // ── Terminal mode: poll ALL running container environments ──────────
   useEffect(() => {

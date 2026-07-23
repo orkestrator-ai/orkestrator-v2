@@ -2619,6 +2619,20 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     storage.updateEnvironment(asString(environmentId, "environmentId"), { prUrl: null, prState: null, hasMergeConflicts: null }).then(() => undefined),
   );
   register("get_environment_pr_url", async ({ environmentId }, { storage }) => (await storage.getEnvironment(asString(environmentId, "environmentId")))?.prUrl ?? null);
+  register("record_environment_activity", async ({ environmentId, occurredAt }, { storage }) => {
+    const id = asString(environmentId, "environmentId");
+    const activityAt = asString(occurredAt, "occurredAt");
+    const activityTime = Date.parse(activityAt);
+    if (!Number.isFinite(activityTime)) throw new Error("occurredAt must be a valid ISO timestamp");
+
+    const environment = await storage.getEnvironment(id);
+    if (!environment) throw new Error(`Environment not found: ${id}`);
+    const previousTime = environment.lastActivityAt
+      ? Date.parse(environment.lastActivityAt)
+      : Number.NEGATIVE_INFINITY;
+    if (Number.isFinite(previousTime) && previousTime >= activityTime) return environment;
+    return storage.updateEnvironment(id, { lastActivityAt: new Date(activityTime).toISOString() });
+  });
   register("set_environment_setup_complete", async ({ environmentId, complete }, { storage }) => {
     const updated = await storage.updateEnvironment(asString(environmentId, "environmentId"), { setupScriptsComplete: asBoolean(complete) });
     return asBoolean(complete) ? captureCreatedFromCommit(updated, storage) : updated;

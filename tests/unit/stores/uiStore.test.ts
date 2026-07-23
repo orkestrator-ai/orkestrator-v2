@@ -15,6 +15,7 @@ describe("uiStore", () => {
       collapsedProjects: [],
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],
+      environmentSortMode: "project",
       zoomLevel: 100,
     });
   });
@@ -30,6 +31,7 @@ describe("uiStore", () => {
     expect(state.collapsedProjects).toEqual([]);
     expect(state.selectedEnvironmentIds).toEqual([]);
     expect(state.expandedSessionsEnvironments).toEqual([]);
+    expect(state.environmentSortMode).toBe("project");
     expect(state.zoomLevel).toBe(100);
   });
 
@@ -177,6 +179,16 @@ describe("uiStore", () => {
 
     useUIStore.getState().toggleSessionsExpanded("env-1");
     expect(useUIStore.getState().isSessionsExpanded("env-1")).toBe(false);
+  });
+
+  test("sets and persists the environment sort mode", () => {
+    useUIStore.getState().setEnvironmentSortMode("activity");
+
+    expect(useUIStore.getState().environmentSortMode).toBe("activity");
+    const persisted = JSON.parse(localStorage.getItem("ui-storage") ?? "{}") as {
+      state?: Record<string, unknown>;
+    };
+    expect(persisted.state?.environmentSortMode).toBe("activity");
   });
 
   test("setZoomLevel clamps to 50-200", () => {

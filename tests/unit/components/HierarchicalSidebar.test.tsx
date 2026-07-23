@@ -112,6 +112,7 @@ const {
   deleteProjectAndEnvironments,
   resolveSidebarReorder,
   resolveSidebarSelection,
+  sortEnvironmentsByActivity,
 } = await import("../../../apps/web/src/components/sidebar/HierarchicalSidebar");
 
 afterAll(() => {
@@ -183,6 +184,7 @@ describe("HierarchicalSidebar", () => {
       collapsedProjects: [],
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],
+      environmentSortMode: "project",
       zoomLevel: 100,
     });
     useConfigStore.setState((state) => ({
@@ -234,6 +236,68 @@ describe("HierarchicalSidebar", () => {
       cleanup();
       window.orkestrator = originalApi;
     }
+  });
+
+  test("offers project and activity sorting next to refresh and persists the selection", async () => {
+    render(<HierarchicalSidebar />);
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Sort environments: By project" }));
+    expect(await screen.findByRole("menuitemradio", { name: "By project" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "By activity" }));
+
+    await waitFor(() => {
+      expect(useUIStore.getState().environmentSortMode).toBe("activity");
+      expect(screen.getByRole("button", { name: "Sort environments: By activity" })).toBeTruthy();
+    });
+  });
+
+  test("renders the activity view as newest-first two-line environment rows", () => {
+    const secondProject = { ...project, id: "project-2", name: "Project Two", order: 1 };
+    projectsValue = [project, secondProject];
+    environmentsValue = [
+      {
+        ...createdEnvironment,
+        id: "env-older",
+        name: "Older environment",
+        lastActivityAt: "2026-07-20T10:00:00.000Z",
+      },
+      {
+        ...createdEnvironment,
+        id: "env-newer",
+        projectId: "project-2",
+        name: "Newer environment",
+        lastActivityAt: "2026-07-22T10:00:00.000Z",
+      },
+    ];
+    useUIStore.getState().setEnvironmentSortMode("activity");
+
+    render(<HierarchicalSidebar />);
+
+    expect(screen.getByText("Recent activity")).toBeTruthy();
+    const rows = Array.from(
+      screen.getByTestId("activity-environment-list").querySelectorAll("[data-environment-id]"),
+    );
+    expect(rows.map((row) => row.getAttribute("data-environment-id"))).toEqual([
+      "env-newer",
+      "env-older",
+    ]);
+    expect(rows[0]?.textContent).toContain("Newer environment");
+    expect(rows[0]?.textContent).toContain("Project Two");
+    expect(rows[1]?.textContent).toContain("Older environment");
+    expect(rows[1]?.textContent).toContain("Project One");
+  });
+
+  test("sorts missing or equal activity timestamps by the existing sidebar order", () => {
+    const secondProject = { ...project, id: "project-2", order: 1 };
+    const environments = [
+      { ...createdEnvironment, id: "env-2", order: 1 },
+      { ...createdEnvironment, id: "env-3", projectId: "project-2", order: 0 },
+      { ...createdEnvironment, id: "env-1", order: 0 },
+    ];
+
+    expect(sortEnvironmentsByActivity(environments, [project, secondProject]).map((env) => env.id))
+      .toEqual(["env-1", "env-2", "env-3"]);
+    expect(environments.map((env) => env.id)).toEqual(["env-2", "env-3", "env-1"]);
   });
 
   test("reloads the workspace from the refresh button", () => {

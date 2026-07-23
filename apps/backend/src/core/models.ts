@@ -37,6 +37,8 @@ export interface Environment {
   prState: PrState | null;
   hasMergeConflicts: boolean | null;
   createdAt: string;
+  /** Last prompt dispatch or agent completion/waiting transition. */
+  lastActivityAt?: string;
   createdFromCommit?: string;
   networkAccessMode: NetworkAccessMode;
   allowedDomains?: string[];

@@ -10,7 +10,10 @@ import {
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
 import { listen } from "@/lib/native/events";
-import { useGlobalActivityMonitor } from "./useGlobalActivityMonitor";
+import {
+  isEnvironmentActivityTransition,
+  useGlobalActivityMonitor,
+} from "./useGlobalActivityMonitor";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
 import { createClaudeSessionKey, useClaudeStore } from "@/stores/claudeStore";
 import {
@@ -136,6 +139,45 @@ describe("useGlobalActivityMonitor tmux activity", () => {
     cleanup();
     resetStores();
     resetBackendMocks();
+  });
+
+  test("identifies prompt, completion, and waiting transitions as sortable activity", () => {
+    expect(isEnvironmentActivityTransition("idle", "working")).toBe(true);
+    expect(isEnvironmentActivityTransition("working", "idle")).toBe(true);
+    expect(isEnvironmentActivityTransition("working", "waiting")).toBe(true);
+    expect(isEnvironmentActivityTransition("idle", "waiting")).toBe(true);
+    expect(isEnvironmentActivityTransition("waiting", "idle")).toBe(false);
+    expect(isEnvironmentActivityTransition("idle", "idle")).toBe(false);
+  });
+
+  test("persists meaningful environment activity and updates the live snapshot", async () => {
+    const environment = makeEnvironment("env-tmux", "container-tmux");
+    useEnvironmentStore.getState().setEnvironments([environment]);
+    mockInvoke.mockImplementation((command: string, args?: Record<string, unknown>) =>
+      command === "record_environment_activity"
+        ? Promise.resolve({ ...environment, lastActivityAt: args?.occurredAt })
+        : Promise.resolve(),
+    );
+    const stateKey = createClaudeTmuxStateKey("env-tmux", "tab-1");
+    render(<MonitorHarness />);
+
+    act(() => {
+      const store = useClaudeTmuxStore.getState();
+      store.setRunning(stateKey, true, {
+        environmentId: "env-tmux",
+        sessionId: "session-1",
+      });
+      store.setBusy(stateKey, true);
+    });
+
+    await waitFor(() => {
+      expect(useEnvironmentStore.getState().getEnvironmentById("env-tmux")?.lastActivityAt)
+        .toBeTruthy();
+      const activityCall = mockInvoke.mock.calls.find(
+        ([command]) => command === "record_environment_activity",
+      );
+      expect(activityCall?.[1]).toMatchObject({ environmentId: "env-tmux" });
+    });
   });
 
   test("maps a busy Claude tmux tab to working activity for the environment", async () => {

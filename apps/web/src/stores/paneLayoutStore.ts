@@ -158,6 +158,7 @@ interface PaneLayoutState {
   moveTab: (fromPaneId: string, toPaneId: string, tabId: string, toIndex?: number, environmentId?: string) => void;
   reorderTabs: (paneId: string, fromIndex: number, toIndex: number, environmentId?: string) => void;
   clearTabInitialPrompt: (tabId: string, environmentId?: string) => void;
+  clearTabInitialAgentOptions: (tabId: string, environmentId?: string) => void;
   updateTabNativeSessionId: (tabId: string, sessionId: string | undefined, environmentId?: string) => void;
   updateTabBrowserUrl: (tabId: string, url: string, environmentId?: string) => void;
 
@@ -691,6 +692,36 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     newEnvs.set(envId, { ...envState, root: newRoot });
     set({ environments: newEnvs });
     console.debug("[PaneLayout] Cleared initialPrompt for tab:", tabId);
+  },
+
+  clearTabInitialAgentOptions: (tabId, environmentId) => {
+    const state = get();
+    const envId = environmentId ?? state.activeEnvironmentId;
+    if (!envId) return;
+
+    const envState = state.environments.get(envId);
+    if (!envState) return;
+
+    const paneWithTab = findPaneWithTab(envState.root, tabId);
+    if (!paneWithTab) return;
+
+    const newRoot = updateLeaf(envState.root, paneWithTab.id, (leaf) => ({
+      ...leaf,
+      tabs: leaf.tabs.map((tab) =>
+        tab.id === tabId
+          ? {
+              ...tab,
+              initialAgentModel: undefined,
+              initialReasoningEffort: undefined,
+            }
+          : tab
+      ),
+    }));
+
+    const newEnvs = new Map(state.environments);
+    newEnvs.set(envId, { ...envState, root: newRoot });
+    set({ environments: newEnvs });
+    console.debug("[PaneLayout] Cleared initial agent options for tab:", tabId);
   },
 
   updateTabNativeSessionId: (tabId, sessionId, environmentId) => {

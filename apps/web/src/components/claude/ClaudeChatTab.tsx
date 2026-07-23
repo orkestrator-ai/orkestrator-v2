@@ -34,6 +34,7 @@ import {
   type PlanApprovalRequestedEventData,
   type PlanApprovalRespondedEventData,
   type SystemMessageEventData,
+  type ClaudeEffortLevel,
 } from "@/lib/claude-client";
 import { extractContextUsage } from "@/lib/context-usage";
 import {
@@ -63,13 +64,18 @@ interface ClaudeChatTabProps {
   isActive: boolean;
   initialPrompt?: string;
   isReviewTab?: boolean;
+  initialAgentModel?: string;
+  initialReasoningEffort?: string;
   refreshRequestId?: number;
 }
 
 type ConnectionState = "connecting" | "connected" | "error";
 
-function resolvePreferredClaudeModel(models: Array<{ id: string }>): string | undefined {
-  const preferred = useConfigStore.getState().config.global.claudeModel;
+function resolvePreferredClaudeModel(
+  models: Array<{ id: string }>,
+  oneShotModel?: string,
+): string | undefined {
+  const preferred = oneShotModel ?? useConfigStore.getState().config.global.claudeModel;
   return models.some((model) => model.id === preferred)
     ? preferred
     : models[0]?.id;
@@ -81,6 +87,8 @@ export function ClaudeChatTab({
   isActive,
   initialPrompt,
   isReviewTab = false,
+  initialAgentModel,
+  initialReasoningEffort,
   refreshRequestId = 0,
 }: ClaudeChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
@@ -148,6 +156,35 @@ export function ClaudeChatTab({
   // Create a unique session key that combines environmentId and tabId
   // This prevents session collisions when multiple environments use the same tab IDs (e.g., "default")
   const sessionKey = useMemo(() => createClaudeSessionKey(environmentId, tabId), [environmentId, tabId]);
+  const initialLaunchOptionsRef = useRef({
+    model: initialAgentModel,
+    reasoningEffort: initialReasoningEffort,
+  });
+  const initialLaunchModel = initialLaunchOptionsRef.current.model;
+  const initialLaunchReasoningEffort = initialLaunchOptionsRef.current.reasoningEffort;
+  const clearTabInitialAgentOptions = usePaneLayoutStore(
+    (state) => state.clearTabInitialAgentOptions,
+  );
+
+  useEffect(() => {
+    if (!initialLaunchReasoningEffort) return;
+    const supported: ClaudeEffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
+    if (supported.includes(initialLaunchReasoningEffort as ClaudeEffortLevel)) {
+      useClaudeStore.getState().setEffort(sessionKey, initialLaunchReasoningEffort as ClaudeEffortLevel);
+    }
+  }, [initialLaunchReasoningEffort, sessionKey]);
+
+  useEffect(() => {
+    if (initialLaunchModel || initialLaunchReasoningEffort) {
+      clearTabInitialAgentOptions(tabId, environmentId);
+    }
+  }, [
+    clearTabInitialAgentOptions,
+    environmentId,
+    initialLaunchModel,
+    initialLaunchReasoningEffort,
+    tabId,
+  ]);
 
   const seedInitialFastMode = useCallback(() => {
     const claudeState = useClaudeStore.getState();
@@ -489,7 +526,7 @@ export function ClaudeChatTab({
           }
 
           const currentSelectedModel = getSelectedModel(sessionKey);
-          const preferredModel = resolvePreferredClaudeModel(resolvedModels);
+          const preferredModel = resolvePreferredClaudeModel(resolvedModels, initialLaunchModel);
           if (!currentSelectedModel && preferredModel) {
             setSelectedModel(sessionKey, preferredModel);
           }
@@ -627,7 +664,7 @@ export function ClaudeChatTab({
 
         // Set default model if not already selected
         const currentSelectedModel = getSelectedModel(sessionKey);
-        const preferredModel = resolvePreferredClaudeModel(availableModels);
+        const preferredModel = resolvePreferredClaudeModel(availableModels, initialLaunchModel);
         if (!currentSelectedModel && preferredModel) {
           setSelectedModel(sessionKey, preferredModel);
         }

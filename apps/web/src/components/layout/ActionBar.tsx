@@ -8,6 +8,7 @@ import {
   useRef,
   type FocusEvent as ReactFocusEvent,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -77,6 +78,15 @@ import { useKanbanStore, findTaskForEnvironment } from "@/stores/kanbanStore";
 import { getEnvironmentBrowserUrl, getEnvironmentPortAddress } from "@/lib/environment-address";
 import { isGatewayBrowserPreviewSupported } from "@/lib/gateway-url";
 import { cn } from "@/lib/utils";
+import {
+  ReviewLaunchDialog,
+  getReviewAgent,
+  type ReviewLaunchSelection,
+} from "@/components/review/ReviewLaunchDialog";
+import {
+  buildReviewModelCatalog,
+  resolveDefaultReviewTabType,
+} from "@/lib/review-launch-options";
 
 function isEditableShortcutTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
@@ -222,6 +232,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
   const [isMerging, setIsMerging] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
+  const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
+  const reviewLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reviewClickSuppressionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reviewLongPressOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const suppressReviewClickRef = useRef(false);
 
   // Drag-to-scroll state for toolbar
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -314,7 +329,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const defaultAgent = selectedEnvironment?.defaultAgent || config.global.defaultAgent || "claude";
 
   // Handler for code review
-  const handleReview = useCallback((agentOverride?: "claude" | "opencode" | "codex") => {
+  const handleReview = useCallback((
+    agentOverride?: "claude" | "opencode" | "codex",
+    launchOptions?: {
+      agentLaunchMode?: AgentLaunchModeOverride;
+      initialAgentModel?: string;
+      initialReasoningEffort?: string;
+    },
+  ) => {
     if (!createTab || !selectedProjectId || !canCreateTab) return;
 
     const repoConfig = config.repositories[selectedProjectId];
@@ -325,8 +347,69 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       initialPrompt: reviewPrompt,
       displayTitle: "Review",
       isReviewTab: true,
+      ...launchOptions,
     });
   }, [createTab, selectedProjectId, canCreateTab, config.repositories, config.global.reviewPrompt, defaultAgent]);
+
+  const openReviewDialog = useCallback(() => {
+    if (!selectedEnvironment || !canCreateTab) return;
+    setReviewDialogOpen(true);
+  }, [canCreateTab, selectedEnvironment]);
+
+  const clearReviewLongPress = useCallback(() => {
+    if (reviewLongPressTimerRef.current) {
+      clearTimeout(reviewLongPressTimerRef.current);
+      reviewLongPressTimerRef.current = null;
+    }
+    reviewLongPressOriginRef.current = null;
+  }, []);
+
+  useEffect(() => () => {
+    clearReviewLongPress();
+    if (reviewClickSuppressionTimerRef.current) {
+      clearTimeout(reviewClickSuppressionTimerRef.current);
+    }
+  }, [clearReviewLongPress]);
+
+  const handleReviewPointerDown = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.pointerType === "mouse" || !selectedEnvironment || !canCreateTab) return;
+    clearReviewLongPress();
+    reviewLongPressOriginRef.current = { x: event.clientX, y: event.clientY };
+    reviewLongPressTimerRef.current = setTimeout(() => {
+      reviewLongPressTimerRef.current = null;
+      reviewLongPressOriginRef.current = null;
+      suppressReviewClickRef.current = true;
+      reviewClickSuppressionTimerRef.current = setTimeout(() => {
+        suppressReviewClickRef.current = false;
+        reviewClickSuppressionTimerRef.current = null;
+      }, 1_000);
+      openReviewDialog();
+    }, 550);
+  }, [canCreateTab, clearReviewLongPress, openReviewDialog, selectedEnvironment]);
+
+  const handleReviewPointerMove = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    const origin = reviewLongPressOriginRef.current;
+    if (!origin) return;
+    if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 10) {
+      clearReviewLongPress();
+    }
+  }, [clearReviewLongPress]);
+
+  const handleConfiguredReview = useCallback((selection: ReviewLaunchSelection) => {
+    const agent = getReviewAgent(selection.tabType);
+    const agentLaunchMode: AgentLaunchModeOverride = selection.tabType.endsWith("-native")
+      ? "native"
+      : selection.tabType === "claude-tmux"
+        ? "tmux"
+        : "cli";
+
+    handleReview(agent, {
+      agentLaunchMode,
+      initialAgentModel: selection.model,
+      initialReasoningEffort: selection.reasoningEffort,
+    });
+    setReviewDialogOpen(false);
+  }, [handleReview]);
 
   // Load run commands from orkestrator-ai.json when workspace is ready
   useEffect(() => {
@@ -1019,43 +1102,49 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 </ContextMenuContent>
               </ContextMenu>
 
-              <ContextMenu>
-                <ToolbarContextMenuTrigger
-                  tooltip={
-                    <>
-                      <p>Code Review</p>
-                      <p className="text-xs text-muted-foreground">Commit changes and review code</p>
-                      <p className="text-xs text-muted-foreground">⌘R · Right-click for agent</p>
-                    </>
-                  }
-                >
+              <ToolbarTooltipTrigger
+                tooltip={
+                  <>
+                    <p>Code Review</p>
+                    <p className="text-xs text-muted-foreground">Commit changes and review code</p>
+                    <p className="text-xs text-muted-foreground">⌘R · Right-click or long-press to configure</p>
+                  </>
+                }
+              >
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8"
-                    onClick={() => handleReview()}
+                    className="h-8 w-8 touch-manipulation"
+                    onClick={(event) => {
+                      if (suppressReviewClickRef.current) {
+                        suppressReviewClickRef.current = false;
+                        if (reviewClickSuppressionTimerRef.current) {
+                          clearTimeout(reviewClickSuppressionTimerRef.current);
+                          reviewClickSuppressionTimerRef.current = null;
+                        }
+                        event.preventDefault();
+                        return;
+                      }
+                      handleReview();
+                    }}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      clearReviewLongPress();
+                      openReviewDialog();
+                    }}
+                    onPointerDown={handleReviewPointerDown}
+                    onPointerMove={handleReviewPointerMove}
+                    onPointerUp={clearReviewLongPress}
+                    onPointerCancel={clearReviewLongPress}
+                    onPointerLeave={clearReviewLongPress}
+                    data-toolbar-custom-context-menu="true"
                     disabled={!selectedEnvironment || !canCreateTab}
                     aria-label="Code review"
                   >
                     <Eye className="h-4 w-4" />
                     {isGrid && <span className="truncate text-xs">Code review</span>}
                   </Button>
-                </ToolbarContextMenuTrigger>
-                <ContextMenuContent>
-                  <ContextMenuItem onClick={() => handleReview("claude")}>
-                    <ClaudeIcon className="mr-2 h-4 w-4" />
-                    Review with Claude
-                  </ContextMenuItem>
-                  <ContextMenuItem onClick={() => handleReview("opencode")}>
-                    <OpenCodeIcon className="mr-2 h-4 w-4" />
-                    Review with OpenCode
-                  </ContextMenuItem>
-                  <ContextMenuItem onClick={() => handleReview("codex")}>
-                    <CodexIcon className="mr-2 h-4 w-4" />
-                    Review with Codex
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              </ContextMenu>
+              </ToolbarTooltipTrigger>
 
               {/* Play Button - Run Commands */}
               <ContextMenu>
@@ -1534,6 +1623,29 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         </div>
         </div>
       </ToolbarTooltipsEnabledContext.Provider>
+
+      <ReviewLaunchDialog
+        open={reviewDialogOpen}
+        onOpenChange={setReviewDialogOpen}
+        defaultTabType={resolveDefaultReviewTabType({
+          defaultAgent,
+          environment: selectedEnvironment ?? undefined,
+          global: config.global,
+          repositoryConfig: selectedProjectId
+            ? config.repositories[selectedProjectId]
+            : undefined,
+        })}
+        catalog={buildReviewModelCatalog(selectedEnvironmentId ?? undefined)}
+        preferredModels={{
+          claude: config.global.claudeModel,
+          codex: config.global.codexModel,
+          opencode: config.global.opencodeModel,
+        }}
+        preferredReasoningEfforts={{
+          codex: config.global.codexReasoningEffort,
+        }}
+        onConfirm={handleConfiguredReview}
+      />
 
       {/* Settings Dialogs */}
       <SettingsPage open={globalSettingsOpen} onOpenChange={setGlobalSettingsOpen} />

@@ -734,7 +734,25 @@ describe("PersistentTerminal", () => {
     });
   });
 
-  it("launches Codex terminal mode with the initial prompt", async () => {
+  it("launches Codex terminal mode with one-shot model, effort, and prompt", async () => {
+    usePaneLayoutStore.setState((state) => {
+      const environments = new Map(state.environments);
+      const environment = environments.get("env-1")!;
+      if (environment.root.kind !== "leaf") throw new Error("expected leaf");
+      environments.set("env-1", {
+        ...environment,
+        root: {
+          ...environment.root,
+          tabs: environment.root.tabs.map((tab) => ({
+            ...tab,
+            initialAgentModel: "gpt-review",
+            initialReasoningEffort: "high",
+          })),
+        },
+      });
+      return { environments };
+    });
+
     render(
       <PersistentTerminal
         terminalData={createTerminalData()}
@@ -743,6 +761,8 @@ describe("PersistentTerminal", () => {
         containerId="container-1"
         environmentId="env-1"
         initialPrompt={"Fix the failing tests"}
+        initialAgentModel="gpt-review"
+        initialReasoningEffort="high"
         isEnvironmentVisible={true}
         isActive={true}
         isFocused={true}
@@ -752,7 +772,13 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => {
-      expect(writeMock).toHaveBeenCalledWith('codex "Fix the failing tests"\n');
+      expect(writeMock).toHaveBeenCalledWith(
+        'codex --model "gpt-review" --config "model_reasoning_effort=\\"high\\"" "Fix the failing tests"\n',
+      );
+    });
+    expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+      initialAgentModel: undefined,
+      initialReasoningEffort: undefined,
     });
   });
 
@@ -1516,7 +1542,7 @@ describe("PersistentTerminal", () => {
     });
   });
 
-  it("escapes newlines in Codex prompts", async () => {
+  it("preserves newlines in Codex prompts", async () => {
     render(
       <PersistentTerminal
         terminalData={createTerminalData()}
@@ -1534,7 +1560,7 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => {
-      expect(writeMock).toHaveBeenCalledWith('codex "Fix line one\\nand line two"\n');
+      expect(writeMock).toHaveBeenCalledWith('codex "Fix line one\nand line two"\n');
     });
   });
 });

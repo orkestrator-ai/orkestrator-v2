@@ -196,6 +196,8 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isActive={isTabActive && isActive}
                   initialPrompt={tab.initialPrompt}
                   isReviewTab={tab.isReviewTab}
+                  initialAgentModel={tab.initialAgentModel}
+                  initialReasoningEffort={tab.initialReasoningEffort}
                   refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                 />
               </div>
@@ -218,6 +220,8 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isActive={isTabActive && isActive}
                   initialPrompt={tab.initialPrompt}
                   isReviewTab={tab.isReviewTab}
+                  initialAgentModel={tab.initialAgentModel}
+                  initialReasoningEffort={tab.initialReasoningEffort}
                   refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                 />
               </div>
@@ -240,6 +244,8 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isActive={isTabActive && isActive}
                   initialPrompt={tab.initialPrompt}
                   isReviewTab={tab.isReviewTab}
+                  initialAgentModel={tab.initialAgentModel}
+                  initialReasoningEffort={tab.initialReasoningEffort}
                   refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                 />
               </div>
@@ -262,6 +268,8 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                   isActive={isTabActive && isActive}
                   initialPrompt={tab.initialPrompt}
                   isReviewTab={tab.isReviewTab}
+                  initialAgentModel={tab.initialAgentModel}
+                  initialReasoningEffort={tab.initialReasoningEffort}
                   refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                 />
               </div>

@@ -69,6 +69,8 @@ interface CodexChatTabProps {
   isActive: boolean;
   initialPrompt?: string;
   isReviewTab?: boolean;
+  initialAgentModel?: string;
+  initialReasoningEffort?: string;
   refreshRequestId?: number;
 }
 
@@ -87,6 +89,8 @@ export function CodexChatTab({
   isActive,
   initialPrompt,
   isReviewTab = false,
+  initialAgentModel,
+  initialReasoningEffort,
   refreshRequestId = 0,
 }: CodexChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
@@ -115,6 +119,50 @@ export function CodexChatTab({
     () => createCodexSessionKey(environmentId, tabId),
     [environmentId, tabId],
   );
+  const initialLaunchOptionsRef = useRef({
+    model: initialAgentModel,
+    reasoningEffort: initialReasoningEffort,
+  });
+  const initialLaunchModel = initialLaunchOptionsRef.current.model;
+  const initialLaunchReasoningEffort = initialLaunchOptionsRef.current.reasoningEffort;
+  const clearTabInitialAgentOptions = usePaneLayoutStore(
+    (state) => state.clearTabInitialAgentOptions,
+  );
+
+  useEffect(() => {
+    const store = useCodexStore.getState();
+    if (initialLaunchModel) {
+      store.setSelectedModel(sessionKey, initialLaunchModel);
+    }
+    const supported: CodexReasoningEffort[] = [
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ];
+    if (
+      initialLaunchReasoningEffort
+      && supported.includes(initialLaunchReasoningEffort as CodexReasoningEffort)
+    ) {
+      store.setSelectedReasoningEffort(
+        sessionKey,
+        initialLaunchReasoningEffort as CodexReasoningEffort,
+      );
+    }
+    if (initialLaunchModel || initialLaunchReasoningEffort) {
+      clearTabInitialAgentOptions(tabId, environmentId);
+    }
+  }, [
+    clearTabInitialAgentOptions,
+    environmentId,
+    initialLaunchModel,
+    initialLaunchReasoningEffort,
+    sessionKey,
+    tabId,
+  ]);
   const config = useConfigStore((state) => state.config);
   const setConfig = useConfigStore((state) => state.setConfig);
   const persistedPreferencesRef = useRef(getPersistedCodexPreferences(config));

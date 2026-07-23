@@ -1,4 +1,5 @@
 import {
+  getNormalizedClipboardImageDimensions,
   readClipboardImageBlob,
   validateClipboardImageDimensions,
 } from "@/lib/clipboard-image";
@@ -16,22 +17,31 @@ async function decodeImageData(
   image.src = dataUrl;
   await image.decode();
 
-  const decodedDimensions = validateClipboardImageDimensions(image.naturalWidth, image.naturalHeight);
+  const sourceDimensions = validateClipboardImageDimensions(
+    image.naturalWidth,
+    image.naturalHeight,
+  );
   if (
     expectedDimensions &&
-    (decodedDimensions.width !== expectedDimensions.width ||
-      decodedDimensions.height !== expectedDimensions.height)
+    (sourceDimensions.width !== expectedDimensions.width ||
+      sourceDimensions.height !== expectedDimensions.height)
   ) {
     throw new Error("Clipboard image dimensions do not match its encoded metadata");
   }
+  const outputDimensions = getNormalizedClipboardImageDimensions(
+    sourceDimensions.width,
+    sourceDimensions.height,
+  );
 
   const canvas = document.createElement("canvas");
-  canvas.width = decodedDimensions.width;
-  canvas.height = decodedDimensions.height;
+  canvas.width = outputDimensions.width;
+  canvas.height = outputDimensions.height;
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Canvas 2D context is not available");
 
-  context.drawImage(image, 0, 0);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(image, 0, 0, outputDimensions.width, outputDimensions.height);
   return context.getImageData(0, 0, canvas.width, canvas.height);
 }
 
@@ -41,6 +51,9 @@ function createClipboardImage(
 ): ClipboardImage {
   const safeDimensions = dimensions
     ? validateClipboardImageDimensions(dimensions.width, dimensions.height)
+    : undefined;
+  const outputDimensions = safeDimensions
+    ? getNormalizedClipboardImageDimensions(safeDimensions.width, safeDimensions.height)
     : undefined;
   let imageData: ImageData | null = null;
   const getImageData = async () => {
@@ -53,7 +66,7 @@ function createClipboardImage(
       return new Uint8Array((await getImageData()).data);
     },
     async size() {
-      if (safeDimensions) return safeDimensions;
+      if (outputDimensions) return outputDimensions;
       const decoded = await getImageData();
       return { width: decoded.width, height: decoded.height };
     },

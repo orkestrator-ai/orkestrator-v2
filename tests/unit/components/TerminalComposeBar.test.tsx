@@ -334,9 +334,32 @@ describe("Terminal ComposeBar", () => {
 
     await waitFor(() => {
       const attached = useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)[0];
-      expect(attached).toMatchObject({ width: 2896, height: 2896 });
+      expect(attached).toMatchObject({ width: 2000, height: 2000 });
     });
     expect(mockDrawImage).toHaveBeenCalledTimes(1);
+  });
+
+  test("downscales an oversized encoded image and still attaches it", async () => {
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 2000, height: 1000 }),
+    }));
+    HTMLCanvasElement.prototype.toDataURL = function () {
+      return this.width === 2000
+        ? `data:image/png;base64,${"A".repeat(12 * 1024 * 1024)}`
+        : ONE_PIXEL_DATA_URL;
+    };
+    renderComposeBar();
+    getTextarea().focus();
+
+    dispatchPaste();
+
+    await waitFor(() => {
+      const attached = useTerminalSessionStore.getState().getComposeDraftImages(SESSION_KEY)[0];
+      expect(attached?.width).toBeLessThan(2000);
+      expect(attached?.base64Data).toBe("QUJD");
+    });
+    expect(mockDrawImage).toHaveBeenCalled();
   });
 
   test("supports previewing, closing, and removing draft images", () => {

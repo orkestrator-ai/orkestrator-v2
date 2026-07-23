@@ -4,7 +4,12 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { readImage } from "@/lib/native/clipboard";
 import { writeContainerFile, writeLocalFile } from "@/lib/backend";
-import { resizeCanvasIfNeeded } from "@/lib/canvas-utils";
+import {
+  encodeCanvasAsPngWithinSize,
+  MAX_IMAGE_DIMENSION,
+  resizeCanvasIfNeeded,
+  resizeCanvasToMaxDimension,
+} from "@/lib/canvas-utils";
 import { toast } from "sonner";
 import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
 import { getPastedImageBlob } from "@/lib/clipboard-event";
@@ -105,21 +110,19 @@ export function ComposeBar({
       const imageDataObj = new ImageData(new Uint8ClampedArray(rgba), width, height);
       ctx.putImageData(imageDataObj, 0, 0);
 
-      // Resize if needed to fit within RGBA size limit
+      canvas = resizeCanvasToMaxDimension(canvas, MAX_IMAGE_DIMENSION);
       canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
 
-      const dataUrl = canvas.toDataURL("image/png");
-      const base64Data = dataUrl.split(",")[1] || "";
-
-      // Check final PNG size
-      const estimatedSize = (base64Data.length * 3) / 4;
-      if (estimatedSize > MAX_IMAGE_SIZE) {
-        console.error("[ComposeBar] Image too large after encoding");
+      const encodedImage = encodeCanvasAsPngWithinSize(canvas, MAX_IMAGE_SIZE);
+      if (!encodedImage) {
+        console.error("[ComposeBar] Image could not be resized below the attachment limit");
         toast.error("Image too large", {
-          description: `Image is ${(estimatedSize / 1024 / 1024).toFixed(1)}MB. Maximum is 8MB.`,
+          description: "The image could not be resized below the 8MB attachment limit.",
         });
         return;
       }
+      canvas = encodedImage.canvas;
+      const { dataUrl, base64Data } = encodedImage;
 
       // Store final dimensions before cleanup
       const finalWidth = canvas.width;

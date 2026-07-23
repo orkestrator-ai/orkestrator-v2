@@ -24,8 +24,19 @@ type IpcMainLike = {
 type ClipboardLike = {
   readText(): string;
   writeText(text: string): void;
-  readImage(): { isEmpty(): boolean; getSize(): { width: number; height: number }; toDataURL(): string };
+  readImage(): ClipboardNativeImageLike;
   writeImage(image: unknown): void;
+};
+
+type ClipboardNativeImageLike = {
+  isEmpty(): boolean;
+  getSize(): { width: number; height: number };
+  resize(options: {
+    width?: number;
+    height?: number;
+    quality?: "good" | "better" | "best";
+  }): ClipboardNativeImageLike;
+  toDataURL(): string;
 };
 
 type DialogLike = {
@@ -39,6 +50,8 @@ type AppLike = {
 type NativeImageLike = {
   createFromDataURL(dataUrl: string): unknown;
 };
+
+const MAX_CLIPBOARD_TRANSFER_DIMENSION = 2000;
 
 export type BrowserPreviewController = {
   attach(input: BrowserPreviewAttachInput): Promise<BrowserPreviewState>;
@@ -154,8 +167,18 @@ export function registerMainIpc({
     clipboardApi.writeText(typeof text === "string" ? text : "");
   });
   handle("orkestrator:clipboard:read-image", () => {
-    const image = clipboardApi.readImage();
-    if (image.isEmpty()) return null;
+    const clipboardImage = clipboardApi.readImage();
+    if (clipboardImage.isEmpty()) return null;
+    const sourceSize = clipboardImage.getSize();
+    const image = sourceSize.width > MAX_CLIPBOARD_TRANSFER_DIMENSION ||
+      sourceSize.height > MAX_CLIPBOARD_TRANSFER_DIMENSION
+      ? clipboardImage.resize({
+          ...(sourceSize.width >= sourceSize.height
+            ? { width: MAX_CLIPBOARD_TRANSFER_DIMENSION }
+            : { height: MAX_CLIPBOARD_TRANSFER_DIMENSION }),
+          quality: "best",
+        })
+      : clipboardImage;
     const size = image.getSize();
     return {
       width: size.width,

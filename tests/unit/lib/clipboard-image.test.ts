@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   ClipboardImageValidationError,
+  getNormalizedClipboardImageDimensions,
   MAX_CLIPBOARD_IMAGE_BYTES,
   readClipboardImageBlob,
   validateClipboardImageDimensions,
@@ -125,7 +126,16 @@ describe("clipboard image validation", () => {
     await expect(readClipboardImageBlob(new Blob([jpegBytes(10, 0)]))).rejects.toMatchObject({ code: "invalid" });
   });
 
-  test("rejects encoded bytes and decoded dimensions before FileReader allocation", async () => {
+  test("allows sources above the attachment limit so they can be resized", async () => {
+    const sourceBytes = new Uint8Array(9 * 1024 * 1024);
+    sourceBytes.set(pngBytes(9000, 1000));
+
+    await expect(
+      readClipboardImageBlob(new Blob([sourceBytes], { type: "image/png" })),
+    ).resolves.toMatchObject({ width: 9000, height: 1000 });
+  });
+
+  test("rejects extreme source bytes and dimensions before decoding", async () => {
     const arrayBuffer = mock(async () => pngBytes(1, 1).buffer);
     const oversizedBlob = {
       size: MAX_CLIPBOARD_IMAGE_BYTES + 1,
@@ -135,8 +145,8 @@ describe("clipboard image validation", () => {
     await expect(readClipboardImageBlob(oversizedBlob)).rejects.toMatchObject({ code: "too-large" });
     expect(arrayBuffer).not.toHaveBeenCalled();
 
-    await expect(readClipboardImageBlob(new Blob([pngBytes(8193, 1)]))).rejects.toMatchObject({ code: "too-large" });
-    await expect(readClipboardImageBlob(new Blob([pngBytes(4096, 4096)]))).rejects.toMatchObject({ code: "too-large" });
+    await expect(readClipboardImageBlob(new Blob([pngBytes(32769, 1)]))).rejects.toMatchObject({ code: "too-large" });
+    await expect(readClipboardImageBlob(new Blob([pngBytes(9000, 9000)]))).rejects.toMatchObject({ code: "too-large" });
   });
 
   test("validates direct native dimensions", () => {
@@ -144,6 +154,21 @@ describe("clipboard image validation", () => {
     for (const dimensions of [[NaN, 1], [1.5, 2], [-1, 2], [1, 0]] as const) {
       expect(() => validateClipboardImageDimensions(...dimensions)).toThrow(ClipboardImageValidationError);
     }
+  });
+
+  test("calculates bounded output dimensions while preserving aspect ratio", () => {
+    expect(getNormalizedClipboardImageDimensions(1200, 800)).toEqual({
+      width: 1200,
+      height: 800,
+    });
+    expect(getNormalizedClipboardImageDimensions(9000, 1000)).toEqual({
+      width: 2000,
+      height: 222,
+    });
+    expect(getNormalizedClipboardImageDimensions(1000, 9000)).toEqual({
+      width: 222,
+      height: 2000,
+    });
   });
 
   test("surfaces FileReader errors and non-string results", async () => {

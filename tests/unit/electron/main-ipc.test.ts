@@ -16,9 +16,18 @@ function createHarness(options: {
     ? { invoke: mock(async (_command: string, args: Record<string, unknown>) => ({ ok: true, args })) }
     : options.backend;
   const window = options.window === undefined ? { id: 1 } : options.window;
+  const resizedClipboardImage = {
+    isEmpty: mock(() => false),
+    getSize: mock(() => ({ width: 2000, height: 1000 })),
+    resize: mock(() => {
+      throw new Error("already resized");
+    }),
+    toDataURL: mock(() => "data:image/png;base64,resized"),
+  };
   const clipboardImage = {
     isEmpty: mock(() => false),
     getSize: mock(() => ({ width: 16, height: 9 })),
+    resize: mock(() => resizedClipboardImage),
     toDataURL: mock(() => "data:image/png;base64,abc"),
   };
   const nativeImage = { createFromDataURL: mock((dataUrl: string) => ({ dataUrl })) };
@@ -119,7 +128,7 @@ function createHarness(options: {
   const invokeSync = (channel: string, ...args: unknown[]) =>
     invokeSyncFrom(trustedRendererUrl, channel, ...args);
 
-  return { invoke, invokeFrom, invokeSync, invokeSyncFrom, handlers, syncHandlers, backend, window, clipboardApi, clipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled, resetWebClientServe, getGatewayTokenSettings, setGatewayToken, listConnections, connectToRemote, useConnection, forgetConnection, browserPreviews };
+  return { invoke, invokeFrom, invokeSync, invokeSyncFrom, handlers, syncHandlers, backend, window, clipboardApi, clipboardImage, resizedClipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled, resetWebClientServe, getGatewayTokenSettings, setGatewayToken, listConnections, connectToRemote, useConnection, forgetConnection, browserPreviews };
 }
 
 describe("main IPC registration", () => {
@@ -390,6 +399,28 @@ describe("main IPC registration", () => {
     harness.clipboardImage.isEmpty.mockReturnValueOnce(true);
 
     await expect(harness.invoke("orkestrator:clipboard:read-image")).resolves.toBeNull();
+  });
+
+  test("resizes large clipboard images before sending them to the renderer", async () => {
+    const harness = createHarness();
+    harness.clipboardImage.getSize.mockReturnValueOnce({
+      width: 6000,
+      height: 3000,
+    });
+
+    await expect(
+      harness.invoke("orkestrator:clipboard:read-image"),
+    ).resolves.toEqual({
+      width: 2000,
+      height: 1000,
+      dataUrl: "data:image/png;base64,resized",
+    });
+    expect(harness.clipboardImage.resize).toHaveBeenCalledWith({
+      width: 2000,
+      quality: "best",
+    });
+    expect(harness.clipboardImage.toDataURL).not.toHaveBeenCalled();
+    expect(harness.resizedClipboardImage.toDataURL).toHaveBeenCalledTimes(1);
   });
 
   test("uses windowless dialog overloads and safe defaults for malformed utility input", async () => {

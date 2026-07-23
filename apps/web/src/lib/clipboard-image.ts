@@ -1,6 +1,14 @@
-export const MAX_CLIPBOARD_IMAGE_BYTES = 8 * 1024 * 1024;
-export const MAX_CLIPBOARD_IMAGE_PIXELS = 8 * 1024 * 1024;
-export const MAX_CLIPBOARD_IMAGE_DIMENSION = 8192;
+/**
+ * Source-image limits protect the renderer from pathological clipboard
+ * payloads. They are intentionally higher than the final 8MB attachment
+ * limit: normal large screenshots and photos are resized before attachment.
+ */
+export const MAX_CLIPBOARD_IMAGE_BYTES = 64 * 1024 * 1024;
+export const MAX_CLIPBOARD_IMAGE_PIXELS = 64 * 1024 * 1024;
+export const MAX_CLIPBOARD_IMAGE_DIMENSION = 32768;
+
+/** Maximum dimensions exposed to paste consumers after decoding. */
+export const MAX_NORMALIZED_CLIPBOARD_IMAGE_DIMENSION = 2000;
 
 export type ClipboardImageValidationCode = "too-large" | "unsupported" | "invalid";
 
@@ -27,11 +35,33 @@ export function validateClipboardImageDimensions(
     width * height > MAX_CLIPBOARD_IMAGE_PIXELS
   ) {
     throw new ClipboardImageValidationError(
-      `Clipboard image is too large (${width}×${height}); maximum decoded size is 8 megapixels`,
+      `Clipboard image is too large (${width}×${height}); maximum source size is 64 megapixels`,
       "too-large",
     );
   }
   return { width, height };
+}
+
+export function getNormalizedClipboardImageDimensions(
+  width: number,
+  height: number,
+): { width: number; height: number } {
+  const dimensions = validateClipboardImageDimensions(width, height);
+  if (
+    dimensions.width <= MAX_NORMALIZED_CLIPBOARD_IMAGE_DIMENSION &&
+    dimensions.height <= MAX_NORMALIZED_CLIPBOARD_IMAGE_DIMENSION
+  ) {
+    return dimensions;
+  }
+
+  const scale = Math.min(
+    MAX_NORMALIZED_CLIPBOARD_IMAGE_DIMENSION / dimensions.width,
+    MAX_NORMALIZED_CLIPBOARD_IMAGE_DIMENSION / dimensions.height,
+  );
+  return {
+    width: Math.max(1, Math.floor(dimensions.width * scale)),
+    height: Math.max(1, Math.floor(dimensions.height * scale)),
+  };
 }
 
 function isBytes(bytes: Uint8Array, offset: number, expected: readonly number[]): boolean {
@@ -124,7 +154,7 @@ async function readEncodedImageDimensions(blob: Blob): Promise<{ width: number; 
   }
   if (blob.size > MAX_CLIPBOARD_IMAGE_BYTES) {
     throw new ClipboardImageValidationError(
-      `Clipboard image is too large (${(blob.size / 1024 / 1024).toFixed(1)}MB); maximum is 8MB`,
+      `Clipboard image source is too large (${(blob.size / 1024 / 1024).toFixed(1)}MB); maximum source size is 64MB`,
       "too-large",
     );
   }

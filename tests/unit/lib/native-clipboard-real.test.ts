@@ -60,6 +60,48 @@ describe("native clipboard wrapper", () => {
     }
   });
 
+  test("decodes a large browser image directly into bounded dimensions", async () => {
+    const { readImage } = await loadNativeClipboard();
+    const originalImage = globalThis.Image;
+    const originalGetContext = HTMLCanvasElement.prototype.getContext;
+    const drawImage = mock(() => undefined);
+    const getImageData = mock((_x: number, _y: number, width: number, height: number) => ({
+      data: new Uint8ClampedArray(width * height * 4),
+      width,
+      height,
+    }));
+
+    class LargeTestImage {
+      naturalWidth = 9000;
+      naturalHeight = 1000;
+      src = "";
+      async decode() {}
+    }
+    globalThis.Image = LargeTestImage as unknown as typeof Image;
+    HTMLCanvasElement.prototype.getContext = (() => ({
+      drawImage,
+      getImageData,
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+
+    try {
+      const image = await readImage(pngBlob(9000, 1000));
+      await expect(image.size()).resolves.toEqual({ width: 2000, height: 222 });
+      await image.rgba();
+
+      expect(drawImage).toHaveBeenCalledWith(
+        expect.any(LargeTestImage),
+        0,
+        0,
+        2000,
+        222,
+      );
+      expect(getImageData).toHaveBeenCalledWith(0, 0, 2000, 222);
+    } finally {
+      globalThis.Image = originalImage;
+      HTMLCanvasElement.prototype.getContext = originalGetContext;
+    }
+  });
+
   test("uses the preload clipboard bridge when available", async () => {
     const { readText, writeText } = await loadNativeClipboard();
     const readTextMock = mock(async () => "from-native");

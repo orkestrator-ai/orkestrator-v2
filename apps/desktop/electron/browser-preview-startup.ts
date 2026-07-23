@@ -21,12 +21,31 @@ export interface InitializeBrowserPreviewsOptions {
   emitOpenLink: (event: BrowserPreviewOpenLinkEvent) => void;
   openExternal: (url: string) => void;
   writeClipboardText: (text: string) => void;
+  focusAddressBar: (tabId: string) => void;
   getAuthorization: (url: string) => string | null;
 }
 
 export interface BrowserPreviewRuntime {
   manager: BrowserPreviewManager;
   browserSession: Session;
+}
+
+export interface BrowserPreviewAddressFocusOptions {
+  getWindow: () => BrowserWindow | null;
+  emitFocus: (tabId: string) => void;
+}
+
+export function createBrowserPreviewAddressFocusHandler({
+  getWindow,
+  emitFocus,
+}: BrowserPreviewAddressFocusOptions): (tabId: string) => void {
+  return (tabId) => {
+    const window = getWindow();
+    if (window && !window.isDestroyed()) {
+      window.webContents.focus();
+    }
+    emitFocus(tabId);
+  };
 }
 
 export function initializeBrowserPreviews({
@@ -38,6 +57,7 @@ export function initializeBrowserPreviews({
   emitOpenLink,
   openExternal,
   writeClipboardText,
+  focusAddressBar,
   getAuthorization,
 }: InitializeBrowserPreviewsOptions): BrowserPreviewRuntime {
   const browserSession = fromPartition(BROWSER_PREVIEW_PARTITION);
@@ -50,6 +70,7 @@ export function initializeBrowserPreviews({
     emitOpenLink,
     openExternal,
     writeClipboardText,
+    focusAddressBar,
   });
   browserSession.setPermissionCheckHandler(() => false);
   browserSession.setPermissionRequestHandler(

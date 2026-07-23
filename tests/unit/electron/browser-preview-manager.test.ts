@@ -76,6 +76,7 @@ function createHarness() {
   const emitOpenLink = mock(() => undefined);
   const openExternal = mock(() => undefined);
   const writeClipboardText = mock(() => undefined);
+  const focusAddressBar = mock(() => undefined);
   const popup = mock(() => undefined);
   const menuTemplates: MenuItemConstructorOptions[][] = [];
   const menu = {
@@ -93,6 +94,7 @@ function createHarness() {
     emitOpenLink,
     openExternal,
     writeClipboardText,
+    focusAddressBar,
   });
   return {
     manager,
@@ -102,6 +104,7 @@ function createHarness() {
     emitOpenLink,
     openExternal,
     writeClipboardText,
+    focusAddressBar,
     menuTemplates,
     popup,
     window,
@@ -265,6 +268,42 @@ describe("BrowserPreviewManager", () => {
 
     expect(contents.inspectElement).toHaveBeenCalledWith(123, 456);
     expect(harness.views).toHaveLength(1);
+  });
+
+  test("routes Cmd+L and Ctrl+L from the native preview to the app address bar", async () => {
+    const harness = createHarness();
+    await harness.manager.attach(input);
+    const contents = harness.views[0]!.webContents;
+
+    for (const modifiers of [
+      { meta: true, control: false },
+      { meta: false, control: true },
+    ]) {
+      const event = { preventDefault: mock(() => undefined) };
+      contents.emit("before-input-event", event, {
+        type: "keyDown",
+        key: "L",
+        alt: false,
+        shift: false,
+        ...modifiers,
+      });
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    }
+
+    expect(harness.focusAddressBar).toHaveBeenCalledTimes(2);
+    expect(harness.focusAddressBar).toHaveBeenNthCalledWith(1, input.tabId);
+    expect(harness.focusAddressBar).toHaveBeenNthCalledWith(2, input.tabId);
+
+    for (const ignoredInput of [
+      { type: "keyUp", key: "l", meta: true, control: false, alt: false, shift: false },
+      { type: "keyDown", key: "l", meta: true, control: false, alt: false, shift: true },
+      { type: "keyDown", key: "k", meta: true, control: false, alt: false, shift: false },
+    ]) {
+      const event = { preventDefault: mock(() => undefined) };
+      contents.emit("before-input-event", event, ignoredInput);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    }
+    expect(harness.focusAddressBar).toHaveBeenCalledTimes(2);
   });
 
   test("offers link actions that open a preview tab, the external browser, and the clipboard", async () => {

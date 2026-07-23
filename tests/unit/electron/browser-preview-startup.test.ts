@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, mock, test } from "bun:test";
 import { BrowserPreviewManager } from "../../../apps/desktop/electron/browser-preview-manager";
 import {
+  createBrowserPreviewAddressFocusHandler,
   initializeBrowserPreviews,
   registerBrowserPreviewWindowActivation,
   registerBrowserPreviewWindowCleanup,
@@ -55,6 +56,40 @@ class FakeWebContentsView {
 }
 
 describe("browser preview startup wiring", () => {
+  test("focuses a live window and always emits the requested tab", () => {
+    const focus = mock(() => undefined);
+    const emitFocus = mock(() => undefined);
+    let currentWindow: {
+      isDestroyed: () => boolean;
+      webContents: { focus: () => void };
+    } | null = {
+      isDestroyed: () => false,
+      webContents: { focus },
+    };
+    const handleFocus = createBrowserPreviewAddressFocusHandler({
+      getWindow: () => currentWindow as never,
+      emitFocus,
+    });
+
+    handleFocus("browser-live");
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(emitFocus).toHaveBeenLastCalledWith("browser-live");
+
+    currentWindow = {
+      isDestroyed: () => true,
+      webContents: { focus },
+    };
+    handleFocus("browser-destroyed");
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(emitFocus).toHaveBeenLastCalledWith("browser-destroyed");
+
+    currentWindow = null;
+    handleFocus("browser-missing");
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(emitFocus).toHaveBeenLastCalledWith("browser-missing");
+    expect(emitFocus).toHaveBeenCalledTimes(3);
+  });
+
   test("requires scoped visible user activation for clipboard writes and installs preview-only auth", async () => {
     FakeWebContentsView.instances.length = 0;
     let permissionCheck:
@@ -110,6 +145,7 @@ describe("browser preview startup wiring", () => {
     const emitOpenLink = mock(() => undefined);
     const openExternal = mock(() => undefined);
     const writeClipboardText = mock(() => undefined);
+    const focusAddressBar = mock(() => undefined);
     const menuTemplates: Array<
       Array<{ label?: string; click?: (...args: never[]) => void }>
     > = [];
@@ -129,6 +165,7 @@ describe("browser preview startup wiring", () => {
       emitOpenLink,
       openExternal,
       writeClipboardText,
+      focusAddressBar,
       getAuthorization: (url) =>
         url.startsWith("https://desk.example/__orkestrator/")
           ? "Bearer test"
@@ -346,6 +383,18 @@ describe("browser preview startup wiring", () => {
     });
     expect(openExternal).toHaveBeenCalledWith("http://localhost:3000/docs");
     expect(writeClipboardText).toHaveBeenCalledWith("http://localhost:3000/docs");
+
+    const inputEvent = { preventDefault: mock(() => undefined) };
+    previewContents.emit("before-input-event", inputEvent, {
+      type: "keyDown",
+      key: "l",
+      meta: true,
+      control: false,
+      alt: false,
+      shift: false,
+    });
+    expect(inputEvent.preventDefault).toHaveBeenCalledTimes(1);
+    expect(focusAddressBar).toHaveBeenCalledWith("browser-1");
   });
 
   test("destroys previews on close and only clears the window that actually closed", () => {

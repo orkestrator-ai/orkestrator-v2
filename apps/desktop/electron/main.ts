@@ -14,6 +14,7 @@ import { createToolchainBootstrapWindow, reportToolchainProgress } from "./toolc
 import { createToolchainProgressController, preparePinnedToolchains } from "./toolchain-startup.js";
 import type { BrowserPreviewManager } from "./browser-preview-manager.js";
 import {
+  createBrowserPreviewAddressFocusHandler,
   initializeBrowserPreviews,
   registerBrowserPreviewWindowActivation,
   registerBrowserPreviewWindowCleanup,
@@ -199,6 +200,11 @@ async function startApplication(): Promise<void> {
     menu: Menu,
     getWindow: () => mainWindow,
     ...browserPreviewMainAdapters,
+    focusAddressBar: createBrowserPreviewAddressFocusHandler({
+      getWindow: () => mainWindow,
+      emitFocus: (tabId) =>
+        emitToRenderers("browser-preview-focus-address", tabId),
+    }),
     getAuthorization: (url) => connectionManager?.getRendererRequestAuthorization(url) ?? null,
   });
   browserPreviewManager = browserPreviewRuntime.manager;

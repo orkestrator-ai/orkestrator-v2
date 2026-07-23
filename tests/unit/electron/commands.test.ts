@@ -651,6 +651,8 @@ exit 42
       expect(result.name).toBe("20260415-123456");
       expect(result.branch).toBe("20260415-123456");
       expect(result.initialPrompt).toBe("Please review the OAuth callback flow");
+      expect(result.createdAt).toBe("2026-04-15T12:34:56.789Z");
+      expect(result.lastActivityAt).toBe(result.createdAt);
       await expect(fs.readFile(logPath, "utf8")).rejects.toThrow();
     });
   });

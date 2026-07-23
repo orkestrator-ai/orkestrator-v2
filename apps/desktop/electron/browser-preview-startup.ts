@@ -15,6 +15,7 @@ export interface InitializeBrowserPreviewsOptions {
   menu: BrowserPreviewManagerOptions["menu"];
   getWindow: () => BrowserWindow | null;
   emitState: (state: BrowserPreviewState) => void;
+  focusAddressBar: (tabId: string) => void;
   getAuthorization: (url: string) => string | null;
 }
 
@@ -23,12 +24,31 @@ export interface BrowserPreviewRuntime {
   browserSession: Session;
 }
 
+export interface BrowserPreviewAddressFocusOptions {
+  getWindow: () => BrowserWindow | null;
+  emitFocus: (tabId: string) => void;
+}
+
+export function createBrowserPreviewAddressFocusHandler({
+  getWindow,
+  emitFocus,
+}: BrowserPreviewAddressFocusOptions): (tabId: string) => void {
+  return (tabId) => {
+    const window = getWindow();
+    if (window && !window.isDestroyed()) {
+      window.webContents.focus();
+    }
+    emitFocus(tabId);
+  };
+}
+
 export function initializeBrowserPreviews({
   fromPartition,
   WebContentsViewCtor,
   menu,
   getWindow,
   emitState,
+  focusAddressBar,
   getAuthorization,
 }: InitializeBrowserPreviewsOptions): BrowserPreviewRuntime {
   const browserSession = fromPartition(BROWSER_PREVIEW_PARTITION);
@@ -38,6 +58,7 @@ export function initializeBrowserPreviews({
     menu,
     getWindow,
     emitState,
+    focusAddressBar,
   });
   browserSession.setPermissionCheckHandler(() => false);
   browserSession.setPermissionRequestHandler(

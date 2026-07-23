@@ -35,6 +35,7 @@ import {
 } from "@/lib/initial-prompt-attachments";
 import { resolveClaudeConfig } from "@/lib/claude-mode-resolver";
 import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
+import { listenForTerminalBrowserTabRequests } from "@/lib/terminal-links";
 import { createOrkestratorScriptPrompt } from "@/prompts";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { PaneTree } from "@/components/pane-layout";
@@ -79,7 +80,7 @@ const isTabOrTabbar = (collision: Collision): boolean => {
  * When multiple collisions are found, prioritize tabbars/tabs over edge zones
  * to prevent accidental splits when trying to combine tabs.
  */
-const customCollisionDetection: CollisionDetection = (args) => {
+export const customCollisionDetection: CollisionDetection = (args) => {
   // First, check if the pointer is directly over any droppable
   const pointerCollisions = pointerWithin(args);
   if (pointerCollisions.length > 0) {
@@ -177,6 +178,8 @@ export function getTerminalTabDragEndAction({
       return { type: "reorder", paneId: draggedTab.paneId, fromIndex, toIndex };
     }
 
+    if (!getPane(targetPaneId)) return { type: "none" };
+
     return {
       type: "move",
       fromPaneId: draggedTab.paneId,
@@ -216,13 +219,15 @@ export function getTerminalTabDragEndAction({
 
   const targetPane = getPane(overTab.paneId);
   if (!targetPane) return { type: "none" };
+  const toIndex = targetPane.tabs.findIndex((t) => t.id === overTab.tabId);
+  if (toIndex === -1) return { type: "none" };
 
   return {
     type: "move",
     fromPaneId: draggedTab.paneId,
     toPaneId: overTab.paneId,
     tabId: draggedTab.tabId,
-    toIndex: targetPane.tabs.findIndex((t) => t.id === overTab.tabId),
+    toIndex,
   };
 }
 
@@ -389,6 +394,7 @@ export function TerminalContainer({
           console.warn("[setup-terminal] ensureEnvironmentSetup returned no result", {
             environmentId,
           });
+          rerunSetupFetchFailedRef.current = true;
           const store = useEnvironmentStore.getState();
           store.setSetupCommandsResolved(environmentId, true);
           store.setSetupScriptsRunning(environmentId, false);
@@ -1276,6 +1282,70 @@ export function TerminalContainer({
     };
   }, [isActive, setTerminalWrite, activePaneId]);
 
+  const createBrowserTab = useCallback(
+    (
+      initialUrl: string | undefined,
+      targetPaneId = activePaneId,
+      displayTitle?: string,
+    ) => {
+      if (!isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) {
+        return false;
+      }
+
+      const allTabs = getAllTabs(environmentId);
+      if (allTabs.length >= MAX_TABS) {
+        console.debug("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
+        return false;
+      }
+
+      if (!usePaneLayoutStore.getState().getPane(targetPaneId, environmentId)) {
+        return false;
+      }
+
+      const newTabId = createUniqueTabId("tab");
+      const newTab: TabInfo = {
+        id: newTabId,
+        type: "browser",
+        browserData: { url: initialUrl?.trim() ?? "" },
+        displayTitle,
+      };
+      console.debug(
+        "[TerminalContainer] Creating browser tab:",
+        newTabId,
+        "for environment:",
+        environmentId,
+      );
+      addTab(targetPaneId, newTab, environmentId);
+      return true;
+    },
+    [
+      activePaneId,
+      addTab,
+      containerId,
+      environmentId,
+      getAllTabs,
+      isEnvironmentRunning,
+      isLocalEnvironmentReady,
+    ],
+  );
+
+  useEffect(
+    () =>
+      listenForTerminalBrowserTabRequests((request) => {
+        if (request.environmentId !== environmentId) return;
+
+        const pane = usePaneLayoutStore
+          .getState()
+          .findPaneWithTab(request.sourceTabId, environmentId);
+        if (!pane) return;
+
+        if (createBrowserTab(request.url, pane.id)) {
+          usePaneLayoutStore.getState().setActivePane(pane.id, environmentId);
+        }
+      }),
+    [createBrowserTab, environmentId],
+  );
+
   // Handler for creating new terminal tabs
   const handleCreateTab = useCallback(
     (type: CreatableTabType, options?: CreateTabOptions) => {
@@ -1288,20 +1358,16 @@ export function TerminalContainer({
         return;
       }
 
-      const newTabId = createUniqueTabId("tab");
-
       if (type === "browser") {
-        const newTab: TabInfo = {
-          id: newTabId,
-          type,
-          browserData: { url: options?.initialUrl?.trim() ?? "" },
-          displayTitle: options?.displayTitle,
-        };
-        console.debug("[TerminalContainer] Creating browser tab:", newTabId, "for environment:", environmentId);
-        addTab(activePaneId, newTab, environmentId);
+        createBrowserTab(
+          options?.initialUrl,
+          activePaneId,
+          options?.displayTitle,
+        );
         return;
       }
 
+      const newTabId = createUniqueTabId("tab");
       const launchModeOverride = options?.agentLaunchMode;
       const shouldUseOpenCodeNative =
         type === "opencode" &&
@@ -1395,7 +1461,7 @@ export function TerminalContainer({
       console.debug("[TerminalContainer] Creating new tab:", newTabId, "type:", type, "for environment:", environmentId);
       addTab(activePaneId, newTab, environmentId);
     },
-    [containerId, isEnvironmentRunning, activePaneId, addTab, getAllTabs, environmentId, opencodeMode, claudeMode, claudeNativeBackend, codexMode, isLocalEnvironmentReady]
+    [containerId, isEnvironmentRunning, activePaneId, addTab, getAllTabs, environmentId, opencodeMode, claudeMode, claudeNativeBackend, codexMode, isLocalEnvironmentReady, createBrowserTab]
   );
 
   // Handler for creating file viewer tabs

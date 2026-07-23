@@ -587,6 +587,22 @@ function createContainerGhRunner(containerId: string): GhCliRunner {
     dockerExec(containerId, ["gh", ...args].map(quoteShell).join(" "), timeoutMs);
 }
 
+async function markPullRequestReadyIfDraft(prUrl: string, runGh: GhCliRunner): Promise<void> {
+  const draftStatus = (await runGh([
+    "pr",
+    "view",
+    prUrl,
+    "--json",
+    "isDraft",
+    "--jq",
+    ".isDraft",
+  ], 30_000)).trim().toLowerCase();
+
+  if (draftStatus === "true") {
+    await runGh(["pr", "ready", prUrl], 30_000);
+  }
+}
+
 async function loadPullRequestHead(pullEndpoint: string, runGh: GhCliRunner): Promise<GitHubPullRequestHead> {
   const stdout = await runGh(["api", pullEndpoint], 30_000);
   return JSON.parse(stdout) as GitHubPullRequestHead;
@@ -634,6 +650,8 @@ async function mergePullRequestViaGitHubApi(
   const mergeEndpoint = `${pullEndpoint}/merge`;
   const runGh = createLocalGhRunner(cwd);
 
+  await markPullRequestReadyIfDraft(prUrl, runGh);
+
   let head: GitHubPullRequestHead | null = null;
   if (deleteBranch) {
     head = await loadPullRequestHead(pullEndpoint, runGh);
@@ -671,6 +689,8 @@ async function mergePullRequestInContainer(
   const runGh = createContainerGhRunner(containerId);
   const prUrl = (await runGh(["pr", "view", "--json", "url", "--jq", ".url"], 30_000)).trim();
   parseGitHubPullRequestUrl(prUrl);
+
+  await markPullRequestReadyIfDraft(prUrl, runGh);
 
   await runGh([
     "pr",

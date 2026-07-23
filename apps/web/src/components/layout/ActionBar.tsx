@@ -1633,6 +1633,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             <AlertDialogTitle>Merge Pull Request</AlertDialogTitle>
             <AlertDialogDescription>
               This will squash and merge <span className="font-semibold">{sourceBranch}</span> into <span className="font-semibold">{targetBranch}</span>.
+              If the pull request is a draft, it will be marked ready for review first.
               The feature branch will be deleted after merging.
             </AlertDialogDescription>
           </AlertDialogHeader>

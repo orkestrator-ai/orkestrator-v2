@@ -3308,6 +3308,10 @@ if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
   printf '%s\\n' 'https://github.com/acme/repo/pull/42'
   exit 0
 fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'isDraft' '--jq' '.isDraft'" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$command" = "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--squash'" ]; then
   exit 0
 fi
@@ -3329,6 +3333,82 @@ exit 1
     });
   });
 
+  test("marks a draft container PR ready before merging it", async () => {
+    const { context } = createContext(createEnvironment());
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+command=""
+for arg in "$@"; do command="$arg"; done
+if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
+  printf '%s\\n' 'https://github.com/acme/repo/pull/42'
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'isDraft' '--jq' '.isDraft'" ]; then
+  printf '%s\\n' 'true'
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'ready' 'https://github.com/acme/repo/pull/42'" ]; then
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--squash'" ]; then
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'state' '--jq' '.state'" ]; then
+  printf '%s\\n' 'MERGED'
+  exit 0
+fi
+printf 'unexpected docker command: %s\\n' "$command" >&2
+exit 1
+`, async (logs) => {
+      await expect(commands.get("merge_pr")?.(
+        { containerId: "container-1", method: "squash", deleteBranch: false },
+        context,
+      )).resolves.toEqual({ outcome: "merged" });
+
+      const execLog = await fs.readFile(logs.exec, "utf8");
+      const readyCommand = "'gh' 'pr' 'ready' 'https://github.com/acme/repo/pull/42'";
+      const mergeCommand = "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--squash'";
+      expect(execLog).toContain(readyCommand);
+      expect(execLog.indexOf(readyCommand)).toBeLessThan(execLog.indexOf(mergeCommand));
+    });
+  });
+
+  test("stops container merges when draft inspection or readiness fails", async () => {
+    const { context } = createContext(createEnvironment());
+    const commands = createCommandRegistry();
+
+    for (const failure of ["draft-status", "ready"] as const) {
+      await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+command=""
+for arg in "$@"; do command="$arg"; done
+if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
+  printf '%s\\n' 'https://github.com/acme/repo/pull/42'
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'isDraft' '--jq' '.isDraft'" ]; then
+  ${failure === "draft-status" ? "printf 'draft lookup failed\\n' >&2; exit 41" : "printf 'true\\n'; exit 0"}
+fi
+if [ "$command" = "'gh' 'pr' 'ready' 'https://github.com/acme/repo/pull/42'" ]; then
+  printf 'ready failed\\n' >&2
+  exit 42
+fi
+printf 'merge must not be submitted: %s\\n' "$command" >&2
+exit 43
+`, async (logs) => {
+        await expect(commands.get("merge_pr")?.(
+          { containerId: "container-1", method: "squash", deleteBranch: false },
+          context,
+        )).rejects.toThrow(failure === "draft-status" ? "draft lookup failed" : "ready failed");
+
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(execLog).not.toContain("'gh' 'pr' 'merge'");
+      });
+    }
+  });
+
   test("reports a queued container PR as pending when the captured PR remains open", async () => {
     const { context } = createContext(createEnvironment());
     const commands = createCommandRegistry();
@@ -3338,6 +3418,10 @@ command=""
 for arg in "$@"; do command="$arg"; done
 if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
   printf '%s\\n' 'https://github.com/acme/repo/pull/42'
+  exit 0
+fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'isDraft' '--jq' '.isDraft'" ]; then
+  printf '%s\\n' 'false'
   exit 0
 fi
 if [ "$command" = "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--rebase' '--delete-branch'" ]; then
@@ -3368,6 +3452,10 @@ if [ "$command" = "'gh' 'pr' 'view' '--json' 'url' '--jq' '.url'" ]; then
   printf '%s\\n' 'https://github.com/acme/repo/pull/42'
   exit 0
 fi
+if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'isDraft' '--jq' '.isDraft'" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$command" = "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--merge'" ]; then
   exit 0
 fi
@@ -3396,6 +3484,10 @@ exit 1
 
     await withFakeGh(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ] && [ "$3" = "--method" ] && [ "$4" = "PUT" ]; then
   printf '%s\\n' '{"merged":true}'
   exit 0
@@ -3415,6 +3507,119 @@ exit 1
     });
   });
 
+  test("marks a draft local PR ready before merging it through the GitHub API", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-draft-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
+  printf '%s\\n' 'true'
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "ready" ]; then
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
+  printf '%s\\n' '{"merged":true}'
+  exit 0
+fi
+printf 'unexpected gh args: %s\\n' "$*" >&2
+exit 1
+`, async (logPath) => {
+      await expect(commands.get("merge_pr_local")?.(
+        { environmentId: environment.id, method: "squash", deleteBranch: false },
+        context,
+      )).resolves.toEqual({ outcome: "merged" });
+
+      const ghLog = await fs.readFile(logPath, "utf8");
+      const readyCommand = "pr ready https://github.com/acme/repo/pull/42";
+      const mergeCommand = "api repos/acme/repo/pulls/42/merge";
+      expect(ghLog).toContain(readyCommand);
+      expect(ghLog.indexOf(readyCommand)).toBeLessThan(ghLog.indexOf(mergeCommand));
+    });
+  });
+
+  test("stops local merges when draft inspection or readiness fails", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-failure-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    for (const failure of ["draft-status", "ready"] as const) {
+      await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  ${failure === "draft-status" ? "printf 'draft lookup failed\\n' >&2; exit 41" : "printf 'true\\n'; exit 0"}
+fi
+if [ "$1" = "pr" ] && [ "$2" = "ready" ]; then
+  printf 'ready failed\\n' >&2
+  exit 42
+fi
+printf 'merge must not be submitted: %s\\n' "$*" >&2
+exit 43
+`, async (logPath) => {
+        await expect(commands.get("merge_pr_local")?.(
+          { environmentId: environment.id, method: "squash", deleteBranch: false },
+          context,
+        )).rejects.toThrow(failure === "draft-status" ? "draft lookup failed" : "ready failed");
+
+        const ghLog = await fs.readFile(logPath, "utf8");
+        expect(ghLog).not.toContain("api repos/acme/repo/pulls/42/merge");
+      });
+    }
+  });
+
+  test("treats empty, null, and non-boolean draft output as non-draft", async () => {
+    const worktreePath = await createTempDir("ork-electron-merge-malformed-draft-worktree-");
+    const environment = createEnvironment({
+      worktreePath,
+      prUrl: "https://github.com/acme/repo/pull/42",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const previousStatus = process.env.FAKE_DRAFT_STATUS;
+
+    try {
+      for (const status of ["", "null", "unexpected"]) {
+        process.env.FAKE_DRAFT_STATUS = status;
+        await withFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' "$FAKE_DRAFT_STATUS"
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
+  printf '%s\\n' '{"merged":true}'
+  exit 0
+fi
+printf 'unexpected gh args: %s\\n' "$*" >&2
+exit 1
+`, async (logPath) => {
+          await expect(commands.get("merge_pr_local")?.(
+            { environmentId: environment.id, method: "squash", deleteBranch: false },
+            context,
+          )).resolves.toEqual({ outcome: "merged" });
+
+          const ghLog = await fs.readFile(logPath, "utf8");
+          expect(ghLog).not.toContain("pr ready");
+          expect(ghLog).toContain("api repos/acme/repo/pulls/42/merge");
+        });
+      }
+    } finally {
+      if (previousStatus === undefined) delete process.env.FAKE_DRAFT_STATUS;
+      else process.env.FAKE_DRAFT_STATUS = previousStatus;
+    }
+  });
+
   test("deletes the remote head branch after local API merge when requested", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-delete-worktree-");
     const environment = createEnvironment({
@@ -3426,6 +3631,10 @@ exit 1
 
     await withFakeGh(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ] && [ "$3" = "" ]; then
   printf '%s\\n' '{"head":{"ref":"feature/local-work","repo":{"full_name":"acme/repo"}}}'
   exit 0
@@ -3464,6 +3673,10 @@ exit 1
 
     await withFakeGh(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ] && [ "$3" = "--method" ] && [ "$4" = "PUT" ]; then
   printf '%s\\n' '{"merged":true}'
   exit 0
@@ -3492,6 +3705,10 @@ exit 1
 
     await withFakeGh(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
   printf '%s\\n' '{"merged":false,"message":"Merge is pending"}'
   exit 0
@@ -3516,6 +3733,10 @@ exit 1
     const commands = createCommandRegistry();
 
     await withFakeGh(`#!/bin/sh
+if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
   printf '%s\\n' 'not-json'
   exit 0
@@ -3581,6 +3802,10 @@ exit 1
 
     await withFakeGh(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ] && [ "$3" = "" ]; then
   printf '%s\\n' '{"head":{"ref":"feature/already-deleted","repo":{"full_name":"acme/repo"}}}'
   exit 0
@@ -3617,6 +3842,10 @@ exit 1
 
     await withFakeGh(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
+  printf '%s\\n' 'false'
+  exit 0
+fi
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ] && [ "$3" = "" ]; then
   printf '%s\\n' '{"head":{"ref":"feature/protected","repo":{"full_name":"acme/repo"}}}'
   exit 0
@@ -4431,6 +4660,306 @@ exit 0
     expect(spawnCall?.[2]).toMatchObject({
       cols: 100,
       rows: 32,
+    });
+  });
+});
+
+describe("environment status and settings commands", () => {
+  test("synchronizes individual and all stored environment statuses", async () => {
+    const local = createEnvironment({ id: "env-local", environmentType: "local", containerId: null });
+    const missingContainer = createEnvironment({
+      id: "env-missing",
+      environmentType: "containerized",
+      containerId: "container-missing",
+    });
+    const { context, updates } = createContext([local, missingContainer]);
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("sync_environment_status")?.({ environmentId: local.id }, context)).resolves.toEqual(local);
+    await expect(commands.get("sync_environment_status")?.({ environmentId: "unknown" }, context))
+      .rejects.toThrow("Environment not found: unknown");
+    await withFakeDocker(`#!/bin/sh
+printf 'Error: No such object: %s\\n' "$4" >&2
+exit 1
+`, async () => {
+      await expect(commands.get("sync_all_environments_with_docker")?.({}, context)).resolves.toEqual(["env-missing"]);
+    });
+    expect(updates).toContainEqual({ status: "stopped", containerId: null });
+  });
+
+  test("stops local and container environments and treats recreation without a container as a no-op", async () => {
+    const local = createEnvironment({ id: "env-local", environmentType: "local", containerId: null });
+    const container = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+    });
+    const { context, updates } = createContext([local, container]);
+    const commands = createCommandRegistry();
+
+    await commands.get("stop_environment")?.({ environmentId: local.id }, context);
+    expect(updates).toContainEqual({ status: "stopped" });
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+exit 0
+`, async (logs) => {
+      await commands.get("stop_environment")?.({ environmentId: container.id }, context);
+      expect(await fs.readFile(logs.all, "utf8")).toContain("stop container-1");
+    });
+    await expect(commands.get("recreate_environment")?.({ environmentId: local.id }, context)).resolves.toBeUndefined();
+  });
+
+  test("stores PR metadata, normalized settings, and deduplicated domain changes", async () => {
+    const environment = createEnvironment({ allowedDomains: ["api.example.com", "shared.example.com"] });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await commands.get("set_environment_pr")?.({
+      environmentId: environment.id,
+      prUrl: "https://github.com/acme/repo/pull/42",
+      prState: "open",
+      hasMergeConflicts: false,
+    }, context);
+    expect(updates).toContainEqual({
+      prUrl: "https://github.com/acme/repo/pull/42",
+      prState: "open",
+      hasMergeConflicts: false,
+    });
+    await expect(commands.get("get_environment_pr_url")?.({ environmentId: environment.id }, context))
+      .resolves.toBe("https://github.com/acme/repo/pull/42");
+    await commands.get("clear_environment_pr")?.({ environmentId: environment.id }, context);
+    expect(updates).toContainEqual({ prUrl: null, prState: null, hasMergeConflicts: null });
+    await expect(commands.get("get_environment_pr_url")?.({ environmentId: "missing" }, context)).resolves.toBeNull();
+
+    await commands.get("update_port_mappings")?.({
+      environmentId: environment.id,
+      portMappings: [{ hostPort: 3000, containerPort: 3001, protocol: "tcp" }],
+    }, context);
+    expect(updates).toContainEqual({
+      portMappings: [{ hostPort: 3000, containerPort: 3001, protocol: "tcp" }],
+    });
+    await commands.get("update_port_mappings")?.({ environmentId: environment.id, portMappings: null }, context);
+    expect(updates).toContainEqual({ portMappings: [] });
+    await commands.get("update_environment_agent_settings")?.({
+      environmentId: environment.id,
+      defaultAgent: "codex",
+      claudeMode: "native",
+      claudeNativeBackend: "bridge",
+      opencodeMode: "native",
+      codexMode: "native",
+    }, context);
+    expect(updates).toContainEqual({
+      defaultAgent: "codex",
+      claudeMode: "native",
+      claudeNativeBackend: "bridge",
+      opencodeMode: "native",
+      codexMode: "native",
+    });
+    await commands.get("update_environment_allowed_domains")?.({
+      environmentId: environment.id,
+      domains: ["one.example.com", "two.example.com"],
+    }, context);
+    expect(updates).toContainEqual({ allowedDomains: ["one.example.com", "two.example.com"] });
+
+    environment.allowedDomains = ["api.example.com", "shared.example.com"];
+    await expect(commands.get("add_environment_domains")?.({
+      environmentId: environment.id,
+      domains: ["shared.example.com", "new.example.com"],
+    }, context)).resolves.toBe("api.example.com,shared.example.com,new.example.com");
+    expect(updates).toContainEqual({
+      allowedDomains: ["api.example.com", "shared.example.com", "new.example.com"],
+    });
+    await expect(commands.get("remove_environment_domains")?.({
+      environmentId: environment.id,
+      domains: ["shared.example.com"],
+    }, context)).resolves.toBe("api.example.com,new.example.com");
+    await expect(commands.get("add_environment_domains")?.({
+      environmentId: "missing",
+      domains: [],
+    }, context)).rejects.toThrow("Environment not found: missing");
+    await expect(commands.get("remove_environment_domains")?.({
+      environmentId: "missing",
+      domains: [],
+    }, context)).rejects.toThrow("Environment not found: missing");
+  });
+});
+
+describe("storage-backed command delegation", () => {
+  test("validates and delegates project and configuration commands", async () => {
+    const { worktree, remote } = await createGitWorktreeWithOrigin();
+    const project = { id: "project-1", name: "repo" };
+    const config = { version: "1.0.0", global: { allowedDomains: [] }, repositories: {} };
+    const repositoryConfig = { defaultBranch: "develop", prBaseBranch: "develop" };
+    const storage = {
+      loadProjects: mock(async () => [project]),
+      addProject: mock(async (value: Record<string, unknown>) => value),
+      removeProject: mock(async (id: string) => id),
+      getProject: mock(async () => project),
+      updateProject: mock(async (_id: string, updates: Record<string, unknown>) => updates),
+      reorderProjects: mock(async (ids: string[]) => ids),
+      loadConfig: mock(async () => config),
+      saveConfig: mock(async (value: unknown) => value),
+      updateGlobalConfig: mock(async (value: unknown) => value),
+      getRepositoryConfig: mock(async () => repositoryConfig),
+      updateRepositoryConfig: mock(async (_id: string, value: unknown) => value),
+    };
+    const context = { storage } as unknown as CommandContext;
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("get_projects")?.({}, context)).resolves.toEqual([project]);
+    const added = await commands.get("add_project")?.(
+      { gitUrl: "https://github.com/acme/repo.git", localPath: "/tmp/repo" },
+      context,
+    ) as Record<string, unknown>;
+    expect(added).toMatchObject({
+      gitUrl: "https://github.com/acme/repo.git",
+      localPath: "/tmp/repo",
+    });
+    expect(typeof added.id).toBe("string");
+    await expect(commands.get("remove_project")?.({ projectId: "project-1" }, context)).resolves.toBe("project-1");
+    await expect(commands.get("get_project")?.({ projectId: "project-1" }, context)).resolves.toEqual(project);
+    await expect(commands.get("update_project")?.(
+      { projectId: "project-1", updates: { name: "renamed" } },
+      context,
+    )).resolves.toEqual({ name: "renamed" });
+    await expect(commands.get("reorder_projects")?.(
+      { projectIds: ["project-2", "project-1"] },
+      context,
+    )).resolves.toEqual(["project-2", "project-1"]);
+    expect(commands.get("validate_git_url")?.({ url: " https://github.com/acme/repo.git " }, context)).toBe(true);
+    expect(commands.get("validate_git_url")?.({ url: "git@github.com:acme/repo.git" }, context)).toBe(true);
+    expect(commands.get("validate_git_url")?.({ url: "ssh://git@example.com/repo" }, context)).toBe(true);
+    expect(commands.get("validate_git_url")?.({ url: "file:///tmp/repo" }, context)).toBe(false);
+    await expect(commands.get("get_git_remote_url")?.({ path: worktree }, context)).resolves.toBe(remote);
+
+    await expect(commands.get("get_config")?.({}, context)).resolves.toEqual(config);
+    await expect(commands.get("save_config")?.({ config }, context)).resolves.toEqual(config);
+    await expect(commands.get("get_global_config")?.({}, context)).resolves.toEqual(config.global);
+    await expect(commands.get("update_global_config")?.({ global: { githubToken: "placeholder" } }, context))
+      .resolves.toEqual({ githubToken: "placeholder" });
+    await expect(commands.get("get_repository_config")?.({ projectId: "project-1" }, context))
+      .resolves.toEqual(repositoryConfig);
+    await expect(commands.get("update_repository_config")?.(
+      { projectId: "project-1", repoConfig: repositoryConfig },
+      context,
+    )).resolves.toEqual(repositoryConfig);
+
+    expect(storage.removeProject).toHaveBeenCalledWith("project-1");
+    expect(storage.updateProject).toHaveBeenCalledWith("project-1", { name: "renamed" });
+    expect(storage.updateRepositoryConfig).toHaveBeenCalledWith("project-1", repositoryConfig);
+  });
+
+  test("delegates session lifecycle, synchronization, and buffer commands", async () => {
+    const session = { id: "session-1", environmentId: "env-1" };
+    const sessions = [session];
+    const disconnected = [{ ...session, status: "disconnected" }];
+    const storage = {
+      createSession: mock(async () => session),
+      getSession: mock(async () => session),
+      getSessionsByEnvironment: mock(async () => sessions),
+      updateSession: mock(async (_id: string, update: Record<string, unknown>) => ({ ...session, ...update })),
+      removeSession: mock(async () => undefined),
+      removeSessionsByEnvironment: mock(async () => undefined),
+      disconnectEnvironmentSessions: mock(async () => disconnected),
+      saveSessionBuffer: mock(async () => undefined),
+      loadSessionBuffer: mock(async () => "saved output"),
+      reorderSessions: mock(async () => sessions),
+      cleanupOrphanedBuffers: mock(async () => 3),
+    };
+    const context = { storage } as unknown as CommandContext;
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("create_session")?.({
+      environmentId: "env-1",
+      containerId: "container-1",
+      tabId: "tab-1",
+      sessionType: "terminal",
+    }, context)).resolves.toEqual(session);
+    expect(storage.createSession).toHaveBeenCalledWith("env-1", "container-1", "tab-1", "terminal");
+    await expect(commands.get("get_session")?.({ sessionId: "session-1" }, context)).resolves.toEqual(session);
+    await expect(commands.get("get_sessions_by_environment")?.({ environmentId: "env-1" }, context))
+      .resolves.toEqual(sessions);
+    await commands.get("update_session_status")?.({ sessionId: "session-1", status: "running" }, context);
+    expect(storage.updateSession).toHaveBeenLastCalledWith("session-1", { status: "running" });
+    await withFixedDate("2026-07-23T12:00:00.000Z", async () => {
+      await commands.get("update_session_activity")?.({ sessionId: "session-1" }, context);
+    });
+    expect(storage.updateSession).toHaveBeenLastCalledWith("session-1", {
+      lastActivityAt: "2026-07-23T12:00:00.000Z",
+    });
+    await commands.get("rename_session")?.({ sessionId: "session-1", name: "Shell" }, context);
+    expect(storage.updateSession).toHaveBeenLastCalledWith("session-1", { name: "Shell" });
+    await commands.get("rename_session")?.({ sessionId: "session-1", name: null }, context);
+    expect(storage.updateSession).toHaveBeenLastCalledWith("session-1", { name: undefined });
+    await commands.get("set_session_has_launched_command")?.(
+      { sessionId: "session-1", hasLaunched: true },
+      context,
+    );
+    expect(storage.updateSession).toHaveBeenLastCalledWith("session-1", { hasLaunchedCommand: true });
+    await commands.get("save_session_buffer")?.({ sessionId: "session-1", buffer: "saved output" }, context);
+    expect(storage.saveSessionBuffer).toHaveBeenCalledWith("session-1", "saved output");
+    await expect(commands.get("load_session_buffer")?.({ sessionId: "session-1" }, context))
+      .resolves.toBe("saved output");
+    await expect(commands.get("sync_sessions_with_container")?.(
+      { environmentId: "env-1", containerRunning: true },
+      context,
+    )).resolves.toEqual(sessions);
+    expect(storage.disconnectEnvironmentSessions).not.toHaveBeenCalled();
+    await expect(commands.get("sync_sessions_with_container")?.(
+      { environmentId: "env-1", containerRunning: false },
+      context,
+    )).resolves.toEqual(disconnected);
+    await expect(commands.get("disconnect_environment_sessions")?.({ environmentId: "env-1" }, context))
+      .resolves.toEqual(disconnected);
+    await commands.get("reorder_sessions")?.(
+      { environmentId: "env-1", sessionIds: ["session-2", "session-1"] },
+      context,
+    );
+    expect(storage.reorderSessions).toHaveBeenCalledWith("env-1", ["session-2", "session-1"]);
+    await expect(commands.get("cleanup_orphaned_buffers")?.({}, context)).resolves.toBe(3);
+    await commands.get("delete_session")?.({ sessionId: "session-1" }, context);
+    expect(storage.removeSession).toHaveBeenCalledWith("session-1");
+    await commands.get("delete_sessions_by_environment")?.({ environmentId: "env-1" }, context);
+    expect(storage.removeSessionsByEnvironment).toHaveBeenCalledWith("env-1");
+  });
+
+  test("delegates Kanban reads and typed updates", async () => {
+    const task = { id: "task-1", title: "Investigate" };
+    const storage = {
+      getKanbanTasks: mock(async () => [task]),
+      addKanbanTask: mock(async () => task),
+      updateKanbanTask: mock(async (_id: string, update: Record<string, unknown>) => ({ ...task, ...update })),
+    };
+    const context = { storage } as unknown as CommandContext;
+    const commands = createCommandRegistry();
+
+    await expect(commands.get("get_kanban_tasks")?.({ projectId: "project-1" }, context)).resolves.toEqual([task]);
+    await expect(commands.get("add_kanban_task")?.(
+      { projectId: "project-1", title: "Investigate", description: "Details" },
+      context,
+    )).resolves.toEqual(task);
+    expect(storage.addKanbanTask).toHaveBeenCalledWith("project-1", "Investigate", "Details");
+    await commands.get("update_kanban_task")?.({
+      taskId: "task-1",
+      title: "Fixed",
+      description: 123,
+      acceptanceCriteria: "Tests pass",
+      status: "done",
+      environmentId: "",
+      buildPipelineId: "",
+      prUrl: "",
+      prState: "merged",
+      prMergeCommented: false,
+    }, context);
+    expect(storage.updateKanbanTask).toHaveBeenCalledWith("task-1", {
+      title: "Fixed",
+      acceptanceCriteria: "Tests pass",
+      status: "done",
+      environmentId: undefined,
+      buildPipelineId: undefined,
+      prUrl: undefined,
+      prState: "merged",
+      prMergeCommented: false,
     });
   });
 });

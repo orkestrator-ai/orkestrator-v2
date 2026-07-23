@@ -81,8 +81,16 @@ export function createBuildPrompt(task: TaskSnapshot | null, projectNotes: strin
   return parts.join("\n");
 }
 
+export function createAddressIssuesPrompt(): string {
+  return `Please address all the above issues and test coverage gaps, without asking questions. Make sensible assumptions. Run typechecking and build validation to ensure the changes are valid as appropriate for the project.
+
+Before finishing, run \`git status --porcelain\`. If there are any uncommitted changes, stage and commit them so they are included in the branch diff used by the verification step. Use a conventional-commit message, do not use \`--no-verify\`, and do not finish until \`git status --porcelain\` is clean.`;
+}
+
 export function createVerificationPrompt(task: TaskSnapshot | null, projectNotes: string, targetBranch: string = "main"): string {
-  if (!task) return "Do the changes satisfy the acceptance criteria?";
+  if (!task) {
+    return `Before verification, run \`git status --porcelain\` and commit any uncommitted changes so they are included in the branch diff. Then determine whether the changes satisfy the acceptance criteria.`;
+  }
 
   const parts = [
     "Review the current state of the codebase against the following ticket context:\n",
@@ -107,9 +115,10 @@ export function createVerificationPrompt(task: TaskSnapshot | null, projectNotes
 
   parts.push(`\n\nVerify the changes on the current branch against the target branch \`${targetBranch}\`.
 
-1. Run \`git branch --show-current\` to identify the current branch
-2. Run \`git diff origin/${targetBranch}...HEAD\` to see all changes since branching from \`${targetBranch}\`
-3. Review the diff to determine whether ALL acceptance criteria above are satisfied
+1. Run \`git status --porcelain\`. If there are any uncommitted changes, stage and commit them before continuing so they are included in the branch diff. Do not use \`--no-verify\`.
+2. Run \`git branch --show-current\` to identify the current branch
+3. Run \`git diff origin/${targetBranch}...HEAD\` to see all changes since branching from \`${targetBranch}\`
+4. Review the diff to determine whether ALL acceptance criteria above are satisfied
 
 Respond with ONLY a JSON object in the following format (no other text before or after):
 

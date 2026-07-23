@@ -38,6 +38,7 @@ import {
   createResolveConflictsPrompt,
   createBuildReviewPrompt,
   createBuildPrompt,
+  createAddressIssuesPrompt,
   createVerificationPrompt,
   createFixPrompt,
 } from "@/prompts";
@@ -709,11 +710,12 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       // Set loading for the session
       setSessionLoading(reviewSession.sessionKey, true);
 
+      const addressIssuesPrompt = createAddressIssuesPrompt();
       const userMessage: ClaudeMessageType = {
         id: createUuid(),
         role: "user",
-        content: "Please address all the above issues and test coverage gaps, without asking questions. Make sensible assumptions. Run typechecking and build validation to ensure the changes are valid as appropriate for the project.",
-        parts: [{ type: "text", content: "Please address all the above issues and test coverage gaps, without asking questions. Make sensible assumptions. Run typechecking and build validation to ensure the changes are valid as appropriate for the project." }],
+        content: addressIssuesPrompt,
+        parts: [{ type: "text", content: addressIssuesPrompt }],
         timestamp: new Date().toISOString(),
       };
       addMessage(reviewSession.sessionKey, userMessage);

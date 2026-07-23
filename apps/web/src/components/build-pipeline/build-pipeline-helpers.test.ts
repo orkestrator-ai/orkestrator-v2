@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useEnvironmentStore } from "@/stores";
 import {
+  createAddressIssuesPrompt,
   createBuildReviewPrompt,
   createBuildPrompt,
   createVerificationPrompt,
@@ -327,6 +328,19 @@ describe("createBuildPrompt", () => {
   });
 });
 
+// --- createAddressIssuesPrompt ---
+
+describe("createAddressIssuesPrompt", () => {
+  test("requires addressed changes to be committed before verification", () => {
+    const result = createAddressIssuesPrompt();
+
+    expect(result).toContain("git status --porcelain");
+    expect(result).toContain("stage and commit them");
+    expect(result).toContain("included in the branch diff used by the verification step");
+    expect(result).toContain("do not finish until `git status --porcelain` is clean");
+  });
+});
+
 // --- createVerificationPrompt ---
 
 describe("createVerificationPrompt", () => {
@@ -348,6 +362,16 @@ describe("createVerificationPrompt", () => {
     expect(result).toContain('"complete"');
     expect(result).toContain('"rationale"');
     expect(result).toContain("JSON");
+  });
+
+  test("commits uncommitted changes before inspecting the verification diff", () => {
+    const result = createVerificationPrompt(baseTask, "");
+    const statusIndex = result.indexOf("git status --porcelain");
+    const diffIndex = result.indexOf("git diff origin/main...HEAD");
+
+    expect(statusIndex).toBeGreaterThan(-1);
+    expect(result).toContain("stage and commit them before continuing");
+    expect(diffIndex).toBeGreaterThan(statusIndex);
   });
 
   test("includes ticket context", () => {

@@ -27,6 +27,7 @@ import { createCodexSessionKey } from "@/stores/codexStore";
 import type { BuildTabData } from "@/types/paneLayout";
 import type { TaskSnapshotImage } from "@/prompts";
 import {
+  createAddressIssuesPrompt,
   createBuildPrompt,
   createBuildReviewPrompt,
   createFixPrompt,
@@ -902,7 +903,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         return { pipelines: next };
       });
 
-      const prompt = "Please address all the above issues and test coverage gaps, without asking questions. Make sensible assumptions. Run typechecking and build validation to ensure the changes are valid as appropriate for the project.";
+      const prompt = createAddressIssuesPrompt();
       appendCodexMessage(reviewSession.sessionKey, buildUserMessage(prompt));
       setSessionLoading(reviewSession.sessionKey, true);
 

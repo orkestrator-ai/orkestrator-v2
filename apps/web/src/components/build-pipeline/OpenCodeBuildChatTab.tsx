@@ -29,6 +29,7 @@ import { createOpenCodeSessionKey } from "@/stores/openCodeStore";
 import type { BuildTabData } from "@/types/paneLayout";
 import type { TaskSnapshotImage } from "@/prompts";
 import {
+  createAddressIssuesPrompt,
   createBuildPrompt,
   createBuildReviewPrompt,
   createFixPrompt,
@@ -780,7 +781,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
         return { pipelines: next };
       });
 
-      const prompt = "Please address all the above issues and test coverage gaps, without asking questions. Make sensible assumptions. Run typechecking and build validation to ensure the changes are valid as appropriate for the project.";
+      const prompt = createAddressIssuesPrompt();
       const success = await sendPipelinePrompt(reviewSession.sessionKey, reviewSession.sdkSessionId, prompt, currentPipeline.projectId);
       if (!success) {
         if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send address issues prompt");

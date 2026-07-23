@@ -119,11 +119,20 @@ export function CodexChatTab({
     () => createCodexSessionKey(environmentId, tabId),
     [environmentId, tabId],
   );
+  const initialLaunchOptionsRef = useRef({
+    model: initialAgentModel,
+    reasoningEffort: initialReasoningEffort,
+  });
+  const initialLaunchModel = initialLaunchOptionsRef.current.model;
+  const initialLaunchReasoningEffort = initialLaunchOptionsRef.current.reasoningEffort;
+  const clearTabInitialAgentOptions = usePaneLayoutStore(
+    (state) => state.clearTabInitialAgentOptions,
+  );
 
   useEffect(() => {
     const store = useCodexStore.getState();
-    if (initialAgentModel) {
-      store.setSelectedModel(sessionKey, initialAgentModel);
+    if (initialLaunchModel) {
+      store.setSelectedModel(sessionKey, initialLaunchModel);
     }
     const supported: CodexReasoningEffort[] = [
       "minimal",
@@ -135,15 +144,25 @@ export function CodexChatTab({
       "ultra",
     ];
     if (
-      initialReasoningEffort
-      && supported.includes(initialReasoningEffort as CodexReasoningEffort)
+      initialLaunchReasoningEffort
+      && supported.includes(initialLaunchReasoningEffort as CodexReasoningEffort)
     ) {
       store.setSelectedReasoningEffort(
         sessionKey,
-        initialReasoningEffort as CodexReasoningEffort,
+        initialLaunchReasoningEffort as CodexReasoningEffort,
       );
     }
-  }, [initialAgentModel, initialReasoningEffort, sessionKey]);
+    if (initialLaunchModel || initialLaunchReasoningEffort) {
+      clearTabInitialAgentOptions(tabId, environmentId);
+    }
+  }, [
+    clearTabInitialAgentOptions,
+    environmentId,
+    initialLaunchModel,
+    initialLaunchReasoningEffort,
+    sessionKey,
+    tabId,
+  ]);
   const config = useConfigStore((state) => state.config);
   const setConfig = useConfigStore((state) => state.setConfig);
   const persistedPreferencesRef = useRef(getPersistedCodexPreferences(config));

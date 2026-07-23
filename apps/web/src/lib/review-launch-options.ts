@@ -33,25 +33,8 @@ const CLAUDE_FALLBACK_MODELS: ReviewModelOption[] = [
   },
 ];
 
-function withPreferredModel(
-  models: ReviewModelOption[],
-  preferredId: string | undefined,
-): ReviewModelOption[] {
-  if (!preferredId || models.some((model) => model.id === preferredId)) return models;
-  return [
-    {
-      id: preferredId,
-      name: preferredId,
-      description: "Current default",
-      reasoningEfforts: [],
-    },
-    ...models,
-  ];
-}
-
 export function buildReviewModelCatalog(
   environmentId: string | undefined,
-  global: Pick<GlobalConfig, "claudeModel" | "codexModel" | "opencodeModel">,
 ): ReviewModelCatalog {
   const liveClaudeModels = useClaudeStore.getState().models.map((model) => ({
     id: model.id,
@@ -64,34 +47,27 @@ export function buildReviewModelCatalog(
           ? ["low", "medium", "high"]
           : [],
   }));
-  const claude = withPreferredModel(
-    liveClaudeModels.length > 0 ? liveClaudeModels : CLAUDE_FALLBACK_MODELS,
-    global.claudeModel,
-  );
+  const claude = liveClaudeModels.length > 0
+    ? liveClaudeModels
+    : CLAUDE_FALLBACK_MODELS;
 
   const codexModels = useCodexStore.getState().models;
-  const codex = withPreferredModel(
-    (codexModels.length > 0 ? codexModels : CODEX_MODELS).map((model) => ({
+  const codex = (codexModels.length > 0 ? codexModels : CODEX_MODELS).map((model) => ({
       id: model.id,
       name: model.name,
       description: model.description,
       reasoningEfforts: [...(model.reasoningEfforts ?? ["medium", "high"])],
-    })),
-    global.codexModel,
-  );
+    }));
 
   const liveOpenCodeModels = environmentId
     ? useOpenCodeStore.getState().getModels(environmentId)
     : [];
-  const opencode = withPreferredModel(
-    liveOpenCodeModels.map((model) => ({
+  const opencode = liveOpenCodeModels.map((model) => ({
       id: model.id,
       name: model.name,
       description: model.provider,
       reasoningEfforts: [...(model.variants ?? [])],
-    })),
-    global.opencodeModel,
-  );
+    }));
 
   return {
     claude: claude.length > 0 ? claude : CLAUDE_FALLBACK_MODELS,

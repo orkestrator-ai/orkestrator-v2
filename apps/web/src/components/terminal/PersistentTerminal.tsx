@@ -115,6 +115,15 @@ export function PersistentTerminal({
   const workspaceReadySignaledRef = useRef(false);
   const hasLaunchedCommandRef = useRef(false);
   const hasInitiatedConnectionRef = useRef(false);
+  const initialLaunchOptionsRef = useRef({
+    model: initialAgentModel,
+    reasoningEffort: initialReasoningEffort,
+  });
+  const initialLaunchModel = initialLaunchOptionsRef.current.model;
+  const initialLaunchReasoningEffort = initialLaunchOptionsRef.current.reasoningEffort;
+  const clearTabInitialAgentOptions = usePaneLayoutStore(
+    (state) => state.clearTabInitialAgentOptions,
+  );
   const previousContainerIdRef = useRef<string>(containerId);
   // Initialize with current paneId so first mount doesn't trigger false paneChanged
   const previousPaneIdRef = useRef<string>(paneId);
@@ -126,6 +135,18 @@ export function PersistentTerminal({
   const restorationInProgressRef = useRef<boolean>(false);
   // Track if initial buffer restoration has completed - prevents cleanup from overwriting buffer during mount cycle
   const initialRestorationCompleteRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (initialLaunchModel || initialLaunchReasoningEffort) {
+      clearTabInitialAgentOptions(tabId, environmentId);
+    }
+  }, [
+    clearTabInitialAgentOptions,
+    environmentId,
+    initialLaunchModel,
+    initialLaunchReasoningEffort,
+    tabId,
+  ]);
 
   // Get terminal appearance settings from config
   const terminalAppearance = useConfigStore(
@@ -1172,8 +1193,8 @@ export function PersistentTerminal({
         const agentCommand = buildAgentLaunchCommand({
           tabType,
           initialPrompt,
-          model: initialAgentModel,
-          reasoningEffort: initialReasoningEffort,
+          model: initialLaunchModel,
+          reasoningEffort: initialLaunchReasoningEffort,
         });
         if (agentCommand) {
           const command = agentCommand;
@@ -1200,7 +1221,7 @@ export function PersistentTerminal({
         }
       }, 300);
     }
-  }, [isEnvironmentReady, isConnected, tabType, tabId, initialPrompt, initialCommands, initialAgentModel, initialReasoningEffort, isSetupTab, sessionKey, setHasLaunchedCommandStore]);
+  }, [isEnvironmentReady, isConnected, tabType, tabId, initialPrompt, initialCommands, initialLaunchModel, initialLaunchReasoningEffort, isSetupTab, sessionKey, setHasLaunchedCommandStore]);
 
   // Focus when active
   useEffect(() => {

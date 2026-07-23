@@ -1484,6 +1484,85 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
+  test("cancels a pending mobile long press after movement or pointer cancellation", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar presentation="grid" />);
+
+    const reviewButton = screen.getByRole("button", { name: "Code review" });
+    fireEvent.pointerDown(reviewButton, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(reviewButton, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 30,
+      clientY: 10,
+    });
+    fireEvent.pointerDown(reviewButton, {
+      pointerId: 2,
+      pointerType: "touch",
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerCancel(reviewButton, {
+      pointerId: 2,
+      pointerType: "touch",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 575));
+    expect(screen.queryByRole("dialog", { name: "Configure code review" })).toBeNull();
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("maps every configured review tab type and closes without launch on Cancel", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar />);
+    const reviewButton = screen.getByRole("button", { name: "Code review" });
+
+    fireEvent.contextMenu(reviewButton);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Configure code review" })).toBeNull();
+    expect(createTabMock).not.toHaveBeenCalled();
+
+    const cases = [
+      { label: /^Claude CLI/, agent: "claude", mode: "cli" },
+      { label: /^Claude Native/, agent: "claude", mode: "native" },
+      { label: /^Claude Tmux/, agent: "claude", mode: "tmux" },
+      { label: /^Codex CLI/, agent: "codex", mode: "cli" },
+      { label: /^Codex Native/, agent: "codex", mode: "native" },
+      { label: /^OpenCode CLI/, agent: "opencode", mode: "cli" },
+      { label: /^OpenCode Native/, agent: "opencode", mode: "native" },
+    ] as const;
+
+    for (const reviewCase of cases) {
+      fireEvent.contextMenu(reviewButton);
+      fireEvent.click(screen.getByRole("radio", { name: reviewCase.label }));
+      fireEvent.click(screen.getByRole("button", { name: "OK" }));
+      expect(createTabMock).toHaveBeenLastCalledWith(
+        reviewCase.agent,
+        expect.objectContaining({
+          agentLaunchMode: reviewCase.mode,
+          initialAgentModel: expect.any(String),
+          isReviewTab: true,
+        }),
+      );
+    }
+    expect(createTabMock).toHaveBeenCalledTimes(cases.length);
+  });
+
   test("falls back from an absent environment and global workflow default to Claude", () => {
     currentEnvironment = {
       ...selectedEnvironment,

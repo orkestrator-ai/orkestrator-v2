@@ -156,14 +156,35 @@ export function ClaudeChatTab({
   // Create a unique session key that combines environmentId and tabId
   // This prevents session collisions when multiple environments use the same tab IDs (e.g., "default")
   const sessionKey = useMemo(() => createClaudeSessionKey(environmentId, tabId), [environmentId, tabId]);
+  const initialLaunchOptionsRef = useRef({
+    model: initialAgentModel,
+    reasoningEffort: initialReasoningEffort,
+  });
+  const initialLaunchModel = initialLaunchOptionsRef.current.model;
+  const initialLaunchReasoningEffort = initialLaunchOptionsRef.current.reasoningEffort;
+  const clearTabInitialAgentOptions = usePaneLayoutStore(
+    (state) => state.clearTabInitialAgentOptions,
+  );
 
   useEffect(() => {
-    if (!initialReasoningEffort) return;
+    if (!initialLaunchReasoningEffort) return;
     const supported: ClaudeEffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
-    if (supported.includes(initialReasoningEffort as ClaudeEffortLevel)) {
-      useClaudeStore.getState().setEffort(sessionKey, initialReasoningEffort as ClaudeEffortLevel);
+    if (supported.includes(initialLaunchReasoningEffort as ClaudeEffortLevel)) {
+      useClaudeStore.getState().setEffort(sessionKey, initialLaunchReasoningEffort as ClaudeEffortLevel);
     }
-  }, [initialReasoningEffort, sessionKey]);
+  }, [initialLaunchReasoningEffort, sessionKey]);
+
+  useEffect(() => {
+    if (initialLaunchModel || initialLaunchReasoningEffort) {
+      clearTabInitialAgentOptions(tabId, environmentId);
+    }
+  }, [
+    clearTabInitialAgentOptions,
+    environmentId,
+    initialLaunchModel,
+    initialLaunchReasoningEffort,
+    tabId,
+  ]);
 
   const seedInitialFastMode = useCallback(() => {
     const claudeState = useClaudeStore.getState();
@@ -505,7 +526,7 @@ export function ClaudeChatTab({
           }
 
           const currentSelectedModel = getSelectedModel(sessionKey);
-          const preferredModel = resolvePreferredClaudeModel(resolvedModels, initialAgentModel);
+          const preferredModel = resolvePreferredClaudeModel(resolvedModels, initialLaunchModel);
           if (!currentSelectedModel && preferredModel) {
             setSelectedModel(sessionKey, preferredModel);
           }
@@ -643,7 +664,7 @@ export function ClaudeChatTab({
 
         // Set default model if not already selected
         const currentSelectedModel = getSelectedModel(sessionKey);
-        const preferredModel = resolvePreferredClaudeModel(availableModels, initialAgentModel);
+        const preferredModel = resolvePreferredClaudeModel(availableModels, initialLaunchModel);
         if (!currentSelectedModel && preferredModel) {
           setSelectedModel(sessionKey, preferredModel);
         }

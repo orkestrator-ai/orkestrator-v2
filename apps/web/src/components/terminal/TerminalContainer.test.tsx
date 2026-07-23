@@ -2514,6 +2514,58 @@ describe("TerminalContainer", () => {
       });
     });
 
+    test("carries one-shot review options through every agent launch mode", async () => {
+      const launchCases = [
+        { type: "claude", mode: "cli", title: "Claude CLI review", expectedType: "claude" },
+        { type: "claude", mode: "native", title: "Claude Native review", expectedType: "claude-native" },
+        { type: "claude", mode: "tmux", title: "Claude Tmux review", expectedType: "claude-tmux" },
+        { type: "codex", mode: "cli", title: "Codex CLI review", expectedType: "codex" },
+        { type: "codex", mode: "native", title: "Codex Native review", expectedType: "codex-native" },
+        { type: "opencode", mode: "cli", title: "OpenCode CLI review", expectedType: "opencode" },
+        { type: "opencode", mode: "native", title: "OpenCode Native review", expectedType: "opencode-native" },
+      ] as const;
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          {launchCases.map((launchCase) => (
+            <CreateTabHarness
+              key={launchCase.title}
+              type={launchCase.type}
+              options={{
+                agentLaunchMode: launchCase.mode,
+                displayTitle: launchCase.title,
+                initialAgentModel: `${launchCase.type}-review-model`,
+                initialReasoningEffort: "high",
+                initialPrompt: "Review this diff",
+                isReviewTab: true,
+              }}
+            />
+          ))}
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
+        for (const launchCase of launchCases) {
+          const created = env.root.tabs.find((tab) => tab.displayTitle === launchCase.title);
+          expect(created).toMatchObject({
+            type: launchCase.expectedType,
+            initialAgentModel: `${launchCase.type}-review-model`,
+            initialReasoningEffort: "high",
+            initialPrompt: "Review this diff",
+            isReviewTab: true,
+          });
+        }
+      });
+    });
+
     test("agentLaunchMode cli opens an OpenCode CLI tab even when OpenCode defaults to native", async () => {
       useConfigStore.setState((state) => ({
         ...state,

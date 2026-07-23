@@ -1199,6 +1199,31 @@ describe("paneLayoutStore pane and tab actions", () => {
     }]);
   });
 
+  test("consumes one-shot agent options without clearing the pending prompt", () => {
+    seedPaneTree({
+      kind: "leaf",
+      id: "default",
+      tabs: [{
+        id: "review-tab",
+        type: "codex-native",
+        initialPrompt: "Review the diff",
+        initialAgentModel: "gpt-5.6-sol",
+        initialReasoningEffort: "xhigh",
+      }],
+      activeTabId: "review-tab",
+    }, "default", "env-review");
+
+    usePaneLayoutStore.getState().clearTabInitialAgentOptions("review-tab", "env-review");
+
+    expect(usePaneLayoutStore.getState().getAllTabs("env-review")).toEqual([{
+      id: "review-tab",
+      type: "codex-native",
+      initialPrompt: "Review the diff",
+      initialAgentModel: undefined,
+      initialReasoningEffort: undefined,
+    }]);
+  });
+
   test("splits a pane and activates the pane containing the moved tab", () => {
     seedPaneTree({
       kind: "leaf",

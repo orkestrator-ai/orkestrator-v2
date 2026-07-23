@@ -1634,6 +1634,65 @@ describe("CodexChatTab", () => {
     });
   });
 
+  test("does not reapply one-shot review options after the tab remounts", async () => {
+    const firstMount = render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        initialAgentModel="gpt-5.4-codex"
+        initialReasoningEffort="high"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().selectedModel.get(SESSION_KEY)).toBe("gpt-5.4-codex");
+      expect(useCodexStore.getState().selectedReasoningEffort.get(SESSION_KEY)).toBe("high");
+    });
+    useCodexStore.getState().setSelectedModel(SESSION_KEY, "gpt-5.3-codex");
+    useCodexStore.getState().setSelectedReasoningEffort(SESSION_KEY, "medium");
+    firstMount.unmount();
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().selectedModel.get(SESSION_KEY)).toBe("gpt-5.3-codex");
+      expect(useCodexStore.getState().selectedReasoningEffort.get(SESSION_KEY)).toBe("medium");
+    });
+  });
+
+  test("falls back from stale one-shot Codex preferences during session creation", async () => {
+    useCodexStore.setState((state) => ({
+      ...state,
+      sessions: new Map(),
+      selectedModel: new Map(),
+      selectedReasoningEffort: new Map(),
+    }));
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        initialAgentModel="removed-codex-model"
+        initialReasoningEffort="ultra"
+      />,
+    );
+
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
+    const lastCall = mockCreateSession.mock.calls.at(-1) as unknown as unknown[] | undefined;
+    expect(lastCall?.[1]).toMatchObject({
+      model: MOCK_MODELS[0]!.id,
+      modelReasoningEffort: "medium",
+    });
+  });
+
   test("initializes and drains a queued prompt while the Codex tab is inactive", async () => {
     useCodexStore.setState((state) => ({
       ...state,

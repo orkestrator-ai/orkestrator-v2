@@ -78,13 +78,19 @@ mock.module("@/components/claude/ClaudeChatTab", () => ({
   ClaudeChatTab: ({
     tabId,
     isReviewTab,
+    initialAgentModel,
+    initialReasoningEffort,
     refreshRequestId,
   }: {
     tabId: string;
     isReviewTab?: boolean;
+    initialAgentModel?: string;
+    initialReasoningEffort?: string;
     refreshRequestId?: number;
   }) => (
     <div
+      data-agent-model={initialAgentModel}
+      data-reasoning-effort={initialReasoningEffort}
       data-refresh-request-id={refreshRequestId}
       data-review-tab={String(Boolean(isReviewTab))}
       data-testid="claude-tab"
@@ -98,13 +104,19 @@ mock.module("@/components/claude/ClaudeTmuxChatTab", () => ({
   ClaudeTmuxChatTab: ({
     tabId,
     isReviewTab,
+    initialAgentModel,
+    initialReasoningEffort,
     refreshRequestId,
   }: {
     tabId: string;
     isReviewTab?: boolean;
+    initialAgentModel?: string;
+    initialReasoningEffort?: string;
     refreshRequestId?: number;
   }) => (
     <div
+      data-agent-model={initialAgentModel}
+      data-reasoning-effort={initialReasoningEffort}
       data-refresh-request-id={refreshRequestId}
       data-review-tab={String(Boolean(isReviewTab))}
       data-testid="claude-tmux-tab"
@@ -118,13 +130,19 @@ mock.module("@/components/codex/CodexChatTab", () => ({
   CodexChatTab: ({
     tabId,
     isReviewTab,
+    initialAgentModel,
+    initialReasoningEffort,
     refreshRequestId,
   }: {
     tabId: string;
     isReviewTab?: boolean;
+    initialAgentModel?: string;
+    initialReasoningEffort?: string;
     refreshRequestId?: number;
   }) => (
     <div
+      data-agent-model={initialAgentModel}
+      data-reasoning-effort={initialReasoningEffort}
       data-refresh-request-id={refreshRequestId}
       data-review-tab={String(Boolean(isReviewTab))}
       data-testid="codex-tab"
@@ -138,13 +156,19 @@ mock.module("@/components/opencode/OpenCodeChatTab", () => ({
   OpenCodeChatTab: ({
     tabId,
     isReviewTab,
+    initialAgentModel,
+    initialReasoningEffort,
     refreshRequestId,
   }: {
     tabId: string;
     isReviewTab?: boolean;
+    initialAgentModel?: string;
+    initialReasoningEffort?: string;
     refreshRequestId?: number;
   }) => (
     <div
+      data-agent-model={initialAgentModel}
+      data-reasoning-effort={initialReasoningEffort}
       data-refresh-request-id={refreshRequestId}
       data-review-tab={String(Boolean(isReviewTab))}
       data-testid="opencode-tab"
@@ -372,24 +396,32 @@ describe("PaneLeafContainer", () => {
           id: "tab-claude",
           type: "claude-native" as const,
           isReviewTab: true,
+          initialAgentModel: "claude-review",
+          initialReasoningEffort: "high",
           claudeNativeData: { environmentId: "env-visible" },
         },
         {
           id: "tab-tmux",
           type: "claude-tmux" as const,
           isReviewTab: true,
+          initialAgentModel: "claude-tmux-review",
+          initialReasoningEffort: "xhigh",
           claudeTmuxData: { environmentId: "env-visible" },
         },
         {
           id: "tab-codex",
           type: "codex-native" as const,
           isReviewTab: true,
+          initialAgentModel: "codex-review",
+          initialReasoningEffort: "medium",
           codexNativeData: { environmentId: "env-visible" },
         },
         {
           id: "tab-opencode",
           type: "opencode-native" as const,
           isReviewTab: true,
+          initialAgentModel: "provider/opencode-review",
+          initialReasoningEffort: "deep",
           openCodeNativeData: { environmentId: "env-visible" },
         },
       ],
@@ -409,6 +441,22 @@ describe("PaneLeafContainer", () => {
     expect(screen.getByTestId("claude-tmux-tab").dataset.reviewTab).toBe("true");
     expect(screen.getByTestId("codex-tab").dataset.reviewTab).toBe("true");
     expect(screen.getByTestId("opencode-tab").dataset.reviewTab).toBe("true");
+    expect(screen.getByTestId("claude-tab").dataset).toMatchObject({
+      agentModel: "claude-review",
+      reasoningEffort: "high",
+    });
+    expect(screen.getByTestId("claude-tmux-tab").dataset).toMatchObject({
+      agentModel: "claude-tmux-review",
+      reasoningEffort: "xhigh",
+    });
+    expect(screen.getByTestId("codex-tab").dataset).toMatchObject({
+      agentModel: "codex-review",
+      reasoningEffort: "medium",
+    });
+    expect(screen.getByTestId("opencode-tab").dataset).toMatchObject({
+      agentModel: "provider/opencode-review",
+      reasoningEffort: "deep",
+    });
   });
 
   test("forwards independent repeated refresh requests to every refreshable tab", () => {

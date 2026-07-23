@@ -344,6 +344,7 @@ export function ClaudeTmuxChatTab({
   const addToQueue = useClaudeTmuxStore((s) => s.addToQueue);
   const removeFromQueue = useClaudeTmuxStore((s) => s.removeFromQueue);
   const clearTabInitialPrompt = usePaneLayoutStore((s) => s.clearTabInitialPrompt);
+  const clearTabInitialAgentOptions = usePaneLayoutStore((s) => s.clearTabInitialAgentOptions);
   const setConfig = useConfigStore((s) => s.setConfig);
   const persistedClaudeModel = useConfigStore((s) => s.config.global.claudeModel);
 
@@ -354,9 +355,16 @@ export function ClaudeTmuxChatTab({
   const [tuiSnapshot, setTuiSnapshot] = useState<string>("");
   const sdkModels = useClaudeStore((s) => s.models);
   const availableModels = useMemo(() => tmuxModelList(sdkModels), [sdkModels]);
+  const initialLaunchOptionsRef = useRef({
+    model: initialAgentModel,
+    reasoningEffort: initialReasoningEffort,
+  });
+  const initialLaunchModel = initialLaunchOptionsRef.current.model;
+  const initialLaunchReasoningEffort = initialLaunchOptionsRef.current.reasoningEffort;
+  const initialLaunchModelPendingRef = useRef(Boolean(initialLaunchModel));
   const [selectedModel, setSelectedModel] = useState<string>(() =>
     resolveTmuxModelPreference(
-      initialAgentModel ?? useConfigStore.getState().config.global.claudeModel,
+      initialLaunchModel ?? useConfigStore.getState().config.global.claudeModel,
       tmuxModelList(useClaudeStore.getState().models),
     ),
   );
@@ -480,19 +488,35 @@ export function ClaudeTmuxChatTab({
       : selectedEffort;
 
   useEffect(() => {
-    if (!initialReasoningEffort) return;
+    if (!initialLaunchReasoningEffort) return;
     const supported: ClaudeEffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
-    if (supported.includes(initialReasoningEffort as ClaudeEffortLevel)) {
-      setEffortLevel(storeKey, initialReasoningEffort as ClaudeEffortLevel);
+    if (supported.includes(initialLaunchReasoningEffort as ClaudeEffortLevel)) {
+      setEffortLevel(storeKey, initialLaunchReasoningEffort as ClaudeEffortLevel);
     }
-  }, [initialReasoningEffort, setEffortLevel, storeKey]);
+  }, [initialLaunchReasoningEffort, setEffortLevel, storeKey]);
+
+  useEffect(() => {
+    if (initialLaunchModel || initialLaunchReasoningEffort) {
+      clearTabInitialAgentOptions(tabId, environmentId);
+    }
+  }, [
+    clearTabInitialAgentOptions,
+    environmentId,
+    initialLaunchModel,
+    initialLaunchReasoningEffort,
+    tabId,
+  ]);
 
   useEffect(() => {
     if (hasStarted) return;
+    const preferredModel = initialLaunchModelPendingRef.current
+      ? initialLaunchModel
+      : persistedClaudeModel;
     setSelectedModel(
-      resolveTmuxModelPreference(initialAgentModel ?? persistedClaudeModel, availableModels),
+      resolveTmuxModelPreference(preferredModel, availableModels),
     );
-  }, [hasStarted, initialAgentModel, persistedClaudeModel, availableModels]);
+    initialLaunchModelPendingRef.current = false;
+  }, [hasStarted, initialLaunchModel, persistedClaudeModel, availableModels]);
 
   const persistSelectedModel = useCallback(
     async (modelId: string) => {

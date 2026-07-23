@@ -1635,7 +1635,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
             ? config.repositories[selectedProjectId]
             : undefined,
         })}
-        catalog={buildReviewModelCatalog(selectedEnvironmentId ?? undefined, config.global)}
+        catalog={buildReviewModelCatalog(selectedEnvironmentId ?? undefined)}
         preferredModels={{
           claude: config.global.claudeModel,
           codex: config.global.codexModel,

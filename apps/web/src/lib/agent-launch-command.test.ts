@@ -43,4 +43,19 @@ describe("buildAgentLaunchCommand", () => {
       reasoningEffort: "xhigh",
     })).toBe('opencode --prompt "Review"');
   });
+
+  test("preserves multiline and CRLF prompt structure", () => {
+    expect(buildAgentLaunchCommand({
+      tabType: "claude",
+      initialPrompt: "Review:\r\n- first\n- second",
+    })).toBe('claude --dangerously-skip-permissions "Review:\r\n- first\n- second"');
+  });
+
+  test("supports empty optional values and rejects non-agent tab types", () => {
+    expect(buildAgentLaunchCommand({ tabType: "codex" })).toBe("codex");
+    expect(buildAgentLaunchCommand({
+      tabType: "plain",
+      initialPrompt: "Review",
+    })).toBeNull();
+  });
 });

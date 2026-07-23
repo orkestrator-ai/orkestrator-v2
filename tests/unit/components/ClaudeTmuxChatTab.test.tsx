@@ -271,7 +271,11 @@ function mockRunningTmuxStatus() {
   }));
 }
 
-function seedPane(initialPrompt?: string) {
+function seedPane(
+  initialPrompt?: string,
+  initialAgentModel?: string,
+  initialReasoningEffort?: string,
+) {
   usePaneLayoutStore.setState({
     environments: new Map([
       [
@@ -286,6 +290,8 @@ function seedPane(initialPrompt?: string) {
                 id: "tab-1",
                 type: "claude-tmux",
                 initialPrompt,
+                initialAgentModel,
+                initialReasoningEffort,
                 claudeTmuxData: { environmentId: "env-1" },
               },
             ],
@@ -2687,6 +2693,48 @@ Running 1 Explore agent...
         resumeSessionId: undefined,
       });
     });
+  });
+
+  test("consumes one-shot model and effort without replaying them after remount", async () => {
+    seedPane(undefined, "claude-fable-5[1m]", "max");
+    const firstMount = render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        initialAgentModel="claude-fable-5[1m]"
+        initialReasoningEffort="max"
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: /Fable/ })).toBeTruthy();
+    await waitFor(() => {
+      expect(useClaudeTmuxStore.getState().effortLevels.get("env:env-1:tab:tab-1")).toBe("max");
+      expect(usePaneLayoutStore.getState().getAllTabs("env-1")[0]).toMatchObject({
+        initialAgentModel: undefined,
+        initialReasoningEffort: undefined,
+      });
+    });
+
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: { ...state.config.global, claudeModel: "sonnet" },
+      },
+    }));
+    useClaudeTmuxStore.getState().setEffortLevel("env:env-1:tab:tab-1", "low");
+    firstMount.unmount();
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: /Sonnet/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Low" })).toBeTruthy();
   });
 
   test("switches the running session effort through Claude's /effort command", async () => {

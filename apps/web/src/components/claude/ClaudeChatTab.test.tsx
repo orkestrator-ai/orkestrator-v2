@@ -6,6 +6,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type {
   ClaudeMessage as ClaudeMessageType,
+  ClaudeModel,
   ClaudePlanApprovalRequest,
   ClaudeQuestionRequest,
 } from "@/lib/claude-client";
@@ -22,7 +23,7 @@ const mockScrollToBottom = mock(() => {});
 let mockIsAtBottom = true;
 let lastVirtualizedMessages: any[] = [];
 const mockCreateSession = mock(async () => ({ sessionId: "session-1" }));
-const mockGetModels = mock(async () => []);
+const mockGetModels = mock(async (): Promise<ClaudeModel[]> => []);
 const mockGetSessionMessages = mock<
   (_client: unknown, _sessionId: string) => Promise<ClaudeMessageType[]>
 >(async () => []);
@@ -285,6 +286,69 @@ describe("ClaudeChatTab", () => {
     mockReadFileBase64.mockReset();
     mockReadFileBase64.mockImplementation(async () => "chat-local-base64");
     lastVirtualizedMessages = [];
+  });
+
+  test("does not reapply one-shot review options after the tab remounts", async () => {
+    const firstMount = render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        initialAgentModel="claude-review"
+        initialReasoningEffort="xhigh"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().effort.get(SESSION_KEY)).toBe("xhigh");
+    });
+    useClaudeStore.getState().setSelectedModel(SESSION_KEY, "claude-user-choice");
+    useClaudeStore.getState().setEffort(SESSION_KEY, "low");
+    firstMount.unmount();
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().selectedModel.get(SESSION_KEY)).toBe("claude-user-choice");
+      expect(useClaudeStore.getState().effort.get(SESSION_KEY)).toBe("low");
+    });
+  });
+
+  test("applies a valid one-shot review model and effort to a new session", async () => {
+    useClaudeStore.setState((state) => ({
+      ...state,
+      sessions: new Map(),
+      selectedModel: new Map(),
+    }));
+    mockGetModels.mockResolvedValueOnce([{
+      id: "claude-review",
+      name: "Claude Review",
+      description: "Review model",
+      supportsEffort: true,
+      supportedEffortLevels: ["low", "high"],
+    } as any]);
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        initialAgentModel="claude-review"
+        initialReasoningEffort="high"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().selectedModel.get(SESSION_KEY)).toBe("claude-review");
+      expect(useClaudeStore.getState().effort.get(SESSION_KEY)).toBe("high");
+      expect(mockCreateSession).toHaveBeenCalled();
+    });
   });
 
   afterEach(() => {

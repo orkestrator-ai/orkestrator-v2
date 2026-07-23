@@ -177,6 +177,33 @@ describe("BrowserTab", () => {
     expect(address.selectionEnd).toBe(address.value.length);
 
     address.blur();
+    const controlEvent = new KeyboardEvent("keydown", {
+      key: "L",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(controlEvent);
+    expect(controlEvent.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(address);
+
+    for (const modifiers of [
+      { metaKey: true, altKey: true },
+      { ctrlKey: true, shiftKey: true },
+    ]) {
+      address.blur();
+      const ignoredEvent = new KeyboardEvent("keydown", {
+        key: "l",
+        bubbles: true,
+        cancelable: true,
+        ...modifiers,
+      });
+      window.dispatchEvent(ignoredEvent);
+      expect(ignoredEvent.defaultPrevented).toBe(false);
+      expect(document.activeElement).not.toBe(address);
+    }
+
+    address.blur();
     view.rerender(
       <BrowserTab
         tabId="browser-1"
@@ -281,6 +308,59 @@ describe("BrowserTab", () => {
     );
     native.focusAddress("browser-1");
     expect(document.activeElement).not.toBe(address);
+  });
+
+  test("activates the owning pane when Cmd+L comes from a native preview", () => {
+    usePaneLayoutStore.setState({
+      activeEnvironmentId: "env-1",
+      environments: new Map([
+        ["env-1", {
+          root: {
+            kind: "split",
+            id: "split-1",
+            direction: "horizontal",
+            sizes: [50, 50],
+            depth: 1,
+            children: [
+              {
+                kind: "leaf",
+                id: "pane-left",
+                tabs: [{ id: "browser-left", type: "browser", browserData: { url: "http://localhost:3000/" } }],
+                activeTabId: "browser-left",
+              },
+              {
+                kind: "leaf",
+                id: "pane-right",
+                tabs: [{ id: "browser-right", type: "browser", browserData: { url: "http://localhost:4000/" } }],
+                activeTabId: "browser-right",
+              },
+            ],
+          },
+          activePaneId: "pane-right",
+          containerId: "container-1",
+        }],
+      ]),
+    });
+    const native = installNativePreview();
+
+    render(
+      <BrowserTab
+        tabId="browser-left"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+    const address = screen.getByRole("textbox", { name: "Browser address" }) as HTMLInputElement;
+
+    native.focusAddress("browser-left");
+
+    expect(document.activeElement).toBe(address);
+    expect(address.selectionStart).toBe(0);
+    expect(address.selectionEnd).toBe(address.value.length);
+    expect(
+      usePaneLayoutStore.getState().environments.get("env-1")?.activePaneId,
+    ).toBe("pane-left");
   });
 
   test("normalizes, loads, and persists a submitted backend-local address", async () => {
@@ -723,7 +803,13 @@ describe("BrowserTab", () => {
       desktop: true,
       baseUrl: "https://workstation.tailnet.ts.net/",
     };
-    const native = installNativePreview();
+    const native = installNativePreview({
+      attach: mock(async (input: { url: string }) =>
+        previewState({
+          url: input.url,
+          loading: input.url.includes("/docs"),
+        })),
+    });
     setBrowserTab("http://localhost:3000/");
     const view = render(
       <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,

@@ -23,6 +23,24 @@ export interface BrowserPreviewRuntime {
   browserSession: Session;
 }
 
+export interface BrowserPreviewAddressFocusOptions {
+  getWindow: () => BrowserWindow | null;
+  emitFocus: (tabId: string) => void;
+}
+
+export function createBrowserPreviewAddressFocusHandler({
+  getWindow,
+  emitFocus,
+}: BrowserPreviewAddressFocusOptions): (tabId: string) => void {
+  return (tabId) => {
+    const window = getWindow();
+    if (window && !window.isDestroyed()) {
+      window.webContents.focus();
+    }
+    emitFocus(tabId);
+  };
+}
+
 export function initializeBrowserPreviews({
   fromPartition,
   WebContentsViewCtor,

@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, mock, test } from "bun:test";
 import { BrowserPreviewManager } from "../../../apps/desktop/electron/browser-preview-manager";
 import {
+  createBrowserPreviewAddressFocusHandler,
   initializeBrowserPreviews,
   registerBrowserPreviewWindowActivation,
   registerBrowserPreviewWindowCleanup,
@@ -46,7 +47,48 @@ class FakeWebContentsView {
 }
 
 describe("browser preview startup wiring", () => {
+  test("focuses a live window and always emits the requested tab", () => {
+    const focus = mock(() => undefined);
+    const emitFocus = mock(() => undefined);
+    let currentWindow: {
+      isDestroyed: () => boolean;
+      webContents: { focus: () => void };
+    } | null = {
+      isDestroyed: () => false,
+      webContents: { focus },
+    };
+    const handleFocus = createBrowserPreviewAddressFocusHandler({
+      getWindow: () => currentWindow as never,
+      emitFocus,
+    });
+
+    handleFocus("browser-live");
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(emitFocus).toHaveBeenLastCalledWith("browser-live");
+
+    currentWindow = {
+      isDestroyed: () => true,
+      webContents: { focus },
+    };
+    handleFocus("browser-destroyed");
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(emitFocus).toHaveBeenLastCalledWith("browser-destroyed");
+
+    currentWindow = null;
+    handleFocus("browser-missing");
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(emitFocus).toHaveBeenLastCalledWith("browser-missing");
+    expect(emitFocus).toHaveBeenCalledTimes(3);
+  });
+
   test("creates the dedicated locked-down session, auth hooks, manager, and state bridge", async () => {
+    const createdViews: FakeWebContentsView[] = [];
+    class CapturingFakeWebContentsView extends FakeWebContentsView {
+      constructor() {
+        super();
+        createdViews.push(this);
+      }
+    }
     let permissionCheck: ((...args: unknown[]) => boolean) | null = null;
     let permissionRequest: ((webContents: unknown, permission: string, callback: (allowed: boolean) => void) => void) | null = null;
     const webRequest = {
@@ -73,7 +115,7 @@ describe("browser preview startup wiring", () => {
 
     const runtime = initializeBrowserPreviews({
       fromPartition: fromPartition as never,
-      WebContentsViewCtor: FakeWebContentsView as never,
+      WebContentsViewCtor: CapturingFakeWebContentsView as never,
       menu: { buildFromTemplate: () => ({ popup: () => undefined }) } as never,
       getWindow: () => window as never,
       emitState,
@@ -99,6 +141,19 @@ describe("browser preview startup wiring", () => {
     });
     expect(addChildView).toHaveBeenCalledTimes(1);
     expect(emitState).toHaveBeenCalledWith(expect.objectContaining({ tabId: "browser-1" }));
+
+    const inputEvent = { preventDefault: mock(() => undefined) };
+    createdViews[0]?.webContents.emit("before-input-event", inputEvent, {
+      type: "keyDown",
+      key: "l",
+      meta: true,
+      control: false,
+      alt: false,
+      shift: false,
+    });
+    expect(inputEvent.preventDefault).toHaveBeenCalledTimes(1);
+    expect(focusAddressBar).toHaveBeenCalledTimes(1);
+    expect(focusAddressBar).toHaveBeenCalledWith("browser-1");
   });
 
   test("destroys previews on close and only clears the window that actually closed", () => {

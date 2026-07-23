@@ -61,6 +61,7 @@ export function BrowserTab({
   refreshRequestId = 0,
 }: BrowserTabProps) {
   const updateTabBrowserUrl = usePaneLayoutStore((state) => state.updateTabBrowserUrl);
+  const setActivePane = usePaneLayoutStore((state) => state.setActivePane);
   const activePaneId = usePaneLayoutStore(
     (state) => state.environments.get(environmentId)?.activePaneId,
   );
@@ -142,10 +143,21 @@ export function BrowserTab({
     return window.orkestrator?.listen<string>(
       "browser-preview-focus-address",
       (requestedTabId) => {
-        if (requestedTabId === tabId) focusAddressBar();
+        if (requestedTabId !== tabId) return;
+        if (owningPaneId) {
+          setActivePane(owningPaneId, environmentId);
+        }
+        focusAddressBar();
       },
     );
-  }, [focusAddressBar, isActive, tabId]);
+  }, [
+    environmentId,
+    focusAddressBar,
+    isActive,
+    owningPaneId,
+    setActivePane,
+    tabId,
+  ]);
 
   useEffect(() => {
     if (!isActive || activePaneId !== owningPaneId) return;

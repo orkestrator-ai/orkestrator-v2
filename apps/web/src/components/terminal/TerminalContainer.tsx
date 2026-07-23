@@ -80,7 +80,7 @@ const isTabOrTabbar = (collision: Collision): boolean => {
  * When multiple collisions are found, prioritize tabbars/tabs over edge zones
  * to prevent accidental splits when trying to combine tabs.
  */
-const customCollisionDetection: CollisionDetection = (args) => {
+export const customCollisionDetection: CollisionDetection = (args) => {
   // First, check if the pointer is directly over any droppable
   const pointerCollisions = pointerWithin(args);
   if (pointerCollisions.length > 0) {
@@ -178,6 +178,8 @@ export function getTerminalTabDragEndAction({
       return { type: "reorder", paneId: draggedTab.paneId, fromIndex, toIndex };
     }
 
+    if (!getPane(targetPaneId)) return { type: "none" };
+
     return {
       type: "move",
       fromPaneId: draggedTab.paneId,
@@ -217,13 +219,15 @@ export function getTerminalTabDragEndAction({
 
   const targetPane = getPane(overTab.paneId);
   if (!targetPane) return { type: "none" };
+  const toIndex = targetPane.tabs.findIndex((t) => t.id === overTab.tabId);
+  if (toIndex === -1) return { type: "none" };
 
   return {
     type: "move",
     fromPaneId: draggedTab.paneId,
     toPaneId: overTab.paneId,
     tabId: draggedTab.tabId,
-    toIndex: targetPane.tabs.findIndex((t) => t.id === overTab.tabId),
+    toIndex,
   };
 }
 
@@ -390,6 +394,7 @@ export function TerminalContainer({
           console.warn("[setup-terminal] ensureEnvironmentSetup returned no result", {
             environmentId,
           });
+          rerunSetupFetchFailedRef.current = true;
           const store = useEnvironmentStore.getState();
           store.setSetupCommandsResolved(environmentId, true);
           store.setSetupScriptsRunning(environmentId, false);
@@ -1284,17 +1289,17 @@ export function TerminalContainer({
       displayTitle?: string,
     ) => {
       if (!isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) {
-        return;
+        return false;
       }
 
       const allTabs = getAllTabs(environmentId);
       if (allTabs.length >= MAX_TABS) {
         console.debug("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
-        return;
+        return false;
       }
 
       if (!usePaneLayoutStore.getState().getPane(targetPaneId, environmentId)) {
-        return;
+        return false;
       }
 
       const newTabId = createUniqueTabId("tab");
@@ -1311,6 +1316,7 @@ export function TerminalContainer({
         environmentId,
       );
       addTab(targetPaneId, newTab, environmentId);
+      return true;
     },
     [
       activePaneId,
@@ -1333,8 +1339,9 @@ export function TerminalContainer({
           .findPaneWithTab(request.sourceTabId, environmentId);
         if (!pane) return;
 
-        usePaneLayoutStore.getState().setActivePane(pane.id, environmentId);
-        createBrowserTab(request.url, pane.id);
+        if (createBrowserTab(request.url, pane.id)) {
+          usePaneLayoutStore.getState().setActivePane(pane.id, environmentId);
+        }
       }),
     [createBrowserTab, environmentId],
   );

@@ -1,6 +1,6 @@
 import type { BrowserWindow, ContextMenuParams, MenuItemConstructorOptions } from "electron";
 
-type MenuLike = {
+export type MenuLike = {
   buildFromTemplate(template: MenuItemConstructorOptions[]): { popup(options: { window: BrowserWindow }): void };
 };
 

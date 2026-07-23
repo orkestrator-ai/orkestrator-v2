@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./browser-preview": "./src/browser-preview.ts",
     "./connections": "./src/connections.ts",
     "./gateway-token": "./src/gateway-token.ts",
     "./review-prompt": "./src/review-prompt.ts",

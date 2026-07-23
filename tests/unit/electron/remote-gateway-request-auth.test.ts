@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { installRemoteGatewayRequestAuth } from "../../../apps/desktop/electron/remote-gateway-request-auth";
 
-function installHarness() {
+function installHarness(options: { browserPreviewOnly?: boolean } = {}) {
   let beforeHeaders: ((details: any, callback: (response: any) => void) => void) | null = null;
   let receivedHeaders: ((details: any, callback: (response: any) => void) => void) | null = null;
   const webRequest = {
@@ -11,6 +11,7 @@ function installHarness() {
   installRemoteGatewayRequestAuth(
     webRequest as never,
     (url) => url.startsWith("https://desk.example/__orkestrator/") ? "Bearer gateway-token" : null,
+    options,
   );
   return {
     beforeHeaders: () => {
@@ -205,6 +206,102 @@ describe("remote gateway renderer request authentication", () => {
         Authorization: "Bearer gateway-token",
         Origin: "https://orkestrator.dev",
       },
+    });
+  });
+
+  test("limits a dedicated preview session to preview namespaces", () => {
+    const harness = installHarness({ browserPreviewOnly: true });
+    const preview = mock(() => undefined);
+    harness.beforeHeaders()({
+      url: "https://desk.example/__orkestrator/browser/loopback/3000/",
+      resourceType: "mainFrame",
+      frame: null,
+      requestHeaders: {},
+    }, preview);
+    expect(preview).toHaveBeenCalledWith({
+      requestHeaders: {
+        Authorization: "Bearer gateway-token",
+        Origin: "https://orkestrator.dev",
+      },
+    });
+
+    const privileged = mock(() => undefined);
+    harness.beforeHeaders()({
+      url: "https://desk.example/__orkestrator/invoke",
+      resourceType: "mainFrame",
+      frame: null,
+      requestHeaders: { Authorization: "Bearer ambient", Cookie: "gateway=ambient" },
+    }, privileged);
+    expect(privileged).toHaveBeenCalledWith({ requestHeaders: {} });
+  });
+
+  test("authorizes cross-scope main-frame navigation but not cross-scope subresources in a dedicated preview session", () => {
+    const harness = installHarness({ browserPreviewOnly: true });
+    const previewFrame = {
+      url: "https://desk.example/__orkestrator/browser/loopback/3000/app",
+      parent: null,
+    };
+
+    const mainFrame = mock(() => undefined);
+    harness.beforeHeaders()({
+      url: "https://desk.example/__orkestrator/browser/loopback/4000/next",
+      resourceType: "mainFrame",
+      referrer: previewFrame.url,
+      frame: previewFrame,
+      requestHeaders: { Authorization: "Bearer stale", Accept: "text/html" },
+    }, mainFrame);
+    expect(mainFrame).toHaveBeenCalledWith({
+      requestHeaders: {
+        Accept: "text/html",
+        Authorization: "Bearer gateway-token",
+        Origin: "https://orkestrator.dev",
+      },
+    });
+
+    const xhr = mock(() => undefined);
+    harness.beforeHeaders()({
+      url: "https://desk.example/__orkestrator/browser/loopback/4000/api",
+      resourceType: "xhr",
+      referrer: previewFrame.url,
+      frame: previewFrame,
+      requestHeaders: {
+        Authorization: "Bearer ambient",
+        Cookie: "gateway=ambient",
+        Accept: "application/json",
+      },
+    }, xhr);
+    expect(xhr).toHaveBeenCalledWith({ requestHeaders: { Accept: "application/json" } });
+  });
+
+  test("rewrites response CORS only for authorized dedicated-preview requests", () => {
+    const harness = installHarness({ browserPreviewOnly: true });
+    const previewFrame = {
+      url: "https://desk.example/__orkestrator/browser/loopback/3000/",
+      parent: null,
+    };
+
+    const mainFrame = mock(() => undefined);
+    harness.receivedHeaders()({
+      url: "https://desk.example/__orkestrator/browser/loopback/4000/",
+      resourceType: "mainFrame",
+      referrer: previewFrame.url,
+      frame: previewFrame,
+      responseHeaders: { "Access-Control-Allow-Origin": ["https://desk.example"], Server: ["test"] },
+    }, mainFrame);
+    expect(mainFrame).toHaveBeenCalledWith({
+      responseHeaders: { Server: ["test"], "Access-Control-Allow-Origin": ["*"] },
+    });
+
+    const xhr = mock(() => undefined);
+    harness.receivedHeaders()({
+      url: "https://desk.example/__orkestrator/browser/loopback/4000/api",
+      resourceType: "xhr",
+      referrer: previewFrame.url,
+      frame: previewFrame,
+      responseHeaders: { "Access-Control-Allow-Origin": ["https://desk.example"], Server: ["test"] },
+    }, xhr);
+    expect(xhr).toHaveBeenCalledWith({
+      responseHeaders: { "Access-Control-Allow-Origin": ["https://desk.example"], Server: ["test"] },
     });
   });
 });

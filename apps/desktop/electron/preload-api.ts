@@ -1,4 +1,9 @@
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
+import type {
+  BrowserPreviewAttachInput,
+  BrowserPreviewBounds,
+  BrowserPreviewState,
+} from "@orkestrator/protocol/browser-preview";
 import {
   parseConnectionList,
   type ConnectToRemoteInput,
@@ -119,6 +124,36 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
     window: {
       startDragging(): Promise<void> {
         return ipcRenderer.invoke("orkestrator:window:start-dragging");
+      },
+    },
+
+    browserPreview: {
+      attach(input: BrowserPreviewAttachInput): Promise<BrowserPreviewState> {
+        return ipcRenderer.invoke("orkestrator:browser-preview:attach", input);
+      },
+      setBounds(tabId: string, bounds: BrowserPreviewBounds): Promise<BrowserPreviewState> {
+        return ipcRenderer.invoke("orkestrator:browser-preview:set-bounds", tabId, bounds);
+      },
+      setVisible(tabId: string, visible: boolean): Promise<BrowserPreviewState | null> {
+        return ipcRenderer.invoke("orkestrator:browser-preview:set-visible", tabId, visible);
+      },
+      navigate(tabId: string, url: string): Promise<BrowserPreviewState> {
+        return ipcRenderer.invoke("orkestrator:browser-preview:navigate", tabId, url);
+      },
+      goBack(tabId: string): Promise<BrowserPreviewState> {
+        return ipcRenderer.invoke("orkestrator:browser-preview:go-back", tabId);
+      },
+      goForward(tabId: string): Promise<BrowserPreviewState> {
+        return ipcRenderer.invoke("orkestrator:browser-preview:go-forward", tabId);
+      },
+      reload(tabId: string): Promise<BrowserPreviewState> {
+        return ipcRenderer.invoke("orkestrator:browser-preview:reload", tabId);
+      },
+      openDevTools(tabId: string): Promise<BrowserPreviewState> {
+        return ipcRenderer.invoke("orkestrator:browser-preview:open-devtools", tabId);
+      },
+      destroy(tabId: string): Promise<void> {
+        return ipcRenderer.invoke("orkestrator:browser-preview:destroy", tabId);
       },
     },
   };

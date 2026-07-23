@@ -44,5 +44,16 @@ interface Window {
     window: {
       startDragging(): Promise<void>;
     };
+    browserPreview?: {
+      attach(input: import("@orkestrator/protocol/browser-preview").BrowserPreviewAttachInput): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
+      setBounds(tabId: string, bounds: import("@orkestrator/protocol/browser-preview").BrowserPreviewBounds): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
+      setVisible(tabId: string, visible: boolean): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState | null>;
+      navigate(tabId: string, url: string): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
+      goBack(tabId: string): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
+      goForward(tabId: string): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
+      reload(tabId: string): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
+      openDevTools(tabId: string): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
+      destroy(tabId: string): Promise<void>;
+    };
   };
 }

@@ -10,6 +10,7 @@ export {
 export {
   createBuildReviewPrompt,
   createBuildPrompt,
+  createAddressIssuesPrompt,
   createVerificationPrompt,
   createFixPrompt,
   type TaskSnapshot,

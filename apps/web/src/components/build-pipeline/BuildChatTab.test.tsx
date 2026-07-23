@@ -21,6 +21,16 @@ const mockGetLocalClaudeServerStatus = mock(() =>
 const mockGetProjectNotes = mock(() =>
   Promise.resolve({ projectId: "project-1", notes: "" })
 );
+const mockDetectPr = mock(() => Promise.resolve(null as {
+  url: string;
+  state: "open" | "merged" | "closed";
+  hasMergeConflicts: boolean;
+} | null));
+const mockDetectPrLocal = mock(() => Promise.resolve(null as {
+  url: string;
+  state: "open" | "merged" | "closed";
+  hasMergeConflicts: boolean;
+} | null));
 
 mock.module("@/lib/backend", () => ({
   startClaudeServer: mockStartClaudeServer,
@@ -28,6 +38,8 @@ mock.module("@/lib/backend", () => ({
   startLocalClaudeServer: mockStartLocalClaudeServer,
   getLocalClaudeServerStatus: mockGetLocalClaudeServerStatus,
   getProjectNotes: mockGetProjectNotes,
+  detectPr: mockDetectPr,
+  detectPrLocal: mockDetectPrLocal,
 }));
 
 // Claude client
@@ -85,6 +97,7 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
+import { createAddressIssuesPrompt } from "@/prompts/build-pipeline";
 import { BuildChatTab } from "./BuildChatTab";
 import type { BuildTabData } from "@/types/paneLayout";
 import type { ClaudeMessage } from "@/lib/claude-client";
@@ -200,6 +213,48 @@ function seedPipelineWithBuildSession(phase: "building" | "paused", sessionStatu
     ]),
     buildEnvironmentIds: new Set([ENV_ID]),
   });
+}
+
+function seedClaudeReviewPipeline(phase: "reviewing" | "addressing" = "reviewing") {
+  seedPipelineWithBuildSession("building", "running");
+  useBuildPipelineStore.setState((state) => {
+    const pipelines = new Map(state.pipelines);
+    const pipeline = pipelines.get(PIPELINE_ID)!;
+    pipelines.set(PIPELINE_ID, {
+      ...pipeline,
+      phase,
+      sessions: [
+        {
+          ...pipeline.sessions[0]!,
+          phase: "review",
+          label: "Review Session",
+        },
+      ],
+    });
+    return { pipelines };
+  });
+  seedClaudeSession(false);
+}
+
+function seedClaudePrPipeline(phase: "creating-pr" | "resolving-conflicts" = "creating-pr") {
+  seedPipelineWithBuildSession("building", "running");
+  useBuildPipelineStore.setState((state) => {
+    const pipelines = new Map(state.pipelines);
+    const pipeline = pipelines.get(PIPELINE_ID)!;
+    pipelines.set(PIPELINE_ID, {
+      ...pipeline,
+      phase,
+      sessions: [
+        {
+          ...pipeline.sessions[0]!,
+          phase: phase === "creating-pr" ? "pr" : "resolve-conflicts",
+          label: phase === "creating-pr" ? "PR Creation Session" : "Conflict Resolution Session",
+        },
+      ],
+    });
+    return { pipelines };
+  });
+  seedClaudeSession(false);
 }
 
 function seedClaudeSession(isLoading: boolean) {
@@ -393,6 +448,8 @@ describe("BuildChatTab", () => {
     mockStartLocalClaudeServer.mockClear();
     mockGetLocalClaudeServerStatus.mockClear();
     mockGetProjectNotes.mockClear();
+    mockDetectPr.mockClear();
+    mockDetectPrLocal.mockClear();
     mockCreateClient.mockClear();
     mockCheckHealth.mockClear();
     mockGetModels.mockClear();
@@ -420,10 +477,33 @@ describe("BuildChatTab", () => {
     mockGetSessionMessages.mockImplementation(() => Promise.resolve([]));
     mockSendPrompt.mockImplementation(() => Promise.resolve(true));
     mockAbortSession.mockImplementation(() => Promise.resolve(true));
+    mockDetectPr.mockImplementation(() => Promise.resolve(null));
+    mockDetectPrLocal.mockImplementation(() => Promise.resolve(null));
   });
 
   afterEach(() => {
     cleanup();
+  });
+
+  test.each([
+    ["codex", "Codex"],
+    ["opencode", "OpenCode"],
+  ] as const)("routes %s pipelines through the lazy build runner", (agentType, label) => {
+    seedPipeline("waiting-for-setup");
+    seedEnvironment({ workspaceReady: false });
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          agentType,
+        }),
+      };
+    });
+
+    render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+    expect(screen.getByText(`Loading ${label} build runner...`)).toBeTruthy();
   });
 
   // -----------------------------------------------------------------------
@@ -841,6 +921,84 @@ describe("BuildChatTab", () => {
       });
     });
 
+    test("sends a trimmed jump-in message on Enter but not Shift+Enter", async () => {
+      seedPipelineWithBuildSession("paused", "idle");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(false);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      const textarea = await screen.findByPlaceholderText("Send a message to the agent...");
+      fireEvent.change(textarea, { target: { value: "  inspect the edge case  " } });
+      fireEvent.keyDown(textarea, { key: "Enter", shiftKey: true });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
+
+      await waitFor(() => {
+        expect(mockSendPrompt).toHaveBeenCalledWith(
+          { baseUrl: "http://127.0.0.1:9999" },
+          SESSION_ID,
+          "inspect the edge case",
+          { permissionMode: "bypassPermissions" },
+        );
+      });
+      expect((textarea as HTMLTextAreaElement).value).toBe("");
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages.at(-1)?.content).toBe(
+        "inspect the edge case",
+      );
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+    });
+
+    test("restores the paused session to idle and surfaces an error when jump-in send fails", async () => {
+      mockSendPrompt.mockResolvedValueOnce(false);
+      seedPipelineWithBuildSession("paused", "idle");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(false);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      const textarea = await screen.findByPlaceholderText("Send a message to the agent...");
+      fireEvent.change(textarea, { target: { value: "retry this" } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.sessions[0]?.status).toBe("idle");
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages.at(-1)?.content).toBe(
+          "Failed to send message to the agent",
+        );
+      });
+    });
+
+    test("aborts an in-flight jump-in message", async () => {
+      seedPipelineWithBuildSession("paused", "idle");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(false);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      const textarea = await screen.findByPlaceholderText("Send a message to the agent...");
+      fireEvent.change(textarea, { target: { value: "long-running request" } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+
+      await waitFor(() => {
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+      });
+      const stopButton = document.querySelector("button.h-9.w-9");
+      expect(stopButton).toBeTruthy();
+      fireEvent.click(stopButton!);
+
+      await waitFor(() => {
+        expect(mockAbortSession).toHaveBeenCalledWith(
+          { baseUrl: "http://127.0.0.1:9999" },
+          SESSION_ID,
+        );
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+      });
+    });
+
     test("does not show stop button when paused", async () => {
       seedPipeline("paused");
       seedEnvironment({ isLocal: false, workspaceReady: true });
@@ -967,6 +1125,70 @@ describe("BuildChatTab", () => {
   // -----------------------------------------------------------------------
 
   describe("event stream disconnection", () => {
+    test("refreshes messages and records context usage from session events", async () => {
+      const refreshedMessage: ClaudeMessage = {
+        id: "refreshed-message",
+        role: "assistant",
+        content: "Fresh response",
+        parts: [{ type: "text", content: "Fresh response" }],
+        timestamp: "2026-06-22T00:00:01.000Z",
+      };
+      mockGetSessionMessages.mockResolvedValueOnce([refreshedMessage]);
+      mockSubscribeToEvents.mockImplementationOnce(() =>
+        (async function* () {
+          yield {
+            type: "session.updated",
+            sessionId: SESSION_ID,
+            data: {
+              model: "anthropic/claude-sonnet",
+              contextUsage: { usedTokens: 2_500, totalContextTokens: 10_000 },
+            },
+          } as any;
+        })() as unknown as AsyncGenerator<never, void, unknown>,
+      );
+      seedPipelineWithBuildSession("paused", "idle");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
+          refreshedMessage,
+        ]);
+        expect(useClaudeStore.getState().contextUsage.get(SESSION_KEY)).toEqual({
+          usedTokens: 2_500,
+          totalTokens: 10_000,
+          percentUsed: 25,
+          modelId: "anthropic/claude-sonnet",
+        });
+      });
+    });
+
+    test("turns a session error event into an idle error message", async () => {
+      mockSubscribeToEvents.mockImplementationOnce(() =>
+        (async function* () {
+          yield {
+            type: "session.error",
+            sessionId: SESSION_ID,
+            data: { error: "tool execution failed" },
+          } as any;
+        })() as unknown as AsyncGenerator<never, void, unknown>,
+      );
+      seedPipelineWithBuildSession("paused", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(true);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        const session = useClaudeStore.getState().sessions.get(SESSION_KEY);
+        expect(session?.isLoading).toBe(false);
+        expect(session?.messages.at(-1)?.content).toBe("tool execution failed");
+        expect(session?.messages.at(-1)?.id.startsWith("[ERROR]")).toBe(true);
+      });
+    });
+
     test("event subscription failure surfaces the error screen with reconnect controls", async () => {
       // Init succeeds (cached client + healthy), then the SSE subscription
       // throws, simulating the bridge dropping the stream mid-run.
@@ -1023,6 +1245,45 @@ describe("BuildChatTab", () => {
   });
 
   describe("automatic phase advancement", () => {
+    test("maps task images to WebP Claude attachments for the initial build prompt", async () => {
+      seedPipeline("waiting-for-setup");
+      useBuildPipelineStore.setState((state) => {
+        const pipelines = new Map(state.pipelines);
+        const pipeline = pipelines.get(PIPELINE_ID)!;
+        pipelines.set(PIPELINE_ID, {
+          ...pipeline,
+          taskSnapshot: {
+            ...pipeline.taskSnapshot,
+            images: [{ filename: "wireframe.png", data: "YWJjMTIz" }],
+          },
+        });
+        return { pipelines };
+      });
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(false);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(mockSendPrompt).toHaveBeenCalledWith(
+          { baseUrl: "http://127.0.0.1:9999" },
+          SESSION_ID,
+          expect.stringContaining("Test task"),
+          {
+            permissionMode: "bypassPermissions",
+            attachments: [
+              {
+                type: "image",
+                path: "wireframe.png",
+                filename: "wireframe.png",
+                dataUrl: "data:image/webp;base64,YWJjMTIz",
+              },
+            ],
+          },
+        );
+      });
+    });
+
     test("advances an idle build session into review", async () => {
       seedPipelineWithBuildSession("building", "running");
       seedEnvironment({ isLocal: false, workspaceReady: true });
@@ -1041,6 +1302,150 @@ describe("BuildChatTab", () => {
         expect.stringContaining("review"),
         expect.objectContaining({ permissionMode: "bypassPermissions" }),
       );
+    });
+
+    test("fails the pipeline when review-session creation rejects", async () => {
+      mockCreateSession.mockImplementationOnce(() =>
+        Promise.reject(new Error("review bridge unavailable")),
+      );
+      seedPipelineWithBuildSession("building", "running");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+      seedClaudeSession(false);
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("failed");
+        expect(pipeline?.error).toBe("Failed to create review session");
+      });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("dispatches the shared safely-scoped address-issues prompt when review becomes idle", async () => {
+      let resolvePrompt: ((value: boolean) => void) | undefined;
+      mockSendPrompt.mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            resolvePrompt = resolve;
+          }),
+      );
+      seedClaudeReviewPipeline();
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(mockSendPrompt).toHaveBeenCalledWith(
+          { baseUrl: "http://127.0.0.1:9999" },
+          SESSION_ID,
+          createAddressIssuesPrompt(),
+          { permissionMode: "bypassPermissions" },
+        );
+      });
+
+      const prompt = createAddressIssuesPrompt();
+      expect(prompt).toContain(
+        "Stage only files that clearly belong to the review fixes and test coverage changes you made",
+      );
+      expect(prompt).toContain("Do NOT add secrets, credentials, `.env*` files");
+      expect(prompt).toContain("leave them uncommitted and report them");
+
+      await act(async () => {
+        resolvePrompt?.(true);
+      });
+    });
+
+    test("keeps the successful address-issues follow-up in the review session until it idles", async () => {
+      seedClaudeReviewPipeline();
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("addressing");
+        expect(pipeline?.sessions).toHaveLength(1);
+        expect(pipeline?.sessions[0]?.phase).toBe("review");
+        expect(pipeline?.sessions[0]?.status).toBe("running");
+      });
+
+      const reviewSession = useClaudeStore.getState().sessions.get(SESSION_KEY);
+      expect(reviewSession?.isLoading).toBe(true);
+      expect(reviewSession?.messages.at(-1)?.content).toBe(createAddressIssuesPrompt());
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
+    test("fails the pipeline when the address-issues follow-up is rejected", async () => {
+      mockSendPrompt.mockResolvedValueOnce(false);
+      seedClaudeReviewPipeline();
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("failed");
+        expect(pipeline?.error).toBe("Failed to send address issues prompt");
+      });
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
+    test("starts verification after the addressing review session idles", async () => {
+      mockCreateSession.mockResolvedValueOnce({ sessionId: "verify-session" });
+      seedClaudeReviewPipeline("addressing");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("verifying");
+        expect(pipeline?.sessions.at(-1)?.phase).toBe("verify");
+        expect(pipeline?.sessions.at(-1)?.sdkSessionId).toBe("verify-session");
+      });
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        { baseUrl: "http://127.0.0.1:9999" },
+        "verify-session",
+        expect.stringContaining("Verify the changes"),
+        expect.objectContaining({ permissionMode: "bypassPermissions" }),
+      );
+    });
+
+    test("fails the pipeline when verification-session creation fails", async () => {
+      mockCreateSession.mockImplementationOnce(() =>
+        Promise.reject(new Error("verification bridge unavailable")),
+      );
+      seedClaudeReviewPipeline("addressing");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("failed");
+        expect(pipeline?.error).toBe("Failed to create verification session");
+      });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("fails the pipeline when the verification prompt is rejected", async () => {
+      mockCreateSession.mockResolvedValueOnce({ sessionId: "verify-session" });
+      mockSendPrompt.mockResolvedValueOnce(false);
+      seedClaudeReviewPipeline("addressing");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("failed");
+        expect(pipeline?.error).toBe("Failed to send verification prompt");
+      });
+      expect(
+        useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions.at(-1)?.phase,
+      ).toBe("verify");
     });
 
     test("starts PR creation after successful verification", async () => {
@@ -1083,6 +1488,89 @@ describe("BuildChatTab", () => {
         expect(pipeline?.phase).toBe("failed");
         expect(pipeline?.error).toContain("Max iterations (3) reached");
       });
+    });
+
+    test("detects PR conflicts and starts a conflict-resolution session", async () => {
+      mockDetectPr.mockResolvedValueOnce({
+        url: "https://example.test/pull/42",
+        state: "open",
+        hasMergeConflicts: true,
+      });
+      mockCreateSession.mockResolvedValueOnce({ sessionId: "conflict-session" });
+      seedClaudePrPipeline();
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("resolving-conflicts");
+        expect(pipeline?.sessions.at(-1)?.phase).toBe("resolve-conflicts");
+      });
+      expect(mockDetectPr).toHaveBeenCalledWith(CONTAINER_ID, "feat/test");
+      expect(useEnvironmentStore.getState().environments[0]).toMatchObject({
+        prUrl: "https://example.test/pull/42",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        { baseUrl: "http://127.0.0.1:9999" },
+        "conflict-session",
+        expect.stringContaining("merge conflict"),
+        { permissionMode: "bypassPermissions" },
+      );
+    });
+
+    test("completes PR creation when conflict detection reports no conflicts", async () => {
+      mockDetectPr.mockResolvedValueOnce({
+        url: "https://example.test/pull/43",
+        state: "open",
+        hasMergeConflicts: false,
+      });
+      seedClaudePrPipeline();
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase).toBe("complete");
+      });
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
+    test("fails when conflicts remain after a conflict-resolution session", async () => {
+      mockDetectPr.mockResolvedValueOnce({
+        url: "https://example.test/pull/44",
+        state: "open",
+        hasMergeConflicts: true,
+      });
+      seedClaudePrPipeline("resolving-conflicts");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("failed");
+        expect(pipeline?.error).toBe("Merge conflicts could not be fully resolved automatically");
+      });
+    });
+
+    test("completes when conflict detection confirms the resolution succeeded", async () => {
+      mockDetectPr.mockResolvedValueOnce({
+        url: "https://example.test/pull/45",
+        state: "open",
+        hasMergeConflicts: false,
+      });
+      seedClaudePrPipeline("resolving-conflicts");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase).toBe("complete");
+      });
+      expect(mockDetectPr).toHaveBeenCalledWith(CONTAINER_ID, "feat/test");
     });
   });
 });

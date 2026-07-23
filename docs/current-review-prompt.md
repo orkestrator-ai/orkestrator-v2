@@ -220,7 +220,11 @@ Category is one of: correctness, security, privacy, supply-chain, error-handling
 - Ready: yes | with-fixes | no
 - Reasoning: 1-2 sentences.
 
-## Summary
+## Summary of change
+
+Write a couple of paragraphs describing what the change being reviewed involves.
+
+## Review summary
 
 One paragraph. If nothing high-confidence was found, say exactly:
 "No high-confidence issues were found in the reviewed scope."
@@ -242,7 +246,7 @@ Begin by running the git commands to understand the current state.
 | 2 | Run full project test suite; record failures |
 | 3 | Diff against `origin/<targetBranch>...HEAD`; review bugs/edge-cases/race-conditions, error handling, expanded security checklist; typecheck/build; gate issues at confidence >= 75 with P0/P1/P2 severity |
 | 4 | Audit test coverage for all impacted files (whole test files, not only diff hunks) |
-| Output | Markdown sections: Review Scope, What Changed, Risk Profile, Test Results, Strengths, Issues (numbered and tagged `### 1. [P0\|P1\|P2][conf:NN][category]` with `####` title headings), Test Coverage Gaps, Verdict, Summary |
+| Output | Markdown sections: Review Scope, What Changed, Risk Profile, Test Results, Strengths, Issues (numbered and tagged `### 1. [P0\|P1\|P2][conf:NN][category]` with `####` title headings), Test Coverage Gaps, Verdict, Summary of change, Review summary |
 
 ## Related prompts (not this button)
 

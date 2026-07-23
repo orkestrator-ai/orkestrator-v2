@@ -194,7 +194,11 @@ Category is one of: correctness, security, privacy, supply-chain, error-handling
 - Ready: yes | with-fixes | no
 - Reasoning: 1-2 sentences.
 
-## Summary
+## Summary of change
+
+Write a couple of paragraphs describing what the change being reviewed involves.
+
+## Review summary
 
 One paragraph. If nothing high-confidence was found, say exactly:
 "No high-confidence issues were found in the reviewed scope."

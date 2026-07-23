@@ -9,7 +9,7 @@ import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters"
 import { createUuid } from "@/lib/uuid";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useConfigStore, useCodexStore, useEnvironmentStore } from "@/stores";
-import type { BuildPhase, PipelineSession } from "@/stores/buildPipelineStore";
+import type { BuildPhase, PipelineSession, ResumableBuildPhase } from "@/stores/buildPipelineStore";
 import {
   abortSession,
   checkHealth,
@@ -136,6 +136,28 @@ function buildErrorMessage(content: string): CodexMessage {
     parts: [{ type: "text", content }],
     createdAt: new Date().toISOString(),
   };
+}
+
+function getFailedPromptRetryPhase(
+  session: PipelineSession,
+  messages: CodexMessage[],
+): ResumableBuildPhase {
+  switch (session.phase) {
+    case "build":
+      return "building";
+    case "review":
+      return messages.filter((message) => message.role === "user").length > 1
+        ? "addressing"
+        : "reviewing";
+    case "verify":
+      return "verifying";
+    case "fix":
+      return "fixing";
+    case "pr":
+      return "creating-pr";
+    case "resolve-conflicts":
+      return "resolving-conflicts";
+  }
 }
 
 function codexMessagesEqual(a: CodexMessage[], b: CodexMessage[]): boolean {
@@ -306,6 +328,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
   const pollingSessionIdRef = useRef<string | null>(null);
   const pendingPromptDispatchesRef = useRef<Set<string>>(new Set());
   const [jumpInText, setJumpInText] = useState("");
+  const [isReconnecting, setIsReconnecting] = useState(false);
   const jumpInTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(pipelineId));
@@ -318,6 +341,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     setVerificationResult,
     incrementIteration,
     setPipelineError,
+    retryFailedPipeline,
     pausePipeline,
     resumePipeline,
   } = useBuildPipelineStore();
@@ -1482,6 +1506,81 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     setSessionLoading,
   ]);
 
+  const failedPromptRetry = useMemo(() => {
+    if (!pipeline || pipeline.phase !== "failed") return null;
+    const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
+    if (!currentSession) return null;
+
+    const messages = sessionsMap.get(currentSession.sessionKey)?.messages ?? [];
+    const userMessages = messages.filter((message) => message.role === "user");
+    const lastPrompt = userMessages.at(-1)?.content.trim();
+    if (!lastPrompt) return null;
+
+    const shouldReuseTaskImages =
+      currentSession.phase === "build"
+      || currentSession.phase === "verify"
+      || currentSession.phase === "fix"
+      || (currentSession.phase === "review" && userMessages.length === 1);
+
+    return {
+      currentSession,
+      lastPrompt,
+      retryPhase: getFailedPromptRetryPhase(currentSession, messages),
+      attachments: shouldReuseTaskImages
+        ? taskImagesToAttachments(pipeline.taskSnapshot.images)
+        : undefined,
+    };
+  }, [pipeline, sessionsMap]);
+
+  const handleReconnect = useCallback(async () => {
+    if (!failedPromptRetry || isReconnecting) return;
+
+    const { currentSession, lastPrompt, retryPhase, attachments } = failedPromptRetry;
+    setIsReconnecting(true);
+
+    try {
+      const activeClient = await initializeClient();
+      if (!retryFailedPipeline(pipelineId, retryPhase)) return;
+
+      markSessionRunning(pipelineId, currentSession.sdkSessionId);
+      setSessionError(currentSession.sessionKey, undefined);
+      setSessionLoading(currentSession.sessionKey, true);
+
+      const success = await sendPromptWithDispatchGuard(
+        activeClient,
+        currentSession.sdkSessionId,
+        lastPrompt,
+        attachments ? { attachments } : undefined,
+      );
+      if (!success) {
+        throw new Error("Failed to retry the last prompt");
+      }
+    } catch (error) {
+      const message = `Reconnect failed: ${
+        error instanceof Error ? error.message : "Unable to reach the Codex bridge"
+      }`;
+      appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
+      setSessionError(currentSession.sessionKey, message);
+      setSessionLoading(currentSession.sessionKey, false);
+      markSessionIdle(pipelineId, currentSession.sdkSessionId);
+      setPipelineError(pipelineId, message);
+    } finally {
+      setIsReconnecting(false);
+    }
+  }, [
+    failedPromptRetry,
+    initializeClient,
+    isReconnecting,
+    markSessionIdle,
+    markSessionRunning,
+    pipelineId,
+    retryFailedPipeline,
+    sendPromptWithDispatchGuard,
+    setPipelineError,
+    setSessionError,
+    setSessionLoading,
+  ]);
+
   const setupPending = isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady });
 
   const isRunning = pipeline && !["complete", "failed", "paused"].includes(pipeline.phase);
@@ -1616,7 +1715,24 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
               <span className="text-xs font-medium text-green-400">All acceptance criteria satisfied</span>
             )}
             {pipeline.phase === "failed" && (
-              <span className="max-w-[300px] truncate text-xs font-medium text-red-400">{pipeline.error}</span>
+              <>
+                <span className="max-w-[300px] truncate text-xs font-medium text-red-400">{pipeline.error}</span>
+                {failedPromptRetry && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      void handleReconnect();
+                    }}
+                    disabled={isReconnecting}
+                    className="h-6 gap-1.5 px-2.5 text-xs"
+                    title="Reconnect and retry the last prompt"
+                  >
+                    <RefreshCw className={cn("h-3 w-3", isReconnecting && "animate-spin")} />
+                    {isReconnecting ? "Reconnecting..." : "Reconnect"}
+                  </Button>
+                )}
+              </>
             )}
           </div>
         </div>

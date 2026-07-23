@@ -409,6 +409,29 @@ describe("buildPipelineStore", () => {
     });
   });
 
+  describe("retryFailedPipeline", () => {
+    test("restores the requested phase and clears the failure", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().setPipelineError(id, "Connection dropped");
+
+      const retried = useBuildPipelineStore.getState().retryFailedPipeline(id, "addressing");
+
+      expect(retried).toBe(true);
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      expect(pipeline.phase).toBe("addressing");
+      expect(pipeline.error).toBeUndefined();
+    });
+
+    test("does not restart a pipeline that is not failed", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+
+      const retried = useBuildPipelineStore.getState().retryFailedPipeline(id, "building");
+
+      expect(retried).toBe(false);
+      expect(useBuildPipelineStore.getState().pipelines.get(id)!.phase).toBe("creating-environment");
+    });
+  });
+
   describe("pausePipeline", () => {
     test("sets phase to paused and clears error", () => {
       const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());

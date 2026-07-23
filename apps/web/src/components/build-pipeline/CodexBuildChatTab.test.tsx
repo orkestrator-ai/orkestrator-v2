@@ -1403,6 +1403,76 @@ describe("CodexBuildChatTab", () => {
     expect(pipeline?.error).toBe("previous failure");
   });
 
+  test("reconnects a failed build and retries its last prompt from the top-right action", async () => {
+    seedReviewPipeline();
+    seedCodexStore(false);
+    const reviewPrompt = "Review the implementation.";
+    const addressPrompt = "Please address all the above issues and test coverage gaps.";
+    useCodexStore.setState((state) => ({
+      sessions: new Map(state.sessions).set(SESSION_KEY, {
+        sessionId: SESSION_ID,
+        messages: [
+          {
+            id: "review-prompt",
+            role: "user",
+            content: reviewPrompt,
+            parts: [{ type: "text", content: reviewPrompt }],
+            createdAt: "2026-04-15T00:00:00.000Z",
+          },
+          {
+            id: "review-result",
+            role: "assistant",
+            content: "Two issues found.",
+            parts: [{ type: "text", content: "Two issues found." }],
+            createdAt: "2026-04-15T00:00:01.000Z",
+          },
+          {
+            id: "address-prompt",
+            role: "user",
+            content: addressPrompt,
+            parts: [{ type: "text", content: addressPrompt }],
+            createdAt: "2026-04-15T00:00:02.000Z",
+          },
+          {
+            id: "stream-error",
+            role: "assistant",
+            content: "stream disconnected before completion",
+            parts: [{ type: "text", content: "stream disconnected before completion" }],
+            createdAt: "2026-04-15T00:00:03.000Z",
+          },
+        ],
+        isLoading: false,
+        error: "stream disconnected before completion",
+        title: "Review Session",
+      }),
+    }));
+    useBuildPipelineStore.getState().setPipelineError(
+      PIPELINE_ID,
+      "stream disconnected before completion",
+    );
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    const reconnectButton = await screen.findByRole("button", { name: "Reconnect" });
+    fireEvent.click(reconnectButton);
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        { baseUrl: "http://127.0.0.1:9999" },
+        SESSION_ID,
+        addressPrompt,
+        undefined,
+      );
+    });
+
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+    expect(pipeline?.phase).toBe("addressing");
+    expect(pipeline?.error).toBeUndefined();
+    expect(pipeline?.sessions[0]?.status).toBe("running");
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.error).toBeUndefined();
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+  });
+
   test("does not start verification while the address-issues prompt is being accepted", async () => {
     seedReviewPipeline();
     seedCodexStore(false);

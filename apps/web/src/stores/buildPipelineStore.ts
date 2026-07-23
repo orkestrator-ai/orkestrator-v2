@@ -95,6 +95,7 @@ interface BuildPipelineState {
   setVerificationResult: (pipelineId: string, result: "pass" | "fail", feedback: string) => void;
   incrementIteration: (pipelineId: string) => void;
   setPipelineError: (pipelineId: string, error: string) => void;
+  retryFailedPipeline: (pipelineId: string, phase: ResumableBuildPhase) => boolean;
   pausePipeline: (pipelineId: string) => void;
   resumePipeline: (pipelineId: string, fallbackPhase?: ResumableBuildPhase) => ResumableBuildPhase | undefined;
   markSessionRunning: (pipelineId: string, sdkSessionId: string) => void;
@@ -263,6 +264,26 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
       newMap.set(pipelineId, { ...pipeline, phase: "failed", error, pausedFromPhase: undefined });
       return { pipelines: newMap };
     }),
+
+  retryFailedPipeline: (pipelineId, phase) => {
+    const pipeline = get().pipelines.get(pipelineId);
+    if (!pipeline || pipeline.phase !== "failed") return false;
+
+    set((state) => {
+      const latest = state.pipelines.get(pipelineId);
+      if (!latest || latest.phase !== "failed") return state;
+      const newMap = new Map(state.pipelines);
+      newMap.set(pipelineId, {
+        ...latest,
+        phase,
+        error: undefined,
+        pausedFromPhase: undefined,
+      });
+      return { pipelines: newMap };
+    });
+
+    return true;
+  },
 
   pausePipeline: (pipelineId) =>
     set((state) => {

@@ -1608,6 +1608,32 @@ describe("CodexChatTab", () => {
     });
   });
 
+  test("uses one-shot review model and effort when creating a native session", async () => {
+    useCodexStore.setState((state) => ({
+      ...state,
+      sessions: new Map(),
+      selectedModel: new Map(),
+      selectedReasoningEffort: new Map(),
+    }));
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive
+        initialAgentModel="gpt-5.4-codex"
+        initialReasoningEffort="high"
+      />,
+    );
+
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalled());
+    const lastCall = mockCreateSession.mock.calls.at(-1) as unknown as unknown[] | undefined;
+    expect(lastCall?.[1]).toMatchObject({
+      model: "gpt-5.4-codex",
+      modelReasoningEffort: "high",
+    });
+  });
+
   test("initializes and drains a queued prompt while the Codex tab is inactive", async () => {
     useCodexStore.setState((state) => ({
       ...state,

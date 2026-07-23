@@ -69,6 +69,8 @@ interface CodexChatTabProps {
   isActive: boolean;
   initialPrompt?: string;
   isReviewTab?: boolean;
+  initialAgentModel?: string;
+  initialReasoningEffort?: string;
   refreshRequestId?: number;
 }
 
@@ -87,6 +89,8 @@ export function CodexChatTab({
   isActive,
   initialPrompt,
   isReviewTab = false,
+  initialAgentModel,
+  initialReasoningEffort,
   refreshRequestId = 0,
 }: CodexChatTabProps) {
   const { containerId, environmentId, isLocal } = data;
@@ -115,6 +119,31 @@ export function CodexChatTab({
     () => createCodexSessionKey(environmentId, tabId),
     [environmentId, tabId],
   );
+
+  useEffect(() => {
+    const store = useCodexStore.getState();
+    if (initialAgentModel) {
+      store.setSelectedModel(sessionKey, initialAgentModel);
+    }
+    const supported: CodexReasoningEffort[] = [
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ];
+    if (
+      initialReasoningEffort
+      && supported.includes(initialReasoningEffort as CodexReasoningEffort)
+    ) {
+      store.setSelectedReasoningEffort(
+        sessionKey,
+        initialReasoningEffort as CodexReasoningEffort,
+      );
+    }
+  }, [initialAgentModel, initialReasoningEffort, sessionKey]);
   const config = useConfigStore((state) => state.config);
   const setConfig = useConfigStore((state) => state.setConfig);
   const persistedPreferencesRef = useRef(getPersistedCodexPreferences(config));

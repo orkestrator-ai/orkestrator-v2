@@ -1629,6 +1629,8 @@ describe("OpenCodeChatTab", () => {
         data={createData()}
         isActive={false}
         initialPrompt={initialPrompt}
+        initialAgentModel="openai/gpt-5.6-sol"
+        initialReasoningEffort="xhigh"
       />,
     );
 
@@ -1637,7 +1639,11 @@ describe("OpenCodeChatTab", () => {
         MOCK_CLIENT,
         "session-1",
         initialPrompt,
-        expect.objectContaining({ model: "openai/gpt-5", mode: "build" }),
+        expect.objectContaining({
+          model: "openai/gpt-5.6-sol",
+          variant: "xhigh",
+          mode: "build",
+        }),
       );
     });
   });

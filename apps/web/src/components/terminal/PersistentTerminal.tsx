@@ -42,6 +42,7 @@ import {
 import { ComposeBar, type ImageAttachment } from "@/components/terminal/ComposeBar";
 import { CheckCircle2 } from "lucide-react";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { buildAgentLaunchCommand } from "@/lib/agent-launch-command";
 
 // Threshold for detecting intermediate/cleared buffer state during React mount cycles.
 // If new buffer is less than 50% of stored buffer size, it likely represents a cleared
@@ -65,6 +66,8 @@ interface PersistentTerminalProps {
   initialPrompt?: string;
   initialCommands?: string[];
   isReviewTab?: boolean;
+  initialAgentModel?: string;
+  initialReasoningEffort?: string;
   paneId: string;
   isSetupTab?: boolean;
   onReady?: (payload: { persistSetupComplete: boolean; workspaceReady?: boolean }) => void;
@@ -93,6 +96,8 @@ export function PersistentTerminal({
   initialPrompt,
   initialCommands,
   isReviewTab = false,
+  initialAgentModel,
+  initialReasoningEffort,
   paneId,
   isSetupTab,
   onReady,
@@ -1164,45 +1169,14 @@ export function PersistentTerminal({
       }
 
       setTimeout(() => {
-        if (tabType === "claude") {
-          // Build the claude command with dangerously-skip-permissions (always enabled)
-          let command = "claude --dangerously-skip-permissions";
-          if (initialPrompt) {
-            const escapedPrompt = initialPrompt
-              .replace(/\\/g, '\\\\')
-              .replace(/"/g, '\\"')
-              .replace(/\$/g, '\\$')
-              .replace(/`/g, '\\`');
-            command += ` "${escapedPrompt}"`;
-          }
-          console.debug("[PersistentTerminal] Launching command for tab:", tabId, "command:", command);
-          writeRef.current(command + "\n");
-        } else if (tabType === "opencode") {
-          // Build the opencode command with optional initial prompt
-          let command = "opencode";
-          if (initialPrompt) {
-            // Escape shell-special characters within double quotes: \, ", $, `
-            const escapedPrompt = initialPrompt
-              .replace(/\\/g, '\\\\')
-              .replace(/"/g, '\\"')
-              .replace(/\$/g, '\\$')
-              .replace(/`/g, '\\`');
-            command += ` --prompt "${escapedPrompt}"`;
-          }
-          console.debug("[PersistentTerminal] Launching command for tab:", tabId, "command:", command);
-          writeRef.current(command + "\n");
-        } else if (tabType === "codex") {
-          // Build the interactive codex command with an optional initial prompt.
-          let command = "codex";
-          if (initialPrompt) {
-            const escapedPrompt = initialPrompt
-              .replace(/\\/g, '\\\\')
-              .replace(/"/g, '\\"')
-              .replace(/\$/g, '\\$')
-              .replace(/`/g, '\\`')
-              .replace(/\n/g, '\\n');
-            command += ` "${escapedPrompt}"`;
-          }
+        const agentCommand = buildAgentLaunchCommand({
+          tabType,
+          initialPrompt,
+          model: initialAgentModel,
+          reasoningEffort: initialReasoningEffort,
+        });
+        if (agentCommand) {
+          const command = agentCommand;
           console.debug("[PersistentTerminal] Launching command for tab:", tabId, "command:", command);
           writeRef.current(command + "\n");
         } else if (tabType === "plain" && initialCommands && initialCommands.length > 0) {
@@ -1226,7 +1200,7 @@ export function PersistentTerminal({
         }
       }, 300);
     }
-  }, [isEnvironmentReady, isConnected, tabType, tabId, initialPrompt, initialCommands, isSetupTab, sessionKey, setHasLaunchedCommandStore]);
+  }, [isEnvironmentReady, isConnected, tabType, tabId, initialPrompt, initialCommands, initialAgentModel, initialReasoningEffort, isSetupTab, sessionKey, setHasLaunchedCommandStore]);
 
   // Focus when active
   useEffect(() => {

@@ -120,6 +120,8 @@ interface Props {
   isActive: boolean;
   initialPrompt?: string;
   isReviewTab?: boolean;
+  initialAgentModel?: string;
+  initialReasoningEffort?: string;
   refreshRequestId?: number;
 }
 
@@ -303,6 +305,8 @@ export function ClaudeTmuxChatTab({
   isActive,
   initialPrompt,
   isReviewTab = false,
+  initialAgentModel,
+  initialReasoningEffort,
   refreshRequestId = 0,
 }: Props) {
   const { environmentId, containerId } = data;
@@ -352,7 +356,7 @@ export function ClaudeTmuxChatTab({
   const availableModels = useMemo(() => tmuxModelList(sdkModels), [sdkModels]);
   const [selectedModel, setSelectedModel] = useState<string>(() =>
     resolveTmuxModelPreference(
-      useConfigStore.getState().config.global.claudeModel,
+      initialAgentModel ?? useConfigStore.getState().config.global.claudeModel,
       tmuxModelList(useClaudeStore.getState().models),
     ),
   );
@@ -476,11 +480,19 @@ export function ClaudeTmuxChatTab({
       : selectedEffort;
 
   useEffect(() => {
+    if (!initialReasoningEffort) return;
+    const supported: ClaudeEffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
+    if (supported.includes(initialReasoningEffort as ClaudeEffortLevel)) {
+      setEffortLevel(storeKey, initialReasoningEffort as ClaudeEffortLevel);
+    }
+  }, [initialReasoningEffort, setEffortLevel, storeKey]);
+
+  useEffect(() => {
     if (hasStarted) return;
     setSelectedModel(
-      resolveTmuxModelPreference(persistedClaudeModel, availableModels),
+      resolveTmuxModelPreference(initialAgentModel ?? persistedClaudeModel, availableModels),
     );
-  }, [hasStarted, persistedClaudeModel, availableModels]);
+  }, [hasStarted, initialAgentModel, persistedClaudeModel, availableModels]);
 
   const persistSelectedModel = useCallback(
     async (modelId: string) => {

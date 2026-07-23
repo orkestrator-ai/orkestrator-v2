@@ -2477,6 +2477,43 @@ describe("TerminalContainer", () => {
       });
     });
 
+    test("carries one-shot review model and effort settings into the created native tab", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="codex"
+            options={{
+              agentLaunchMode: "native",
+              displayTitle: "Review",
+              initialAgentModel: "gpt-5.6-sol",
+              initialReasoningEffort: "xhigh",
+              initialPrompt: "Review this diff",
+              isReviewTab: true,
+            }}
+          />
+        </TerminalProvider>
+      );
+
+      await waitFor(() => {
+        const env = usePaneLayoutStore.getState().environments.get("env-visible");
+        if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
+        const created = env.root.tabs.find((t) => t.type === "codex-native");
+        expect(created).toMatchObject({
+          displayTitle: "Review",
+          initialAgentModel: "gpt-5.6-sol",
+          initialReasoningEffort: "xhigh",
+          initialPrompt: "Review this diff",
+          isReviewTab: true,
+        });
+      });
+    });
+
     test("agentLaunchMode cli opens an OpenCode CLI tab even when OpenCode defaults to native", async () => {
       useConfigStore.setState((state) => ({
         ...state,

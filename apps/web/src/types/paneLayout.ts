@@ -137,6 +137,10 @@ export interface TabInfo {
   displayTitle?: string;
   /** True when the tab was launched from the review workflow. */
   isReviewTab?: boolean;
+  /** One-shot model selected when the agent tab was created. */
+  initialAgentModel?: string;
+  /** One-shot reasoning effort or provider variant selected at creation. */
+  initialReasoningEffort?: string;
   /** Whether this tab runs setup scripts (used to track completion) */
   isSetupTab?: boolean;
 }

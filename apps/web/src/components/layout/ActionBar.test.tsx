@@ -1432,10 +1432,55 @@ describe("ActionBar workflow tabs", () => {
     );
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Code review" }));
-    fireEvent.click(screen.getByRole("button", { name: "Review with Codex" }));
+    expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: /Codex Native/ }));
+    fireEvent.click(screen.getByRole("button", { name: "OK" }));
     expect(createTabMock).toHaveBeenLastCalledWith(
       "codex",
-      expect.objectContaining({ displayTitle: "Review" }),
+      expect.objectContaining({
+        agentLaunchMode: "native",
+        displayTitle: "Review",
+        initialAgentModel: expect.any(String),
+        isReviewTab: true,
+      }),
+    );
+  });
+
+  test("opens the review modal after a mobile long press without launching the default review", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar presentation="grid" />);
+
+    const reviewButton = screen.getByRole("button", { name: "Code review" });
+    fireEvent.pointerDown(reviewButton, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 575));
+    fireEvent.pointerUp(reviewButton, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+
+    expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
+    expect(createTabMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "OK" }));
+    expect(createTabMock).toHaveBeenCalledWith(
+      "codex",
+      expect.objectContaining({
+        agentLaunchMode: "cli",
+        displayTitle: "Review",
+        isReviewTab: true,
+      }),
     );
   });
 

@@ -46,9 +46,23 @@ class FakeWebContentsView {
 }
 
 describe("browser preview startup wiring", () => {
-  test("creates the dedicated locked-down session, auth hooks, manager, and state bridge", async () => {
-    let permissionCheck: ((...args: unknown[]) => boolean) | null = null;
-    let permissionRequest: ((webContents: unknown, permission: string, callback: (allowed: boolean) => void) => void) | null = null;
+  test("creates the dedicated session with main-frame clipboard writes, auth hooks, manager, and state bridge", async () => {
+    let permissionCheck:
+      | ((
+          webContents: unknown,
+          permission: string,
+          requestingOrigin: string,
+          details: { isMainFrame: boolean },
+        ) => boolean)
+      | null = null;
+    let permissionRequest:
+      | ((
+          webContents: unknown,
+          permission: string,
+          callback: (allowed: boolean) => void,
+          details: { isMainFrame: boolean },
+        ) => void)
+      | null = null;
     const webRequest = {
       onBeforeSendHeaders: mock(() => undefined),
       onHeadersReceived: mock(() => undefined),
@@ -82,10 +96,48 @@ describe("browser preview startup wiring", () => {
     expect(fromPartition).toHaveBeenCalledWith("persist:orkestrator-browser-previews");
     expect(runtime.browserSession).toBe(browserSession as never);
     expect(runtime.manager).toBeInstanceOf(BrowserPreviewManager);
-    expect(permissionCheck?.()).toBe(false);
-    const permissionResult = mock(() => undefined);
-    permissionRequest?.({}, "geolocation", permissionResult);
-    expect(permissionResult).toHaveBeenCalledWith(false);
+    expect(
+      permissionCheck?.(
+        {},
+        "clipboard-sanitized-write",
+        "http://localhost:3000",
+        { isMainFrame: true },
+      ),
+    ).toBe(true);
+    expect(
+      permissionCheck?.({}, "clipboard-read", "http://localhost:3000", {
+        isMainFrame: true,
+      }),
+    ).toBe(false);
+    expect(
+      permissionCheck?.(
+        {},
+        "clipboard-sanitized-write",
+        "https://embedded.example",
+        { isMainFrame: false },
+      ),
+    ).toBe(false);
+
+    const clipboardWriteResult = mock(() => undefined);
+    permissionRequest?.({}, "clipboard-sanitized-write", clipboardWriteResult, {
+      isMainFrame: true,
+    });
+    expect(clipboardWriteResult).toHaveBeenCalledWith(true);
+
+    const unrelatedPermissionResult = mock(() => undefined);
+    permissionRequest?.({}, "geolocation", unrelatedPermissionResult, {
+      isMainFrame: true,
+    });
+    expect(unrelatedPermissionResult).toHaveBeenCalledWith(false);
+
+    const subframeClipboardWriteResult = mock(() => undefined);
+    permissionRequest?.(
+      {},
+      "clipboard-sanitized-write",
+      subframeClipboardWriteResult,
+      { isMainFrame: false },
+    );
+    expect(subframeClipboardWriteResult).toHaveBeenCalledWith(false);
     expect(webRequest.onBeforeSendHeaders).toHaveBeenCalledTimes(1);
     expect(webRequest.onHeadersReceived).toHaveBeenCalledTimes(1);
 

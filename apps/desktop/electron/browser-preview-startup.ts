@@ -7,6 +7,14 @@ import {
 import { installRemoteGatewayRequestAuth } from "./remote-gateway-request-auth.js";
 
 const BROWSER_PREVIEW_PARTITION = "persist:orkestrator-browser-previews";
+const CLIPBOARD_WRITE_PERMISSION = "clipboard-sanitized-write";
+
+function isAllowedBrowserPreviewPermission(
+  permission: string,
+  isMainFrame: boolean,
+): boolean {
+  return isMainFrame && permission === CLIPBOARD_WRITE_PERMISSION;
+}
 
 export interface InitializeBrowserPreviewsOptions {
   fromPartition: (partition: string) => Session;
@@ -31,8 +39,16 @@ export function initializeBrowserPreviews({
   getAuthorization,
 }: InitializeBrowserPreviewsOptions): BrowserPreviewRuntime {
   const browserSession = fromPartition(BROWSER_PREVIEW_PARTITION);
-  browserSession.setPermissionCheckHandler(() => false);
-  browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  browserSession.setPermissionCheckHandler(
+    (_webContents, permission, _requestingOrigin, details) =>
+      isAllowedBrowserPreviewPermission(permission, details.isMainFrame),
+  );
+  browserSession.setPermissionRequestHandler(
+    (_webContents, permission, callback, details) =>
+      callback(
+        isAllowedBrowserPreviewPermission(permission, details.isMainFrame),
+      ),
+  );
 
   const manager = new BrowserPreviewManager({
     WebContentsViewCtor,

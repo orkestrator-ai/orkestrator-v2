@@ -213,10 +213,6 @@ function resolveTmuxModelPreference(
     : DEFAULT_MODEL;
 }
 
-function selectedModelForLaunch(modelId: string): string | undefined {
-  return modelId === "default" ? undefined : modelId;
-}
-
 function getTmuxModel(id: string, models: ClaudeModel[]): ClaudeModel {
   return (
     models.find((m) => m.id === id) ??
@@ -245,8 +241,8 @@ function fallbackEffort(options: ClaudeEffortLevel[]): ClaudeEffortLevel {
 
 /**
  * Prefer the live model list the Claude bridge fetched from the Agent SDK
- * (shared via the claude store) over the static fallback. The launch-only
- * "default" sentinel is guaranteed to be present either way.
+ * (shared via the claude store) over the static fallback. The "default"
+ * sentinel is guaranteed to be present either way.
  */
 function tmuxModelList(sdkModels: ClaudeModel[]): ClaudeModel[] {
   if (sdkModels.length === 0) return TMUX_FALLBACK_MODELS;
@@ -807,7 +803,7 @@ export function ClaudeTmuxChatTab({
       startedRef.current = true;
       startSession(tabId, environmentId, {
         initialPrompt,
-        model: selectedModelForLaunch(selectedModel),
+        model: selectedModel,
         effort: effortOptions.length > 0 ? effectiveEffort : undefined,
         resumeSessionId,
       })
@@ -1045,10 +1041,9 @@ export function ClaudeTmuxChatTab({
   ) => {
     try {
       await answerPreToolUse(tabId, eventId, decision, undefined, environmentId);
+      removePendingApproval(storeKey, eventId);
     } catch (e) {
       setError(String(e));
-    } finally {
-      removePendingApproval(storeKey, eventId);
     }
   };
 
@@ -1212,9 +1207,7 @@ export function ClaudeTmuxChatTab({
   const handleSelectModel = async (modelId: string) => {
     if (modelId === selectedModel || modelSwitching || effortSwitching) return;
 
-    // "default" means no explicit --model flag; can't send /model default to a
-    // running session, so just update the stored preference for the next launch.
-    if (modelId === "default" || !hasStarted || !running) {
+    if (!hasStarted || !running) {
       setSelectedModel(modelId);
       clampEffortToModel(modelId);
       void persistSelectedModel(modelId);

@@ -558,6 +558,37 @@ describe("ClaudeTmuxChatTab", () => {
     });
   });
 
+  test("passes the Default model through initial-prompt auto-start", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          claudeModel: "default",
+        },
+      },
+    }));
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        initialPrompt="Run the audit"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
+        initialPrompt: "Run the audit",
+        model: "default",
+        effort: "high",
+        resumeSessionId: undefined,
+      });
+    });
+  });
+
   test("does not set busy when the backend emits a warning instead of initial-prompt-sent", async () => {
     render(
       <ClaudeTmuxChatTab
@@ -619,6 +650,62 @@ describe("ClaudeTmuxChatTab", () => {
     );
 
     expect(await screen.findByText("Error: event stream unavailable")).toBeTruthy();
+  });
+
+  test("cleans up an event subscription that resolves after unmount", async () => {
+    let resolveSubscribe!: (unlisten: () => void) => void;
+    const unlisten = mock(() => {
+      subscribedHandler = null;
+    });
+    subscribeMock.mockImplementationOnce(async (handler) => {
+      subscribedHandler = handler;
+      return await new Promise<() => void>((resolve) => {
+        resolveSubscribe = resolve;
+      });
+    });
+
+    const { unmount } = render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(subscribeMock).toHaveBeenCalledTimes(1));
+    unmount();
+
+    await act(async () => {
+      resolveSubscribe(unlisten);
+      await Promise.resolve();
+    });
+
+    expect(unlisten).toHaveBeenCalledTimes(1);
+  });
+
+  test("renders capture polling failures in the raw TUI snapshot", async () => {
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    capturePaneMock.mockImplementation(async () => {
+      throw new Error("capture unavailable");
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Show TUI" }));
+
+    expect(
+      await screen.findByText("(capture failed: Error: capture unavailable)"),
+    ).toBeTruthy();
+    expect(screen.queryByText("Error: capture unavailable")).toBeNull();
   });
 
   test("applies started and stopped backend lifecycle events", async () => {
@@ -1234,6 +1321,82 @@ Running 1 Explore agent...
     expect(screen.queryByTestId("tmux-interactive-terminal")).toBeNull();
   });
 
+  test("retries stale hydration three times before allowing auto-start", async () => {
+    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
+    let attempt = 0;
+    getStatusMock.mockImplementation(async () => {
+      attempt += 1;
+      useClaudeTmuxStore.getState().setBusy(stateKey, attempt % 2 === 1);
+      return null;
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        initialPrompt="Run the audit"
+      />,
+    );
+
+    await waitFor(() => expect(getStatusMock).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(startSessionMock).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/Failed to refresh Claude tmux tab/)).toBeNull();
+  });
+
+  test("clears stale transcript and hooks for a matching status without a session id", async () => {
+    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
+    const store = useClaudeTmuxStore.getState();
+    store.setRunning(stateKey, true, {
+      environmentId: "env-1",
+      sessionId: "stale-session",
+    });
+    store.applyTranscriptLine(stateKey, {
+      type: "assistant",
+      uuid: "stale-message",
+      message: { role: "assistant", content: "Stale transcript" },
+    });
+    store.addPendingApproval(stateKey, {
+      eventId: "stale-approval",
+      toolName: "Bash",
+      toolInput: { command: "bun test" },
+      payload: {},
+      receivedAt: new Date().toISOString(),
+    });
+    getStatusMock.mockImplementation(async () => ({
+      tab_id: "tab-1",
+      environment_id: "env-1",
+      session_id: null,
+      tmux_session: "orkestrator-env1-tab1",
+      running: true,
+      transcript_path: null,
+      resumed: false,
+      busy: true,
+      permission_mode: "plan",
+    }));
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      const tab = useClaudeTmuxStore.getState().getTab(stateKey);
+      expect(tab.running).toBe(true);
+      expect(tab.sessionId).toBeNull();
+      expect(tab.busy).toBe(true);
+      expect(tab.messages).toEqual([]);
+      expect(tab.pendingApprovals).toEqual([]);
+    });
+    expect(getTranscriptMock).not.toHaveBeenCalled();
+    expect(getPendingHooksMock).not.toHaveBeenCalled();
+    expect(startSessionMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Plan" })).toBeTruthy();
+  });
+
   test("hydrates a running backend session and replays missed transcript before auto-starting", async () => {
     getStatusMock.mockImplementation(async () => ({
       tab_id: "tab-1",
@@ -1768,6 +1931,132 @@ Running 1 Explore agent...
     });
   });
 
+  test("routes live lifecycle and actionable hook events into authoritative state", async () => {
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+    await waitFor(() => expect(subscribedHandler).not.toBeNull());
+
+    act(() => {
+      subscribedHandler?.({
+        kind: "hook",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        event_id: "prompt-submit",
+        event_kind: "UserPromptSubmit",
+        payload: {},
+      });
+      subscribedHandler?.({
+        kind: "hook",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        event_id: "question-live",
+        event_kind: "PreToolUse",
+        payload: {
+          tool_name: "AskUserQuestion",
+          tool_input: {
+            questions: [
+              {
+                question: "Which framework?",
+                header: "Framework",
+                options: [{ label: "React" }],
+                multiSelect: false,
+              },
+            ],
+          },
+        },
+      });
+      subscribedHandler?.({
+        kind: "hook",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        event_id: "plan-live",
+        event_kind: "PreToolUse",
+        payload: {
+          tool_name: "ExitPlanMode",
+          tool_input: { plan: "Ship the implementation" },
+        },
+      });
+      subscribedHandler?.({
+        kind: "hook",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        event_id: "approval-live",
+        event_kind: "PreToolUse",
+        payload: {
+          tool_name: "Bash",
+          tool_input: { command: "bun test" },
+        },
+      });
+      subscribedHandler?.({
+        kind: "hook",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        event_id: "permission-live",
+        event_kind: "PermissionRequest",
+        payload: {
+          tool_name: "Write",
+          tool_input: { file_path: "/tmp/result.txt" },
+          permission_suggestions: [],
+        },
+      });
+      subscribedHandler?.({
+        kind: "hook",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+        session_id: "session-1",
+        event_id: "elicitation-live",
+        event_kind: "Elicitation",
+        payload: {
+          mcp_server_name: "docs-mcp",
+          message: "Choose a format",
+          mode: "form",
+          requested_schema: {
+            type: "object",
+            properties: { format: { type: "string", title: "Format" } },
+          },
+        },
+      });
+    });
+
+    const tab = useClaudeTmuxStore.getState().getTab("tab-1");
+    expect(tab.busy).toBe(true);
+    expect(tab.pendingQuestions.map((item) => item.eventId)).toEqual([
+      "question-live",
+    ]);
+    expect(tab.pendingPlans.map((item) => item.eventId)).toEqual(["plan-live"]);
+    expect(tab.pendingApprovals.map((item) => item.eventId)).toEqual([
+      "approval-live",
+    ]);
+    expect(tab.pendingPermissions.map((item) => item.eventId)).toEqual([
+      "permission-live",
+    ]);
+    expect(tab.pendingElicitations.map((item) => item.eventId)).toEqual([
+      "elicitation-live",
+    ]);
+    expect(tab.pendingElicitations[0]).toMatchObject({
+      mcpServerName: "docs-mcp",
+      message: "Choose a format",
+    });
+    expect(screen.getByText("Claude wants to use a tool")).toBeTruthy();
+    expect(screen.getByText("Claude needs permission")).toBeTruthy();
+    expect(screen.getByText("MCP server requested input")).toBeTruthy();
+  });
+
   test("keeps busy during SubagentStop and clears it on top-level Stop", async () => {
     useClaudeTmuxStore
       .getState()
@@ -2139,6 +2428,177 @@ Running 1 Explore agent...
     });
   });
 
+  test("preserves and escapes absolute tmux @ file references before submit", async () => {
+    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
+    const store = useClaudeTmuxStore.getState();
+    store.setRunning(stateKey, true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    store.setDraftText(stateKey, "Review @/tmp/My File.ts");
+    store.setDraftMentions(stateKey, [
+      {
+        id: "absolute-file",
+        filename: "My File.ts",
+        relativePath: "/tmp/My File.ts",
+      },
+    ]);
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle("Send (↵)"));
+
+    await waitFor(() => {
+      expect(submitMock).toHaveBeenCalledWith(
+        "tab-1",
+        "Review /tmp/My\\ File.ts",
+        "env-1",
+      );
+    });
+  });
+
+  test("deduplicates selected file mentions and removes metadata when mention text is deleted", async () => {
+    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
+    const store = useClaudeTmuxStore.getState();
+    store.setRunning(stateKey, true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    store.setDraftText(
+      stateKey,
+      "Review @src/components/Button.tsx and @",
+    );
+    store.setDraftMentions(stateKey, [
+      {
+        id: "existing-file",
+        filename: "Button.tsx",
+        relativePath: "src/components/Button.tsx",
+      },
+    ]);
+    getFileTreeMock.mockResolvedValue([
+      {
+        name: "Button.tsx",
+        path: "src/components/Button.tsx",
+        isDirectory: false,
+        extension: ".tsx",
+      },
+    ]);
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    const textarea = await screen.findByPlaceholderText(/@ to mention/) as HTMLTextAreaElement;
+    const cursorPosition = textarea.value.length;
+    textarea.setSelectionRange(cursorPosition, cursorPosition);
+    fireEvent.click(textarea);
+    await screen.findByText("Button.tsx");
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(useClaudeTmuxStore.getState().getDraftMentions(stateKey)).toEqual([
+        {
+          id: "existing-file",
+          filename: "Button.tsx",
+          relativePath: "src/components/Button.tsx",
+        },
+      ]);
+      expect(textarea.value).toBe(
+        "Review @src/components/Button.tsx and @src/components/Button.tsx ",
+      );
+    });
+
+    fireEvent.change(textarea, {
+      target: {
+        value: "Review the component",
+        selectionStart: "Review the component".length,
+        selectionEnd: "Review the component".length,
+      },
+    });
+
+    expect(useClaudeTmuxStore.getState().getDraftMentions(stateKey)).toEqual([]);
+  });
+
+  test("removes a staged tmux attachment from the compose bar", async () => {
+    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
+    const store = useClaudeTmuxStore.getState();
+    store.setRunning(stateKey, true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    store.addAttachment(stateKey, {
+      id: "attachment-1",
+      type: "image",
+      path: "/workspace/diagram.png",
+      previewUrl: "data:image/png;base64,QUJD",
+      name: "diagram.png",
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByAltText("diagram.png")).toBeTruthy();
+    fireEvent.click(screen.getByTitle("Remove attachment"));
+
+    expect(screen.queryByAltText("diagram.png")).toBeNull();
+    expect(useClaudeTmuxStore.getState().getAttachments(stateKey)).toEqual([]);
+  });
+
+  test("reopens file mention detection when cursor navigation enters an @ token", async () => {
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    getFileTreeMock.mockResolvedValue([
+      {
+        name: "Button.tsx",
+        path: "src/Button.tsx",
+        isDirectory: false,
+        extension: ".tsx",
+      },
+    ]);
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    const textarea = await screen.findByPlaceholderText(/@ to mention/) as HTMLTextAreaElement;
+    const value = "Review @src before shipping";
+    fireEvent.change(textarea, {
+      target: {
+        value,
+        selectionStart: value.length,
+        selectionEnd: value.length,
+      },
+    });
+    expect(screen.queryByText("Button.tsx")).toBeNull();
+
+    const cursorPosition = "Review @src".length;
+    textarea.setSelectionRange(cursorPosition, cursorPosition);
+    fireEvent.keyUp(textarea, { key: "ArrowLeft" });
+
+    expect(await screen.findByText("Button.tsx")).toBeTruthy();
+  });
+
   test("does not rewrite non-file @ references in tmux prompts", async () => {
     useClaudeTmuxStore.getState().setRunning("tab-1", true, {
       environmentId: "env-1",
@@ -2300,7 +2760,7 @@ Running 1 Explore agent...
     expect(screen.getByRole("button", { name: /Fable/ })).toBeTruthy();
   });
 
-  test("persists the launch-only Default model sentinel without switching a running tmux session", async () => {
+  test("switches a running tmux session to the Default model", async () => {
     useClaudeTmuxStore
       .getState()
       .setRunning("tab-1", true, {
@@ -2332,7 +2792,13 @@ Running 1 Explore agent...
       await Promise.resolve();
     });
 
-    expect(switchModelMock).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(switchModelMock).toHaveBeenCalledWith(
+        "tab-1",
+        "default",
+        "env-1",
+      );
+    });
     await waitFor(() => {
       expect(updateGlobalConfigMock).toHaveBeenCalledWith(
         expect.objectContaining({ claudeModel: "default" }),
@@ -2443,12 +2909,12 @@ Running 1 Explore agent...
       expect(startSessionMock).toHaveBeenCalledWith(
         "tab-1",
         "env-1",
-        expect.objectContaining({ model: undefined }),
+        expect.objectContaining({ model: "default" }),
       );
     });
   });
 
-  test("uses Claude Code's own model default when persisted tmux model is Default", async () => {
+  test("passes the persisted Default model explicitly when starting Claude Code", async () => {
     seedPane();
     useConfigStore.setState((state) => ({
       ...state,
@@ -2477,7 +2943,7 @@ Running 1 Explore agent...
     await waitFor(() => {
       expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
         initialPrompt: undefined,
-        model: undefined,
+        model: "default",
         effort: "high",
         resumeSessionId: undefined,
       });
@@ -2928,6 +3394,36 @@ Running 1 Explore agent...
     expect(screen.getByRole("button", { name: /Default \(SDK\)/ })).toBeTruthy();
   });
 
+  test("uses the standard effort ladder when a model supports effort without listing levels", async () => {
+    seedPane();
+    useClaudeStore.setState({
+      models: [
+        {
+          id: "default",
+          name: "Default (SDK)",
+          supportsEffort: true,
+        },
+      ] as ClaudeModel[],
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "High" }));
+
+    expect(await screen.findByText("Low")).toBeTruthy();
+    expect(screen.getByText("Medium")).toBeTruthy();
+    expect(screen.getAllByText("High").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Extra High")).toBeNull();
+    expect(screen.queryByText("Max")).toBeNull();
+  });
+
   test("falls back to the first supported level when a model's levels exclude the default", async () => {
     seedPane();
     useClaudeStore.setState({
@@ -3294,6 +3790,40 @@ Running 1 Explore agent...
       expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
         initialPrompt: undefined,
         model: "sonnet",
+        effort: "high",
+        resumeSessionId: "resume-1",
+      });
+    });
+  });
+
+  test("passes the persisted Default model through the resume picker", async () => {
+    seedPane();
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          claudeModel: "default",
+        },
+      },
+    }));
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Resume previous session/ }));
+    fireEvent.click(await screen.findByText("Previous audit"));
+
+    await waitFor(() => {
+      expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
+        initialPrompt: undefined,
+        model: "default",
         effort: "high",
         resumeSessionId: "resume-1",
       });
@@ -4796,6 +5326,22 @@ Enter to confirm · Esc to cancel
     expect(prompt?.question).toBe("https://code.claude.com/docs/en/security");
   });
 
+  test("strips a boundary immediately preceding the active question", () => {
+    const prompt = parseTmuxSelectionPrompt(`
+Earlier output that should not be part of the question.
+
+------------------------------------------------------------
+Choose the deployment strategy.
+
+› 1. Blue-green
+  2. Rolling
+
+Enter to confirm · Esc to cancel
+`);
+
+    expect(prompt?.question).toBe("Choose the deployment strategy.");
+  });
+
   test("answers AskUserQuestion hooks with PreToolUse updatedInput", async () => {
     useClaudeTmuxStore
       .getState()
@@ -5045,6 +5591,55 @@ Enter to confirm · Esc to cancel
     });
   });
 
+  test("keeps AskUserQuestion pending when dismissal delivery fails", async () => {
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    useClaudeTmuxStore.getState().addPendingQuestion("tab-1", {
+      eventId: "question-retry",
+      questions: [
+        {
+          question: "Which framework?",
+          header: "Framework",
+          options: [{ label: "React" }],
+          multiSelect: false,
+        },
+      ],
+      toolInput: {
+        questions: [
+          {
+            question: "Which framework?",
+            header: "Framework",
+            options: [{ label: "React" }],
+            multiSelect: false,
+          },
+        ],
+      },
+      payload: {},
+      receivedAt: new Date().toISOString(),
+    });
+    replyHookMock.mockImplementationOnce(async () => {
+      throw new Error("bridge down");
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+    expect(await screen.findByText("Error: bridge down")).toBeTruthy();
+    expect(
+      useClaudeTmuxStore.getState().getTab("tab-1").pendingQuestions,
+    ).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeTruthy();
+  });
+
   test("answers plan approvals and change requests", async () => {
     useClaudeTmuxStore
       .getState()
@@ -5228,6 +5823,70 @@ Enter to confirm · Esc to cancel
         "env-1",
       );
     });
+    expect(useClaudeTmuxStore.getState().getTab("tab-1").pendingApprovals).toEqual([]);
+  });
+
+  test("renders file-oriented approval paths and content previews", async () => {
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    useClaudeTmuxStore.getState().addPendingApproval("tab-1", {
+      eventId: "file-approval",
+      toolName: "Edit",
+      toolInput: {
+        file_path: "/workspace/src/Button.tsx",
+        new_string: "export function Button() {}",
+      },
+      payload: {},
+      receivedAt: new Date().toISOString(),
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(subscribedHandler).not.toBeNull());
+    expect(screen.getByText("/workspace/src/Button.tsx")).toBeTruthy();
+    expect(screen.getByText("export function Button() {}")).toBeTruthy();
+  });
+
+  test("keeps a legacy PreToolUse approval pending when delivery fails", async () => {
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    useClaudeTmuxStore.getState().addPendingApproval("tab-1", {
+      eventId: "approval-retry",
+      toolName: "Bash",
+      toolInput: { command: "bun test" },
+      payload: {},
+      receivedAt: new Date().toISOString(),
+    });
+    answerPreToolUseMock.mockImplementationOnce(async () => {
+      throw new Error("bridge down");
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+
+    expect(await screen.findByText("Error: bridge down")).toBeTruthy();
+    expect(
+      useClaudeTmuxStore.getState().getTab("tab-1").pendingApprovals,
+    ).toHaveLength(1);
+    expect(screen.getByText("Claude wants to use a tool")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
   });
 
   test("answers PermissionRequest hooks with nested permission decision", async () => {
@@ -5273,6 +5932,57 @@ Enter to confirm · Esc to cancel
         "env-1",
       );
     });
+  });
+
+  test("keeps a denied PermissionRequest pending when delivery fails", async () => {
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    useClaudeTmuxStore.getState().addPendingPermission("tab-1", {
+      eventId: "permission-retry",
+      toolName: "Bash",
+      toolInput: { command: "bun test" },
+      permissionSuggestions: [],
+      payload: {},
+      receivedAt: new Date().toISOString(),
+    });
+    replyHookMock.mockImplementationOnce(async () => {
+      throw new Error("bridge down");
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+
+    await waitFor(() => {
+      expect(replyHookMock).toHaveBeenCalledWith(
+        "tab-1",
+        "PermissionRequest",
+        "permission-retry",
+        {
+          hookSpecificOutput: {
+            hookEventName: "PermissionRequest",
+            decision: {
+              behavior: "deny",
+              message: "Permission denied by user.",
+            },
+          },
+        },
+        "env-1",
+      );
+    });
+    expect(await screen.findByText("Error: bridge down")).toBeTruthy();
+    expect(
+      useClaudeTmuxStore.getState().getTab("tab-1").pendingPermissions,
+    ).toHaveLength(1);
+    expect(screen.getByText("Claude needs permission")).toBeTruthy();
   });
 
   test("answers PermissionRequest suggestions as persistent permission updates", async () => {
@@ -5371,6 +6081,42 @@ Enter to confirm · Esc to cancel
         "env-1",
       );
     });
+  });
+
+  test("keeps an MCP Elicitation pending when delivery fails", async () => {
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    useClaudeTmuxStore.getState().addPendingElicitation("tab-1", {
+      eventId: "elicitation-retry",
+      mcpServerName: "docs-mcp",
+      message: "Provide credentials",
+      mode: "form",
+      url: null,
+      requestedSchema: null,
+      payload: {},
+      receivedAt: new Date().toISOString(),
+    });
+    replyHookMock.mockImplementationOnce(async () => {
+      throw new Error("bridge down");
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Decline" }));
+
+    expect(await screen.findByText("Error: bridge down")).toBeTruthy();
+    expect(
+      useClaudeTmuxStore.getState().getTab("tab-1").pendingElicitations,
+    ).toHaveLength(1);
+    expect(screen.getByText("MCP server requested input")).toBeTruthy();
   });
 
   test("declines and cancels MCP Elicitation hooks", async () => {

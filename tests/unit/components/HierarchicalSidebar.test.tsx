@@ -289,6 +289,19 @@ describe("HierarchicalSidebar", () => {
     expect(rows[1]?.textContent).toContain("Project One");
   });
 
+  test("aligns the activity controls with the main tab bar and evenly insets the rows", () => {
+    environmentsValue = [createdEnvironment];
+    useUIStore.getState().setEnvironmentSortMode("activity");
+
+    render(<HierarchicalSidebar />);
+
+    expect(screen.getByTestId("sidebar-list-content").className).toBe("pb-2");
+    expect(screen.getByTestId("activity-controls-bar").className).toContain("h-10");
+    expect(screen.getByTestId("activity-controls-bar").className).toContain("md:h-8");
+    expect(screen.getByTestId("activity-environment-rows").className).toContain("px-1");
+    expect(screen.getByTestId("activity-environment-rows").className).toContain("pt-2");
+  });
+
   test("shows ordered project creation, environment count, and waiting count in the activity bar", async () => {
     const secondProject = { ...project, id: "project-2", name: "Project Two", order: 1 };
     projectsValue = [project, secondProject];

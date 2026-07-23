@@ -709,7 +709,14 @@ export function HierarchicalSidebar() {
 
       {/* Projects List */}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="py-2">
+        <div
+          data-testid="sidebar-list-content"
+          className={
+            environmentSortMode === "activity" && projects.length > 0
+              ? "pb-2"
+              : "py-2"
+          }
+        >
           {projectsLoading && projects.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
               <FolderGit2 className="h-8 w-8 mb-2 opacity-50" />
@@ -729,7 +736,10 @@ export function HierarchicalSidebar() {
             </div>
           ) : environmentSortMode === "activity" ? (
             <div data-testid="activity-environment-list">
-              <div className="sticky top-0 z-10 mb-1 flex h-9 items-center border-b border-border/60 bg-[#1d1d20]/95 px-2 backdrop-blur-sm">
+              <div
+                data-testid="activity-controls-bar"
+                className="sticky top-0 z-10 flex h-10 items-center border-b border-border/60 bg-[#1d1d20]/95 px-2 backdrop-blur-sm md:h-8"
+              >
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
@@ -809,7 +819,10 @@ export function HierarchicalSidebar() {
                   No environments yet
                 </div>
               ) : (
-                <div className="space-y-0.5 px-1">
+                <div
+                  data-testid="activity-environment-rows"
+                  className="space-y-0.5 px-1 pt-2"
+                >
                   {activityEnvironments.map((environment) => (
                     <AnimatedActivityRow
                       key={environment.id}

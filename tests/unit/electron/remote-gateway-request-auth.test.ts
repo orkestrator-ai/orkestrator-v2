@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { installRemoteGatewayRequestAuth } from "../../../apps/desktop/electron/remote-gateway-request-auth";
 
-function installHarness() {
+function installHarness(options: { browserPreviewOnly?: boolean } = {}) {
   let beforeHeaders: ((details: any, callback: (response: any) => void) => void) | null = null;
   let receivedHeaders: ((details: any, callback: (response: any) => void) => void) | null = null;
   const webRequest = {
@@ -11,6 +11,7 @@ function installHarness() {
   installRemoteGatewayRequestAuth(
     webRequest as never,
     (url) => url.startsWith("https://desk.example/__orkestrator/") ? "Bearer gateway-token" : null,
+    options,
   );
   return {
     beforeHeaders: () => {
@@ -206,5 +207,31 @@ describe("remote gateway renderer request authentication", () => {
         Origin: "https://orkestrator.dev",
       },
     });
+  });
+
+  test("limits a dedicated preview session to preview namespaces", () => {
+    const harness = installHarness({ browserPreviewOnly: true });
+    const preview = mock(() => undefined);
+    harness.beforeHeaders()({
+      url: "https://desk.example/__orkestrator/browser/loopback/3000/",
+      resourceType: "mainFrame",
+      frame: null,
+      requestHeaders: {},
+    }, preview);
+    expect(preview).toHaveBeenCalledWith({
+      requestHeaders: {
+        Authorization: "Bearer gateway-token",
+        Origin: "https://orkestrator.dev",
+      },
+    });
+
+    const privileged = mock(() => undefined);
+    harness.beforeHeaders()({
+      url: "https://desk.example/__orkestrator/invoke",
+      resourceType: "mainFrame",
+      frame: null,
+      requestHeaders: { Authorization: "Bearer ambient", Cookie: "gateway=ambient" },
+    }, privileged);
+    expect(privileged).toHaveBeenCalledWith({ requestHeaders: {} });
   });
 });

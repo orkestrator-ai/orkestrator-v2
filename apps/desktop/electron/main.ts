@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, safeStorage, session } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, net, safeStorage, session, WebContentsView } from "electron";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
@@ -12,6 +12,7 @@ import { installRemoteGatewayRequestAuth } from "./remote-gateway-request-auth.j
 import { ensurePinnedToolchains } from "./toolchain-manager.js";
 import { createToolchainBootstrapWindow, reportToolchainProgress } from "./toolchain-bootstrap-window.js";
 import { createToolchainProgressController, preparePinnedToolchains } from "./toolchain-startup.js";
+import { BrowserPreviewManager } from "./browser-preview-manager.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,6 +24,7 @@ app.setPath("userData", path.join(app.getPath("appData"), APP_SLUG));
 let mainWindow: BrowserWindow | null = null;
 let backend: BackendHttpClient | null = null;
 let connectionManager: ConnectionManager | null = null;
+let browserPreviewManager: BrowserPreviewManager | null = null;
 const backendProcess = new BackendProcess();
 const toolchainProgress = createToolchainProgressController({
   createWindow: () => createToolchainBootstrapWindow({
@@ -79,7 +81,7 @@ function createMenu(): void {
 }
 
 async function createWindow(): Promise<void> {
-  mainWindow = await createMainWindow({
+  const createdWindow = await createMainWindow({
     BrowserWindowCtor: BrowserWindow,
     menu: Menu,
     dirname: __dirname,
@@ -87,6 +89,11 @@ async function createWindow(): Promise<void> {
     appPath: app.getAppPath(),
     rendererRoot: isDev ? undefined : path.join(process.resourcesPath, "web"),
     devServerUrl: process.env.VITE_DEV_SERVER_URL,
+  });
+  mainWindow = createdWindow;
+  createdWindow.once("closed", () => {
+    browserPreviewManager?.destroyAll();
+    if (mainWindow === createdWindow) mainWindow = null;
   });
 }
 
@@ -116,6 +123,7 @@ function registerIpc(): void {
       if (!connectionManager) throw new Error("Connections are not initialized");
       return connectionManager.forget(connectionId);
     },
+    browserPreviews: browserPreviewManager ?? undefined,
     trustedRendererUrl: isDev
       ? process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:1420"
       : pathToFileURL(path.join(process.resourcesPath, "web", "index.html")).href,
@@ -169,10 +177,26 @@ async function startApplication(): Promise<void> {
   await connectionManager.initialize();
   await backend.invoke("get_config");
 
+  const browserSession = session.fromPartition("persist:orkestrator-browser-previews");
+  browserSession.setPermissionCheckHandler(() => false);
+  browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  browserPreviewManager = new BrowserPreviewManager({
+    WebContentsViewCtor: WebContentsView,
+    browserSession,
+    menu: Menu,
+    getWindow: () => mainWindow,
+    emitState: (state) => emitToRenderers("browser-preview-state", state),
+  });
+
   createMenu();
   installRemoteGatewayRequestAuth(
     session.defaultSession.webRequest,
     (url) => connectionManager?.getRendererRequestAuthorization(url) ?? null,
+  );
+  installRemoteGatewayRequestAuth(
+    browserSession.webRequest,
+    (url) => connectionManager?.getRendererRequestAuthorization(url) ?? null,
+    { browserPreviewOnly: true },
   );
   registerIpc();
   await createWindow();

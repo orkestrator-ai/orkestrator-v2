@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { BrowserTab } from "./BrowserTab";
@@ -12,6 +12,7 @@ const happyDOM = (window as unknown as Window & {
 }).happyDOM;
 const originalDisableIframePageLoading = happyDOM.settings.disableIframePageLoading;
 const originalHref = window.location.href;
+const originalOrkestrator = window.orkestrator;
 let consoleErrorSpy: ReturnType<typeof spyOn> | undefined;
 
 function setBrowserTab(url = "") {
@@ -41,6 +42,7 @@ describe("BrowserTab", () => {
     cleanup();
     await happyDOM.abort();
     happyDOM.setURL(originalHref);
+    window.orkestrator = originalOrkestrator;
     delete window.orkestratorGateway;
     consoleErrorSpy?.mockRestore();
     consoleErrorSpy = undefined;
@@ -163,6 +165,52 @@ describe("BrowserTab", () => {
     expect(sandbox).not.toContain("allow-popups");
     expect(sandbox).not.toContain("allow-downloads");
     expect(iframe?.hasAttribute("referrerpolicy")).toBe(false);
+  });
+
+  test("uses an isolated native surface and opens DevTools for that preview in Electron", async () => {
+    const state = {
+      tabId: "browser-1",
+      url: "http://localhost:3000/",
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
+      error: null,
+    };
+    const attach = mock(async () => state);
+    const openDevTools = mock(async () => state);
+    const setVisible = mock(async () => state);
+    window.orkestrator = {
+      listen: () => () => {},
+      browserPreview: {
+        attach,
+        setBounds: async () => state,
+        setVisible,
+        navigate: async () => state,
+        goBack: async () => state,
+        goForward: async () => state,
+        reload: async () => state,
+        openDevTools,
+        destroy: async () => {},
+      },
+    } as never;
+    setBrowserTab("http://localhost:3000/");
+
+    const { container } = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(attach).toHaveBeenCalled());
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector('[data-native-browser-preview="browser-1"]')).not.toBeNull();
+    const devToolsButton = screen.getByRole("button", { name: "Open preview DevTools" });
+    await waitFor(() => expect(devToolsButton.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(devToolsButton);
+    await waitFor(() => expect(openDevTools).toHaveBeenCalledWith("browser-1"));
   });
 
   test("refuses to preview the app's own origin", () => {

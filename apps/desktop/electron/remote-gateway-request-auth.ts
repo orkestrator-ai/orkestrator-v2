@@ -40,9 +40,12 @@ function previewInitiatorScope(details: GatewayRequestDetails): string | null {
   return frameBrowserPreviewScope(details.frame) ?? browserPreviewScope(details.referrer);
 }
 
-function canAttachGatewayAuthorization(details: GatewayRequestDetails): boolean {
+function canAttachGatewayAuthorization(details: GatewayRequestDetails, browserPreviewOnly: boolean): boolean {
   const initiatorScope = previewInitiatorScope(details);
   const targetScope = browserPreviewScope(details.url);
+  if (browserPreviewOnly) {
+    return targetScope !== null && (!initiatorScope || targetScope === initiatorScope);
+  }
   if (initiatorScope) return targetScope === initiatorScope;
   // A new browser preview is the only gateway navigation an untrusted subframe
   // may authenticate. All privileged APIs remain main-renderer-only even if the
@@ -66,6 +69,7 @@ function withoutAmbientGatewayCredentials(headers: Record<string, string>): Reco
 export function installRemoteGatewayRequestAuth(
   webRequest: Pick<WebRequest, "onBeforeSendHeaders" | "onHeadersReceived">,
   getAuthorization: (url: string) => string | null,
+  options: { browserPreviewOnly?: boolean } = {},
 ): void {
   const filter = { urls: ["http://*/*", "https://*/*"] };
   webRequest.onBeforeSendHeaders(filter, (details, callback) => {
@@ -74,7 +78,7 @@ export function installRemoteGatewayRequestAuth(
       callback({ requestHeaders: details.requestHeaders });
       return;
     }
-    if (!canAttachGatewayAuthorization(details)) {
+    if (!canAttachGatewayAuthorization(details, options.browserPreviewOnly === true)) {
       callback({ requestHeaders: withoutAmbientGatewayCredentials(details.requestHeaders) });
       return;
     }
@@ -94,7 +98,7 @@ export function installRemoteGatewayRequestAuth(
   });
   webRequest.onHeadersReceived(filter, (details, callback) => {
     const authorization = getAuthorization(details.url);
-    if (!authorization || !canAttachGatewayAuthorization(details)) {
+    if (!authorization || !canAttachGatewayAuthorization(details, options.browserPreviewOnly === true)) {
       callback({ responseHeaders: details.responseHeaders });
       return;
     }

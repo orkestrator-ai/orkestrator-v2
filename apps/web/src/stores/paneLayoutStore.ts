@@ -24,6 +24,7 @@ import { stopSession as stopClaudeTmuxSession } from "@/lib/claude-tmux-client";
 import { deleteSession as deleteCodexSession } from "@/lib/codex-client";
 import { deleteSession as deleteOpenCodeSession } from "@/lib/opencode-client";
 import { createUuid } from "@/lib/uuid";
+import { destroyBrowserPreview } from "@/lib/native/browser-preview";
 
 /**
  * Per-environment state for pane layout
@@ -293,6 +294,13 @@ function cleanupClaudeTmuxTab(envId: string, tabId: string) {
 }
 
 function cleanupTabResources(envId: string, containerId: string | null, tab: TabInfo) {
+  if (tab.type === "browser") {
+    destroyBrowserPreview(tab.id).catch((err) => {
+      console.debug("[PaneLayout] Error destroying browser preview:", err);
+    });
+    return;
+  }
+
   if (TERMINAL_TAB_TYPES.has(tab.type)) {
     cleanupTerminalTab(envId, containerId, tab.id);
     return;

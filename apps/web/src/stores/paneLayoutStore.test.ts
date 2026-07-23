@@ -9,6 +9,7 @@ const deleteCodexSession = mock(async (_client: unknown, _sessionId: string) => 
 const deleteOpenCodeSession = mock(async (_client: unknown, _sessionId: string) => true);
 let consoleDebugSpy: ReturnType<typeof spyOn> | undefined;
 let consoleErrorSpy: ReturnType<typeof spyOn> | undefined;
+const originalOrkestrator = window.orkestrator;
 
 const realBackend = await import("@/lib/backend");
 const realBackendSnapshot = { ...realBackend };
@@ -69,6 +70,7 @@ afterAll(() => {
 });
 
 afterEach(() => {
+  window.orkestrator = originalOrkestrator;
   consoleDebugSpy?.mockRestore();
   consoleErrorSpy?.mockRestore();
   consoleDebugSpy = undefined;
@@ -210,6 +212,18 @@ describe("paneLayoutStore tab cleanup", () => {
     usePaneLayoutStore.getState().removeTab("default", "tab-tmux");
 
     expect(stopTmuxSession).toHaveBeenCalledWith("tab-tmux", "env-local");
+  });
+
+  test("closing a browser tab destroys its main-process preview", () => {
+    const destroy = mock(async () => {});
+    window.orkestrator = {
+      browserPreview: { destroy },
+    } as never;
+    seedSingleTabEnvironment("env-browser", null, { id: "browser-tab", type: "browser" });
+
+    usePaneLayoutStore.getState().removeTab("default", "browser-tab");
+
+    expect(destroy).toHaveBeenCalledWith("browser-tab");
   });
 
   test("closing native agent tabs deletes their backend sessions", () => {

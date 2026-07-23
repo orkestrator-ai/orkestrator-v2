@@ -113,5 +113,27 @@ describe("preload API factory", () => {
     await expect(api.connections.forget("remote-1")).resolves.toEqual({ channel: "orkestrator:connections:forget", args: ["remote-1"] });
     await expect(api.process.exit(7)).resolves.toEqual({ channel: "orkestrator:process:exit", args: [7] });
     await expect(api.window.startDragging()).resolves.toEqual({ channel: "orkestrator:window:start-dragging", args: [] });
+    const bounds = { x: 10, y: 20, width: 640, height: 480 };
+    await expect(api.browserPreview.attach({
+      tabId: "browser-1",
+      url: "http://localhost:3000/",
+      bounds,
+      visible: true,
+    })).resolves.toEqual({
+      channel: "orkestrator:browser-preview:attach",
+      args: [{ tabId: "browser-1", url: "http://localhost:3000/", bounds, visible: true }],
+    });
+    await expect(api.browserPreview.setBounds("browser-1", bounds)).resolves.toEqual({
+      channel: "orkestrator:browser-preview:set-bounds",
+      args: ["browser-1", bounds],
+    });
+    await expect(api.browserPreview.openDevTools("browser-1")).resolves.toEqual({
+      channel: "orkestrator:browser-preview:open-devtools",
+      args: ["browser-1"],
+    });
+    await expect(api.browserPreview.destroy("browser-1")).resolves.toEqual({
+      channel: "orkestrator:browser-preview:destroy",
+      args: ["browser-1"],
+    });
   });
 });

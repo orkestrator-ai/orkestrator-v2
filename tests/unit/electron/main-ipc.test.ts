@@ -48,6 +48,25 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
   const connectToRemote = mock(async () => connectionList);
   const useConnection = mock(async () => connectionList);
   const forgetConnection = mock(async () => connectionList);
+  const browserPreviewState = {
+    tabId: "browser-1",
+    url: "http://localhost:3000/",
+    loading: false,
+    canGoBack: false,
+    canGoForward: false,
+    error: null,
+  };
+  const browserPreviews = {
+    attach: mock(async () => browserPreviewState),
+    setBounds: mock(() => browserPreviewState),
+    setVisible: mock(() => browserPreviewState),
+    navigate: mock(async () => browserPreviewState),
+    goBack: mock(() => browserPreviewState),
+    goForward: mock(() => browserPreviewState),
+    reload: mock(() => browserPreviewState),
+    openDevTools: mock(() => browserPreviewState),
+    destroy: mock(() => undefined),
+  };
 
   registerMainIpc({
     getBackend: () => backend,
@@ -69,6 +88,7 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
     connectToRemote,
     useConnection,
     forgetConnection,
+    browserPreviews,
     trustedRendererUrl,
   });
 
@@ -95,7 +115,7 @@ function createHarness(options: { backend?: { invoke: ReturnType<typeof mock> } 
   const invokeSync = (channel: string, ...args: unknown[]) =>
     invokeSyncFrom(trustedRendererUrl, channel, ...args);
 
-  return { invoke, invokeFrom, invokeSync, invokeSyncFrom, handlers, syncHandlers, backend, window, clipboardApi, clipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled, resetWebClientServe, getGatewayTokenSettings, setGatewayToken, listConnections, connectToRemote, useConnection, forgetConnection };
+  return { invoke, invokeFrom, invokeSync, invokeSyncFrom, handlers, syncHandlers, backend, window, clipboardApi, clipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled, resetWebClientServe, getGatewayTokenSettings, setGatewayToken, listConnections, connectToRemote, useConnection, forgetConnection, browserPreviews };
 }
 
 describe("main IPC registration", () => {
@@ -156,6 +176,39 @@ describe("main IPC registration", () => {
     );
     await expect(harness.invoke("orkestrator:web-client:set-token", 42)).rejects.toThrow(
       "Expected token to be a string",
+    );
+  });
+
+  test("validates and routes native browser preview operations", async () => {
+    const harness = createHarness();
+    const bounds = { x: 10, y: 20, width: 640, height: 480 };
+
+    await harness.invoke("orkestrator:browser-preview:attach", {
+      tabId: "browser-1",
+      url: "http://localhost:3000/",
+      bounds,
+      visible: true,
+    });
+    await harness.invoke("orkestrator:browser-preview:set-bounds", "browser-1", bounds);
+    await harness.invoke("orkestrator:browser-preview:set-visible", "browser-1", false);
+    await harness.invoke("orkestrator:browser-preview:navigate", "browser-1", "http://localhost:4000/");
+    await harness.invoke("orkestrator:browser-preview:go-back", "browser-1");
+    await harness.invoke("orkestrator:browser-preview:go-forward", "browser-1");
+    await harness.invoke("orkestrator:browser-preview:reload", "browser-1");
+    await harness.invoke("orkestrator:browser-preview:open-devtools", "browser-1");
+    await harness.invoke("orkestrator:browser-preview:destroy", "browser-1");
+
+    expect(harness.browserPreviews.attach).toHaveBeenCalledWith({
+      tabId: "browser-1",
+      url: "http://localhost:3000/",
+      bounds,
+      visible: true,
+    });
+    expect(harness.browserPreviews.openDevTools).toHaveBeenCalledWith("browser-1");
+    expect(harness.browserPreviews.destroy).toHaveBeenCalledWith("browser-1");
+    await expect(harness.invoke("orkestrator:browser-preview:attach", { tabId: "", url: 42 })).rejects.toThrow();
+    await expect(harness.invoke("orkestrator:browser-preview:set-bounds", "browser-1", { x: 0 })).rejects.toThrow(
+      "finite browser preview bounds",
     );
   });
 

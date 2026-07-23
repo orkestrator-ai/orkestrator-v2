@@ -86,19 +86,33 @@ export function sortEnvironmentsByActivity(
   });
 }
 
+export function measureActivityRowLayoutTop(element: HTMLElement): number {
+  const getOffsetTop = (node: HTMLElement | null): number => {
+    let top = 0;
+    let current = node;
+    while (current) {
+      top += current.offsetTop;
+      current = current.offsetParent as HTMLElement | null;
+    }
+    return top;
+  };
+  return getOffsetTop(element) - getOffsetTop(element.parentElement);
+}
+
 export function animateActivityRowMovement(
   element: HTMLElement,
   previousTop: number | null,
   reduceMotion: boolean,
-): number {
-  const nextTop = element.getBoundingClientRect().top;
+): { top: number; animation: Animation | null } {
+  const nextTop = measureActivityRowLayoutTop(element);
   const offset = previousTop === null ? 0 : previousTop - nextTop;
+  let animation: Animation | null = null;
   if (
     offset !== 0 &&
     !reduceMotion &&
     typeof element.animate === "function"
   ) {
-    element.animate(
+    animation = element.animate(
       [
         { transform: `translateY(${offset}px)` },
         { transform: "translateY(0)" },
@@ -109,7 +123,7 @@ export function animateActivityRowMovement(
       },
     );
   }
-  return nextTop;
+  return { top: nextTop, animation };
 }
 
 function AnimatedActivityRow({
@@ -125,6 +139,8 @@ function AnimatedActivityRow({
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
   const previousTopRef = useRef<number | null>(null);
+  const previousPositionRef = useRef(position);
+  const animationRef = useRef<Animation | null>(null);
 
   useLayoutEffect(() => {
     const row = rowRef.current;
@@ -133,14 +149,41 @@ function AnimatedActivityRow({
     // Activity, unread, and status updates all re-render the sidebar. Only run
     // the FLIP animation when this row's actual list position changes so those
     // unrelated updates cannot restart transforms across the whole list.
+    if (previousTopRef.current !== null && previousPositionRef.current === position) {
+      // A preceding row may have changed height without changing this row's
+      // numeric position. Refresh the transform-independent layout baseline,
+      // but leave any in-flight animation alone.
+      previousTopRef.current = measureActivityRowLayoutTop(row);
+      return;
+    }
+
+    let previousTop = previousTopRef.current;
+    const activeAnimation = animationRef.current;
+    if (
+      activeAnimation &&
+      activeAnimation.playState === "running"
+    ) {
+      // Preserve the row's current visual position when activity changes again
+      // before the prior movement finishes. Cancelling first would otherwise
+      // make the row jump to its new layout position.
+      const parentTop = row.parentElement?.getBoundingClientRect().top ?? 0;
+      const transformedTop = row.getBoundingClientRect().top - parentTop;
+      activeAnimation.cancel();
+      const layoutTop = row.getBoundingClientRect().top - parentTop;
+      previousTop = (previousTopRef.current ?? layoutTop) + (transformedTop - layoutTop);
+    }
+
     const reduceMotion = typeof window.matchMedia === "function" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    previousTopRef.current = animateActivityRowMovement(
+    const result = animateActivityRowMovement(
       row,
-      previousTopRef.current,
+      previousTop,
       reduceMotion,
     );
-  }, [position]);
+    previousTopRef.current = result.top;
+    previousPositionRef.current = position;
+    animationRef.current = result.animation;
+  });
 
   return (
     <div

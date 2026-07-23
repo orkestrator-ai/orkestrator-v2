@@ -163,21 +163,27 @@ function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function asOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
+function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
+  return typeof value === "string" && allowed.includes(value as T);
 }
 
-function asNullableString(value: unknown): string | null | undefined {
-  if (value === null) return null;
-  return asOptionalString(value);
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
-function asOptionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
-function asOptionalBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
+function isPortNumber(value: unknown): value is number {
+  return isPositiveInteger(value) && value <= 65_535;
+}
+
+function isPortMapping(value: unknown): value is PortMapping {
+  return isRecord(value)
+    && isPortNumber(value.containerPort)
+    && isPortNumber(value.hostPort)
+    && (value.protocol === "tcp" || value.protocol === "udp");
 }
 
 function validateConfigReviewPrompt(value: unknown): AppConfig {
@@ -741,45 +747,97 @@ export class StorageService {
       const environment = environments.find((candidate) => candidate.id === environmentId);
       if (!environment) throw new Error(`Environment not found: ${environmentId}`);
 
-      const stringFields = [
-        "name",
-        "branch",
-        "status",
-        "environmentType",
+      if (isNonBlankString(updates.name)) environment.name = updates.name;
+      if (isNonBlankString(updates.branch)) environment.branch = updates.branch;
+      if ("status" in updates && isOneOf(updates.status, ["running", "stopped", "error", "creating", "stopping"])) {
+        environment.status = updates.status;
+      }
+      if ("environmentType" in updates && isOneOf(updates.environmentType, ["containerized", "local"])) {
+        environment.environmentType = updates.environmentType;
+      }
+
+      const optionalStringFields = [
         "worktreePath",
-        "defaultAgent",
-        "claudeMode",
-        "claudeNativeBackend",
-        "opencodeMode",
-        "codexMode",
         "initialPrompt",
         "pendingRenamePrompt",
         "createdFromCommit",
         "lastActivityAt",
       ] as const;
-      for (const field of stringFields) {
+      for (const field of optionalStringFields) {
         if (field in updates) {
-          (environment as unknown as Record<string, unknown>)[field] = asNullableString(updates[field]) ?? undefined;
+          const value = updates[field];
+          if (value === null || value === undefined || typeof value === "string") {
+            (environment as unknown as Record<string, unknown>)[field] = value ?? undefined;
+          }
         }
       }
 
-      if ("containerId" in updates) environment.containerId = asNullableString(updates.containerId) ?? null;
-      if ("prUrl" in updates) environment.prUrl = asNullableString(updates.prUrl) ?? null;
-      if ("prState" in updates) environment.prState = (asNullableString(updates.prState) as PrState | null | undefined) ?? null;
-      if ("hasMergeConflicts" in updates) environment.hasMergeConflicts = asOptionalBoolean(updates.hasMergeConflicts) ?? null;
+      if ("containerId" in updates && (updates.containerId == null || typeof updates.containerId === "string")) {
+        environment.containerId = updates.containerId ?? null;
+      }
+      if ("prUrl" in updates && (updates.prUrl == null || typeof updates.prUrl === "string")) {
+        environment.prUrl = updates.prUrl ?? null;
+      }
+      if ("prState" in updates) {
+        if (updates.prState == null) environment.prState = null;
+        else if (isOneOf(updates.prState, ["open", "merged", "closed"])) environment.prState = updates.prState;
+      }
+      if ("hasMergeConflicts" in updates) {
+        if (updates.hasMergeConflicts == null) environment.hasMergeConflicts = null;
+        else if (typeof updates.hasMergeConflicts === "boolean") environment.hasMergeConflicts = updates.hasMergeConflicts;
+      }
       if ("allowedDomains" in updates) environment.allowedDomains = Array.isArray(updates.allowedDomains) ? updates.allowedDomains.filter((value): value is string => typeof value === "string") : undefined;
-      if ("portMappings" in updates) environment.portMappings = Array.isArray(updates.portMappings) ? updates.portMappings as PortMapping[] : undefined;
-      if ("opencodePid" in updates) environment.opencodePid = asOptionalNumber(updates.opencodePid);
-      if ("claudeBridgePid" in updates) environment.claudeBridgePid = asOptionalNumber(updates.claudeBridgePid);
-      if ("codexBridgePid" in updates) environment.codexBridgePid = asOptionalNumber(updates.codexBridgePid);
-      if ("localOpencodePort" in updates) environment.localOpencodePort = asOptionalNumber(updates.localOpencodePort);
-      if ("localClaudePort" in updates) environment.localClaudePort = asOptionalNumber(updates.localClaudePort);
-      if ("localCodexPort" in updates) environment.localCodexPort = asOptionalNumber(updates.localCodexPort);
-      if ("entryPort" in updates) environment.entryPort = asOptionalNumber(updates.entryPort);
-      if ("hostEntryPort" in updates) environment.hostEntryPort = asOptionalNumber(updates.hostEntryPort);
-      if ("setupScriptsComplete" in updates) environment.setupScriptsComplete = asOptionalBoolean(updates.setupScriptsComplete) ?? false;
+      if ("portMappings" in updates) {
+        if (updates.portMappings == null) environment.portMappings = undefined;
+        else if (Array.isArray(updates.portMappings) && updates.portMappings.every(isPortMapping)) {
+          environment.portMappings = updates.portMappings;
+        }
+      }
+
+      const pidFields = ["opencodePid", "claudeBridgePid", "codexBridgePid"] as const;
+      for (const field of pidFields) {
+        if (!(field in updates)) continue;
+        const value = updates[field];
+        if (value == null) environment[field] = undefined;
+        else if (isPositiveInteger(value)) environment[field] = value;
+      }
+
+      const portFields = ["localOpencodePort", "localClaudePort", "localCodexPort", "entryPort", "hostEntryPort"] as const;
+      for (const field of portFields) {
+        if (!(field in updates)) continue;
+        const value = updates[field];
+        if (value == null) environment[field] = undefined;
+        else if (isPortNumber(value)) environment[field] = value;
+      }
+
+      if ("setupScriptsComplete" in updates) {
+        if (updates.setupScriptsComplete == null) environment.setupScriptsComplete = false;
+        else if (typeof updates.setupScriptsComplete === "boolean") {
+          environment.setupScriptsComplete = updates.setupScriptsComplete;
+        }
+      }
       if ("networkAccessMode" in updates && (updates.networkAccessMode === "full" || updates.networkAccessMode === "restricted")) {
         environment.networkAccessMode = updates.networkAccessMode;
+      }
+      if ("defaultAgent" in updates) {
+        if (updates.defaultAgent == null) environment.defaultAgent = undefined;
+        else if (isOneOf(updates.defaultAgent, ["claude", "opencode", "codex"])) environment.defaultAgent = updates.defaultAgent;
+      }
+      if ("claudeMode" in updates) {
+        if (updates.claudeMode == null) environment.claudeMode = undefined;
+        else if (isOneOf(updates.claudeMode, ["terminal", "native"])) environment.claudeMode = updates.claudeMode;
+      }
+      if ("claudeNativeBackend" in updates) {
+        if (updates.claudeNativeBackend == null) environment.claudeNativeBackend = undefined;
+        else if (isOneOf(updates.claudeNativeBackend, ["sdk", "tmux"])) environment.claudeNativeBackend = updates.claudeNativeBackend;
+      }
+      if ("opencodeMode" in updates) {
+        if (updates.opencodeMode == null) environment.opencodeMode = undefined;
+        else if (isOneOf(updates.opencodeMode, ["terminal", "native"])) environment.opencodeMode = updates.opencodeMode;
+      }
+      if ("codexMode" in updates) {
+        if (updates.codexMode == null) environment.codexMode = undefined;
+        else if (isOneOf(updates.codexMode, ["terminal", "native"])) environment.codexMode = updates.codexMode;
       }
 
       await this.saveJson(this.environmentsFile(), environments);
@@ -1056,11 +1114,11 @@ export class StorageService {
   async cleanupOrphanedBuffers(): Promise<string[]> {
     if (!await exists(this.buffersDir())) return [];
     const sessions = await this.loadJson<Session[]>(this.sessionsFile(), () => []);
-    const sessionIds = new Set(sessions.map((session) => session.id));
+    const liveBufferFiles = new Set(sessions.map((session) => `${session.id}.txt`));
     const deleted: string[] = [];
     for (const entry of await fs.readdir(this.buffersDir())) {
       const sessionId = path.basename(entry, path.extname(entry));
-      if (!sessionIds.has(sessionId)) {
+      if (!liveBufferFiles.has(entry)) {
         await fs.rm(path.join(this.buffersDir(), entry), { force: true });
         deleted.push(sessionId);
       }

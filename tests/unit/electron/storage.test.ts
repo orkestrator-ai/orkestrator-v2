@@ -15,11 +15,15 @@ import {
   StorageService,
 } from "../../../apps/backend/src/core/storage";
 
+const resizeKanbanImageToBuffer = mock(async () => Buffer.from("webp-bytes"));
+const transparentPngBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
 mock.module("sharp", () => {
   const pipeline = {
     resize: mock(() => pipeline),
     webp: mock(() => pipeline),
-    toBuffer: mock(async () => Buffer.from("webp-bytes")),
+    toBuffer: resizeKanbanImageToBuffer,
   };
   return { default: mock(() => pipeline) };
 });
@@ -68,6 +72,8 @@ function withFixedDate<T>(iso: string, fn: () => T): T {
 }
 
 afterEach(async () => {
+  resizeKanbanImageToBuffer.mockClear();
+  resizeKanbanImageToBuffer.mockImplementation(async () => Buffer.from("webp-bytes"));
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -226,8 +232,8 @@ describe("Electron StorageService", () => {
       setupScriptsComplete: true,
       networkAccessMode: "full",
       pendingRenamePrompt: "Name this after startup",
-      entryPort: undefined,
     });
+    expect(updated.entryPort).toBeUndefined();
     await storage.updateEnvironment(firstEnvironment.id, { pendingRenamePrompt: undefined });
     expect((await storage.getEnvironment(firstEnvironment.id))?.pendingRenamePrompt).toBeUndefined();
     await expect(storage.updateEnvironment("missing", {})).rejects.toThrow("Environment not found");
@@ -837,8 +843,6 @@ describe("Electron StorageService", () => {
     await storage.init();
 
     const task = await storage.addKanbanTask("project-1", "Build thing", "Details");
-    const transparentPngBase64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
     const withImage = await storage.addKanbanImage(task.id, "pixel.png", transparentPngBase64);
     const image = withImage.images[0];
     expect(image).toMatchObject({ filename: "pixel.png" });
@@ -849,5 +853,20 @@ describe("Electron StorageService", () => {
     const withoutImage = await storage.deleteKanbanImage(task.id, image!.id);
     expect(withoutImage.images).toHaveLength(0);
     await expect(storage.getKanbanImageData(image!.id)).rejects.toThrow();
+  });
+
+  test("does not persist kanban image metadata when resizing fails", async () => {
+    const dataDir = await createTempDir("ork-storage-kanban-resize-failed-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const task = await storage.addKanbanTask("project-1", "Build thing", "Details");
+    resizeKanbanImageToBuffer.mockRejectedValueOnce(new Error("image resize failed"));
+
+    await expect(storage.addKanbanImage(task.id, "pixel.png", transparentPngBase64)).rejects.toThrow(
+      "image resize failed",
+    );
+
+    expect((await storage.getKanbanTasks("project-1"))[0]?.images).toEqual([]);
+    await expect(fs.readdir(path.join(dataDir, "kanban-images"))).rejects.toThrow();
   });
 });

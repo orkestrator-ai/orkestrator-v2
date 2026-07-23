@@ -11,12 +11,14 @@ import * as realUseProjects from "@/hooks/useProjects";
 import * as realUseEnvironments from "@/hooks/useEnvironments";
 import * as realUseEnvironmentDiffStats from "@/hooks/useEnvironmentDiffStats";
 import * as realBackend from "@/lib/backend";
+import * as realEnvironmentSettingsDialog from "@/components/environments/EnvironmentSettingsDialog";
 
 const realDndCoreSnapshot = { ...realDndCore };
 const realUseProjectsSnapshot = { ...realUseProjects };
 const realUseEnvironmentsSnapshot = { ...realUseEnvironments };
 const realUseEnvironmentDiffStatsSnapshot = { ...realUseEnvironmentDiffStats };
 const realBackendSnapshot = { ...realBackend };
+const realEnvironmentSettingsDialogSnapshot = { ...realEnvironmentSettingsDialog };
 
 const project: Project = {
   id: "project-1",
@@ -107,6 +109,26 @@ mock.module("@/lib/backend", () => ({
   updateEnvironmentAgentSettings: updateEnvironmentAgentSettingsMock,
 }));
 
+mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
+  EnvironmentSettingsDialog: ({
+    open,
+    environment,
+    onUpdate,
+  }: {
+    open: boolean;
+    environment: Environment;
+    onUpdate: (environment: Environment) => void;
+  }) => open
+    ? createElement(
+        "button",
+        {
+          onClick: () => onUpdate({ ...environment, name: "Updated from settings" }),
+        },
+        "Apply settings update",
+      )
+    : null,
+}));
+
 const {
   HierarchicalSidebar,
   animateActivityRowMovement,
@@ -122,6 +144,10 @@ afterAll(() => {
   mock.module("@/hooks/useEnvironments", () => realUseEnvironmentsSnapshot);
   mock.module("@/hooks/useEnvironmentDiffStats", () => realUseEnvironmentDiffStatsSnapshot);
   mock.module("@/lib/backend", () => realBackendSnapshot);
+  mock.module(
+    "@/components/environments/EnvironmentSettingsDialog",
+    () => realEnvironmentSettingsDialogSnapshot,
+  );
 });
 
 if (typeof globalThis.ImageData === "undefined") {
@@ -141,6 +167,32 @@ if (typeof globalThis.ImageData === "undefined") {
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
 const originalReload = window.location.reload;
+
+function mockActivityRowOffsetTop(
+  getTop: (row: HTMLElement, index: number, rows: HTMLElement[]) => number =
+    (_row, index) => index * 40,
+): () => void {
+  const originalDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetTop");
+  Object.defineProperty(HTMLElement.prototype, "offsetTop", {
+    configurable: true,
+    get() {
+      if (this.dataset.environmentId && this.parentElement) {
+        const rows = Array.from(
+          this.parentElement.querySelectorAll<HTMLElement>("[data-environment-id]"),
+        );
+        return getTop(this, rows.indexOf(this), rows);
+      }
+      return originalDescriptor?.get?.call(this) ?? 0;
+    },
+  });
+  return () => {
+    if (originalDescriptor) {
+      Object.defineProperty(HTMLElement.prototype, "offsetTop", originalDescriptor);
+    } else {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).offsetTop;
+    }
+  };
+}
 
 describe("HierarchicalSidebar", () => {
   beforeEach(() => {
@@ -360,23 +412,64 @@ describe("HierarchicalSidebar", () => {
     expect(screen.getByLabelText("0 waiting environments")).toBeTruthy();
   });
 
-  test("animates activity row movement with a reduced-motion escape hatch", () => {
+  test("persists environment updates initiated from an activity row", async () => {
+    environmentsValue = [{
+      ...createdEnvironment,
+      id: "env-settings",
+      name: "Settings environment",
+      lastActivityAt: "2026-07-22T10:00:00.000Z",
+    }];
+    useUIStore.getState().setEnvironmentSortMode("activity");
+    render(<HierarchicalSidebar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /Settings environment/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply settings update" }));
+
+    expect(updateEnvironmentMock).toHaveBeenCalledWith(
+      "env-settings",
+      expect.objectContaining({
+        id: "env-settings",
+        name: "Updated from settings",
+      }),
+    );
+  });
+
+  test("animates activity row movement and skips first, stationary, unsupported, and reduced-motion cases", () => {
+    const parent = document.createElement("div");
     const row = document.createElement("div");
     const animate = mock(() => ({} as Animation));
+    parent.append(row);
+    Object.defineProperty(parent, "offsetTop", { configurable: true, value: 100 });
+    Object.defineProperty(row, "offsetTop", { configurable: true, value: 120 });
+    parent.getBoundingClientRect = () => ({
+      bottom: 500,
+      height: 400,
+      left: 0,
+      right: 200,
+      top: 100,
+      width: 200,
+      x: 0,
+      y: 100,
+      toJSON: () => ({}),
+    });
     row.getBoundingClientRect = () => ({
-      bottom: 60,
+      bottom: 160,
       height: 40,
       left: 0,
       right: 200,
-      top: 20,
+      top: 120,
       width: 200,
       x: 0,
-      y: 20,
+      y: 120,
       toJSON: () => ({}),
     });
     row.animate = animate;
 
-    expect(animateActivityRowMovement(row, 100, false)).toBe(20);
+    expect(animateActivityRowMovement(row, 100, false)).toEqual({
+      top: 20,
+      animation: expect.anything(),
+    });
     expect(animate).toHaveBeenCalledWith(
       [
         { transform: "translateY(80px)" },
@@ -389,18 +482,43 @@ describe("HierarchicalSidebar", () => {
     );
 
     animate.mockClear();
-    expect(animateActivityRowMovement(row, 100, true)).toBe(20);
+    expect(animateActivityRowMovement(row, null, false)).toEqual({
+      top: 20,
+      animation: null,
+    });
+    expect(animateActivityRowMovement(row, 20, false)).toEqual({
+      top: 20,
+      animation: null,
+    });
+    expect(animateActivityRowMovement(row, 100, true)).toEqual({
+      top: 20,
+      animation: null,
+    });
     expect(animate).not.toHaveBeenCalled();
+
+    Object.defineProperty(row, "animate", { configurable: true, value: undefined });
+    expect(animateActivityRowMovement(row, 100, false)).toEqual({
+      top: 20,
+      animation: null,
+    });
   });
 
-  test("animates only rows whose activity position changes", () => {
+  test("keeps activity FLIP animations stable across content, scroll, layout, and rapid reorder updates", () => {
     const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect;
+    const originalAnimate = HTMLElement.prototype.animate;
+    const transforms = new Map<string, number>();
+    const animationCalls = new Map<string, Array<Keyframe[]>>();
+    const animations = new Map<string, { playState: AnimationPlayState; cancel: ReturnType<typeof mock> }>();
+    const restoreOffsetTop = mockActivityRowOffsetTop();
+    let viewportTop = 100;
+
     HTMLElement.prototype.getBoundingClientRect = function () {
       if (this.dataset.environmentId && this.parentElement) {
         const rows = Array.from(
           this.parentElement.querySelectorAll<HTMLElement>("[data-environment-id]"),
         );
-        const top = rows.indexOf(this) * 40;
+        const top = viewportTop + rows.indexOf(this) * 40 +
+          (transforms.get(this.dataset.environmentId) ?? 0);
         return {
           bottom: top + 40,
           height: 40,
@@ -413,7 +531,39 @@ describe("HierarchicalSidebar", () => {
           toJSON: () => ({}),
         };
       }
+      if (Array.from(this.children).some(
+        (child) => child instanceof HTMLElement && Boolean(child.dataset.environmentId),
+      )) {
+        return {
+          bottom: viewportTop + 400,
+          height: 400,
+          left: 0,
+          right: 200,
+          top: viewportTop,
+          width: 200,
+          x: 0,
+          y: viewportTop,
+          toJSON: () => ({}),
+        };
+      }
       return originalGetBoundingClientRect.call(this);
+    };
+    HTMLElement.prototype.animate = function (keyframes) {
+      const id = this.dataset.environmentId!;
+      const frames = keyframes as Keyframe[];
+      const firstTransform = String(frames[0]?.transform ?? "");
+      const offset = Number(firstTransform.match(/translateY\((-?\d+)px\)/)?.[1] ?? 0);
+      transforms.set(id, offset);
+      animationCalls.set(id, [...(animationCalls.get(id) ?? []), frames]);
+      const animation = {
+        playState: "running" as AnimationPlayState,
+        cancel: mock(() => {
+          transforms.delete(id);
+          animation.playState = "idle";
+        }),
+      };
+      animations.set(id, animation);
+      return animation as unknown as Animation;
     };
 
     try {
@@ -438,26 +588,7 @@ describe("HierarchicalSidebar", () => {
 
       const view = render(<HierarchicalSidebar />);
       const list = screen.getByTestId("activity-environment-list");
-      const firstRow = list.querySelector<HTMLElement>('[data-environment-id="env-first"]')!;
-      const secondRow = list.querySelector<HTMLElement>('[data-environment-id="env-second"]')!;
-      const unchangedRow = list.querySelector<HTMLElement>('[data-environment-id="env-unchanged"]')!;
-      const firstAnimate = mock(() => ({} as Animation));
-      const secondAnimate = mock(() => ({} as Animation));
-      const unchangedAnimate = mock(() => ({} as Animation));
-      firstRow.animate = firstAnimate;
-      secondRow.animate = secondAnimate;
-      unchangedRow.animate = unchangedAnimate;
-
-      // A content-only update should not restart any row movement.
-      environmentsValue = environmentsValue.map((environment) => (
-        environment.id === "env-unchanged"
-          ? { ...environment, status: "stopped" as const }
-          : environment
-      ));
-      view.rerender(<HierarchicalSidebar />);
-      expect(firstAnimate).not.toHaveBeenCalled();
-      expect(secondAnimate).not.toHaveBeenCalled();
-      expect(unchangedAnimate).not.toHaveBeenCalled();
+      expect(animationCalls.size).toBe(0);
 
       // Moving the second row to the top shifts only the first and second rows.
       environmentsValue = environmentsValue.map((environment) => (
@@ -472,11 +603,215 @@ describe("HierarchicalSidebar", () => {
         (row) => row.dataset.environmentId,
       );
       expect(orderedIds).toEqual(["env-second", "env-first", "env-unchanged"]);
-      expect(firstAnimate).toHaveBeenCalledTimes(1);
-      expect(secondAnimate).toHaveBeenCalledTimes(1);
-      expect(unchangedAnimate).not.toHaveBeenCalled();
+      expect(animationCalls.get("env-first")?.[0]?.[0]).toEqual({ transform: "translateY(-40px)" });
+      expect(animationCalls.get("env-second")?.[0]?.[0]).toEqual({ transform: "translateY(40px)" });
+      expect(animationCalls.has("env-unchanged")).toBe(false);
+
+      // A content-only update while transforms are active must not restart them.
+      environmentsValue = environmentsValue.map((environment) => (
+        environment.id === "env-unchanged"
+          ? { ...environment, status: "stopped" as const }
+          : environment
+      ));
+      view.rerender(<HierarchicalSidebar />);
+      expect(animationCalls.get("env-first")).toHaveLength(1);
+      expect(animationCalls.get("env-second")).toHaveLength(1);
+
+      // Simulate a half-complete animation, then reverse the activity order.
+      transforms.set("env-first", -20);
+      transforms.set("env-second", 20);
+      const firstAnimation = animations.get("env-first");
+      const secondAnimation = animations.get("env-second");
+      viewportTop = -250; // Scrolling and an outer layout shift cancel in list-relative geometry.
+      environmentsValue = environmentsValue.map((environment) => (
+        environment.id === "env-first"
+          ? { ...environment, lastActivityAt: "2026-07-23T14:00:00.000Z" }
+          : environment
+      ));
+      view.rerender(<HierarchicalSidebar />);
+
+      expect(firstAnimation?.cancel).toHaveBeenCalledTimes(1);
+      expect(secondAnimation?.cancel).toHaveBeenCalledTimes(1);
+      expect(animationCalls.get("env-first")?.[1]?.[0]).toEqual({ transform: "translateY(20px)" });
+      expect(animationCalls.get("env-second")?.[1]?.[0]).toEqual({ transform: "translateY(-20px)" });
+      expect(animationCalls.has("env-unchanged")).toBe(false);
     } finally {
       HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect;
+      HTMLElement.prototype.animate = originalAnimate;
+      restoreOffsetTop();
+    }
+  });
+
+  test("refreshes stable-position baselines after a preceding activity row changes height", () => {
+    const originalAnimate = HTMLElement.prototype.animate;
+    const rowHeights = new Map<string, number>([
+      ["env-a", 40],
+      ["env-b", 40],
+      ["env-c", 40],
+    ]);
+    const restoreOffsetTop = mockActivityRowOffsetTop((_row, index, rows) =>
+      rows.slice(0, index).reduce(
+        (top, row) => top + (rowHeights.get(row.dataset.environmentId!) ?? 40),
+        0,
+      )
+    );
+    const animationCalls = new Map<string, Keyframe[]>();
+    HTMLElement.prototype.animate = function (keyframes) {
+      animationCalls.set(this.dataset.environmentId!, keyframes as Keyframe[]);
+      return { playState: "finished" } as Animation;
+    };
+
+    try {
+      environmentsValue = [
+        { ...createdEnvironment, id: "env-a", lastActivityAt: "2026-07-23T12:00:00.000Z" },
+        { ...createdEnvironment, id: "env-b", lastActivityAt: "2026-07-23T11:00:00.000Z" },
+        { ...createdEnvironment, id: "env-c", lastActivityAt: "2026-07-23T10:00:00.000Z" },
+      ];
+      useUIStore.getState().setEnvironmentSortMode("activity");
+      const view = render(<HierarchicalSidebar />);
+
+      // The first row grows, moving later rows without changing their indices.
+      rowHeights.set("env-a", 80);
+      environmentsValue = environmentsValue.map((environment) => (
+        environment.id === "env-a"
+          ? { ...environment, initialPrompt: "A prompt that expands the row" }
+          : environment
+      ));
+      view.rerender(<HierarchicalSidebar />);
+      expect(animationCalls.size).toBe(0);
+
+      environmentsValue = environmentsValue.map((environment) => (
+        environment.id === "env-b"
+          ? { ...environment, lastActivityAt: "2026-07-23T13:00:00.000Z" }
+          : environment
+      ));
+      view.rerender(<HierarchicalSidebar />);
+
+      expect(animationCalls.get("env-b")?.[0]).toEqual({ transform: "translateY(80px)" });
+      expect(animationCalls.get("env-a")?.[0]).toEqual({ transform: "translateY(-40px)" });
+      expect(animationCalls.has("env-c")).toBe(false);
+    } finally {
+      HTMLElement.prototype.animate = originalAnimate;
+      restoreOffsetTop();
+    }
+  });
+
+  test("does not animate activity reorder when reduced motion is preferred", () => {
+    const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect;
+    const originalAnimate = HTMLElement.prototype.animate;
+    const originalMatchMedia = window.matchMedia;
+    const animate = mock(() => ({ playState: "running" } as Animation));
+    const restoreOffsetTop = mockActivityRowOffsetTop();
+
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      if (this.dataset.environmentId && this.parentElement) {
+        const rows = Array.from(
+          this.parentElement.querySelectorAll<HTMLElement>("[data-environment-id]"),
+        );
+        const top = rows.indexOf(this) * 40;
+        return {
+          bottom: top + 40,
+          height: 40,
+          left: 0,
+          right: 200,
+          top,
+          width: 200,
+          x: 0,
+          y: top,
+          toJSON: () => ({}),
+        };
+      }
+      return originalGetBoundingClientRect.call(this);
+    };
+    HTMLElement.prototype.animate = animate;
+    window.matchMedia = mock(() => ({
+      matches: true,
+      media: "(prefers-reduced-motion: reduce)",
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }));
+
+    try {
+      environmentsValue = [
+        { ...createdEnvironment, id: "env-a", lastActivityAt: "2026-07-23T12:00:00.000Z" },
+        { ...createdEnvironment, id: "env-b", lastActivityAt: "2026-07-23T11:00:00.000Z" },
+      ];
+      useUIStore.getState().setEnvironmentSortMode("activity");
+      const view = render(<HierarchicalSidebar />);
+
+      environmentsValue = environmentsValue.map((environment) => (
+        environment.id === "env-b"
+          ? { ...environment, lastActivityAt: "2026-07-23T13:00:00.000Z" }
+          : environment
+      ));
+      view.rerender(<HierarchicalSidebar />);
+
+      expect(animate).not.toHaveBeenCalled();
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect;
+      HTMLElement.prototype.animate = originalAnimate;
+      window.matchMedia = originalMatchMedia;
+      restoreOffsetTop();
+    }
+  });
+
+  test("animates existing activity rows when a row is added or removed without animating the new row", () => {
+    const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect;
+    const originalAnimate = HTMLElement.prototype.animate;
+    const animatedIds: string[] = [];
+    const restoreOffsetTop = mockActivityRowOffsetTop();
+
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      if (this.dataset.environmentId && this.parentElement) {
+        const rows = Array.from(
+          this.parentElement.querySelectorAll<HTMLElement>("[data-environment-id]"),
+        );
+        const top = rows.indexOf(this) * 40;
+        return {
+          bottom: top + 40,
+          height: 40,
+          left: 0,
+          right: 200,
+          top,
+          width: 200,
+          x: 0,
+          y: top,
+          toJSON: () => ({}),
+        };
+      }
+      return originalGetBoundingClientRect.call(this);
+    };
+    HTMLElement.prototype.animate = function () {
+      animatedIds.push(this.dataset.environmentId!);
+      return { playState: "finished" } as Animation;
+    };
+
+    try {
+      environmentsValue = [
+        { ...createdEnvironment, id: "env-a", lastActivityAt: "2026-07-23T12:00:00.000Z" },
+        { ...createdEnvironment, id: "env-b", lastActivityAt: "2026-07-23T11:00:00.000Z" },
+      ];
+      useUIStore.getState().setEnvironmentSortMode("activity");
+      const view = render(<HierarchicalSidebar />);
+
+      environmentsValue = [
+        ...environmentsValue,
+        { ...createdEnvironment, id: "env-new", lastActivityAt: "2026-07-23T13:00:00.000Z" },
+      ];
+      view.rerender(<HierarchicalSidebar />);
+      expect(animatedIds).toEqual(["env-a", "env-b"]);
+
+      environmentsValue = environmentsValue.filter((environment) => environment.id !== "env-new");
+      view.rerender(<HierarchicalSidebar />);
+      expect(animatedIds).toEqual(["env-a", "env-b", "env-a", "env-b"]);
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = originalGetBoundingClientRect;
+      HTMLElement.prototype.animate = originalAnimate;
+      restoreOffsetTop();
     }
   });
 
@@ -494,16 +829,28 @@ describe("HierarchicalSidebar", () => {
         order: 0,
         lastActivityAt: "not-a-date",
       },
+      { ...createdEnvironment, id: "env-tie-z", order: 2 },
+      { ...createdEnvironment, id: "env-tie-a", order: 2 },
     ];
 
     expect(sortEnvironmentsByActivity(environments, [project, secondProject]).map((env) => env.id))
-      .toEqual(["env-1", "env-2", "env-3", "env-unknown-a", "env-unknown-b"]);
+      .toEqual([
+        "env-1",
+        "env-2",
+        "env-tie-a",
+        "env-tie-z",
+        "env-3",
+        "env-unknown-a",
+        "env-unknown-b",
+      ]);
     expect(environments.map((env) => env.id)).toEqual([
       "env-2",
       "env-3",
       "env-1",
       "env-unknown-b",
       "env-unknown-a",
+      "env-tie-z",
+      "env-tie-a",
     ]);
   });
 

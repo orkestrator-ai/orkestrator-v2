@@ -46,6 +46,38 @@ export type BuildPipelineSource =
 
 export type CompletionCommentStatus = "posting" | "posted" | "failed";
 
+export type PipelineFailureKind = "prompt-dispatch" | "stage-transition";
+
+export interface PipelineFailureContext {
+  phase: ResumableBuildPhase;
+  kind: PipelineFailureKind;
+  sessionId?: string;
+  prompt?: string;
+  useTaskImages?: boolean;
+  requestId?: string;
+}
+
+export interface PipelineReconnectAttempt {
+  id: string;
+  phase: ResumableBuildPhase;
+  kind: PipelineFailureKind;
+  sessionId?: string;
+  prompt?: string;
+  useTaskImages?: boolean;
+  requestId?: string;
+  startedAt: string;
+}
+
+export interface PipelinePromptAttempt {
+  id: string;
+  sessionId: string;
+  requestId: string;
+  phase: ResumableBuildPhase;
+  prompt: string;
+  useTaskImages: boolean;
+  startedAt: string;
+}
+
 export interface BuildPipeline {
   id: string;
   taskId: string;
@@ -62,6 +94,10 @@ export interface BuildPipeline {
   verificationFeedback?: string;
   pausedFromPhase?: ResumableBuildPhase;
   error?: string;
+  failureContext?: PipelineFailureContext;
+  reconnectAttempt?: PipelineReconnectAttempt;
+  pendingPromptAttempt?: PipelinePromptAttempt;
+  activePromptContext?: PipelineFailureContext;
   createdAt: string;
   taskTitle: string;
   taskSnapshot: TaskSnapshot;
@@ -94,8 +130,12 @@ interface BuildPipelineState {
   setCurrentSessionIndex: (pipelineId: string, index: number) => void;
   setVerificationResult: (pipelineId: string, result: "pass" | "fail", feedback: string) => void;
   incrementIteration: (pipelineId: string) => void;
-  setPipelineError: (pipelineId: string, error: string) => void;
-  retryFailedPipeline: (pipelineId: string, phase: ResumableBuildPhase) => boolean;
+  setPipelineError: (pipelineId: string, error: string, context?: PipelineFailureContext | null) => void;
+  beginReconnect: (pipelineId: string, attempt: PipelineReconnectAttempt) => boolean;
+  completeReconnect: (pipelineId: string, attemptId: string) => boolean;
+  failReconnect: (pipelineId: string, attemptId: string, error: string) => boolean;
+  beginPromptAttempt: (pipelineId: string, attempt: PipelinePromptAttempt) => boolean;
+  completePromptAttempt: (pipelineId: string, attemptId: string) => boolean;
   pausePipeline: (pipelineId: string) => void;
   resumePipeline: (pipelineId: string, fallbackPhase?: ResumableBuildPhase) => ResumableBuildPhase | undefined;
   markSessionRunning: (pipelineId: string, sdkSessionId: string) => void;
@@ -206,10 +246,20 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
           ? pipeline.phase
           : pipeline.pausedFromPhase
         : undefined;
+      const preservesReconnect = pipeline.reconnectAttempt?.phase === phase;
+      const preservesFailureContext = pipeline.phase === phase || preservesReconnect;
       newMap.set(pipelineId, {
         ...pipeline,
         phase,
         pausedFromPhase,
+        failureContext: preservesFailureContext ? pipeline.failureContext : undefined,
+        reconnectAttempt: preservesReconnect ? pipeline.reconnectAttempt : undefined,
+        pendingPromptAttempt: pipeline.pendingPromptAttempt?.phase === phase
+          ? pipeline.pendingPromptAttempt
+          : undefined,
+        activePromptContext: pipeline.activePromptContext?.phase === phase
+          ? pipeline.activePromptContext
+          : undefined,
       });
       return { pipelines: newMap };
     }),
@@ -218,11 +268,28 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
     set((state) => {
       const pipeline = state.pipelines.get(pipelineId);
       if (!pipeline) return state;
+      const session = pipeline.sessions.find((candidate) => candidate.sdkSessionId === sdkSessionId);
+      if (!session) return state;
+      const clearsPromptContext = pipeline.activePromptContext?.sessionId === sdkSessionId;
+      const clearsPendingAttempt = pipeline.pendingPromptAttempt?.sessionId === sdkSessionId;
+      const clearsFailureContext = pipeline.failureContext?.kind === "prompt-dispatch"
+        && pipeline.failureContext.sessionId === sdkSessionId;
+      if (session.status === "idle" && !clearsPromptContext && !clearsPendingAttempt && !clearsFailureContext) {
+        return state;
+      }
       const newMap = new Map(state.pipelines);
       const sessions = pipeline.sessions.map((s) =>
         s.sdkSessionId === sdkSessionId ? { ...s, status: "idle" as const } : s
       );
-      newMap.set(pipelineId, { ...pipeline, sessions });
+      newMap.set(pipelineId, {
+        ...pipeline,
+        sessions,
+        activePromptContext: pipeline.activePromptContext?.sessionId === sdkSessionId
+          ? undefined
+          : pipeline.activePromptContext,
+        pendingPromptAttempt: clearsPendingAttempt ? undefined : pipeline.pendingPromptAttempt,
+        failureContext: clearsFailureContext ? undefined : pipeline.failureContext,
+      });
       return { pipelines: newMap };
     }),
 
@@ -230,6 +297,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
     set((state) => {
       const pipeline = state.pipelines.get(pipelineId);
       if (!pipeline) return state;
+      if (pipeline.currentSessionIndex === index) return state;
       const newMap = new Map(state.pipelines);
       newMap.set(pipelineId, { ...pipeline, currentSessionIndex: index });
       return { pipelines: newMap };
@@ -239,6 +307,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
     set((state) => {
       const pipeline = state.pipelines.get(pipelineId);
       if (!pipeline) return state;
+      if (pipeline.verificationResult === result && pipeline.verificationFeedback === feedback) return state;
       const newMap = new Map(state.pipelines);
       newMap.set(pipelineId, { ...pipeline, verificationResult: result, verificationFeedback: feedback });
       return { pipelines: newMap };
@@ -253,36 +322,246 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
       return { pipelines: newMap };
     }),
 
-  setPipelineError: (pipelineId, error) =>
+  setPipelineError: (pipelineId, error, context) =>
     set((state) => {
       const pipeline = state.pipelines.get(pipelineId);
       if (!pipeline) return state;
+      if (
+        pipeline.phase === "complete"
+        || (pipeline.phase === "paused" && context !== null)
+      ) {
+        return state;
+      }
+      if (
+        context
+        && pipeline.phase !== "failed"
+        && pipeline.phase !== context.phase
+      ) {
+        return state;
+      }
+      if (
+        context
+        && pipeline.phase === "failed"
+        && pipeline.failureContext
+        && (
+          pipeline.failureContext.phase !== context.phase
+          || pipeline.failureContext.kind !== context.kind
+          || pipeline.failureContext.sessionId !== context.sessionId
+          || pipeline.failureContext.prompt !== context.prompt
+          || pipeline.failureContext.useTaskImages !== context.useTaskImages
+          || pipeline.failureContext.requestId !== context.requestId
+        )
+      ) {
+        return state;
+      }
+      const failureContext = context === null
+        ? undefined
+        : context
+          ?? pipeline.activePromptContext
+          ?? (isResumableBuildPhase(pipeline.phase)
+            ? { phase: pipeline.phase, kind: "stage-transition" as const }
+            : pipeline.failureContext);
       // No-op if already failed with the same error, so subscribers don't
       // re-render in a loop (prevents "Maximum update depth exceeded").
-      if (pipeline.phase === "failed" && pipeline.error === error) return state;
+      if (
+        pipeline.phase === "failed"
+        && pipeline.error === error
+        && pipeline.failureContext?.phase === failureContext?.phase
+        && pipeline.failureContext?.kind === failureContext?.kind
+        && pipeline.failureContext?.sessionId === failureContext?.sessionId
+        && pipeline.failureContext?.prompt === failureContext?.prompt
+        && pipeline.failureContext?.useTaskImages === failureContext?.useTaskImages
+        && pipeline.failureContext?.requestId === failureContext?.requestId
+        && !pipeline.reconnectAttempt
+        && !pipeline.pendingPromptAttempt
+      ) {
+        return state;
+      }
       const newMap = new Map(state.pipelines);
-      newMap.set(pipelineId, { ...pipeline, phase: "failed", error, pausedFromPhase: undefined });
+      newMap.set(pipelineId, {
+        ...pipeline,
+        phase: "failed",
+        error,
+        pausedFromPhase: undefined,
+        failureContext,
+        reconnectAttempt: undefined,
+        pendingPromptAttempt: undefined,
+        activePromptContext: undefined,
+      });
       return { pipelines: newMap };
     }),
 
-  retryFailedPipeline: (pipelineId, phase) => {
+  beginReconnect: (pipelineId, attempt) => {
     const pipeline = get().pipelines.get(pipelineId);
-    if (!pipeline || pipeline.phase !== "failed") return false;
+    if (
+      !pipeline
+      || pipeline.phase !== "failed"
+      || pipeline.reconnectAttempt
+      || !pipeline.failureContext
+      || pipeline.failureContext.phase !== attempt.phase
+      || pipeline.failureContext.kind !== attempt.kind
+      || pipeline.failureContext.sessionId !== attempt.sessionId
+      || pipeline.failureContext.prompt !== attempt.prompt
+      || pipeline.failureContext.useTaskImages !== attempt.useTaskImages
+      || pipeline.failureContext.requestId !== attempt.requestId
+    ) {
+      return false;
+    }
 
+    let started = false;
     set((state) => {
       const latest = state.pipelines.get(pipelineId);
-      if (!latest || latest.phase !== "failed") return state;
+      if (
+        !latest
+        || latest.phase !== "failed"
+        || latest.reconnectAttempt
+        || !latest.failureContext
+        || latest.failureContext.phase !== attempt.phase
+        || latest.failureContext.kind !== attempt.kind
+        || latest.failureContext.sessionId !== attempt.sessionId
+        || latest.failureContext.prompt !== attempt.prompt
+        || latest.failureContext.useTaskImages !== attempt.useTaskImages
+        || latest.failureContext.requestId !== attempt.requestId
+      ) {
+        return state;
+      }
       const newMap = new Map(state.pipelines);
       newMap.set(pipelineId, {
         ...latest,
-        phase,
+        phase: attempt.phase,
         error: undefined,
         pausedFromPhase: undefined,
+        reconnectAttempt: attempt,
+        activePromptContext: attempt.kind === "prompt-dispatch"
+          ? {
+              phase: attempt.phase,
+              kind: attempt.kind,
+              sessionId: attempt.sessionId,
+              prompt: attempt.prompt,
+              useTaskImages: attempt.useTaskImages,
+              requestId: attempt.requestId,
+            }
+          : undefined,
       });
+      started = true;
       return { pipelines: newMap };
     });
 
-    return true;
+    return started;
+  },
+
+  completeReconnect: (pipelineId, attemptId) => {
+    const pipeline = get().pipelines.get(pipelineId);
+    if (!pipeline || pipeline.reconnectAttempt?.id !== attemptId) return false;
+
+    let completed = false;
+    set((state) => {
+      const latest = state.pipelines.get(pipelineId);
+      if (!latest || latest.reconnectAttempt?.id !== attemptId) return state;
+      const newMap = new Map(state.pipelines);
+      newMap.set(pipelineId, {
+        ...latest,
+        reconnectAttempt: undefined,
+      });
+      completed = true;
+      return { pipelines: newMap };
+    });
+
+    return completed;
+  },
+
+  failReconnect: (pipelineId, attemptId, error) => {
+    const pipeline = get().pipelines.get(pipelineId);
+    if (!pipeline || pipeline.reconnectAttempt?.id !== attemptId) return false;
+
+    let failed = false;
+    set((state) => {
+      const latest = state.pipelines.get(pipelineId);
+      if (!latest || latest.reconnectAttempt?.id !== attemptId) return state;
+      const newMap = new Map(state.pipelines);
+      newMap.set(pipelineId, {
+        ...latest,
+        phase: "failed",
+        error,
+        pausedFromPhase: undefined,
+        failureContext: latest.activePromptContext ?? latest.failureContext ?? {
+          phase: latest.reconnectAttempt.phase,
+          kind: latest.reconnectAttempt.kind,
+          sessionId: latest.reconnectAttempt.sessionId,
+          prompt: latest.reconnectAttempt.prompt,
+          useTaskImages: latest.reconnectAttempt.useTaskImages,
+          requestId: latest.reconnectAttempt.requestId,
+        },
+        reconnectAttempt: undefined,
+        pendingPromptAttempt: undefined,
+        activePromptContext: undefined,
+      });
+      failed = true;
+      return { pipelines: newMap };
+    });
+
+    return failed;
+  },
+
+  beginPromptAttempt: (pipelineId, attempt) => {
+    const pipeline = get().pipelines.get(pipelineId);
+    if (
+      !pipeline
+      || pipeline.phase !== attempt.phase
+      || pipeline.pendingPromptAttempt
+    ) {
+      return false;
+    }
+
+    let started = false;
+    set((state) => {
+      const latest = state.pipelines.get(pipelineId);
+      if (
+        !latest
+        || latest.phase !== attempt.phase
+        || latest.pendingPromptAttempt
+      ) {
+        return state;
+      }
+      const newMap = new Map(state.pipelines);
+      newMap.set(pipelineId, {
+        ...latest,
+        pendingPromptAttempt: attempt,
+        failureContext: undefined,
+        activePromptContext: {
+          phase: attempt.phase,
+          kind: "prompt-dispatch",
+          sessionId: attempt.sessionId,
+          prompt: attempt.prompt,
+          useTaskImages: attempt.useTaskImages,
+          requestId: attempt.requestId,
+        },
+      });
+      started = true;
+      return { pipelines: newMap };
+    });
+
+    return started;
+  },
+
+  completePromptAttempt: (pipelineId, attemptId) => {
+    const pipeline = get().pipelines.get(pipelineId);
+    if (!pipeline || pipeline.pendingPromptAttempt?.id !== attemptId) return false;
+
+    let completed = false;
+    set((state) => {
+      const latest = state.pipelines.get(pipelineId);
+      if (!latest || latest.pendingPromptAttempt?.id !== attemptId) return state;
+      const newMap = new Map(state.pipelines);
+      newMap.set(pipelineId, {
+        ...latest,
+        pendingPromptAttempt: undefined,
+      });
+      completed = true;
+      return { pipelines: newMap };
+    });
+
+    return completed;
   },
 
   pausePipeline: (pipelineId) =>
@@ -298,6 +577,9 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
         phase: "paused",
         pausedFromPhase,
         error: undefined,
+        reconnectAttempt: undefined,
+        pendingPromptAttempt: undefined,
+        activePromptContext: undefined,
       });
       return { pipelines: newMap };
     }),
@@ -318,6 +600,10 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
         phase: resumePhase,
         pausedFromPhase: undefined,
         error: undefined,
+        failureContext: undefined,
+        reconnectAttempt: undefined,
+        pendingPromptAttempt: undefined,
+        activePromptContext: undefined,
       });
       return { pipelines: newMap };
     });
@@ -329,6 +615,8 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
     set((state) => {
       const pipeline = state.pipelines.get(pipelineId);
       if (!pipeline) return state;
+      const session = pipeline.sessions.find((candidate) => candidate.sdkSessionId === sdkSessionId);
+      if (!session || session.status === "running") return state;
       const newMap = new Map(state.pipelines);
       const sessions = pipeline.sessions.map((s) =>
         s.sdkSessionId === sdkSessionId ? { ...s, status: "running" as const } : s
@@ -341,13 +629,24 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
     set((state) => {
       const pipeline = state.pipelines.get(pipelineId);
       if (!pipeline) return state;
+      const completionCommentId = details?.commentId ?? pipeline.completionCommentId;
+      const completionCommentPostedAt = details?.postedAt ?? pipeline.completionCommentPostedAt;
+      const completionCommentError = status === "failed" ? details?.error : undefined;
+      if (
+        pipeline.completionCommentStatus === status
+        && pipeline.completionCommentId === completionCommentId
+        && pipeline.completionCommentPostedAt === completionCommentPostedAt
+        && pipeline.completionCommentError === completionCommentError
+      ) {
+        return state;
+      }
       const newMap = new Map(state.pipelines);
       newMap.set(pipelineId, {
         ...pipeline,
         completionCommentStatus: status,
-        completionCommentId: details?.commentId ?? pipeline.completionCommentId,
-        completionCommentPostedAt: details?.postedAt ?? pipeline.completionCommentPostedAt,
-        completionCommentError: status === "failed" ? details?.error : undefined,
+        completionCommentId,
+        completionCommentPostedAt,
+        completionCommentError,
       });
       return { pipelines: newMap };
     }),
@@ -356,6 +655,14 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
     set((state) => {
       const pipeline = state.pipelines.get(pipelineId);
       if (!pipeline) return state;
+      if (
+        pipeline.completionCommentStatus === undefined
+        && pipeline.completionCommentError === undefined
+        && pipeline.completionCommentId === undefined
+        && pipeline.completionCommentPostedAt === undefined
+      ) {
+        return state;
+      }
       const newMap = new Map(state.pipelines);
       const nextPipeline = { ...pipeline };
       delete nextPipeline.completionCommentStatus;

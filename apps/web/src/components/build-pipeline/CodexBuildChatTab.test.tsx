@@ -6,7 +6,12 @@ const mockCreateClient = mock(() => ({ baseUrl: "http://127.0.0.1:9999" }));
 const mockCreateSession = mock(async () => ({ sessionId: "review-session", title: "Review Session" }));
 const mockGetSessionMessages = mock(async (_client?: unknown, _sessionId?: string): Promise<any[]> => []);
 const mockGetSessionStatus = mock(async (): Promise<{ status: "idle" | "running" | "error"; title?: string; error?: string }> => ({ status: "running" }));
-const mockSendPrompt = mock(async () => true);
+const mockSendPrompt = mock(async (
+  _client?: unknown,
+  _sessionId?: string,
+  _prompt?: string,
+  _options?: unknown,
+) => true);
 const mockAbortSession = mock(async () => true);
 const mockDetectPr = mock(async (): Promise<any> => null);
 const mockDetectPrLocal = mock(async (): Promise<any> => null);
@@ -84,6 +89,11 @@ mock.module("@/lib/backend", () => ({
 
 import { createCodexSessionKey, useCodexStore } from "@/stores/codexStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import type {
+  PipelineFailureContext,
+  PipelineSessionPhase,
+  ResumableBuildPhase,
+} from "@/stores/buildPipelineStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
@@ -444,6 +454,73 @@ function seedCodexStore(isLoading: boolean) {
   });
 }
 
+function createTestMessage(
+  id: string,
+  role: "user" | "assistant",
+  content: string,
+) {
+  return {
+    id,
+    role,
+    content,
+    parts: [{ type: "text" as const, content }],
+    createdAt: "2026-04-15T00:00:00.000Z",
+  };
+}
+
+function seedFailedPromptRecovery(options: {
+  phase: ResumableBuildPhase;
+  sessionPhase: PipelineSessionPhase;
+  prompt: string;
+  requestId: string;
+  useTaskImages: boolean;
+  messages?: ReturnType<typeof createTestMessage>[];
+  images?: Array<{ filename: string; data: string }>;
+}) {
+  seedPipeline("building", "idle");
+  seedCodexStore(false);
+
+  const failureContext: PipelineFailureContext = {
+    phase: options.phase,
+    kind: "prompt-dispatch",
+    sessionId: SESSION_ID,
+    prompt: options.prompt,
+    useTaskImages: options.useTaskImages,
+    requestId: options.requestId,
+  };
+
+  useBuildPipelineStore.setState((state) => {
+    const pipeline = state.pipelines.get(PIPELINE_ID)!;
+    return {
+      pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+        ...pipeline,
+        phase: "failed",
+        error: "stream disconnected before completion",
+        failureContext,
+        sessions: pipeline.sessions.map((session) => ({
+          ...session,
+          phase: options.sessionPhase,
+          status: "idle" as const,
+        })),
+        taskSnapshot: {
+          ...pipeline.taskSnapshot,
+          images: options.images ?? [],
+        },
+      }),
+    };
+  });
+
+  useCodexStore.setState((state) => ({
+    sessions: new Map(state.sessions).set(SESSION_KEY, {
+      sessionId: SESSION_ID,
+      messages: options.messages ?? [createTestMessage("failed-prompt", "user", options.prompt)],
+      isLoading: false,
+      error: "stream disconnected before completion",
+      title: "Failed Session",
+    }),
+  }));
+}
+
 function resetStores() {
   useBuildPipelineStore.setState({
     pipelines: new Map(),
@@ -796,6 +873,7 @@ describe("CodexBuildChatTab", () => {
             dataUrl: "data:image/webp;base64,aW1hZ2U=",
             filename: "design.webp",
           }],
+          requestId: expect.any(String),
         },
       );
     });
@@ -858,7 +936,7 @@ describe("CodexBuildChatTab", () => {
         { baseUrl: "http://127.0.0.1:9999" },
         "review-session",
         expect.stringContaining("Test task"),
-        { attachments: undefined },
+        { attachments: undefined, requestId: expect.any(String) },
       );
     });
     expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions[0]?.phase).toBe("build");
@@ -1022,7 +1100,7 @@ describe("CodexBuildChatTab", () => {
         { baseUrl: "http://127.0.0.1:9999" },
         SESSION_ID,
         expect.stringContaining("Resume the build pipeline from where you left off"),
-        undefined,
+        { attachments: undefined, requestId: expect.any(String) },
       );
     });
 
@@ -1076,7 +1154,7 @@ describe("CodexBuildChatTab", () => {
         expect.anything(),
         "new-pr-session",
         expect.stringContaining("PR creation workflow"),
-        undefined,
+        { attachments: undefined, requestId: expect.any(String) },
       );
     });
   });
@@ -1403,7 +1481,7 @@ describe("CodexBuildChatTab", () => {
     expect(pipeline?.error).toBe("previous failure");
   });
 
-  test("reconnects a failed build and retries its last prompt from the top-right action", async () => {
+  test("reconnects a failed addressing prompt from explicit failure provenance", async () => {
     seedReviewPipeline();
     seedCodexStore(false);
     const reviewPrompt = "Review the implementation.";
@@ -1446,10 +1524,21 @@ describe("CodexBuildChatTab", () => {
         title: "Review Session",
       }),
     }));
+    useBuildPipelineStore.getState().setPhase(PIPELINE_ID, "addressing");
     useBuildPipelineStore.getState().setPipelineError(
       PIPELINE_ID,
       "stream disconnected before completion",
+      {
+        phase: "addressing",
+        kind: "prompt-dispatch",
+        sessionId: SESSION_ID,
+        prompt: addressPrompt,
+        useTaskImages: false,
+        requestId: "address-request-1",
+      },
     );
+    mockGetSessionStatus.mockResolvedValueOnce({ status: "idle" });
+    mockGetSessionStatus.mockResolvedValue({ status: "running" });
 
     render(<CodexBuildChatTab data={createData()} isActive />);
 
@@ -1461,7 +1550,10 @@ describe("CodexBuildChatTab", () => {
         { baseUrl: "http://127.0.0.1:9999" },
         SESSION_ID,
         addressPrompt,
-        undefined,
+        {
+          attachments: undefined,
+          requestId: "address-request-1",
+        },
       );
     });
 
@@ -1472,6 +1564,501 @@ describe("CodexBuildChatTab", () => {
     expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.error).toBeUndefined();
     expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
   });
+
+  test("reconnects a failed review transition without rerunning the completed build", async () => {
+    seedPipeline("building", "idle");
+    seedCodexStore(false);
+    const completedBuildPrompt = "Implement the original ticket.";
+    useCodexStore.setState((state) => ({
+      sessions: new Map(state.sessions).set(SESSION_KEY, {
+        sessionId: SESSION_ID,
+        messages: [
+          createTestMessage("build-prompt", "user", completedBuildPrompt),
+          createTestMessage("build-result", "assistant", "Implementation complete."),
+        ],
+        isLoading: false,
+        title: "Build Session",
+      }),
+    }));
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          phase: "failed",
+          error: "Failed to create review session",
+          failureContext: {
+            phase: "reviewing",
+            kind: "stage-transition",
+          },
+        }),
+      };
+    });
+    mockCreateSession.mockResolvedValue({
+      sessionId: "retry-review-session",
+      title: "Review Session",
+    });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reconnect" }));
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("reviewing");
+      expect(pipeline?.sessions).toHaveLength(2);
+      expect(pipeline?.sessions.at(-1)).toMatchObject({
+        phase: "review",
+        sdkSessionId: "retry-review-session",
+      });
+    });
+
+    expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+    const sendCalls = mockSendPrompt.mock.calls as unknown as Array<
+      [unknown, string, string, unknown]
+    >;
+    expect(sendCalls[0]?.[1]).toBe("retry-review-session");
+    expect(sendCalls[0]?.[2]).not.toBe(completedBuildPrompt);
+  });
+
+  test("reconnect adopts an authoritative running turn without resending its prompt", async () => {
+    const prompt = "Continue implementing the ticket.";
+    const authoritativeMessages = [
+      createTestMessage("authoritative-prompt", "user", prompt),
+    ];
+    seedFailedPromptRecovery({
+      phase: "building",
+      sessionPhase: "build",
+      prompt,
+      requestId: "running-request-1",
+      useTaskImages: false,
+    });
+    mockGetSessionStatus.mockResolvedValue({ status: "running" });
+    mockGetSessionMessages.mockResolvedValue(authoritativeMessages);
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reconnect" }));
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("building");
+      expect(pipeline?.reconnectAttempt).toBeUndefined();
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+    });
+
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+    expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual(
+      authoritativeMessages,
+    );
+  });
+
+  test("reconnect accepts an authoritative completed turn without resending its prompt", async () => {
+    const prompt = "Verify the completed implementation.";
+    const authoritativeMessages = [
+      createTestMessage("authoritative-prompt", "user", prompt),
+      createTestMessage("authoritative-result", "assistant", "Verification complete."),
+    ];
+    seedFailedPromptRecovery({
+      phase: "verifying",
+      sessionPhase: "verify",
+      prompt,
+      requestId: "completed-request-1",
+      useTaskImages: true,
+      messages: [createTestMessage("local-prompt", "user", prompt)],
+    });
+    mockGetSessionStatus.mockResolvedValueOnce({ status: "idle" });
+    mockGetSessionStatus.mockResolvedValue({ status: "running" });
+    mockGetSessionMessages.mockResolvedValue(authoritativeMessages);
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reconnect" }));
+
+    await waitFor(() => {
+      expect(
+        useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.reconnectAttempt,
+      ).toBeUndefined();
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual(
+        authoritativeMessages,
+      );
+    });
+
+    const sendCalls = mockSendPrompt.mock.calls as unknown as Array<
+      [unknown, string, string, unknown]
+    >;
+    expect(
+      sendCalls.some((call) => call[1] === SESSION_ID),
+    ).toBe(false);
+  });
+
+  test("idle incomplete review retry uses explicit phase, request ID, and task images", async () => {
+    const prompt = "Review the implementation against the ticket.";
+    seedFailedPromptRecovery({
+      phase: "reviewing",
+      sessionPhase: "review",
+      prompt,
+      requestId: "review-request-1",
+      useTaskImages: true,
+      images: [{ filename: "review.webp", data: "cmV2aWV3" }],
+      messages: [
+        createTestMessage("old-review-prompt", "user", "Start reviewing."),
+        createTestMessage("old-review-result", "assistant", "One issue so far."),
+        createTestMessage("jump-in", "user", "Also inspect the edge case."),
+        createTestMessage("retry-review-prompt", "user", prompt),
+      ],
+    });
+    mockGetSessionStatus.mockResolvedValueOnce({ status: "idle" });
+    mockGetSessionStatus.mockResolvedValue({ status: "running" });
+    mockGetSessionMessages.mockResolvedValue([
+      createTestMessage("retry-review-prompt", "user", prompt),
+    ]);
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reconnect" }));
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        { baseUrl: "http://127.0.0.1:9999" },
+        SESSION_ID,
+        prompt,
+        {
+          attachments: [{
+            type: "image",
+            path: "review.webp",
+            dataUrl: "data:image/webp;base64,cmV2aWV3",
+            filename: "review.webp",
+          }],
+          requestId: "review-request-1",
+        },
+      );
+    });
+
+    expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase).toBe(
+      "reviewing",
+    );
+  });
+
+  test("a double reconnect attempt has a single authoritative owner", async () => {
+    const prompt = "Continue the build.";
+    seedFailedPromptRecovery({
+      phase: "building",
+      sessionPhase: "build",
+      prompt,
+      requestId: "double-request-1",
+      useTaskImages: false,
+    });
+    let resolveStatus:
+      | ((value: { status: "running" }) => void)
+      | undefined;
+    mockGetSessionStatus.mockImplementationOnce(
+      () => new Promise<{ status: "running" }>((resolve) => {
+        resolveStatus = resolve;
+      }),
+    );
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+    const reconnect = await screen.findByRole("button", { name: "Reconnect" });
+    fireEvent.click(reconnect);
+    fireEvent.click(reconnect);
+
+    await waitFor(() => {
+      expect(mockGetSessionStatus).toHaveBeenCalledTimes(1);
+      expect(
+        useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.reconnectAttempt,
+      ).toBeDefined();
+    });
+
+    await act(async () => {
+      resolveStatus?.({ status: "running" });
+    });
+    await waitFor(() => {
+      expect(
+        useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.reconnectAttempt,
+      ).toBeUndefined();
+    });
+    expect(mockSendPrompt).not.toHaveBeenCalled();
+  });
+
+  test("stopping a pending reconnect prevents its late failure from replacing paused state", async () => {
+    const prompt = "Continue the build after reconnecting.";
+    seedFailedPromptRecovery({
+      phase: "building",
+      sessionPhase: "build",
+      prompt,
+      requestId: "stop-race-request-1",
+      useTaskImages: false,
+    });
+    mockGetSessionStatus.mockResolvedValue({ status: "idle" });
+    mockGetSessionMessages.mockResolvedValue([
+      createTestMessage("pending-prompt", "user", prompt),
+    ]);
+    let resolvePrompt: ((value: boolean) => void) | undefined;
+    mockSendPrompt.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => {
+        resolvePrompt = resolve;
+      }),
+    );
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reconnect" }));
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
+    await waitFor(() => {
+      expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase).toBe(
+        "paused",
+      );
+    });
+
+    await act(async () => {
+      resolvePrompt?.(false);
+    });
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("paused");
+      expect(pipeline?.error).toBeUndefined();
+      expect(pipeline?.reconnectAttempt).toBeUndefined();
+    });
+    expect(
+      useCodexStore.getState().sessions.get(SESSION_KEY)?.messages.some(
+        (message) => message.content.startsWith("Reconnect failed:"),
+      ),
+    ).toBe(false);
+  });
+
+  for (const [missingField, incompleteContext] of [
+    [
+      "session ID",
+      {
+        prompt: "Retry this prompt",
+        requestId: "malformed-request-1",
+      },
+    ],
+    [
+      "prompt",
+      {
+        sessionId: SESSION_ID,
+        requestId: "malformed-request-1",
+      },
+    ],
+    [
+      "request ID",
+      {
+        sessionId: SESSION_ID,
+        prompt: "Retry this prompt",
+      },
+    ],
+  ] as const) {
+    test(`hides Reconnect for prompt failure provenance missing its ${missingField}`, async () => {
+      seedPipeline("building", "idle");
+      seedCodexStore(false);
+      useBuildPipelineStore.setState((state) => {
+        const pipeline = state.pipelines.get(PIPELINE_ID)!;
+        return {
+          pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+            ...pipeline,
+            phase: "failed",
+            error: "Malformed retry context",
+            failureContext: {
+              phase: "building",
+              kind: "prompt-dispatch",
+              useTaskImages: false,
+              ...incompleteContext,
+            } as PipelineFailureContext,
+          }),
+        };
+      });
+
+      render(<CodexBuildChatTab data={createData()} isActive />);
+
+      expect(await screen.findByText("Malformed retry context")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
+    });
+  }
+
+  test("remounting during a pending prompt dispatch does not duplicate or advance it", async () => {
+    seedStartingPipeline();
+    mockGetSessionStatus.mockResolvedValue({ status: "idle" });
+    mockGetSessionMessages.mockResolvedValue([]);
+    let resolvePrompt: ((value: boolean) => void) | undefined;
+    mockSendPrompt.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => {
+        resolvePrompt = resolve;
+      }),
+    );
+
+    const firstRender = render(<CodexBuildChatTab data={createData()} isActive />);
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+      expect(
+        useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.pendingPromptAttempt,
+      ).toBeDefined();
+    });
+
+    firstRender.unmount();
+    render(<CodexBuildChatTab data={createData()} isActive />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+
+    const pendingPipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+    expect(mockCreateSession).toHaveBeenCalledTimes(1);
+    expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+    expect(pendingPipeline?.phase).toBe("building");
+    expect(pendingPipeline?.sessions).toHaveLength(1);
+
+    await act(async () => {
+      resolvePrompt?.(true);
+    });
+    await waitFor(() => {
+      expect(
+        useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.pendingPromptAttempt,
+      ).toBeUndefined();
+    });
+    expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  test("a rejected session creation becomes a recoverable failed build stage", async () => {
+    seedStartingPipeline();
+    mockCreateSession.mockRejectedValueOnce(new Error("bridge rejected session creation"));
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("failed");
+      expect(pipeline?.error).toBe("Failed to create build session");
+      expect(pipeline?.failureContext).toEqual({
+        phase: "building",
+        kind: "stage-transition",
+      });
+    });
+    expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy();
+    expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.sessions).toHaveLength(0);
+  });
+
+  test("a completed fix session starts the next review at the same iteration", async () => {
+    seedPipeline("building", "running");
+    seedCodexStore(false);
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          phase: "fixing",
+          iteration: 1,
+          sessions: pipeline.sessions.map((session) => ({
+            ...session,
+            phase: "fix" as const,
+            iteration: 1,
+            label: "Fix Session (Iteration 2)",
+          })),
+        }),
+      };
+    });
+    mockGetSessionStatus.mockResolvedValueOnce({ status: "idle" });
+    mockGetSessionStatus.mockResolvedValue({ status: "running" });
+    mockCreateSession.mockResolvedValue({
+      sessionId: "post-fix-review-session",
+      title: "Review Session",
+    });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("reviewing");
+      expect(pipeline?.sessions.at(-1)).toMatchObject({
+        phase: "review",
+        iteration: 1,
+        sdkSessionId: "post-fix-review-session",
+      });
+    });
+    expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  test("a completed conflict-resolution session completes when conflicts are gone", async () => {
+    seedPrPipeline();
+    seedCodexStore(false);
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          phase: "resolving-conflicts",
+          sessions: pipeline.sessions.map((session) => ({
+            ...session,
+            phase: "resolve-conflicts" as const,
+            label: "Conflict Resolution Session",
+          })),
+        }),
+      };
+    });
+    mockGetSessionStatus.mockResolvedValue({ status: "idle" });
+    mockDetectPr.mockResolvedValue({
+      url: "https://github.com/example/repo/pull/10",
+      state: "open",
+      hasMergeConflicts: false,
+    });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)?.phase).toBe(
+        "complete",
+      );
+    });
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  for (const recoveryCase of [
+    {
+      label: "PR",
+      phase: "creating-pr" as const,
+      sessionPhase: "pr" as const,
+      prompt: "Create the pull request.",
+      requestId: "pr-retry-request-1",
+    },
+    {
+      label: "conflict",
+      phase: "resolving-conflicts" as const,
+      sessionPhase: "resolve-conflicts" as const,
+      prompt: "Resolve the merge conflicts.",
+      requestId: "conflict-retry-request-1",
+    },
+  ]) {
+    test(`${recoveryCase.label} prompt recovery does not reuse task images`, async () => {
+      seedFailedPromptRecovery({
+        phase: recoveryCase.phase,
+        sessionPhase: recoveryCase.sessionPhase,
+        prompt: recoveryCase.prompt,
+        requestId: recoveryCase.requestId,
+        useTaskImages: false,
+        images: [{ filename: "task.webp", data: "dGFzaw==" }],
+      });
+      mockGetSessionStatus.mockResolvedValueOnce({ status: "idle" });
+      mockGetSessionStatus.mockResolvedValue({ status: "running" });
+      mockGetSessionMessages.mockResolvedValue([
+        createTestMessage("retry-prompt", "user", recoveryCase.prompt),
+      ]);
+
+      render(<CodexBuildChatTab data={createData()} isActive />);
+      fireEvent.click(await screen.findByRole("button", { name: "Reconnect" }));
+
+      await waitFor(() => {
+        expect(mockSendPrompt).toHaveBeenCalledWith(
+          { baseUrl: "http://127.0.0.1:9999" },
+          SESSION_ID,
+          recoveryCase.prompt,
+          {
+            attachments: undefined,
+            requestId: recoveryCase.requestId,
+          },
+        );
+      });
+    });
+  }
 
   test("does not start verification while the address-issues prompt is being accepted", async () => {
     seedReviewPipeline();
@@ -1603,7 +2190,7 @@ describe("CodexBuildChatTab", () => {
     seedReviewPipeline();
     seedCodexStore(false);
     mockCreateSession.mockImplementationOnce(async () => ({ sessionId: "verify-session", title: "Verification Session" }));
-    mockGetSessionStatus.mockImplementation(async () => undefined as any);
+    mockGetSessionStatus.mockResolvedValue({ status: "idle" });
 
     mockSendPrompt.mockImplementationOnce(async () => {
       useCodexStore.getState().setSessionLoading(SESSION_KEY, false);
@@ -1629,7 +2216,7 @@ describe("CodexBuildChatTab", () => {
   test("starts PR creation when verification passes", async () => {
     seedVerifyPipeline("All acceptance criteria are satisfied", { complete: true });
     mockCreateSession.mockImplementationOnce(async () => ({ sessionId: "pr-session", title: "PR Creation Session" }));
-    mockGetSessionStatus.mockImplementation(async () => undefined as any);
+    mockGetSessionStatus.mockResolvedValue({ status: "idle" });
 
     render(<CodexBuildChatTab data={createData()} isActive />);
 
@@ -1645,7 +2232,7 @@ describe("CodexBuildChatTab", () => {
 
   test("fails the pipeline when the PR creation prompt is rejected", async () => {
     seedVerifyPipeline("Everything passes", { complete: true });
-    mockGetSessionStatus.mockImplementation(async () => undefined as any);
+    mockGetSessionStatus.mockResolvedValue({ status: "idle" });
     mockCreateSession.mockResolvedValue({ sessionId: "pr-session", title: "PR Creation Session" });
     mockSendPrompt.mockResolvedValue(false);
 
@@ -1661,7 +2248,7 @@ describe("CodexBuildChatTab", () => {
   test("starts a fix session and increments iteration when verification fails below max iterations", async () => {
     seedVerifyPipeline("Tests still fail", { complete: false, iteration: 0, maxIterations: 3 });
     mockCreateSession.mockImplementationOnce(async () => ({ sessionId: "fix-session", title: "Fix Session" }));
-    mockGetSessionStatus.mockImplementation(async () => undefined as any);
+    mockGetSessionStatus.mockResolvedValue({ status: "idle" });
 
     render(<CodexBuildChatTab data={createData()} isActive />);
 
@@ -1678,7 +2265,7 @@ describe("CodexBuildChatTab", () => {
 
   test("fails the pipeline when the fix prompt is rejected", async () => {
     seedVerifyPipeline("Tests still fail", { complete: false, iteration: 0, maxIterations: 3 });
-    mockGetSessionStatus.mockImplementation(async () => undefined as any);
+    mockGetSessionStatus.mockResolvedValue({ status: "idle" });
     mockCreateSession.mockResolvedValue({ sessionId: "fix-session", title: "Fix Session" });
     mockSendPrompt.mockResolvedValue(false);
 
@@ -1693,7 +2280,7 @@ describe("CodexBuildChatTab", () => {
 
   test("fails the pipeline when verification fails at the max iteration", async () => {
     seedVerifyPipeline("Still incomplete", { complete: false, iteration: 3, maxIterations: 3 });
-    mockGetSessionStatus.mockImplementation(async () => undefined as any);
+    mockGetSessionStatus.mockResolvedValue({ status: "idle" });
 
     render(<CodexBuildChatTab data={createData()} isActive />);
 
@@ -1709,7 +2296,8 @@ describe("CodexBuildChatTab", () => {
   test("starts conflict resolution when a created PR still has merge conflicts", async () => {
     seedPrPipeline();
     seedCodexStore(false);
-    mockGetSessionStatus.mockImplementation(async () => undefined as any);
+    mockGetSessionStatus.mockResolvedValueOnce({ status: "idle" });
+    mockGetSessionStatus.mockResolvedValue({ status: "running" });
     mockDetectPr.mockImplementation(async () => ({
       url: "https://github.com/orkestrator-ai/orkestrator-ai/pull/1",
       state: "open",
@@ -1738,7 +2326,7 @@ describe("CodexBuildChatTab", () => {
       "open",
       false,
     );
-    mockGetSessionStatus.mockImplementation(async () => undefined as any);
+    mockGetSessionStatus.mockResolvedValue({ status: "idle" });
     mockDetectPr.mockResolvedValue({
       url: "https://github.com/example/repo/pull/7",
       state: "open",
@@ -1786,7 +2374,7 @@ describe("CodexBuildChatTab", () => {
       })),
       setupCommandsResolved: new Set([ENV_ID]),
     }));
-    mockGetSessionStatus.mockImplementation(async () => undefined as any);
+    mockGetSessionStatus.mockResolvedValue({ status: "idle" });
     mockDetectPrLocal.mockResolvedValue({
       url: "https://github.com/example/repo/pull/8",
       state: "open",
@@ -1807,7 +2395,7 @@ describe("CodexBuildChatTab", () => {
   test("fails conflict resolution when its prompt is rejected", async () => {
     seedPrPipeline();
     seedCodexStore(false);
-    mockGetSessionStatus.mockImplementation(async () => undefined as any);
+    mockGetSessionStatus.mockResolvedValue({ status: "idle" });
     mockDetectPr.mockResolvedValue({
       url: "https://github.com/example/repo/pull/9",
       state: "open",

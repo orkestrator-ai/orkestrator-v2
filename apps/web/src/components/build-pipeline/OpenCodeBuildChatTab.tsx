@@ -382,7 +382,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
               ? event.properties.questions.map((question) => question.header || question.question).filter(Boolean).join(", ")
               : "OpenCode asked a question";
             await rejectQuestion(activeClient, event.properties.id);
-            setPipelineError(pipelineId, `Pipeline blocked by OpenCode question: ${questionSummary}`);
+            setPipelineError(pipelineId, `Pipeline blocked by OpenCode question: ${questionSummary}`, null);
           }
 
           if (!eventSessionId) {

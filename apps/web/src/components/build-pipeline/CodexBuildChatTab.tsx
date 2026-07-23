@@ -9,7 +9,12 @@ import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters"
 import { createUuid } from "@/lib/uuid";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useConfigStore, useCodexStore, useEnvironmentStore } from "@/stores";
-import type { BuildPhase, PipelineSession, ResumableBuildPhase } from "@/stores/buildPipelineStore";
+import type {
+  BuildPhase,
+  PipelineFailureContext,
+  PipelineSession,
+  ResumableBuildPhase,
+} from "@/stores/buildPipelineStore";
 import {
   abortSession,
   checkHealth,
@@ -138,28 +143,6 @@ function buildErrorMessage(content: string): CodexMessage {
   };
 }
 
-function getFailedPromptRetryPhase(
-  session: PipelineSession,
-  messages: CodexMessage[],
-): ResumableBuildPhase {
-  switch (session.phase) {
-    case "build":
-      return "building";
-    case "review":
-      return messages.filter((message) => message.role === "user").length > 1
-        ? "addressing"
-        : "reviewing";
-    case "verify":
-      return "verifying";
-    case "fix":
-      return "fixing";
-    case "pr":
-      return "creating-pr";
-    case "resolve-conflicts":
-      return "resolving-conflicts";
-  }
-}
-
 function codexMessagesEqual(a: CodexMessage[], b: CodexMessage[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
@@ -175,6 +158,18 @@ function codexMessagesEqual(a: CodexMessage[], b: CodexMessage[]): boolean {
       && JSON.stringify(message.parts) === JSON.stringify(other.parts)
     );
   });
+}
+
+function hasCompletedPrompt(messages: CodexMessage[], prompt: string): boolean {
+  const normalizedPrompt = prompt.trim();
+  const promptIndex = messages.findLastIndex(
+    (message) => message.role === "user" && message.content.trim() === normalizedPrompt,
+  );
+  if (promptIndex < 0) return false;
+
+  return messages
+    .slice(promptIndex + 1)
+    .some((message) => message.role === "assistant" && message.content.trim().length > 0);
 }
 
 function appendCodexMessage(sessionKey: string, message: CodexMessage) {
@@ -326,7 +321,6 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
   const [advanceTick, setAdvanceTick] = useState(0);
   const [connectAttempt, setConnectAttempt] = useState(0);
   const pollingSessionIdRef = useRef<string | null>(null);
-  const pendingPromptDispatchesRef = useRef<Set<string>>(new Set());
   const [jumpInText, setJumpInText] = useState("");
   const [isReconnecting, setIsReconnecting] = useState(false);
   const jumpInTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -341,7 +335,11 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     setVerificationResult,
     incrementIteration,
     setPipelineError,
-    retryFailedPipeline,
+    beginReconnect,
+    completeReconnect,
+    failReconnect,
+    beginPromptAttempt,
+    completePromptAttempt,
     pausePipeline,
     resumePipeline,
   } = useBuildPipelineStore();
@@ -582,15 +580,22 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       iteration: number,
       label: string,
     ): Promise<{ sessionKey: string; sdkSessionId: string } | null> => {
-      const activeClient = client ?? await initializeClient();
       if (!pipeline || isPipelinePaused()) return null;
 
-      const { model, effort } = resolveCodexPreferences(pipeline.projectId);
-      const newSession = await createSession(activeClient, {
-        model,
-        modelReasoningEffort: effort,
-        mode: "build",
-      });
+      let activeClient: CodexClient;
+      let newSession: Awaited<ReturnType<typeof createSession>>;
+      try {
+        activeClient = client ?? await initializeClient();
+        const { model, effort } = resolveCodexPreferences(pipeline.projectId);
+        newSession = await createSession(activeClient, {
+          model,
+          modelReasoningEffort: effort,
+          mode: "build",
+        });
+      } catch (error) {
+        console.error(`[CodexBuildChatTab] Failed to create ${phase} session:`, error);
+        return null;
+      }
       if (isPipelinePaused()) {
         try {
           await abortSession(activeClient, newSession.sessionId);
@@ -602,7 +607,6 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
 
       const tabIdForSession = `build-${phase}-${iteration}-${Date.now()}`;
       const sessionKey = createCodexSessionKey(environmentId, tabIdForSession);
-      pendingPromptDispatchesRef.current.add(newSession.sessionId);
 
       setSession(sessionKey, {
         sessionId: newSession.sessionId,
@@ -631,16 +635,36 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       activeClient: CodexClient,
       sdkSessionId: string,
       prompt: string,
-      options?: { attachments?: CodexPromptAttachment[] },
+      options: {
+        phase: ResumableBuildPhase;
+        useTaskImages: boolean;
+        attachments?: CodexPromptAttachment[];
+        requestId?: string;
+      },
     ) => {
-      pendingPromptDispatchesRef.current.add(sdkSessionId);
+      const attemptId = createUuid();
+      const requestId = options.requestId ?? createUuid();
+      const ownsAttempt = beginPromptAttempt(pipelineId, {
+        id: attemptId,
+        sessionId: sdkSessionId,
+        requestId,
+        phase: options.phase,
+        prompt,
+        useTaskImages: options.useTaskImages,
+        startedAt: new Date().toISOString(),
+      });
+      if (!ownsAttempt) return false;
+
       try {
-        return await sendPrompt(activeClient, sdkSessionId, prompt, options);
+        return await sendPrompt(activeClient, sdkSessionId, prompt, {
+          attachments: options.attachments,
+          requestId,
+        });
       } finally {
-        pendingPromptDispatchesRef.current.delete(sdkSessionId);
+        completePromptAttempt(pipelineId, attemptId);
       }
     },
-    [],
+    [beginPromptAttempt, completePromptAttempt, pipelineId],
   );
 
   const startBuildSession = useCallback(
@@ -662,6 +686,8 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       appendCodexMessage(result.sessionKey, buildUserMessage(taskDescription));
 
       const success = await sendPromptWithDispatchGuard(activeClient, result.sdkSessionId, taskDescription, {
+        phase: "building",
+        useTaskImages: true,
         attachments,
       });
 
@@ -708,6 +734,8 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       appendCodexMessage(result.sessionKey, buildUserMessage(prompt));
 
       const success = await sendPromptWithDispatchGuard(activeClient, result.sdkSessionId, prompt, {
+        phase: "reviewing",
+        useTaskImages: true,
         attachments: taskImagesToAttachments(task.images),
       });
 
@@ -754,6 +782,8 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       appendCodexMessage(result.sessionKey, buildUserMessage(prompt));
 
       const success = await sendPromptWithDispatchGuard(activeClient, result.sdkSessionId, prompt, {
+        phase: "verifying",
+        useTaskImages: true,
         attachments: taskImagesToAttachments(task.images),
       });
 
@@ -799,6 +829,8 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       appendCodexMessage(result.sessionKey, buildUserMessage(prompt));
 
       const success = await sendPromptWithDispatchGuard(activeClient, result.sdkSessionId, prompt, {
+        phase: "fixing",
+        useTaskImages: true,
         attachments: taskImagesToAttachments(task.images),
       });
 
@@ -838,7 +870,10 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       const prompt = createPRPrompt(targetBranch);
       appendCodexMessage(result.sessionKey, buildUserMessage(prompt));
 
-      const success = await sendPromptWithDispatchGuard(activeClient, result.sdkSessionId, prompt);
+      const success = await sendPromptWithDispatchGuard(activeClient, result.sdkSessionId, prompt, {
+        phase: "creating-pr",
+        useTaskImages: false,
+      });
       if (!success) {
         if (isPipelinePaused()) return;
         const message = "Failed to send PR creation prompt";
@@ -888,7 +923,10 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       const prompt = createResolveConflictsPrompt(targetBranch);
       appendCodexMessage(result.sessionKey, buildUserMessage(prompt));
 
-      const success = await sendPromptWithDispatchGuard(activeClient, result.sdkSessionId, prompt);
+      const success = await sendPromptWithDispatchGuard(activeClient, result.sdkSessionId, prompt, {
+        phase: "resolving-conflicts",
+        useTaskImages: false,
+      });
       if (!success) {
         if (isPipelinePaused()) return;
         const message = "Failed to send conflict resolution prompt";
@@ -905,13 +943,9 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       if (isPipelinePaused()) return;
       const activeClient = client ?? await initializeClient();
       if (isPipelinePaused()) return;
-      pendingPromptDispatchesRef.current.add(reviewSession.sdkSessionId);
 
       setPhase(pipelineId, "addressing");
-      if (isPipelinePaused()) {
-        pendingPromptDispatchesRef.current.delete(reviewSession.sdkSessionId);
-        return;
-      }
+      if (isPipelinePaused()) return;
 
       const updatedSessions = currentPipeline.sessions.map((session) =>
         session.sdkSessionId === reviewSession.sdkSessionId
@@ -930,7 +964,10 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       appendCodexMessage(reviewSession.sessionKey, buildUserMessage(prompt));
       setSessionLoading(reviewSession.sessionKey, true);
 
-      const success = await sendPromptWithDispatchGuard(activeClient, reviewSession.sdkSessionId, prompt);
+      const success = await sendPromptWithDispatchGuard(activeClient, reviewSession.sdkSessionId, prompt, {
+        phase: "addressing",
+        useTaskImages: false,
+      });
       if (!success) {
         if (isPipelinePaused()) return;
         const message = "Failed to send address issues prompt";
@@ -979,7 +1016,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
             const stillConflicting = await checkPRMergeConflicts();
             if (isPipelinePaused()) return;
             if (stillConflicting) {
-              setPipelineError(pipelineId, "Merge conflicts could not be fully resolved automatically");
+              setPipelineError(pipelineId, "Merge conflicts could not be fully resolved automatically", null);
             } else {
               setPhase(pipelineId, "complete");
             }
@@ -1025,7 +1062,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
               addPipelineKanbanComment(currentPipeline, "✅ Validation complete");
               await startPRSession(currentPipeline);
             } else if (currentPipeline.iteration >= currentPipeline.maxIterations) {
-              setPipelineError(pipelineId, `Max iterations (${currentPipeline.maxIterations}) reached. Last feedback: ${result.feedback}`);
+              setPipelineError(pipelineId, `Max iterations (${currentPipeline.maxIterations}) reached. Last feedback: ${result.feedback}`, null);
             } else {
               incrementIteration(pipelineId);
               await startFixSession(currentPipeline, result.feedback);
@@ -1073,8 +1110,8 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       let status: Awaited<ReturnType<typeof getSessionStatus>>;
       let messages: CodexMessage[];
       try {
-        status = await getSessionStatus(client, currentSdkSessionId);
-        messages = await getSessionMessages(client, currentSdkSessionId);
+        status = await getSessionStatus(client, currentSdkSessionId, { throwOnError: true });
+        messages = await getSessionMessages(client, currentSdkSessionId, { throwOnError: true });
       } catch (error) {
         if (cancelled) return;
         console.error("[CodexBuildChatTab] Polling disconnected:", error);
@@ -1115,6 +1152,11 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       }
 
       if (!status) {
+        const message = "Codex session no longer exists";
+        appendCodexMessage(currentSessionKey, buildErrorMessage(message));
+        setSessionError(currentSessionKey, message);
+        setSessionLoading(currentSessionKey, false);
+        setPipelineError(pipelineId, message);
         return;
       }
 
@@ -1136,7 +1178,8 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         return;
       }
 
-      if (pendingPromptDispatchesRef.current.has(currentSdkSessionId)) {
+      const latestPipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+      if (latestPipeline?.pendingPromptAttempt || latestPipeline?.reconnectAttempt) {
         return;
       }
 
@@ -1183,6 +1226,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     currentSessionIsLoading,
     currentSessionKey,
     setMessages,
+    setPipelineError,
     setSessionError,
     setSessionLoading,
     setSessionTitle,
@@ -1193,14 +1237,13 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     if (pipeline.phase === "addressing") return;
     if (pipeline.phase === "paused") return;
     if (pipeline.phase === "failed") return;
+    if (pipeline.pendingPromptAttempt || pipeline.reconnectAttempt) return;
 
     const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
     if (!currentSession) return;
 
     const sessionState = sessionsMap.get(currentSession.sessionKey);
     if (!sessionState || sessionState.isLoading) return;
-    if (pendingPromptDispatchesRef.current.has(currentSession.sdkSessionId)) return;
-
     if (sessionState.error) {
       setPipelineError(pipelineId, sessionState.error);
       return;
@@ -1209,23 +1252,36 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     if (currentSession.status === "running") {
       pipelineAdvancingRef.current = true;
       void (async () => {
-        const status = await getSessionStatus(client, currentSession.sdkSessionId);
-        if (status?.status === "running") {
-          setSessionLoading(currentSession.sessionKey, true);
-          return;
-        }
+        try {
+          const status = await getSessionStatus(client, currentSession.sdkSessionId, { throwOnError: true });
+          if (status?.status === "running") {
+            setSessionLoading(currentSession.sessionKey, true);
+            return;
+          }
 
-        if (status?.status === "error") {
-          const message = status.error?.trim() || "Codex session failed";
+          if (!status) {
+            throw new Error("Codex session no longer exists");
+          }
+
+          if (status?.status === "error") {
+            const message = status.error?.trim() || "Codex session failed";
+            appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
+            setSessionError(currentSession.sessionKey, message);
+            setSessionLoading(currentSession.sessionKey, false);
+            setPipelineError(pipelineId, message);
+            return;
+          }
+
+          markSessionIdle(pipelineId, currentSession.sdkSessionId);
+          await advancePipeline(pipeline, currentSession);
+        } catch (error) {
+          if (isPipelinePaused()) return;
+          const message = error instanceof Error ? error.message : "Failed to read Codex session status";
           appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
           setSessionError(currentSession.sessionKey, message);
           setSessionLoading(currentSession.sessionKey, false);
           setPipelineError(pipelineId, message);
-          return;
         }
-
-        markSessionIdle(pipelineId, currentSession.sdkSessionId);
-        await advancePipeline(pipeline, currentSession);
       })().finally(() => {
         pipelineAdvancingRef.current = false;
         setAdvanceTick((value) => value + 1);
@@ -1236,6 +1292,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     advanceTick,
     client,
     connectionState,
+    isPipelinePaused,
     markSessionIdle,
     pipeline,
     pipelineId,
@@ -1260,14 +1317,13 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
   useEffect(() => {
     if (!pipeline || !client || connectionState !== "connected" || pipelineAdvancingRef.current) return;
     if (pipeline.phase !== "addressing") return;
+    if (pipeline.pendingPromptAttempt || pipeline.reconnectAttempt) return;
 
     const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
     if (!currentSession) return;
 
     const sessionState = sessionsMap.get(currentSession.sessionKey);
     if (!sessionState || sessionState.isLoading) return;
-    if (pendingPromptDispatchesRef.current.has(currentSession.sdkSessionId)) return;
-
     if (sessionState.error) {
       setPipelineError(pipelineId, sessionState.error);
       return;
@@ -1276,23 +1332,36 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     if (currentSession.status === "running") {
       pipelineAdvancingRef.current = true;
       void (async () => {
-        const status = await getSessionStatus(client, currentSession.sdkSessionId);
-        if (status?.status === "running") {
-          setSessionLoading(currentSession.sessionKey, true);
-          return;
-        }
+        try {
+          const status = await getSessionStatus(client, currentSession.sdkSessionId, { throwOnError: true });
+          if (status?.status === "running") {
+            setSessionLoading(currentSession.sessionKey, true);
+            return;
+          }
 
-        if (status?.status === "error") {
-          const message = status.error?.trim() || "Codex session failed";
+          if (!status) {
+            throw new Error("Codex session no longer exists");
+          }
+
+          if (status?.status === "error") {
+            const message = status.error?.trim() || "Codex session failed";
+            appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
+            setSessionError(currentSession.sessionKey, message);
+            setSessionLoading(currentSession.sessionKey, false);
+            setPipelineError(pipelineId, message);
+            return;
+          }
+
+          markSessionIdle(pipelineId, currentSession.sdkSessionId);
+          await startVerifySession(pipeline);
+        } catch (error) {
+          if (isPipelinePaused()) return;
+          const message = error instanceof Error ? error.message : "Failed to read Codex session status";
           appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
           setSessionError(currentSession.sessionKey, message);
           setSessionLoading(currentSession.sessionKey, false);
           setPipelineError(pipelineId, message);
-          return;
         }
-
-        markSessionIdle(pipelineId, currentSession.sdkSessionId);
-        await startVerifySession(pipeline);
       })().finally(() => {
         pipelineAdvancingRef.current = false;
         setAdvanceTick((value) => value + 1);
@@ -1302,6 +1371,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     advanceTick,
     client,
     connectionState,
+    isPipelinePaused,
     markSessionIdle,
     pipeline,
     pipelineId,
@@ -1480,8 +1550,12 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     setSessionLoading(currentSession.sessionKey, true);
     appendCodexMessage(currentSession.sessionKey, buildUserMessage(prompt));
 
-    const success = await sendPromptWithDispatchGuard(client, currentSession.sdkSessionId, prompt);
+    const success = await sendPromptWithDispatchGuard(client, currentSession.sdkSessionId, prompt, {
+      phase: resumedPhase,
+      useTaskImages: false,
+    });
     if (!success) {
+      if (isPipelinePaused()) return;
       const message = "Failed to resume build pipeline";
       appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
       setSessionLoading(currentSession.sessionKey, false);
@@ -1490,6 +1564,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     }
   }, [
     client,
+    isPipelinePaused,
     markSessionIdle,
     markSessionRunning,
     pausePipeline,
@@ -1506,77 +1581,214 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     setSessionLoading,
   ]);
 
-  const failedPromptRetry = useMemo(() => {
-    if (!pipeline || pipeline.phase !== "failed") return null;
-    const currentSession = pipeline.sessions[pipeline.currentSessionIndex];
-    if (!currentSession) return null;
+  const failedRecovery = useMemo(() => {
+    if (!pipeline || pipeline.phase !== "failed" || !pipeline.failureContext) return null;
 
-    const messages = sessionsMap.get(currentSession.sessionKey)?.messages ?? [];
-    const userMessages = messages.filter((message) => message.role === "user");
-    const lastPrompt = userMessages.at(-1)?.content.trim();
-    if (!lastPrompt) return null;
+    const context = pipeline.failureContext;
+    const currentSession = context.sessionId
+      ? pipeline.sessions.find((session) => session.sdkSessionId === context.sessionId)
+      : undefined;
 
-    const shouldReuseTaskImages =
-      currentSession.phase === "build"
-      || currentSession.phase === "verify"
-      || currentSession.phase === "fix"
-      || (currentSession.phase === "review" && userMessages.length === 1);
+    if (
+      context.kind === "prompt-dispatch"
+      && (!context.sessionId || !context.prompt || !context.requestId)
+    ) {
+      return null;
+    }
 
     return {
+      context,
       currentSession,
-      lastPrompt,
-      retryPhase: getFailedPromptRetryPhase(currentSession, messages),
-      attachments: shouldReuseTaskImages
+      attachments: context.useTaskImages
         ? taskImagesToAttachments(pipeline.taskSnapshot.images)
         : undefined,
     };
-  }, [pipeline, sessionsMap]);
+  }, [pipeline]);
+
+  const restartFailedStage = useCallback(
+    async (
+      context: PipelineFailureContext,
+      currentPipeline: NonNullable<typeof pipeline>,
+      options: { reuseAddressingSession?: boolean } = {},
+    ) => {
+      switch (context.phase) {
+        case "building": {
+          const task = currentPipeline.taskSnapshot;
+          try {
+            const notes = await backend.getProjectNotes(currentPipeline.projectId);
+            await startBuildSession(createBuildPrompt(task, notes.content), taskImagesToAttachments(task.images));
+          } catch {
+            await startBuildSession(createBuildPrompt(task, ""), taskImagesToAttachments(task.images));
+          }
+          break;
+        }
+        case "reviewing":
+          await startReviewSession(currentPipeline);
+          break;
+        case "addressing": {
+          const reviewSession = options.reuseAddressingSession === false
+            ? undefined
+            : [...currentPipeline.sessions]
+                .reverse()
+                .find((session) => session.phase === "review");
+          if (reviewSession) {
+            await sendAddressIssuesMessage(currentPipeline, reviewSession);
+          } else {
+            await startReviewSession(currentPipeline);
+          }
+          break;
+        }
+        case "verifying":
+          await startVerifySession(currentPipeline);
+          break;
+        case "fixing":
+          await startFixSession(
+            currentPipeline,
+            currentPipeline.verificationFeedback ?? "Resume fixing the latest verification failures.",
+          );
+          break;
+        case "creating-pr":
+          await startPRSession(currentPipeline);
+          break;
+        case "resolving-conflicts":
+          await startResolveConflictsSession(currentPipeline);
+          break;
+        case "creating-environment":
+          setPhase(pipelineId, "starting-environment");
+          break;
+        case "starting-environment":
+        case "waiting-for-setup":
+          setAdvanceTick((value) => value + 1);
+          break;
+      }
+    },
+    [
+      pipelineId,
+      sendAddressIssuesMessage,
+      setPhase,
+      startBuildSession,
+      startFixSession,
+      startPRSession,
+      startResolveConflictsSession,
+      startReviewSession,
+      startVerifySession,
+    ],
+  );
 
   const handleReconnect = useCallback(async () => {
-    if (!failedPromptRetry || isReconnecting) return;
+    if (!failedRecovery || !pipeline) return;
 
-    const { currentSession, lastPrompt, retryPhase, attachments } = failedPromptRetry;
+    const { context, currentSession, attachments } = failedRecovery;
+    const attemptId = createUuid();
+    if (!beginReconnect(pipelineId, {
+      ...context,
+      id: attemptId,
+      startedAt: new Date().toISOString(),
+    })) {
+      return;
+    }
+
     setIsReconnecting(true);
+    const stillOwnsReconnect = () =>
+      useBuildPipelineStore.getState().pipelines.get(pipelineId)?.reconnectAttempt?.id === attemptId;
 
     try {
+      if (context.kind === "stage-transition") {
+        await restartFailedStage(context, pipeline);
+        completeReconnect(pipelineId, attemptId);
+        return;
+      }
+
       const activeClient = await initializeClient();
-      if (!retryFailedPipeline(pipelineId, retryPhase)) return;
+      if (!stillOwnsReconnect()) return;
+      if (!currentSession || !context.prompt || !context.requestId) {
+        await restartFailedStage(context, pipeline, { reuseAddressingSession: false });
+        completeReconnect(pipelineId, attemptId);
+        return;
+      }
+
+      const [status, authoritativeMessages] = await Promise.all([
+        getSessionStatus(activeClient, currentSession.sdkSessionId, { throwOnError: true }),
+        getSessionMessages(activeClient, currentSession.sdkSessionId, { throwOnError: true }),
+      ]);
+      if (!stillOwnsReconnect()) return;
+
+      if (authoritativeMessages.length > 0) {
+        const existingMessages = useCodexStore.getState().sessions.get(currentSession.sessionKey)?.messages ?? [];
+        if (!codexMessagesEqual(existingMessages, authoritativeMessages)) {
+          setMessages(currentSession.sessionKey, authoritativeMessages);
+        }
+      }
+
+      if (!status) {
+        await restartFailedStage(context, pipeline, { reuseAddressingSession: false });
+        completeReconnect(pipelineId, attemptId);
+        return;
+      }
 
       markSessionRunning(pipelineId, currentSession.sdkSessionId);
       setSessionError(currentSession.sessionKey, undefined);
-      setSessionLoading(currentSession.sessionKey, true);
 
-      const success = await sendPromptWithDispatchGuard(
-        activeClient,
-        currentSession.sdkSessionId,
-        lastPrompt,
-        attachments ? { attachments } : undefined,
-      );
-      if (!success) {
-        throw new Error("Failed to retry the last prompt");
+      if (status.status === "running") {
+        setSessionLoading(currentSession.sessionKey, true);
+        completeReconnect(pipelineId, attemptId);
+        return;
       }
+
+      if (status.status === "idle" && hasCompletedPrompt(authoritativeMessages, context.prompt)) {
+        setSessionLoading(currentSession.sessionKey, false);
+        completeReconnect(pipelineId, attemptId);
+        return;
+      }
+
+      setSessionLoading(currentSession.sessionKey, true);
+      const success = await sendPrompt(activeClient, currentSession.sdkSessionId, context.prompt, {
+        attachments,
+        requestId: context.requestId,
+      });
+      if (!stillOwnsReconnect()) return;
+      if (!success) {
+        const [retryStatus, retryMessages] = await Promise.all([
+          getSessionStatus(activeClient, currentSession.sdkSessionId, { throwOnError: true }),
+          getSessionMessages(activeClient, currentSession.sdkSessionId, { throwOnError: true }),
+        ]);
+        if (!stillOwnsReconnect()) return;
+        if (
+          retryStatus?.status !== "running"
+          && !(retryStatus?.status === "idle" && hasCompletedPrompt(retryMessages, context.prompt))
+        ) {
+          throw new Error("Failed to retry the last prompt");
+        }
+        if (retryMessages.length > 0) {
+          setMessages(currentSession.sessionKey, retryMessages);
+        }
+        setSessionLoading(currentSession.sessionKey, retryStatus.status === "running");
+      }
+
+      completeReconnect(pipelineId, attemptId);
     } catch (error) {
       const message = `Reconnect failed: ${
         error instanceof Error ? error.message : "Unable to reach the Codex bridge"
       }`;
-      appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
-      setSessionError(currentSession.sessionKey, message);
-      setSessionLoading(currentSession.sessionKey, false);
-      markSessionIdle(pipelineId, currentSession.sdkSessionId);
-      setPipelineError(pipelineId, message);
+      if (failReconnect(pipelineId, attemptId, message) && currentSession) {
+        appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
+        setSessionError(currentSession.sessionKey, message);
+        setSessionLoading(currentSession.sessionKey, false);
+      }
     } finally {
       setIsReconnecting(false);
     }
   }, [
-    failedPromptRetry,
+    beginReconnect,
+    completeReconnect,
+    failReconnect,
+    failedRecovery,
     initializeClient,
-    isReconnecting,
-    markSessionIdle,
     markSessionRunning,
+    pipeline,
     pipelineId,
-    retryFailedPipeline,
-    sendPromptWithDispatchGuard,
-    setPipelineError,
+    restartFailedStage,
+    setMessages,
     setSessionError,
     setSessionLoading,
   ]);
@@ -1717,7 +1929,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
             {pipeline.phase === "failed" && (
               <>
                 <span className="max-w-[300px] truncate text-xs font-medium text-red-400">{pipeline.error}</span>
-                {failedPromptRetry && (
+                {failedRecovery && (
                   <Button
                     variant="outline"
                     size="sm"

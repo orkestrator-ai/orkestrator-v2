@@ -356,6 +356,7 @@ export async function sendPrompt(
   prompt: string,
   options?: {
     attachments?: CodexPromptAttachment[];
+    requestId?: string;
   },
 ): Promise<boolean> {
   try {
@@ -367,6 +368,7 @@ export async function sendPrompt(
         body: JSON.stringify({
           prompt,
           attachments: options?.attachments,
+          requestId: options?.requestId,
         }),
       },
     );

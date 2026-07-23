@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   BrowserPreviewAttachInput,
   BrowserPreviewBounds,
+  BrowserPreviewOpenLinkEvent,
   BrowserPreviewState,
 } from "@orkestrator/protocol/browser-preview";
 
@@ -41,8 +42,16 @@ describe("browser preview protocol contract", () => {
       canGoForward: true,
       error: null,
     } satisfies BrowserPreviewState;
+    const openLinkEvent = {
+      tabId: input.tabId,
+      url: "http://localhost:3000/docs",
+    } satisfies BrowserPreviewOpenLinkEvent;
 
     expect(input.bounds).toEqual(bounds);
     expect(state).toMatchObject({ tabId: "browser-1", canGoForward: true, error: null });
+    expect(openLinkEvent).toEqual({
+      tabId: "browser-1",
+      url: "http://localhost:3000/docs",
+    });
   });
 });

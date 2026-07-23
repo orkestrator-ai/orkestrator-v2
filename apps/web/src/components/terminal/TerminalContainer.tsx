@@ -80,32 +80,44 @@ const isTabOrTabbar = (collision: Collision): boolean => {
  * When multiple collisions are found, prioritize tabbars/tabs over edge zones
  * to prevent accidental splits when trying to combine tabs.
  */
-const customCollisionDetection: CollisionDetection = (args) => {
-  // First, check if the pointer is directly over any droppable
-  const pointerCollisions = pointerWithin(args);
-  if (pointerCollisions.length > 0) {
-    // Prioritize tabbars and tabs over edge zones
-    const tabCollisions = pointerCollisions.filter(isTabOrTabbar);
-    if (tabCollisions.length > 0) {
-      return tabCollisions;
+export function createTerminalCollisionDetection({
+  pointerDetection = pointerWithin,
+  rectangleDetection = rectIntersection,
+  nearestDetection = closestCenter,
+}: {
+  pointerDetection?: CollisionDetection;
+  rectangleDetection?: CollisionDetection;
+  nearestDetection?: CollisionDetection;
+} = {}): CollisionDetection {
+  return (args) => {
+    // First, check if the pointer is directly over any droppable
+    const pointerCollisions = pointerDetection(args);
+    if (pointerCollisions.length > 0) {
+      // Prioritize tabbars and tabs over edge zones
+      const tabCollisions = pointerCollisions.filter(isTabOrTabbar);
+      if (tabCollisions.length > 0) {
+        return tabCollisions;
+      }
+      return pointerCollisions;
     }
-    return pointerCollisions;
-  }
 
-  // Try rect intersection for nearby targets
-  const rectCollisions = rectIntersection(args);
-  if (rectCollisions.length > 0) {
-    // Prioritize tabbars and tabs over edge zones
-    const tabCollisions = rectCollisions.filter(isTabOrTabbar);
-    if (tabCollisions.length > 0) {
-      return tabCollisions;
+    // Try rect intersection for nearby targets
+    const rectCollisions = rectangleDetection(args);
+    if (rectCollisions.length > 0) {
+      // Prioritize tabbars and tabs over edge zones
+      const tabCollisions = rectCollisions.filter(isTabOrTabbar);
+      if (tabCollisions.length > 0) {
+        return tabCollisions;
+      }
+      return rectCollisions;
     }
-    return rectCollisions;
-  }
 
-  // Last resort: use closestCenter to find the nearest target
-  return closestCenter(args);
-};
+    // Last resort: use closestCenter to find the nearest target
+    return nearestDetection(args);
+  };
+}
+
+const customCollisionDetection = createTerminalCollisionDetection();
 
 let tabIdCounter = 0;
 
@@ -482,6 +494,7 @@ export function TerminalContainer({
     beginHydration,
     finishHydration,
     addTab,
+    setActivePane,
     removeTab,
     reorderTabs,
     moveTab,
@@ -1296,6 +1309,7 @@ export function TerminalContainer({
       };
       console.debug("[TerminalContainer] Creating browser tab:", newTabId, "for environment:", environmentId);
       addTab(targetPaneId, newTab, environmentId);
+      setActivePane(targetPaneId, environmentId);
     },
     [
       addTab,
@@ -1304,6 +1318,7 @@ export function TerminalContainer({
       getAllTabs,
       isEnvironmentRunning,
       isLocalEnvironmentReady,
+      setActivePane,
     ],
   );
 

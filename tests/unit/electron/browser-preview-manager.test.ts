@@ -317,6 +317,175 @@ describe("BrowserPreviewManager", () => {
     });
   });
 
+  test("maps a same-origin gateway root without a trailing slash", async () => {
+    const harness = createHarness();
+    await harness.manager.attach({
+      ...input,
+      url: "https://desk.example/__orkestrator/browser/loopback/3000",
+    });
+    const contents = harness.views[0]!.webContents;
+
+    contents.emit(
+      "context-menu",
+      {},
+      createContextMenuParams({
+        linkURL: "https://desk.example/__orkestrator/browser/loopback/3000?q=1#root",
+      }),
+    );
+    const openInTab = harness.menuTemplates[0]!.find(
+      (item) => item.label === "Open Link in New Tab",
+    );
+    openInTab?.click?.(undefined as never, undefined as never, undefined as never);
+
+    expect(harness.emitOpenLink).toHaveBeenCalledWith({
+      tabId: input.tabId,
+      url: "http://localhost:3000/?q=1#root",
+    });
+  });
+
+  test("does not translate gateway-shaped links outside the source gateway origin", async () => {
+    const gatewayHarness = createHarness();
+    await gatewayHarness.manager.attach({
+      ...input,
+      url: "https://desk.example/__orkestrator/browser/loopback/3000/",
+    });
+    const gatewayContents = gatewayHarness.views[0]!.webContents;
+    const mismatchedLink =
+      "https://other.example/__orkestrator/browser/loopback/3000/docs";
+
+    gatewayContents.emit(
+      "context-menu",
+      {},
+      createContextMenuParams({ linkURL: mismatchedLink }),
+    );
+
+    expect(
+      gatewayHarness.menuTemplates[0]!.find((item) => item.label === "Open Link in New Tab")
+        ?.enabled,
+    ).toBe(false);
+    expect(
+      gatewayHarness.menuTemplates[0]!.find((item) => item.label === "Open in External Browser")
+        ?.enabled,
+    ).toBe(true);
+
+    const loopbackHarness = createHarness();
+    await loopbackHarness.manager.attach(input);
+    loopbackHarness.views[0]!.webContents.emit(
+      "context-menu",
+      {},
+      createContextMenuParams({
+        linkURL: "https://desk.example/__orkestrator/browser/loopback/3000/docs",
+      }),
+    );
+
+    expect(
+      loopbackHarness.menuTemplates[0]!.find((item) => item.label === "Open Link in New Tab")
+        ?.enabled,
+    ).toBe(false);
+  });
+
+  test("validates gateway port boundaries without throwing from context-menu handling", async () => {
+    const harness = createHarness();
+    await harness.manager.attach({
+      ...input,
+      url: "https://desk.example/__orkestrator/browser/loopback/65535/",
+    });
+    const contents = harness.views[0]!.webContents;
+
+    expect(() => {
+      contents.emit(
+        "context-menu",
+        {},
+        createContextMenuParams({
+          linkURL: "https://desk.example/__orkestrator/browser/loopback/65536/docs",
+        }),
+      );
+    }).not.toThrow();
+    expect(
+      harness.menuTemplates[0]!.find((item) => item.label === "Open Link in New Tab")?.enabled,
+    ).toBe(false);
+
+    contents.emit(
+      "context-menu",
+      {},
+      createContextMenuParams({
+        linkURL: "https://desk.example/__orkestrator/browser/loopback/65535/docs",
+      }),
+    );
+    const validAction = harness.menuTemplates[1]!.find(
+      (item) => item.label === "Open Link in New Tab",
+    );
+    expect(validAction?.enabled).toBe(true);
+    validAction?.click?.(undefined as never, undefined as never, undefined as never);
+    expect(harness.emitOpenLink).toHaveBeenCalledWith({
+      tabId: input.tabId,
+      url: "http://localhost:65535/docs",
+    });
+
+    const invalidHarness = createHarness();
+    await expect(
+      invalidHarness.manager.attach({
+        ...input,
+        url: "https://desk.example/__orkestrator/browser/loopback/65536/",
+      }),
+    ).rejects.toThrow("loopback or authenticated gateway-preview URL");
+  });
+
+  test("supports IPv6 loopback links", async () => {
+    const harness = createHarness();
+    await harness.manager.attach({
+      ...input,
+      url: "http://[::1]:3000/",
+    });
+    const contents = harness.views[0]!.webContents;
+    const linkURL = "http://[::1]:3000/docs?q=1#ipv6";
+
+    contents.emit("context-menu", {}, createContextMenuParams({ linkURL }));
+    const openInTab = harness.menuTemplates[0]!.find(
+      (item) => item.label === "Open Link in New Tab",
+    );
+    openInTab?.click?.(undefined as never, undefined as never, undefined as never);
+
+    expect(harness.emitOpenLink).toHaveBeenCalledWith({
+      tabId: input.tabId,
+      url: linkURL,
+    });
+  });
+
+  test("keeps ordinary external HTTPS links external-only and malformed links disabled", async () => {
+    const harness = createHarness();
+    await harness.manager.attach(input);
+    const contents = harness.views[0]!.webContents;
+
+    contents.emit(
+      "context-menu",
+      {},
+      createContextMenuParams({ linkURL: "https://example.com/docs" }),
+    );
+    const externalTemplate = harness.menuTemplates[0]!;
+    expect(
+      externalTemplate.find((item) => item.label === "Open Link in New Tab")?.enabled,
+    ).toBe(false);
+    expect(
+      externalTemplate.find((item) => item.label === "Open in External Browser")?.enabled,
+    ).toBe(true);
+
+    expect(() => {
+      contents.emit(
+        "context-menu",
+        {},
+        createContextMenuParams({ linkURL: "this is not a URL" }),
+      );
+    }).not.toThrow();
+    const malformedTemplate = harness.menuTemplates[1]!;
+    expect(
+      malformedTemplate.find((item) => item.label === "Open Link in New Tab")?.enabled,
+    ).toBe(false);
+    expect(
+      malformedTemplate.find((item) => item.label === "Open in External Browser")?.enabled,
+    ).toBe(false);
+  });
+
   test("keeps link actions visible but disables unsafe or unsupported navigation", async () => {
     const harness = createHarness();
     await harness.manager.attach(input);
@@ -356,6 +525,57 @@ describe("BrowserPreviewManager", () => {
     await expect(harness.manager.navigate(input.tabId, "https://example.com/")).rejects.toThrow(
       "loopback or authenticated gateway-preview URL",
     );
+  });
+
+  test("orders link, editable, and Interrogate actions without adjacent separators", async () => {
+    const harness = createHarness();
+    await harness.manager.attach(input);
+    const contents = harness.views[0]!.webContents;
+
+    contents.emit(
+      "context-menu",
+      {},
+      createContextMenuParams({
+        linkURL: "http://localhost:3000/docs",
+        isEditable: true,
+        editFlags: {
+          canUndo: true,
+          canRedo: true,
+          canCut: true,
+          canCopy: true,
+          canPaste: true,
+          canDelete: true,
+          canSelectAll: true,
+          canEditRichly: false,
+        },
+      }),
+    );
+
+    const template = harness.menuTemplates[0]!;
+    expect(
+      template.map((item) => item.label ?? item.role ?? item.type),
+    ).toEqual([
+      "Open Link in New Tab",
+      "Open in External Browser",
+      "Copy Link Address",
+      "separator",
+      "undo",
+      "redo",
+      "separator",
+      "cut",
+      "copy",
+      "paste",
+      "delete",
+      "separator",
+      "selectAll",
+      "separator",
+      "Interrogate",
+    ]);
+    expect(
+      template.some(
+        (item, index) => item.type === "separator" && template[index + 1]?.type === "separator",
+      ),
+    ).toBe(false);
   });
 
   test("accepts gateway-preview URLs and destroys owned webContents explicitly", async () => {
@@ -740,6 +960,11 @@ describe("BrowserPreviewManager", () => {
     expect(harness.menuTemplates).toHaveLength(0);
 
     harness.setWindowAvailable(true);
+    harness.setWindowDestroyed(true);
+    contents.emit("context-menu", {}, createContextMenuParams());
+    expect(harness.menuTemplates).toHaveLength(0);
+
+    harness.setWindowDestroyed(false);
     contents.emit("context-menu", {}, createContextMenuParams());
     const interrogate = harness.menuTemplates[0]!.find((item) => item.label === "Interrogate");
     contents.destroyed = true;

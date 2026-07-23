@@ -18,6 +18,7 @@ import {
   registerBrowserPreviewWindowActivation,
   registerBrowserPreviewWindowCleanup,
 } from "./browser-preview-startup.js";
+import { createBrowserPreviewMainAdapters } from "./browser-preview-main-adapters.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -186,19 +187,18 @@ async function startApplication(): Promise<void> {
   await connectionManager.initialize();
   await backend.invoke("get_config");
 
+  const browserPreviewMainAdapters = createBrowserPreviewMainAdapters({
+    emitToRenderers,
+    openExternal: (url) => shell.openExternal(url),
+    writeClipboardText: (text) => clipboard.writeText(text),
+    logError: (message, error) => console.error(message, error),
+  });
   const browserPreviewRuntime = initializeBrowserPreviews({
     fromPartition: (partition) => session.fromPartition(partition),
     WebContentsViewCtor: WebContentsView,
     menu: Menu,
     getWindow: () => mainWindow,
-    emitState: (state) => emitToRenderers("browser-preview-state", state),
-    emitOpenLink: (event) => emitToRenderers("browser-preview-open-link", event),
-    openExternal: (url) => {
-      void shell.openExternal(url).catch((error: unknown) => {
-        console.error("[BrowserPreview] Failed to open link externally:", error);
-      });
-    },
-    writeClipboardText: (text) => clipboard.writeText(text),
+    ...browserPreviewMainAdapters,
     getAuthorization: (url) => connectionManager?.getRendererRequestAuthorization(url) ?? null,
   });
   browserPreviewManager = browserPreviewRuntime.manager;

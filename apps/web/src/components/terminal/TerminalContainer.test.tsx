@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect, useRef, type ReactNode } from "react";
+import type { Collision, CollisionDetection } from "@dnd-kit/core";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TerminalProvider, useTerminalContext, type CreatableTabType, type CreateTabOptions, type CreateFileTabOptions } from "@/contexts";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
@@ -109,7 +110,11 @@ mock.module("./InitializationLogs", () => ({
   InitializationLogs: () => null,
 }));
 
-const { TerminalContainer, getTerminalTabDragEndAction } = await import("./TerminalContainer");
+const {
+  TerminalContainer,
+  createTerminalCollisionDetection,
+  getTerminalTabDragEndAction,
+} = await import("./TerminalContainer");
 
 describe("TerminalContainer", () => {
   afterAll(() => {
@@ -955,6 +960,207 @@ describe("TerminalContainer", () => {
     );
   });
 
+  test("creates the remaining local setup agent variants and the no-agent setup layout", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          opencodeMode: "native",
+          claudeMode: "terminal",
+          codexMode: "native",
+        },
+        repositories: {},
+      },
+    }));
+    const baseEnvironment = useEnvironmentStore.getState().getEnvironmentById("env-hidden")!;
+    const cases = [
+      { id: "local-codex", agentType: "codex" as const, expectedType: "codex-native" },
+      { id: "local-opencode", agentType: "opencode" as const, expectedType: "opencode-native" },
+      { id: "local-claude", agentType: "claude" as const, expectedType: "claude" },
+      { id: "local-no-agent", agentType: null, expectedType: null },
+    ];
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: [
+        ...state.environments,
+        ...cases.map(({ id }, order) => ({
+          ...baseEnvironment,
+          id,
+          name: id,
+          containerId: null,
+          environmentType: "local" as const,
+          worktreePath: `/tmp/${id}`,
+          order: order + 10,
+        })),
+      ],
+      pendingSetupCommands: new Map(
+        cases.map(({ id }) => [id, [`setup ${id}`]]),
+      ),
+      setupCommandsResolved: new Set(cases.map(({ id }) => id)),
+    }));
+    useClaudeOptionsStore.setState({
+      options: Object.fromEntries(
+        cases
+          .filter(({ agentType }) => agentType)
+          .map(({ id, agentType }) => [
+            id,
+            {
+              launchAgent: true,
+              agentType: agentType!,
+              initialPrompt: `Launch ${id}`,
+            },
+          ]),
+      ),
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        {cases.map(({ id }) => (
+          <TerminalContainer
+            key={id}
+            environmentId={id}
+            containerId={null}
+            isActive={false}
+          />
+        ))}
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      for (const { id, expectedType } of cases) {
+        const tabs = usePaneLayoutStore.getState().getAllTabs(id);
+        expect(tabs[0]).toMatchObject({
+          type: "plain",
+          initialCommands: [`setup ${id}`],
+          isSetupTab: true,
+        });
+        if (expectedType) {
+          expect(tabs[1]).toMatchObject({
+            type: expectedType,
+            initialPrompt: `Launch ${id}`,
+          });
+        } else {
+          expect(tabs).toHaveLength(1);
+        }
+      }
+    });
+  });
+
+  test("creates a native OpenCode tab for a ready local environment without setup commands", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: { ...state.config.global, opencodeMode: "native" },
+        repositories: {},
+      },
+    }));
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((environment) =>
+        environment.id === "env-hidden"
+          ? {
+              ...environment,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: "/tmp/env-hidden-worktree",
+            }
+          : environment,
+      ),
+      setupCommandsResolved: new Set(["env-hidden"]),
+    }));
+    useClaudeOptionsStore.setState({
+      options: {
+        "env-hidden": {
+          launchAgent: true,
+          agentType: "opencode",
+          initialPrompt: "Use OpenCode",
+        },
+      },
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId={null}
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+        {
+          type: "opencode-native",
+          initialPrompt: "Use OpenCode",
+          openCodeNativeData: {
+            containerId: undefined,
+            environmentId: "env-hidden",
+            isLocal: true,
+          },
+        },
+      ]);
+    });
+    expect(markSetupScriptsCompleteMock).toHaveBeenCalledWith("env-hidden");
+  });
+
+  test("auto-resolves persisted-complete and repeat-session local setup without rerunning it", async () => {
+    const baseEnvironment = useEnvironmentStore.getState().getEnvironmentById("env-hidden")!;
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: [
+        ...state.environments,
+        {
+          ...baseEnvironment,
+          id: "local-persisted",
+          name: "local-persisted",
+          containerId: null,
+          environmentType: "local",
+          worktreePath: "/tmp/local-persisted",
+          setupScriptsComplete: true,
+        },
+        {
+          ...baseEnvironment,
+          id: "local-repeat",
+          name: "local-repeat",
+          containerId: null,
+          environmentType: "local",
+          worktreePath: "/tmp/local-repeat",
+          setupScriptsComplete: false,
+        },
+      ],
+      sessionActivated: new Set(["local-repeat"]),
+    }));
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="local-persisted"
+          containerId={null}
+          isActive={false}
+        />
+        <TerminalContainer
+          environmentId="local-repeat"
+          containerId={null}
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(useEnvironmentStore.getState().isSetupCommandsResolved("local-persisted")).toBe(true);
+      expect(useEnvironmentStore.getState().isSetupCommandsResolved("local-repeat")).toBe(true);
+      expect(usePaneLayoutStore.getState().getAllTabs("local-persisted")).toHaveLength(1);
+      expect(usePaneLayoutStore.getState().getAllTabs("local-repeat")).toHaveLength(1);
+    });
+    expect(ensureEnvironmentSetupMock).not.toHaveBeenCalled();
+  });
+
   test("resumes a pending container native launch after the environment remounts", async () => {
     seedContainerSetupCommands();
     useConfigStore.setState((state) => ({
@@ -1112,6 +1318,147 @@ describe("TerminalContainer", () => {
       ).toBeUndefined();
       expect(useEnvironmentStore.getState().isWorkspaceReady("env-hidden")).toBe(true);
       expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-hidden")).toBe(false);
+    });
+  });
+
+  test("initializes already-complete containers directly into each native agent variant", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          claudeMode: "native",
+          claudeNativeBackend: "sdk",
+          codexMode: "native",
+          opencodeMode: "native",
+        },
+        repositories: {},
+      },
+    }));
+    const baseEnvironment = useEnvironmentStore.getState().getEnvironmentById("env-hidden")!;
+    const cases = [
+      { id: "complete-claude", containerId: "container-claude", agentType: "claude" as const, expectedType: "claude-native" },
+      { id: "complete-codex", containerId: "container-codex", agentType: "codex" as const, expectedType: "codex-native" },
+      { id: "complete-opencode", containerId: "container-opencode", agentType: "opencode" as const, expectedType: "opencode-native" },
+    ];
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: [
+        ...state.environments,
+        ...cases.map(({ id, containerId }, order) => ({
+          ...baseEnvironment,
+          id,
+          name: id,
+          containerId,
+          setupScriptsComplete: true,
+          order: order + 20,
+        })),
+      ],
+      setupCommandsResolved: new Set(cases.map(({ id }) => id)),
+    }));
+    useClaudeOptionsStore.setState({
+      options: Object.fromEntries(
+        cases.map(({ id, agentType }) => [
+          id,
+          {
+            launchAgent: true,
+            agentType,
+            initialPrompt: `Launch ${agentType}`,
+          },
+        ]),
+      ),
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        {cases.map(({ id, containerId }) => (
+          <TerminalContainer
+            key={id}
+            environmentId={id}
+            containerId={containerId}
+            isContainerRunning
+            isActive={false}
+          />
+        ))}
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      for (const { id, agentType, expectedType } of cases) {
+        expect(usePaneLayoutStore.getState().getAllTabs(id)).toMatchObject([
+          {
+            type: expectedType,
+            initialPrompt: `Launch ${agentType}`,
+          },
+        ]);
+      }
+    });
+    for (const { id } of cases) {
+      expect(useEnvironmentStore.getState().isWorkspaceReady(id)).toBe(true);
+      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch(id)).toBeUndefined();
+    }
+  });
+
+  test("launches and clears a pending native OpenCode tab", async () => {
+    usePaneLayoutStore.setState((state) => ({
+      ...state,
+      environments: new Map(state.environments).set("env-hidden", {
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [{ id: "setup", type: "plain", isSetupTab: true }],
+          activeTabId: "setup",
+        },
+        activePaneId: "default",
+        containerId: "container-hidden",
+      }),
+    }));
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      setupCommandsResolved: new Set(["env-hidden"]),
+      workspaceReadyEnvironments: new Set(["env-hidden"]),
+    }));
+    useClaudeOptionsStore.setState({
+      options: {},
+      pendingNativeLaunches: {
+        "env-hidden": {
+          containerId: "container-hidden",
+          environmentId: "env-hidden",
+          initialPrompt: "Continue in OpenCode",
+          targetPaneId: "default",
+          agentType: "opencode",
+          launchMode: "native",
+        },
+      },
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      const openCodeTab = usePaneLayoutStore
+        .getState()
+        .getAllTabs("env-hidden")
+        .find((tab) => tab.type === "opencode-native");
+      expect(openCodeTab).toMatchObject({
+        initialPrompt: "Continue in OpenCode",
+        openCodeNativeData: {
+          containerId: "container-hidden",
+          environmentId: "env-hidden",
+          isLocal: false,
+        },
+      });
+      expect(useClaudeOptionsStore.getState().getPendingNativeLaunch("env-hidden")).toBeUndefined();
     });
   });
 
@@ -1443,6 +1790,97 @@ describe("TerminalContainer", () => {
         )?.sessionId,
       ).toBe("env-hidden:setup");
     });
+  });
+
+  test("deduplicates an in-flight setup-session bind and handles a missing result", async () => {
+    let resolveSetupSession!: (session: EnvironmentSetupSession | null) => void;
+    getEnvironmentSetupSessionMock.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveSetupSession = resolve;
+      }),
+    );
+    usePaneLayoutStore.setState((state) => ({
+      ...state,
+      environments: new Map(state.environments).set("env-hidden", {
+        root: { kind: "leaf", id: "default", tabs: [], activeTabId: null },
+        activePaneId: "default",
+        containerId: "container-hidden",
+      }),
+      hydration: new Map(state.hydration).set("env-hidden", "done"),
+    }));
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      setupCommandsResolved: new Set(["env-hidden"]),
+      setupScriptsRunning: new Set(["env-hidden"]),
+    }));
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+    await waitFor(() => {
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+        worktreePath: "/ignored-for-container",
+      });
+    });
+    expect(getEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveSetupSession(null);
+    });
+    expect(
+      useTerminalSessionStore.getState().sessions.get(
+        createSessionKey("container-hidden", "default", "env-hidden"),
+      )?.sessionId,
+    ).toBeUndefined();
+  });
+
+  test("recovers when binding the backend setup session rejects", async () => {
+    getEnvironmentSetupSessionMock.mockRejectedValueOnce(new Error("session unavailable"));
+    usePaneLayoutStore.setState((state) => ({
+      ...state,
+      environments: new Map(state.environments).set("env-hidden", {
+        root: { kind: "leaf", id: "default", tabs: [], activeTabId: null },
+        activePaneId: "default",
+        containerId: "container-hidden",
+      }),
+      hydration: new Map(state.hydration).set("env-hidden", "done"),
+    }));
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      setupCommandsResolved: new Set(["env-hidden"]),
+      setupScriptsRunning: new Set(["env-hidden"]),
+    }));
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
+    });
+    expect(
+      useTerminalSessionStore.getState().sessions.get(
+        createSessionKey("container-hidden", "default", "env-hidden"),
+      )?.sessionId,
+    ).toBeUndefined();
   });
 
   test("requests backend setup for previously incomplete local environments", async () => {
@@ -1966,6 +2404,140 @@ describe("TerminalContainer", () => {
     });
   });
 
+  test("context-exposed tab actions select by index and close the active tab", async () => {
+    function TabActionHarness() {
+      const { selectTab, closeActiveTab } = useTerminalContext();
+      return (
+        <>
+          <button type="button" disabled={!selectTab} onClick={() => selectTab?.(1)}>
+            Select second
+          </button>
+          <button type="button" disabled={!selectTab} onClick={() => selectTab?.(99)}>
+            Select missing
+          </button>
+          <button type="button" disabled={!closeActiveTab} onClick={() => closeActiveTab?.()}>
+            Close active
+          </button>
+        </>
+      );
+    }
+
+    usePaneLayoutStore.setState((state) => ({
+      environments: new Map(state.environments).set("env-visible", {
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "first", type: "plain" },
+            { id: "second", type: "plain" },
+            { id: "third", type: "plain" },
+          ],
+          activeTabId: "first",
+        },
+        activePaneId: "default",
+        containerId: "container-visible",
+      }),
+    }));
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-visible"
+          containerId="container-visible"
+          isContainerRunning
+          isActive
+        />
+        <TabActionHarness />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(
+        (screen.getByRole("button", { name: "Select second" }) as HTMLButtonElement).disabled,
+      ).toBe(false);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Select second" }));
+    expect(usePaneLayoutStore.getState().getActivePane("env-visible")?.activeTabId).toBe("second");
+
+    fireEvent.click(screen.getByRole("button", { name: "Select missing" }));
+    expect(usePaneLayoutStore.getState().getActivePane("env-visible")?.activeTabId).toBe("second");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close active" }));
+    expect(usePaneLayoutStore.getState().getAllTabs("env-visible").map((tab) => tab.id)).toEqual([
+      "first",
+      "third",
+    ]);
+  });
+
+  describe("tab collision decisions", () => {
+    const collision = (id: string) => ({ id } as Collision);
+    const collisionArgs = {} as Parameters<CollisionDetection>[0];
+
+    test("prioritizes tab targets returned by pointer detection", () => {
+      const pointerDetection = mock(() => [
+        collision("edge:left:right"),
+        collision("tab:a:pane:left"),
+      ]);
+      const rectangleDetection = mock(() => [collision("tabbar:right")]);
+      const nearestDetection = mock(() => [collision("edge:right:left")]);
+      const detection = createTerminalCollisionDetection({
+        pointerDetection,
+        rectangleDetection,
+        nearestDetection,
+      });
+
+      expect(detection(collisionArgs)).toEqual([collision("tab:a:pane:left")]);
+      expect(rectangleDetection).not.toHaveBeenCalled();
+      expect(nearestDetection).not.toHaveBeenCalled();
+    });
+
+    test("keeps pointer edge targets when there is no tab target", () => {
+      const pointerCollisions = [collision("edge:left:right")];
+      const detection = createTerminalCollisionDetection({
+        pointerDetection: () => pointerCollisions,
+        rectangleDetection: () => [collision("tabbar:right")],
+        nearestDetection: () => [],
+      });
+
+      expect(detection(collisionArgs)).toBe(pointerCollisions);
+    });
+
+    test("falls back through rectangle detection and then nearest detection", () => {
+      const rectangleDetection = mock(() => [
+        collision("edge:left:right"),
+        collision("tabbar:right"),
+      ]);
+      const nearestDetection = mock(() => [collision("edge:right:left")]);
+      const rectangleFallback = createTerminalCollisionDetection({
+        pointerDetection: () => [],
+        rectangleDetection,
+        nearestDetection,
+      });
+
+      expect(rectangleFallback(collisionArgs)).toEqual([collision("tabbar:right")]);
+      expect(nearestDetection).not.toHaveBeenCalled();
+
+      const rectangleEdges = [collision("edge:left:right")];
+      expect(
+        createTerminalCollisionDetection({
+          pointerDetection: () => [],
+          rectangleDetection: () => rectangleEdges,
+          nearestDetection,
+        })(collisionArgs),
+      ).toBe(rectangleEdges);
+      expect(nearestDetection).not.toHaveBeenCalled();
+
+      const nearestCollisions = [collision("edge:right:left")];
+      expect(
+        createTerminalCollisionDetection({
+          pointerDetection: () => [],
+          rectangleDetection: () => [],
+          nearestDetection: () => nearestCollisions,
+        })(collisionArgs),
+      ).toBe(nearestCollisions);
+    });
+  });
+
   describe("tab drag-end decisions", () => {
     const pane = (id: string, tabIds: string[]): PaneLeaf => ({
       kind: "leaf",
@@ -2040,6 +2612,14 @@ describe("TerminalContainer", () => {
 
       expect(
         getTerminalTabDragEndAction({
+          activeId: "tab:a:pane:left",
+          overId: null,
+          lastDragOverPaneId: null,
+          getPane,
+        })
+      ).toEqual({ type: "none" });
+      expect(
+        getTerminalTabDragEndAction({
           activeId: "not-a-tab",
           overId: "tab:a:pane:left",
           lastDragOverPaneId: null,
@@ -2049,7 +2629,86 @@ describe("TerminalContainer", () => {
       expect(
         getTerminalTabDragEndAction({
           activeId: "tab:a:pane:left",
+          overId: "not-a-drop-target",
+          lastDragOverPaneId: null,
+          getPane,
+        })
+      ).toEqual({ type: "none" });
+      expect(
+        getTerminalTabDragEndAction({
+          activeId: "tab:a:pane:left",
           overId: "tabbar:left",
+          lastDragOverPaneId: null,
+          getPane,
+        })
+      ).toEqual({ type: "none" });
+      expect(
+        getTerminalTabDragEndAction({
+          activeId: "tab:a:pane:left",
+          overId: "tab:a:pane:left",
+          lastDragOverPaneId: "left",
+          getPane,
+        })
+      ).toEqual({ type: "none" });
+    });
+
+    test("handles same-pane and cross-pane tabbar drops", () => {
+      const panes = new Map([
+        ["left", pane("left", ["a", "b", "c"])],
+        ["right", pane("right", ["x"])],
+      ]);
+      const getPane = (paneId: string) => panes.get(paneId) ?? null;
+
+      expect(
+        getTerminalTabDragEndAction({
+          activeId: "tab:a:pane:left",
+          overId: "tabbar:left",
+          lastDragOverPaneId: null,
+          getPane,
+        })
+      ).toEqual({ type: "reorder", paneId: "left", fromIndex: 0, toIndex: 2 });
+      expect(
+        getTerminalTabDragEndAction({
+          activeId: "tab:b:pane:left",
+          overId: "tabbar:right",
+          lastDragOverPaneId: null,
+          getPane,
+        })
+      ).toEqual({
+        type: "move",
+        fromPaneId: "left",
+        toPaneId: "right",
+        tabId: "b",
+      });
+      expect(
+        getTerminalTabDragEndAction({
+          activeId: "tab:a:pane:missing",
+          overId: "tabbar:missing",
+          lastDragOverPaneId: null,
+          getPane,
+        })
+      ).toEqual({ type: "none" });
+    });
+
+    test("returns none when source or target pane data is stale", () => {
+      const panes = new Map([
+        ["left", pane("left", ["a"])],
+        ["right", pane("right", ["x"])],
+      ]);
+      const getPane = (paneId: string) => panes.get(paneId) ?? null;
+
+      expect(
+        getTerminalTabDragEndAction({
+          activeId: "tab:missing:pane:left",
+          overId: "tab:a:pane:left",
+          lastDragOverPaneId: null,
+          getPane,
+        })
+      ).toEqual({ type: "none" });
+      expect(
+        getTerminalTabDragEndAction({
+          activeId: "tab:a:pane:left",
+          overId: "tab:x:pane:missing",
           lastDragOverPaneId: null,
           getPane,
         })
@@ -2108,7 +2767,10 @@ describe("TerminalContainer", () => {
           />
           <CreateTabHarness
             type="browser"
-            options={{ initialUrl: "  http://localhost:49152/  " }}
+            options={{
+              initialUrl: "  http://localhost:49152/  ",
+              displayTitle: "Preview",
+            }}
           />
         </TerminalProvider>
       );
@@ -2118,6 +2780,7 @@ describe("TerminalContainer", () => {
         if (!env || env.root.kind !== "leaf") throw new Error("expected leaf");
         const created = env.root.tabs.find((tab) => tab.type === "browser");
         expect(created?.browserData).toEqual({ url: "http://localhost:49152/" });
+        expect(created?.displayTitle).toBe("Preview");
       });
     });
 
@@ -2309,6 +2972,289 @@ describe("TerminalContainer", () => {
       });
       expect(left?.activeTabId).toBe(left?.tabs[1]?.id);
       expect(right?.tabs).toHaveLength(1);
+      expect(usePaneLayoutStore.getState().environments.get("env-visible")?.activePaneId).toBe("left");
+    });
+
+    test("subscribes only while active and unsubscribes on deactivation and unmount", async () => {
+      const unsubscribe = mock(() => {});
+      const listen = mock(() => unsubscribe);
+      window.orkestrator = { listen } as never;
+
+      const { rerender, unmount } = render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive={false}
+          />
+        </TerminalProvider>,
+      );
+
+      expect(listen).not.toHaveBeenCalled();
+
+      rerender(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+        </TerminalProvider>,
+      );
+      await waitFor(() => expect(listen).toHaveBeenCalledTimes(1));
+
+      rerender(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive={false}
+          />
+        </TerminalProvider>,
+      );
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+      rerender(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+        </TerminalProvider>,
+      );
+      await waitFor(() => expect(listen).toHaveBeenCalledTimes(2));
+      unmount();
+      expect(unsubscribe).toHaveBeenCalledTimes(2);
+    });
+
+    test("does not subscribe when the desktop bridge is unavailable", async () => {
+      window.orkestrator = undefined as never;
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+        </TerminalProvider>,
+      );
+
+      await act(async () => {});
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(1);
+    });
+
+    test("ignores preview-link events with missing or non-browser source tabs", async () => {
+      let openLinkListener:
+        | ((event: { tabId: string; url: string }) => void)
+        | undefined;
+      window.orkestrator = {
+        listen: (_event: string, callback: (payload: unknown) => void) => {
+          openLinkListener = callback as (payload: { tabId: string; url: string }) => void;
+          return () => {};
+        },
+      } as never;
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+        </TerminalProvider>,
+      );
+      await waitFor(() => expect(openLinkListener).toBeDefined());
+
+      act(() => {
+        openLinkListener?.({ tabId: "missing", url: "http://localhost:3000/missing" });
+        openLinkListener?.({ tabId: "visible-tab", url: "http://localhost:3000/plain" });
+      });
+
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toEqual([
+        { id: "visible-tab", type: "plain" },
+      ]);
+    });
+
+    test("ignores preview-link events for stopped environments and at the tab limit", async () => {
+      let openLinkListener:
+        | ((event: { tabId: string; url: string }) => void)
+        | undefined;
+      window.orkestrator = {
+        listen: (_event: string, callback: (payload: unknown) => void) => {
+          openLinkListener = callback as (payload: { tabId: string; url: string }) => void;
+          return () => {};
+        },
+      } as never;
+      usePaneLayoutStore.setState((state) => ({
+        environments: new Map(state.environments).set("env-visible", {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              {
+                id: "browser-source",
+                type: "browser",
+                browserData: { url: "http://localhost:3000/" },
+              },
+            ],
+            activeTabId: "browser-source",
+          },
+          activePaneId: "default",
+          containerId: null,
+        }),
+      }));
+      useEnvironmentStore.setState((state) => ({
+        ...state,
+        environments: state.environments.map((environment) =>
+          environment.id === "env-visible"
+            ? {
+                ...environment,
+                containerId: null,
+                environmentType: "local",
+                worktreePath: undefined,
+              }
+            : environment,
+        ),
+      }));
+
+      const { rerender } = render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId={null}
+            isActive
+          />
+        </TerminalProvider>,
+      );
+      await waitFor(() => expect(openLinkListener).toBeDefined());
+      act(() => {
+        openLinkListener?.({ tabId: "browser-source", url: "http://localhost:3000/stopped" });
+      });
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(1);
+
+      act(() => {
+        usePaneLayoutStore.setState((state) => ({
+          environments: new Map(state.environments).set("env-visible", {
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [
+                {
+                  id: "browser-source",
+                  type: "browser",
+                  browserData: { url: "http://localhost:3000/" },
+                },
+                ...Array.from({ length: 8 }, (_, index) => ({
+                  id: `plain-${index}`,
+                  type: "plain" as const,
+                })),
+              ],
+              activeTabId: "browser-source",
+            },
+            activePaneId: "default",
+            containerId: "container-visible",
+          }),
+        }));
+        useEnvironmentStore.setState((state) => ({
+          ...state,
+          environments: state.environments.map((environment) =>
+            environment.id === "env-visible"
+              ? {
+                  ...environment,
+                  containerId: "container-visible",
+                  environmentType: "containerized",
+                }
+              : environment,
+          ),
+          setupCommandsResolved: new Set(["env-visible"]),
+        }));
+      });
+      rerender(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+        </TerminalProvider>,
+      );
+      await waitFor(() => expect(openLinkListener).toBeDefined());
+      act(() => {
+        openLinkListener?.({ tabId: "browser-source", url: "http://localhost:3000/limit" });
+      });
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(9);
+    });
+
+    test("opens preview-link events for ready local environments", async () => {
+      let openLinkListener:
+        | ((event: { tabId: string; url: string }) => void)
+        | undefined;
+      window.orkestrator = {
+        listen: (_event: string, callback: (payload: unknown) => void) => {
+          openLinkListener = callback as (payload: { tabId: string; url: string }) => void;
+          return () => {};
+        },
+      } as never;
+      usePaneLayoutStore.setState((state) => ({
+        environments: new Map(state.environments).set("env-visible", {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [{
+              id: "browser-source",
+              type: "browser",
+              browserData: { url: "http://localhost:3000/" },
+            }],
+            activeTabId: "browser-source",
+          },
+          activePaneId: "default",
+          containerId: null,
+        }),
+      }));
+      useEnvironmentStore.setState((state) => ({
+        ...state,
+        environments: state.environments.map((environment) =>
+          environment.id === "env-visible"
+            ? {
+                ...environment,
+                containerId: null,
+                environmentType: "local",
+                worktreePath: "/tmp/env-visible",
+                setupScriptsComplete: true,
+              }
+            : environment,
+        ),
+        setupCommandsResolved: new Set(["env-visible"]),
+      }));
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId={null}
+            isActive
+          />
+        </TerminalProvider>,
+      );
+      await waitFor(() => expect(openLinkListener).toBeDefined());
+      act(() => {
+        openLinkListener?.({ tabId: "browser-source", url: "http://localhost:3000/local" });
+      });
+
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(2);
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")[1]).toMatchObject({
+        type: "browser",
+        browserData: { url: "http://localhost:3000/local" },
+      });
     });
 
     test("claude-native tabs receive displayTitle", async () => {

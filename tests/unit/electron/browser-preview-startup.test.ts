@@ -35,6 +35,7 @@ class FakeWebContents extends EventEmitter {
 }
 
 class FakeWebContentsView {
+  static instances: FakeWebContentsView[] = [];
   readonly webContents = new FakeWebContents();
   private bounds = { x: 0, y: 0, width: 0, height: 0 };
   readonly setBackgroundColor = mock(() => undefined);
@@ -43,10 +44,15 @@ class FakeWebContentsView {
   });
   readonly getBounds = mock(() => this.bounds);
   readonly setVisible = mock(() => undefined);
+
+  constructor() {
+    FakeWebContentsView.instances.push(this);
+  }
 }
 
 describe("browser preview startup wiring", () => {
   test("creates the dedicated locked-down session, auth hooks, manager, and state bridge", async () => {
+    FakeWebContentsView.instances.length = 0;
     let permissionCheck: ((...args: unknown[]) => boolean) | null = null;
     let permissionRequest: ((webContents: unknown, permission: string, callback: (allowed: boolean) => void) => void) | null = null;
     const webRequest = {
@@ -72,11 +78,20 @@ describe("browser preview startup wiring", () => {
     const emitOpenLink = mock(() => undefined);
     const openExternal = mock(() => undefined);
     const writeClipboardText = mock(() => undefined);
+    const menuTemplates: Array<
+      Array<{ label?: string; click?: (...args: never[]) => void }>
+    > = [];
+    const buildFromTemplate = mock(
+      (template: Array<{ label?: string; click?: (...args: never[]) => void }>) => {
+        menuTemplates.push(template);
+        return { popup: () => undefined };
+      },
+    );
 
     const runtime = initializeBrowserPreviews({
       fromPartition: fromPartition as never,
       WebContentsViewCtor: FakeWebContentsView as never,
-      menu: { buildFromTemplate: () => ({ popup: () => undefined }) } as never,
+      menu: { buildFromTemplate } as never,
       getWindow: () => window as never,
       emitState,
       emitOpenLink,
@@ -103,6 +118,34 @@ describe("browser preview startup wiring", () => {
     });
     expect(addChildView).toHaveBeenCalledTimes(1);
     expect(emitState).toHaveBeenCalledWith(expect.objectContaining({ tabId: "browser-1" }));
+
+    FakeWebContentsView.instances[0]!.webContents.emit(
+      "context-menu",
+      {},
+      {
+        linkURL: "http://localhost:3000/docs",
+        isEditable: false,
+        selectionText: "",
+        x: 10,
+        y: 20,
+      },
+    );
+    const menuTemplate = menuTemplates[0];
+    menuTemplate
+      ?.find((item) => item.label === "Open Link in New Tab")
+      ?.click?.();
+    menuTemplate
+      ?.find((item) => item.label === "Open in External Browser")
+      ?.click?.();
+    menuTemplate
+      ?.find((item) => item.label === "Copy Link Address")
+      ?.click?.();
+    expect(emitOpenLink).toHaveBeenCalledWith({
+      tabId: "browser-1",
+      url: "http://localhost:3000/docs",
+    });
+    expect(openExternal).toHaveBeenCalledWith("http://localhost:3000/docs");
+    expect(writeClipboardText).toHaveBeenCalledWith("http://localhost:3000/docs");
   });
 
   test("destroys previews on close and only clears the window that actually closed", () => {

@@ -40,6 +40,13 @@ export interface BrowserPreviewManagerOptions {
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const GATEWAY_PREVIEW_PATH = /^\/__orkestrator\/browser\/loopback\/([1-9]\d{0,4})(\/.*)?$/;
 
+function gatewayPreviewMatch(url: URL): RegExpExecArray | null {
+  const match = GATEWAY_PREVIEW_PATH.exec(url.pathname);
+  if (!match) return null;
+  const port = Number(match[1]);
+  return Number.isInteger(port) && port >= 1 && port <= 65_535 ? match : null;
+}
+
 function previewNavigationScope(value: string): string | null {
   let url: URL;
   try {
@@ -53,14 +60,16 @@ function previewNavigationScope(value: string): string | null {
   }
 
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-  const gatewayMatch = GATEWAY_PREVIEW_PATH.exec(url.pathname);
+  const gatewayMatch = gatewayPreviewMatch(url);
   return gatewayMatch ? `gateway:${url.origin}:${gatewayMatch[1]}` : null;
 }
 
-function browserTabUrlFromPreviewLink(value: string): string | null {
+function browserTabUrlFromPreviewLink(value: string, sourcePreviewUrl: string): string | null {
   let url: URL;
+  let sourceUrl: URL;
   try {
     url = new URL(value);
+    sourceUrl = new URL(sourcePreviewUrl);
   } catch {
     return null;
   }
@@ -69,12 +78,26 @@ function browserTabUrlFromPreviewLink(value: string): string | null {
     return url.toString();
   }
 
-  const gatewayMatch = GATEWAY_PREVIEW_PATH.exec(url.pathname);
-  if (url.protocol !== "https:" || !gatewayMatch) return null;
-  return new URL(
-    `${gatewayMatch[2] ?? "/"}${url.search}${url.hash}`,
-    `http://localhost:${gatewayMatch[1]}`,
-  ).toString();
+  const gatewayMatch = gatewayPreviewMatch(url);
+  const sourceGatewayMatch = gatewayPreviewMatch(sourceUrl);
+  if (
+    url.protocol !== "https:" ||
+    !gatewayMatch ||
+    sourceUrl.protocol !== "https:" ||
+    !sourceGatewayMatch ||
+    url.origin !== sourceUrl.origin
+  ) {
+    return null;
+  }
+
+  try {
+    return new URL(
+      `${gatewayMatch[2] ?? "/"}${url.search}${url.hash}`,
+      `http://localhost:${gatewayMatch[1]}`,
+    ).toString();
+  } catch {
+    return null;
+  }
 }
 
 function isExternalBrowserUrl(value: string): boolean {
@@ -241,7 +264,7 @@ export class BrowserPreviewManager {
 
       const template: MenuItemConstructorOptions[] = [];
       if (params.linkURL) {
-        const browserTabUrl = browserTabUrlFromPreviewLink(params.linkURL);
+        const browserTabUrl = browserTabUrlFromPreviewLink(params.linkURL, preview.requestedUrl);
         const externalBrowserUrl = isExternalBrowserUrl(params.linkURL);
         template.push(
           {

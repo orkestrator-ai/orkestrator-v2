@@ -570,11 +570,12 @@ describe("ActionBar grid presentation", () => {
     const claudeButton = screen.getByRole("button", { name: "New tab with Claude" });
     fireEvent.mouseEnter(claudeButton);
 
-    await waitFor(() => {
-      expect(screen.getByText("New Tab with Claude")).toBeTruthy();
-    });
+    const tooltipTitle = await waitFor(() =>
+      screen.getByText("New Tab with Claude"),
+    );
 
     fireEvent.mouseLeave(claudeButton);
+    fireEvent.mouseLeave(tooltipTitle.parentElement!);
     await waitFor(() => {
       expect(screen.queryByText("New Tab with Claude")).toBeNull();
     });

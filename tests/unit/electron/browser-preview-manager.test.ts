@@ -58,6 +58,7 @@ function createHarness() {
     readonly setVisible = mock((visible: boolean) => {
       this.visible = visible;
     });
+    readonly getVisible = mock(() => this.visible);
 
     constructor(readonly options: unknown) {
       views.push(this);
@@ -379,6 +380,109 @@ describe("BrowserPreviewManager", () => {
     expect(view.visible).toBe(false);
     expect(harness.manager.setVisible("missing", false)).toBeNull();
     expect(() => harness.manager.setVisible("", true)).toThrow("browser preview tab ID");
+  });
+
+  test("consumes only recent trusted input from a visible in-scope preview", async () => {
+    const harness = createHarness();
+    const originalNow = Date.now;
+    let now = 10_000;
+    Date.now = () => now;
+    try {
+      await harness.manager.attach(input);
+      const view = harness.views[0]!;
+      const contents = view.webContents;
+
+      contents.emit("input-event", {}, { type: "mouseMove" });
+      expect(
+        harness.manager.consumeClipboardWriteUserActivation(
+          contents as never,
+          "http://localhost:3000/copy",
+        ),
+      ).toBe(false);
+
+      contents.emit("input-event", {}, { type: "mouseDown" });
+      expect(
+        harness.manager.consumeClipboardWriteUserActivation(
+          contents as never,
+          "http://localhost:4000/wrong-scope",
+        ),
+      ).toBe(false);
+      expect(
+        harness.manager.consumeClipboardWriteUserActivation(
+          contents as never,
+          "http://localhost:3000/copy",
+        ),
+      ).toBe(true);
+      expect(
+        harness.manager.consumeClipboardWriteUserActivation(
+          contents as never,
+          "http://localhost:3000/reuse",
+        ),
+      ).toBe(false);
+
+      contents.emit("input-event", {}, { type: "keyDown" });
+      now += 5_001;
+      expect(
+        harness.manager.consumeClipboardWriteUserActivation(
+          contents as never,
+          "http://localhost:3000/expired",
+        ),
+      ).toBe(false);
+
+      contents.emit("input-event", {}, { type: "pointerDown" });
+      harness.manager.setVisible(input.tabId, false);
+      harness.manager.setVisible(input.tabId, true);
+      expect(
+        harness.manager.consumeClipboardWriteUserActivation(
+          contents as never,
+          "http://localhost:3000/hidden",
+        ),
+      ).toBe(false);
+
+      contents.emit("input-event", {}, { type: "touchStart" });
+      harness.manager.setBounds(input.tabId, {
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 10,
+      });
+      expect(
+        harness.manager.consumeClipboardWriteUserActivation(
+          contents as never,
+          "http://localhost:3000/zero-area",
+        ),
+      ).toBe(false);
+
+      harness.manager.setBounds(input.tabId, input.bounds);
+      contents.emit("input-event", {}, { type: "mouseDown" });
+      await harness.manager.navigate(
+        input.tabId,
+        "http://localhost:3000/after-navigation",
+      );
+      expect(
+        harness.manager.consumeClipboardWriteUserActivation(
+          contents as never,
+          "http://localhost:3000/after-navigation",
+        ),
+      ).toBe(false);
+
+      contents.emit("input-event", {}, { type: "rawKeyDown" });
+      contents.destroyed = true;
+      expect(
+        harness.manager.consumeClipboardWriteUserActivation(
+          contents as never,
+          "http://localhost:3000/destroyed",
+        ),
+      ).toBe(false);
+      expect(
+        harness.manager.consumeClipboardWriteUserActivation(
+          new FakeWebContents() as never,
+          "http://localhost:3000/unowned",
+        ),
+      ).toBe(false);
+    } finally {
+      Date.now = originalNow;
+    }
   });
 
   test("throws consistently for operations on missing previews", async () => {

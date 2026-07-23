@@ -2432,7 +2432,9 @@ describe("CodexBuildChatTab", () => {
   test("starts PR creation when verification passes", async () => {
     seedVerifyPipeline("All acceptance criteria are satisfied", { complete: true });
     mockCreateSession.mockImplementationOnce(async () => ({ sessionId: "pr-session", title: "PR Creation Session" }));
-    mockGetSessionStatus.mockResolvedValue({ status: "idle" });
+    mockGetSessionStatus
+      .mockResolvedValueOnce({ status: "idle" })
+      .mockResolvedValue({ status: "running" });
 
     render(<CodexBuildChatTab data={createData()} isActive />);
 

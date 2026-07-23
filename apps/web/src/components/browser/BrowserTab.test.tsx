@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import type { BrowserPreviewState } from "@orkestrator/protocol/browser-preview";
 import { BrowserTab } from "./BrowserTab";
 
 const happyDOM = (window as unknown as Window & {
@@ -31,6 +32,44 @@ function setBrowserTab(url = "") {
       }],
     ]),
   });
+}
+
+function previewState(overrides: Partial<BrowserPreviewState> = {}): BrowserPreviewState {
+  return {
+    tabId: "browser-1",
+    url: "http://localhost:3000/",
+    loading: false,
+    canGoBack: false,
+    canGoForward: false,
+    error: null,
+    ...overrides,
+  };
+}
+
+function installNativePreview(overrides: Record<string, unknown> = {}) {
+  let stateListener: ((state: BrowserPreviewState) => void) | undefined;
+  const unsubscribe = mock(() => {});
+  const state = previewState();
+  const browserPreview = {
+    attach: mock(async (input: { url: string }) => previewState({ url: input.url })),
+    setBounds: mock(async () => state),
+    setVisible: mock(async () => state),
+    navigate: mock(async (_tabId: string, url: string) => previewState({ url })),
+    goBack: mock(async () => previewState()),
+    goForward: mock(async () => previewState()),
+    reload: mock(async () => previewState()),
+    openDevTools: mock(async () => previewState()),
+    destroy: mock(async () => {}),
+    ...overrides,
+  };
+  window.orkestrator = {
+    listen: (event: string, callback: (payload: unknown) => void) => {
+      if (event === "browser-preview-state") stateListener = callback as (state: BrowserPreviewState) => void;
+      return unsubscribe;
+    },
+    browserPreview,
+  } as never;
+  return { browserPreview, emitState: (next: BrowserPreviewState) => stateListener?.(next), unsubscribe };
 }
 
 describe("BrowserTab", () => {
@@ -527,5 +566,263 @@ describe("BrowserTab", () => {
     expect(container.querySelector(".animate-spin")).not.toBeNull();
     fireEvent.load(container.querySelector("iframe") as HTMLIFrameElement);
     expect(container.querySelector(".animate-spin")).toBeNull();
+  });
+
+  test("rehydrates native state events, maps gateway URLs, and ignores other tabs and scopes", async () => {
+    window.orkestratorGateway = {
+      enabled: true,
+      desktop: true,
+      baseUrl: "https://workstation.tailnet.ts.net/",
+    };
+    const native = installNativePreview();
+    setBrowserTab("http://localhost:3000/");
+    const view = render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+    );
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
+
+    native.emitState(previewState({
+      tabId: "browser-other",
+      url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/3000/ignored",
+      error: "ignored error",
+    }));
+    native.emitState(previewState({
+      url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/4000/wrong-scope",
+    }));
+    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe("http://localhost:3000/");
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    native.emitState(previewState({ url: "", loading: true, error: "empty URL state" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("empty URL state"));
+    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe("http://localhost:3000/");
+    expect(view.container.querySelector(".animate-spin")).not.toBeNull();
+    native.emitState(previewState({ url: "not a URL" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe("http://localhost:3000/");
+
+    native.emitState(previewState({
+      url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/3000/docs?q=1#intro",
+      loading: true,
+      canGoBack: true,
+      canGoForward: true,
+    }));
+    await waitFor(() => {
+      expect((screen.getByLabelText("Browser address") as HTMLInputElement).value).toBe(
+        "http://localhost:3000/docs?q=1#intro",
+      );
+      expect(view.container.querySelector(".animate-spin")).not.toBeNull();
+    });
+    native.emitState(previewState({
+      url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/3000/docs?q=1#intro",
+      canGoBack: true,
+      canGoForward: true,
+    }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Back" }).hasAttribute("disabled")).toBe(false));
+    expect(screen.getByRole("button", { name: "Back" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByRole("button", { name: "Forward" }).hasAttribute("disabled")).toBe(false);
+    const environment = usePaneLayoutStore.getState().environments.get("env-1");
+    if (!environment || environment.root.kind !== "leaf") throw new Error("expected leaf");
+    expect(environment.root.tabs[0]?.browserData?.url).toBe("http://localhost:3000/docs?q=1#intro");
+
+    native.emitState(previewState({
+      url: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/3000/docs?q=1#intro",
+      error: "native load failed",
+    }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("native load failed"));
+    expect(view.container.querySelector(".animate-spin")).toBeNull();
+  });
+
+  test("routes native navigation, history, reload, and refresh actions and reports rejections", async () => {
+    const navigate = mock(async (_tabId: string, url: string) => previewState({ url }));
+    const rejectedBack = mock(async () => { throw new Error("history failed"); });
+    const native = installNativePreview({ navigate, goBack: rejectedBack });
+    setBrowserTab("http://localhost:3000/");
+    const view = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
+    native.emitState(previewState({ canGoBack: true, canGoForward: true }));
+
+    fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "4000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith("browser-1", "http://localhost:4000/"));
+
+    native.emitState(previewState({ url: "http://localhost:4000/", canGoBack: true, canGoForward: true }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Back" }).hasAttribute("disabled")).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("history failed"));
+    fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reload preview" }));
+    await waitFor(() => {
+      expect(rejectedBack).toHaveBeenCalledWith("browser-1");
+      expect(native.browserPreview.goForward).toHaveBeenCalledWith("browser-1");
+      expect(native.browserPreview.reload).toHaveBeenCalledWith("browser-1");
+    });
+
+    view.rerender(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:4000/" }}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+    await waitFor(() => expect(native.browserPreview.reload.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  test("reports native navigation, forward, toolbar reload, and refresh reload failures", async () => {
+    let attachCount = 0;
+    const attach = mock((input: { url: string }) => {
+      attachCount += 1;
+      if (attachCount === 1) return Promise.resolve(previewState({ url: input.url }));
+      return new Promise<BrowserPreviewState>(() => {});
+    });
+    const navigate = mock(async () => { throw "navigation failed"; });
+    const goForward = mock(async () => { throw new Error("forward failed"); });
+    const reload = mock()
+      .mockRejectedValueOnce(new Error("toolbar reload failed"))
+      .mockRejectedValueOnce("refresh reload failed");
+    const native = installNativePreview({ attach, navigate, goForward, reload });
+    setBrowserTab("http://localhost:3000/");
+    const view = render(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:3000/" }}
+        isActive
+        refreshRequestId={0}
+      />,
+    );
+    await waitFor(() => expect(attach).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "4000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("navigation failed"));
+    expect(navigate).toHaveBeenCalledWith("browser-1", "http://localhost:4000/");
+
+    native.emitState(previewState({ url: "http://localhost:4000/", canGoForward: true }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Forward" }).hasAttribute("disabled")).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Forward" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("forward failed"));
+    expect(goForward).toHaveBeenCalledWith("browser-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reload preview" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("toolbar reload failed"));
+    expect(reload).toHaveBeenCalledTimes(1);
+
+    view.rerender(
+      <BrowserTab
+        tabId="browser-1"
+        environmentId="env-1"
+        data={{ url: "http://localhost:4000/" }}
+        isActive
+        refreshRequestId={1}
+      />,
+    );
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("refresh reload failed"));
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  test("hides the native preview when no valid preview host can be rendered", async () => {
+    const native = installNativePreview();
+    const view = render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "" }} isActive />,
+    );
+    await waitFor(() => expect(native.browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false));
+    expect(view.container.querySelector('[data-native-browser-preview="browser-1"]')).toBeNull();
+
+    view.rerender(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "not a preview address" }} isActive />,
+    );
+    await waitFor(() => expect(native.browserPreview.setVisible.mock.calls.length).toBeGreaterThanOrEqual(2));
+    expect(view.container.querySelector('[data-native-browser-preview="browser-1"]')).toBeNull();
+    expect(native.browserPreview.attach).not.toHaveBeenCalled();
+  });
+
+  test("synchronizes native bounds and visibility across resize, scroll, overlays, and activation", async () => {
+    const native = installNativePreview();
+    setBrowserTab("http://localhost:3000/");
+    let view = render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+    );
+    const host = view.container.querySelector('[data-native-browser-preview="browser-1"]') as HTMLDivElement;
+    host.getBoundingClientRect = () => ({
+      x: 11, y: 22, left: 11, top: 22, right: 344, bottom: 266, width: 333, height: 244,
+      toJSON: () => ({}),
+    });
+    fireEvent(window, new Event("resize"));
+    fireEvent.scroll(window);
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalledWith(expect.objectContaining({
+      tabId: "browser-1",
+      bounds: { x: 11, y: 22, width: 333, height: 244 },
+      visible: true,
+    })));
+
+    view.unmount();
+    native.browserPreview.attach.mockClear();
+
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    document.body.append(dialog);
+    view = render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+    );
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalledWith(expect.objectContaining({ visible: false })));
+    view.unmount();
+    dialog.remove();
+
+    view = render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive={false} />,
+    );
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalledWith(expect.objectContaining({ visible: false })));
+    view.rerender(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+    );
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenLastCalledWith(expect.objectContaining({ visible: true })));
+    view.unmount();
+    expect(native.unsubscribe).toHaveBeenCalled();
+    expect(native.browserPreview.setVisible).toHaveBeenCalledWith("browser-1", false);
+  });
+
+  test("handles attach and DevTools failures and ignores a disposed attach completion", async () => {
+    let resolveAttach: ((state: BrowserPreviewState) => void) | undefined;
+    const attach = mock(() => new Promise<BrowserPreviewState>((resolve) => { resolveAttach = resolve; }));
+    const openDevTools = mock(async () => { throw "DevTools failed"; });
+    const native = installNativePreview({ attach, openDevTools });
+    setBrowserTab("http://localhost:3000/");
+    const view = render(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />,
+    );
+    expect(screen.getByRole("button", { name: "Open preview DevTools" }).hasAttribute("disabled")).toBe(true);
+    await waitFor(() => expect(attach).toHaveBeenCalled());
+    resolveAttach?.(previewState());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Open preview DevTools" }).hasAttribute("disabled")).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Open preview DevTools" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("DevTools failed"));
+
+    let resolveDisposed: ((state: BrowserPreviewState) => void) | undefined;
+    native.browserPreview.attach = mock(() => new Promise<BrowserPreviewState>((resolve) => { resolveDisposed = resolve; }));
+    view.rerender(
+      <BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:4000/" }} isActive />,
+    );
+    await waitFor(() => expect(native.browserPreview.attach).toHaveBeenCalled());
+    view.unmount();
+    resolveDisposed?.(previewState({ error: "late attach error" }));
+    await Promise.resolve();
+    expect(screen.queryByText("late attach error")).toBeNull();
+  });
+
+  test("reports a native attach rejection", async () => {
+    installNativePreview({ attach: mock(async () => { throw new Error("attach failed"); }) });
+    setBrowserTab("http://localhost:3000/");
+    render(<BrowserTab tabId="browser-1" environmentId="env-1" data={{ url: "http://localhost:3000/" }} isActive />);
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("attach failed"));
   });
 });

@@ -998,6 +998,13 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
       return;
     }
 
+    const pane = findLeaf(envState.root, paneId);
+    if (!pane) return;
+
+    pane.tabs.forEach((tab) => {
+      cleanupTabResources(envId, envState.containerId, tab);
+    });
+
     // Find the sibling
     const siblingIndex = parentSplit.children[0].id === paneId ? 1 : 0;
     const sibling = parentSplit.children[siblingIndex];

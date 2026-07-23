@@ -80,6 +80,13 @@ function browserPreviewTabId(value: unknown): string {
   return value;
 }
 
+function browserPreviewUrl(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error("Expected a browser preview URL");
+  }
+  return value;
+}
+
 function browserPreviewBounds(value: unknown): BrowserPreviewBounds {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Expected browser preview bounds");
@@ -231,12 +238,12 @@ export function registerMainIpc({
       throw new Error("Expected browser preview attachment details");
     }
     const { tabId, url, bounds, visible } = value as Record<string, unknown>;
-    if (typeof url !== "string" || typeof visible !== "boolean") {
+    if (typeof visible !== "boolean") {
       throw new Error("Expected a browser preview URL and visibility");
     }
     return previews().attach({
       tabId: browserPreviewTabId(tabId),
-      url,
+      url: browserPreviewUrl(url),
       bounds: browserPreviewBounds(bounds),
       visible,
     });
@@ -248,8 +255,7 @@ export function registerMainIpc({
     return previews().setVisible(browserPreviewTabId(tabId), visible);
   });
   handle("orkestrator:browser-preview:navigate", (_event, tabId: unknown, url: unknown) => {
-    if (typeof url !== "string") throw new Error("Expected a browser preview URL");
-    return previews().navigate(browserPreviewTabId(tabId), url);
+    return previews().navigate(browserPreviewTabId(tabId), browserPreviewUrl(url));
   });
   handle("orkestrator:browser-preview:go-back", (_event, tabId: unknown) =>
     previews().goBack(browserPreviewTabId(tabId)));

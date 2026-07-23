@@ -44,7 +44,8 @@ function canAttachGatewayAuthorization(details: GatewayRequestDetails, browserPr
   const initiatorScope = previewInitiatorScope(details);
   const targetScope = browserPreviewScope(details.url);
   if (browserPreviewOnly) {
-    return targetScope !== null && (!initiatorScope || targetScope === initiatorScope);
+    return targetScope !== null
+      && (details.resourceType === "mainFrame" || targetScope === initiatorScope);
   }
   if (initiatorScope) return targetScope === initiatorScope;
   // A new browser preview is the only gateway navigation an untrusted subframe

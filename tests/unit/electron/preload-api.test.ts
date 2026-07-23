@@ -127,6 +127,26 @@ describe("preload API factory", () => {
       channel: "orkestrator:browser-preview:set-bounds",
       args: ["browser-1", bounds],
     });
+    await expect(api.browserPreview.setVisible("browser-1", false)).resolves.toEqual({
+      channel: "orkestrator:browser-preview:set-visible",
+      args: ["browser-1", false],
+    });
+    await expect(api.browserPreview.navigate("browser-1", "http://localhost:4000/")).resolves.toEqual({
+      channel: "orkestrator:browser-preview:navigate",
+      args: ["browser-1", "http://localhost:4000/"],
+    });
+    await expect(api.browserPreview.goBack("browser-1")).resolves.toEqual({
+      channel: "orkestrator:browser-preview:go-back",
+      args: ["browser-1"],
+    });
+    await expect(api.browserPreview.goForward("browser-1")).resolves.toEqual({
+      channel: "orkestrator:browser-preview:go-forward",
+      args: ["browser-1"],
+    });
+    await expect(api.browserPreview.reload("browser-1")).resolves.toEqual({
+      channel: "orkestrator:browser-preview:reload",
+      args: ["browser-1"],
+    });
     await expect(api.browserPreview.openDevTools("browser-1")).resolves.toEqual({
       channel: "orkestrator:browser-preview:open-devtools",
       args: ["browser-1"],

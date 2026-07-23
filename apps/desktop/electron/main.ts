@@ -12,7 +12,12 @@ import { installRemoteGatewayRequestAuth } from "./remote-gateway-request-auth.j
 import { ensurePinnedToolchains } from "./toolchain-manager.js";
 import { createToolchainBootstrapWindow, reportToolchainProgress } from "./toolchain-bootstrap-window.js";
 import { createToolchainProgressController, preparePinnedToolchains } from "./toolchain-startup.js";
-import { BrowserPreviewManager } from "./browser-preview-manager.js";
+import type { BrowserPreviewManager } from "./browser-preview-manager.js";
+import {
+  initializeBrowserPreviews,
+  registerBrowserPreviewWindowActivation,
+  registerBrowserPreviewWindowCleanup,
+} from "./browser-preview-startup.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -91,9 +96,13 @@ async function createWindow(): Promise<void> {
     devServerUrl: process.env.VITE_DEV_SERVER_URL,
   });
   mainWindow = createdWindow;
-  createdWindow.once("closed", () => {
-    browserPreviewManager?.destroyAll();
-    if (mainWindow === createdWindow) mainWindow = null;
+  registerBrowserPreviewWindowCleanup({
+    window: createdWindow,
+    getManager: () => browserPreviewManager,
+    getCurrentWindow: () => mainWindow,
+    clearCurrentWindow: () => {
+      mainWindow = null;
+    },
   });
 }
 
@@ -177,33 +186,30 @@ async function startApplication(): Promise<void> {
   await connectionManager.initialize();
   await backend.invoke("get_config");
 
-  const browserSession = session.fromPartition("persist:orkestrator-browser-previews");
-  browserSession.setPermissionCheckHandler(() => false);
-  browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
-  browserPreviewManager = new BrowserPreviewManager({
+  const browserPreviewRuntime = initializeBrowserPreviews({
+    fromPartition: (partition) => session.fromPartition(partition),
     WebContentsViewCtor: WebContentsView,
-    browserSession,
     menu: Menu,
     getWindow: () => mainWindow,
     emitState: (state) => emitToRenderers("browser-preview-state", state),
+    getAuthorization: (url) => connectionManager?.getRendererRequestAuthorization(url) ?? null,
   });
+  browserPreviewManager = browserPreviewRuntime.manager;
 
   createMenu();
   installRemoteGatewayRequestAuth(
     session.defaultSession.webRequest,
     (url) => connectionManager?.getRendererRequestAuthorization(url) ?? null,
   );
-  installRemoteGatewayRequestAuth(
-    browserSession.webRequest,
-    (url) => connectionManager?.getRendererRequestAuthorization(url) ?? null,
-    { browserPreviewOnly: true },
-  );
   registerIpc();
   await createWindow();
   await toolchainProgress.close();
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) void createWindow();
+  registerBrowserPreviewWindowActivation({
+    onActivate: (listener) => app.on("activate", listener),
+    getWindowCount: () => BrowserWindow.getAllWindows().length,
+    createWindow,
+    onCreateError: (error) => console.error("[Desktop] Failed to recreate the main window:", error),
   });
 }
 

@@ -19,6 +19,7 @@ interface ManagedPreview {
   view: WebContentsView;
   requestedUrl: string;
   navigationScope: string;
+  loadGeneration: number;
   loading: boolean;
   error: string | null;
 }
@@ -126,19 +127,11 @@ export class BrowserPreviewManager {
   }
 
   goBack(tabId: string): BrowserPreviewState {
-    const preview = this.get(tabId);
-    if (preview.view.webContents.navigationHistory.canGoBack()) {
-      preview.view.webContents.navigationHistory.goBack();
-    }
-    return this.snapshot(tabId, preview);
+    return this.navigateHistory(tabId, -1);
   }
 
   goForward(tabId: string): BrowserPreviewState {
-    const preview = this.get(tabId);
-    if (preview.view.webContents.navigationHistory.canGoForward()) {
-      preview.view.webContents.navigationHistory.goForward();
-    }
-    return this.snapshot(tabId, preview);
+    return this.navigateHistory(tabId, 1);
   }
 
   reload(tabId: string): BrowserPreviewState {
@@ -195,6 +188,7 @@ export class BrowserPreviewManager {
       view,
       requestedUrl: url,
       navigationScope,
+      loadGeneration: 0,
       loading: true,
       error: null,
     };
@@ -263,16 +257,48 @@ export class BrowserPreviewManager {
   }
 
   private async load(tabId: string, preview: ManagedPreview, url: string): Promise<void> {
+    const generation = ++preview.loadGeneration;
     preview.loading = true;
     this.emit(tabId, preview);
     try {
       await preview.view.webContents.loadURL(url);
     } catch (error) {
-      if (preview.view.webContents.isDestroyed()) return;
+      if (
+        preview.loadGeneration !== generation ||
+        this.previews.get(tabId) !== preview ||
+        preview.view.webContents.isDestroyed()
+      ) {
+        return;
+      }
       preview.loading = false;
       preview.error = error instanceof Error ? error.message : String(error);
       this.emit(tabId, preview);
     }
+  }
+
+  private navigateHistory(tabId: string, offset: -1 | 1): BrowserPreviewState {
+    const preview = this.get(tabId);
+    const history = preview.view.webContents.navigationHistory;
+    const canNavigate = offset === -1 ? history.canGoBack() : history.canGoForward();
+    if (!canNavigate) return this.snapshot(tabId, preview);
+
+    const destination = history.getEntryAtIndex(history.getActiveIndex() + offset);
+    const navigationScope = destination && previewNavigationScope(destination.url);
+    if (!navigationScope) {
+      preview.error = "Blocked browser history navigation outside preview scope";
+      return this.snapshot(tabId, preview);
+    }
+
+    // Programmatic history navigation does not emit `will-navigate`. Authorize the
+    // validated destination before Chromium starts it so redirects and the eventual
+    // commit are checked against the destination scope rather than the page we left.
+    preview.requestedUrl = destination.url;
+    preview.navigationScope = navigationScope;
+    preview.error = null;
+    preview.loadGeneration += 1;
+    if (offset === -1) history.goBack();
+    else history.goForward();
+    return this.snapshot(tabId, preview);
   }
 
   private get(tabId: string): ManagedPreview {

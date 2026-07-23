@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import {
   DndContext,
   closestCenter,
@@ -16,7 +16,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { Button } from "@/components/ui/button";
-import { Activity, ArrowUpDown, Plus, FolderGit2, Square, Trash2, RotateCw, RefreshCw } from "lucide-react";
+import { ArrowUpDown, Bell, Boxes, Plus, FolderGit2, Square, Trash2, RotateCw, RefreshCw } from "lucide-react";
 import { SortableProjectGroup } from "./SortableProjectGroup";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
 import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
@@ -41,11 +41,13 @@ import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
 import { cn } from "@/lib/utils";
 
@@ -82,6 +84,67 @@ export function sortEnvironmentsByActivity(
     if (left.order !== right.order) return left.order - right.order;
     return left.id.localeCompare(right.id);
   });
+}
+
+export function animateActivityRowMovement(
+  element: HTMLElement,
+  previousTop: number | null,
+  reduceMotion: boolean,
+): number {
+  const nextTop = element.getBoundingClientRect().top;
+  const offset = previousTop === null ? 0 : previousTop - nextTop;
+  if (
+    offset !== 0 &&
+    !reduceMotion &&
+    typeof element.animate === "function"
+  ) {
+    element.animate(
+      [
+        { transform: `translateY(${offset}px)` },
+        { transform: "translateY(0)" },
+      ],
+      {
+        duration: 280,
+        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+      },
+    );
+  }
+  return nextTop;
+}
+
+function AnimatedActivityRow({
+  environmentId,
+  className,
+  children,
+}: {
+  environmentId: string;
+  className: string;
+  children: ReactNode;
+}) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const previousTopRef = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    if (!row) return;
+    const reduceMotion = typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    previousTopRef.current = animateActivityRowMovement(
+      row,
+      previousTopRef.current,
+      reduceMotion,
+    );
+  });
+
+  return (
+    <div
+      ref={rowRef}
+      data-environment-id={environmentId}
+      className={className}
+    >
+      {children}
+    </div>
+  );
 }
 
 export function resolveSidebarSelection(
@@ -226,6 +289,7 @@ export function HierarchicalSidebar() {
     collapseEmptyProjects,
     environmentSortMode,
     setEnvironmentSortMode,
+    unreadEnvironmentIds,
   } = useUIStore();
 
   const activityEnvironments = useMemo(
@@ -236,6 +300,11 @@ export function HierarchicalSidebar() {
     () => new Map(projects.map((project) => [project.id, project])),
     [projects],
   );
+  const activeEnvironmentCount = activityEnvironments.length;
+  const waitingEnvironmentCount = useMemo(() => {
+    const environmentIds = new Set(allEnvironments.map((environment) => environment.id));
+    return unreadEnvironmentIds.filter((id) => environmentIds.has(id)).length;
+  }, [allEnvironments, unreadEnvironmentIds]);
 
   const isMultiSelectMode = selectedEnvironmentIds.length >= 1;
 
@@ -660,14 +729,78 @@ export function HierarchicalSidebar() {
             </div>
           ) : environmentSortMode === "activity" ? (
             <div data-testid="activity-environment-list">
-              <div className="sticky top-0 z-10 mb-1 flex items-center gap-2 border-b border-border/50 bg-background/95 px-3 pb-2 pt-1 backdrop-blur-sm">
-                <Activity className="h-3.5 w-3.5 text-amber-500" aria-hidden="true" />
-                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-                  Recent activity
-                </span>
-                <span className="ml-auto font-mono text-[10px] tabular-nums text-zinc-600">
-                  {activityEnvironments.length}
-                </span>
+              <div className="sticky top-0 z-10 mb-1 flex h-9 items-center border-b border-border/60 bg-[#1d1d20]/95 px-2 backdrop-blur-sm">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-zinc-400 hover:bg-zinc-800 hover:text-foreground"
+                      aria-label="Create environment"
+                      title="Create environment"
+                    >
+                      <Plus className="h-4 w-4" aria-hidden="true" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-56">
+                    <DropdownMenuLabel className="text-xs text-muted-foreground">
+                      New environment in
+                    </DropdownMenuLabel>
+                    {projects.map((project) => (
+                      <DropdownMenuItem
+                        key={project.id}
+                        onSelect={() => handleOpenCreateEnvDialog(project.id)}
+                      >
+                        <FolderGit2 className="h-4 w-4" aria-hidden="true" />
+                        <span className="truncate">{project.name}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <div className="ml-auto flex items-center gap-1">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div
+                        className="flex h-7 items-center gap-1.5 rounded-md px-2 font-mono text-[11px] tabular-nums text-zinc-400"
+                        aria-label={`${activeEnvironmentCount} active environments`}
+                      >
+                        <Boxes className="h-3.5 w-3.5 text-emerald-500" aria-hidden="true" />
+                        <span>{activeEnvironmentCount}</span>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" sideOffset={5}>
+                      Active environments
+                    </TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div
+                        className={cn(
+                          "flex h-7 min-w-9 items-center justify-center gap-1.5 rounded-md px-2 font-mono text-[11px] tabular-nums",
+                          waitingEnvironmentCount > 0
+                            ? "bg-amber-500/10 text-amber-400"
+                            : "text-zinc-600",
+                        )}
+                        aria-label={`${waitingEnvironmentCount} waiting ${
+                          waitingEnvironmentCount === 1 ? "environment" : "environments"
+                        }`}
+                      >
+                        <Bell
+                          className={cn(
+                            "h-3.5 w-3.5",
+                            waitingEnvironmentCount > 0 && "fill-amber-400/20",
+                          )}
+                          aria-hidden="true"
+                        />
+                        <span>{waitingEnvironmentCount}</span>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" sideOffset={5}>
+                      Waiting environments
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
               </div>
               {activityEnvironments.length === 0 ? (
                 <div className="px-4 py-8 text-center text-sm text-muted-foreground">
@@ -676,11 +809,11 @@ export function HierarchicalSidebar() {
               ) : (
                 <div className="space-y-0.5 px-1">
                   {activityEnvironments.map((environment) => (
-                    <div
+                    <AnimatedActivityRow
                       key={environment.id}
-                      data-environment-id={environment.id}
+                      environmentId={environment.id}
                       className={cn(
-                        "mx-1 flex items-center rounded-lg border transition-colors",
+                        "mx-1 flex items-center rounded-lg border transition-colors will-change-transform",
                         selectedEnvironmentId === environment.id && !isMultiSelectMode
                           ? "border-zinc-700/70 bg-zinc-800/85"
                           : "border-transparent hover:bg-zinc-800/55",
@@ -701,7 +834,7 @@ export function HierarchicalSidebar() {
                           isChecked={selectedEnvironmentIds.includes(environment.id)}
                         />
                       </div>
-                    </div>
+                    </AnimatedActivityRow>
                   ))}
                 </div>
               )}

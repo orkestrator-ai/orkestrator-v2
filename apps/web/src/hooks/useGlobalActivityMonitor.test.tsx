@@ -11,6 +11,7 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { invoke } from "@/lib/native/backend";
 import { listen } from "@/lib/native/events";
 import {
+  isEnvironmentCompletionTransition,
   isEnvironmentActivityTransition,
   useGlobalActivityMonitor,
 } from "./useGlobalActivityMonitor";
@@ -22,6 +23,7 @@ import {
 } from "@/stores/claudeTmuxStore";
 import { createCodexSessionKey, useCodexStore } from "@/stores/codexStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useUIStore } from "@/stores/uiStore";
 import {
   createOpenCodeSessionKey,
   useOpenCodeStore,
@@ -84,6 +86,10 @@ function resetStores() {
     pendingQuestions: new Map(),
     pendingPermissions: new Map(),
     messageQueue: new Map(),
+  });
+  useUIStore.setState({
+    selectedEnvironmentId: null,
+    unreadEnvironmentIds: [],
   });
 }
 
@@ -150,6 +156,11 @@ describe("useGlobalActivityMonitor tmux activity", () => {
     expect(isEnvironmentActivityTransition("working", "working")).toBe(false);
     expect(isEnvironmentActivityTransition("waiting", "waiting")).toBe(false);
     expect(isEnvironmentActivityTransition("idle", "idle")).toBe(false);
+    expect(isEnvironmentCompletionTransition("working", "idle")).toBe(true);
+    expect(isEnvironmentCompletionTransition("working", "waiting")).toBe(true);
+    expect(isEnvironmentCompletionTransition("idle", "working")).toBe(false);
+    expect(isEnvironmentCompletionTransition("idle", "waiting")).toBe(false);
+    expect(isEnvironmentCompletionTransition("waiting", "idle")).toBe(false);
   });
 
   test("persists meaningful environment activity and updates the live snapshot", async () => {
@@ -180,6 +191,41 @@ describe("useGlobalActivityMonitor tmux activity", () => {
       );
       expect(activityCall?.[1]).toMatchObject({ environmentId: "env-tmux" });
     });
+
+    act(() => {
+      useClaudeTmuxStore.getState().setBusy(stateKey, false);
+    });
+    await waitFor(() => {
+      expect(useUIStore.getState().unreadEnvironmentIds).toEqual(["env-tmux"]);
+    });
+  });
+
+  test("does not mark completed work unread while its environment is open", async () => {
+    const environment = makeEnvironment("env-tmux", "container-tmux");
+    useEnvironmentStore.getState().setEnvironments([environment]);
+    useUIStore.setState({ selectedEnvironmentId: environment.id });
+    mockInvoke.mockImplementation((command: string, args?: Record<string, unknown>) =>
+      command === "record_environment_activity"
+        ? Promise.resolve({ ...environment, lastActivityAt: args?.occurredAt })
+        : Promise.resolve(),
+    );
+    const stateKey = createClaudeTmuxStateKey(environment.id, "tab-1");
+    render(<MonitorHarness />);
+
+    act(() => {
+      const store = useClaudeTmuxStore.getState();
+      store.setRunning(stateKey, true, {
+        environmentId: environment.id,
+        sessionId: "session-1",
+      });
+      store.setBusy(stateKey, true);
+      store.setBusy(stateKey, false);
+    });
+
+    await waitFor(() => {
+      expect(useAgentActivityStore.getState().getContainerState(environment.id)).toBe("idle");
+    });
+    expect(useUIStore.getState().unreadEnvironmentIds).toEqual([]);
   });
 
   test("records a second tmux tab while the environment remains working", async () => {
@@ -541,11 +587,13 @@ describe("useGlobalActivityMonitor terminal activity", () => {
         payload: {
           environment_id: environment.id,
           occurred_at: "2026-07-23T10:00:00.000Z",
+          activity_kind: "completed",
         },
       });
     });
     expect(useEnvironmentStore.getState().getEnvironmentById(environment.id)?.lastActivityAt)
       .toBe("2026-07-23T10:00:00.000Z");
+    expect(useUIStore.getState().unreadEnvironmentIds).toEqual([environment.id]);
 
     act(() => {
       eventCallbacks.get("environment-activity-recorded")?.({
@@ -557,6 +605,69 @@ describe("useGlobalActivityMonitor terminal activity", () => {
     });
     expect(useEnvironmentStore.getState().getEnvironmentById(environment.id)?.lastActivityAt)
       .toBe("2026-07-23T10:00:00.000Z");
+  });
+
+  test("ignores malformed backend terminal activity events", async () => {
+    const environment = {
+      ...makeEnvironment("env-local", ""),
+      environmentType: "local" as const,
+      containerId: null,
+      lastActivityAt: "2026-07-23T09:00:00.000Z",
+    };
+    useEnvironmentStore.setState({ environments: [environment] });
+    render(<MonitorHarness />);
+
+    await waitFor(() => {
+      expect(eventCallbacks.has("environment-activity-recorded")).toBe(true);
+    });
+
+    act(() => {
+      eventCallbacks.get("environment-activity-recorded")?.({
+        payload: {
+          environment_id: environment.id,
+          occurred_at: "not-a-date",
+        },
+      });
+      eventCallbacks.get("environment-activity-recorded")?.({
+        payload: {
+          environment_id: "",
+          occurred_at: "2026-07-23T10:00:00.000Z",
+        },
+      });
+    });
+
+    expect(useEnvironmentStore.getState().getEnvironmentById(environment.id)?.lastActivityAt)
+      .toBe("2026-07-23T09:00:00.000Z");
+  });
+
+  test("reports failure to register the backend terminal activity listener", async () => {
+    const registrationError = new Error("listener unavailable");
+    const consoleWarn = spyOn(console, "warn").mockImplementation(() => {});
+    mockListen.mockImplementation(
+      (
+        eventName: string,
+        callback: (event: { payload: unknown }) => void,
+      ) => {
+        if (eventName === "environment-activity-recorded") {
+          return Promise.reject(registrationError);
+        }
+        eventCallbacks.set(eventName, callback);
+        return Promise.resolve(mockUnlisten);
+      },
+    );
+
+    try {
+      render(<MonitorHarness />);
+
+      await waitFor(() => {
+        expect(consoleWarn).toHaveBeenCalledWith(
+          "[GlobalActivityMonitor] Failed to listen for terminal activity:",
+          registrationError,
+        );
+      });
+    } finally {
+      consoleWarn.mockRestore();
+    }
   });
 
   test("does not let an older persistence response replace newer optimistic activity", async () => {
@@ -1089,6 +1200,9 @@ describe("useGlobalActivityMonitor native agent activity", () => {
         expect(useAgentActivityStore.getState().getContainerState(environmentId))
           .toBe("working");
       }
+      expect(new Set(useUIStore.getState().unreadEnvironmentIds)).toEqual(
+        new Set(["env-claude", "env-opencode", "env-codex"]),
+      );
     });
   });
 

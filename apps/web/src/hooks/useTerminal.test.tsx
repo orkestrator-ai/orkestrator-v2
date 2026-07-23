@@ -225,6 +225,55 @@ describe("useTerminal reconnect behavior", () => {
     container.unmount();
   });
 
+  it("preserves environment activity tracking when replacing stale local and container sessions", async () => {
+    getTerminalSessionMock.mockImplementation(async (sessionId: string) => ({
+      id: sessionId,
+      running: false,
+    }));
+
+    const local = renderHook(() =>
+      useTerminal({
+        containerId: null,
+        environmentId: "env-local",
+        isLocal: true,
+        existingSessionId: "session-stale-local",
+        persistSession: true,
+        trackEnvironmentActivity: true,
+      }),
+    );
+
+    await act(async () => {
+      await local.result.current.connect();
+    });
+    expect(getTerminalSessionMock).toHaveBeenCalledWith("session-stale-local");
+    expect(createLocalTerminalSessionMock).toHaveBeenCalledWith("env-local", 80, 24, true);
+    local.unmount();
+
+    const container = renderHook(() =>
+      useTerminal({
+        containerId: "container-1",
+        environmentId: "env-container",
+        isLocal: false,
+        existingSessionId: "session-stale-container",
+        persistSession: true,
+        trackEnvironmentActivity: true,
+      }),
+    );
+
+    await act(async () => {
+      await container.result.current.connect();
+    });
+    expect(getTerminalSessionMock).toHaveBeenCalledWith("session-stale-container");
+    expect(createTerminalSessionMock).toHaveBeenCalledWith(
+      "container-1",
+      80,
+      24,
+      undefined,
+      true,
+    );
+    container.unmount();
+  });
+
   it("does not attach an event listener from a stale in-flight connect after unmount", async () => {
     let resolveCreateSession: (sessionId: string) => void = () => {};
     createTerminalSessionMock.mockImplementation(

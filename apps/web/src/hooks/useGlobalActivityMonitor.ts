@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useRef, type MutableRefObject } from "react";
 import { listen, type UnlistenFn } from "@/lib/native/events";
 import * as backend from "@/lib/backend";
-import { useEnvironmentStore } from "@/stores";
+import { useEnvironmentStore, useUIStore } from "@/stores";
 import {
   useAgentActivityStore,
   type AgentActivityState,
@@ -33,6 +33,7 @@ interface ClaudeStateEvent {
 interface EnvironmentActivityRecordedEvent {
   environment_id: string;
   occurred_at: string;
+  activity_kind?: "prompt" | "completed";
 }
 
 /**
@@ -78,6 +79,16 @@ export function isEnvironmentActivityTransition(
   );
 }
 
+/** A completed turn becomes unread unless its environment is already open. */
+export function isEnvironmentCompletionTransition(
+  previousState: AgentActivityState,
+  newState: AgentActivityState,
+): boolean {
+  return previousState === "working" && (
+    newState === "idle" || newState === "waiting"
+  );
+}
+
 function setEnvironmentSourceActivity(
   activitySources: MutableRefObject<ActivitySourcesByEnvironment>,
   environmentId: string,
@@ -120,7 +131,7 @@ function getSessionEnvironmentIds(
   return environmentIds;
 }
 
-function getActivityTransitionEnvironmentIds<T>(
+function getEnvironmentTransitionIds<T>(
   currentItems: Map<string, T>,
   previousItems: Map<string, T>,
   getEnvironmentId: (
@@ -130,24 +141,28 @@ function getActivityTransitionEnvironmentIds<T>(
   ) => string | null | undefined,
   getCurrentState: (item: T | undefined) => AgentActivityState,
   getPreviousState: (item: T | undefined) => AgentActivityState,
-): Set<string> {
-  const environmentIds = new Set<string>();
+): {
+  activityEnvironmentIds: Set<string>;
+  completedEnvironmentIds: Set<string>;
+} {
+  const activityEnvironmentIds = new Set<string>();
+  const completedEnvironmentIds = new Set<string>();
   const keys = new Set([...previousItems.keys(), ...currentItems.keys()]);
   for (const key of keys) {
     const previousItem = previousItems.get(key);
     const currentItem = currentItems.get(key);
     const environmentId = getEnvironmentId(key, currentItem, previousItem);
-    if (
-      environmentId &&
-      isEnvironmentActivityTransition(
-        getPreviousState(previousItem),
-        getCurrentState(currentItem),
-      )
-    ) {
-      environmentIds.add(environmentId);
+    if (!environmentId) continue;
+    const previousState = getPreviousState(previousItem);
+    const currentState = getCurrentState(currentItem);
+    if (isEnvironmentActivityTransition(previousState, currentState)) {
+      activityEnvironmentIds.add(environmentId);
+    }
+    if (isEnvironmentCompletionTransition(previousState, currentState)) {
+      completedEnvironmentIds.add(environmentId);
     }
   }
-  return environmentIds;
+  return { activityEnvironmentIds, completedEnvironmentIds };
 }
 
 function getClaudeTmuxTabEnvironmentId(
@@ -178,12 +193,13 @@ function syncClaudeTmuxActivityState(
   activitySources: MutableRefObject<ActivitySourcesByEnvironment>,
   setContainerState: SetContainerState,
   recordActivity?: (environmentId: string) => void,
+  markCompleted?: (environmentId: string) => void,
 ): void {
   const desiredByEnvironment = new Map<string, AgentActivityState>();
   const seenEnvironmentIds = new Set<string>();
 
   if (previousTabs && recordActivity) {
-    const changedEnvironmentIds = getActivityTransitionEnvironmentIds(
+    const transitions = getEnvironmentTransitionIds(
       tabs,
       previousTabs,
       (stateKey, currentTab, previousTab) => currentTab
@@ -194,8 +210,11 @@ function syncClaudeTmuxActivityState(
       (tab) => tab ? getClaudeTmuxTabActivityState(tab) : "idle",
       (tab) => tab ? getClaudeTmuxTabActivityState(tab) : "idle",
     );
-    for (const environmentId of changedEnvironmentIds) {
+    for (const environmentId of transitions.activityEnvironmentIds) {
       recordActivity(environmentId);
+    }
+    for (const environmentId of transitions.completedEnvironmentIds) {
+      markCompleted?.(environmentId);
     }
   }
 
@@ -326,22 +345,32 @@ export function useGlobalActivityMonitor(): void {
       });
   }, []);
 
+  const markCompleted = useCallback((environmentId: string) => {
+    const uiStore = useUIStore.getState();
+    if (uiStore.selectedEnvironmentId !== environmentId) {
+      uiStore.markEnvironmentUnread(environmentId);
+    }
+  }, []);
+
   // Persist activity independently of whichever sidebar/chat is mounted. The
   // backend timestamp is the source of truth; the optimistic store update
   // keeps an activity-sorted sidebar responsive while the write completes.
   useEffect(() => {
     const callbackId = registerStateCallback((activityKey, previousState, newState) => {
-      if (!isEnvironmentActivityTransition(previousState, newState)) return;
+      const isActivity = isEnvironmentActivityTransition(previousState, newState);
+      const isCompleted = isEnvironmentCompletionTransition(previousState, newState);
+      if (!isActivity && !isCompleted) return;
 
       const environment = useEnvironmentStore.getState().environments.find(
         (candidate) => candidate.containerId === activityKey,
       );
       if (!environment) return;
-      recordActivity(environment.id);
+      if (isActivity) recordActivity(environment.id);
+      if (isCompleted) markCompleted(environment.id);
     });
 
     return () => unregisterStateCallback(callbackId);
-  }, [recordActivity, registerStateCallback, unregisterStateCallback]);
+  }, [markCompleted, recordActivity, registerStateCallback, unregisterStateCallback]);
 
   // ── Terminal mode: poll ALL running container environments ──────────
   useEffect(() => {
@@ -457,7 +486,7 @@ export function useGlobalActivityMonitor(): void {
       );
 
       if (prevState) {
-        const changedEnvironmentIds = getActivityTransitionEnvironmentIds(
+        const transitions = getEnvironmentTransitionIds(
           state.sessions,
           prevState.sessions,
           (sessionKey) => {
@@ -489,7 +518,8 @@ export function useGlobalActivityMonitor(): void {
             return waitingForQuestion || waitingForPlanApproval ? "waiting" : "idle";
           },
         );
-        for (const envId of changedEnvironmentIds) recordActivity(envId);
+        for (const envId of transitions.activityEnvironmentIds) recordActivity(envId);
+        for (const envId of transitions.completedEnvironmentIds) markCompleted(envId);
       }
 
       for (const envId of environmentIds) {
@@ -546,7 +576,7 @@ export function useGlobalActivityMonitor(): void {
     const unsubscribe = useClaudeStore.subscribe(syncActivity);
 
     return unsubscribe;
-  }, [recordActivity, setContainerState]);
+  }, [markCompleted, recordActivity, setContainerState]);
 
   // ── Claude tmux mode: derive activity from hydrated tmux tab state ──
   // Tmux mode has its own backend lifecycle (`running`) and turn lifecycle
@@ -571,11 +601,12 @@ export function useGlobalActivityMonitor(): void {
         activitySources,
         setContainerState,
         recordActivity,
+        markCompleted,
       );
     });
 
     return unsubscribe;
-  }, [recordActivity, setContainerState]);
+  }, [markCompleted, recordActivity, setContainerState]);
 
   // ── Native OpenCode mode: derive activity from session store ───────
   useEffect(() => {
@@ -613,7 +644,7 @@ export function useGlobalActivityMonitor(): void {
           );
           return waiting ? "waiting" : "idle";
         };
-        const changedEnvironmentIds = getActivityTransitionEnvironmentIds(
+        const transitions = getEnvironmentTransitionIds(
           state.sessions,
           prevState.sessions,
           (sessionKey) => {
@@ -631,7 +662,8 @@ export function useGlobalActivityMonitor(): void {
             prevState.pendingPermissions,
           ),
         );
-        for (const envId of changedEnvironmentIds) recordActivity(envId);
+        for (const envId of transitions.activityEnvironmentIds) recordActivity(envId);
+        for (const envId of transitions.completedEnvironmentIds) markCompleted(envId);
       }
 
       for (const envId of environmentIds) {
@@ -683,7 +715,7 @@ export function useGlobalActivityMonitor(): void {
     const unsubscribe = useOpenCodeStore.subscribe(syncActivity);
 
     return unsubscribe;
-  }, [recordActivity, setContainerState]);
+  }, [markCompleted, recordActivity, setContainerState]);
 
   // ── Native Codex mode: derive activity from session store ──────────
   // Codex SSE streams close on unmount, so state may go stale for
@@ -708,7 +740,7 @@ export function useGlobalActivityMonitor(): void {
       );
 
       if (prevState) {
-        const changedEnvironmentIds = getActivityTransitionEnvironmentIds(
+        const transitions = getEnvironmentTransitionIds(
           state.sessions,
           prevState.sessions,
           (sessionKey) => {
@@ -718,7 +750,8 @@ export function useGlobalActivityMonitor(): void {
           (session) => session?.isLoading ? "working" : "idle",
           (session) => session?.isLoading ? "working" : "idle",
         );
-        for (const envId of changedEnvironmentIds) recordActivity(envId);
+        for (const envId of transitions.activityEnvironmentIds) recordActivity(envId);
+        for (const envId of transitions.completedEnvironmentIds) markCompleted(envId);
       }
 
       for (const envId of environmentIds) {
@@ -761,7 +794,7 @@ export function useGlobalActivityMonitor(): void {
     const unsubscribe = useCodexStore.subscribe(syncActivity);
 
     return unsubscribe;
-  }, [recordActivity, setContainerState]);
+  }, [markCompleted, recordActivity, setContainerState]);
 
   // Terminal-mode activity is detected by the backend PTY so it continues to
   // work while an environment's React tree is inactive. Apply the persisted
@@ -774,7 +807,11 @@ export function useGlobalActivityMonitor(): void {
     void listen<EnvironmentActivityRecordedEvent>(
       "environment-activity-recorded",
       (event) => {
-        const { environment_id: environmentId, occurred_at: occurredAt } = event.payload;
+        const {
+          environment_id: environmentId,
+          occurred_at: occurredAt,
+          activity_kind: activityKind,
+        } = event.payload;
         const occurredTime = Date.parse(occurredAt);
         if (!Number.isFinite(occurredTime)) return;
 
@@ -790,6 +827,9 @@ export function useGlobalActivityMonitor(): void {
         useEnvironmentStore.getState().updateEnvironment(environmentId, {
           lastActivityAt: new Date(occurredTime).toISOString(),
         });
+        if (activityKind === "completed") {
+          markCompleted(environmentId);
+        }
       },
     ).then((stop) => {
       if (disposed) stop();
@@ -805,5 +845,5 @@ export function useGlobalActivityMonitor(): void {
       disposed = true;
       unlisten?.();
     };
-  }, []);
+  }, [markCompleted]);
 }

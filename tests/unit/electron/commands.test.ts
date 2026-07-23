@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, promises as fs } from "node:fs";
@@ -4234,12 +4234,141 @@ exit 0
     await waitForCondition(
       () => emitted.some(({ event, payload }) =>
         event === "environment-activity-recorded" &&
-        (payload as { environment_id?: string; occurred_at?: string }).environment_id === environment.id &&
-        (payload as { environment_id?: string; occurred_at?: string }).occurred_at === "2026-07-23T10:05:00.000Z"
+        (payload as { environment_id?: string; occurred_at?: string; activity_kind?: string }).environment_id === environment.id &&
+        (payload as { environment_id?: string; occurred_at?: string; activity_kind?: string }).occurred_at === "2026-07-23T10:05:00.000Z" &&
+        (payload as { environment_id?: string; occurred_at?: string; activity_kind?: string }).activity_kind === "completed"
       ),
       "the terminal activity event",
     );
+    expect(emitted).toContainEqual({
+      event: "environment-activity-recorded",
+      payload: {
+        environment_id: environment.id,
+        occurred_at: "2026-07-23T10:00:00.000Z",
+        activity_kind: "prompt",
+      },
+    });
     await commands.get("close_local_terminal_session")?.({ sessionId }, context);
+  });
+
+  test("debounces repeated output and ignores writes without a submitted prompt", async () => {
+    const worktreePath = await createTempDir("ork-electron-local-agent-debounce-");
+    const environment = createEnvironment({
+      id: "env-local-agent-debounce",
+      worktreePath,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
+
+    const sessionId = await commands.get("create_local_terminal_session")?.(
+      {
+        environmentId: environment.id,
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity: true,
+      },
+      context,
+    ) as string;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+
+    await commands.get("local_terminal_write")?.({ sessionId, data: "unfinished" }, context);
+    ptyProcesses[0]?.emitData("shell echo");
+    await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+    expect(recordActivity).not.toHaveBeenCalled();
+
+    await commands.get("local_terminal_write")?.({ sessionId, data: "\r" }, context);
+    expect(recordActivity).toHaveBeenCalledTimes(1);
+    recordActivity.mockClear();
+
+    ptyProcesses[0]?.emitData("first chunk");
+    await Bun.sleep(400);
+    ptyProcesses[0]?.emitData("second chunk");
+    await Bun.sleep(500);
+    expect(recordActivity).not.toHaveBeenCalled();
+
+    await Bun.sleep(400);
+    expect(recordActivity).toHaveBeenCalledTimes(1);
+    recordActivity.mockClear();
+    ptyProcesses[0]?.emitData("background output after completion");
+    await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+    expect(recordActivity).not.toHaveBeenCalled();
+    await commands.get("close_local_terminal_session")?.({ sessionId }, context);
+  });
+
+  test("logs terminal activity persistence failures without emitting a success event", async () => {
+    const worktreePath = await createTempDir("ork-electron-local-agent-persistence-failure-");
+    const environment = createEnvironment({
+      id: "env-local-agent-persistence-failure",
+      worktreePath,
+    });
+    const { context, emitted } = createContext(environment);
+    const commands = createCommandRegistry();
+    const persistenceError = new Error("activity storage unavailable");
+    const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
+    recordActivity.mockRejectedValueOnce(persistenceError);
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const sessionId = await commands.get("create_local_terminal_session")?.(
+        {
+          environmentId: environment.id,
+          cols: 80,
+          rows: 24,
+          trackEnvironmentActivity: true,
+        },
+        context,
+      ) as string;
+      await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+      await commands.get("local_terminal_write")?.({ sessionId, data: "codex\r" }, context);
+
+      await waitForCondition(
+        () => consoleError.mock.calls.length > 0,
+        "the terminal activity persistence error",
+      );
+      expect(consoleError).toHaveBeenCalledWith(
+        "Failed to record terminal environment activity",
+        {
+          environmentId: environment.id,
+          error: persistenceError.message,
+        },
+      );
+      expect(emitted.some(({ event }) => event === "environment-activity-recorded")).toBe(false);
+      await commands.get("close_local_terminal_session")?.({ sessionId }, context);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  test("cancels pending settled-output activity when a tracked terminal is explicitly closed", async () => {
+    const worktreePath = await createTempDir("ork-electron-local-agent-close-");
+    const environment = createEnvironment({
+      id: "env-local-agent-close",
+      worktreePath,
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const recordActivity = context.storage.recordEnvironmentActivity as ReturnType<typeof mock>;
+
+    const sessionId = await commands.get("create_local_terminal_session")?.(
+      {
+        environmentId: environment.id,
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity: true,
+      },
+      context,
+    ) as string;
+    await commands.get("start_local_terminal_session")?.({ sessionId }, context);
+    await commands.get("local_terminal_write")?.({ sessionId, data: "claude\r" }, context);
+    recordActivity.mockClear();
+
+    ptyProcesses[0]?.emitData("work in progress");
+    await commands.get("close_local_terminal_session")?.({ sessionId }, context);
+    await Bun.sleep(TERMINAL_ACTIVITY_SETTLE_TEST_WAIT_MS);
+
+    expect(recordActivity).not.toHaveBeenCalled();
+    expect(ptyProcesses[0]?.kill).toHaveBeenCalled();
   });
 
   test("records prompt and settled-output activity for tracked container agent terminals", async () => {

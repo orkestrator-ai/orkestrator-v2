@@ -34,6 +34,8 @@ interface UIState {
   expandedSessionsEnvironments: string[];
   /** How environments are arranged in the sidebar. */
   environmentSortMode: EnvironmentSortMode;
+  /** Environments with completed work that has not been opened yet. */
+  unreadEnvironmentIds: string[];
   /** Zoom level as a percentage (50-200, default 100) */
   zoomLevel: number;
 
@@ -58,6 +60,8 @@ interface UIState {
   /** Toggle the expanded state of sessions for an environment */
   toggleSessionsExpanded: (environmentId: string) => void;
   setEnvironmentSortMode: (mode: EnvironmentSortMode) => void;
+  markEnvironmentUnread: (environmentId: string) => void;
+  clearEnvironmentUnread: (environmentId: string) => void;
   /** Check if sessions are expanded for an environment */
   isSessionsExpanded: (environmentId: string) => boolean;
   /** Collapse projects that have no environments (used on initial load) */
@@ -86,6 +90,7 @@ export const useUIStore = create<UIState>()(
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],
       environmentSortMode: "project",
+      unreadEnvironmentIds: [],
       zoomLevel: ZOOM_DEFAULT,
 
       // Actions
@@ -100,7 +105,12 @@ export const useUIStore = create<UIState>()(
         })),
 
       selectEnvironment: (environmentId) =>
-        set({ selectedEnvironmentId: environmentId }),
+        set((state) => ({
+          selectedEnvironmentId: environmentId,
+          unreadEnvironmentIds: environmentId
+            ? state.unreadEnvironmentIds.filter((id) => id !== environmentId)
+            : state.unreadEnvironmentIds,
+        })),
 
       setProjectBoardTab: (tab) =>
         set({ projectBoardTab: tab, projectBoardNotesOpen: false }),
@@ -112,6 +122,9 @@ export const useUIStore = create<UIState>()(
         set((state) => ({
           selectedProjectId: projectId,
           selectedEnvironmentId: environmentId,
+          unreadEnvironmentIds: state.unreadEnvironmentIds.filter(
+            (id) => id !== environmentId,
+          ),
           recentProjectIds: addRecentProject(state.recentProjectIds, projectId),
         })),
 
@@ -156,6 +169,20 @@ export const useUIStore = create<UIState>()(
       setEnvironmentSortMode: (mode) =>
         set({ environmentSortMode: mode }),
 
+      markEnvironmentUnread: (environmentId) =>
+        set((state) => ({
+          unreadEnvironmentIds: state.unreadEnvironmentIds.includes(environmentId)
+            ? state.unreadEnvironmentIds
+            : [...state.unreadEnvironmentIds, environmentId],
+        })),
+
+      clearEnvironmentUnread: (environmentId) =>
+        set((state) => ({
+          unreadEnvironmentIds: state.unreadEnvironmentIds.filter(
+            (id) => id !== environmentId,
+          ),
+        })),
+
       isSessionsExpanded: (environmentId) =>
         get().expandedSessionsEnvironments.includes(environmentId),
 
@@ -196,6 +223,7 @@ export const useUIStore = create<UIState>()(
         collapsedProjects: state.collapsedProjects,
         recentProjectIds: state.recentProjectIds,
         environmentSortMode: state.environmentSortMode,
+        unreadEnvironmentIds: state.unreadEnvironmentIds,
         zoomLevel: state.zoomLevel,
       }),
     }

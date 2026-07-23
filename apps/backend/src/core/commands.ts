@@ -878,7 +878,11 @@ function getTrackedTerminalEnvironmentId(id: string): string | null {
     : config.activityEnvironmentId ?? null;
 }
 
-function persistTerminalActivity(id: string, context: CommandContext): void {
+function persistTerminalActivity(
+  id: string,
+  context: CommandContext,
+  activityKind: "prompt" | "completed",
+): void {
   const timer = terminalActivityTimers.get(id);
   if (timer) clearTimeout(timer);
   terminalActivityTimers.delete(id);
@@ -886,6 +890,9 @@ function persistTerminalActivity(id: string, context: CommandContext): void {
   if (!terminalActivityArmed.has(id)) return;
   const environmentId = getTrackedTerminalEnvironmentId(id);
   if (!environmentId) return;
+  if (activityKind === "completed") {
+    terminalActivityArmed.delete(id);
+  }
 
   const occurredAt = new Date().toISOString();
   void context.storage.recordEnvironmentActivity(environmentId, occurredAt)
@@ -893,6 +900,7 @@ function persistTerminalActivity(id: string, context: CommandContext): void {
       context.emit("environment-activity-recorded", {
         environment_id: environment.id,
         occurred_at: environment.lastActivityAt ?? occurredAt,
+        activity_kind: activityKind,
       });
     })
     .catch((error) => {
@@ -906,14 +914,17 @@ function persistTerminalActivity(id: string, context: CommandContext): void {
 function recordTerminalInputActivity(id: string, data: string, context: CommandContext): void {
   if (!/[\r\n]/.test(data) || !getTrackedTerminalEnvironmentId(id)) return;
   terminalActivityArmed.add(id);
-  persistTerminalActivity(id, context);
+  persistTerminalActivity(id, context, "prompt");
 }
 
 function scheduleTerminalOutputActivity(id: string, context: CommandContext): void {
   if (!terminalActivityArmed.has(id) || !getTrackedTerminalEnvironmentId(id)) return;
   const existingTimer = terminalActivityTimers.get(id);
   if (existingTimer) clearTimeout(existingTimer);
-  const timer = setTimeout(() => persistTerminalActivity(id, context), TERMINAL_ACTIVITY_SETTLE_MS);
+  const timer = setTimeout(
+    () => persistTerminalActivity(id, context, "completed"),
+    TERMINAL_ACTIVITY_SETTLE_MS,
+  );
   timer.unref?.();
   terminalActivityTimers.set(id, timer);
 }
@@ -924,7 +935,7 @@ function trackedTerminalActivityHooks(
 ): { onData: () => void; onExit: () => void } {
   return {
     onData: () => scheduleTerminalOutputActivity(id, context),
-    onExit: () => persistTerminalActivity(id, context),
+    onExit: () => persistTerminalActivity(id, context, "completed"),
   };
 }
 

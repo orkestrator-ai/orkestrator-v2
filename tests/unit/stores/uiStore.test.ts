@@ -16,6 +16,7 @@ describe("uiStore", () => {
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],
       environmentSortMode: "project",
+      unreadEnvironmentIds: [],
       zoomLevel: 100,
     });
   });
@@ -32,6 +33,7 @@ describe("uiStore", () => {
     expect(state.selectedEnvironmentIds).toEqual([]);
     expect(state.expandedSessionsEnvironments).toEqual([]);
     expect(state.environmentSortMode).toBe("project");
+    expect(state.unreadEnvironmentIds).toEqual([]);
     expect(state.zoomLevel).toBe(100);
   });
 
@@ -64,8 +66,10 @@ describe("uiStore", () => {
   });
 
   test("selectEnvironment sets environment id", () => {
+    useUIStore.setState({ unreadEnvironmentIds: ["env-1", "env-2"] });
     useUIStore.getState().selectEnvironment("env-1");
     expect(useUIStore.getState().selectedEnvironmentId).toBe("env-1");
+    expect(useUIStore.getState().unreadEnvironmentIds).toEqual(["env-2"]);
   });
 
   test("selectEnvironment with null clears environment", () => {
@@ -101,12 +105,14 @@ describe("uiStore", () => {
   });
 
   test("selectProjectAndEnvironment sets both", () => {
+    useUIStore.setState({ unreadEnvironmentIds: ["env-1", "env-2"] });
     useUIStore.getState().selectProjectAndEnvironment("project-1", "env-1");
 
     const state = useUIStore.getState();
     expect(state.selectedProjectId).toBe("project-1");
     expect(state.selectedEnvironmentId).toBe("env-1");
     expect(state.recentProjectIds).toEqual(["project-1"]);
+    expect(state.unreadEnvironmentIds).toEqual(["env-2"]);
   });
 
   test("keeps the five most recently opened projects without duplicates", () => {
@@ -189,6 +195,21 @@ describe("uiStore", () => {
       state?: Record<string, unknown>;
     };
     expect(persisted.state?.environmentSortMode).toBe("activity");
+  });
+
+  test("deduplicates, clears, and persists unread environment activity", () => {
+    useUIStore.getState().markEnvironmentUnread("env-1");
+    useUIStore.getState().markEnvironmentUnread("env-1");
+    useUIStore.getState().markEnvironmentUnread("env-2");
+
+    expect(useUIStore.getState().unreadEnvironmentIds).toEqual(["env-1", "env-2"]);
+    const persisted = JSON.parse(localStorage.getItem("ui-storage") ?? "{}") as {
+      state?: Record<string, unknown>;
+    };
+    expect(persisted.state?.unreadEnvironmentIds).toEqual(["env-1", "env-2"]);
+
+    useUIStore.getState().clearEnvironmentUnread("env-1");
+    expect(useUIStore.getState().unreadEnvironmentIds).toEqual(["env-2"]);
   });
 
   test("setZoomLevel clamps to 50-200", () => {

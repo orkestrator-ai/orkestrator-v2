@@ -109,6 +109,7 @@ mock.module("@/lib/backend", () => ({
 
 const {
   HierarchicalSidebar,
+  animateActivityRowMovement,
   deleteProjectAndEnvironments,
   resolveSidebarReorder,
   resolveSidebarSelection,
@@ -185,6 +186,7 @@ describe("HierarchicalSidebar", () => {
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],
       environmentSortMode: "project",
+      unreadEnvironmentIds: [],
       zoomLevel: 100,
     });
     useConfigStore.setState((state) => ({
@@ -273,7 +275,7 @@ describe("HierarchicalSidebar", () => {
 
     render(<HierarchicalSidebar />);
 
-    expect(screen.getByText("Recent activity")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create environment" })).toBeTruthy();
     const rows = Array.from(
       screen.getByTestId("activity-environment-list").querySelectorAll("[data-environment-id]"),
     );
@@ -285,6 +287,110 @@ describe("HierarchicalSidebar", () => {
     expect(rows[0]?.textContent).toContain("Project Two");
     expect(rows[1]?.textContent).toContain("Older environment");
     expect(rows[1]?.textContent).toContain("Project One");
+  });
+
+  test("shows ordered project creation, active count, and waiting count in the activity bar", async () => {
+    const secondProject = { ...project, id: "project-2", name: "Project Two", order: 1 };
+    projectsValue = [project, secondProject];
+    environmentsValue = [
+      {
+        ...createdEnvironment,
+        id: "env-running",
+        lastActivityAt: "2026-07-22T10:00:00.000Z",
+      },
+      {
+        ...createdEnvironment,
+        id: "env-stopped",
+        status: "stopped",
+        lastActivityAt: "2026-07-21T10:00:00.000Z",
+      },
+      {
+        ...createdEnvironment,
+        id: "env-local",
+        projectId: secondProject.id,
+        environmentType: "local",
+        containerId: null,
+        status: "stopped",
+        lastActivityAt: "2026-07-20T10:00:00.000Z",
+      },
+    ];
+    useUIStore.setState({
+      environmentSortMode: "activity",
+      unreadEnvironmentIds: ["env-running", "missing-environment"],
+    });
+
+    render(<HierarchicalSidebar />);
+
+    expect(screen.getByLabelText("3 active environments")).toBeTruthy();
+    expect(screen.getByLabelText("1 waiting environment")).toBeTruthy();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Create environment" }));
+    const projectItems = await screen.findAllByRole("menuitem");
+    expect(projectItems.map((item) => item.textContent)).toEqual([
+      "Project One",
+      "Project Two",
+    ]);
+
+    fireEvent.click(projectItems[1]!);
+    expect(await screen.findByRole("heading", { name: "Create Ork (Environment)" })).toBeTruthy();
+  });
+
+  test("shows completed activity on its row and clears it when the environment is opened", () => {
+    environmentsValue = [{
+      ...createdEnvironment,
+      id: "env-waiting",
+      name: "Waiting environment",
+      lastActivityAt: "2026-07-22T10:00:00.000Z",
+    }];
+    useUIStore.setState({
+      environmentSortMode: "activity",
+      unreadEnvironmentIds: ["env-waiting"],
+    });
+
+    render(<HierarchicalSidebar />);
+
+    expect(screen.getByLabelText("New completed activity")).toBeTruthy();
+    const row = screen.getByTestId("activity-environment-list")
+      .querySelector('[data-environment-id="env-waiting"] [role="button"]');
+    expect(row).toBeTruthy();
+    fireEvent.click(row!);
+
+    expect(useUIStore.getState().unreadEnvironmentIds).toEqual([]);
+    expect(screen.queryByLabelText("New completed activity")).toBeNull();
+    expect(screen.getByLabelText("0 waiting environments")).toBeTruthy();
+  });
+
+  test("animates activity row movement with a reduced-motion escape hatch", () => {
+    const row = document.createElement("div");
+    const animate = mock(() => ({} as Animation));
+    row.getBoundingClientRect = () => ({
+      bottom: 60,
+      height: 40,
+      left: 0,
+      right: 200,
+      top: 20,
+      width: 200,
+      x: 0,
+      y: 20,
+      toJSON: () => ({}),
+    });
+    row.animate = animate;
+
+    expect(animateActivityRowMovement(row, 100, false)).toBe(20);
+    expect(animate).toHaveBeenCalledWith(
+      [
+        { transform: "translateY(80px)" },
+        { transform: "translateY(0)" },
+      ],
+      {
+        duration: 280,
+        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+      },
+    );
+
+    animate.mockClear();
+    expect(animateActivityRowMovement(row, 100, true)).toBe(20);
+    expect(animate).not.toHaveBeenCalled();
   });
 
   test("sorts missing or equal activity timestamps by the existing sidebar order", () => {

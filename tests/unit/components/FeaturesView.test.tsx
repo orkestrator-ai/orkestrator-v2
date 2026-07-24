@@ -156,7 +156,26 @@ beforeEach(() => {
   updateTaskMock.mockClear();
   updateFeatureMock.mockClear();
   loadFeaturesMock.mockClear();
+  useFeaturePlanStore.setState({ chatDrafts: new Map() });
   useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
+});
+
+describe("FeaturesView message drafts", () => {
+  test("restores an unfinished feature message after the view is unmounted and reopened", () => {
+    seedStores(featureWithStories({ status: "collecting", stories: [] }));
+    const view = render(<FeaturesView projectId="project-1" />);
+    const composer = screen.getByPlaceholderText("Describe the feature or answer Codex...");
+
+    fireEvent.change(composer, { target: { value: "A half-finished feature message" } });
+    expect((composer as HTMLTextAreaElement).value).toBe("A half-finished feature message");
+
+    view.unmount();
+    render(<FeaturesView projectId="project-1" />);
+
+    expect(
+      (screen.getByPlaceholderText("Describe the feature or answer Codex...") as HTMLTextAreaElement).value,
+    ).toBe("A half-finished feature message");
+  });
 });
 
 describe("FeaturesView build action", () => {

@@ -77,7 +77,27 @@ const { useFeaturePlanStore } = await import("@/stores/featurePlanStore");
 describe("featurePlanStore", () => {
   beforeEach(() => {
     backing = [];
-    useFeaturePlanStore.setState({ features: [], isLoading: false, currentProjectId: null });
+    useFeaturePlanStore.setState({
+      features: [],
+      isLoading: false,
+      currentProjectId: null,
+      chatDrafts: new Map(),
+    });
+  });
+
+  test("stores chat drafts by id and removes them when cleared", () => {
+    const store = useFeaturePlanStore.getState();
+
+    store.setChatDraft("feature:feature-1", "unfinished message");
+    store.setChatDraft("feature:feature-2", "another message");
+
+    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1")).toBe("unfinished message");
+    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-2")).toBe("another message");
+
+    useFeaturePlanStore.getState().setChatDraft("feature:feature-1", "");
+
+    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1")).toBe("");
+    expect(useFeaturePlanStore.getState().chatDrafts.has("feature:feature-1")).toBe(false);
   });
 
   test("loadFeatures populates features and tracks the current project", async () => {

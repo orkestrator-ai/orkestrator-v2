@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, ArrowDown, History, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import { useElapsedTimer, useVirtuosoScrollState } from "@/hooks";
@@ -1502,8 +1503,7 @@ export function CodexChatTab({
                 <div className="px-2 @sm:px-4 py-3">
                   <div className="mx-auto max-w-3xl min-w-0">
                     <div className="flex items-center gap-2 text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      <span className="text-xs">Codex is thinking...</span>
+                      <AgentThinkingIndicator agentName="Codex" />
                       {elapsedSeconds !== null && elapsedSeconds > 0 && (
                         <span className="text-xs text-muted-foreground/50">
                           {formatElapsed(elapsedSeconds)}

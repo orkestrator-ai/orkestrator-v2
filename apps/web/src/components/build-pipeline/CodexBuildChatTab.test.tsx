@@ -1527,8 +1527,14 @@ describe("CodexBuildChatTab", () => {
     seedReviewPipeline();
     seedCodexStore(false);
     mockGetSessionStatus.mockResolvedValue({ status: "idle" });
+    let resolvePrompt: ((accepted: boolean) => void) | undefined;
+    mockSendPrompt.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => {
+        resolvePrompt = resolve;
+      }),
+    );
 
-    render(<CodexBuildChatTab data={createData()} isActive />);
+    const { unmount } = render(<CodexBuildChatTab data={createData()} isActive />);
 
     await waitFor(() => {
       expect(mockSendPrompt).toHaveBeenCalledTimes(1);
@@ -1548,6 +1554,11 @@ describe("CodexBuildChatTab", () => {
       expect(prompt).not.toContain("do not finish until `git status --porcelain` is clean");
       expect(prompt).not.toContain("If there are any uncommitted changes, stage and commit them");
     }
+
+    unmount();
+    await act(async () => {
+      resolvePrompt?.(true);
+    });
   });
 
   test("fails the pipeline when the address-issues prompt is rejected", async () => {

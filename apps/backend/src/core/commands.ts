@@ -2987,7 +2987,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("test_domain_resolution", ({ domains }) => Promise.all(asStringArray(domains).map(async (domain) => {
     try {
       const dns = await import("node:dns/promises");
-      const ips = await dns.resolve(domain);
+      const ips = (await dns.lookup(domain, { all: true })).map(({ address }) => address);
       return { domain, valid: true, resolvable: true, ips, error: null };
     } catch (error) {
       return { domain, valid: true, resolvable: false, ips: [], error: error instanceof Error ? error.message : String(error) };

@@ -75,17 +75,34 @@ function messageContent(message: CodexMessage): string {
     .trim();
 }
 
-function latestAssistantContent(messages: CodexMessage[]): string | null {
+function latestAssistantMessage(
+  messages: CodexMessage[],
+  options: {
+    excludeIds?: ReadonlySet<string>;
+    accept?: (content: string) => boolean;
+  } = {},
+): { id: string; content: string } | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role !== "assistant") continue;
+    if (options.excludeIds?.has(message.id)) continue;
     const content = messageContent(message);
-    if (content.trim()) return content;
+    if (content.trim() && (!options.accept || options.accept(content))) {
+      return { id: message.id, content };
+    }
   }
   return null;
 }
 
-async function waitForCodexReply(client: CodexClient, sessionId: string): Promise<string | null> {
+function assistantMessageIds(messages: CodexMessage[]): Set<string> {
+  return new Set(messages.filter((message) => message.role === "assistant").map((message) => message.id));
+}
+
+async function waitForCodexReply(
+  client: CodexClient,
+  sessionId: string,
+  baselineAssistantIds: ReadonlySet<string>,
+): Promise<string | null> {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
@@ -96,8 +113,9 @@ async function waitForCodexReply(client: CodexClient, sessionId: string): Promis
       throw new Error(status.error || "Codex planning session failed");
     }
 
-    if (status?.status === "idle") {
-      return latestAssistantContent(messages);
+    const reply = latestAssistantMessage(messages, { excludeIds: baselineAssistantIds });
+    if (status?.status === "idle" && reply) {
+      return reply.content;
     }
 
     await wait(POLL_INTERVAL_MS);
@@ -184,6 +202,7 @@ interface FeaturesViewProps {
 
 export function FeaturesView({ projectId }: FeaturesViewProps) {
   const features = useFeaturePlanStore((state) => state.features);
+  const isLoading = useFeaturePlanStore((state) => state.isLoading);
   const loadFeatures = useFeaturePlanStore((state) => state.loadFeatures);
   const createFeature = useFeaturePlanStore((state) => state.createFeature);
   const updateFeature = useFeaturePlanStore((state) => state.updateFeature);
@@ -197,8 +216,10 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   const [openStoryTabs, setOpenStoryTabs] = useState<string[]>([]);
   const [featureDraft, setFeatureDraft] = useState("");
   const [storyDrafts, setStoryDrafts] = useState<Record<string, string>>({});
-  const [runningFeatureId, setRunningFeatureId] = useState<string | null>(null);
-  const [runningStoryId, setRunningStoryId] = useState<string | null>(null);
+  const [runningConversation, setRunningConversation] = useState<{
+    featureId: string;
+    storyId?: string;
+  } | null>(null);
   const [buildingFeatureId, setBuildingFeatureId] = useState<string | null>(null);
   const clientsRef = useRef<Map<string, CodexClient>>(new Map());
 
@@ -234,6 +255,26 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
     setRightTab(selectedFeature?.stories.length ? "stories" : "chat");
     setOpenStoryTabs([]);
   }, [selectedFeature?.id]);
+
+  useEffect(() => {
+    if (!selectedFeature) {
+      setOpenStoryTabs([]);
+      if (rightTab.startsWith("story:")) setRightTab("chat");
+      return;
+    }
+
+    const storyIds = new Set(selectedFeature.stories.map((story) => story.id));
+    setOpenStoryTabs((tabs) => {
+      const next = tabs.filter((storyId) => storyIds.has(storyId));
+      return next.length === tabs.length ? tabs : next;
+    });
+
+    if (rightTab.startsWith("story:") && !storyIds.has(rightTab.slice("story:".length))) {
+      setRightTab(selectedFeature.stories.length ? "stories" : "chat");
+    } else if (rightTab === "stories" && selectedFeature.stories.length === 0) {
+      setRightTab("chat");
+    }
+  }, [rightTab, selectedFeature]);
 
   const selectedStory = useMemo(() => {
     if (!selectedFeature || !rightTab.startsWith("story:")) return null;
@@ -271,7 +312,9 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
           "native",
         );
         useEnvironmentStore.getState().updateEnvironment(environment.id, environment);
-        workingFeature = await updateFeature(feature.id, { codexEnvironmentId: environment.id }) ?? workingFeature;
+        const updated = await updateFeature(feature.id, { codexEnvironmentId: environment.id });
+        if (!updated) throw new Error("Failed to persist the feature planning environment");
+        workingFeature = updated;
       }
 
       if (environment.status !== "running") {
@@ -328,7 +371,9 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         fastMode: config.global.codexNativeFastModeDefault ?? false,
       });
 
-      workingFeature = await updateFeature(workingFeature.id, { codexSessionId: created.sessionId }) ?? workingFeature;
+      const updated = await updateFeature(workingFeature.id, { codexSessionId: created.sessionId });
+      if (!updated) throw new Error("Failed to persist the feature planning session");
+      workingFeature = updated;
       return { client, sessionId: created.sessionId, feature: workingFeature };
     },
     [createEnvironment, projectId, startEnvironment, updateFeature],
@@ -351,7 +396,8 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       }
 
       if (Object.keys(updates).length > 0) {
-        await updateFeature(feature.id, updates);
+        const updated = await updateFeature(feature.id, updates);
+        if (!updated) throw new Error("Failed to persist the feature planning state");
       }
     },
     [updateFeature],
@@ -361,15 +407,19 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
     async (text: string) => {
       const feature = selectedFeature;
       const trimmed = text.trim();
-      if (!feature || !trimmed || runningFeatureId) return;
+      if (!feature || !trimmed || runningConversation) return;
 
       setFeatureDraft("");
-      setRunningFeatureId(feature.id);
+      setRunningConversation({ featureId: feature.id });
+      let userMessagePersisted = false;
       try {
         const withUserMessage = await appendMessage(feature.id, "user", trimmed);
-        const latestFeature = withUserMessage ?? feature;
+        if (!withUserMessage) throw new Error("Failed to persist the feature message");
+        userMessagePersisted = true;
+        const latestFeature = withUserMessage;
         const previousSessionId = latestFeature.codexSessionId;
         const { client, sessionId } = await ensureCodexSession(latestFeature);
+        const baselineMessages = await getSessionMessages(client, sessionId);
         const prompt = selectFeaturePlannerPrompt({
           feature: latestFeature,
           userMessage: trimmed,
@@ -380,7 +430,11 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         const sent = await sendPrompt(client, sessionId, prompt);
         if (!sent) throw new Error("Failed to send feature planning prompt");
 
-        const assistantContent = await waitForCodexReply(client, sessionId);
+        const assistantContent = await waitForCodexReply(
+          client,
+          sessionId,
+          assistantMessageIds(baselineMessages),
+        );
         if (!assistantContent) {
           toast.warning("Codex is still working", {
             description: "The feature chat was persisted. Use refresh when you return.",
@@ -389,31 +443,44 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         }
 
         const updated = await appendMessage(feature.id, "assistant", assistantContent);
-        await applyFeaturePlannerState(updated ?? latestFeature, assistantContent);
+        if (!updated) throw new Error("Failed to persist the feature planning response");
+        await applyFeaturePlannerState(updated, assistantContent);
       } catch (error) {
+        if (!userMessagePersisted) setFeatureDraft(text);
         console.error("[FeaturesView] Failed to send feature message:", error);
         toast.error("Feature planning failed", {
           description: error instanceof Error ? error.message : "Unknown error",
         });
       } finally {
-        setRunningFeatureId(null);
+        setRunningConversation(null);
       }
     },
-    [appendMessage, applyFeaturePlannerState, ensureCodexSession, runningFeatureId, selectedFeature],
+    [appendMessage, applyFeaturePlannerState, ensureCodexSession, runningConversation, selectedFeature],
   );
 
   const refreshFeatureChat = useCallback(
     async (feature: FeaturePlan) => {
-      if (!feature.codexEnvironmentId || !feature.codexSessionId || runningFeatureId) return;
-      setRunningFeatureId(feature.id);
+      if (
+        !feature.codexEnvironmentId
+        || !feature.codexSessionId
+        || runningConversation
+      ) return;
+      setRunningConversation({ featureId: feature.id });
       try {
         const { client, sessionId } = await ensureCodexSession(feature);
         const messages = await getSessionMessages(client, sessionId);
-        const assistantContent = latestAssistantContent(messages);
-        const persistedLastAssistant = [...feature.messages].reverse().find((message) => message.role === "assistant")?.content;
-        if (assistantContent && assistantContent !== persistedLastAssistant) {
+        const assistantContent = latestAssistantMessage(messages, {
+          accept: (content) => parseFeaturePlannerState(content) !== null,
+        })?.content;
+        const persistedAssistantContents = new Set(
+          feature.messages
+            .filter((message) => message.role === "assistant")
+            .map((message) => message.content),
+        );
+        if (assistantContent && !persistedAssistantContents.has(assistantContent)) {
           const updated = await appendMessage(feature.id, "assistant", assistantContent);
-          await applyFeaturePlannerState(updated ?? feature, assistantContent);
+          if (!updated) throw new Error("Failed to persist the refreshed feature response");
+          await applyFeaturePlannerState(updated, assistantContent);
         }
       } catch (error) {
         console.error("[FeaturesView] Failed to refresh feature chat:", error);
@@ -421,30 +488,64 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
           description: error instanceof Error ? error.message : "Unknown error",
         });
       } finally {
-        setRunningFeatureId(null);
+        setRunningConversation(null);
       }
     },
-    [appendMessage, applyFeaturePlannerState, ensureCodexSession, runningFeatureId],
+    [appendMessage, applyFeaturePlannerState, ensureCodexSession, runningConversation],
+  );
+
+  const applyStoryRefinement = useCallback(
+    async (feature: FeaturePlan, story: FeatureStoryCard, assistantContent: string) => {
+      const parsed = parseStoryRefinement(assistantContent);
+      if (!parsed) return;
+      if (parsed.storyId && parsed.storyId !== story.id) {
+        throw new Error("Story refinement response targeted a different story");
+      }
+
+      const stories = feature.stories.map((candidate) => {
+        if (candidate.id !== story.id) return candidate;
+        return {
+          ...candidate,
+          title: parsed.title?.trim() || candidate.title,
+          description: parsed.description?.trim() || candidate.description,
+          acceptanceCriteria: parsed.acceptanceCriteria?.length
+            ? parsed.acceptanceCriteria
+            : candidate.acceptanceCriteria,
+          updatedAt: new Date().toISOString(),
+        };
+      });
+      const updated = await updateFeature(feature.id, { stories });
+      if (!updated) throw new Error("Failed to persist the refined story");
+    },
+    [updateFeature],
   );
 
   const sendStoryMessage = useCallback(
     async (story: FeatureStoryCard, text: string) => {
       const feature = selectedFeature;
       const trimmed = text.trim();
-      if (!feature || !trimmed || runningStoryId) return;
+      if (!feature || !trimmed || runningConversation) return;
 
       setStoryDrafts((drafts) => ({ ...drafts, [story.id]: "" }));
-      setRunningStoryId(story.id);
+      setRunningConversation({ featureId: feature.id, storyId: story.id });
+      let userMessagePersisted = false;
       try {
         const withUserMessage = await appendStoryMessage(feature.id, story.id, "user", trimmed);
-        const latestFeature = withUserMessage ?? feature;
+        if (!withUserMessage) throw new Error("Failed to persist the story message");
+        userMessagePersisted = true;
+        const latestFeature = withUserMessage;
         const latestStory = latestFeature.stories.find((candidate) => candidate.id === story.id) ?? story;
         const { client, sessionId } = await ensureCodexSession(latestFeature);
+        const baselineMessages = await getSessionMessages(client, sessionId);
         const prompt = createStoryRefinementPrompt(latestStory, trimmed);
         const sent = await sendPrompt(client, sessionId, prompt);
         if (!sent) throw new Error("Failed to send story refinement prompt");
 
-        const assistantContent = await waitForCodexReply(client, sessionId);
+        const assistantContent = await waitForCodexReply(
+          client,
+          sessionId,
+          assistantMessageIds(baselineMessages),
+        );
         if (!assistantContent) {
           toast.warning("Codex is still refining the story", {
             description: "The refinement request was persisted. Use refresh when you return.",
@@ -453,31 +554,62 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         }
 
         const withAssistantMessage = await appendStoryMessage(feature.id, story.id, "assistant", assistantContent);
-        const parsed = parseStoryRefinement(assistantContent);
-        if (!parsed) return;
-
-        const featureForUpdate = withAssistantMessage ?? latestFeature;
-        const stories = featureForUpdate.stories.map((candidate) => {
-          if (candidate.id !== story.id) return candidate;
-          return {
-            ...candidate,
-            title: parsed.title?.trim() || candidate.title,
-            description: parsed.description?.trim() || candidate.description,
-            acceptanceCriteria: parsed.acceptanceCriteria?.length ? parsed.acceptanceCriteria : candidate.acceptanceCriteria,
-            updatedAt: new Date().toISOString(),
-          };
-        });
-        await updateFeature(feature.id, { stories });
+        if (!withAssistantMessage) throw new Error("Failed to persist the story refinement response");
+        const updatedStory = withAssistantMessage.stories.find((candidate) => candidate.id === story.id) ?? latestStory;
+        await applyStoryRefinement(withAssistantMessage, updatedStory, assistantContent);
       } catch (error) {
+        if (!userMessagePersisted) {
+          setStoryDrafts((drafts) => ({ ...drafts, [story.id]: text }));
+        }
         console.error("[FeaturesView] Failed to send story message:", error);
         toast.error("Story refinement failed", {
           description: error instanceof Error ? error.message : "Unknown error",
         });
       } finally {
-        setRunningStoryId(null);
+        setRunningConversation(null);
       }
     },
-    [appendStoryMessage, ensureCodexSession, runningStoryId, selectedFeature, updateFeature],
+    [appendStoryMessage, applyStoryRefinement, ensureCodexSession, runningConversation, selectedFeature],
+  );
+
+  const refreshStoryChat = useCallback(
+    async (feature: FeaturePlan, story: FeatureStoryCard) => {
+      if (
+        !feature.codexEnvironmentId
+        || !feature.codexSessionId
+        || runningConversation
+      ) return;
+      setRunningConversation({ featureId: feature.id, storyId: story.id });
+      try {
+        const { client, sessionId } = await ensureCodexSession(feature);
+        const messages = await getSessionMessages(client, sessionId);
+        const assistantContent = latestAssistantMessage(messages, {
+          accept: (content) => {
+            const parsed = parseStoryRefinement(content);
+            return parsed !== null && (!parsed.storyId || parsed.storyId === story.id);
+          },
+        })?.content;
+        const persistedAssistantContents = new Set(
+          story.messages
+            .filter((message) => message.role === "assistant")
+            .map((message) => message.content),
+        );
+        if (assistantContent && !persistedAssistantContents.has(assistantContent)) {
+          const updated = await appendStoryMessage(feature.id, story.id, "assistant", assistantContent);
+          if (!updated) throw new Error("Failed to persist the refreshed story response");
+          const updatedStory = updated.stories.find((candidate) => candidate.id === story.id) ?? story;
+          await applyStoryRefinement(updated, updatedStory, assistantContent);
+        }
+      } catch (error) {
+        console.error("[FeaturesView] Failed to refresh story chat:", error);
+        toast.error("Failed to refresh story chat", {
+          description: error instanceof Error ? error.message : "Unknown error",
+        });
+      } finally {
+        setRunningConversation(null);
+      }
+    },
+    [appendStoryMessage, applyStoryRefinement, ensureCodexSession, runningConversation],
   );
 
   const openStory = useCallback((storyId: string) => {
@@ -523,12 +655,13 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
           // rather than marking it as building.
           return;
         }
-        await updateFeature(feature.id, {
+        const updated = await updateFeature(feature.id, {
           status: "building",
           buildTaskId: taskId,
           buildPipelineId: pipeline.id,
           ...(pipeline.environmentId ? { codexEnvironmentId: pipeline.environmentId } : {}),
         });
+        if (!updated) throw new Error("Failed to persist the feature build state");
       } catch (error) {
         console.error("[FeaturesView] Failed to start feature build:", error);
         toast.error("Failed to start feature build", {
@@ -571,7 +704,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
             ))}
             {projectFeatures.length === 0 && (
               <div className="px-3 py-8 text-center text-xs text-muted-foreground">
-                Create a feature to start discovery.
+                {isLoading ? "Loading features..." : "Create a feature to start discovery."}
               </div>
             )}
           </div>
@@ -581,7 +714,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       <main className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
         {!selectedFeature ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            Select or create a feature.
+            {isLoading ? "Loading features..." : "Select or create a feature."}
           </div>
         ) : (
           <Tabs
@@ -610,6 +743,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                     <TabsTrigger
                       key={storyId}
                       value={`story:${storyId}`}
+                      aria-label={formatStoryTabTitle(story)}
                       className={cn(COMPACT_TAB_TRIGGER_CLASS, "group gap-1.5")}
                     >
                       <Sparkles className="h-3.5 w-3.5" />
@@ -617,8 +751,15 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                       <span
                         role="button"
                         tabIndex={0}
+                        aria-label={`Close ${story.title}`}
                         className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
                         onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          closeStoryTab(storyId);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" && event.key !== " ") return;
                           event.preventDefault();
                           event.stopPropagation();
                           closeStoryTab(storyId);
@@ -652,7 +793,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                 feature={selectedFeature}
                 draft={featureDraft}
                 setDraft={setFeatureDraft}
-                isRunning={runningFeatureId === selectedFeature.id}
+                isRunning={runningConversation !== null}
                 onSend={sendFeatureMessage}
                 onRefresh={() => void refreshFeatureChat(selectedFeature)}
               />
@@ -671,8 +812,9 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                   story={selectedStory}
                   draft={storyDrafts[selectedStory.id] ?? ""}
                   setDraft={(value) => setStoryDrafts((drafts) => ({ ...drafts, [selectedStory.id]: value }))}
-                  isRunning={runningStoryId === selectedStory.id}
+                  isRunning={runningConversation !== null}
                   onSend={(text) => void sendStoryMessage(selectedStory, text)}
+                  onRefresh={() => void refreshStoryChat(selectedFeature, selectedStory)}
                 />
               </TabsContent>
             )}
@@ -714,7 +856,7 @@ function FeatureChatPanel({
   );
 }
 
-function NativeStyleChatPanel({
+export function NativeStyleChatPanel({
   messages,
   stripState,
   persistKey,
@@ -888,12 +1030,14 @@ function StoryDetailPanel({
   setDraft,
   isRunning,
   onSend,
+  onRefresh,
 }: {
   story: FeatureStoryCard;
   draft: string;
   setDraft: (value: string) => void;
   isRunning: boolean;
   onSend: (text: string) => void;
+  onRefresh: () => void;
 }) {
   return (
     <div className="grid h-full min-h-0 grid-cols-[minmax(260px,360px)_1fr]">
@@ -926,6 +1070,7 @@ function StoryDetailPanel({
           loadingText="Codex is refining..."
           placeholder="Refine the story, description, or acceptance criteria..."
           onSend={onSend}
+          onRefresh={onRefresh}
         />
       </div>
     </div>

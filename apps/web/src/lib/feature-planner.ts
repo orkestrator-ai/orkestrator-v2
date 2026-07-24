@@ -133,8 +133,35 @@ export function parseFeaturePlannerState(content: string): ParsedFeaturePlannerS
   const match = content.match(FEATURE_STATE_BLOCK_RE);
   if (!match?.[1]) return null;
   try {
-    const parsed = JSON.parse(match[1]) as ParsedFeaturePlannerState;
-    return parsed && typeof parsed === "object" ? parsed : null;
+    const parsed = JSON.parse(match[1]) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    if (
+      parsed.phase !== undefined
+      && parsed.phase !== "collecting"
+      && parsed.phase !== "confirming"
+      && parsed.phase !== "stories"
+    ) {
+      return null;
+    }
+    if (parsed.title !== undefined && typeof parsed.title !== "string") return null;
+    if (parsed.summary !== undefined && typeof parsed.summary !== "string") return null;
+    if (parsed.phase === "stories" && !Array.isArray(parsed.stories)) return null;
+    if (parsed.stories !== undefined) {
+      if (!Array.isArray(parsed.stories)) return null;
+      for (const story of parsed.stories) {
+        if (!story || typeof story !== "object" || Array.isArray(story)) return null;
+        const candidate = story as Record<string, unknown>;
+        if (candidate.id !== undefined && typeof candidate.id !== "string") return null;
+        if (typeof candidate.title !== "string" || typeof candidate.description !== "string") return null;
+        if (
+          !Array.isArray(candidate.acceptanceCriteria)
+          || !candidate.acceptanceCriteria.every((criterion) => typeof criterion === "string")
+        ) {
+          return null;
+        }
+      }
+    }
+    return parsed as ParsedFeaturePlannerState;
   } catch {
     return null;
   }
@@ -144,8 +171,21 @@ export function parseStoryRefinement(content: string): ParsedStoryRefinement | n
   const match = content.match(STORY_STATE_BLOCK_RE);
   if (!match?.[1]) return null;
   try {
-    const parsed = JSON.parse(match[1]) as ParsedStoryRefinement;
-    return parsed && typeof parsed === "object" ? parsed : null;
+    const parsed = JSON.parse(match[1]) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    if (parsed.storyId !== undefined && typeof parsed.storyId !== "string") return null;
+    if (parsed.title !== undefined && typeof parsed.title !== "string") return null;
+    if (parsed.description !== undefined && typeof parsed.description !== "string") return null;
+    if (
+      parsed.acceptanceCriteria !== undefined
+      && (
+        !Array.isArray(parsed.acceptanceCriteria)
+        || !parsed.acceptanceCriteria.every((criterion) => typeof criterion === "string")
+      )
+    ) {
+      return null;
+    }
+    return parsed as ParsedStoryRefinement;
   } catch {
     return null;
   }

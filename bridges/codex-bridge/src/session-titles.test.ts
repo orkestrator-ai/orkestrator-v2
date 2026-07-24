@@ -162,7 +162,7 @@ describe("Codex session titles", () => {
   test("the pinned Codex parser accepts the production argument shape and secured catalog", () => {
     const codexPath = join(
       import.meta.dir,
-      "../../../node_modules/.bun/@openai+codex@0.144.1/node_modules/@openai/codex/bin/codex.js",
+      "../../../node_modules/.bun/@openai+codex@0.145.0/node_modules/@openai/codex/bin/codex.js",
     );
     if (!existsSync(codexPath)) return;
 

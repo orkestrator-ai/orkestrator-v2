@@ -190,11 +190,39 @@ mock.module("./OpenCodeComposeBar", () => ({
 }));
 
 mock.module("./OpenCodePermissionCard", () => ({
-  OpenCodePermissionCard: () => null,
+  OpenCodePermissionCard: ({
+    permission,
+    client,
+  }: {
+    permission: PermissionRequest;
+    client: typeof MOCK_CLIENT;
+  }) => (
+    <div
+      data-testid={`opencode-permission-card-${permission.id}`}
+      data-session-id={permission.sessionID}
+      data-client-url={client.baseUrl}
+    >
+      {permission.permission}
+    </div>
+  ),
 }));
 
 mock.module("./OpenCodeQuestionCard", () => ({
-  OpenCodeQuestionCard: () => null,
+  OpenCodeQuestionCard: ({
+    question,
+    client,
+  }: {
+    question: QuestionRequest;
+    client: typeof MOCK_CLIENT;
+  }) => (
+    <div
+      data-testid={`opencode-question-card-${question.id}`}
+      data-session-id={question.sessionID}
+      data-client-url={client.baseUrl}
+    >
+      {question.questions[0]?.question}
+    </div>
+  ),
 }));
 
 mock.module("./OpenCodeResumeSessionDialog", () => ({
@@ -1056,6 +1084,98 @@ describe("OpenCodeChatTab", () => {
     });
   });
 
+  test("keeps the current session and resume dialog open when manual resume fails", async () => {
+    const originalError = console.error;
+    const consoleError = mock(() => {});
+    console.error = consoleError as unknown as typeof console.error;
+    mockGetSessionMessages.mockImplementation(async (_client, sessionId) => {
+      if (sessionId === "resumed-opencode") {
+        throw new Error("resume unavailable");
+      }
+      return [];
+    });
+
+    try {
+      render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Resume Session" }));
+      fireEvent.click(await screen.findByTestId("opencode-resume-choice"));
+
+      await waitFor(() => {
+        expect(consoleError).toHaveBeenCalledWith(
+          "[OpenCodeChatTab] Failed to resume session:",
+          expect.any(Error),
+        );
+      });
+      expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        sessionId: "session-1",
+        messages: [],
+      });
+      expect(
+        usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.openCodeNativeData?.sessionId,
+      ).toBe("session-1");
+      expect(screen.getByTestId("opencode-resume-choice")).toBeTruthy();
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("renders pending permission and question cards for the active session", async () => {
+    const permission: PermissionRequest = {
+      id: "permission-visible",
+      sessionID: "session-1",
+      permission: "edit",
+      patterns: ["src/**"],
+      metadata: {},
+      always: [],
+    };
+    const question: QuestionRequest = {
+      id: "question-visible",
+      sessionID: "session-1",
+      questions: [{ question: "Continue with the edit?", header: "Confirm", options: [] }],
+    };
+    mockGetPendingPermissions.mockResolvedValue([permission]);
+    mockGetPendingQuestions.mockResolvedValue([question]);
+    useOpenCodeStore.setState((state) => ({
+      ...state,
+      pendingPermissions: new Map([
+        [permission.id, permission],
+        [
+          "permission-other-session",
+          { ...permission, id: "permission-other-session", sessionID: "session-other" },
+        ],
+      ]),
+      pendingQuestions: new Map([
+        [question.id, question],
+        [
+          "question-other-session",
+          { ...question, id: "question-other-session", sessionID: "session-other" },
+        ],
+      ]),
+    }));
+
+    render(<OpenCodeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    const permissionCard = await screen.findByTestId(
+      "opencode-permission-card-permission-visible",
+    );
+    expect(permissionCard.getAttribute("data-session-id")).toBe("session-1");
+    expect(permissionCard.getAttribute("data-client-url")).toBe(MOCK_CLIENT.baseUrl);
+    expect(permissionCard.textContent).toBe("edit");
+
+    const questionCard = screen.getByTestId("opencode-question-card-question-visible");
+    expect(questionCard.getAttribute("data-session-id")).toBe("session-1");
+    expect(questionCard.getAttribute("data-client-url")).toBe(MOCK_CLIENT.baseUrl);
+    expect(questionCard.textContent).toBe("Continue with the edit?");
+
+    expect(
+      screen.queryByTestId("opencode-permission-card-permission-other-session"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("opencode-question-card-question-other-session"),
+    ).toBeNull();
+  });
+
   test("shows the scroll down accessory and scrolls to the bottom when clicked", () => {
     mockIsAtBottom = false;
     useOpenCodeStore.setState((state) => {
@@ -1386,6 +1506,9 @@ describe("OpenCodeChatTab", () => {
       />,
     );
 
+    const thinkingStatus = screen.getByRole("status");
+    expect(thinkingStatus.textContent).toBe("OpenCode is thinking...");
+    expect(screen.getByText("OpenCode is thinking...")).toBeTruthy();
     expect(screen.queryByText("0s")).toBeNull();
     expect(screen.queryByText(/Completed in/)).toBeNull();
 

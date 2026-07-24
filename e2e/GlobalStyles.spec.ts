@@ -1,5 +1,47 @@
 import { expect, test } from "@playwright/test";
 
+test("agent thinking shimmer respects motion and forced-color preferences", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop coverage is sufficient for global media rules");
+  await page.emulateMedia({
+    reducedMotion: "no-preference",
+    forcedColors: "none",
+  });
+  await page.goto("/styles");
+
+  const indicator = page.getByRole("status");
+  await expect(indicator).toHaveText("Codex is thinking...");
+  await expect(indicator).toHaveCSS("animation-name", "agent-thinking-shimmer");
+  await expect(indicator).toHaveCSS("color", "rgba(0, 0, 0, 0)");
+  await expect(indicator).toHaveCSS("background-clip", "text");
+  await expect(indicator).toHaveCSS("background-image", /linear-gradient/);
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(true);
+  await expect(indicator).toHaveCSS("animation-name", "none");
+  await expect(indicator).toHaveCSS("color", "rgb(161, 161, 170)");
+  await expect(indicator).toHaveCSS("background-image", "none");
+
+  await page.emulateMedia({
+    reducedMotion: "no-preference",
+    forcedColors: "active",
+  });
+  const forcedColorStyles = await indicator.evaluate((element) => {
+    const styles = getComputedStyle(element);
+    return {
+      forcedColorsActive: matchMedia("(forced-colors: active)").matches,
+      animationName: styles.animationName,
+      backgroundImage: styles.backgroundImage,
+      color: styles.color,
+    };
+  });
+  expect(forcedColorStyles.forcedColorsActive).toBe(true);
+  expect(forcedColorStyles.animationName).toBe("none");
+  expect(forcedColorStyles.backgroundImage).toBe("none");
+  expect(forcedColorStyles.color).not.toBe("rgba(0, 0, 0, 0)");
+});
+
 test("global dark surfaces, fonts, terminal, and scrollbar rules compile into browser styles", async ({
   page,
 }, testInfo) => {

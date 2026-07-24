@@ -15,7 +15,6 @@ import {
   ChevronDown,
   ChevronUp,
   History,
-  Loader2,
   Plus,
   Sparkles,
   Square,
@@ -27,6 +26,7 @@ import { useVirtuosoScrollState } from "@/hooks";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
+import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import {
@@ -1507,14 +1507,13 @@ export function ClaudeTmuxChatTab({
                   />
                 )}
 
-                {/* "Claude is thinking…" indicator — matches the native tab so the UI
-                    looks the same between modes. Shown only while running so a freshly
-                    mounted tab without a session doesn't flash a misleading spinner. */}
+                {/* Claude's thinking indicator matches the native tab. It is shown only
+                    while running so a freshly mounted tab without a session does not
+                    flash a misleading busy state. */}
                 {isThinking && running && (
                   <div className="py-2">
                     <div className="flex items-center gap-2 text-muted-foreground">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span className="text-xs">Claude is thinking...</span>
+                      <AgentThinkingIndicator agentName="Claude" />
                       {elapsedSeconds !== null && elapsedSeconds > 0 && (
                         <span className="text-xs text-muted-foreground/50">
                           {formatElapsed(elapsedSeconds)}

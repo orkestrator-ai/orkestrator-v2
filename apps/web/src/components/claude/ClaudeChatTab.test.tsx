@@ -5,6 +5,7 @@ import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type {
+  ClaudeEvent,
   ClaudeMessage as ClaudeMessageType,
   ClaudeModel,
   ClaudePlanApprovalRequest,
@@ -41,6 +42,10 @@ const mockGetPendingPlanApprovals = mock(
 const mockCheckHealth = mock(async () => true);
 const mockSendPrompt = mock(async () => {});
 const mockAbortSession = mock(async () => true);
+const mockSubscribeToEvents = mock(
+  (_client: unknown, _signal?: AbortSignal): AsyncIterable<ClaudeEvent> =>
+    abortableEmptyEventStream(_signal),
+);
 const mockReadFileBase64 = mock(async () => "chat-local-base64");
 const mockReadContainerFileBase64 = mock(async () => "chat-container-base64");
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
@@ -86,7 +91,7 @@ mock.module("@/lib/claude-client", () => ({
   getPendingPlanApprovals: mockGetPendingPlanApprovals,
   sendPrompt: mockSendPrompt,
   abortSession: mockAbortSession,
-  subscribeToEvents: mock(() => (async function* () {})()),
+  subscribeToEvents: mockSubscribeToEvents,
   checkHealth: mockCheckHealth,
   getSlashCommands: mock(async () => []),
   ERROR_MESSAGE_PREFIX: "error-",
@@ -252,6 +257,52 @@ function resetStores(environmentName = "review-table") {
   seedPaneLayout();
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function* abortableEmptyEventStream(signal?: AbortSignal) {
+  if (!signal?.aborted) {
+    await new Promise<void>((resolve) => {
+      signal?.addEventListener("abort", () => resolve(), { once: true });
+    });
+  }
+}
+
+function eventChannel() {
+  const queue: ClaudeEvent[] = [];
+  let wake = deferred<void>();
+  let closed = false;
+  const stream = (async function* () {
+    while (!closed) {
+      if (queue.length === 0) await wake.promise;
+      while (queue.length > 0) {
+        const event = queue.shift();
+        if (event) yield event;
+      }
+    }
+  })();
+
+  return {
+    stream,
+    push(event: ClaudeEvent) {
+      queue.push(event);
+      wake.resolve();
+      wake = deferred<void>();
+    },
+    close() {
+      closed = true;
+      wake.resolve();
+    },
+  };
+}
+
 describe("ClaudeChatTab", () => {
   afterAll(() => {
     mock.module("@/hooks", () => realHooksSnapshot);
@@ -279,6 +330,11 @@ describe("ClaudeChatTab", () => {
     mockSendPrompt.mockClear();
     mockAbortSession.mockClear();
     mockAbortSession.mockImplementation(async () => true);
+    mockSubscribeToEvents.mockReset();
+    mockSubscribeToEvents.mockImplementation(
+      (_client: unknown, _signal?: AbortSignal): AsyncIterable<ClaudeEvent> =>
+        abortableEmptyEventStream(_signal),
+    );
     mockRenameEnvironmentFromPrompt.mockClear();
     mockRenameEnvironmentFromPrompt.mockImplementation(async () => {});
     mockReadContainerFileBase64.mockReset();
@@ -352,6 +408,7 @@ describe("ClaudeChatTab", () => {
   });
 
   afterEach(() => {
+    useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
     cleanup();
     Date.now = ORIGINAL_DATE_NOW;
     globalThis.setInterval = ORIGINAL_SET_INTERVAL;
@@ -624,6 +681,7 @@ describe("ClaudeChatTab", () => {
       />,
     );
 
+    expect(screen.getByRole("status").textContent).toContain("Claude is thinking...");
     expect(screen.queryByText("0s")).toBeNull();
     expect(screen.queryByText(/Completed in/)).toBeNull();
 
@@ -646,6 +704,341 @@ describe("ClaudeChatTab", () => {
     });
 
     expect(clearIntervalCalls).toBeGreaterThan(0);
+  });
+
+  describe("shared SSE event handling", () => {
+    test("applies assistant updates, titles, usage, idle refreshes, and error payloads", async () => {
+      const channel = eventChannel();
+      const originalError = console.error;
+      const consoleError = mock(() => {});
+      console.error = consoleError as unknown as typeof console.error;
+      mockSubscribeToEvents.mockImplementation(() => channel.stream);
+      useClaudeStore.getState().setSelectedModel(SESSION_KEY, "claude-fallback-model");
+      useClaudeStore.getState().setSessionLoading(SESSION_KEY, true);
+
+      try {
+        render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+        await waitFor(() => {
+          expect(mockSubscribeToEvents).toHaveBeenCalledWith(
+            MOCK_CLIENT,
+            expect.any(AbortSignal),
+          );
+        });
+        mockGetSessionMessages.mockClear();
+
+        const streamingMessage: ClaudeMessageType = {
+          id: "sse-assistant",
+          role: "assistant",
+          content: "Streaming from Claude",
+          parts: [{ type: "text", content: "Streaming from Claude" }],
+          timestamp: "2026-07-20T12:00:00.000Z",
+        };
+        channel.push({
+          type: "message.updated",
+          sessionId: "session-1",
+          data: { message: streamingMessage },
+        });
+        await waitFor(() => {
+          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toContainEqual(
+            streamingMessage,
+          );
+        });
+
+        channel.push({
+          type: "session.title-updated",
+          sessionId: "session-1",
+          data: {
+            title: "Live Claude title",
+            usage: { inputTokens: 25, outputTokens: 15 },
+            maxContextTokens: 1_000,
+          },
+        });
+        await waitFor(() => {
+          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.title).toBe(
+            "Live Claude title",
+          );
+          expect(useClaudeStore.getState().contextUsage.get(SESSION_KEY)).toEqual({
+            usedTokens: 40,
+            totalTokens: 1_000,
+            percentUsed: 4,
+            modelId: "claude-fallback-model",
+          });
+        });
+
+        const completedMessage: ClaudeMessageType = {
+          ...streamingMessage,
+          id: "sse-completed",
+          content: "Claude completed",
+          parts: [{ type: "text", content: "Claude completed" }],
+        };
+        mockGetSessionMessages.mockResolvedValue([completedMessage]);
+        channel.push({
+          type: "session.idle",
+          sessionId: "session-1",
+        });
+        await waitFor(() => {
+          expect(mockGetSessionMessages).toHaveBeenCalledWith(MOCK_CLIENT, "session-1");
+          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+            messages: [completedMessage],
+            isLoading: false,
+          });
+        });
+
+        channel.push({
+          type: "session.error",
+          sessionId: "session-1",
+          data: { error: "string failure" },
+        });
+        channel.push({
+          type: "session.error",
+          sessionId: "session-1",
+          data: { error: { message: "object failure" } },
+        });
+        channel.push({
+          type: "session.error",
+          sessionId: "session-1",
+          data: {},
+        });
+        await waitFor(() => {
+          const contents = useClaudeStore
+            .getState()
+            .sessions.get(SESSION_KEY)
+            ?.messages.map((message) => message.content);
+          expect(contents).toContain("string failure");
+          expect(contents).toContain("object failure");
+          expect(contents).toContain("An unknown error occurred");
+        });
+        expect(consoleError).toHaveBeenCalledWith(
+          "[ClaudeChatTab] Session error:",
+          "string failure",
+        );
+      } finally {
+        console.error = originalError;
+        useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+        channel.close();
+      }
+    });
+
+    test("authoritatively refetches non-assistant and payload-less message updates", async () => {
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockImplementation(() => channel.stream);
+
+      try {
+        render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+        await waitFor(() => {
+          expect(mockSubscribeToEvents).toHaveBeenCalled();
+        });
+        mockGetSessionMessages.mockClear();
+
+        const firstRefetch: ClaudeMessageType = {
+          id: "sse-system-refetch",
+          role: "system",
+          content: "Server-originated system response",
+          parts: [{ type: "text", content: "Server-originated system response" }],
+          timestamp: "2026-07-20T12:00:00.000Z",
+        };
+        mockGetSessionMessages.mockResolvedValue([firstRefetch]);
+        channel.push({
+          type: "message.updated",
+          sessionId: "session-1",
+          data: {
+            message: {
+              ...firstRefetch,
+              id: "raw-system-event",
+            },
+          },
+        });
+        await waitFor(() => {
+          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
+            firstRefetch,
+          ]);
+        });
+
+        const secondRefetch: ClaudeMessageType = {
+          ...firstRefetch,
+          id: "sse-payloadless-refetch",
+          content: "Fetched after payload-less update",
+          parts: [{ type: "text", content: "Fetched after payload-less update" }],
+        };
+        mockGetSessionMessages.mockResolvedValue([secondRefetch]);
+        channel.push({
+          type: "message.updated",
+          sessionId: "session-1",
+          data: {},
+        });
+        await waitFor(() => {
+          expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
+            secondRefetch,
+          ]);
+        });
+      } finally {
+        useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+        channel.close();
+      }
+    });
+
+    test("reconciles questions, plan state, approvals, initialization, and system notices", async () => {
+      const channel = eventChannel();
+      mockSubscribeToEvents.mockImplementation(() => channel.stream);
+      useClaudeStore.getState().setSessionInitData(ENVIRONMENT_ID, {
+        mcpServers: [],
+        plugins: [],
+        slashCommands: ["/eager - Eagerly discovered"],
+      });
+
+      try {
+        render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+        await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+        channel.push({
+          type: "question.asked",
+          sessionId: "session-1",
+          data: {
+            id: "question-sse",
+            questions: [{
+              question: "Continue?",
+              header: "Confirm",
+              options: [],
+            }],
+            toolUseId: "question-tool",
+          },
+        });
+        channel.push({
+          type: "plan.enter-requested",
+          sessionId: "session-1",
+        });
+        channel.push({
+          type: "plan.approval-requested",
+          sessionId: "session-1",
+          data: {
+            id: "approval-sse",
+            toolUseId: "approval-tool",
+          },
+        });
+        await waitFor(() => {
+          expect(useClaudeStore.getState().pendingQuestions.get("question-sse")).toMatchObject({
+            sessionId: "session-1",
+            toolUseId: "question-tool",
+          });
+          expect(useClaudeStore.getState().isPlanMode(SESSION_KEY)).toBe(true);
+          expect(useClaudeStore.getState().pendingPlanApprovals.get("approval-sse")).toMatchObject({
+            sessionId: "session-1",
+            toolUseId: "approval-tool",
+          });
+        });
+
+        channel.push({
+          type: "question.answered",
+          data: { requestId: "question-sse" },
+        });
+        channel.push({
+          type: "plan.exit-requested",
+          sessionId: "session-1",
+        });
+        channel.push({
+          type: "plan.approval-responded",
+          data: { requestId: "approval-sse", approved: true },
+        });
+        await waitFor(() => {
+          expect(useClaudeStore.getState().pendingQuestions.has("question-sse")).toBe(false);
+          expect(useClaudeStore.getState().isPlanMode(SESSION_KEY)).toBe(false);
+          expect(useClaudeStore.getState().pendingPlanApprovals.has("approval-sse")).toBe(false);
+        });
+
+        channel.push({
+          type: "session.init",
+          sessionId: "session-1",
+          data: {
+            mcpServers: [{ name: "filesystem", status: "connected" }],
+            plugins: [{ name: "review", status: "loaded" }],
+            slashCommands: ["/sdk-only"],
+          },
+        });
+        await waitFor(() => {
+          expect(useClaudeStore.getState().sessionInitData.get(ENVIRONMENT_ID)).toEqual({
+            mcpServers: [{ name: "filesystem", status: "connected" }],
+            plugins: [{ name: "review", status: "loaded" }],
+            slashCommands: ["/eager - Eagerly discovered"],
+          });
+        });
+        act(() => {
+          useClaudeStore.getState().setSessionInitData(ENVIRONMENT_ID, null);
+        });
+        channel.push({
+          type: "session.init",
+          sessionId: "session-1",
+          data: {
+            mcpServers: [],
+            plugins: [],
+            slashCommands: ["/sdk-only"],
+          },
+        });
+        await waitFor(() => {
+          expect(useClaudeStore.getState().sessionInitData.get(ENVIRONMENT_ID)?.slashCommands)
+            .toEqual(["/sdk-only"]);
+        });
+
+        channel.push({
+          type: "system.compact",
+          sessionId: "session-1",
+          data: { preTokens: 900, postTokens: 300 },
+        });
+        channel.push({
+          type: "system.message",
+          sessionId: "session-1",
+          data: { subtype: "clear" },
+        });
+        channel.push({
+          type: "system.message",
+          sessionId: "session-1",
+          data: { subtype: "status" },
+        });
+        await waitFor(() => {
+          const systemMessages = useClaudeStore
+            .getState()
+            .sessions.get(SESSION_KEY)
+            ?.messages.filter((message) => message.role === "system")
+            .map((message) => message.content);
+          expect(systemMessages).toEqual([
+            "Conversation compacted.",
+            "Conversation cleared.",
+          ]);
+        });
+      } finally {
+        useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+        channel.close();
+      }
+    });
+
+    test("logs a dropped stream and reconnects the shared subscription", async () => {
+      const replacementChannel = eventChannel();
+      const originalError = console.error;
+      const consoleError = mock(() => {});
+      console.error = consoleError as unknown as typeof console.error;
+      mockSubscribeToEvents
+        .mockImplementationOnce(() => (async function* () {
+          throw new Error("Claude SSE dropped");
+        })())
+        .mockImplementationOnce(() => replacementChannel.stream);
+
+      try {
+        render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+        await waitFor(() => {
+          expect(consoleError).toHaveBeenCalledWith(
+            "[ClaudeChatTab] Event subscription error:",
+            expect.objectContaining({ message: "Claude SSE dropped" }),
+          );
+        });
+        await waitFor(() => {
+          expect(mockSubscribeToEvents).toHaveBeenCalledTimes(2);
+        }, { timeout: 4_000 });
+      } finally {
+        console.error = originalError;
+        useClaudeStore.getState().closeEventSubscription(ENVIRONMENT_ID);
+        replacementChannel.close();
+      }
+    });
   });
 
   test("fast reconnect reuses the existing session instead of creating a new one", async () => {
@@ -795,6 +1188,37 @@ describe("ClaudeChatTab", () => {
       expect(usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId)
         .toBe("resumed-claude");
     });
+  });
+
+  test("keeps the resume dialog open and logs when loading a resumed session fails", async () => {
+    const originalError = console.error;
+    const consoleError = mock(() => {});
+    const resumeError = new Error("resume transcript unavailable");
+    console.error = consoleError as unknown as typeof console.error;
+    mockGetSessionMessages.mockImplementation(async (_client, sessionId) => {
+      if (sessionId === "resumed-claude") throw resumeError;
+      return [];
+    });
+
+    try {
+      render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
+      fireEvent.click(screen.getAllByRole("button", { name: "Resume Session" })[0]!);
+      fireEvent.click(await screen.findByTestId("claude-resume-choice"));
+
+      await waitFor(() => {
+        expect(consoleError).toHaveBeenCalledWith(
+          "[ClaudeChatTab] Failed to resume session:",
+          resumeError,
+        );
+      });
+      expect(screen.getByTestId("claude-resume-choice")).toBeTruthy();
+      expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.sessionId).toBe("session-1");
+      expect(
+        usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.claudeNativeData?.sessionId,
+      ).not.toBe("resumed-claude");
+    } finally {
+      console.error = originalError;
+    }
   });
 
   test("review tabs show Address all after messages exist and send the shared prompt", async () => {

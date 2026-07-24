@@ -17,6 +17,7 @@ import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
 import { NativeComposeDock } from "@/components/chat/NativeComposeDock";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
 import {
@@ -2024,8 +2025,7 @@ export function OpenCodeChatTab({
               <div className="px-2 @sm:px-4 py-3">
                 <div className="max-w-3xl mx-auto min-w-0">
                   <div className="flex items-center gap-2 text-muted-foreground">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span className="text-xs">OpenCode is thinking...</span>
+                    <AgentThinkingIndicator agentName="OpenCode" />
                     {elapsedSeconds !== null && elapsedSeconds > 0 && (
                       <span className="text-xs text-muted-foreground/50">{formatElapsed(elapsedSeconds)}</span>
                     )}

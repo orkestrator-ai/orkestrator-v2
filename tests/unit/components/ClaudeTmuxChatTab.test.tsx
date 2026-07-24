@@ -1,4 +1,13 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { forwardRef, useEffect, useImperativeHandle, useRef as useReactRef } from "react";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -31,6 +40,7 @@ const realFileMentionMenuSnapshot = { ...realFileMentionMenu };
 const realReactVirtuosoSnapshot = { ...realReactVirtuoso };
 const VIRTUOSO_WINDOW_SIZE = 25;
 let lastVirtuosoProps: Record<string, any> | null = null;
+let dateNowSpy: ReturnType<typeof spyOn> | undefined;
 const virtuosoScrollToIndexMock = mock(() => {});
 const virtuosoScrollToMock = mock(() => {});
 const virtuosoGetStateMock = mock((callback: (snapshot: any) => void) => {
@@ -329,6 +339,11 @@ function seedEnvironment(overrides: Partial<Environment> = {}) {
 }
 
 describe("ClaudeTmuxChatTab", () => {
+  afterEach(() => {
+    dateNowSpy?.mockRestore();
+    dateNowSpy = undefined;
+  });
+
   afterAll(() => {
     mock.module("@/lib/claude-tmux-client", () => realTmuxClientSnapshot);
     mock.module("@/lib/backend", () => realBackendSnapshot);
@@ -749,6 +764,77 @@ describe("ClaudeTmuxChatTab", () => {
     expect(useClaudeTmuxStore.getState().getTab(stateKey)).toMatchObject({
       running: false,
       sessionId: null,
+      busy: false,
+    });
+  });
+
+  test("shows elapsed thinking status only while the session is busy and running", async () => {
+    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
+    const busyStartedAt = 1_000_000;
+    dateNowSpy = spyOn(Date, "now").mockReturnValue(busyStartedAt);
+    useClaudeTmuxStore.getState().setBusy(stateKey, true);
+    dateNowSpy.mockReturnValue(busyStartedAt + 65_000);
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(screen.queryByRole("status")).toBeNull();
+
+    act(() => {
+      useClaudeTmuxStore.getState().setRunning(stateKey, true, {
+        environmentId: "env-1",
+        sessionId: "session-1",
+      });
+    });
+
+    const indicator = await screen.findByRole("status");
+    expect(indicator.textContent).toBe("Claude is thinking...");
+    expect(screen.getByText("1m 5s")).toBeTruthy();
+
+    act(() => {
+      useClaudeTmuxStore.getState().setBusy(stateKey, false);
+    });
+
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+  });
+
+  test("hides the thinking status when the backend reports the session stopped", async () => {
+    const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
+    useClaudeTmuxStore.getState().setRunning(stateKey, true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
+    useClaudeTmuxStore.getState().setBusy(stateKey, true);
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "Claude is thinking...",
+    );
+    await waitFor(() => expect(subscribedHandler).not.toBeNull());
+
+    act(() => {
+      subscribedHandler?.({
+        kind: "stopped",
+        tab_id: "tab-1",
+        environment_id: "env-1",
+      });
+    });
+
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    expect(useClaudeTmuxStore.getState().getTab(stateKey)).toMatchObject({
+      running: false,
       busy: false,
     });
   });

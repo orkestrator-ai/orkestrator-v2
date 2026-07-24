@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, mock } from "bun:test";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useConfigStore } from "../../../apps/web/src/stores/configStore";
+import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, StartEnvironmentResult } from "../../../apps/web/src/types";
@@ -71,6 +72,10 @@ describe("useEnvironments", () => {
       sessionActivated: new Set(),
     });
     useUIStore.setState({ unreadEnvironmentIds: [] });
+    useBuildPipelineStore.setState({
+      pipelines: new Map(),
+      buildEnvironmentIds: new Set(),
+    });
     useConfigStore.setState({
       config: {
         version: "1.0",
@@ -141,6 +146,47 @@ describe("useEnvironments", () => {
 
     expect(mockGetEnvironments).toHaveBeenCalledWith("project-1");
     expect(result.current.environments[0]?.id).toBe("env-1");
+  });
+
+  test("reconciles active pipelines against the authoritative environment list", async () => {
+    const existing = createMockEnvironment({
+      id: "env-existing",
+      projectId: "project-1",
+      name: "existing",
+    });
+    mockGetEnvironments.mockResolvedValue([existing]);
+    const pipelineId = useBuildPipelineStore.getState().createPipeline({
+      taskId: "github:acme/widget#42",
+      projectId: "project-1",
+      environmentType: "local",
+      agentType: "claude",
+      taskTitle: "Issue 42",
+      taskSnapshot: {
+        title: "Issue 42",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+      source: {
+        type: "github",
+        repositoryOwner: "acme",
+        repositoryName: "widget",
+        issueNumber: 42,
+        issueUrl: "https://github.com/acme/widget/issues/42",
+        status: "Todo",
+      },
+    });
+    useBuildPipelineStore
+      .getState()
+      .setPipelineEnvironment(pipelineId, "env-deleted-elsewhere");
+
+    renderHook(() => useEnvironments("project-1"));
+
+    await waitFor(() => {
+      expect(mockGetEnvironments).toHaveBeenCalledWith("project-1");
+      expect(useBuildPipelineStore.getState().pipelines.has(pipelineId)).toBe(false);
+    });
   });
 
   test("silently refreshes read-only snapshots without changing loading or error state", async () => {
@@ -275,6 +321,21 @@ describe("useEnvironments", () => {
     });
 
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
+    const pipelineId = useBuildPipelineStore.getState().createPipeline({
+      taskId: "task-1",
+      projectId: "project-1",
+      environmentType: "local",
+      agentType: "claude",
+      taskTitle: "Task",
+      taskSnapshot: {
+        title: "Task",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+    });
+    useBuildPipelineStore.getState().setPipelineEnvironment(pipelineId, "env-1");
 
     const { result } = renderHook(() => useEnvironments("project-1"));
 
@@ -289,6 +350,7 @@ describe("useEnvironments", () => {
     expect(mockDeleteEnvironment).toHaveBeenCalledWith("env-1");
     expect(result.current.allEnvironments).toHaveLength(0);
     expect(result.current.error).toBeNull();
+    expect(useBuildPipelineStore.getState().pipelines.has(pipelineId)).toBe(false);
   });
 
   test("deleteEnvironment prunes the deleted environment's unread activity marker", async () => {
@@ -329,6 +391,21 @@ describe("useEnvironments", () => {
     useUIStore.setState({ unreadEnvironmentIds: ["env-1"] });
 
     mockGetEnvironments.mockImplementation(() => Promise.resolve([existingEnv]));
+    const pipelineId = useBuildPipelineStore.getState().createPipeline({
+      taskId: "task-1",
+      projectId: "project-1",
+      environmentType: "local",
+      agentType: "claude",
+      taskTitle: "Task",
+      taskSnapshot: {
+        title: "Task",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+    });
+    useBuildPipelineStore.getState().setPipelineEnvironment(pipelineId, "env-1");
 
     const { result } = renderHook(() => useEnvironments("project-1"));
 
@@ -341,6 +418,7 @@ describe("useEnvironments", () => {
     });
 
     expect(useUIStore.getState().unreadEnvironmentIds).toEqual(["env-1"]);
+    expect(useBuildPipelineStore.getState().pipelines.has(pipelineId)).toBe(true);
   });
 
   test("deleteEnvironment sets error on failure", async () => {

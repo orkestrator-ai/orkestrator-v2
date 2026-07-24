@@ -56,9 +56,12 @@ afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
-function seedGitHubPipeline(phase: "complete" | "failed" = "complete"): string {
+function seedGitHubPipeline(
+  phase: "complete" | "failed" = "complete",
+  issueNumber = 42,
+): string {
   const id = useBuildPipelineStore.getState().createPipeline({
-    taskId: "github:acme/widget#42",
+    taskId: `github:acme/widget#${issueNumber}`,
     projectId: "project-1",
     environmentType: "local",
     agentType: "codex",
@@ -74,8 +77,8 @@ function seedGitHubPipeline(phase: "complete" | "failed" = "complete"): string {
       type: "github",
       repositoryOwner: "acme",
       repositoryName: "widget",
-      issueNumber: 42,
-      issueUrl: "https://github.com/acme/widget/issues/42",
+      issueNumber,
+      issueUrl: `https://github.com/acme/widget/issues/${issueNumber}`,
       status: "Review",
     },
   });
@@ -126,6 +129,56 @@ describe("GitHubPipelineCompletionMonitor", () => {
         useBuildPipelineStore.getState().pipelines.get(pipelineId)?.completionCommentStatus,
       ).toBe("posted");
     });
+  });
+
+  test("posts every newly completed GitHub pipeline during the same render", async () => {
+    const firstId = seedGitHubPipeline("complete", 42);
+    const secondId = seedGitHubPipeline("failed", 43);
+
+    render(<GitHubPipelineCompletionMonitor />);
+
+    await waitFor(() => {
+      expect(postGitHubCompletionCommentMock).toHaveBeenCalledTimes(2);
+      expect(
+        useBuildPipelineStore.getState().pipelines.get(firstId)
+          ?.completionCommentStatus,
+      ).toBe("posted");
+      expect(
+        useBuildPipelineStore.getState().pipelines.get(secondId)
+          ?.completionCommentStatus,
+      ).toBe("posted");
+    });
+    expect(
+      postGitHubCompletionCommentMock.mock.calls.map((call) => call[4]).sort(),
+    ).toEqual([42, 43]);
+  });
+
+  test("does not repost pipelines with persisted posting, posted, or failed state", async () => {
+    const postingId = seedGitHubPipeline("complete", 42);
+    const postedId = seedGitHubPipeline("complete", 43);
+    const failedId = seedGitHubPipeline("failed", 44);
+    useBuildPipelineStore
+      .getState()
+      .setCompletionCommentStatus(postingId, "posting");
+    useBuildPipelineStore
+      .getState()
+      .setCompletionCommentStatus(postedId, "posted", {
+        commentId: "accepted",
+        postedAt: "2026-07-24T12:00:00.000Z",
+      });
+    useBuildPipelineStore
+      .getState()
+      .setCompletionCommentStatus(failedId, "failed", {
+        error: "retry explicitly",
+      });
+
+    const { unmount } = render(<GitHubPipelineCompletionMonitor />);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    unmount();
+    render(<GitHubPipelineCompletionMonitor />);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(postGitHubCompletionCommentMock).not.toHaveBeenCalled();
   });
 
   test("does not handle Linear pipelines", async () => {
@@ -201,5 +254,25 @@ describe("GitHubPipelineCompletionMonitor", () => {
     const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
 
     await expect(createGitHubCompletionComment(pipeline)).resolves.toContain("Result: Failed");
+  });
+
+  test("formats verification and failure context when available", async () => {
+    const pipelineId = seedGitHubPipeline("failed");
+    useBuildPipelineStore.setState((state) => {
+      const pipelines = new Map(state.pipelines);
+      pipelines.set(pipelineId, {
+        ...pipelines.get(pipelineId)!,
+        verificationResult: "fail",
+        verificationFeedback: "Unit test failed",
+        error: "Build command exited with 1",
+      });
+      return { pipelines };
+    });
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(pipelineId)!;
+
+    const body = await createGitHubCompletionComment(pipeline);
+    expect(body).toContain("Verification: Failed");
+    expect(body).toContain("Error: Build command exited with 1");
+    expect(body).toContain("Latest verification feedback:\nUnit test failed");
   });
 });

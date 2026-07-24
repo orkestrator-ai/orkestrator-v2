@@ -2,7 +2,7 @@
 import { useCallback, useEffect } from "react";
 import { listen, type UnlistenFn } from "@/lib/native/events";
 import { toast } from "sonner";
-import { createSessionKey, useConfigStore, useEnvironmentStore, useErrorDialogStore, useTerminalSessionStore, useUIStore } from "@/stores";
+import { createSessionKey, useBuildPipelineStore, useConfigStore, useEnvironmentStore, useErrorDialogStore, useTerminalSessionStore, useUIStore } from "@/stores";
 import { useSessionStore } from "@/stores/sessionStore";
 import * as backend from "@/lib/backend";
 import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, PrState } from "@/types";
@@ -263,6 +263,10 @@ export function useEnvironments(
           : await backend.getEnvironmentSnapshots(pid);
         // Merge environments for this project (uses current store state, not stale closure)
         mergeEnvironmentsForProject(pid, envs);
+        useBuildPipelineStore.getState().reconcilePipelinesForProject(
+          pid,
+          new Set(envs.map((environment) => environment.id)),
+        );
       } catch (err) {
         const message = getErrorMessage(err, "Failed to load environments");
         if (silent) {
@@ -316,6 +320,7 @@ export function useEnvironments(
         await deleteSessionsByEnvironment(environmentId);
 
         await backend.deleteEnvironment(environmentId);
+        useBuildPipelineStore.getState().removePipelinesForEnvironment(environmentId);
         removeEnvironmentFromStore(environmentId);
         // Prune any persisted unread-activity marker so it does not leak for a
         // deleted environment (unreadEnvironmentIds is persisted to localStorage).

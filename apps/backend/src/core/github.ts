@@ -97,6 +97,7 @@ const GITHUB_API_BASE = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
 const STATUS_LABEL_NAMES = Object.values(GITHUB_STATUS_LABELS);
 const ensureLabelLocks = new Map<string, Promise<void>>();
+const issueStatusLocks = new Map<string, Promise<unknown>>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -665,23 +666,48 @@ export async function updateGitHubIssueStatus(
   if (status !== "backlog" && !(status in GITHUB_STATUS_LABELS)) {
     throw new GitHubApiError("Unknown GitHub issue status.", { code: "validation" });
   }
-  const issue = await getIssue(token, ref, issueNumber, fetchImpl);
-  const recognized = new Set<string>(STATUS_LABEL_NAMES);
-  const labels = issue.labels
-    .map((label) => label.name)
-    .filter((name) => !recognized.has(name.toLowerCase()));
-  if (status !== "backlog") labels.push(GITHUB_STATUS_LABELS[status]);
-
-  const { data } = await githubRequest<unknown>(
-    token,
-    `${repositoryPath(ref)}/issues/${issueNumber}`,
-    `change the status of issue #${issueNumber}`,
-    { method: "PATCH", body: JSON.stringify({ labels }) },
-    fetchImpl,
-  );
-  const updated = issueFromApi(data);
-  if (!updated) throw new GitHubApiError(`GitHub returned an invalid status update for issue #${issueNumber}. Refresh and try again.`);
-  return updated;
+  requirePositiveInteger(issueNumber, "Issue number");
+  const key = `${ref.owner.toLowerCase()}/${ref.name.toLowerCase()}#${issueNumber}`;
+  const previous = issueStatusLocks.get(key) ?? Promise.resolve();
+  const update = async () => {
+    const base = `${repositoryPath(ref)}/issues/${issueNumber}/labels`;
+    for (const label of STATUS_LABEL_NAMES) {
+      try {
+        await githubRequest<unknown>(
+          token,
+          `${base}/${encodePathSegment(label)}`,
+          `remove the ${label} workflow label from issue #${issueNumber}`,
+          { method: "DELETE" },
+          fetchImpl,
+        );
+      } catch (error) {
+        // Removing an already-absent label is idempotent. Other failures are
+        // surfaced so the renderer can reload the authoritative issue state.
+        if (!(error instanceof GitHubApiError) || error.status !== 404) throw error;
+      }
+    }
+    if (status !== "backlog") {
+      await githubRequest<unknown>(
+        token,
+        base,
+        `apply the ${GITHUB_STATUS_LABELS[status]} workflow label to issue #${issueNumber}`,
+        {
+          method: "POST",
+          body: JSON.stringify({ labels: [GITHUB_STATUS_LABELS[status]] }),
+        },
+        fetchImpl,
+      );
+    }
+    return getIssue(token, ref, issueNumber, fetchImpl);
+  };
+  // A failed queued update must not poison the next user attempt.
+  const current = previous.then(update, update);
+  issueStatusLocks.set(key, current);
+  try {
+    return await current;
+  } finally {
+    if (issueStatusLocks.get(key) === current) issueStatusLocks.delete(key);
+  }
 }
 
 export async function closeGitHubIssue(

@@ -27,6 +27,7 @@ import * as realContexts from "@/contexts";
 import * as realSonnerUi from "@/components/ui/sonner";
 import * as realErrors from "@/components/errors";
 import * as realLinear from "@/components/linear";
+import * as realGitHubCompletionMonitor from "@/components/github/GitHubPipelineCompletionMonitor";
 import * as realAlertDialog from "@/components/ui/alert-dialog";
 import * as realButton from "@/components/ui/button";
 import * as realPrMonitorService from "@/hooks/usePrMonitorService";
@@ -45,6 +46,7 @@ const realContextsSnapshot = { ...realContexts };
 const realSonnerUiSnapshot = { ...realSonnerUi };
 const realErrorsSnapshot = { ...realErrors };
 const realLinearSnapshot = { ...realLinear };
+const realGitHubCompletionMonitorSnapshot = { ...realGitHubCompletionMonitor };
 const realAlertDialogSnapshot = { ...realAlertDialog };
 const realButtonSnapshot = { ...realButton };
 const realPrMonitorServiceSnapshot = { ...realPrMonitorService };
@@ -59,6 +61,7 @@ const mockCreateEnvironment = mock(async () => makeEnvironment("created", "proje
 const mockUpdateEnvironment = mock(() => {});
 const mockExit = mock(async () => {});
 const mockLinearMonitorRender = mock(() => undefined);
+const mockGitHubMonitorRender = mock(() => undefined);
 const mockListen = listen as ReturnType<typeof mock>;
 type AppEventCallback = (event: { payload: any }) => void;
 let appEventCallbacks = new Map<string, AppEventCallback>();
@@ -172,6 +175,14 @@ mock.module("@/components/linear", () => ({
   LinearPipelineCompletionMonitor: () => {
     mockLinearMonitorRender();
     return <div data-testid="linear-completion-monitor" />;
+  },
+}));
+
+mock.module("@/components/github/GitHubPipelineCompletionMonitor", () => ({
+  ...realGitHubCompletionMonitorSnapshot,
+  GitHubPipelineCompletionMonitor: () => {
+    mockGitHubMonitorRender();
+    return <div data-testid="github-completion-monitor" />;
   },
 }));
 
@@ -383,6 +394,7 @@ function resetAppMocks() {
   mockSavePaneLayout.mockClear();
   mockToastError.mockClear();
   mockLinearMonitorRender.mockClear();
+  mockGitHubMonitorRender.mockClear();
   mockAppUnlisten.mockClear();
   appEventCallbacks = new Map();
   mockListen.mockClear();
@@ -403,6 +415,10 @@ afterAll(() => {
   mock.module("@/components/ui/sonner", () => realSonnerUiSnapshot);
   mock.module("@/components/errors", () => realErrorsSnapshot);
   mock.module("@/components/linear", () => realLinearSnapshot);
+  mock.module(
+    "@/components/github/GitHubPipelineCompletionMonitor",
+    () => realGitHubCompletionMonitorSnapshot,
+  );
   mock.module("@/components/ui/alert-dialog", () => realAlertDialogSnapshot);
   mock.module("@/components/ui/button", () => realButtonSnapshot);
   mock.module("@/hooks/usePrMonitorService", () => realPrMonitorServiceSnapshot);
@@ -460,6 +476,19 @@ describe("App background processing mounts", () => {
 
     expect(await screen.findByTestId("linear-completion-monitor")).toBeTruthy();
     expect(mockLinearMonitorRender).toHaveBeenCalled();
+  });
+
+  test("mounts the GitHub completion monitor globally", async () => {
+    resetStores({
+      environments: [],
+      selectedProjectId: "another-project",
+      selectedEnvironmentId: null,
+    });
+
+    render(<App />);
+
+    expect(await screen.findByTestId("github-completion-monitor")).toBeTruthy();
+    expect(mockGitHubMonitorRender).toHaveBeenCalled();
   });
 
   test("routes the empty selection to the launcher and forwards environment operations", async () => {

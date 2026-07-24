@@ -7,6 +7,7 @@ import { parseStoredDesktopConnections } from "@orkestrator/protocol/connections
 import {
   PANE_LAYOUT_VERSION,
   type Environment,
+  type AppConfig,
   type EnvironmentStatus,
   type EnvironmentType,
   type PortMapping,
@@ -177,6 +178,44 @@ async function requireGitHubProject(
     throw new Error("GitHub is not configured. Add a global GitHub token in Settings and try again.");
   }
   return { token, repository: resolveGitHubRepository(project.gitUrl) };
+}
+
+type RendererGlobalConfig = Omit<AppConfig["global"], "githubToken"> & {
+  githubTokenConfigured: boolean;
+};
+
+type RendererAppConfig = Omit<AppConfig, "global"> & {
+  global: RendererGlobalConfig;
+};
+
+function redactGlobalConfig(global: AppConfig["global"]): RendererGlobalConfig {
+  const { githubToken, ...safeGlobal } = global;
+  return {
+    ...safeGlobal,
+    githubTokenConfigured: Boolean(githubToken?.trim()),
+  };
+}
+
+function redactAppConfig(config: AppConfig): RendererAppConfig {
+  return {
+    ...config,
+    global: redactGlobalConfig(config.global),
+  };
+}
+
+function preserveStoredGitHubToken(
+  global: Record<string, unknown>,
+  githubToken: string | undefined,
+): AppConfig["global"] {
+  const {
+    githubToken: _ignoredToken,
+    githubTokenConfigured: _ignoredConfigured,
+    ...safeGlobal
+  } = global;
+  return {
+    ...safeGlobal,
+    ...(githubToken ? { githubToken } : {}),
+  } as AppConfig["global"];
 }
 
 function asGitHubIssueStatus(value: unknown): GitHubIssueStatus {
@@ -2501,16 +2540,51 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     return stdout.trim() || null;
   });
 
-  register("get_config", (_args, { storage }) => storage.loadConfig());
-  register("save_config", ({ config }, { storage }) => storage.saveConfig(config as never));
+  register("get_config", async (_args, { storage }) => redactAppConfig(await storage.loadConfig()));
+  register("save_config", async ({ config }, { storage }) => {
+    const candidate = asRecord(config, "config") as unknown as AppConfig;
+    const stored = await storage.loadConfig();
+    await storage.saveConfig({
+      ...candidate,
+      global: preserveStoredGitHubToken(
+        asRecord(candidate.global, "config.global"),
+        stored.global.githubToken,
+      ),
+    });
+  });
   register("get_desktop_connections", (_args, { storage }) => storage.getDesktopConnections());
   register("save_desktop_connections", ({ desktopConnections }, { storage }) => {
     return storage.saveDesktopConnections(parseStoredDesktopConnections(desktopConnections));
   });
-  register("get_global_config", async (_args, { storage }) => (await storage.loadConfig()).global);
-  register("update_global_config", ({ global }, { storage }) => storage.updateGlobalConfig(global as never));
+  register("get_global_config", async (_args, { storage }) =>
+    redactGlobalConfig((await storage.loadConfig()).global)
+  );
+  register("update_global_config", async ({ global }, { storage }) => {
+    const stored = await storage.loadConfig();
+    const updated = await storage.updateGlobalConfig(
+      preserveStoredGitHubToken(
+        asRecord(global, "global"),
+        stored.global.githubToken,
+      ),
+    );
+    return redactAppConfig(updated);
+  });
+  register("set_github_token", async ({ token }, { storage }) => {
+    const nextToken = token === null ? null : asString(token, "token").trim();
+    if (nextToken !== null && !nextToken) {
+      throw new Error("GitHub token cannot be empty. Use null to clear it.");
+    }
+    return redactAppConfig(await storage.setGitHubToken(nextToken));
+  });
   register("get_repository_config", ({ projectId }, { storage }) => storage.getRepositoryConfig(asString(projectId, "projectId")));
-  register("update_repository_config", ({ projectId, repoConfig }, { storage }) => storage.updateRepositoryConfig(asString(projectId, "projectId"), repoConfig as never));
+  register("update_repository_config", async ({ projectId, repoConfig }, { storage }) =>
+    redactAppConfig(
+      await storage.updateRepositoryConfig(
+        asString(projectId, "projectId"),
+        repoConfig as never,
+      ),
+    )
+  );
   register("get_linear_connection", async (_args, context) => {
     const auth = await context.storage.getLinearAuth();
     if (!auth?.apiKey) return { connected: false, hasToken: false };

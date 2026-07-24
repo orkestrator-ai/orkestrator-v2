@@ -157,6 +157,11 @@ interface BuildPipelineState {
   clearCompletionCommentStatus: (pipelineId: string) => void;
   removePipeline: (pipelineId: string) => void;
   removePipelinesForTask: (taskId: string) => void;
+  removePipelinesForEnvironment: (environmentId: string) => void;
+  reconcilePipelinesForProject: (
+    projectId: string,
+    environmentIds: ReadonlySet<string>,
+  ) => void;
 
   // Selectors
   getPipelineByTaskId: (taskId: string) => BuildPipeline | undefined;
@@ -729,6 +734,48 @@ export const useBuildPipelineStore = create<BuildPipelineState>()(
         }
       }
       return { pipelines: newMap, buildEnvironmentIds: ids };
+    }),
+
+  removePipelinesForEnvironment: (environmentId) =>
+    set((state) => {
+      const pipelines = new Map(state.pipelines);
+      let removed = false;
+      for (const [pipelineId, pipeline] of pipelines) {
+        if (pipeline.environmentId === environmentId) {
+          pipelines.delete(pipelineId);
+          removed = true;
+        }
+      }
+      if (!removed) return state;
+      const buildEnvironmentIds = new Set<string>();
+      for (const pipeline of pipelines.values()) {
+        if (pipeline.environmentId) buildEnvironmentIds.add(pipeline.environmentId);
+      }
+      return { pipelines, buildEnvironmentIds };
+    }),
+
+  reconcilePipelinesForProject: (projectId, environmentIds) =>
+    set((state) => {
+      const pipelines = new Map(state.pipelines);
+      let removed = false;
+      for (const [pipelineId, pipeline] of pipelines) {
+        if (
+          pipeline.projectId === projectId
+          && pipeline.environmentId
+          && !environmentIds.has(pipeline.environmentId)
+          && pipeline.phase !== "complete"
+          && pipeline.phase !== "failed"
+        ) {
+          pipelines.delete(pipelineId);
+          removed = true;
+        }
+      }
+      if (!removed) return state;
+      const buildEnvironmentIds = new Set<string>();
+      for (const pipeline of pipelines.values()) {
+        if (pipeline.environmentId) buildEnvironmentIds.add(pipeline.environmentId);
+      }
+      return { pipelines, buildEnvironmentIds };
     }),
 
   getPipelineByTaskId: (taskId) => {

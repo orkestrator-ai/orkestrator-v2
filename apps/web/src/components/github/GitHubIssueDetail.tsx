@@ -77,11 +77,11 @@ function errorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function findIssuePipeline(
+function findIssuePipelines(
   pipelines: Map<string, BuildPipeline>,
   repository: GitHubRepository,
   issueNumber: number,
-): BuildPipeline | undefined {
+): BuildPipeline[] {
   return Array.from(pipelines.values())
     .filter((pipeline) => {
       const source = pipeline.source;
@@ -97,7 +97,7 @@ function findIssuePipeline(
         Number(right.phase !== "complete" && right.phase !== "failed") -
         Number(left.phase !== "complete" && left.phase !== "failed");
       return activeDelta || right.createdAt.localeCompare(left.createdAt);
-    })[0];
+    });
 }
 
 function GitHubComment({
@@ -286,9 +286,13 @@ export function GitHubIssueDetailContent({
   const changingStatus = mutations.has(statusKey);
   const postingComment = mutations.has(commentKey);
   const statusError = mutationErrors.get(statusKey);
-  const selectedPipeline = useMemo(
-    () => findIssuePipeline(pipelines, repository, issueNumber),
+  const issuePipelines = useMemo(
+    () => findIssuePipelines(pipelines, repository, issueNumber),
     [issueNumber, pipelines, repository],
+  );
+  const selectedPipeline = issuePipelines[0];
+  const failedCompletionPipelines = issuePipelines.filter(
+    (pipeline) => pipeline.completionCommentStatus === "failed",
   );
   const activePipeline =
     selectedPipeline &&
@@ -754,25 +758,30 @@ export function GitHubIssueDetailContent({
                     <span>{buildError}</span>
                   </div>
                 )}
-                {selectedPipeline?.completionCommentStatus === "failed" && (
-                  <div className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3">
-                    <span className="text-xs text-destructive">
-                      GitHub completion comment failed:{" "}
-                      {selectedPipeline.completionCommentError}
+                {failedCompletionPipelines.map((pipeline) => (
+                  <div
+                    key={pipeline.id}
+                    className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3"
+                  >
+                    <span className="min-w-0 flex-1 text-xs text-destructive">
+                      GitHub completion comment failed for build{" "}
+                      {formatGitHubDate(pipeline.createdAt)}:{" "}
+                      {pipeline.completionCommentError}
                     </span>
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
+                      aria-label={`Retry completion comment for build ${pipeline.id}`}
                       onClick={() =>
-                        clearCompletionCommentStatus(selectedPipeline.id)
+                        clearCompletionCommentStatus(pipeline.id)
                       }
                     >
                       <RefreshCw className="h-3.5 w-3.5" />
                       Retry comment
                     </Button>
                   </div>
-                )}
+                ))}
                 {selectedPipeline?.completionCommentStatus === "posting" && (
                   <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
                     <Loader2 className="h-3 w-3 animate-spin" />

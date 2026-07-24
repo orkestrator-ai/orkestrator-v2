@@ -1,4 +1,12 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import {
@@ -8,7 +16,16 @@ import {
 import type { GitHubIssueDetail, GitHubRepository } from "@/types/github";
 import type { EnvironmentType } from "@/types";
 import type { GitHubIssueBuildInput } from "@/hooks/useBuildPipeline";
-import { GitHubIssueDetailContent } from "./GitHubIssueDetail";
+import * as realBackend from "@/lib/backend";
+
+const realBackendSnapshot = { ...realBackend };
+const openInBrowserMock = mock(async () => undefined);
+mock.module("@/lib/backend", () => ({
+  ...realBackendSnapshot,
+  openInBrowser: openInBrowserMock,
+}));
+
+const { GitHubIssueDetailContent } = await import("./GitHubIssueDetail");
 
 const repository: GitHubRepository = {
   owner: "acme",
@@ -73,10 +90,14 @@ const navigateToPipelineMock = mock(async () => undefined);
 const originalGitHubStoreState = useGitHubIssuesStore.getState();
 
 afterAll(() => {
+  cleanup();
   useGitHubIssuesStore.setState(originalGitHubStoreState, true);
+  mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
 describe("GitHubIssueDetail", () => {
+  afterEach(cleanup);
+
   beforeEach(() => {
     cleanup();
     loadIssueMock.mockClear();
@@ -93,6 +114,7 @@ describe("GitHubIssueDetail", () => {
     startBuildMock.mockReset();
     startBuildMock.mockResolvedValue(undefined);
     navigateToPipelineMock.mockClear();
+    openInBrowserMock.mockClear();
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
@@ -116,21 +138,62 @@ describe("GitHubIssueDetail", () => {
     });
   });
 
-  function renderDetail() {
+  function renderDetail({
+    onBack = () => {},
+    onClosed = () => {},
+  }: {
+    onBack?: () => void;
+    onClosed?: () => void;
+  } = {}) {
     return render(
       <GitHubIssueDetailContent
         projectId="project-1"
         repository={repository}
         issueNumber={42}
         summary={detail}
-        onBack={() => {}}
-        onClosed={() => {}}
+        onBack={onBack}
+        onClosed={onClosed}
         buildPipeline={{
           startBuildFromGitHubIssue: startBuildMock,
           navigateToPipeline: navigateToPipelineMock,
         }}
       />,
     );
+  }
+
+  function seedIssuePipeline(
+    phase: "building" | "complete" | "failed",
+    environmentId?: string,
+  ) {
+    const pipelineId = useBuildPipelineStore.getState().createPipeline({
+      taskId: "github:acme/widget#42",
+      projectId: "project-1",
+      environmentType: "local",
+      agentType: "codex",
+      taskTitle: "#42: Ship GitHub issues",
+      taskSnapshot: {
+        title: detail.title,
+        description: detail.body,
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+      source: {
+        type: "github",
+        repositoryOwner: "acme",
+        repositoryName: "widget",
+        issueNumber: 42,
+        issueUrl: detail.htmlUrl,
+        status: "Todo",
+      },
+    });
+    if (environmentId) {
+      useBuildPipelineStore
+        .getState()
+        .setPipelineEnvironment(pipelineId, environmentId);
+    }
+    useBuildPipelineStore.getState().setPhase(pipelineId, phase);
+    return pipelineId;
   }
 
   test("preserves issue and comment drafts when GitHub rejects mutations", async () => {
@@ -163,6 +226,96 @@ describe("GitHubIssueDetail", () => {
     expect(screen.getByText("Someone else's comment")).toBeTruthy();
   });
 
+  test("saves issue edits and clears a successful new-comment draft", async () => {
+    renderDetail();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit issue" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Issue title" }), {
+      target: { value: "Updated title" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Issue body" }), {
+      target: { value: "Updated body" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      expect(saveIssueMock).toHaveBeenCalledWith("project-1", 42, {
+        title: "Updated title",
+        body: "Updated body",
+      });
+    });
+
+    const newComment = screen.getByRole("textbox", {
+      name: "Add GitHub comment",
+    }) as HTMLTextAreaElement;
+    fireEvent.change(newComment, { target: { value: "A new decision" } });
+    fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+
+    await waitFor(() => {
+      expect(addCommentMock).toHaveBeenCalledWith(
+        "project-1",
+        42,
+        "A new decision",
+      );
+      expect(newComment.value).toBe("");
+    });
+  });
+
+  test("edits a permitted comment and preserves the draft after a stale failure", async () => {
+    editCommentMock.mockRejectedValueOnce(new Error("Comment was deleted"));
+    renderDetail();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const draft = screen.getByRole("textbox", {
+      name: "Edit comment by ada",
+    }) as HTMLTextAreaElement;
+    fireEvent.change(draft, { target: { value: "Revised comment" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+
+    expect(await screen.findByText("Comment was deleted")).toBeTruthy();
+    expect(draft.value).toBe("Revised comment");
+
+    editCommentMock.mockResolvedValueOnce({
+      ...detail.comments[0]!,
+      body: "Revised comment",
+      isEdited: true,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+    await waitFor(() => {
+      expect(editCommentMock).toHaveBeenLastCalledWith(
+        "project-1",
+        42,
+        9001,
+        "Revised comment",
+      );
+    });
+  });
+
+  test("changes status, opens GitHub, and closes with explicit confirmation", async () => {
+    const onClosed = mock(() => undefined);
+    renderDetail({ onClosed });
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Issue status" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Review" }));
+    await waitFor(() => {
+      expect(changeStatusMock).toHaveBeenCalledWith("project-1", 42, "review");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Open on GitHub/ }));
+    expect(openInBrowserMock).toHaveBeenCalledWith(detail.htmlUrl);
+
+    fireEvent.click(screen.getByRole("button", { name: "Close Issue" }));
+    expect(screen.getByText("Close issue #42?")).toBeTruthy();
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Close Issue" }).at(-1)!,
+    );
+
+    await waitFor(() => {
+      expect(closeIssueMock).toHaveBeenCalledWith("project-1", 42);
+      expect(onClosed).toHaveBeenCalledTimes(1);
+    });
+  });
+
   test("starts a local build with the complete current issue snapshot", async () => {
     renderDetail();
 
@@ -187,5 +340,82 @@ describe("GitHubIssueDetail", () => {
       assigneeLogins: ["grace"],
     });
     expect(buildCall![0].comments).toHaveLength(2);
+  });
+
+  test("starts a container build and shows an existing active build", async () => {
+    const activeId = seedIssuePipeline("building", "env-active");
+    renderDetail();
+
+    expect(
+      screen.getByText("A build is already active for this issue."),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Build Container" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: /View Build/ }));
+    await waitFor(() => {
+      expect(navigateToPipelineMock).toHaveBeenCalledWith(
+        expect.objectContaining({ id: activeId, environmentId: "env-active" }),
+      );
+    });
+  });
+
+  test("starts a container build when no pipeline exists", async () => {
+    renderDetail();
+
+    fireEvent.click(screen.getByRole("button", { name: "Build Container" }));
+
+    await waitFor(() => {
+      expect(startBuildMock).toHaveBeenCalledWith(
+        expect.objectContaining({ number: 42 }),
+        "project-1",
+        "containerized",
+      );
+    });
+  });
+
+  test("keeps retry controls visible for every failed completion comment", async () => {
+    const olderId = seedIssuePipeline("failed", "env-old");
+    useBuildPipelineStore
+      .getState()
+      .setCompletionCommentStatus(olderId, "failed", { error: "first failure" });
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const newerId = seedIssuePipeline("complete", "env-new");
+    useBuildPipelineStore
+      .getState()
+      .setCompletionCommentStatus(newerId, "failed", { error: "second failure" });
+
+    renderDetail();
+
+    expect(screen.getByText(/first failure/)).toBeTruthy();
+    expect(screen.getByText(/second failure/)).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: `Retry completion comment for build ${olderId}`,
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: `Retry completion comment for build ${newerId}`,
+      }),
+    ).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Retry completion comment for build ${olderId}`,
+      }),
+    );
+    await waitFor(() => {
+      expect(
+        useBuildPipelineStore.getState().pipelines.get(olderId)
+          ?.completionCommentStatus,
+      ).toBeUndefined();
+      expect(
+        useBuildPipelineStore.getState().pipelines.get(newerId)
+          ?.completionCommentStatus,
+      ).toBe("failed");
+    });
   });
 });

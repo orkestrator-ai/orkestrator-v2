@@ -10,6 +10,14 @@ const mockUpdateGlobalConfig = mock(async (globalConfig: unknown) => ({
   global: globalConfig,
   repositories: {},
 }));
+const mockSetGitHubToken = mock(async (token: string | null) => ({
+  version: "1.0",
+  global: {
+    ...useConfigStore.getState().config.global,
+    githubTokenConfigured: token !== null,
+  },
+  repositories: {},
+}));
 const mockGetLogDirectory = mock(async () => null);
 const mockPropagateGithubTokenToContainers = mock(async () => ({ updated: [] }));
 const mockGetWebClientStatus = mock(async () => ({
@@ -51,6 +59,7 @@ const actualBackend = await import("../../../apps/web/src/lib/backend");
 mock.module("@/lib/backend", () => ({
   ...actualBackend,
   updateGlobalConfig: mockUpdateGlobalConfig,
+  setGitHubToken: mockSetGitHubToken,
   getLogDirectory: mockGetLogDirectory,
   propagateGithubTokenToContainers: mockPropagateGithubTokenToContainers,
   getWebClientStatus: mockGetWebClientStatus,
@@ -69,6 +78,7 @@ describe("GlobalSettings", () => {
   beforeEach(() => {
     cleanup();
     mockUpdateGlobalConfig.mockClear();
+    mockSetGitHubToken.mockClear();
     mockGetLogDirectory.mockClear();
     mockPropagateGithubTokenToContainers.mockClear();
     mockGetWebClientStatus.mockClear();
@@ -703,19 +713,78 @@ describe("GlobalSettings", () => {
     fireEvent.change(anthropicInput, { target: { value: "test-anthropic-key" } });
 
     rerender(<GlobalSettings activeSection="general" />);
-    const githubInput = screen.getByPlaceholderText("ghp_...") as HTMLInputElement;
+    const githubInput = screen.getByLabelText("GitHub token") as HTMLInputElement;
     expect(githubInput.type).toBe("password");
     fireEvent.click(githubInput.parentElement!.querySelector("button")!);
     expect(githubInput.type).toBe("text");
     fireEvent.change(githubInput, { target: { value: "test-github-token" } });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        anthropicApiKey: "test-anthropic-key",
-        githubToken: "test-github-token",
-      }),
-    ));
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ anthropicApiKey: "test-anthropic-key" }),
+      );
+      expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty(
+        "githubToken",
+      );
+      expect(mockSetGitHubToken).toHaveBeenCalledWith("test-github-token");
+    });
+  });
+
+  test("treats a configured GitHub token as write-only and replaces it explicitly", async () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          githubTokenConfigured: true,
+        },
+      },
+    }));
+    render(<GlobalSettings activeSection="general" />);
+
+    const githubInput = screen.getByLabelText("GitHub token") as HTMLInputElement;
+    expect(githubInput.value).toBe("");
+    expect(githubInput.placeholder).toBe(
+      "Token configured — enter a replacement",
+    );
+
+    fireEvent.change(githubInput, { target: { value: "replacement-token" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(mockSetGitHubToken).toHaveBeenCalledWith("replacement-token");
+    });
+    expect(mockUpdateGlobalConfig.mock.calls[0]?.[0]).not.toHaveProperty(
+      "githubToken",
+    );
+    expect(mockPropagateGithubTokenToContainers).toHaveBeenCalledWith(
+      "replacement-token",
+    );
+  });
+
+  test("clears a configured GitHub token through the write-only command", async () => {
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          githubTokenConfigured: true,
+        },
+      },
+    }));
+    render(<GlobalSettings activeSection="general" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear stored token" }));
+    expect(
+      screen.getByText("The stored GitHub token will be cleared when you save."),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(mockSetGitHubToken).toHaveBeenCalledWith(null);
+    });
+    expect(mockPropagateGithubTokenToContainers).toHaveBeenCalledWith(null);
   });
 
   test("saves debug logging and opens its log directory", async () => {
@@ -1017,7 +1086,7 @@ describe("GlobalSettings", () => {
     mockPropagateGithubTokenToContainers.mockResolvedValueOnce({ updated: ["container-1"] });
     render(<GlobalSettings activeSection="general" />);
 
-    fireEvent.change(screen.getByPlaceholderText("ghp_..."), { target: { value: "new-token" } });
+    fireEvent.change(screen.getByLabelText("GitHub token"), { target: { value: "new-token" } });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(mockPropagateGithubTokenToContainers).toHaveBeenCalledWith("new-token"));
@@ -1028,7 +1097,7 @@ describe("GlobalSettings", () => {
     mockPropagateGithubTokenToContainers.mockRejectedValueOnce(new Error("container unavailable"));
     render(<GlobalSettings activeSection="general" />);
 
-    fireEvent.change(screen.getByPlaceholderText("ghp_..."), { target: { value: "new-token" } });
+    fireEvent.change(screen.getByLabelText("GitHub token"), { target: { value: "new-token" } });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(mockPropagateGithubTokenToContainers).toHaveBeenCalledTimes(1));

@@ -222,6 +222,47 @@ describe("buildPipelineStore", () => {
       ).toHaveProperty("id", id);
     });
 
+    test("returns the newest matching GitHub pipeline and skips newer terminal builds when activeOnly", () => {
+      const source = {
+        type: "github" as const,
+        repositoryOwner: "acme",
+        repositoryName: "widget",
+        issueNumber: 42,
+        issueUrl: "https://github.com/acme/widget/issues/42",
+        status: "Todo",
+      };
+      const older = useBuildPipelineStore.getState().createPipeline(
+        createPipelineParams({ taskId: "older", source }),
+      );
+      const newer = useBuildPipelineStore.getState().createPipeline(
+        createPipelineParams({ taskId: "newer", source }),
+      );
+      useBuildPipelineStore.setState((state) => {
+        const pipelines = new Map(state.pipelines);
+        pipelines.set(older, {
+          ...pipelines.get(older)!,
+          createdAt: "2026-07-23T10:00:00.000Z",
+        });
+        pipelines.set(newer, {
+          ...pipelines.get(newer)!,
+          createdAt: "2026-07-24T10:00:00.000Z",
+          phase: "complete",
+        });
+        return { pipelines };
+      });
+
+      expect(
+        useBuildPipelineStore
+          .getState()
+          .getPipelineForGitHubIssue("ACME", "WIDGET", 42),
+      ).toHaveProperty("id", newer);
+      expect(
+        useBuildPipelineStore
+          .getState()
+          .getPipelineForGitHubIssue("ACME", "WIDGET", 42, true),
+      ).toHaveProperty("id", older);
+    });
+
     test("returns a unique ID for each pipeline", () => {
       const { createPipeline } = useBuildPipelineStore.getState();
       const id1 = createPipeline(createPipelineParams({ taskId: "task-1" }));
@@ -285,6 +326,32 @@ describe("buildPipelineStore", () => {
       expect(
         useBuildPipelineStore.getState().pipelines.get(id)?.completionCommentStatus,
       ).toBeUndefined();
+    });
+
+    test("skips malformed persisted entries while retaining valid pipelines", async () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id)!;
+      const stored = JSON.stringify({
+          state: {
+            pipelines: [
+              null,
+              ["missing-pipeline"],
+              [42, pipeline],
+              ["empty", null],
+              [id, pipeline],
+            ],
+          },
+          version: 1,
+        });
+      useBuildPipelineStore.setState({
+        pipelines: new Map(),
+        buildEnvironmentIds: new Set(),
+      });
+      localStorage.setItem(BUILD_PIPELINE_STORAGE_KEY, stored);
+
+      await useBuildPipelineStore.persist.rehydrate();
+
+      expect(Array.from(useBuildPipelineStore.getState().pipelines.keys())).toEqual([id]);
     });
   });
 
@@ -476,6 +543,86 @@ describe("buildPipelineStore", () => {
       expect(state.pipelines).toBe(before);
       expect(state.pipelines.has(id)).toBe(true);
       expect(state.buildEnvironmentIds.has("env-1")).toBe(true);
+    });
+  });
+
+  describe("environment pipeline cleanup", () => {
+    test("removes every pipeline associated with a deleted environment", () => {
+      const first = useBuildPipelineStore
+        .getState()
+        .createPipeline(createPipelineParams({ taskId: "task-1" }));
+      const second = useBuildPipelineStore
+        .getState()
+        .createPipeline(createPipelineParams({ taskId: "task-2" }));
+      const keep = useBuildPipelineStore
+        .getState()
+        .createPipeline(createPipelineParams({ taskId: "task-3" }));
+      useBuildPipelineStore.getState().setPipelineEnvironment(first, "env-deleted");
+      useBuildPipelineStore.getState().setPipelineEnvironment(second, "env-deleted");
+      useBuildPipelineStore.getState().setPipelineEnvironment(keep, "env-keep");
+
+      useBuildPipelineStore
+        .getState()
+        .removePipelinesForEnvironment("env-deleted");
+
+      const state = useBuildPipelineStore.getState();
+      expect(Array.from(state.pipelines.keys())).toEqual([keep]);
+      expect(state.buildEnvironmentIds).toEqual(new Set(["env-keep"]));
+    });
+
+    test("reconciles only nonterminal pipelines in the requested project", () => {
+      const missingActive = useBuildPipelineStore
+        .getState()
+        .createPipeline(createPipelineParams({ taskId: "missing-active" }));
+      const existingActive = useBuildPipelineStore
+        .getState()
+        .createPipeline(createPipelineParams({ taskId: "existing-active" }));
+      const completed = useBuildPipelineStore
+        .getState()
+        .createPipeline(createPipelineParams({ taskId: "completed" }));
+      const failed = useBuildPipelineStore
+        .getState()
+        .createPipeline(createPipelineParams({ taskId: "failed" }));
+      const otherProject = useBuildPipelineStore.getState().createPipeline(
+        createPipelineParams({ taskId: "other", projectId: "project-2" }),
+      );
+      const pendingEnvironment = useBuildPipelineStore
+        .getState()
+        .createPipeline(createPipelineParams({ taskId: "pending" }));
+      const store = useBuildPipelineStore.getState();
+      store.setPipelineEnvironment(missingActive, "env-missing");
+      store.setPipelineEnvironment(existingActive, "env-existing");
+      store.setPipelineEnvironment(completed, "env-completed");
+      store.setPipelineEnvironment(failed, "env-failed");
+      store.setPipelineEnvironment(otherProject, "env-other");
+      store.setPhase(completed, "complete");
+      store.setPhase(failed, "failed");
+
+      store.reconcilePipelinesForProject("project-1", new Set(["env-existing"]));
+
+      const state = useBuildPipelineStore.getState();
+      expect(state.pipelines.has(missingActive)).toBe(false);
+      expect(state.pipelines.has(existingActive)).toBe(true);
+      expect(state.pipelines.has(completed)).toBe(true);
+      expect(state.pipelines.has(failed)).toBe(true);
+      expect(state.pipelines.has(otherProject)).toBe(true);
+      expect(state.pipelines.has(pendingEnvironment)).toBe(true);
+      expect(state.buildEnvironmentIds).toEqual(
+        new Set(["env-existing", "env-completed", "env-failed", "env-other"]),
+      );
+    });
+
+    test("does not replace state when cleanup finds no matching pipeline", () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().setPipelineEnvironment(id, "env-existing");
+      const before = useBuildPipelineStore.getState().pipelines;
+
+      useBuildPipelineStore.getState().removePipelinesForEnvironment("env-missing");
+      useBuildPipelineStore
+        .getState()
+        .reconcilePipelinesForProject("project-2", new Set());
+
+      expect(useBuildPipelineStore.getState().pipelines).toBe(before);
     });
   });
 

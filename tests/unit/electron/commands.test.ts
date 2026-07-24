@@ -5150,6 +5150,250 @@ exit 0
   });
 });
 
+describe("GitHub issue commands", () => {
+  test("loads and mutates only the selected project's GitHub issues", async () => {
+    const originalFetch = globalThis.fetch;
+    const { context } = createContext(createEnvironment(), {
+      project: {
+        id: "project-1",
+        name: "repo",
+        gitUrl: "https://github.com/acme/repo.git",
+        localPath: null,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      },
+    });
+    const commands = createCommandRegistry();
+    const requests: Array<{ method: string; pathname: string; body: unknown }> = [];
+    let issueTitle = "Original issue";
+    let issueBody = "Original body";
+    let issueState = "open";
+    let issueLabels = [{ name: "bug", color: "ff0000" }];
+    let commentBody = "Original comment";
+
+    Object.assign(context.storage, {
+      loadConfig: mock(async () => ({
+        version: "1.0.0",
+        global: { githubToken: "github_secret_token" },
+        repositories: {},
+      })),
+    });
+
+    const issuePayload = () => ({
+      id: 420,
+      number: 42,
+      title: issueTitle,
+      body: issueBody,
+      html_url: "https://github.com/acme/repo/issues/42",
+      state: issueState,
+      locked: false,
+      user: {
+        login: "viewer",
+        avatar_url: "https://avatars.example/viewer",
+        html_url: "https://github.com/viewer",
+      },
+      assignees: [],
+      labels: issueLabels,
+      comments: 1,
+      created_at: "2026-07-20T10:00:00.000Z",
+      updated_at: "2026-07-24T10:00:00.000Z",
+    });
+    const commentPayload = () => ({
+      id: 7,
+      body: commentBody,
+      html_url: "https://github.com/acme/repo/issues/42#issuecomment-7",
+      issue_url: "https://api.github.com/repos/acme/repo/issues/42",
+      user: { login: "viewer" },
+      created_at: "2026-07-21T10:00:00.000Z",
+      updated_at: "2026-07-21T10:00:00.000Z",
+    });
+
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      requests.push({ method, pathname: `${url.pathname}${url.search}`, body });
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer github_secret_token");
+
+      if (url.pathname === "/user") {
+        return Response.json({ login: "viewer", html_url: "https://github.com/viewer" });
+      }
+      if (url.pathname === "/repos/acme/repo") {
+        return Response.json({
+          full_name: "acme/repo",
+          html_url: "https://github.com/acme/repo",
+          permissions: { push: false },
+        });
+      }
+      if (url.pathname === "/repos/acme/repo/labels" && method === "GET") {
+        return Response.json([
+          { name: "ork:todo", color: "D4C5F9" },
+          { name: "ork:inprogress", color: "FBCA04" },
+          { name: "ork:review", color: "0E8A16" },
+        ]);
+      }
+      if (url.pathname === "/repos/acme/repo/issues" && method === "GET") {
+        return Response.json([issuePayload()]);
+      }
+      if (url.pathname === "/repos/acme/repo/issues/42/comments" && method === "GET") {
+        return Response.json([commentPayload()]);
+      }
+      if (url.pathname === "/repos/acme/repo/issues/42/comments" && method === "POST") {
+        commentBody = String((body as { body: string }).body);
+        return Response.json(commentPayload(), { status: 201 });
+      }
+      if (url.pathname === "/repos/acme/repo/issues/comments/7" && method === "GET") {
+        return Response.json(commentPayload());
+      }
+      if (url.pathname === "/repos/acme/repo/issues/comments/7" && method === "PATCH") {
+        commentBody = String((body as { body: string }).body);
+        return Response.json({ ...commentPayload(), updated_at: "2026-07-24T11:00:00.000Z" });
+      }
+      if (url.pathname.startsWith("/repos/acme/repo/issues/42/labels/") && method === "DELETE") {
+        const label = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+        issueLabels = issueLabels.filter((candidate) => candidate.name !== label);
+        return new Response(null, { status: 204 });
+      }
+      if (url.pathname === "/repos/acme/repo/issues/42/labels" && method === "POST") {
+        const labels = (body as { labels: string[] }).labels;
+        issueLabels = [
+          ...issueLabels,
+          ...labels.map((name) => ({ name, color: "D4C5F9" })),
+        ];
+        return Response.json(issueLabels);
+      }
+      if (url.pathname === "/repos/acme/repo/issues/42" && method === "PATCH") {
+        const update = body as { title?: string; body?: string; state?: string };
+        if (update.title !== undefined) issueTitle = update.title;
+        if (update.body !== undefined) issueBody = update.body;
+        if (update.state !== undefined) issueState = update.state;
+        return Response.json(issuePayload());
+      }
+      if (url.pathname === "/repos/acme/repo/issues/42" && method === "GET") {
+        return Response.json(issuePayload());
+      }
+      throw new Error(`Unexpected GitHub request: ${method} ${url.pathname}${url.search}`);
+    }) as unknown as typeof fetch;
+
+    try {
+      const snapshot = await commands.get("get_github_issues")?.({ projectId: "project-1" }, context);
+      expect(snapshot).toMatchObject({
+        repository: { owner: "acme", name: "repo" },
+        viewer: { login: "viewer" },
+        issues: [{ number: 42, title: "Original issue", status: "backlog" }],
+      });
+      await expect(commands.get("get_github_issue")?.({
+        projectId: "project-1",
+        issueNumber: 42,
+      }, context)).resolves.toMatchObject({
+        number: 42,
+        comments: [{ id: 7, body: "Original comment", canEdit: true }],
+      });
+      await expect(commands.get("update_github_issue")?.({
+        projectId: "project-1",
+        issueNumber: 42,
+        title: "Updated issue",
+        body: "Updated body",
+      }, context)).resolves.toMatchObject({ title: "Updated issue", body: "Updated body" });
+      const statusIssue = await commands.get("update_github_issue_status")?.({
+        projectId: "project-1",
+        issueNumber: 42,
+        status: "todo",
+      }, context) as { status: string; labels: Array<{ name: string }> };
+      expect(statusIssue.status).toBe("todo");
+      expect(statusIssue.labels.map((label) => label.name)).toEqual(["bug", "ork:todo"]);
+      await expect(commands.get("add_github_issue_comment")?.({
+        projectId: "project-1",
+        issueNumber: 42,
+        body: "New comment",
+      }, context)).resolves.toMatchObject({ body: "New comment", canEdit: true });
+      await expect(commands.get("update_github_issue_comment")?.({
+        projectId: "project-1",
+        issueNumber: 42,
+        commentId: 7,
+        body: "Edited comment",
+      }, context)).resolves.toMatchObject({ body: "Edited comment", canEdit: true, isEdited: true });
+      await expect(commands.get("close_github_issue")?.({
+        projectId: "project-1",
+        issueNumber: 42,
+      }, context)).resolves.toMatchObject({ state: "closed" });
+
+      expect(requests.filter((request) =>
+        request.method === "DELETE" && request.pathname.includes("/issues/42/labels/")
+      )).toHaveLength(3);
+      expect(requests).toContainEqual({
+        method: "POST",
+        pathname: "/repos/acme/repo/issues/42/labels",
+        body: { labels: ["ork:todo"] },
+      });
+      expect(JSON.stringify(await commands.get("get_github_issues")?.({
+        projectId: "project-1",
+      }, context))).not.toContain("github_secret_token");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("reports actionable GitHub setup and sanitized API failures", async () => {
+    const commands = createCommandRegistry();
+    const { context } = createContext(createEnvironment());
+
+    Object.assign(context.storage, {
+      loadConfig: mock(async () => ({ version: "1.0.0", global: {}, repositories: {} })),
+    });
+    await expect(commands.get("get_github_issues")?.({ projectId: "project-1" }, context))
+      .rejects.toThrow("GitHub is not configured");
+
+    Object.assign(context.storage, {
+      getProject: mock(async () => null),
+      loadConfig: mock(async () => ({
+        version: "1.0.0",
+        global: { githubToken: "github_secret_token" },
+        repositories: {},
+      })),
+    });
+    await expect(commands.get("get_github_issues")?.({ projectId: "missing" }, context))
+      .rejects.toThrow("Project not found: missing");
+
+    Object.assign(context.storage, {
+      getProject: mock(async () => ({
+        id: "project-1",
+        name: "bad",
+        gitUrl: "https://gitlab.com/acme/repo.git",
+      })),
+    });
+    await expect(commands.get("get_github_issues")?.({ projectId: "project-1" }, context))
+      .rejects.toThrow(/github\.com HTTPS or SSH URL/i);
+
+    const originalFetch = globalThis.fetch;
+    Object.assign(context.storage, {
+      getProject: mock(async () => ({
+        id: "project-1",
+        name: "repo",
+        gitUrl: "git@github.com:acme/repo.git",
+      })),
+    });
+    globalThis.fetch = mock(async () =>
+      Response.json(
+        { message: "Bad credentials github_secret_token" },
+        { status: 401, headers: { "x-ratelimit-remaining": "1" } },
+      )
+    ) as unknown as typeof fetch;
+    try {
+      let failure: Error | null = null;
+      try {
+        await commands.get("get_github_issues")?.({ projectId: "project-1" }, context);
+      } catch (error) {
+        failure = error as Error;
+      }
+      expect(failure?.message).toContain("GitHub authentication failed");
+      expect(failure?.message).not.toContain("github_secret_token");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 describe("environment status and settings commands", () => {
   test("synchronizes individual and all stored environment statuses", async () => {
     const local = createEnvironment({ id: "env-local", environmentType: "local", containerId: null });
@@ -5274,7 +5518,11 @@ describe("storage-backed command delegation", () => {
   test("validates and delegates project and configuration commands", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();
     const project = { id: "project-1", name: "repo" };
-    const config = { version: "1.0.0", global: { allowedDomains: [] }, repositories: {} };
+    let config = {
+      version: "1.0.0",
+      global: { allowedDomains: [] as string[], githubToken: "github_secret_token" },
+      repositories: {} as Record<string, RepositoryConfig>,
+    };
     const repositoryConfig = { defaultBranch: "develop", prBaseBranch: "develop" };
     const storage = {
       loadProjects: mock(async () => [project]),
@@ -5284,10 +5532,26 @@ describe("storage-backed command delegation", () => {
       updateProject: mock(async (_id: string, updates: Record<string, unknown>) => updates),
       reorderProjects: mock(async (ids: string[]) => ids),
       loadConfig: mock(async () => config),
-      saveConfig: mock(async (value: unknown) => value),
-      updateGlobalConfig: mock(async (value: unknown) => value),
+      saveConfig: mock(async (value: typeof config) => {
+        config = value;
+      }),
+      updateGlobalConfig: mock(async (value: typeof config.global) => {
+        config = { ...config, global: value };
+        return config;
+      }),
+      setGitHubToken: mock(async (token: string | null) => {
+        const { githubToken: _removed, ...global } = config.global;
+        config = {
+          ...config,
+          global: token === null ? global : { ...global, githubToken: token },
+        };
+        return config;
+      }),
       getRepositoryConfig: mock(async () => repositoryConfig),
-      updateRepositoryConfig: mock(async (_id: string, value: unknown) => value),
+      updateRepositoryConfig: mock(async (id: string, value: RepositoryConfig) => {
+        config = { ...config, repositories: { ...config.repositories, [id]: value } };
+        return config;
+      }),
     };
     const context = { storage } as unknown as CommandContext;
     const commands = createCommandRegistry();
@@ -5318,17 +5582,73 @@ describe("storage-backed command delegation", () => {
     expect(commands.get("validate_git_url")?.({ url: "file:///tmp/repo" }, context)).toBe(false);
     await expect(commands.get("get_git_remote_url")?.({ path: worktree }, context)).resolves.toBe(remote);
 
-    await expect(commands.get("get_config")?.({}, context)).resolves.toEqual(config);
-    await expect(commands.get("save_config")?.({ config }, context)).resolves.toEqual(config);
-    await expect(commands.get("get_global_config")?.({}, context)).resolves.toEqual(config.global);
-    await expect(commands.get("update_global_config")?.({ global: { githubToken: "placeholder" } }, context))
-      .resolves.toEqual({ githubToken: "placeholder" });
+    await expect(commands.get("get_config")?.({}, context)).resolves.toEqual({
+      version: "1.0.0",
+      global: { allowedDomains: [], githubTokenConfigured: true },
+      repositories: {},
+    });
+    await expect(commands.get("get_global_config")?.({}, context)).resolves.toEqual({
+      allowedDomains: [],
+      githubTokenConfigured: true,
+    });
+
+    await expect(commands.get("save_config")?.({
+      config: {
+        version: "1.0.0",
+        global: {
+          allowedDomains: ["api.example.com"],
+          githubToken: "renderer_attempted_secret",
+          githubTokenConfigured: false,
+        },
+        repositories: {},
+      },
+    }, context)).resolves.toBeUndefined();
+    expect(storage.saveConfig).toHaveBeenLastCalledWith({
+      version: "1.0.0",
+      global: {
+        allowedDomains: ["api.example.com"],
+        githubToken: "github_secret_token",
+      },
+      repositories: {},
+    });
+
+    await expect(commands.get("update_global_config")?.({
+      global: {
+        allowedDomains: ["github.com"],
+        githubToken: "renderer_attempted_secret",
+        githubTokenConfigured: false,
+      },
+    }, context)).resolves.toEqual({
+      version: "1.0.0",
+      global: { allowedDomains: ["github.com"], githubTokenConfigured: true },
+      repositories: {},
+    });
+    expect(storage.updateGlobalConfig).toHaveBeenLastCalledWith({
+      allowedDomains: ["github.com"],
+      githubToken: "github_secret_token",
+    });
+
+    await expect(commands.get("set_github_token")?.({ token: " replacement_token " }, context))
+      .resolves.toMatchObject({
+        global: { allowedDomains: ["github.com"], githubTokenConfigured: true },
+      });
+    expect(storage.setGitHubToken).toHaveBeenLastCalledWith("replacement_token");
+    expect(JSON.stringify(await commands.get("get_config")?.({}, context))).not.toContain("replacement_token");
+    await expect(commands.get("set_github_token")?.({ token: null }, context)).resolves.toMatchObject({
+      global: { githubTokenConfigured: false },
+    });
+    await expect(commands.get("set_github_token")?.({ token: "   " }, context))
+      .rejects.toThrow("GitHub token cannot be empty");
+
     await expect(commands.get("get_repository_config")?.({ projectId: "project-1" }, context))
       .resolves.toEqual(repositoryConfig);
     await expect(commands.get("update_repository_config")?.(
       { projectId: "project-1", repoConfig: repositoryConfig },
       context,
-    )).resolves.toEqual(repositoryConfig);
+    )).resolves.toMatchObject({
+      global: { githubTokenConfigured: false },
+      repositories: { "project-1": repositoryConfig },
+    });
 
     expect(storage.removeProject).toHaveBeenCalledWith("project-1");
     expect(storage.updateProject).toHaveBeenCalledWith("project-1", { name: "renamed" });

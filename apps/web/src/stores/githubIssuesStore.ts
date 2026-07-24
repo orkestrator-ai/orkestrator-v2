@@ -90,6 +90,16 @@ interface GitHubIssuesState {
 const activeIssueRequests = new Map<string, number>();
 const activeProjectRequests = new Map<string, number>();
 
+function invalidateIssueReads(projectId: string, issueNumber: number): string {
+  const key = detailKey(projectId, issueNumber);
+  activeProjectRequests.set(
+    projectId,
+    (activeProjectRequests.get(projectId) ?? 0) + 1,
+  );
+  activeIssueRequests.set(key, (activeIssueRequests.get(key) ?? 0) + 1);
+  return key;
+}
+
 export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
   snapshots: new Map(),
   details: new Map(),
@@ -173,6 +183,7 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
   changeStatus: async (projectId, issueNumber, status) => {
     const mutationKey = `status:${projectId}:${issueNumber}`;
     if (get().mutations.has(mutationKey)) return;
+    const detailRequestKey = invalidateIssueReads(projectId, issueNumber);
 
     const previousSnapshot = get().snapshots.get(projectId);
     const previousIssue = previousSnapshot?.issues.find(
@@ -180,6 +191,10 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
     );
     set((state) => {
       const mutations = new Set(state.mutations).add(mutationKey);
+      const loadingProjects = new Set(state.loadingProjects);
+      loadingProjects.delete(projectId);
+      const loadingDetails = new Set(state.loadingDetails);
+      loadingDetails.delete(detailRequestKey);
       const mutationErrors = new Map(state.mutationErrors);
       mutationErrors.delete(mutationKey);
       const snapshots = new Map(state.snapshots);
@@ -189,7 +204,7 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
           replaceIssue(previousSnapshot, { ...previousIssue, status })!,
         );
       }
-      return { mutations, mutationErrors, snapshots };
+      return { mutations, mutationErrors, snapshots, loadingProjects, loadingDetails };
     });
 
     try {
@@ -233,11 +248,16 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
     if (get().mutations.has(mutationKey)) {
       throw new Error("This issue is already being saved.");
     }
+    const detailRequestKey = invalidateIssueReads(projectId, issueNumber);
     set((state) => {
       const mutations = new Set(state.mutations).add(mutationKey);
+      const loadingProjects = new Set(state.loadingProjects);
+      loadingProjects.delete(projectId);
+      const loadingDetails = new Set(state.loadingDetails);
+      loadingDetails.delete(detailRequestKey);
       const mutationErrors = new Map(state.mutationErrors);
       mutationErrors.delete(mutationKey);
-      return { mutations, mutationErrors };
+      return { mutations, mutationErrors, loadingProjects, loadingDetails };
     });
     try {
       const issue = await updateGitHubIssue(projectId, issueNumber, updates);
@@ -271,10 +291,21 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
   closeIssue: async (projectId, issueNumber) => {
     const mutationKey = `close:${projectId}:${issueNumber}`;
     if (get().mutations.has(mutationKey)) return;
-    set((state) => ({
-      mutations: new Set(state.mutations).add(mutationKey),
-      mutationErrors: new Map(state.mutationErrors),
-    }));
+    const detailRequestKey = invalidateIssueReads(projectId, issueNumber);
+    set((state) => {
+      const mutationErrors = new Map(state.mutationErrors);
+      mutationErrors.delete(mutationKey);
+      const loadingProjects = new Set(state.loadingProjects);
+      loadingProjects.delete(projectId);
+      const loadingDetails = new Set(state.loadingDetails);
+      loadingDetails.delete(detailRequestKey);
+      return {
+        mutations: new Set(state.mutations).add(mutationKey),
+        mutationErrors,
+        loadingProjects,
+        loadingDetails,
+      };
+    });
     try {
       const issue = await closeGitHubIssue(projectId, issueNumber);
       set((state) => {
@@ -306,9 +337,21 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
     if (get().mutations.has(mutationKey)) {
       throw new Error("A comment is already being posted.");
     }
-    set((state) => ({
-      mutations: new Set(state.mutations).add(mutationKey),
-    }));
+    const detailRequestKey = invalidateIssueReads(projectId, issueNumber);
+    set((state) => {
+      const mutationErrors = new Map(state.mutationErrors);
+      mutationErrors.delete(mutationKey);
+      const loadingProjects = new Set(state.loadingProjects);
+      loadingProjects.delete(projectId);
+      const loadingDetails = new Set(state.loadingDetails);
+      loadingDetails.delete(detailRequestKey);
+      return {
+        mutations: new Set(state.mutations).add(mutationKey),
+        mutationErrors,
+        loadingProjects,
+        loadingDetails,
+      };
+    });
     try {
       const comment = await addGitHubIssueComment(projectId, issueNumber, body);
       set((state) => {
@@ -360,9 +403,21 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
     if (get().mutations.has(mutationKey)) {
       throw new Error("This comment is already being saved.");
     }
-    set((state) => ({
-      mutations: new Set(state.mutations).add(mutationKey),
-    }));
+    const detailRequestKey = invalidateIssueReads(projectId, issueNumber);
+    set((state) => {
+      const mutationErrors = new Map(state.mutationErrors);
+      mutationErrors.delete(mutationKey);
+      const loadingProjects = new Set(state.loadingProjects);
+      loadingProjects.delete(projectId);
+      const loadingDetails = new Set(state.loadingDetails);
+      loadingDetails.delete(detailRequestKey);
+      return {
+        mutations: new Set(state.mutations).add(mutationKey),
+        mutationErrors,
+        loadingProjects,
+        loadingDetails,
+      };
+    });
     try {
       const comment = await updateGitHubIssueComment(
         projectId,
@@ -410,12 +465,54 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
 
   clearProject: (projectId) =>
     set((state) => {
+      activeProjectRequests.set(
+        projectId,
+        (activeProjectRequests.get(projectId) ?? 0) + 1,
+      );
+      for (const key of activeIssueRequests.keys()) {
+        if (key.startsWith(`${projectId}:`)) {
+          activeIssueRequests.set(key, (activeIssueRequests.get(key) ?? 0) + 1);
+        }
+      }
       const snapshots = new Map(state.snapshots);
       snapshots.delete(projectId);
       const details = new Map(
         Array.from(state.details).filter(([key]) => !key.startsWith(`${projectId}:`)),
       );
-      return { snapshots, details };
+      const loadingProjects = new Set(state.loadingProjects);
+      loadingProjects.delete(projectId);
+      const loadingDetails = new Set(
+        Array.from(state.loadingDetails).filter(
+          (key) => !key.startsWith(`${projectId}:`),
+        ),
+      );
+      const projectErrors = new Map(state.projectErrors);
+      projectErrors.delete(projectId);
+      const detailErrors = new Map(
+        Array.from(state.detailErrors).filter(
+          ([key]) => !key.startsWith(`${projectId}:`),
+        ),
+      );
+      const mutations = new Set(
+        Array.from(state.mutations).filter(
+          (key) => !key.includes(`:${projectId}:`),
+        ),
+      );
+      const mutationErrors = new Map(
+        Array.from(state.mutationErrors).filter(
+          ([key]) => !key.includes(`:${projectId}:`),
+        ),
+      );
+      return {
+        snapshots,
+        details,
+        loadingProjects,
+        loadingDetails,
+        projectErrors,
+        detailErrors,
+        mutations,
+        mutationErrors,
+      };
     }),
 }));
 

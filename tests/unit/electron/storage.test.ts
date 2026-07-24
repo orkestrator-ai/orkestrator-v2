@@ -863,6 +863,76 @@ describe("Electron StorageService", () => {
     expect(await fs.readdir(dataDir)).toContain("github-completion-comments.json");
   });
 
+  test("serializes GitHub completion comment writes across storage instances", async () => {
+    const dataDir = await createTempDir("ork-storage-github-completion-concurrency-");
+    const first = new StorageService(dataDir);
+    const second = new StorageService(dataDir);
+    await Promise.all([first.init(), second.init()]);
+
+    await Promise.all(Array.from({ length: 20 }, (_, index) => {
+      const storage = index % 2 === 0 ? first : second;
+      return storage.saveGitHubCompletionComment({
+        pipelineId: `pipeline-${index}`,
+        repositoryOwner: "acme",
+        repositoryName: "widget",
+        issueNumber: index + 1,
+        status: index % 3 === 0 ? "failed" : "posted",
+        ...(index % 3 === 0
+          ? { error: `failure-${index}` }
+          : { commentId: String(9_000 + index), postedAt: "2026-07-24T12:00:00.000Z" }),
+      });
+    }));
+
+    const records = JSON.parse(
+      await fs.readFile(path.join(dataDir, "github-completion-comments.json"), "utf8"),
+    ) as Array<{ pipelineId: string }>;
+    expect(records).toHaveLength(20);
+    expect(new Set(records.map((record) => record.pipelineId)).size).toBe(20);
+    await expect(first.getGitHubCompletionComment("pipeline-0")).resolves.toMatchObject({
+      status: "failed",
+      error: "failure-0",
+    });
+    await expect(second.getGitHubCompletionComment("pipeline-19")).resolves.toMatchObject({
+      status: "posted",
+      commentId: "9019",
+    });
+    expect(await fs.readdir(dataDir)).not.toContain("github-completion-comments.json.lock");
+  });
+
+  test("recovers GitHub completion comments from malformed persistence", async () => {
+    const dataDir = await createTempDir("ork-storage-github-completion-malformed-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const file = path.join(dataDir, "github-completion-comments.json");
+
+    await fs.writeFile(file, "{not-json");
+    await expect(storage.getGitHubCompletionComment("missing")).resolves.toBeNull();
+
+    await storage.saveGitHubCompletionComment({
+      pipelineId: "pipeline-recovered",
+      repositoryOwner: "acme",
+      repositoryName: "widget",
+      issueNumber: 42,
+      status: "failed",
+      error: "first attempt failed",
+    });
+    await storage.saveGitHubCompletionComment({
+      pipelineId: "pipeline-recovered",
+      repositoryOwner: "acme",
+      repositoryName: "widget",
+      issueNumber: 42,
+      status: "posted",
+      commentId: "9001",
+      postedAt: "2026-07-24T12:00:00.000Z",
+    });
+    await fs.writeFile(file, "{truncated");
+
+    await expect(storage.getGitHubCompletionComment("pipeline-recovered")).resolves.toMatchObject({
+      status: "failed",
+      error: "first attempt failed",
+    });
+  });
+
   test("removes temporary Linear auth files when a secret write fails", async () => {
     const dataDir = await createTempDir("ork-storage-linear-failed-");
     const storage = new StorageService(dataDir);

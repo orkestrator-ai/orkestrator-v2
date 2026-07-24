@@ -234,7 +234,8 @@ export interface GlobalConfig {
   containerResources: ContainerResources;
   envFilePatterns: string[];
   anthropicApiKey?: string;
-  githubToken?: string;
+  /** Whether a write-only GitHub token is stored by the backend. */
+  githubTokenConfigured?: boolean;
   /** Domains allowed when environments are in restricted network mode */
   allowedDomains: string[];
   /** Preferred editor for opening containers (VS Code or Cursor) */

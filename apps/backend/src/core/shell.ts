@@ -16,10 +16,37 @@ export type ExecResult = {
   stderr: string;
 };
 
+type RunCommandOptions = {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  /**
+   * Values that must never escape this process boundary. Both successful
+   * output and errors are redacted because some CLIs echo argv or environment
+   * values when reporting failures.
+   */
+  redactValues?: ReadonlyArray<string | null | undefined>;
+};
+
+function redactCommandValues(
+  value: string,
+  redactValues: ReadonlyArray<string | null | undefined> | undefined,
+): string {
+  const secrets = Array.from(new Set(
+    (redactValues ?? [])
+      .filter((secret): secret is string => typeof secret === "string" && secret.length > 0),
+  )).sort((left, right) => right.length - left.length);
+
+  return secrets.reduce(
+    (redacted, secret) => redacted.split(secret).join("[REDACTED]"),
+    value,
+  );
+}
+
 export async function runCommand(
   command: string,
   args: string[] = [],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+  options: RunCommandOptions = {},
 ): Promise<ExecResult> {
   try {
     const execPromise = execFileAsync(command, args, {
@@ -34,13 +61,23 @@ export async function runCommand(
     // stdin here, so close it immediately to signal EOF.
     execPromise.child.stdin?.end();
     const { stdout, stderr } = await execPromise;
-    return { stdout: stdout.toString(), stderr: stderr.toString() };
+    return {
+      stdout: redactCommandValues(stdout.toString(), options.redactValues),
+      stderr: redactCommandValues(stderr.toString(), options.redactValues),
+    };
   } catch (error) {
     if (error && typeof error === "object" && "stdout" in error && "stderr" in error) {
       const withOutput = error as { message?: string; stdout?: Buffer | string; stderr?: Buffer | string };
       const stderr = withOutput.stderr?.toString() ?? "";
       const stdout = withOutput.stdout?.toString() ?? "";
-      throw new Error((stderr || stdout || withOutput.message || "Command failed").trim());
+      const message = (stderr || stdout || withOutput.message || "Command failed").trim();
+      throw new Error(redactCommandValues(message, options.redactValues));
+    }
+    if (options.redactValues?.some((value) => typeof value === "string" && value.length > 0)) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Construct a clean Error instead of returning the original child-process
+      // error, which can expose argv through enumerable `cmd`/`spawnargs` fields.
+      throw new Error(redactCommandValues(message || "Command failed", options.redactValues));
     }
     throw error;
   }

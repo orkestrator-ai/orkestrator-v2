@@ -19,6 +19,7 @@ const mockCreateEnvironment = mock<(
   portMappings?: PortMapping[],
   environmentType?: EnvironmentType,
   namingPrompt?: string,
+  buildPipelineId?: string,
 ) => Promise<Environment>>((projectId) =>
   Promise.resolve(createMockEnvironment({ id: "new-env-id", projectId, name: "test-env" }))
 );
@@ -282,6 +283,7 @@ describe("useEnvironments", () => {
       portMappings,
       "containerized",
       "Build task\n\nShip the feature",
+      undefined,
     );
   });
 

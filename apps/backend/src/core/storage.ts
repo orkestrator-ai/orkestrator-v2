@@ -322,6 +322,7 @@ export function createEnvironment(
   projectId: string,
   options: {
     name?: string;
+    buildPipelineId?: string;
     networkAccessMode?: "full" | "restricted";
     initialPrompt?: string;
     portMappings?: PortMapping[];
@@ -339,6 +340,7 @@ export function createEnvironment(
   return {
     id: randomUUID(),
     projectId,
+    buildPipelineId: options.buildPipelineId,
     name,
     branch: sanitizeBranchName(name),
     containerId: null,

@@ -108,6 +108,11 @@ export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
     state.projectErrors.get(projectId),
   );
   const mutationErrors = useGitHubIssuesStore((state) => state.mutationErrors);
+  const statusMutating = useGitHubIssuesStore((state) =>
+    Array.from(state.mutations).some((key) =>
+      key.startsWith(`status:${projectId}:`),
+    ),
+  );
   const loadIssues = useGitHubIssuesStore((state) => state.loadIssues);
   const changeStatus = useGitHubIssuesStore((state) => state.changeStatus);
   const [selectedIssueNumber, setSelectedIssueNumber] = useState<number | null>(
@@ -227,7 +232,7 @@ export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
           type="button"
           variant="outline"
           size="sm"
-          disabled={loading}
+          disabled={loading || statusMutating}
           onClick={() => void loadIssues(projectId)}
         >
           {loading ? (
@@ -250,6 +255,7 @@ export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
                 variant="outline"
                 size="sm"
                 className="mt-2"
+                disabled={loading || statusMutating}
                 onClick={() => void loadIssues(projectId)}
               >
                 <RefreshCw className="h-3.5 w-3.5" />

@@ -114,9 +114,19 @@ export async function createEnvironment(
   initialPrompt?: string,
   portMappings?: PortMapping[],
   environmentType?: EnvironmentType,
-  namingPrompt?: string
+  namingPrompt?: string,
+  buildPipelineId?: string,
 ): Promise<Environment> {
-  return invoke<Environment>("create_environment", { projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt });
+  return invoke<Environment>("create_environment", {
+    projectId,
+    name,
+    networkAccessMode,
+    initialPrompt,
+    portMappings,
+    environmentType,
+    namingPrompt,
+    ...(buildPipelineId ? { buildPipelineId } : {}),
+  });
 }
 
 export async function deleteEnvironment(environmentId: string): Promise<void> {

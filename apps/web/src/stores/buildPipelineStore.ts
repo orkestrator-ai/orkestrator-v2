@@ -160,7 +160,10 @@ interface BuildPipelineState {
   removePipelinesForEnvironment: (environmentId: string) => void;
   reconcilePipelinesForProject: (
     projectId: string,
-    environmentIds: ReadonlySet<string>,
+    environments: ReadonlySet<string> | readonly {
+      id: string;
+      buildPipelineId?: string;
+    }[],
   ) => void;
 
   // Selectors
@@ -754,23 +757,49 @@ export const useBuildPipelineStore = create<BuildPipelineState>()(
       return { pipelines, buildEnvironmentIds };
     }),
 
-  reconcilePipelinesForProject: (projectId, environmentIds) =>
+  reconcilePipelinesForProject: (projectId, environments) =>
     set((state) => {
+      const snapshots = Array.isArray(environments) ? environments : null;
+      const environmentIds = snapshots
+        ? new Set(snapshots.map((environment) => environment.id))
+        : environments as ReadonlySet<string>;
+      const environmentByPipelineId = new Map<string, string>();
+      for (const environment of snapshots ?? []) {
+        if (environment.buildPipelineId) {
+          environmentByPipelineId.set(environment.buildPipelineId, environment.id);
+        }
+      }
       const pipelines = new Map(state.pipelines);
-      let removed = false;
+      let changed = false;
       for (const [pipelineId, pipeline] of pipelines) {
+        if (pipeline.projectId !== projectId) continue;
+
+        if (!pipeline.environmentId && snapshots) {
+          const recoveredEnvironmentId = environmentByPipelineId.get(pipelineId);
+          if (recoveredEnvironmentId) {
+            pipelines.set(pipelineId, { ...pipeline, environmentId: recoveredEnvironmentId });
+            changed = true;
+          } else if (pipeline.phase === "creating-environment") {
+            // An authoritative environment snapshot without the durable
+            // association means creation did not complete. Clear the local
+            // reservation so the source issue can start another build.
+            pipelines.delete(pipelineId);
+            changed = true;
+          }
+          continue;
+        }
+
         if (
-          pipeline.projectId === projectId
-          && pipeline.environmentId
+          pipeline.environmentId
           && !environmentIds.has(pipeline.environmentId)
           && pipeline.phase !== "complete"
           && pipeline.phase !== "failed"
         ) {
           pipelines.delete(pipelineId);
-          removed = true;
+          changed = true;
         }
       }
-      if (!removed) return state;
+      if (!changed) return state;
       const buildEnvironmentIds = new Set<string>();
       for (const pipeline of pipelines.values()) {
         if (pipeline.environmentId) buildEnvironmentIds.add(pipeline.environmentId);

@@ -5,6 +5,7 @@ import type {
   GitHubIssueComment,
   GitHubIssueDetail,
   GitHubIssuesSnapshot,
+  GitHubIssueStatus,
 } from "@/types/github";
 
 const realBackendSnapshot = { ...realBackend };
@@ -62,9 +63,15 @@ function deferred<T>() {
 
 const getGitHubIssuesMock = mock(async () => snapshot);
 const getGitHubIssueMock = mock(async () => detail);
-const updateGitHubIssueStatusMock = mock(async () => ({
+const updateGitHubIssueStatusMock = mock<
+  (
+    projectId: string,
+    issueNumber: number,
+    status: GitHubIssueStatus,
+  ) => Promise<GitHubIssue>
+>(async () => ({
   ...issue,
-  status: "todo" as const,
+  status: "todo",
   labels: [
     ...issue.labels,
     { name: "ork:todo", color: "1d76db" },
@@ -192,6 +199,46 @@ describe("githubIssuesStore", () => {
         .getState()
         .mutationErrors.get("status:project-1:42"),
     ).toContain("GitHub rejected");
+  });
+
+  test("ignores a stale refresh started while a status mutation is in flight", async () => {
+    await useGitHubIssuesStore.getState().loadIssues("project-1");
+    const pendingStatus = deferred<GitHubIssue>();
+    const staleRefresh = deferred<GitHubIssuesSnapshot>();
+    const updatedIssue: GitHubIssue = {
+      ...issue,
+      status: "review",
+      labels: [...issue.labels, { name: "ork:review", color: "5319e7" }],
+    };
+    updateGitHubIssueStatusMock.mockImplementationOnce(
+      () => pendingStatus.promise,
+    );
+    getGitHubIssuesMock.mockImplementationOnce(() => staleRefresh.promise);
+
+    const statusRequest = useGitHubIssuesStore
+      .getState()
+      .changeStatus("project-1", 42, "review");
+    const refreshRequest = useGitHubIssuesStore
+      .getState()
+      .loadIssues("project-1");
+
+    pendingStatus.resolve(updatedIssue);
+    await statusRequest;
+    expect(
+      useGitHubIssuesStore.getState().snapshots.get("project-1")?.issues[0]
+        ?.status,
+    ).toBe("review");
+
+    staleRefresh.resolve(snapshot);
+    await refreshRequest;
+
+    const state = useGitHubIssuesStore.getState();
+    expect(state.snapshots.get("project-1")?.issues[0]?.status).toBe("review");
+    expect(state.snapshots.get("project-1")?.issues[0]?.labels).toContainEqual({
+      name: "ork:review",
+      color: "5319e7",
+    });
+    expect(state.loadingProjects.has("project-1")).toBe(false);
   });
 
   test("keeps list and detail state current after edits and comments", async () => {

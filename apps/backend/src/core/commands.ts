@@ -2429,10 +2429,23 @@ async function createDockerContainer(environment: Environment, context: CommandC
   ];
 
   const githubToken = config.global.githubToken?.trim();
+  const dockerEnvironment: NodeJS.ProcessEnv = { ...process.env };
+  const redactValues: string[] = [];
   if (githubToken) {
-    args.push("-e", `GITHUB_TOKEN=${githubToken}`, "-e", `GH_TOKEN=${githubToken}`);
+    // Use Docker's host-environment passthrough form so credentials are not
+    // present in the process argv (and therefore cannot appear in command
+    // failure messages or process listings).
+    dockerEnvironment.GITHUB_TOKEN = githubToken;
+    dockerEnvironment.GH_TOKEN = githubToken;
+    redactValues.push(githubToken);
+    args.push("-e", "GITHUB_TOKEN", "-e", "GH_TOKEN");
   }
-  if (config.global.anthropicApiKey) args.push("-e", `ANTHROPIC_API_KEY=${config.global.anthropicApiKey}`);
+  const anthropicApiKey = config.global.anthropicApiKey?.trim();
+  if (anthropicApiKey) {
+    dockerEnvironment.ANTHROPIC_API_KEY = anthropicApiKey;
+    redactValues.push(anthropicApiKey);
+    args.push("-e", "ANTHROPIC_API_KEY");
+  }
   if (config.global.opencodeModel) args.push("-e", `OPENCODE_MODEL=${config.global.opencodeModel}`);
   if (environment.networkAccessMode === "full") {
     args.push("-e", "NETWORK_MODE=full");
@@ -2468,7 +2481,11 @@ async function createDockerContainer(environment: Environment, context: CommandC
   if (repoConfig.entryPort) args.push("-p", `127.0.0.1::${repoConfig.entryPort}/tcp`);
   args.push(DOCKER_IMAGE);
 
-  const { stdout } = await runCommand("docker", args, { timeoutMs: 120_000 });
+  const { stdout } = await runCommand("docker", args, {
+    env: dockerEnvironment,
+    timeoutMs: 120_000,
+    redactValues,
+  });
   const containerId = stdout.trim();
   try {
     if (project.localPath) {
@@ -2890,7 +2907,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   );
   register("get_environment", ({ environmentId }, { storage }) => storage.getEnvironment(asString(environmentId, "environmentId")));
   register("reorder_environments", ({ projectId, environmentIds }, { storage }) => storage.reorderEnvironments(asString(projectId, "projectId"), asStringArray(environmentIds)));
-  register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt }, context) => {
+  register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt, buildPipelineId }, context) => {
     const { storage } = context;
     const project = await storage.getProject(asString(projectId, "projectId"));
     if (!project) throw new Error(`Project not found: ${projectId}`);
@@ -2908,6 +2925,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const uniqueName = makeUniqueEnvironmentSlug(baseName, existingEnvironments, existingGitBranches);
     const env = createEnvironment(project.id, {
       name: uniqueName,
+      buildPipelineId: asOptionalString(buildPipelineId),
       networkAccessMode: networkAccessMode === "full" ? "full" : networkAccessMode === "restricted" ? "restricted" : undefined,
       initialPrompt: initialPromptText,
       portMappings: asPortMappings(portMappings),

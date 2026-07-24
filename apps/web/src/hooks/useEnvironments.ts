@@ -265,7 +265,7 @@ export function useEnvironments(
         mergeEnvironmentsForProject(pid, envs);
         useBuildPipelineStore.getState().reconcilePipelinesForProject(
           pid,
-          new Set(envs.map((environment) => environment.id)),
+          envs,
         );
       } catch (err) {
         const message = getErrorMessage(err, "Failed to load environments");
@@ -284,11 +284,11 @@ export function useEnvironments(
   );
 
   const createEnvironment = useCallback(
-    async (pid: string, name?: string, networkAccessMode?: NetworkAccessMode, initialPrompt?: string, portMappings?: PortMapping[], environmentType?: EnvironmentType, namingPrompt?: string) => {
+    async (pid: string, name?: string, networkAccessMode?: NetworkAccessMode, initialPrompt?: string, portMappings?: PortMapping[], environmentType?: EnvironmentType, namingPrompt?: string, buildPipelineId?: string) => {
       setLoading(true);
       setError(null);
       try {
-        const environment = await backend.createEnvironment(pid, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt);
+        const environment = await backend.createEnvironment(pid, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt, buildPipelineId);
         addEnvironmentToStore(environment);
         useConfigStore.getState().setRepositoryLastEnvironmentType(pid, environment.environmentType);
         toast.success("Environment created");

@@ -415,6 +415,7 @@ describe("useBuildPipeline", () => {
       undefined,
       "containerized",
       undefined,
+      expect.any(String),
     );
     await waitFor(() => {
       expect(mockRenameEnvironmentFromPrompt).toHaveBeenCalledWith(
@@ -829,6 +830,7 @@ describe("useBuildPipeline", () => {
       undefined,
       "local",
       undefined,
+      expect.any(String),
     );
     expect(mockStartEnvironment).toHaveBeenCalledWith("env-build");
 

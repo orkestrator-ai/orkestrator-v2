@@ -29,6 +29,8 @@ export type AgentStyle = "terminal" | "native";
 export interface Environment {
   id: string;
   projectId: string;
+  /** Persisted association used to recover a build pipeline after renderer remount. */
+  buildPipelineId?: string;
   name: string;
   branch: string;
   containerId: string | null;

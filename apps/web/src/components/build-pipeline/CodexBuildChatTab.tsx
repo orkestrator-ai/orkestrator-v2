@@ -50,6 +50,7 @@ import {
   addPipelineKanbanComment,
   updatePipelineKanbanPrMetadata,
 } from "@/lib/build-pipeline-source";
+import { GitHubCompletionCommentStatus } from "./GitHubCompletionCommentStatus";
 
 interface CodexBuildChatTabProps {
   data: BuildTabData;
@@ -1950,6 +1951,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
           </div>
         </div>
       )}
+      {pipeline && <GitHubCompletionCommentStatus pipeline={pipeline} />}
 
       <VirtualizedMessageList
         messages={messageRows}

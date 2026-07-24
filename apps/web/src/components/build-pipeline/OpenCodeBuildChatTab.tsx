@@ -49,6 +49,7 @@ import {
   addPipelineKanbanComment,
   updatePipelineKanbanPrMetadata,
 } from "@/lib/build-pipeline-source";
+import { GitHubCompletionCommentStatus } from "./GitHubCompletionCommentStatus";
 
 interface OpenCodeBuildChatTabProps {
   data: BuildTabData;
@@ -1339,6 +1340,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
           </div>
         </div>
       )}
+      {pipeline && <GitHubCompletionCommentStatus pipeline={pipeline} />}
 
       <div ref={scrollRef} data-scroll-viewport="true" className="min-h-0 flex-1 overflow-y-auto">
         <div className="min-w-[320px] py-4">

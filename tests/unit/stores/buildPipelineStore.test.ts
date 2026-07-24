@@ -612,6 +612,33 @@ describe("buildPipelineStore", () => {
       );
     });
 
+    test("recovers a pending pipeline from an authoritative environment association", () => {
+      const pending = useBuildPipelineStore
+        .getState()
+        .createPipeline(createPipelineParams({ taskId: "pending" }));
+
+      useBuildPipelineStore.getState().reconcilePipelinesForProject(
+        "project-1",
+        [{ id: "env-recovered", buildPipelineId: pending }],
+      );
+
+      const state = useBuildPipelineStore.getState();
+      expect(state.pipelines.get(pending)?.environmentId).toBe("env-recovered");
+      expect(state.buildEnvironmentIds).toEqual(new Set(["env-recovered"]));
+    });
+
+    test("removes an unresolved creation reservation after authoritative rehydration", () => {
+      const pending = useBuildPipelineStore
+        .getState()
+        .createPipeline(createPipelineParams({ taskId: "pending" }));
+
+      useBuildPipelineStore
+        .getState()
+        .reconcilePipelinesForProject("project-1", []);
+
+      expect(useBuildPipelineStore.getState().pipelines.has(pending)).toBe(false);
+    });
+
     test("does not replace state when cleanup finds no matching pipeline", () => {
       const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
       useBuildPipelineStore.getState().setPipelineEnvironment(id, "env-existing");

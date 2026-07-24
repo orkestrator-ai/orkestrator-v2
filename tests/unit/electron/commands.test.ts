@@ -703,6 +703,26 @@ exit 42
     expect(result.pendingRenamePrompt).toBeUndefined();
   });
 
+  test("persists the originating build pipeline on a created environment", async () => {
+    const { context } = createContext([]);
+    const commands = createCommandRegistry();
+
+    const result = await commands.get("create_environment")?.(
+      {
+        projectId: "project-1",
+        name: "GitHub issue build",
+        environmentType: "local",
+        buildPipelineId: "pipeline-github-42",
+      },
+      context,
+    ) as Environment;
+
+    expect(result.buildPipelineId).toBe("pipeline-github-42");
+    expect(
+      (await context.storage.getEnvironment(result.id))?.buildPipelineId,
+    ).toBe("pipeline-github-42");
+  });
+
   test("clears a pending prompt when the user manually renames the environment", async () => {
     const environment = createEnvironment({
       pendingRenamePrompt: "Generate a name after startup",
@@ -1931,6 +1951,58 @@ exit 0
         expect(dockerCalls).not.toContain("GH_TOKEN=host-gh-token");
         expect(environment.containerId).toBe("container-created");
       });
+    });
+  });
+
+  test("does not expose configured credentials in Docker argv or container creation errors", async () => {
+    const githubToken = "github_secret_token";
+    const anthropicApiKey = "anthropic_secret_key";
+    const environment = createEnvironment({
+      id: "env-container-secret-failure",
+      environmentType: "containerized",
+      worktreePath: undefined,
+      containerId: null,
+      status: "stopped",
+      networkAccessMode: "full",
+    });
+    const { context } = createContext(environment);
+    Object.assign(context.storage, {
+      loadConfig: mock(async () => ({
+        version: "1.0.0",
+        global: { githubToken, anthropicApiKey },
+        repositories: {
+          "project-1": { defaultBranch: "main", prBaseBranch: "main" },
+        },
+      })),
+    });
+    const commands = createCommandRegistry();
+
+    await withFakeDocker(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = "create" ]; then
+  printf 'Docker permission denied for %s and %s\\n' "$GITHUB_TOKEN" "$ANTHROPIC_API_KEY" >&2
+  exit 42
+fi
+exit 0
+`, async (logs) => {
+      let failure: unknown;
+      try {
+        await commands.get("provision_environment")?.({ environmentId: environment.id }, context);
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toContain("Docker permission denied");
+      expect((failure as Error).message).toContain("[REDACTED]");
+      expect((failure as Error).message).not.toContain(githubToken);
+      expect((failure as Error).message).not.toContain(anthropicApiKey);
+
+      const dockerCalls = await fs.readFile(logs.all, "utf8");
+      expect(dockerCalls).toContain("-e GITHUB_TOKEN -e GH_TOKEN");
+      expect(dockerCalls).toContain("-e ANTHROPIC_API_KEY");
+      expect(dockerCalls).not.toContain(githubToken);
+      expect(dockerCalls).not.toContain(anthropicApiKey);
     });
   });
 

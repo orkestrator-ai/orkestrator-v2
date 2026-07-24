@@ -55,6 +55,7 @@ import {
   movePipelineKanbanTask,
   updatePipelineKanbanPrMetadata,
 } from "@/lib/build-pipeline-source";
+import { GitHubCompletionCommentStatus } from "./GitHubCompletionCommentStatus";
 
 const LazyCodexBuildChatTab = lazy(async () => {
   const module = await import("./CodexBuildChatTab");
@@ -1564,6 +1565,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
           </div>
         </div>
       )}
+      {pipeline && <GitHubCompletionCommentStatus pipeline={pipeline} />}
 
       {/* Messages area */}
       <div ref={scrollRef} data-scroll-viewport="true" className="min-h-0 flex-1 overflow-y-auto">

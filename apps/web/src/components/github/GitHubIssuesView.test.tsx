@@ -166,6 +166,19 @@ describe("GitHubIssuesView", () => {
     });
   });
 
+  test("disables refresh while a status mutation is in progress", () => {
+    useGitHubIssuesStore.setState({
+      mutations: new Set(["status:project-1:2"]),
+    });
+
+    render(<GitHubIssuesView projectId="project-1" />);
+
+    expect(
+      (screen.getByRole("button", { name: /Refresh/ }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
   test("opens an issue in the in-app detail view and returns to the board", async () => {
     render(<GitHubIssuesView projectId="project-1" />);
 

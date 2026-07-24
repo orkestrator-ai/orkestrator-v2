@@ -125,6 +125,32 @@ describe("backend setup wrappers", () => {
     ]);
   });
 
+  test("persists a build pipeline association when creating an environment", async () => {
+    await createEnvironment(
+      "project-1",
+      undefined,
+      "full",
+      undefined,
+      undefined,
+      "local",
+      undefined,
+      "pipeline-42",
+    );
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["create_environment", {
+        projectId: "project-1",
+        name: undefined,
+        networkAccessMode: "full",
+        initialPrompt: undefined,
+        portMappings: undefined,
+        environmentType: "local",
+        namingPrompt: undefined,
+        buildPipelineId: "pipeline-42",
+      }],
+    ]);
+  });
+
   test("calls the read-only environment snapshot command", async () => {
     invokeMock.mockResolvedValue([]);
 

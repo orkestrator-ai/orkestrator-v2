@@ -282,6 +282,8 @@ export function useBuildPipeline() {
             undefined, // no initial prompt - we handle it via the pipeline
             undefined, // no port mappings
             effectiveEnvironmentType,
+            undefined, // no backend-owned naming prompt; rename starts after launch
+            pipelineId, // durable association for renderer-remount recovery
           );
         }
 

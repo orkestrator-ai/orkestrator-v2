@@ -209,9 +209,20 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
 
     try {
       const issue = await updateGitHubIssueStatus(projectId, issueNumber, status);
+      // A refresh can begin after the mutation starts and still contain the
+      // pre-mutation labels. Invalidate those overlapping reads once GitHub
+      // confirms the write so they cannot replace this authoritative response.
+      const completedDetailRequestKey = invalidateIssueReads(
+        projectId,
+        issueNumber,
+      );
       set((state) => {
         const mutations = new Set(state.mutations);
         mutations.delete(mutationKey);
+        const loadingProjects = new Set(state.loadingProjects);
+        loadingProjects.delete(projectId);
+        const loadingDetails = new Set(state.loadingDetails);
+        loadingDetails.delete(completedDetailRequestKey);
         const snapshots = new Map(state.snapshots);
         const nextSnapshot = replaceIssue(snapshots.get(projectId), issue);
         if (nextSnapshot) snapshots.set(projectId, nextSnapshot);
@@ -219,7 +230,13 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
         const key = detailKey(projectId, issueNumber);
         const nextDetail = mergeIssueDetail(details.get(key), issue);
         if (nextDetail) details.set(key, nextDetail);
-        return { mutations, snapshots, details };
+        return {
+          mutations,
+          snapshots,
+          details,
+          loadingProjects,
+          loadingDetails,
+        };
       });
     } catch (error) {
       set((state) => {

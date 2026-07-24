@@ -162,7 +162,7 @@ describe("GitHubIssueDetail", () => {
   }
 
   function seedIssuePipeline(
-    phase: "building" | "complete" | "failed",
+    phase: "creating-environment" | "building" | "complete" | "failed",
     environmentId?: string,
   ) {
     const pipelineId = useBuildPipelineStore.getState().createPipeline({
@@ -360,6 +360,20 @@ describe("GitHubIssueDetail", () => {
         expect.objectContaining({ id: activeId, environmentId: "env-active" }),
       );
     });
+  });
+
+  test("shows the phase while an existing build is still creating its environment", () => {
+    seedIssuePipeline("creating-environment");
+    renderDetail();
+
+    expect(screen.getByText("Build phase: creating-environment")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /View Build/ }),
+    ).toBeNull();
+    expect(
+      (screen.getByRole("button", { name: "Build Container" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
   });
 
   test("starts a container build when no pipeline exists", async () => {

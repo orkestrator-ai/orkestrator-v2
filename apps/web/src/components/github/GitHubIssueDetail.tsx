@@ -741,10 +741,12 @@ export function GitHubIssueDetailContent({
                     >
                       <ExternalLink className="h-3.5 w-3.5" />
                       View Build
-                      <span className="text-xs text-muted-foreground">
-                        ({selectedPipeline.phase})
-                      </span>
                     </Button>
+                  )}
+                  {selectedPipeline && (
+                    <span className="text-xs text-muted-foreground">
+                      Build phase: {selectedPipeline.phase}
+                    </span>
                   )}
                   {activePipeline && (
                     <span className="text-xs text-muted-foreground">

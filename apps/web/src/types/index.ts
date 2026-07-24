@@ -37,6 +37,8 @@ export interface PortMapping {
 export interface Environment {
   id: string;
   projectId: string;
+  /** Persisted association used to recover a build pipeline after renderer remount. */
+  buildPipelineId?: string;
   name: string;
   /** Git branch name (defaults to "main" for legacy environments via serde default) */
   branch: string;

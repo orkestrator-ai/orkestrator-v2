@@ -101,7 +101,7 @@ const selectedProject: Project = {
 let currentEnvironment: Environment = selectedEnvironment;
 let currentSelectedEnvironmentId: string | null = selectedEnvironment.id;
 let currentSelectedProjectId: string | null = selectedProject.id;
-let currentProjectBoardTab: "kanban" | "linear" | "features" = "kanban";
+let currentProjectBoardTab: "kanban" | "github" | "linear" | "features" = "kanban";
 let currentChanges: unknown[] = [];
 let currentFilesPanelOpen = false;
 let currentReviewPrompt: string | undefined;
@@ -394,8 +394,8 @@ mock.module("@/stores", () => ({
   useUIStore: <T,>(selector?: (state: {
     selectedEnvironmentId: string | null;
     selectedProjectId: string | null;
-    projectBoardTab: "kanban" | "linear" | "features";
-    setProjectBoardTab: (tab: "kanban" | "linear" | "features") => void;
+    projectBoardTab: "kanban" | "linear" | "github" | "features";
+    setProjectBoardTab: (tab: "kanban" | "linear" | "github" | "features") => void;
     setProjectBoardNotesOpen: (open: boolean) => void;
   }) => T) =>
     selectState(
@@ -659,12 +659,14 @@ describe("ActionBar grid presentation", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Project notes" }));
     fireEvent.click(screen.getByRole("button", { name: "Kanban board" }));
+    fireEvent.click(screen.getByRole("button", { name: "GitHub issues" }));
     fireEvent.click(screen.getByRole("button", { name: "Linear pipeline" }));
     fireEvent.click(screen.getByRole("button", { name: "Features" }));
 
     expect(setProjectBoardNotesOpenMock).toHaveBeenCalledWith(true);
     expect(setProjectBoardTabMock.mock.calls.map(([tab]) => tab)).toEqual([
       "kanban",
+      "github",
       "linear",
       "features",
     ]);
@@ -1205,6 +1207,7 @@ describe("ActionBar workflow tabs", () => {
     const notesButton = screen.getByRole("button", { name: "Project Notes" });
     const kanbanTab = screen.getByRole("tab", { name: "Kanban" });
     expect(kanbanTab).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "GitHub" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Linear" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Features" })).toBeTruthy();
     expect(notesButton.compareDocumentPosition(kanbanTab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -1229,6 +1232,15 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Linear" }), { button: 0 });
     expect(setProjectBoardTabMock).toHaveBeenCalledWith("linear");
+  });
+
+  test("selecting the GitHub board tab updates the project board tab", () => {
+    currentSelectedEnvironmentId = null;
+
+    render(<ActionBar />);
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "GitHub" }), { button: 0 });
+    expect(setProjectBoardTabMock).toHaveBeenCalledWith("github");
   });
 
   test("selecting the Kanban board tab updates the project board tab", () => {

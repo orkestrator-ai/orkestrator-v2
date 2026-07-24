@@ -435,6 +435,48 @@ describe("findTaskForEnvironment", () => {
     expect(result.taskId).toBeUndefined();
   });
 
+  test("does not treat GitHub-backed pipelines as kanban tasks", () => {
+    useBuildPipelineStore.setState({
+      pipelines: new Map([
+        ["pipeline-github", {
+          id: "pipeline-github",
+          taskId: "github:acme/widget#42",
+          source: {
+            type: "github",
+            repositoryOwner: "acme",
+            repositoryName: "widget",
+            issueNumber: 42,
+            issueUrl: "https://github.com/acme/widget/issues/42",
+            status: "review",
+          },
+          projectId: "proj-1",
+          environmentId: "env-github",
+          environmentType: "local" as const,
+          agentType: "claude" as const,
+          phase: "building" as any,
+          sessions: [],
+          currentSessionIndex: -1,
+          iteration: 0,
+          maxIterations: 3,
+          createdAt: new Date().toISOString(),
+          taskTitle: "GitHub issue",
+          taskSnapshot: {
+            title: "GitHub issue",
+            description: "",
+            acceptanceCriteria: "",
+            comments: [],
+            images: [],
+          },
+        }],
+      ]),
+    });
+
+    expect(findTaskForEnvironment("env-github")).toEqual({
+      task: undefined,
+      taskId: undefined,
+    });
+  });
+
   test("returns undefined when environment has no associated task", () => {
     const result = findTaskForEnvironment("env-nonexistent");
     expect(result.task).toBeUndefined();

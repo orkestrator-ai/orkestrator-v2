@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { AppConfig } from "@/types";
 
 const invokeMock = mock<(...args: unknown[]) => Promise<unknown>>(() => Promise.resolve());
 
@@ -30,6 +31,14 @@ const {
   getLinearConnection,
   getLinearIssue,
   getLinearIssues,
+  getGitHubIssues,
+  getGitHubIssue,
+  updateGitHubIssue,
+  updateGitHubIssueStatus,
+  closeGitHubIssue,
+  addGitHubIssueComment,
+  updateGitHubIssueComment,
+  postGitHubCompletionComment,
   getSetupCommands,
   getGatewayTokenSettings,
   getWebClientStatus,
@@ -41,6 +50,7 @@ const {
   savePaneLayout,
   setWebClientEnabled,
   setGatewayToken,
+  setGitHubToken,
   setEnvironmentSetupComplete,
 } = backendWrappers;
 
@@ -115,6 +125,32 @@ describe("backend setup wrappers", () => {
     ]);
   });
 
+  test("persists a build pipeline association when creating an environment", async () => {
+    await createEnvironment(
+      "project-1",
+      undefined,
+      "full",
+      undefined,
+      undefined,
+      "local",
+      undefined,
+      "pipeline-42",
+    );
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["create_environment", {
+        projectId: "project-1",
+        name: undefined,
+        networkAccessMode: "full",
+        initialPrompt: undefined,
+        portMappings: undefined,
+        environmentType: "local",
+        namingPrompt: undefined,
+        buildPipelineId: "pipeline-42",
+      }],
+    ]);
+  });
+
   test("calls the read-only environment snapshot command", async () => {
     invokeMock.mockResolvedValue([]);
 
@@ -183,6 +219,82 @@ describe("backend setup wrappers", () => {
         body: "Done",
       }],
       ["disconnect_linear"],
+    ]);
+  });
+
+  test("calls GitHub issue Electron commands with project-scoped payloads", async () => {
+    await getGitHubIssues("project-1");
+    await getGitHubIssue("project-1", 42);
+    await updateGitHubIssue("project-1", 42, { title: "Title", body: "Body" });
+    await updateGitHubIssueStatus("project-1", 42, "inprogress");
+    await addGitHubIssueComment("project-1", 42, "Comment");
+    await updateGitHubIssueComment("project-1", 42, 9001, "Edited");
+    await closeGitHubIssue("project-1", 42);
+    await postGitHubCompletionComment(
+      "pipeline-1",
+      "project-1",
+      "acme",
+      "widget",
+      42,
+      "Build completed",
+    );
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["get_github_issues", { projectId: "project-1" }],
+      ["get_github_issue", { projectId: "project-1", issueNumber: 42 }],
+      ["update_github_issue", {
+        projectId: "project-1",
+        issueNumber: 42,
+        title: "Title",
+        body: "Body",
+      }],
+      ["update_github_issue_status", {
+        projectId: "project-1",
+        issueNumber: 42,
+        status: "inprogress",
+      }],
+      ["add_github_issue_comment", {
+        projectId: "project-1",
+        issueNumber: 42,
+        body: "Comment",
+      }],
+      ["update_github_issue_comment", {
+        projectId: "project-1",
+        issueNumber: 42,
+        commentId: 9001,
+        body: "Edited",
+      }],
+      ["close_github_issue", { projectId: "project-1", issueNumber: 42 }],
+      ["post_github_completion_comment", {
+        pipelineId: "pipeline-1",
+        projectId: "project-1",
+        repositoryOwner: "acme",
+        repositoryName: "widget",
+        issueNumber: 42,
+        body: "Build completed",
+      }],
+    ]);
+  });
+
+  test("uses the write-only GitHub token command for replacement and clearing", async () => {
+    const configured = {
+      version: "1.0",
+      global: { githubTokenConfigured: true },
+      repositories: {},
+    } as AppConfig;
+    const cleared = {
+      version: "1.0",
+      global: { githubTokenConfigured: false },
+      repositories: {},
+    } as AppConfig;
+    invokeMock.mockResolvedValueOnce(configured).mockResolvedValueOnce(cleared);
+
+    await expect(setGitHubToken("ghp_replacement")).resolves.toBe(configured);
+    await expect(setGitHubToken(null)).resolves.toBe(cleared);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["set_github_token", { token: "ghp_replacement" }],
+      ["set_github_token", { token: null }],
     ]);
   });
 });

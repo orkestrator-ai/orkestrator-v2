@@ -108,6 +108,55 @@ describe("runCommand", () => {
     ).rejects.toThrow("boom");
   });
 
+  test("redacts sensitive values from successful output and command failures", async () => {
+    const secret = "github_secret_token";
+    const success = await runCommand(
+      "node",
+      ["-e", "process.stdout.write(process.env.TEST_SECRET);process.stderr.write(process.env.TEST_SECRET)"],
+      {
+        env: { ...process.env, TEST_SECRET: secret },
+        redactValues: [secret],
+      },
+    );
+    expect(success).toEqual({
+      stdout: "[REDACTED]",
+      stderr: "[REDACTED]",
+    });
+
+    let failure: unknown;
+    try {
+      await runCommand(
+        "node",
+        ["-e", "process.stderr.write('Docker permission denied for ' + process.env.TEST_SECRET);process.exit(1)"],
+        {
+          env: { ...process.env, TEST_SECRET: secret },
+          redactValues: [secret],
+        },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe("Docker permission denied for [REDACTED]");
+    expect((failure as Error).message).not.toContain(secret);
+
+    let argvFailure: unknown;
+    try {
+      await runCommand(
+        "node",
+        ["-e", "process.exit(1)", secret],
+        { redactValues: [secret] },
+      );
+    } catch (error) {
+      argvFailure = error;
+    }
+
+    expect(argvFailure).toBeInstanceOf(Error);
+    expect((argvFailure as Error).message).toContain("[REDACTED]");
+    expect((argvFailure as Error).message).not.toContain(secret);
+  });
+
   test("rejects when the command does not exist", async () => {
     await expect(runCommand("orkestrator-no-such-binary-xyz", [])).rejects.toThrow();
   });

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import type { DefaultAgent, EnvironmentType } from "@/types";
 import type { TaskSnapshot } from "@/prompts";
 import { createUuid } from "@/lib/uuid";
@@ -41,6 +42,15 @@ export type BuildPipelineSource =
       issueUrl?: string;
       status?: string;
       teamKey?: string;
+      updatedAt?: string;
+    }
+  | {
+      type: "github";
+      repositoryOwner: string;
+      repositoryName: string;
+      issueNumber: number;
+      issueUrl: string;
+      status: string;
       updatedAt?: string;
     };
 
@@ -147,15 +157,41 @@ interface BuildPipelineState {
   clearCompletionCommentStatus: (pipelineId: string) => void;
   removePipeline: (pipelineId: string) => void;
   removePipelinesForTask: (taskId: string) => void;
+  removePipelinesForEnvironment: (environmentId: string) => void;
+  reconcilePipelinesForProject: (
+    projectId: string,
+    environments: ReadonlySet<string> | readonly {
+      id: string;
+      buildPipelineId?: string;
+    }[],
+    options?: {
+      /** Remove nonterminal pipelines whose linked environment is missing. */
+      removeMissingActive?: boolean;
+      /** Remove an unlinked creation reservation not recovered by the snapshot. */
+      removeUnresolvedCreating?: boolean;
+    },
+  ) => void;
 
   // Selectors
   getPipelineByTaskId: (taskId: string) => BuildPipeline | undefined;
+  getPipelineForGitHubIssue: (
+    repositoryOwner: string,
+    repositoryName: string,
+    issueNumber: number,
+    activeOnly?: boolean,
+  ) => BuildPipeline | undefined;
   getPipelineById: (id: string) => BuildPipeline | undefined;
   getActivePipelineForEnvironment: (environmentId: string) => BuildPipeline | undefined;
   isBuildEnvironment: (environmentId: string) => boolean;
   /** Rebuild the buildEnvironmentIds set from current pipelines */
   _rebuildBuildEnvironmentIds: () => Set<string>;
 }
+
+type PersistedBuildPipelineState = {
+  pipelines: Array<[string, BuildPipeline]>;
+};
+
+export const BUILD_PIPELINE_STORAGE_KEY = "orkestrator-build-pipelines";
 
 /**
  * Whether a build phase represents an in-progress build (a running, abortable
@@ -171,7 +207,8 @@ function isResumableBuildPhase(phase: BuildPhase): phase is ResumableBuildPhase 
   return isActiveBuildPhase(phase);
 }
 
-export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => ({
+export const useBuildPipelineStore = create<BuildPipelineState>()(
+  persist<BuildPipelineState, [], [], PersistedBuildPipelineState>((set, get) => ({
   pipelines: new Map(),
   buildEnvironmentIds: new Set<string>(),
 
@@ -708,11 +745,108 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
       return { pipelines: newMap, buildEnvironmentIds: ids };
     }),
 
+  removePipelinesForEnvironment: (environmentId) =>
+    set((state) => {
+      const pipelines = new Map(state.pipelines);
+      let removed = false;
+      for (const [pipelineId, pipeline] of pipelines) {
+        if (pipeline.environmentId === environmentId) {
+          pipelines.delete(pipelineId);
+          removed = true;
+        }
+      }
+      if (!removed) return state;
+      const buildEnvironmentIds = new Set<string>();
+      for (const pipeline of pipelines.values()) {
+        if (pipeline.environmentId) buildEnvironmentIds.add(pipeline.environmentId);
+      }
+      return { pipelines, buildEnvironmentIds };
+    }),
+
+  reconcilePipelinesForProject: (projectId, environments, options = {}) =>
+    set((state) => {
+      const {
+        removeMissingActive = true,
+        removeUnresolvedCreating = true,
+      } = options;
+      const snapshots = Array.isArray(environments) ? environments : null;
+      const environmentIds = snapshots
+        ? new Set(snapshots.map((environment) => environment.id))
+        : environments as ReadonlySet<string>;
+      const environmentByPipelineId = new Map<string, string>();
+      for (const environment of snapshots ?? []) {
+        if (environment.buildPipelineId) {
+          environmentByPipelineId.set(environment.buildPipelineId, environment.id);
+        }
+      }
+      const pipelines = new Map(state.pipelines);
+      let changed = false;
+      for (const [pipelineId, pipeline] of pipelines) {
+        if (pipeline.projectId !== projectId) continue;
+
+        if (!pipeline.environmentId && snapshots) {
+          const recoveredEnvironmentId = environmentByPipelineId.get(pipelineId);
+          if (recoveredEnvironmentId) {
+            pipelines.set(pipelineId, { ...pipeline, environmentId: recoveredEnvironmentId });
+            changed = true;
+          } else if (
+            removeUnresolvedCreating
+            && pipeline.phase === "creating-environment"
+          ) {
+            // An authoritative environment snapshot without the durable
+            // association means creation did not complete. Clear the local
+            // reservation so the source issue can start another build.
+            pipelines.delete(pipelineId);
+            changed = true;
+          }
+          continue;
+        }
+
+        if (
+          removeMissingActive
+          &&
+          pipeline.environmentId
+          && !environmentIds.has(pipeline.environmentId)
+          && pipeline.phase !== "complete"
+          && pipeline.phase !== "failed"
+        ) {
+          pipelines.delete(pipelineId);
+          changed = true;
+        }
+      }
+      if (!changed) return state;
+      const buildEnvironmentIds = new Set<string>();
+      for (const pipeline of pipelines.values()) {
+        if (pipeline.environmentId) buildEnvironmentIds.add(pipeline.environmentId);
+      }
+      return { pipelines, buildEnvironmentIds };
+    }),
+
   getPipelineByTaskId: (taskId) => {
     for (const pipeline of get().pipelines.values()) {
       if (pipeline.taskId === taskId) return pipeline;
     }
     return undefined;
+  },
+
+  getPipelineForGitHubIssue: (repositoryOwner, repositoryName, issueNumber, activeOnly = false) => {
+    const normalizedOwner = repositoryOwner.toLowerCase();
+    const normalizedName = repositoryName.toLowerCase();
+    let latest: BuildPipeline | undefined;
+    for (const pipeline of get().pipelines.values()) {
+      const source = pipeline.source;
+      if (
+        source?.type !== "github"
+        || source.repositoryOwner.toLowerCase() !== normalizedOwner
+        || source.repositoryName.toLowerCase() !== normalizedName
+        || source.issueNumber !== issueNumber
+        || (activeOnly && (pipeline.phase === "complete" || pipeline.phase === "failed"))
+      ) {
+        continue;
+      }
+      if (!latest || pipeline.createdAt > latest.createdAt) latest = pipeline;
+    }
+    return latest;
   },
 
   getPipelineById: (id) => get().pipelines.get(id),
@@ -737,4 +871,40 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
     }
     return ids;
   },
-}));
+}), {
+    name: BUILD_PIPELINE_STORAGE_KEY,
+    version: 1,
+    partialize: (state) => ({
+      pipelines: Array.from(state.pipelines.entries()),
+    }),
+    merge: (persistedState, currentState) => {
+      const persisted = persistedState as PersistedBuildPipelineState | undefined;
+      const pipelines = new Map<string, BuildPipeline>();
+      for (const entry of Array.isArray(persisted?.pipelines) ? persisted.pipelines : []) {
+        if (!Array.isArray(entry) || entry.length !== 2) continue;
+        const [id, storedPipeline] = entry;
+        if (typeof id !== "string" || !storedPipeline) continue;
+        // "posting" is an in-process lease, not a terminal result. A renderer
+        // that disappeared while posting must retry through the backend's
+        // durable marker check instead of remaining stuck forever.
+        if (storedPipeline.completionCommentStatus === "posting") {
+          const recoveredPipeline = { ...storedPipeline };
+          delete recoveredPipeline.completionCommentStatus;
+          delete recoveredPipeline.completionCommentError;
+          pipelines.set(id, recoveredPipeline);
+        } else {
+          pipelines.set(id, storedPipeline);
+        }
+      }
+      const buildEnvironmentIds = new Set<string>();
+      for (const pipeline of pipelines.values()) {
+        if (pipeline.environmentId) buildEnvironmentIds.add(pipeline.environmentId);
+      }
+      return {
+        ...currentState,
+        pipelines,
+        buildEnvironmentIds,
+      };
+    },
+  }),
+);

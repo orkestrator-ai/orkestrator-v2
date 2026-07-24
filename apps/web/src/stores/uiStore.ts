@@ -14,7 +14,7 @@ const addRecentProject = (recentProjectIds: string[], projectId: string): string
     RECENT_PROJECT_LIMIT,
   );
 
-export type ProjectBoardTab = "kanban" | "linear" | "features";
+export type ProjectBoardTab = "kanban" | "github" | "linear" | "features";
 export type EnvironmentSortMode = "project" | "activity";
 
 interface UIState {

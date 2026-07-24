@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -822,6 +823,171 @@ describe("Electron StorageService", () => {
 
     await storage.clearLinearAuth();
     await expect(storage.getLinearAuth()).resolves.toBeNull();
+  });
+
+  test("persists GitHub completion comment outcomes by pipeline", async () => {
+    const dataDir = await createTempDir("ork-storage-github-completion-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    await expect(storage.getGitHubCompletionComment("pipeline-github")).resolves.toBeNull();
+    await storage.saveGitHubCompletionComment({
+      pipelineId: "pipeline-github",
+      repositoryOwner: "acme",
+      repositoryName: "widget",
+      issueNumber: 42,
+      status: "posted",
+      commentId: "9001",
+      postedAt: "2026-07-24T12:00:00.000Z",
+    });
+
+    await expect(storage.getGitHubCompletionComment("pipeline-github")).resolves.toMatchObject({
+      repositoryOwner: "acme",
+      repositoryName: "widget",
+      issueNumber: 42,
+      status: "posted",
+      commentId: "9001",
+    });
+
+    await storage.saveGitHubCompletionComment({
+      pipelineId: "pipeline-github",
+      repositoryOwner: "acme",
+      repositoryName: "widget",
+      issueNumber: 42,
+      status: "failed",
+      error: "GitHub API unavailable",
+    });
+    await expect(storage.getGitHubCompletionComment("pipeline-github")).resolves.toMatchObject({
+      status: "failed",
+      error: "GitHub API unavailable",
+    });
+    expect(await fs.readdir(dataDir)).toContain("github-completion-comments.json");
+  });
+
+  test("serializes GitHub completion comment writes across storage instances", async () => {
+    const dataDir = await createTempDir("ork-storage-github-completion-concurrency-");
+    const first = new StorageService(dataDir);
+    const second = new StorageService(dataDir);
+    await Promise.all([first.init(), second.init()]);
+
+    await Promise.all(Array.from({ length: 20 }, (_, index) => {
+      const storage = index % 2 === 0 ? first : second;
+      return storage.saveGitHubCompletionComment({
+        pipelineId: `pipeline-${index}`,
+        repositoryOwner: "acme",
+        repositoryName: "widget",
+        issueNumber: index + 1,
+        status: index % 3 === 0 ? "failed" : "posted",
+        ...(index % 3 === 0
+          ? { error: `failure-${index}` }
+          : { commentId: String(9_000 + index), postedAt: "2026-07-24T12:00:00.000Z" }),
+      });
+    }));
+
+    const records = JSON.parse(
+      await fs.readFile(path.join(dataDir, "github-completion-comments.json"), "utf8"),
+    ) as Array<{ pipelineId: string }>;
+    expect(records).toHaveLength(20);
+    expect(new Set(records.map((record) => record.pipelineId)).size).toBe(20);
+    await expect(first.getGitHubCompletionComment("pipeline-0")).resolves.toMatchObject({
+      status: "failed",
+      error: "failure-0",
+    });
+    await expect(second.getGitHubCompletionComment("pipeline-19")).resolves.toMatchObject({
+      status: "posted",
+      commentId: "9019",
+    });
+    expect(await fs.readdir(dataDir)).not.toContain("github-completion-comments.json.lock");
+  });
+
+  test("serializes the complete GitHub completion transaction across storage instances", async () => {
+    const dataDir = await createTempDir("ork-storage-github-post-lock-");
+    const first = new StorageService(dataDir);
+    const second = new StorageService(dataDir);
+    await Promise.all([first.init(), second.init()]);
+
+    let releaseFirst!: () => void;
+    let markFirstEntered!: () => void;
+    const firstEntered = new Promise<void>((resolve) => {
+      markFirstEntered = resolve;
+    });
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const order: string[] = [];
+
+    const firstRun = first.withGitHubCompletionCommentLock("pipeline-shared", async () => {
+      order.push("first-start");
+      markFirstEntered();
+      await firstGate;
+      order.push("first-end");
+    });
+    await firstEntered;
+
+    const secondRun = second.withGitHubCompletionCommentLock("pipeline-shared", async () => {
+      order.push("second-start");
+      order.push("second-end");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(order).toEqual(["first-start"]);
+
+    releaseFirst();
+    await Promise.all([firstRun, secondRun]);
+    expect(order).toEqual(["first-start", "first-end", "second-start", "second-end"]);
+  });
+
+  test("recovers an abandoned GitHub completion transaction lock", async () => {
+    const dataDir = await createTempDir("ork-storage-github-stale-post-lock-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const pipelineId = "pipeline-abandoned";
+    const key = createHash("sha256").update(pipelineId).digest("hex");
+    const lockDir = path.join(dataDir, "github-completion-comment-locks");
+    const lockPath = path.join(lockDir, `${key}.lock`);
+    await fs.mkdir(lockDir, { recursive: true });
+    await fs.writeFile(lockPath, "abandoned");
+    const staleTime = new Date(Date.now() - 20_000);
+    await fs.utimes(lockPath, staleTime, staleTime);
+
+    await expect(storage.withGitHubCompletionCommentLock(
+      pipelineId,
+      async () => "recovered",
+    )).resolves.toBe("recovered");
+    await expect(fs.access(lockPath)).rejects.toThrow();
+  });
+
+  test("recovers GitHub completion comments from malformed persistence", async () => {
+    const dataDir = await createTempDir("ork-storage-github-completion-malformed-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const file = path.join(dataDir, "github-completion-comments.json");
+
+    await fs.writeFile(file, "{not-json");
+    await expect(storage.getGitHubCompletionComment("missing")).resolves.toBeNull();
+
+    await storage.saveGitHubCompletionComment({
+      pipelineId: "pipeline-recovered",
+      repositoryOwner: "acme",
+      repositoryName: "widget",
+      issueNumber: 42,
+      status: "failed",
+      error: "first attempt failed",
+    });
+    await storage.saveGitHubCompletionComment({
+      pipelineId: "pipeline-recovered",
+      repositoryOwner: "acme",
+      repositoryName: "widget",
+      issueNumber: 42,
+      status: "posted",
+      commentId: "9001",
+      postedAt: "2026-07-24T12:00:00.000Z",
+    });
+    await fs.writeFile(file, "{truncated");
+
+    await expect(storage.getGitHubCompletionComment("pipeline-recovered")).resolves.toMatchObject({
+      status: "failed",
+      error: "first attempt failed",
+    });
   });
 
   test("removes temporary Linear auth files when a secret write fails", async () => {

@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   parseStoredDesktopConnections,
   type StoredDesktopConnections,
@@ -112,6 +112,18 @@ type LinearAuth = {
 type LinearCompletionComment = {
   pipelineId: string;
   issueId: string;
+  status: "posted" | "failed";
+  commentId?: string;
+  postedAt?: string;
+  error?: string;
+  updatedAt: string;
+};
+
+export type GitHubCompletionComment = {
+  pipelineId: string;
+  repositoryOwner: string;
+  repositoryName: string;
+  issueNumber: number;
   status: "posted" | "failed";
   commentId?: string;
   postedAt?: string;
@@ -310,6 +322,7 @@ export function createEnvironment(
   projectId: string,
   options: {
     name?: string;
+    buildPipelineId?: string;
     networkAccessMode?: "full" | "restricted";
     initialPrompt?: string;
     portMappings?: PortMapping[];
@@ -327,6 +340,7 @@ export function createEnvironment(
   return {
     id: randomUUID(),
     projectId,
+    buildPipelineId: options.buildPipelineId,
     name,
     branch: sanitizeBranchName(name),
     containerId: null,
@@ -399,6 +413,7 @@ export class StorageService {
   private writeQueue = Promise.resolve();
   private environmentMutationQueue: Promise<unknown> = Promise.resolve();
   private configMutationQueue: Promise<unknown> = Promise.resolve();
+  private githubCompletionCommentMutationQueue: Promise<unknown> = Promise.resolve();
   private featurePlanMutation: Promise<unknown> = Promise.resolve();
   private paneLayoutMutation: Promise<unknown> = Promise.resolve();
 
@@ -456,6 +471,15 @@ export class StorageService {
 
   private linearCompletionCommentsFile(): string {
     return this.file("linear-completion-comments.json");
+  }
+
+  private githubCompletionCommentsFile(): string {
+    return this.file("github-completion-comments.json");
+  }
+
+  private githubCompletionCommentLockTarget(pipelineId: string): string {
+    const key = createHash("sha256").update(pipelineId).digest("hex");
+    return this.file(path.join("github-completion-comment-locks", key));
   }
 
   private buffersDir(): string {
@@ -536,8 +560,28 @@ export class StorageService {
     return next;
   }
 
-  private async acquireConfigMutationLock(): Promise<() => Promise<void>> {
-    const lockPath = `${this.configFile()}.lock`;
+  private enqueueGitHubCompletionCommentMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.githubCompletionCommentsFile(),
+        "GitHub completion comment storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.githubCompletionCommentMutationQueue.then(run, run);
+    this.githubCompletionCommentMutationQueue = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private async acquireMutationLock(
+    targetPath: string,
+    description: string,
+  ): Promise<() => Promise<void>> {
+    const lockPath = `${targetPath}.lock`;
     const token = randomUUID();
     const deadline = Date.now() + 20_000;
     await fs.mkdir(path.dirname(lockPath), { recursive: true });
@@ -552,7 +596,12 @@ export class StorageService {
           await fs.rm(lockPath, { force: true });
           throw error;
         }
+        const heartbeat = setInterval(() => {
+          void handle.utimes(new Date(), new Date()).catch(() => undefined);
+        }, 5_000);
+        heartbeat.unref();
         return async () => {
+          clearInterval(heartbeat);
           await handle.close();
           const currentToken = await fs.readFile(lockPath, "utf8").catch(() => null);
           if (currentToken === token) await fs.rm(lockPath, { force: true });
@@ -565,10 +614,16 @@ export class StorageService {
           await fs.rm(lockPath, { force: true });
           continue;
         }
-        if (Date.now() >= deadline) throw new Error("Timed out waiting for configuration storage lock");
+        if (Date.now() >= deadline) {
+          throw new Error(`Timed out waiting for ${description} lock`);
+        }
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
     }
+  }
+
+  private async acquireConfigMutationLock(): Promise<() => Promise<void>> {
+    return this.acquireMutationLock(this.configFile(), "configuration storage");
   }
 
   private async acquireEnvironmentMutationLock(): Promise<() => Promise<void>> {
@@ -938,6 +993,16 @@ export class StorageService {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadConfig();
       config.global = validated;
+      await this.saveJson(this.configFile(), config);
+      return config;
+    });
+  }
+
+  async setGitHubToken(token: string | null): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      if (token === null) delete config.global.githubToken;
+      else config.global.githubToken = token;
       await this.saveJson(this.configFile(), config);
       return config;
     });
@@ -1374,6 +1439,54 @@ export class StorageService {
     else comments.push(nextRecord);
     await this.saveJson(this.linearCompletionCommentsFile(), comments);
     return nextRecord;
+  }
+
+  async getGitHubCompletionComment(pipelineId: string): Promise<GitHubCompletionComment | null> {
+    const comments = await this.loadJson<GitHubCompletionComment[]>(
+      this.githubCompletionCommentsFile(),
+      () => [],
+    );
+    return comments.find((comment) => comment.pipelineId === pipelineId) ?? null;
+  }
+
+  /**
+   * Serialize the complete scan/post/persist transaction for one GitHub-backed
+   * pipeline across backend processes sharing this data directory.
+   */
+  async withGitHubCompletionCommentLock<T>(
+    pipelineId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    if (!pipelineId.trim()) throw new Error("GitHub completion pipeline ID is required");
+    const release = await this.acquireMutationLock(
+      this.githubCompletionCommentLockTarget(pipelineId),
+      "GitHub completion comment posting",
+    );
+    try {
+      return await operation();
+    } finally {
+      await release();
+    }
+  }
+
+  async saveGitHubCompletionComment(
+    record: Omit<GitHubCompletionComment, "updatedAt"> & { updatedAt?: string },
+  ): Promise<GitHubCompletionComment> {
+    return this.enqueueGitHubCompletionCommentMutation(async () => {
+      const comments = await this.loadJson<GitHubCompletionComment[]>(
+        this.githubCompletionCommentsFile(),
+        () => [],
+      );
+      const nextRecord: GitHubCompletionComment = {
+        ...record,
+        updatedAt: record.updatedAt ?? nowIso(),
+      };
+      const index = comments.findIndex((comment) => comment.pipelineId === record.pipelineId);
+      if (index >= 0) comments[index] = nextRecord;
+      else comments.push(nextRecord);
+      await this.saveJson(this.githubCompletionCommentsFile(), comments);
+      return nextRecord;
+    });
   }
 
   async setAllEnvironmentStatusesForContainer(containerId: string, status: EnvironmentStatus): Promise<void> {

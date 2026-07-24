@@ -7,6 +7,7 @@ import { parseStoredDesktopConnections } from "@orkestrator/protocol/connections
 import {
   PANE_LAYOUT_VERSION,
   type Environment,
+  type AppConfig,
   type EnvironmentStatus,
   type EnvironmentType,
   type PortMapping,
@@ -64,6 +65,20 @@ import {
   sanitizeLinearError,
   verifyLinearConnection,
 } from "./linear.js";
+import {
+  closeGitHubIssue,
+  getGitHubIssue,
+  listGitHubIssueComments,
+  listGitHubIssues,
+  postGitHubIssueComment,
+  resolveGitHubRepository,
+  sanitizeGitHubError,
+  updateGitHubIssue,
+  updateGitHubIssueComment,
+  updateGitHubIssueStatus,
+  type GitHubIssueStatus,
+  type GitHubRepositoryRef,
+} from "./github.js";
 
 export type BackendEmit = (event: string, payload: unknown) => void;
 
@@ -149,7 +164,69 @@ async function requireLinearApiKey(context: CommandContext): Promise<string> {
   return auth.apiKey;
 }
 
+async function requireGitHubProject(
+  context: CommandContext,
+  projectId: string,
+): Promise<{ token: string; repository: GitHubRepositoryRef }> {
+  const [project, config] = await Promise.all([
+    context.storage.getProject(projectId),
+    context.storage.loadConfig(),
+  ]);
+  if (!project) throw new Error(`Project not found: ${projectId}`);
+  const token = config.global.githubToken?.trim();
+  if (!token) {
+    throw new Error("GitHub is not configured. Add a global GitHub token in Settings and try again.");
+  }
+  return { token, repository: resolveGitHubRepository(project.gitUrl) };
+}
+
+type RendererGlobalConfig = Omit<AppConfig["global"], "githubToken"> & {
+  githubTokenConfigured: boolean;
+};
+
+type RendererAppConfig = Omit<AppConfig, "global"> & {
+  global: RendererGlobalConfig;
+};
+
+function redactGlobalConfig(global: AppConfig["global"]): RendererGlobalConfig {
+  const { githubToken, ...safeGlobal } = global;
+  return {
+    ...safeGlobal,
+    githubTokenConfigured: Boolean(githubToken?.trim()),
+  };
+}
+
+function redactAppConfig(config: AppConfig): RendererAppConfig {
+  return {
+    ...config,
+    global: redactGlobalConfig(config.global),
+  };
+}
+
+function preserveStoredGitHubToken(
+  global: Record<string, unknown>,
+  githubToken: string | undefined,
+): AppConfig["global"] {
+  const {
+    githubToken: _ignoredToken,
+    githubTokenConfigured: _ignoredConfigured,
+    ...safeGlobal
+  } = global;
+  return {
+    ...safeGlobal,
+    ...(githubToken ? { githubToken } : {}),
+  } as AppConfig["global"];
+}
+
+function asGitHubIssueStatus(value: unknown): GitHubIssueStatus {
+  if (value === "backlog" || value === "todo" || value === "inprogress" || value === "review") {
+    return value;
+  }
+  throw new Error("Expected status to be backlog, todo, inprogress, or review");
+}
+
 const linearCompletionCommentLocks = new Map<string, Promise<unknown>>();
+const githubCompletionCommentLocks = new Map<string, Promise<unknown>>();
 
 async function withLinearCompletionCommentLock<T>(pipelineId: string, task: () => Promise<T>): Promise<T> {
   const previous = linearCompletionCommentLocks.get(pipelineId) ?? Promise.resolve();
@@ -160,6 +237,19 @@ async function withLinearCompletionCommentLock<T>(pipelineId: string, task: () =
   } finally {
     if (linearCompletionCommentLocks.get(pipelineId) === current) {
       linearCompletionCommentLocks.delete(pipelineId);
+    }
+  }
+}
+
+async function withGitHubCompletionCommentLock<T>(pipelineId: string, task: () => Promise<T>): Promise<T> {
+  const previous = githubCompletionCommentLocks.get(pipelineId) ?? Promise.resolve();
+  const current = previous.then(task);
+  githubCompletionCommentLocks.set(pipelineId, current);
+  try {
+    return await current;
+  } finally {
+    if (githubCompletionCommentLocks.get(pipelineId) === current) {
+      githubCompletionCommentLocks.delete(pipelineId);
     }
   }
 }
@@ -2339,10 +2429,23 @@ async function createDockerContainer(environment: Environment, context: CommandC
   ];
 
   const githubToken = config.global.githubToken?.trim();
+  const dockerEnvironment: NodeJS.ProcessEnv = { ...process.env };
+  const redactValues: string[] = [];
   if (githubToken) {
-    args.push("-e", `GITHUB_TOKEN=${githubToken}`, "-e", `GH_TOKEN=${githubToken}`);
+    // Use Docker's host-environment passthrough form so credentials are not
+    // present in the process argv (and therefore cannot appear in command
+    // failure messages or process listings).
+    dockerEnvironment.GITHUB_TOKEN = githubToken;
+    dockerEnvironment.GH_TOKEN = githubToken;
+    redactValues.push(githubToken);
+    args.push("-e", "GITHUB_TOKEN", "-e", "GH_TOKEN");
   }
-  if (config.global.anthropicApiKey) args.push("-e", `ANTHROPIC_API_KEY=${config.global.anthropicApiKey}`);
+  const anthropicApiKey = config.global.anthropicApiKey?.trim();
+  if (anthropicApiKey) {
+    dockerEnvironment.ANTHROPIC_API_KEY = anthropicApiKey;
+    redactValues.push(anthropicApiKey);
+    args.push("-e", "ANTHROPIC_API_KEY");
+  }
   if (config.global.opencodeModel) args.push("-e", `OPENCODE_MODEL=${config.global.opencodeModel}`);
   if (environment.networkAccessMode === "full") {
     args.push("-e", "NETWORK_MODE=full");
@@ -2378,7 +2481,11 @@ async function createDockerContainer(environment: Environment, context: CommandC
   if (repoConfig.entryPort) args.push("-p", `127.0.0.1::${repoConfig.entryPort}/tcp`);
   args.push(DOCKER_IMAGE);
 
-  const { stdout } = await runCommand("docker", args, { timeoutMs: 120_000 });
+  const { stdout } = await runCommand("docker", args, {
+    env: dockerEnvironment,
+    timeoutMs: 120_000,
+    redactValues,
+  });
   const containerId = stdout.trim();
   try {
     if (project.localPath) {
@@ -2450,16 +2557,51 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     return stdout.trim() || null;
   });
 
-  register("get_config", (_args, { storage }) => storage.loadConfig());
-  register("save_config", ({ config }, { storage }) => storage.saveConfig(config as never));
+  register("get_config", async (_args, { storage }) => redactAppConfig(await storage.loadConfig()));
+  register("save_config", async ({ config }, { storage }) => {
+    const candidate = asRecord(config, "config") as unknown as AppConfig;
+    const stored = await storage.loadConfig();
+    await storage.saveConfig({
+      ...candidate,
+      global: preserveStoredGitHubToken(
+        asRecord(candidate.global, "config.global"),
+        stored.global.githubToken,
+      ),
+    });
+  });
   register("get_desktop_connections", (_args, { storage }) => storage.getDesktopConnections());
   register("save_desktop_connections", ({ desktopConnections }, { storage }) => {
     return storage.saveDesktopConnections(parseStoredDesktopConnections(desktopConnections));
   });
-  register("get_global_config", async (_args, { storage }) => (await storage.loadConfig()).global);
-  register("update_global_config", ({ global }, { storage }) => storage.updateGlobalConfig(global as never));
+  register("get_global_config", async (_args, { storage }) =>
+    redactGlobalConfig((await storage.loadConfig()).global)
+  );
+  register("update_global_config", async ({ global }, { storage }) => {
+    const stored = await storage.loadConfig();
+    const updated = await storage.updateGlobalConfig(
+      preserveStoredGitHubToken(
+        asRecord(global, "global"),
+        stored.global.githubToken,
+      ),
+    );
+    return redactAppConfig(updated);
+  });
+  register("set_github_token", async ({ token }, { storage }) => {
+    const nextToken = token === null ? null : asString(token, "token").trim();
+    if (nextToken !== null && !nextToken) {
+      throw new Error("GitHub token cannot be empty. Use null to clear it.");
+    }
+    return redactAppConfig(await storage.setGitHubToken(nextToken));
+  });
   register("get_repository_config", ({ projectId }, { storage }) => storage.getRepositoryConfig(asString(projectId, "projectId")));
-  register("update_repository_config", ({ projectId, repoConfig }, { storage }) => storage.updateRepositoryConfig(asString(projectId, "projectId"), repoConfig as never));
+  register("update_repository_config", async ({ projectId, repoConfig }, { storage }) =>
+    redactAppConfig(
+      await storage.updateRepositoryConfig(
+        asString(projectId, "projectId"),
+        repoConfig as never,
+      ),
+    )
+  );
   register("get_linear_connection", async (_args, context) => {
     const auth = await context.storage.getLinearAuth();
     if (!auth?.apiKey) return { connected: false, hasToken: false };
@@ -2557,6 +2699,193 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       }
     });
   });
+  register("post_github_completion_comment", async ({
+    pipelineId,
+    projectId,
+    repositoryOwner,
+    repositoryName,
+    issueNumber,
+    body,
+  }, context) => {
+    const runId = asString(pipelineId, "pipelineId");
+    const targetProjectId = asString(projectId, "projectId");
+    const owner = asString(repositoryOwner, "repositoryOwner").trim();
+    const name = asString(repositoryName, "repositoryName").trim();
+    const targetIssueNumber = asNumber(issueNumber, "issueNumber");
+    const commentBody = asString(body, "body").trim();
+    if (!commentBody) throw new Error("Completion comment cannot be empty");
+
+    return withGitHubCompletionCommentLock(runId, () => (
+      context.storage.withGitHubCompletionCommentLock(runId, async () => {
+        const target = await requireGitHubProject(context, targetProjectId);
+        if (
+          target.repository.owner.toLowerCase() !== owner.toLowerCase()
+          || target.repository.name.toLowerCase() !== name.toLowerCase()
+        ) {
+          throw new Error(
+            `GitHub pipeline repository does not match the selected project (${target.repository.owner}/${target.repository.name}).`,
+          );
+        }
+        const existing = await context.storage.getGitHubCompletionComment(runId);
+        if (existing?.status === "posted" && existing.commentId) {
+          return {
+            status: "already-posted",
+            commentId: existing.commentId,
+            postedAt: existing.postedAt,
+          };
+        }
+
+        const { token, repository } = target;
+        const marker = `<!-- orkestrator-github-run:${runId} -->`;
+        try {
+          // Always scan before posting. This recovers the case where GitHub
+          // accepted a previous request but the response or local persistence
+          // failed, and makes explicit retries safe.
+          const comments = await listGitHubIssueComments(
+            token,
+            repository,
+            targetIssueNumber,
+          );
+          const matchingComment = comments.find((comment) => comment.body.includes(marker));
+          if (matchingComment) {
+            const commentId = String(matchingComment.id);
+            await context.storage.saveGitHubCompletionComment({
+              pipelineId: runId,
+              repositoryOwner: repository.owner,
+              repositoryName: repository.name,
+              issueNumber: targetIssueNumber,
+              status: "posted",
+              commentId,
+              postedAt: matchingComment.createdAt,
+            });
+            return {
+              status: "already-posted",
+              commentId,
+              postedAt: matchingComment.createdAt,
+            };
+          }
+
+          const comment = await postGitHubIssueComment(
+            token,
+            repository,
+            targetIssueNumber,
+            `${commentBody}\n\n${marker}`,
+          );
+          const commentId = String(comment.id);
+          await context.storage.saveGitHubCompletionComment({
+            pipelineId: runId,
+            repositoryOwner: repository.owner,
+            repositoryName: repository.name,
+            issueNumber: targetIssueNumber,
+            status: "posted",
+            commentId,
+            postedAt: comment.createdAt,
+          });
+          return {
+            status: "posted",
+            commentId,
+            postedAt: comment.createdAt,
+          };
+        } catch (error) {
+          const message = sanitizeGitHubError(error, token);
+          await context.storage.saveGitHubCompletionComment({
+            pipelineId: runId,
+            repositoryOwner: repository.owner,
+            repositoryName: repository.name,
+            issueNumber: targetIssueNumber,
+            status: "failed",
+            error: message,
+          });
+          throw new Error(message);
+        }
+      })
+    ));
+  });
+  register("get_github_issues", async ({ projectId }, context) => {
+    const target = await requireGitHubProject(context, asString(projectId, "projectId"));
+    try {
+      return await listGitHubIssues(target.token, target.repository);
+    } catch (error) {
+      throw new Error(sanitizeGitHubError(error, target.token));
+    }
+  });
+  register("get_github_issue", async ({ projectId, issueNumber }, context) => {
+    const target = await requireGitHubProject(context, asString(projectId, "projectId"));
+    try {
+      return await getGitHubIssue(
+        target.token,
+        target.repository,
+        asNumber(issueNumber, "issueNumber"),
+      );
+    } catch (error) {
+      throw new Error(sanitizeGitHubError(error, target.token));
+    }
+  });
+  register("update_github_issue", async ({ projectId, issueNumber, title, body }, context) => {
+    const target = await requireGitHubProject(context, asString(projectId, "projectId"));
+    try {
+      return await updateGitHubIssue(
+        target.token,
+        target.repository,
+        asNumber(issueNumber, "issueNumber"),
+        { title: asString(title, "title"), body: asString(body, "body") },
+      );
+    } catch (error) {
+      throw new Error(sanitizeGitHubError(error, target.token));
+    }
+  });
+  register("update_github_issue_status", async ({ projectId, issueNumber, status }, context) => {
+    const target = await requireGitHubProject(context, asString(projectId, "projectId"));
+    try {
+      return await updateGitHubIssueStatus(
+        target.token,
+        target.repository,
+        asNumber(issueNumber, "issueNumber"),
+        asGitHubIssueStatus(status),
+      );
+    } catch (error) {
+      throw new Error(sanitizeGitHubError(error, target.token));
+    }
+  });
+  register("close_github_issue", async ({ projectId, issueNumber }, context) => {
+    const target = await requireGitHubProject(context, asString(projectId, "projectId"));
+    try {
+      return await closeGitHubIssue(
+        target.token,
+        target.repository,
+        asNumber(issueNumber, "issueNumber"),
+      );
+    } catch (error) {
+      throw new Error(sanitizeGitHubError(error, target.token));
+    }
+  });
+  register("add_github_issue_comment", async ({ projectId, issueNumber, body }, context) => {
+    const target = await requireGitHubProject(context, asString(projectId, "projectId"));
+    try {
+      return await postGitHubIssueComment(
+        target.token,
+        target.repository,
+        asNumber(issueNumber, "issueNumber"),
+        asString(body, "body"),
+      );
+    } catch (error) {
+      throw new Error(sanitizeGitHubError(error, target.token));
+    }
+  });
+  register("update_github_issue_comment", async ({ projectId, issueNumber, commentId, body }, context) => {
+    const target = await requireGitHubProject(context, asString(projectId, "projectId"));
+    try {
+      return await updateGitHubIssueComment(
+        target.token,
+        target.repository,
+        asNumber(issueNumber, "issueNumber"),
+        asNumber(commentId, "commentId"),
+        asString(body, "body"),
+      );
+    } catch (error) {
+      throw new Error(sanitizeGitHubError(error, target.token));
+    }
+  });
   register("get_log_directory", (_args, { storage }) => storage.getLogDirectory());
 
   register("get_environments", async ({ projectId }, context) => {
@@ -2580,7 +2909,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   );
   register("get_environment", ({ environmentId }, { storage }) => storage.getEnvironment(asString(environmentId, "environmentId")));
   register("reorder_environments", ({ projectId, environmentIds }, { storage }) => storage.reorderEnvironments(asString(projectId, "projectId"), asStringArray(environmentIds)));
-  register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt }, context) => {
+  register("create_environment", async ({ projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt, buildPipelineId }, context) => {
     const { storage } = context;
     const project = await storage.getProject(asString(projectId, "projectId"));
     if (!project) throw new Error(`Project not found: ${projectId}`);
@@ -2598,6 +2927,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const uniqueName = makeUniqueEnvironmentSlug(baseName, existingEnvironments, existingGitBranches);
     const env = createEnvironment(project.id, {
       name: uniqueName,
+      buildPipelineId: asOptionalString(buildPipelineId),
       networkAccessMode: networkAccessMode === "full" ? "full" : networkAccessMode === "restricted" ? "restricted" : undefined,
       initialPrompt: initialPromptText,
       portMappings: asPortMappings(portMappings),

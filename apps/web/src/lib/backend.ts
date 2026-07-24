@@ -35,6 +35,13 @@ import type {
   LinearIssueDetail,
   LinearIssueListItem,
 } from "@/types/linear";
+import type {
+  GitHubIssue,
+  GitHubIssueComment,
+  GitHubIssueDetail,
+  GitHubIssuesSnapshot,
+  GitHubIssueStatus,
+} from "@/types/github";
 
 /** PR detection result containing URL, state, and merge conflict status */
 export interface PrDetectionResult {
@@ -107,9 +114,19 @@ export async function createEnvironment(
   initialPrompt?: string,
   portMappings?: PortMapping[],
   environmentType?: EnvironmentType,
-  namingPrompt?: string
+  namingPrompt?: string,
+  buildPipelineId?: string,
 ): Promise<Environment> {
-  return invoke<Environment>("create_environment", { projectId, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt });
+  return invoke<Environment>("create_environment", {
+    projectId,
+    name,
+    networkAccessMode,
+    initialPrompt,
+    portMappings,
+    environmentType,
+    namingPrompt,
+    ...(buildPipelineId ? { buildPipelineId } : {}),
+  });
 }
 
 export async function deleteEnvironment(environmentId: string): Promise<void> {
@@ -252,6 +269,10 @@ export async function updateGlobalConfig(global: GlobalConfig): Promise<AppConfi
   return invoke<AppConfig>("update_global_config", { global });
 }
 
+export async function setGitHubToken(token: string | null): Promise<AppConfig> {
+  return invoke<AppConfig>("set_github_token", { token });
+}
+
 export async function getWebClientStatus(): Promise<WebClientStatus> {
   if (window.orkestrator?.webClient) {
     return window.orkestrator.webClient.getStatus();
@@ -342,6 +363,86 @@ export async function postLinearCompletionComment(
   body: string,
 ): Promise<LinearCompletionCommentResult> {
   return invoke<LinearCompletionCommentResult>("post_linear_completion_comment", { pipelineId, issueId, body });
+}
+
+export async function getGitHubIssues(projectId: string): Promise<GitHubIssuesSnapshot> {
+  return invoke<GitHubIssuesSnapshot>("get_github_issues", { projectId });
+}
+
+export async function getGitHubIssue(
+  projectId: string,
+  issueNumber: number,
+): Promise<GitHubIssueDetail> {
+  return invoke<GitHubIssueDetail>("get_github_issue", { projectId, issueNumber });
+}
+
+export async function updateGitHubIssue(
+  projectId: string,
+  issueNumber: number,
+  updates: { title: string; body: string },
+): Promise<GitHubIssue> {
+  return invoke<GitHubIssue>("update_github_issue", { projectId, issueNumber, ...updates });
+}
+
+export async function updateGitHubIssueStatus(
+  projectId: string,
+  issueNumber: number,
+  status: GitHubIssueStatus,
+): Promise<GitHubIssue> {
+  return invoke<GitHubIssue>("update_github_issue_status", { projectId, issueNumber, status });
+}
+
+export async function closeGitHubIssue(
+  projectId: string,
+  issueNumber: number,
+): Promise<GitHubIssue> {
+  return invoke<GitHubIssue>("close_github_issue", { projectId, issueNumber });
+}
+
+export async function addGitHubIssueComment(
+  projectId: string,
+  issueNumber: number,
+  body: string,
+): Promise<GitHubIssueComment> {
+  return invoke<GitHubIssueComment>("add_github_issue_comment", { projectId, issueNumber, body });
+}
+
+export async function updateGitHubIssueComment(
+  projectId: string,
+  issueNumber: number,
+  commentId: number,
+  body: string,
+): Promise<GitHubIssueComment> {
+  return invoke<GitHubIssueComment>("update_github_issue_comment", {
+    projectId,
+    issueNumber,
+    commentId,
+    body,
+  });
+}
+
+export interface GitHubCompletionCommentResult {
+  status: "posted" | "already-posted";
+  commentId: string;
+  postedAt?: string;
+}
+
+export async function postGitHubCompletionComment(
+  pipelineId: string,
+  projectId: string,
+  repositoryOwner: string,
+  repositoryName: string,
+  issueNumber: number,
+  body: string,
+): Promise<GitHubCompletionCommentResult> {
+  return invoke<GitHubCompletionCommentResult>("post_github_completion_comment", {
+    pipelineId,
+    projectId,
+    repositoryOwner,
+    repositoryName,
+    issueNumber,
+    body,
+  });
 }
 
 // --- GitHub Commands ---

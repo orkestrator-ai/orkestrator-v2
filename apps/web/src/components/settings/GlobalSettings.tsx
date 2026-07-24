@@ -81,7 +81,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [memoryGb, setMemoryGb] = useState(global.containerResources.memoryGb);
   const [envPatterns, setEnvPatterns] = useState(global.envFilePatterns.join(", "));
   const [anthropicApiKey, setAnthropicApiKey] = useState(global.anthropicApiKey || "");
-  const [githubToken, setGithubToken] = useState(global.githubToken || "");
+  const [githubToken, setGithubToken] = useState("");
+  const [clearGithubToken, setClearGithubToken] = useState(false);
   const [allowedDomains, setAllowedDomains] = useState(
     (global.allowedDomains || []).join("\n")
   );
@@ -164,7 +165,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setMemoryGb(global.containerResources.memoryGb);
     setEnvPatterns(global.envFilePatterns.join(", "));
     setAnthropicApiKey(global.anthropicApiKey || "");
-    setGithubToken(global.githubToken || "");
+    setGithubToken("");
+    setClearGithubToken(false);
     setAllowedDomains((global.allowedDomains || []).join("\n"));
     setPreferredEditor(global.preferredEditor || "vscode");
     setDefaultAgent(global.defaultAgent || "claude");
@@ -256,7 +258,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       memoryGb !== global.containerResources.memoryGb ||
       envPatterns !== global.envFilePatterns.join(", ") ||
       anthropicApiKey !== (global.anthropicApiKey || "") ||
-      githubToken !== (global.githubToken || "") ||
+      githubToken.trim().length > 0 ||
+      clearGithubToken ||
       allowedDomains !== (global.allowedDomains || []).join("\n") ||
       preferredEditor !== (global.preferredEditor || "vscode") ||
       defaultAgent !== (global.defaultAgent || "claude") ||
@@ -281,7 +284,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewPrompt, webClientApplyError, gatewayToken, savedGatewayToken, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, clearGithubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewPrompt, webClientApplyError, gatewayToken, savedGatewayToken, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -354,7 +357,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         envFilePatterns: string[];
         allowedDomains: string[];
         anthropicApiKey?: string;
-        githubToken?: string;
         preferredEditor?: PreferredEditor;
         defaultAgent: DefaultAgent;
         opencodeModel: string;
@@ -408,12 +410,18 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       };
 
       if (anthropicApiKey) newGlobal.anthropicApiKey = anthropicApiKey;
-      if (githubToken) newGlobal.githubToken = githubToken;
       if (reviewPrompt !== DEFAULT_REVIEW_PROMPT_TEMPLATE) {
         newGlobal.reviewPrompt = reviewPrompt;
       }
 
-      const newConfig = await backend.updateGlobalConfig(newGlobal);
+      let newConfig = await backend.updateGlobalConfig(newGlobal);
+      const nextGitHubToken = githubToken.trim();
+      const githubCredentialChanged = clearGithubToken || nextGitHubToken.length > 0;
+      if (githubCredentialChanged) {
+        newConfig = await backend.setGitHubToken(
+          clearGithubToken ? null : nextGitHubToken,
+        );
+      }
       setConfig(newConfig);
 
       if (!window.orkestratorGateway?.enabled) {
@@ -443,12 +451,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       }
 
       // Propagate GitHub token to running containers if it changed
-      const oldToken = global.githubToken || "";
-      const newTokenValue = githubToken || "";
-      if (oldToken !== newTokenValue) {
+      if (githubCredentialChanged) {
         try {
           const propagateResult = await backend.propagateGithubTokenToContainers(
-            newTokenValue === "" ? null : newTokenValue
+            clearGithubToken ? null : nextGitHubToken,
           );
           if (propagateResult.updated.length > 0) {
             toast.success(`Updated GitHub token in ${propagateResult.updated.length} container(s)`);
@@ -458,6 +464,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         }
       }
 
+      setGithubToken("");
+      setClearGithubToken(false);
       setHasChanges(false);
       setSaveSuccess(true);
       toast.success("Settings saved");
@@ -476,7 +484,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setMemoryGb(global.containerResources.memoryGb);
     setEnvPatterns(global.envFilePatterns.join(", "));
     setAnthropicApiKey(global.anthropicApiKey || "");
-    setGithubToken(global.githubToken || "");
+    setGithubToken("");
+    setClearGithubToken(false);
     setAllowedDomains((global.allowedDomains || []).join("\n"));
     setPreferredEditor(global.preferredEditor || "vscode");
     setDefaultAgent(global.defaultAgent || "claude");
@@ -709,10 +718,18 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         </div>
         <div className="relative">
           <Input
+            aria-label="GitHub token"
             type={showGithubToken ? "text" : "password"}
             value={githubToken}
-            onChange={(e) => setGithubToken(e.target.value)}
-            placeholder="ghp_..."
+            onChange={(e) => {
+              setGithubToken(e.target.value);
+              if (e.target.value) setClearGithubToken(false);
+            }}
+            placeholder={
+              global.githubTokenConfigured && !clearGithubToken
+                ? "Token configured — enter a replacement"
+                : "ghp_..."
+            }
             className="pr-10 font-mono"
           />
           <Button
@@ -725,6 +742,24 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
             {showGithubToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
           </Button>
         </div>
+        {global.githubTokenConfigured && !clearGithubToken && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setGithubToken("");
+              setClearGithubToken(true);
+            }}
+          >
+            Clear stored token
+          </Button>
+        )}
+        {clearGithubToken && (
+          <p className="text-xs text-amber-500">
+            The stored GitHub token will be cleared when you save.
+          </p>
+        )}
         <p className="text-xs text-muted-foreground">
           Create at{" "}
           <a href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">

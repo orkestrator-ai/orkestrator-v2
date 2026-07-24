@@ -3,6 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { KanbanBoard, canClearTaskBuildStatus } from "@/components/kanban/KanbanBoard";
 import { useProjectStore } from "@/stores/projectStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
+import { useGitHubIssuesStore } from "@/stores/githubIssuesStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { KanbanTask } from "@/stores/kanbanStore";
 import type { BuildPhase } from "@/stores/buildPipelineStore";
@@ -10,12 +11,14 @@ import type { BuildPhase } from "@/stores/buildPipelineStore";
 const loadTasksMock = mock(async () => undefined);
 const loadNotesMock = mock(async () => undefined);
 const saveNotesMock = mock(async () => undefined);
+const loadGitHubIssuesMock = mock(async () => undefined);
 
 beforeEach(() => {
   cleanup();
   loadTasksMock.mockClear();
   loadNotesMock.mockClear();
   saveNotesMock.mockClear();
+  loadGitHubIssuesMock.mockClear();
   useProjectStore.setState({
     projects: [{
       id: "project-1",
@@ -38,6 +41,26 @@ beforeEach(() => {
   useUIStore.setState({
     projectBoardTab: "kanban",
     projectBoardNotesOpen: false,
+  });
+  useGitHubIssuesStore.setState({
+    snapshots: new Map([[
+      "project-1",
+      {
+        repository: {
+          owner: "acme",
+          name: "repo",
+          fullName: "acme/repo",
+          htmlUrl: "https://github.com/acme/repo",
+        },
+        viewer: { login: "reviewer" },
+        issues: [],
+      },
+    ]]),
+    loadingProjects: new Set(),
+    projectErrors: new Map(),
+    loadIssues: loadGitHubIssuesMock as unknown as ReturnType<
+      typeof useGitHubIssuesStore.getState
+    >["loadIssues"],
   });
 });
 
@@ -115,5 +138,17 @@ describe("KanbanBoard ticket sources", () => {
     expect(screen.queryByText("Backlog")).toBeNull();
     expect(screen.getByText("Project Notes")).toBeTruthy();
     expect(loadNotesMock).toHaveBeenCalledWith("project-1");
+  });
+
+  test("mounts the GitHub issues view for the GitHub project-board tab", async () => {
+    useUIStore.setState({ projectBoardTab: "github", projectBoardNotesOpen: false });
+
+    render(<KanbanBoard projectId="project-1" />);
+
+    expect(screen.getByText("acme/repo")).toBeTruthy();
+    expect(screen.getByText("No open issues")).toBeTruthy();
+    await waitFor(() => {
+      expect(loadGitHubIssuesMock).toHaveBeenCalledWith("project-1");
+    });
   });
 });

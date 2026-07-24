@@ -2,7 +2,7 @@
 import { useCallback, useEffect } from "react";
 import { listen, type UnlistenFn } from "@/lib/native/events";
 import { toast } from "sonner";
-import { createSessionKey, useConfigStore, useEnvironmentStore, useErrorDialogStore, useTerminalSessionStore, useUIStore } from "@/stores";
+import { createSessionKey, useBuildPipelineStore, useConfigStore, useEnvironmentStore, useErrorDialogStore, useTerminalSessionStore, useUIStore } from "@/stores";
 import { useSessionStore } from "@/stores/sessionStore";
 import * as backend from "@/lib/backend";
 import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, PrState } from "@/types";
@@ -61,6 +61,38 @@ interface LoadEnvironmentsOptions {
   silent?: boolean;
   /** Reconcile persisted container state with Docker before returning the list. */
   reconcileStatus?: boolean;
+  /** Remove persisted creation reservations that have no backend association. */
+  cleanupOrphanedPipelines?: boolean;
+}
+
+interface EnvironmentCreationState {
+  generation: number;
+  activeCreations: number;
+}
+
+const environmentCreationStateByProject = new Map<string, EnvironmentCreationState>();
+
+function getEnvironmentCreationState(projectId: string): EnvironmentCreationState {
+  return environmentCreationStateByProject.get(projectId) ?? {
+    generation: 0,
+    activeCreations: 0,
+  };
+}
+
+function beginEnvironmentCreation(projectId: string): void {
+  const current = getEnvironmentCreationState(projectId);
+  environmentCreationStateByProject.set(projectId, {
+    generation: current.generation + 1,
+    activeCreations: current.activeCreations + 1,
+  });
+}
+
+function finishEnvironmentCreation(projectId: string): void {
+  const current = getEnvironmentCreationState(projectId);
+  environmentCreationStateByProject.set(projectId, {
+    generation: current.generation + 1,
+    activeCreations: Math.max(0, current.activeCreations - 1),
+  });
 }
 
 function bindSetupTerminalSession(environment: Environment, sessionId: string): void {
@@ -130,7 +162,7 @@ export function useEnvironments(
   // Load environments when projectId changes
   useEffect(() => {
     if (projectId) {
-      loadEnvironments(projectId);
+      loadEnvironments(projectId, { cleanupOrphanedPipelines: true });
     }
   }, [projectId]);
 
@@ -252,7 +284,12 @@ export function useEnvironments(
 
   const loadEnvironments = useCallback(
     async (pid: string, options: LoadEnvironmentsOptions = {}) => {
-      const { silent = false, reconcileStatus = true } = options;
+      const {
+        silent = false,
+        reconcileStatus = true,
+        cleanupOrphanedPipelines = false,
+      } = options;
+      const creationGeneration = getEnvironmentCreationState(pid).generation;
       if (!silent) {
         setLoading(true);
         setError(null);
@@ -261,8 +298,24 @@ export function useEnvironments(
         const envs = reconcileStatus
           ? await backend.getEnvironments(pid)
           : await backend.getEnvironmentSnapshots(pid);
-        // Merge environments for this project (uses current store state, not stale closure)
-        mergeEnvironmentsForProject(pid, envs);
+        const currentCreationState = getEnvironmentCreationState(pid);
+        const snapshotIsCurrent =
+          currentCreationState.activeCreations === 0
+          && currentCreationState.generation === creationGeneration;
+        // A snapshot requested before or during creation may omit the newly
+        // created environment. Do not let it replace newer local state.
+        if (snapshotIsCurrent) {
+          mergeEnvironmentsForProject(pid, envs);
+        }
+        useBuildPipelineStore.getState().reconcilePipelinesForProject(
+          pid,
+          envs,
+          {
+            removeMissingActive: snapshotIsCurrent,
+            removeUnresolvedCreating:
+              cleanupOrphanedPipelines && snapshotIsCurrent,
+          },
+        );
       } catch (err) {
         const message = getErrorMessage(err, "Failed to load environments");
         if (silent) {
@@ -280,11 +333,12 @@ export function useEnvironments(
   );
 
   const createEnvironment = useCallback(
-    async (pid: string, name?: string, networkAccessMode?: NetworkAccessMode, initialPrompt?: string, portMappings?: PortMapping[], environmentType?: EnvironmentType, namingPrompt?: string) => {
+    async (pid: string, name?: string, networkAccessMode?: NetworkAccessMode, initialPrompt?: string, portMappings?: PortMapping[], environmentType?: EnvironmentType, namingPrompt?: string, buildPipelineId?: string) => {
+      beginEnvironmentCreation(pid);
       setLoading(true);
       setError(null);
       try {
-        const environment = await backend.createEnvironment(pid, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt);
+        const environment = await backend.createEnvironment(pid, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt, buildPipelineId);
         addEnvironmentToStore(environment);
         useConfigStore.getState().setRepositoryLastEnvironmentType(pid, environment.environmentType);
         toast.success("Environment created");
@@ -301,6 +355,7 @@ export function useEnvironments(
         });
         throw new Error(message);
       } finally {
+        finishEnvironmentCreation(pid);
         setLoading(false);
       }
     },
@@ -316,6 +371,7 @@ export function useEnvironments(
         await deleteSessionsByEnvironment(environmentId);
 
         await backend.deleteEnvironment(environmentId);
+        useBuildPipelineStore.getState().removePipelinesForEnvironment(environmentId);
         removeEnvironmentFromStore(environmentId);
         // Prune any persisted unread-activity marker so it does not leak for a
         // deleted environment (unreadEnvironmentIds is persisted to localStorage).

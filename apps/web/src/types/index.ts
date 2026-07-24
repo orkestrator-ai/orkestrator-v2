@@ -37,6 +37,8 @@ export interface PortMapping {
 export interface Environment {
   id: string;
   projectId: string;
+  /** Persisted association used to recover a build pipeline after renderer remount. */
+  buildPipelineId?: string;
   name: string;
   /** Git branch name (defaults to "main" for legacy environments via serde default) */
   branch: string;
@@ -234,7 +236,8 @@ export interface GlobalConfig {
   containerResources: ContainerResources;
   envFilePatterns: string[];
   anthropicApiKey?: string;
-  githubToken?: string;
+  /** Whether a write-only GitHub token is stored by the backend. */
+  githubTokenConfigured?: boolean;
   /** Domains allowed when environments are in restricted network mode */
   allowedDomains: string[];
   /** Preferred editor for opening containers (VS Code or Cursor) */

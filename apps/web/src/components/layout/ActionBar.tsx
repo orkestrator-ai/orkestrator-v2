@@ -45,6 +45,7 @@ import {
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
+  Github,
   Globe2,
   ListChecks,
   Loader2,
@@ -1517,6 +1518,21 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   variant="ghost"
                   size="icon"
                   className={cn(
+                    projectBoardTab === "github" &&
+                      "bg-primary/15 text-blue-300 ring-1 ring-inset ring-primary/50 hover:bg-primary/20 hover:text-blue-200",
+                  )}
+                  onClick={() => setProjectBoardTab("github")}
+                  aria-label="GitHub issues"
+                  aria-pressed={projectBoardTab === "github"}
+                  disabled={!isProjectBoardView}
+                >
+                  <Github className="h-4 w-4" />
+                  <span className="truncate text-xs">GitHub issues</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn(
                     projectBoardTab === "linear" &&
                       "bg-primary/15 text-blue-300 ring-1 ring-inset ring-primary/50 hover:bg-primary/20 hover:text-blue-200",
                   )}
@@ -1563,6 +1579,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 >
                   <TabsList className="h-8 bg-zinc-900/80">
                     <TabsTrigger value="kanban" className="px-2 text-xs data-[state=active]:!bg-primary/15 data-[state=active]:!text-blue-300 data-[state=active]:ring-1 data-[state=active]:ring-inset data-[state=active]:ring-primary/50">Kanban</TabsTrigger>
+                    <TabsTrigger value="github" className="px-2 text-xs data-[state=active]:!bg-primary/15 data-[state=active]:!text-blue-300 data-[state=active]:ring-1 data-[state=active]:ring-inset data-[state=active]:ring-primary/50">GitHub</TabsTrigger>
                     <TabsTrigger value="linear" className="px-2 text-xs data-[state=active]:!bg-primary/15 data-[state=active]:!text-blue-300 data-[state=active]:ring-1 data-[state=active]:ring-inset data-[state=active]:ring-primary/50">Linear</TabsTrigger>
                     <TabsTrigger value="features" className="px-2 text-xs data-[state=active]:!bg-primary/15 data-[state=active]:!text-blue-300 data-[state=active]:ring-1 data-[state=active]:ring-inset data-[state=active]:ring-primary/50">Features</TabsTrigger>
                   </TabsList>

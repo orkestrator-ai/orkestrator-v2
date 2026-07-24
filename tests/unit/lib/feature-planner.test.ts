@@ -71,6 +71,69 @@ describe("parseFeaturePlannerState", () => {
     expect(parseFeaturePlannerState(content)).toBeNull();
   });
 
+  test("rejects null, arrays, and non-object state values", () => {
+    for (const value of ["null", "[]", '"collecting"', "42", "true"]) {
+      expect(
+        parseFeaturePlannerState(
+          `<feature_planner_state>${value}</feature_planner_state>`,
+        ),
+      ).toBeNull();
+    }
+  });
+
+  test("rejects invalid phases and non-string top-level fields", () => {
+    const invalidStates = [
+      { phase: "building" },
+      { phase: 1 },
+      { phase: "stories" },
+      { title: 1 },
+      { summary: ["not", "a", "string"] },
+    ];
+
+    for (const state of invalidStates) {
+      expect(
+        parseFeaturePlannerState(
+          `<feature_planner_state>${JSON.stringify(state)}</feature_planner_state>`,
+        ),
+      ).toBeNull();
+    }
+  });
+
+  test("rejects malformed stories and non-string acceptance criteria", () => {
+    const invalidStories = [
+      null,
+      "not an object",
+      [],
+      { description: "missing title", acceptanceCriteria: [] },
+      { title: "missing description", acceptanceCriteria: [] },
+      { id: 1, title: "title", description: "description", acceptanceCriteria: [] },
+      { title: 1, description: "description", acceptanceCriteria: [] },
+      { title: "title", description: 1, acceptanceCriteria: [] },
+      { title: "title", description: "description", acceptanceCriteria: "criterion" },
+      { title: "title", description: "description", acceptanceCriteria: ["valid", 2] },
+    ];
+
+    for (const story of invalidStories) {
+      expect(
+        parseFeaturePlannerState(
+          `<feature_planner_state>${JSON.stringify({
+            phase: "stories",
+            stories: [story],
+          })}</feature_planner_state>`,
+        ),
+      ).toBeNull();
+    }
+
+    expect(
+      parseFeaturePlannerState(
+        `<feature_planner_state>${JSON.stringify({
+          phase: "stories",
+          stories: "not an array",
+        })}</feature_planner_state>`,
+      ),
+    ).toBeNull();
+  });
+
   test("uses the first block when several are present", () => {
     const content = `<feature_planner_state>
 {"phase":"collecting","title":"first"}
@@ -99,6 +162,32 @@ describe("parseStoryRefinement", () => {
   test("returns null for missing or malformed blocks", () => {
     expect(parseStoryRefinement("no block here")).toBeNull();
     expect(parseStoryRefinement("<story_refinement>oops</story_refinement>")).toBeNull();
+  });
+
+  test("rejects null, arrays, and non-object refinement values", () => {
+    for (const value of ["null", "[]", '"refinement"', "42", "true"]) {
+      expect(
+        parseStoryRefinement(`<story_refinement>${value}</story_refinement>`),
+      ).toBeNull();
+    }
+  });
+
+  test("rejects non-string fields and malformed acceptance criteria", () => {
+    const invalidRefinements = [
+      { storyId: 1 },
+      { title: ["not", "a", "string"] },
+      { description: false },
+      { acceptanceCriteria: "criterion" },
+      { acceptanceCriteria: ["valid", 2] },
+    ];
+
+    for (const refinement of invalidRefinements) {
+      expect(
+        parseStoryRefinement(
+          `<story_refinement>${JSON.stringify(refinement)}</story_refinement>`,
+        ),
+      ).toBeNull();
+    }
   });
 });
 

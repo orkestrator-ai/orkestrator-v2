@@ -22,6 +22,7 @@ interface FeaturePlanState {
   features: FeaturePlan[];
   isLoading: boolean;
   currentProjectId: string | null;
+  chatDrafts: Map<string, string>;
 
   loadFeatures: (projectId: string) => Promise<void>;
   createFeature: (projectId: string) => Promise<string | undefined>;
@@ -50,6 +51,8 @@ interface FeaturePlanState {
     role: FeaturePlanMessage["role"],
     content: string,
   ) => Promise<FeaturePlan | undefined>;
+  setChatDraft: (chatId: string, text: string) => void;
+  getChatDraft: (chatId: string) => string;
 }
 
 function upsertFeature(features: FeaturePlan[], updated: FeaturePlan): FeaturePlan[] {
@@ -63,6 +66,7 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
   features: [],
   isLoading: false,
   currentProjectId: null,
+  chatDrafts: new Map(),
 
   loadFeatures: async (projectId) => {
     set({ isLoading: true, currentProjectId: projectId });
@@ -122,4 +126,17 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
       return undefined;
     }
   },
+
+  setChatDraft: (chatId, text) =>
+    set((state) => {
+      const chatDrafts = new Map(state.chatDrafts);
+      if (text.length > 0) {
+        chatDrafts.set(chatId, text);
+      } else {
+        chatDrafts.delete(chatId);
+      }
+      return { chatDrafts };
+    }),
+
+  getChatDraft: (chatId) => get().chatDrafts.get(chatId) ?? "",
 }));

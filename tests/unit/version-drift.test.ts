@@ -7,6 +7,7 @@ import {
   PINNED_TOOLCHAIN_ARTIFACTS,
   PINNED_TOOLCHAIN_VERSIONS,
   pinnedToolchainArtifacts,
+  selectPinnedToolchainArtifacts,
 } from "../../apps/desktop/electron/toolchain-manifest";
 
 const repoRoot = join(import.meta.dir, "..", "..");
@@ -273,7 +274,10 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
   test("Docker: the pinned CLI versions are what the image actually installs", () => {
     const dockerfile = read("docker/Dockerfile");
+    const nodeVersion = dockerfile.match(/^ARG NODE_VERSION=(\d+\.\d+\.\d+)$/m)?.[1];
 
+    expect(nodeVersion).toBeDefined();
+    expect(Number(nodeVersion!.split(".")[0])).toBeGreaterThanOrEqual(22);
     expect(dockerfile).toContain('npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"');
     expect(dockerfile).toContain('npm install -g "@openai/codex@${CODEX_CLI_VERSION}"');
     expect(dockerfile).toContain('--version "$OPENCODE_CLI_VERSION"');
@@ -282,6 +286,9 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(dockerfile).toContain("ENV CODEX_CLI_PATH=/usr/local/share/npm-global/bin/codex");
     expect(dockerfile).toContain("ENV OPENCODE_CLI_PATH=/home/node/.opencode/bin/opencode");
     expect(dockerfile).toContain("/home/node/.opencode/bin");
+    expect(dockerfile).toContain('RUN "$CLAUDE_CLI_PATH" --version');
+    expect(dockerfile).toContain('&& "$CODEX_CLI_PATH" --version');
+    expect(dockerfile).toContain('&& "$OPENCODE_CLI_PATH" --version');
   });
 
   test("managed manifest covers every supported platform and architecture with immutable checksums", () => {
@@ -327,5 +334,26 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
   test("rejects unsupported toolchain platforms and architectures", () => {
     expect(() => pinnedToolchainArtifacts("win32", "x64")).toThrow("Unsupported toolchain platform");
     expect(() => pinnedToolchainArtifacts("darwin", "ia32")).toThrow("Unsupported toolchain architecture");
+  });
+
+  test("rejects incomplete or duplicate target manifests", () => {
+    const darwinArm64 = pinnedToolchainArtifacts("darwin", "arm64");
+    expect(darwinArm64).toHaveLength(3);
+
+    expect(() =>
+      selectPinnedToolchainArtifacts(
+        darwinArm64.filter((artifact) => artifact.name !== "claude"),
+        "darwin",
+        "arm64",
+      )
+    ).toThrow("Pinned toolchain manifest is incomplete for darwin-arm64");
+
+    expect(() =>
+      selectPinnedToolchainArtifacts(
+        [darwinArm64[0], darwinArm64[0], darwinArm64[1]],
+        "darwin",
+        "arm64",
+      )
+    ).toThrow("Pinned toolchain manifest is incomplete for darwin-arm64");
   });
 });

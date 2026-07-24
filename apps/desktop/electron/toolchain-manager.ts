@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import {
   chmod,
+  copyFile,
   lstat,
   mkdir,
   mkdtemp,
@@ -29,7 +30,7 @@ import {
 
 const TOOLCHAIN_DIRECTORY = "toolchains";
 const INSTALL_LOCK = ".install.lock";
-const INSTALL_RECORD = ".installed.json";
+const LEASE_DIRECTORY = ".leases";
 const LOCK_STALE_AFTER_MS = 10 * 60 * 1_000;
 const LOCK_WAIT_TIMEOUT_MS = 12 * 60 * 1_000;
 const LOCK_POLL_MS = 250;
@@ -38,6 +39,7 @@ const PROCESS_TIMEOUT_MS = 15_000;
 const RETAIN_SUPERSEDED_MS = 14 * 24 * 60 * 60 * 1_000;
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+type ProcessKillLike = (pid: number, signal: 0) => true;
 
 export type ToolchainProgress = {
   phase: "checking" | "waiting" | "downloading" | "verifying" | "installing" | "ready";
@@ -79,7 +81,13 @@ export type EnsurePinnedToolchainsOptions = {
   skipExecutableProbeForTests?: boolean;
   timingsForTests?: Partial<ToolchainManagerTimings>;
   openLockFileForTests?: typeof open;
+  openLeaseFileForTests?: typeof open;
+  spawnForTests?: typeof spawn;
+  processKillForTests?: ProcessKillLike;
+  removeSupersededVersionForTests?: typeof rm;
   processExistsForTests?: (pid: number) => boolean;
+  skipVersionLeaseForTests?: boolean;
+  beforeFinalVerificationForTests?: () => void | Promise<void>;
 };
 
 export type PinnedToolchainResult = {
@@ -105,6 +113,10 @@ function artifactExecutablePath(rootDir: string, artifact: ToolchainArtifact): s
   return path.join(artifactDirectory(rootDir, artifact), artifact.executable.fileName);
 }
 
+function upstreamExecutablePath(rootDir: string, artifact: ToolchainArtifact): string {
+  return path.join(artifactDirectory(rootDir, artifact), `.upstream-${artifact.executable.fileName}`);
+}
+
 async function sha256File(filePath: string): Promise<string> {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(filePath)) hash.update(chunk as Buffer);
@@ -116,61 +128,75 @@ type InstalledExecutableState = {
   sha256: string;
 };
 
-/**
- * The on-disk state the manifest is able to pin ahead of time.
- *
- * Artifacts that need `repairInvalidMacSignature` are re-signed by the local
- * `codesign` after their upstream bytes have already been verified against
- * `executable.sha256`. That re-signature is not reproducible across machines,
- * so there is nothing trustworthy to pin — those return `null` and fall back to
- * the install record written at install time.
- */
-function pinnedInstalledState(artifact: ToolchainArtifact): InstalledExecutableState | null {
+function assertValidArtifactMetadata(artifact: ToolchainArtifact): void {
+  if (artifact.archive.format !== "zip" && artifact.archive.format !== "tar.gz") {
+    throw new Error(`${artifact.name} manifest has unsupported archive format`);
+  }
+  const hasSize = artifact.executable.installedSize !== undefined;
+  const hasSha256 = artifact.executable.installedSha256 !== undefined;
+  if (hasSize !== hasSha256) {
+    throw new Error(
+      `${artifact.name} manifest must provide installedSize and installedSha256 together`,
+    );
+  }
+  if (hasSize && (
+    !Number.isSafeInteger(artifact.executable.installedSize)
+    || artifact.executable.installedSize! <= 0
+    || !/^[a-f0-9]{64}$/.test(artifact.executable.installedSha256!)
+  )) {
+    throw new Error(`${artifact.name} manifest has invalid installed executable metadata`);
+  }
+  if (artifact.executable.repairInvalidMacSignature && hasSize) {
+    throw new Error(
+      `${artifact.name} manifest cannot pin locally repaired executable bytes`,
+    );
+  }
+}
+
+function pinnedInstalledState(artifact: ToolchainArtifact): InstalledExecutableState {
   const { size, sha256, installedSize, installedSha256, repairInvalidMacSignature } = artifact.executable;
   if (installedSize !== undefined && installedSha256 !== undefined) {
     return { size: installedSize, sha256: installedSha256 };
   }
-  if (repairInvalidMacSignature) return null;
+  if (repairInvalidMacSignature) {
+    throw new Error(`${artifact.name} locally repaired executable has no reproducible pinned state`);
+  }
   return { size, sha256 };
 }
 
-async function writeInstallRecord(directory: string, state: InstalledExecutableState): Promise<void> {
-  const handle = await open(path.join(directory, INSTALL_RECORD), "w", 0o600);
+async function isValidFile(filePath: string, expected: InstalledExecutableState): Promise<boolean> {
   try {
-    await handle.writeFile(JSON.stringify(state), "utf8");
-  } finally {
-    await handle.close();
-  }
-}
-
-async function readInstallRecord(directory: string): Promise<InstalledExecutableState | null> {
-  try {
-    const parsed = JSON.parse(
-      await readFile(path.join(directory, INSTALL_RECORD), "utf8"),
-    ) as Partial<InstalledExecutableState>;
-    if (typeof parsed.size !== "number" || !Number.isSafeInteger(parsed.size) || parsed.size <= 0) return null;
-    if (typeof parsed.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(parsed.sha256)) return null;
-    return { size: parsed.size, sha256: parsed.sha256 };
+    const file = await lstat(filePath);
+    return file.isFile()
+      && !file.isSymbolicLink()
+      && file.size === expected.size
+      && await sha256File(filePath) === expected.sha256;
   } catch {
-    return null;
+    return false;
   }
 }
 
-async function expectedInstalledState(
+async function isValidUpstreamExecutable(
   rootDir: string,
   artifact: ToolchainArtifact,
-): Promise<InstalledExecutableState | null> {
-  return pinnedInstalledState(artifact)
-    ?? await readInstallRecord(artifactDirectory(rootDir, artifact));
+): Promise<boolean> {
+  return isValidFile(upstreamExecutablePath(rootDir, artifact), {
+    size: artifact.executable.size,
+    sha256: artifact.executable.sha256,
+  });
 }
 
 async function isValidExecutable(rootDir: string, artifact: ToolchainArtifact): Promise<boolean> {
+  if (artifact.executable.repairInvalidMacSignature) {
+    // Locally ad-hoc-signed bytes are not reproducible and therefore cannot be
+    // pinned in the manifest. The cache is reusable only through the separately
+    // retained, manifest-pinned upstream executable. The runnable copy is
+    // regenerated from it under the install lock on every startup.
+    return isValidUpstreamExecutable(rootDir, artifact);
+  }
   const executablePath = artifactExecutablePath(rootDir, artifact);
   try {
-    // A missing or malformed install record means we cannot vouch for the bytes
-    // on disk, so treat the artifact as absent and reinstall it.
-    const expected = await expectedInstalledState(rootDir, artifact);
-    if (!expected) return false;
+    const expected = pinnedInstalledState(artifact);
     const file = await lstat(executablePath);
     if (!file.isFile() || file.isSymbolicLink() || file.size !== expected.size) return false;
     if (await sha256File(executablePath) !== expected.sha256) return false;
@@ -203,9 +229,9 @@ async function readInstallLockOwner(lockPath: string): Promise<InstallLockOwner 
   }
 }
 
-function processExists(pid: number): boolean {
+function processExists(pid: number, killProcess: ProcessKillLike = process.kill): boolean {
   try {
-    process.kill(pid, 0);
+    killProcess(pid, 0);
     return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "EPERM";
@@ -488,9 +514,10 @@ async function probeExecutable(
   executablePath: string,
   artifact: ToolchainArtifact,
   timeoutMs: number,
+  spawnProcess: typeof spawn,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(executablePath, ["--version"], {
+    const child = spawnProcess(executablePath, ["--version"], {
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -525,9 +552,10 @@ async function verifyMacCodeSignature(
   executablePath: string,
   artifact: ToolchainArtifact,
   timeoutMs: number,
+  spawnProcess: typeof spawn,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("/usr/bin/codesign", ["--verify", "--strict", "--verbose=2", executablePath], {
+    const child = spawnProcess("/usr/bin/codesign", ["--verify", "--strict", "--verbose=2", executablePath], {
       stdio: ["ignore", "ignore", "pipe"],
     });
     const errors: Buffer[] = [];
@@ -554,9 +582,14 @@ async function verifyMacCodeSignature(
   });
 }
 
-async function runCodesign(args: string[], failureMessage: string, timeoutMs: number): Promise<void> {
+async function runCodesign(
+  args: string[],
+  failureMessage: string,
+  timeoutMs: number,
+  spawnProcess: typeof spawn,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("/usr/bin/codesign", args, { stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawnProcess("/usr/bin/codesign", args, { stdio: ["ignore", "ignore", "pipe"] });
     const errors: Buffer[] = [];
     child.stderr.on("data", (chunk) => errors.push(Buffer.from(chunk)));
     const timeout = setTimeout(() => {
@@ -585,11 +618,13 @@ async function repairInvalidMacSignature(
   executablePath: string,
   artifact: ToolchainArtifact,
   timeoutMs: number,
+  spawnProcess: typeof spawn,
 ): Promise<void> {
   await runCodesign(
     ["--remove-signature", executablePath],
     `${artifact.name} invalid signature could not be removed`,
     timeoutMs,
+    spawnProcess,
   ).catch((error: unknown) => {
     // codesign exits non-zero when no removable signature exists. The following
     // forced signature is still authoritative, so only retain unexpected I/O errors.
@@ -600,6 +635,60 @@ async function repairInvalidMacSignature(
     ["--sign", "-", "--force", executablePath],
     `${artifact.name} could not be ad-hoc signed after source verification`,
     timeoutMs,
+    spawnProcess,
+  );
+}
+
+async function prepareRepairableExecutable(
+  sourcePath: string,
+  executablePath: string,
+  artifact: ToolchainArtifact,
+  skipExecutableProbeForTests: boolean,
+  processTimeoutMs: number,
+  spawnProcess: typeof spawn,
+): Promise<void> {
+  const temporaryPath = path.join(
+    path.dirname(executablePath),
+    `.repair-${artifact.executable.fileName}-${randomUUID()}.tmp`,
+  );
+  try {
+    await copyFile(sourcePath, temporaryPath);
+    await chmod(temporaryPath, 0o700);
+    if (!skipExecutableProbeForTests) {
+      try {
+        await verifyMacCodeSignature(temporaryPath, artifact, processTimeoutMs, spawnProcess);
+      } catch {
+        await repairInvalidMacSignature(temporaryPath, artifact, processTimeoutMs, spawnProcess);
+        await verifyMacCodeSignature(temporaryPath, artifact, processTimeoutMs, spawnProcess);
+      }
+      await probeExecutable(temporaryPath, artifact, processTimeoutMs, spawnProcess);
+    }
+    await chmod(temporaryPath, 0o500);
+    await rename(temporaryPath, executablePath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function refreshRepairableArtifact(
+  rootDir: string,
+  artifact: ToolchainArtifact,
+  skipExecutableProbeForTests: boolean,
+  processTimeoutMs: number,
+  spawnProcess: typeof spawn,
+): Promise<void> {
+  const sourcePath = upstreamExecutablePath(rootDir, artifact);
+  if (!await isValidUpstreamExecutable(rootDir, artifact)) {
+    throw new Error(`${artifact.name} trusted upstream executable failed verification`);
+  }
+  await prepareRepairableExecutable(
+    sourcePath,
+    artifactExecutablePath(rootDir, artifact),
+    artifact,
+    skipExecutableProbeForTests,
+    processTimeoutMs,
+    spawnProcess,
   );
 }
 
@@ -612,10 +701,14 @@ async function installArtifact(
   allowInsecureDownloadsForTests: boolean,
   skipExecutableProbeForTests: boolean,
   timings: ToolchainManagerTimings,
+  spawnProcess: typeof spawn,
 ): Promise<string> {
   const stagingDirectory = await mkdtemp(path.join(rootDir, `.staging-${artifact.name}-`));
   const archivePath = path.join(stagingDirectory, `archive.${artifact.archive.format === "zip" ? "zip" : "tar.gz"}`);
   const executablePath = path.join(stagingDirectory, artifact.executable.fileName);
+  const extractedPath = artifact.executable.repairInvalidMacSignature
+    ? path.join(stagingDirectory, `.upstream-${artifact.executable.fileName}`)
+    : executablePath;
   try {
     await downloadArchive(
       artifact,
@@ -627,46 +720,52 @@ async function installArtifact(
     );
     onVerify();
     if (artifact.archive.format === "zip") {
-      await extractZipEntry(archivePath, executablePath, artifact);
+      await extractZipEntry(archivePath, extractedPath, artifact);
     } else {
-      await extractTarGzipEntry(archivePath, executablePath, artifact);
+      await extractTarGzipEntry(archivePath, extractedPath, artifact);
     }
     await rm(archivePath, { force: true });
-    await chmod(executablePath, 0o700);
+    await chmod(extractedPath, 0o700);
 
-    const extracted = await lstat(executablePath);
+    const extracted = await lstat(extractedPath);
     if (!extracted.isFile() || extracted.size !== artifact.executable.size) {
       throw new Error(`${artifact.name} extracted executable size did not match the pinned manifest`);
     }
-    if (await sha256File(executablePath) !== artifact.executable.sha256) {
+    if (await sha256File(extractedPath) !== artifact.executable.sha256) {
       throw new Error(`${artifact.name} executable checksum did not match the pinned manifest`);
     }
-    if (!skipExecutableProbeForTests && artifact.platform === "darwin") {
+    if (artifact.executable.repairInvalidMacSignature) {
+      await prepareRepairableExecutable(
+        extractedPath,
+        executablePath,
+        artifact,
+        skipExecutableProbeForTests,
+        timings.processTimeoutMs,
+        spawnProcess,
+      );
+      await chmod(extractedPath, 0o400);
+    } else if (!skipExecutableProbeForTests && artifact.platform === "darwin") {
       try {
-        await verifyMacCodeSignature(executablePath, artifact, timings.processTimeoutMs);
+        await verifyMacCodeSignature(executablePath, artifact, timings.processTimeoutMs, spawnProcess);
       } catch (error) {
-        if (!artifact.executable.repairInvalidMacSignature) throw error;
-        await repairInvalidMacSignature(executablePath, artifact, timings.processTimeoutMs);
-        await verifyMacCodeSignature(executablePath, artifact, timings.processTimeoutMs);
+        throw error;
       }
     }
 
-    const installed = await lstat(executablePath);
-    const installedState: InstalledExecutableState = {
-      size: installed.size,
-      sha256: await sha256File(executablePath),
-    };
-    const pinned = pinnedInstalledState(artifact);
-    if (pinned && (installedState.size !== pinned.size || installedState.sha256 !== pinned.sha256)) {
-      throw new Error(`${artifact.name} installed executable did not match the pinned manifest`);
+    if (!artifact.executable.repairInvalidMacSignature) {
+      const installed = await lstat(executablePath);
+      const installedState: InstalledExecutableState = {
+        size: installed.size,
+        sha256: await sha256File(executablePath),
+      };
+      const pinned = pinnedInstalledState(artifact);
+      if (installedState.size !== pinned.size || installedState.sha256 !== pinned.sha256) {
+        throw new Error(`${artifact.name} installed executable did not match the pinned manifest`);
+      }
     }
-    // Recorded inside the staging directory so it is published atomically with
-    // the executable by the rename below, and so a partially written record can
-    // never be paired with a different binary.
-    await writeInstallRecord(stagingDirectory, installedState);
     await chmod(executablePath, 0o500);
-    if (!skipExecutableProbeForTests) {
-      await probeExecutable(executablePath, artifact, timings.processTimeoutMs);
+    if (!skipExecutableProbeForTests && !artifact.executable.repairInvalidMacSignature) {
+      await probeExecutable(executablePath, artifact, timings.processTimeoutMs, spawnProcess);
     }
 
     const destinationDirectory = artifactDirectory(rootDir, artifact);
@@ -694,7 +793,81 @@ async function cleanStagingDirectories(rootDir: string): Promise<void> {
  */
 async function touchArtifactDirectory(rootDir: string, artifact: ToolchainArtifact): Promise<void> {
   const now = new Date();
-  await utimes(artifactDirectory(rootDir, artifact), now, now).catch(() => undefined);
+  await utimes(path.dirname(artifactDirectory(rootDir, artifact)), now, now).catch(() => undefined);
+}
+
+type VersionLeaseOwner = {
+  token: string;
+  pid: number;
+  createdAt: string;
+};
+
+const processVersionLeases = new Map<string, string>();
+
+function versionLeaseDirectory(rootDir: string, name: ToolchainName, version: string): string {
+  return path.join(rootDir, LEASE_DIRECTORY, name, version);
+}
+
+async function acquireVersionLease(
+  rootDir: string,
+  artifact: ToolchainArtifact,
+  openLeaseFile: typeof open,
+): Promise<void> {
+  const leaseKey = `${rootDir}\0${artifact.name}\0${artifact.version}`;
+  const existingLeasePath = processVersionLeases.get(leaseKey);
+  if (existingLeasePath && await lstat(existingLeasePath).then(
+    (entry) => entry.isFile() && !entry.isSymbolicLink(),
+    () => false,
+  )) return;
+  processVersionLeases.delete(leaseKey);
+  const owner: VersionLeaseOwner = {
+    token: randomUUID(),
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+  };
+  const directory = versionLeaseDirectory(rootDir, artifact.name, artifact.version);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const leasePath = path.join(directory, `${owner.pid}-${owner.token}.json`);
+  const handle = await openLeaseFile(leasePath, "wx", 0o600);
+  try {
+    await handle.writeFile(JSON.stringify(owner), "utf8");
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    await rm(leasePath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+  await handle.close();
+  processVersionLeases.set(leaseKey, leasePath);
+}
+
+async function versionHasLiveLease(
+  rootDir: string,
+  name: ToolchainName,
+  version: string,
+  ownerProcessExists: (pid: number) => boolean,
+): Promise<boolean> {
+  const directory = versionLeaseDirectory(rootDir, name, version);
+  const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+  let live = false;
+  await Promise.all(entries.filter((entry) => entry.isFile()).map(async (entry) => {
+    const leasePath = path.join(directory, entry.name);
+    try {
+      const parsed = JSON.parse(await readFile(leasePath, "utf8")) as Partial<VersionLeaseOwner>;
+      if (
+        typeof parsed.token === "string"
+        && typeof parsed.pid === "number"
+        && typeof parsed.createdAt === "string"
+        && ownerProcessExists(parsed.pid)
+      ) {
+        live = true;
+        return;
+      }
+    } catch {
+      // Malformed leases cannot prove that a process owns this version.
+    }
+    await rm(leasePath, { force: true }).catch(() => undefined);
+  }));
+  return live;
 }
 
 /**
@@ -706,9 +879,9 @@ async function touchArtifactDirectory(rootDir: string, artifact: ToolchainArtifa
  *
  * Superseded versions are kept for `retainSupersededMs` after they were last
  * used. Another build of the app can legitimately share this cache while
- * pinning an older version; it refreshes its own directories on every launch
- * (see `touchArtifactDirectory`), so the grace period stops the two builds from
- * deleting and re-downloading each other's toolchains in a loop.
+ * pinning an older version; it refreshes the version directory and publishes a
+ * process lease on launch, so neither a recently used nor currently live
+ * version is reclaimed.
  *
  * Failures are non-fatal: reclaiming disk space must not be able to break
  * startup.
@@ -717,6 +890,8 @@ async function pruneSupersededVersions(
   rootDir: string,
   artifacts: readonly ToolchainArtifact[],
   retainSupersededMs: number,
+  ownerProcessExists: (pid: number) => boolean,
+  removeVersion: typeof rm,
 ): Promise<void> {
   const keepByName = new Map<ToolchainName, Set<string>>();
   for (const artifact of artifacts) {
@@ -736,7 +911,11 @@ async function pruneSupersededVersions(
           const versionDir = path.join(toolDir, entry.name);
           try {
             if ((await stat(versionDir)).mtimeMs > staleBefore) return;
-            await rm(versionDir, { recursive: true, force: true });
+            if (await versionHasLiveLease(rootDir, name, entry.name, ownerProcessExists)) return;
+            // Re-check after async lease cleanup so a version is never deleted
+            // after a cooperative process has established ownership.
+            if (await versionHasLiveLease(rootDir, name, entry.name, ownerProcessExists)) return;
+            await removeVersion(versionDir, { recursive: true, force: true });
           } catch {
             // Raced with another instance, or not readable. Try again next launch.
           }
@@ -747,12 +926,47 @@ async function pruneSupersededVersions(
   }));
 }
 
+function activationSetId(artifacts: readonly ToolchainArtifact[]): string {
+  const identity = artifacts
+    .map((artifact) => ({
+      name: artifact.name,
+      version: artifact.version,
+      platform: artifact.platform,
+      architecture: artifact.architecture,
+      executableSize: artifact.executable.size,
+      executableSha256: artifact.executable.sha256,
+      installedSize: artifact.executable.installedSize,
+      installedSha256: artifact.executable.installedSha256,
+      repairInvalidMacSignature: artifact.executable.repairInvalidMacSignature ?? false,
+    }))
+    .sort((left, right) => {
+      const leftKey = `${left.name}\0${left.platform}\0${left.architecture}`;
+      const rightKey = `${right.name}\0${right.platform}\0${right.architecture}`;
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    });
+  return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+}
+
 async function activateExecutables(
   rootDir: string,
   artifacts: readonly ToolchainArtifact[],
 ): Promise<PinnedToolchainResult> {
-  const binDir = path.join(rootDir, "bin");
+  // Each pinned artifact set receives its own stable activation directory.
+  // Running app builds retain this exact path, so a newer build can activate a
+  // different set without redirecting commands launched by the older backend.
+  const binRoot = path.join(rootDir, "bin");
+  const binDir = path.join(binRoot, activationSetId(artifacts));
+  await mkdir(binRoot, { recursive: true, mode: 0o700 });
+  const binRootEntry = await lstat(binRoot);
+  if (!binRootEntry.isDirectory() || binRootEntry.isSymbolicLink()) {
+    throw new Error(`Refusing unsafe toolchain activation root: ${binRoot}`);
+  }
+  await chmod(binRoot, 0o700);
   await mkdir(binDir, { recursive: true, mode: 0o700 });
+  const binEntry = await lstat(binDir);
+  if (!binEntry.isDirectory() || binEntry.isSymbolicLink()) {
+    throw new Error(`Refusing unsafe toolchain activation directory: ${binDir}`);
+  }
   await chmod(binDir, 0o700);
   const executables = {} as Record<ToolchainName, string>;
 
@@ -763,13 +977,21 @@ async function activateExecutables(
     const existingTarget = await readlink(activePath).catch(() => null);
     if (existingTarget !== target) {
       await symlink(target, temporaryLink, "file");
-      await rename(temporaryLink, activePath).catch(async (error) => {
-        await rm(activePath, { force: true });
-        await rename(temporaryLink, activePath).catch(async () => {
-          await rm(temporaryLink, { force: true });
+      try {
+        await rename(temporaryLink, activePath);
+      } catch {
+        try {
+          const active = await lstat(activePath).catch(() => null);
+          if (active?.isDirectory()) {
+            throw new Error(`Refusing to replace toolchain activation directory: ${activePath}`);
+          }
+          await rm(activePath, { force: true });
+          await rename(temporaryLink, activePath);
+        } catch (error) {
+          await rm(temporaryLink, { force: true }).catch(() => undefined);
           throw error;
-        });
-      });
+        }
+      }
     }
     executables[artifact.name] = activePath;
   }
@@ -781,9 +1003,13 @@ export async function ensurePinnedToolchains(
   options: EnsurePinnedToolchainsOptions,
 ): Promise<PinnedToolchainResult> {
   const artifacts = options.artifacts ?? pinnedToolchainArtifacts(options.platform, options.architecture);
+  for (const artifact of artifacts) assertValidArtifactMetadata(artifact);
   const fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
   const onProgress = options.onProgress ?? (() => undefined);
   const timings = { ...DEFAULT_TIMINGS, ...options.timingsForTests };
+  const spawnProcess = options.spawnForTests ?? spawn;
+  const ownerProcessExists = options.processExistsForTests
+    ?? ((pid: number) => processExists(pid, options.processKillForTests));
   const rootDir = path.join(options.dataDir, TOOLCHAIN_DIRECTORY);
   const totalTools = artifacts.length;
   const toolFractions = new Map<ToolchainName, number>(
@@ -804,96 +1030,123 @@ export async function ensurePinnedToolchains(
     message: "Checking pinned Orkestrator tools…",
   });
 
-  const validity = await Promise.all(artifacts.map((artifact) => isValidExecutable(rootDir, artifact)));
-  artifacts.forEach((artifact, index) => toolFractions.set(artifact.name, validity[index] ? 1 : 0));
-  let missing = artifacts.filter((_, index) => !validity[index]);
-  if (missing.length > 0) {
-    const installLock = await acquireInstallLock(rootDir, (message) => progress({
-      phase: "waiting",
-      completedTools: totalTools - missing.length,
-      message,
-    }), timings, options.openLockFileForTests ?? open, options.processExistsForTests ?? processExists);
-    try {
-      await cleanStagingDirectories(rootDir);
-      const lockedValidity = await Promise.all(artifacts.map((artifact) => isValidExecutable(rootDir, artifact)));
-      artifacts.forEach((artifact, index) => toolFractions.set(artifact.name, lockedValidity[index] ? 1 : 0));
-      missing = artifacts.filter((_, index) => !lockedValidity[index]);
-      let completedTools = totalTools - missing.length;
+  const installLock = await acquireInstallLock(rootDir, (message) => progress({
+    phase: "waiting",
+    completedTools: 0,
+    message,
+  }), timings, options.openLockFileForTests ?? open, ownerProcessExists);
+  try {
+    // Validation, installation, activation, lease publication, and pruning are
+    // one cache-wide transaction. Cached callers also take the lock so pruning
+    // in another app window cannot remove a version between its validation and
+    // activation.
+    await cleanStagingDirectories(rootDir);
+    const validity = await Promise.all(artifacts.map((artifact) => isValidExecutable(rootDir, artifact)));
+    artifacts.forEach((artifact, index) => toolFractions.set(artifact.name, validity[index] ? 1 : 0));
+    const missing = artifacts.filter((_, index) => !validity[index]);
+    let completedTools = totalTools - missing.length;
 
-      const installations = await Promise.allSettled(missing.map(async (artifact) => {
-        progress({
-          phase: "downloading",
-          tool: artifact.name,
-          completedTools,
-          bytesReceived: 0,
-          bytesTotal: artifact.archive.size,
-          message: `Downloading ${artifact.name} ${artifact.version}…`,
-        });
-        let lastReportedAt = 0;
-        await installArtifact(
-          rootDir,
-          artifact,
-          fetchImpl,
-          (bytesReceived) => {
-            toolFractions.set(artifact.name, bytesReceived / artifact.archive.size);
-            const now = Date.now();
-            if (now - lastReportedAt < 200 && bytesReceived !== artifact.archive.size) return;
-            lastReportedAt = now;
-            progress({
-              phase: "downloading",
-              tool: artifact.name,
-              completedTools,
-              bytesReceived,
-              bytesTotal: artifact.archive.size,
-              message: `Downloading ${artifact.name} ${artifact.version}…`,
-            });
-          },
-          () => {
-            toolFractions.set(artifact.name, 1);
-            progress({
-              phase: "verifying",
-              tool: artifact.name,
-              completedTools,
-              message: `Verifying ${artifact.name} ${artifact.version}…`,
-            });
-          },
-          options.allowInsecureDownloadsForTests ?? false,
-          options.skipExecutableProbeForTests ?? false,
-          timings,
-        );
-        toolFractions.set(artifact.name, 1);
-        completedTools += 1;
-        progress({
-          phase: "installing",
-          tool: artifact.name,
-          completedTools,
-          message: `Installed ${artifact.name} ${artifact.version}`,
-        });
-      }));
-      const failedInstallation = installations.find(
-        (result): result is PromiseRejectedResult => result.status === "rejected",
+    const installations = await Promise.allSettled(missing.map(async (artifact) => {
+      progress({
+        phase: "downloading",
+        tool: artifact.name,
+        completedTools,
+        bytesReceived: 0,
+        bytesTotal: artifact.archive.size,
+        message: `Downloading ${artifact.name} ${artifact.version}…`,
+      });
+      let lastReportedAt = 0;
+      await installArtifact(
+        rootDir,
+        artifact,
+        fetchImpl,
+        (bytesReceived) => {
+          toolFractions.set(artifact.name, bytesReceived / artifact.archive.size);
+          const now = Date.now();
+          if (now - lastReportedAt < 200 && bytesReceived !== artifact.archive.size) return;
+          lastReportedAt = now;
+          progress({
+            phase: "downloading",
+            tool: artifact.name,
+            completedTools,
+            bytesReceived,
+            bytesTotal: artifact.archive.size,
+            message: `Downloading ${artifact.name} ${artifact.version}…`,
+          });
+        },
+        () => {
+          toolFractions.set(artifact.name, 1);
+          progress({
+            phase: "verifying",
+            tool: artifact.name,
+            completedTools,
+            message: `Verifying ${artifact.name} ${artifact.version}…`,
+          });
+        },
+        options.allowInsecureDownloadsForTests ?? false,
+        options.skipExecutableProbeForTests ?? false,
+        timings,
+        spawnProcess,
       );
-      if (failedInstallation) throw failedInstallation.reason;
-    } finally {
-      await installLock.release();
-    }
-  }
+      toolFractions.set(artifact.name, 1);
+      completedTools += 1;
+      progress({
+        phase: "installing",
+        tool: artifact.name,
+        completedTools,
+        message: `Installed ${artifact.name} ${artifact.version}`,
+      });
+    }));
+    const failedInstallation = installations.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (failedInstallation) throw failedInstallation.reason;
 
-  const finalValidity = await Promise.all(artifacts.map((artifact) => isValidExecutable(rootDir, artifact)));
-  if (finalValidity.some((valid) => !valid)) {
-    throw new Error("One or more pinned Orkestrator tools failed final verification");
+    // Never trust a mutable digest next to a locally re-signed executable.
+    // Recreate those runnable bytes from the manifest-pinned pristine copy.
+    await Promise.all(artifacts
+      .filter((artifact) => artifact.executable.repairInvalidMacSignature)
+      .map((artifact) => refreshRepairableArtifact(
+        rootDir,
+        artifact,
+        options.skipExecutableProbeForTests ?? false,
+        timings.processTimeoutMs,
+        spawnProcess,
+      )));
+
+    await options.beforeFinalVerificationForTests?.();
+    const finalValidity = await Promise.all(artifacts.map(async (artifact) => {
+      if (!await isValidExecutable(rootDir, artifact)) return false;
+      const executable = await lstat(artifactExecutablePath(rootDir, artifact)).catch(() => null);
+      return executable?.isFile() === true && !executable.isSymbolicLink();
+    }));
+    if (finalValidity.some((valid) => !valid)) {
+      throw new Error("One or more pinned Orkestrator tools failed final verification");
+    }
+    const result = await activateExecutables(rootDir, artifacts);
+    await Promise.all(artifacts.map((artifact) => touchArtifactDirectory(rootDir, artifact)));
+    if (!options.skipVersionLeaseForTests) {
+      await Promise.all(artifacts.map((artifact) => acquireVersionLease(
+        rootDir,
+        artifact,
+        options.openLeaseFileForTests ?? open,
+      )));
+    }
+    await pruneSupersededVersions(
+      rootDir,
+      artifacts,
+      timings.retainSupersededMs,
+      ownerProcessExists,
+      options.removeSupersededVersionForTests ?? rm,
+    );
+    artifacts.forEach((artifact) => toolFractions.set(artifact.name, 1));
+    progress({
+      phase: "ready",
+      completedTools: totalTools,
+      message: "Pinned Orkestrator tools are ready",
+    });
+    return result;
+  } finally {
+    await installLock.release();
   }
-  const result = await activateExecutables(rootDir, artifacts);
-  // Only once the pinned versions are verified and activated: every superseded
-  // version is a full copy of the binary (250-300MB each), so leaving them
-  // behind costs roughly a gigabyte per bump.
-  await Promise.all(artifacts.map((artifact) => touchArtifactDirectory(rootDir, artifact)));
-  await pruneSupersededVersions(rootDir, artifacts, timings.retainSupersededMs);
-  artifacts.forEach((artifact) => toolFractions.set(artifact.name, 1));
-  progress({
-    phase: "ready",
-    completedTools: totalTools,
-    message: "Pinned Orkestrator tools are ready",
-  });
-  return result;
 }

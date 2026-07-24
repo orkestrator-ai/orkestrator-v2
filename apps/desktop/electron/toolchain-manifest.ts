@@ -9,6 +9,16 @@ export type ToolchainPlatform = "darwin" | "linux";
 export type ToolchainArchitecture = "arm64" | "x64";
 export type ToolchainArchiveFormat = "tar.gz" | "zip";
 
+type InstalledExecutableIntegrity =
+  | {
+      installedSize: number;
+      installedSha256: string;
+    }
+  | {
+      installedSize?: undefined;
+      installedSha256?: undefined;
+    };
+
 export type ToolchainArtifact = {
   name: ToolchainName;
   version: string;
@@ -33,13 +43,12 @@ export type ToolchainArtifact = {
      * download. Omit for artifacts that set `repairInvalidMacSignature`: the
      * ad-hoc re-signature is produced by the local `codesign`, so its output is
      * not reproducible across machines and must not be pinned here. Those
-     * artifacts are verified against `sha256` before the repair and recorded in
-     * an on-disk install record afterwards. See `toolchain-manager.ts`.
+     * artifacts retain a read-only, manifest-pinned copy of the upstream bytes
+     * and regenerate the locally signed executable from it on every startup.
+     * See `toolchain-manager.ts`.
      */
-    installedSize?: number;
-    installedSha256?: string;
     repairInvalidMacSignature?: boolean;
-  };
+  } & InstalledExecutableIntegrity;
 };
 
 const GITHUB_RELEASE_HOSTS = [
@@ -296,9 +305,10 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
   },
 ] as const;
 
-export function pinnedToolchainArtifacts(
-  platform: NodeJS.Platform = process.platform,
-  architecture: string = process.arch,
+export function selectPinnedToolchainArtifacts(
+  artifacts: readonly ToolchainArtifact[],
+  platform: NodeJS.Platform,
+  architecture: string,
 ): readonly ToolchainArtifact[] {
   if (platform !== "darwin" && platform !== "linux") {
     throw new Error(`Unsupported toolchain platform: ${platform}`);
@@ -307,11 +317,27 @@ export function pinnedToolchainArtifacts(
     throw new Error(`Unsupported toolchain architecture: ${architecture}`);
   }
 
-  const matches = PINNED_TOOLCHAIN_ARTIFACTS.filter(
+  const matches = artifacts.filter(
     (artifact) => artifact.platform === platform && artifact.architecture === architecture,
   );
-  if (matches.length !== Object.keys(PINNED_TOOLCHAIN_VERSIONS).length) {
+  const expectedNames = Object.keys(PINNED_TOOLCHAIN_VERSIONS) as ToolchainName[];
+  const matchedNames = new Set(matches.map((artifact) => artifact.name));
+  if (
+    matches.length !== expectedNames.length
+    || expectedNames.some((name) => !matchedNames.has(name))
+  ) {
     throw new Error(`Pinned toolchain manifest is incomplete for ${platform}-${architecture}`);
   }
   return matches;
+}
+
+export function pinnedToolchainArtifacts(
+  platform: NodeJS.Platform = process.platform,
+  architecture: string = process.arch,
+): readonly ToolchainArtifact[] {
+  return selectPinnedToolchainArtifacts(
+    PINNED_TOOLCHAIN_ARTIFACTS,
+    platform,
+    architecture,
+  );
 }

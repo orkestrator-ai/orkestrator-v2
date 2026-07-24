@@ -242,7 +242,7 @@ The web application is independently built. Electron loads it as its renderer wh
 │                    Docker Containers                     │
 │  ┌────────────────────────────────────────────────────┐ │
 │  │ orkestrator-v2:latest                              │ │
-│  │ - Node.js 20 + Claude Code CLI                     │ │
+│  │ - Node.js 24 LTS + Claude Code CLI                 │ │
 │  │ - Git + GitHub CLI                                 │ │
 │  │ - Network firewall (GitHub, npm, Anthropic only)   │ │
 │  └────────────────────────────────────────────────────┘ │

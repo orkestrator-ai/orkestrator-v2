@@ -169,7 +169,7 @@ The OpenCode server sends these event types:
 ## Docker Base Image
 
 The container includes:
-- Node.js 20
+- Node.js 24 LTS
 - Claude Code CLI
 - Codex CLI
 - OpenCode CLI

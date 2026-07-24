@@ -55,10 +55,11 @@ describe("monorepo orchestration scripts", () => {
     const rootRun = source.indexOf('run("bun", ["test", "tests"]');
     expect(workspaceRun).toBeGreaterThan(-1);
     expect(rootRun).toBeGreaterThan(workspaceRun);
-    expect(source).toContain("process.exit(result.status ?? 1)");
+    expect(source).toContain("return result.status ?? 1");
+    expect(source).toContain("process.exit(status)");
     expect(source).toContain('"--filter=@orkestrator/web-public"');
     expect(source).toContain('run("bun", ["scripts/test-ios.ts"])');
-    expect(source).toContain('process.platform === "darwin"');
+    expect(source).toContain('dependencies.platform === "darwin"');
   });
 
   test("full tests cover the bridge packages, which have no workspace test script", () => {

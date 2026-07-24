@@ -47,6 +47,11 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
+// These tests spawn a real backend child process and wait for it to boot.
+// Bun's 5s default is not enough when the suite runs files in parallel on a
+// loaded machine, which showed up as an intermittent timeout here.
+const SPAWN_TIMEOUT_MS = 30_000;
+
 describe("Electron backend process supervisor", () => {
   test("isolates the child from remote gateway and Tailscale Serve shell settings", () => {
     const parent = {
@@ -214,7 +219,7 @@ describe("Electron backend process supervisor", () => {
     expect(await browserResponse.json()).toEqual({
       result: "Hello, Browser! You've been greeted from the Orkestrator backend!",
     });
-  });
+  }, SPAWN_TIMEOUT_MS);
 
   test("forwards the explicit managed toolchain directory through backend startup", async () => {
     globalThis.fetch = Bun.fetch;
@@ -243,7 +248,7 @@ describe("Electron backend process supervisor", () => {
     expect(optionIndex).toBeGreaterThan(0);
     expect(child.spawnargs[optionIndex + 1]).toBe(toolchainBinDir);
     await expect(client.invoke("check_codex_cli")).resolves.toBe(true);
-  });
+  }, SPAWN_TIMEOUT_MS);
 
   test("manages hosted web access without stopping the Electron backend", async () => {
     globalThis.fetch = Bun.fetch;
@@ -294,7 +299,7 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
       url: null,
     });
     await expect(client.invoke("greet", { name: "Electron" })).resolves.toContain("Hello, Electron!");
-  });
+  }, SPAWN_TIMEOUT_MS);
 
   test("reports backend readiness before slow managed Serve initialization finishes", async () => {
     globalThis.fetch = Bun.fetch;
@@ -374,7 +379,7 @@ exit 1
       error: null,
     });
     await expect(readFile(callsPath, "utf8")).rejects.toThrow();
-  });
+  }, SPAWN_TIMEOUT_MS);
 
   test("keeps backend commands available when managed Serve initialization fails", async () => {
     globalThis.fetch = Bun.fetch;
@@ -399,7 +404,7 @@ exit 1
       running: false,
     });
     await expect(client.invoke("greet", { name: "still-ready" })).resolves.toContain("Hello, still-ready!");
-  });
+  }, SPAWN_TIMEOUT_MS);
 
   test("adopts and removes an owned Serve route after an ungraceful backend restart", async () => {
     globalThis.fetch = Bun.fetch;
@@ -482,7 +487,7 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
     });
     await expect(readFile(serveState, "utf8")).rejects.toThrow();
     await expect(readFile(path.join(dataDir, "managed-web-client.json"), "utf8")).rejects.toThrow();
-  });
+  }, SPAWN_TIMEOUT_MS);
 
   test("shares concurrent startup and clears stale state when the child exits", async () => {
     globalThis.fetch = Bun.fetch;
@@ -518,7 +523,7 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
     }
     expect(backendProcess.getInfo()).toBeNull();
     expect(onUnexpectedExit).toHaveBeenCalledTimes(1);
-  });
+  }, SPAWN_TIMEOUT_MS);
 
   test("rotates the shared HTTP credential without losing command access", async () => {
     globalThis.fetch = Bun.fetch;
@@ -542,7 +547,7 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
       token: "replacement-backend-token-123456",
     });
     await expect(client.invoke("greet", { name: "rotated" })).resolves.toContain("Hello, rotated!");
-  });
+  }, SPAWN_TIMEOUT_MS);
 
   test("cleans up state when the child exits before readiness", async () => {
     globalThis.fetch = Bun.fetch;
@@ -564,5 +569,5 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
     })).rejects.toThrow("Backend service exited");
     expect(backendProcess.getInfo()).toBeNull();
     expect((backendProcess as unknown as { child: unknown }).child).toBeNull();
-  });
+  }, SPAWN_TIMEOUT_MS);
 });

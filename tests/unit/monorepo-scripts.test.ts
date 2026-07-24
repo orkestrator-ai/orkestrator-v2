@@ -55,10 +55,23 @@ describe("monorepo orchestration scripts", () => {
     const rootRun = source.indexOf('run("bun", ["test", "tests"]');
     expect(workspaceRun).toBeGreaterThan(-1);
     expect(rootRun).toBeGreaterThan(workspaceRun);
-    expect(source).toContain("process.exit(result.status ?? 1)");
+    expect(source).toContain("return result.status ?? 1");
+    expect(source).toContain("process.exit(status)");
     expect(source).toContain('"--filter=@orkestrator/web-public"');
     expect(source).toContain('run("bun", ["scripts/test-ios.ts"])');
-    expect(source).toContain('process.platform === "darwin"');
+    expect(source).toContain('dependencies.platform === "darwin"');
+  });
+
+  test("full tests cover the bridge packages, which have no workspace test script", () => {
+    // bridges/* are not in the turbo `test:workspace` filters and declare no
+    // `test` script, so they only run if test-all.ts invokes them directly.
+    const source = read("scripts/test-all.ts");
+    expect(source).toContain('run("bun", ["test", "bridges"])');
+
+    for (const bridge of ["bridges/claude-bridge/package.json", "bridges/codex-bridge/package.json"]) {
+      const scripts = (JSON.parse(read(bridge)) as { scripts?: Record<string, string> }).scripts ?? {};
+      expect(scripts.test).toBeUndefined();
+    }
   });
 
   test("iOS development and test scripts use Bun entrypoints", () => {

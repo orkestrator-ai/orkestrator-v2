@@ -45,12 +45,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupmod -n node bun \
   && usermod -l node -d /home/node -m bun
 
-# Install a real Node.js 20 runtime. bun runs our bridge servers, but the agent
+# Install a real Node.js 24 LTS runtime. bun runs our bridge servers, but the agent
 # CLIs — especially `claude`, which is a Node app launched directly in container
 # terminals — need genuine Node (not bun's node shim). This also provides npm
 # for the global CLI installs below. /usr/local/bin precedes the bun-node
 # fallback on PATH, so this node takes precedence.
-ARG NODE_VERSION=20.18.0
+ARG NODE_VERSION=24.11.0
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
     amd64) NODE_ARCH=x64 ;; \
@@ -123,9 +123,9 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
 #   CODEX_CLI_VERSION     ↔ @openai/codex-sdk in bridges/codex-bridge/package.json (and scripts/download-codex.sh)
 #   OPENCODE_CLI_VERSION  ↔ @opencode-ai/sdk in package.json (and scripts/download-opencode.sh)
 # Claude CLI has its own release train distinct from @anthropic-ai/claude-agent-sdk.
-ARG CLAUDE_CLI_VERSION=2.1.207
-ARG CODEX_CLI_VERSION=0.144.1
-ARG OPENCODE_CLI_VERSION=1.17.18
+ARG CLAUDE_CLI_VERSION=2.1.219
+ARG CODEX_CLI_VERSION=0.145.0
+ARG OPENCODE_CLI_VERSION=1.18.4
 
 # Install Claude Code from the pinned npm package. The package pulls in the
 # platform-native binary via optional dependencies.
@@ -140,6 +140,12 @@ ENV OPENCODE_CLI_PATH=/home/node/.opencode/bin/opencode
 RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}"
 ENV CODEX_CLI_PATH=/usr/local/share/npm-global/bin/codex
 ENV PATH="/usr/local/share/npm-global/bin:/home/node/.opencode/bin:$PATH"
+
+# Fail the image build immediately if an installer completed without leaving a
+# runnable CLI at the path the backend will use.
+RUN "$CLAUDE_CLI_PATH" --version \
+ && "$CODEX_CLI_PATH" --version \
+ && "$OPENCODE_CLI_PATH" --version
 
 # Copy and build Claude Bridge Server
 COPY --chown=node:node bridges/claude-bridge /opt/claude-bridge

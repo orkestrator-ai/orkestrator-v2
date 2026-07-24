@@ -62,6 +62,14 @@ const RIGHT_PANE_CONTENT_CLASS =
 const COMPACT_TAB_LIST_CLASS = "h-8 bg-zinc-900/80";
 const COMPACT_TAB_TRIGGER_CLASS = "px-2 text-xs data-[state=active]:!bg-zinc-800";
 
+function featureChatDraftId(featureId: string): string {
+  return `feature:${featureId}`;
+}
+
+function storyChatDraftId(featureId: string, storyId: string): string {
+  return `feature:${featureId}:story:${storyId}`;
+}
+
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -208,14 +216,14 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   const updateFeature = useFeaturePlanStore((state) => state.updateFeature);
   const appendMessage = useFeaturePlanStore((state) => state.appendMessage);
   const appendStoryMessage = useFeaturePlanStore((state) => state.appendStoryMessage);
+  const chatDrafts = useFeaturePlanStore((state) => state.chatDrafts);
+  const setChatDraft = useFeaturePlanStore((state) => state.setChatDraft);
   const addTask = useKanbanStore((state) => state.addTask);
   const { startBuild } = useBuildPipeline();
   const { createEnvironment, startEnvironment } = useEnvironments(null, { listenForRenameEvents: false });
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [rightTab, setRightTab] = useState<RightPaneTab>("chat");
   const [openStoryTabs, setOpenStoryTabs] = useState<string[]>([]);
-  const [featureDraft, setFeatureDraft] = useState("");
-  const [storyDrafts, setStoryDrafts] = useState<Record<string, string>>({});
   const [runningConversation, setRunningConversation] = useState<{
     featureId: string;
     storyId?: string;
@@ -243,6 +251,9 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
     () => projectFeatures.find((feature) => feature.id === selectedFeatureId) ?? projectFeatures[0] ?? null,
     [projectFeatures, selectedFeatureId],
   );
+  const featureDraft = selectedFeature
+    ? chatDrafts.get(featureChatDraftId(selectedFeature.id)) ?? ""
+    : "";
 
   useEffect(() => {
     if (!selectedFeature) return;
@@ -409,7 +420,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       const trimmed = text.trim();
       if (!feature || !trimmed || runningConversation) return;
 
-      setFeatureDraft("");
+      setChatDraft(featureChatDraftId(feature.id), "");
       setRunningConversation({ featureId: feature.id });
       let userMessagePersisted = false;
       try {
@@ -446,7 +457,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         if (!updated) throw new Error("Failed to persist the feature planning response");
         await applyFeaturePlannerState(updated, assistantContent);
       } catch (error) {
-        if (!userMessagePersisted) setFeatureDraft(text);
+        if (!userMessagePersisted) setChatDraft(featureChatDraftId(feature.id), text);
         console.error("[FeaturesView] Failed to send feature message:", error);
         toast.error("Feature planning failed", {
           description: error instanceof Error ? error.message : "Unknown error",
@@ -455,7 +466,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         setRunningConversation(null);
       }
     },
-    [appendMessage, applyFeaturePlannerState, ensureCodexSession, runningConversation, selectedFeature],
+    [appendMessage, applyFeaturePlannerState, ensureCodexSession, runningConversation, selectedFeature, setChatDraft],
   );
 
   const refreshFeatureChat = useCallback(
@@ -526,7 +537,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       const trimmed = text.trim();
       if (!feature || !trimmed || runningConversation) return;
 
-      setStoryDrafts((drafts) => ({ ...drafts, [story.id]: "" }));
+      setChatDraft(storyChatDraftId(feature.id, story.id), "");
       setRunningConversation({ featureId: feature.id, storyId: story.id });
       let userMessagePersisted = false;
       try {
@@ -559,7 +570,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         await applyStoryRefinement(withAssistantMessage, updatedStory, assistantContent);
       } catch (error) {
         if (!userMessagePersisted) {
-          setStoryDrafts((drafts) => ({ ...drafts, [story.id]: text }));
+          setChatDraft(storyChatDraftId(feature.id, story.id), text);
         }
         console.error("[FeaturesView] Failed to send story message:", error);
         toast.error("Story refinement failed", {
@@ -569,7 +580,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         setRunningConversation(null);
       }
     },
-    [appendStoryMessage, applyStoryRefinement, ensureCodexSession, runningConversation, selectedFeature],
+    [appendStoryMessage, applyStoryRefinement, ensureCodexSession, runningConversation, selectedFeature, setChatDraft],
   );
 
   const refreshStoryChat = useCallback(
@@ -789,11 +800,11 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
             </div>
 
             <TabsContent value="chat" className={RIGHT_PANE_CONTENT_CLASS}>
-              <FeatureChatPanel
-                feature={selectedFeature}
-                draft={featureDraft}
-                setDraft={setFeatureDraft}
-                isRunning={runningConversation !== null}
+                <FeatureChatPanel
+                  feature={selectedFeature}
+                  draft={featureDraft}
+                  setDraft={(value) => setChatDraft(featureChatDraftId(selectedFeature.id), value)}
+                  isRunning={runningConversation !== null}
                 onSend={sendFeatureMessage}
                 onRefresh={() => void refreshFeatureChat(selectedFeature)}
               />
@@ -810,8 +821,11 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
               <TabsContent value={`story:${selectedStory.id}`} className={RIGHT_PANE_CONTENT_CLASS}>
                 <StoryDetailPanel
                   story={selectedStory}
-                  draft={storyDrafts[selectedStory.id] ?? ""}
-                  setDraft={(value) => setStoryDrafts((drafts) => ({ ...drafts, [selectedStory.id]: value }))}
+                  draft={chatDrafts.get(storyChatDraftId(selectedFeature.id, selectedStory.id)) ?? ""}
+                  setDraft={(value) => setChatDraft(
+                    storyChatDraftId(selectedFeature.id, selectedStory.id),
+                    value,
+                  )}
                   isRunning={runningConversation !== null}
                   onSend={(text) => void sendStoryMessage(selectedStory, text)}
                   onRefresh={() => void refreshStoryChat(selectedFeature, selectedStory)}

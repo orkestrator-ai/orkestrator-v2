@@ -461,7 +461,112 @@ beforeEach(() => {
     setupScriptsRunning: new Set(),
     sessionActivated: new Set(),
   });
+  useFeaturePlanStore.setState({ chatDrafts: new Map() });
   useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
+});
+
+describe("FeaturesView message drafts", () => {
+  test("restores an unfinished feature message after remounting", () => {
+    seedStores(chatFeature());
+    const view = render(<FeaturesView projectId="project-1" />);
+    const composer = screen.getByPlaceholderText("Describe the feature or answer Codex...");
+
+    fireEvent.change(composer, { target: { value: "A half-finished feature message" } });
+    view.unmount();
+    render(<FeaturesView projectId="project-1" />);
+
+    expect((screen.getByPlaceholderText(
+      "Describe the feature or answer Codex..."
+    ) as HTMLTextAreaElement).value).toBe("A half-finished feature message");
+  });
+
+  test("restores an unfinished story message after remounting and reopening the story", () => {
+    seedStores(featureWithStories());
+    const view = render(<FeaturesView projectId="project-1" />);
+    openStory();
+    const composer = screen.getByPlaceholderText("Refine the story, description, or acceptance criteria...");
+
+    fireEvent.change(composer, { target: { value: "Keep this story thought" } });
+    view.unmount();
+    render(<FeaturesView projectId="project-1" />);
+    openStory();
+
+    expect((screen.getByPlaceholderText(
+      "Refine the story, description, or acceptance criteria..."
+    ) as HTMLTextAreaElement).value).toBe("Keep this story thought");
+  });
+
+  test("keeps feature drafts isolated while switching conversations", async () => {
+    seedStores([
+      chatFeature({ id: "feature-1", title: "First Feature", order: 0 }),
+      chatFeature({ id: "feature-2", title: "Second Feature", order: 1 }),
+    ]);
+    useFeaturePlanStore.setState({
+      chatDrafts: new Map([
+        ["feature:feature-1", "first feature draft"],
+        ["feature:feature-2", "second feature draft"],
+      ]),
+    });
+    render(<FeaturesView projectId="project-1" />);
+
+    expect((screen.getByPlaceholderText(
+      "Describe the feature or answer Codex..."
+    ) as HTMLTextAreaElement).value).toBe("first feature draft");
+    fireEvent.click(screen.getByText("Second Feature").closest("button")!);
+    await waitFor(() => expect((screen.getByPlaceholderText(
+      "Describe the feature or answer Codex..."
+    ) as HTMLTextAreaElement).value).toBe("second feature draft"));
+    fireEvent.click(screen.getByText("First Feature").closest("button")!);
+    await waitFor(() => expect((screen.getByPlaceholderText(
+      "Describe the feature or answer Codex..."
+    ) as HTMLTextAreaElement).value).toBe("first feature draft"));
+  });
+
+  test("clears only the submitted feature and story drafts", async () => {
+    seedStores(chatFeature());
+    seedExistingCodexEnvironment();
+    useFeaturePlanStore.setState({
+      chatDrafts: new Map([
+        ["feature:feature-1", "send feature"],
+        ["feature:other", "leave feature"],
+      ]),
+    });
+    render(<FeaturesView projectId="project-1" />);
+
+    fireEvent.click(screen.getByTitle("Send message"));
+    await waitFor(() => expect(appendMessageMock).toHaveBeenCalledWith(
+      "feature-1",
+      "user",
+      "send feature",
+    ));
+    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1")).toBe("");
+    expect(useFeaturePlanStore.getState().getChatDraft("feature:other")).toBe("leave feature");
+
+    cleanup();
+    seedStores(featureWithStories({
+      codexEnvironmentId: "env-feature",
+      codexSessionId: "session-existing",
+    }));
+    seedExistingCodexEnvironment();
+    useFeaturePlanStore.setState({
+      chatDrafts: new Map([
+        ["feature:feature-1:story:story-1", "send story"],
+        ["feature:feature-1", "leave chat"],
+      ]),
+    });
+    render(<FeaturesView projectId="project-1" />);
+    openStory();
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => expect(appendStoryMessageMock).toHaveBeenCalledWith(
+      "feature-1",
+      "story-1",
+      "user",
+      "send story",
+    ));
+    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1:story:story-1")).toBe("");
+    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1")).toBe("leave chat");
+  });
 });
 
 describe("FeaturesView conversation ordering", () => {

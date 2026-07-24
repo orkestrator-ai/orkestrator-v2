@@ -24,6 +24,16 @@ function makeFeature(overrides: Partial<FeaturePlan> = {}): FeaturePlan {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 const mockGetFeaturePlans = mock(async (projectId: string) =>
   backing.filter((feature) => feature.projectId === projectId).sort((a, b) => a.order - b.order),
 );
@@ -77,7 +87,48 @@ const { useFeaturePlanStore } = await import("@/stores/featurePlanStore");
 describe("featurePlanStore", () => {
   beforeEach(() => {
     backing = [];
-    useFeaturePlanStore.setState({ features: [], isLoading: false, currentProjectId: null });
+    mockGetFeaturePlans.mockClear();
+    mockGetFeaturePlans.mockImplementation(async (projectId: string) =>
+      backing.filter((feature) => feature.projectId === projectId).sort((a, b) => a.order - b.order),
+    );
+    mockCreateFeaturePlan.mockClear();
+    mockUpdateFeaturePlan.mockClear();
+    mockAppendFeaturePlanMessage.mockClear();
+    mockAppendFeatureStoryMessage.mockClear();
+    useFeaturePlanStore.setState({
+      features: [],
+      isLoading: false,
+      currentProjectId: null,
+      chatDrafts: new Map(),
+    });
+  });
+
+  test("stores chat drafts by id and removes them when cleared", () => {
+    const store = useFeaturePlanStore.getState();
+
+    store.setChatDraft("feature:feature-1", "unfinished message");
+    store.setChatDraft("feature:feature-2", "another message");
+
+    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1")).toBe("unfinished message");
+    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-2")).toBe("another message");
+
+    useFeaturePlanStore.getState().setChatDraft("feature:feature-1", "");
+
+    expect(useFeaturePlanStore.getState().getChatDraft("feature:feature-1")).toBe("");
+    expect(useFeaturePlanStore.getState().chatDrafts.has("feature:feature-1")).toBe(false);
+  });
+
+  test("preserves whitespace-only drafts and safely clears a missing draft repeatedly", () => {
+    const store = useFeaturePlanStore.getState();
+
+    store.setChatDraft("feature:feature-1", "   ");
+    store.setChatDraft("feature:missing", "");
+    store.setChatDraft("feature:missing", "");
+
+    const state = useFeaturePlanStore.getState();
+    expect(state.getChatDraft("feature:feature-1")).toBe("   ");
+    expect(state.chatDrafts.has("feature:feature-1")).toBe(true);
+    expect(state.chatDrafts.has("feature:missing")).toBe(false);
   });
 
   test("loadFeatures populates features and tracks the current project", async () => {
@@ -94,6 +145,79 @@ describe("featurePlanStore", () => {
     expect(state.features.map((feature) => feature.id)).toEqual(["b", "a"]);
   });
 
+  test("loadFeatures preserves existing features and clears loading when the backend rejects", async () => {
+    const existing = makeFeature({ id: "existing", projectId: "project-previous" });
+    useFeaturePlanStore.setState({ features: [existing] });
+    mockGetFeaturePlans.mockImplementationOnce(async () => {
+      throw new Error("backend down");
+    });
+
+    await useFeaturePlanStore.getState().loadFeatures("project-1");
+
+    const state = useFeaturePlanStore.getState();
+    expect(state.currentProjectId).toBe("project-1");
+    expect(state.isLoading).toBe(false);
+    expect(state.features).toEqual([existing]);
+  });
+
+  test("ignores a stale successful load after a newer project load starts", async () => {
+    const firstLoad = deferred<FeaturePlan[]>();
+    const secondLoad = deferred<FeaturePlan[]>();
+    mockGetFeaturePlans.mockImplementation((projectId: string) =>
+      projectId === "project-1" ? firstLoad.promise : secondLoad.promise,
+    );
+
+    const firstPromise = useFeaturePlanStore.getState().loadFeatures("project-1");
+    const secondPromise = useFeaturePlanStore.getState().loadFeatures("project-2");
+    firstLoad.resolve([makeFeature({ id: "stale", projectId: "project-1" })]);
+    await firstPromise;
+
+    expect(useFeaturePlanStore.getState()).toMatchObject({
+      currentProjectId: "project-2",
+      isLoading: true,
+      features: [],
+    });
+
+    secondLoad.resolve([makeFeature({ id: "current", projectId: "project-2" })]);
+    await secondPromise;
+
+    expect(useFeaturePlanStore.getState()).toMatchObject({
+      currentProjectId: "project-2",
+      isLoading: false,
+    });
+    expect(useFeaturePlanStore.getState().features.map((feature) => feature.id)).toEqual(["current"]);
+  });
+
+  test("ignores a stale failed load while a newer project load is pending", async () => {
+    const firstLoad = deferred<FeaturePlan[]>();
+    const secondLoad = deferred<FeaturePlan[]>();
+    const existing = makeFeature({ id: "existing", projectId: "project-previous" });
+    useFeaturePlanStore.setState({ features: [existing] });
+    mockGetFeaturePlans.mockImplementation((projectId: string) =>
+      projectId === "project-1" ? firstLoad.promise : secondLoad.promise,
+    );
+
+    const firstPromise = useFeaturePlanStore.getState().loadFeatures("project-1");
+    const secondPromise = useFeaturePlanStore.getState().loadFeatures("project-2");
+    firstLoad.reject(new Error("stale failure"));
+    await firstPromise;
+
+    expect(useFeaturePlanStore.getState()).toMatchObject({
+      currentProjectId: "project-2",
+      isLoading: true,
+      features: [existing],
+    });
+
+    secondLoad.resolve([makeFeature({ id: "current", projectId: "project-2" })]);
+    await secondPromise;
+
+    expect(useFeaturePlanStore.getState()).toMatchObject({
+      currentProjectId: "project-2",
+      isLoading: false,
+    });
+    expect(useFeaturePlanStore.getState().features.map((feature) => feature.id)).toEqual(["current"]);
+  });
+
   test("createFeature returns the new id and inserts the feature sorted by order", async () => {
     useFeaturePlanStore.setState({ features: [makeFeature({ id: "existing", order: 5 })] });
 
@@ -105,14 +229,38 @@ describe("featurePlanStore", () => {
     expect(features.some((feature) => feature.id === id)).toBe(true);
   });
 
-  test("updateFeature replaces the matching feature in place", async () => {
-    const created = await useFeaturePlanStore.getState().createFeature("project-1");
+  test("updateFeature replaces a matching feature once and restores order", async () => {
+    const original = makeFeature({ id: "target", order: 2, title: "Original" });
+    const other = makeFeature({ id: "other", order: 1 });
+    useFeaturePlanStore.setState({ features: [original, other] });
+    mockUpdateFeaturePlan.mockImplementationOnce(async () =>
+      makeFeature({ id: "target", order: 0, title: "Renamed", status: "stories" }),
+    );
 
-    const updated = await useFeaturePlanStore.getState().updateFeature(created!, { title: "Renamed", status: "stories" });
+    const updated = await useFeaturePlanStore.getState().updateFeature("target", {
+      title: "Renamed",
+      status: "stories",
+    });
 
     expect(updated).toMatchObject({ title: "Renamed", status: "stories" });
-    const stored = useFeaturePlanStore.getState().features.find((feature) => feature.id === created);
+    const features = useFeaturePlanStore.getState().features;
+    expect(features.map((feature) => feature.id)).toEqual(["target", "other"]);
+    expect(features.filter((feature) => feature.id === "target")).toHaveLength(1);
+    const stored = features.find((feature) => feature.id === "target");
     expect(stored).toMatchObject({ title: "Renamed", status: "stories" });
+  });
+
+  test("updateFeature returns undefined and leaves state unchanged when the backend rejects", async () => {
+    const existing = makeFeature({ id: "existing", title: "Original" });
+    useFeaturePlanStore.setState({ features: [existing] });
+    mockUpdateFeaturePlan.mockImplementationOnce(async () => {
+      throw new Error("backend down");
+    });
+
+    const result = await useFeaturePlanStore.getState().updateFeature("existing", { title: "Renamed" });
+
+    expect(result).toBeUndefined();
+    expect(useFeaturePlanStore.getState().features).toEqual([existing]);
   });
 
   test("appendMessage adds the message to the stored feature", async () => {
@@ -122,6 +270,19 @@ describe("featurePlanStore", () => {
 
     const stored = useFeaturePlanStore.getState().features.find((feature) => feature.id === created);
     expect(stored?.messages.at(-1)).toMatchObject({ role: "user", content: "Add saved filters" });
+  });
+
+  test("appendMessage returns undefined and leaves state unchanged when the backend rejects", async () => {
+    const existing = makeFeature({ id: "existing" });
+    useFeaturePlanStore.setState({ features: [existing] });
+    mockAppendFeaturePlanMessage.mockImplementationOnce(async () => {
+      throw new Error("backend down");
+    });
+
+    const result = await useFeaturePlanStore.getState().appendMessage("existing", "user", "Do not append");
+
+    expect(result).toBeUndefined();
+    expect(useFeaturePlanStore.getState().features).toEqual([existing]);
   });
 
   test("appendStoryMessage adds a message to the targeted story", async () => {

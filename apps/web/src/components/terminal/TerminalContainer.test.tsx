@@ -9,6 +9,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createSessionKey, useTerminalSessionStore } from "@/stores/terminalSessionStore";
 import type { PaneLeaf, PersistedPaneLayout } from "@/types/paneLayout";
 import type { EnsureEnvironmentSetupResult, EnvironmentSetupSession } from "@/types";
+import type { CollisionDetection } from "@dnd-kit/core";
 import * as realBackend from "@/lib/backend";
 import * as realSetupCommands from "@/lib/setup-commands";
 import { requestTerminalBrowserTab } from "@/lib/terminal-links";
@@ -28,9 +29,9 @@ type DndContextHarnessProps = {
 };
 
 let latestDndContextProps: DndContextHarnessProps | null = null;
-const pointerWithinMock = mock((_args: never): Array<{ id: string }> => []);
-const rectIntersectionMock = mock((_args: never): Array<{ id: string }> => []);
-const closestCenterMock = mock((_args: never): Array<{ id: string }> => []);
+const pointerWithinMock = mock<CollisionDetection>((_args) => []);
+const rectIntersectionMock = mock<CollisionDetection>((_args) => []);
+const closestCenterMock = mock<CollisionDetection>((_args) => []);
 
 mock.module("@dnd-kit/core", () => ({
   ...realDndKitCoreSnapshot,
@@ -138,7 +139,7 @@ mock.module("./InitializationLogs", () => ({
 
 const {
   TerminalContainer,
-  customCollisionDetection,
+  createTerminalCollisionDetection,
   getTerminalTabDragEndAction,
 } = await import("./TerminalContainer");
 
@@ -2863,35 +2864,41 @@ describe("TerminalContainer", () => {
     });
 
     test("prioritizes tabs in pointer and rectangle collisions, then falls back to closest center", () => {
+      const collisionDetection = createTerminalCollisionDetection({
+        pointerDetection: pointerWithinMock,
+        rectangleDetection: rectIntersectionMock,
+        nearestDetection: closestCenterMock,
+      });
+
       pointerWithinMock.mockReturnValueOnce([
         { id: "edge:left:right" },
         { id: "tab:a:pane:left" },
         { id: "tabbar:right" },
       ]);
-      expect(customCollisionDetection({} as never)).toEqual([
+      expect(collisionDetection({} as never)).toEqual([
         { id: "tab:a:pane:left" },
         { id: "tabbar:right" },
       ]);
       expect(rectIntersectionMock).not.toHaveBeenCalled();
 
       pointerWithinMock.mockReturnValueOnce([{ id: "edge:left:right" }]);
-      expect(customCollisionDetection({} as never)).toEqual([{ id: "edge:left:right" }]);
+      expect(collisionDetection({} as never)).toEqual([{ id: "edge:left:right" }]);
 
       pointerWithinMock.mockReturnValueOnce([]);
       rectIntersectionMock.mockReturnValueOnce([
         { id: "edge:left:right" },
         { id: "tab:a:pane:left" },
       ]);
-      expect(customCollisionDetection({} as never)).toEqual([{ id: "tab:a:pane:left" }]);
+      expect(collisionDetection({} as never)).toEqual([{ id: "tab:a:pane:left" }]);
 
       pointerWithinMock.mockReturnValueOnce([]);
       rectIntersectionMock.mockReturnValueOnce([{ id: "edge:left:right" }]);
-      expect(customCollisionDetection({} as never)).toEqual([{ id: "edge:left:right" }]);
+      expect(collisionDetection({} as never)).toEqual([{ id: "edge:left:right" }]);
 
       pointerWithinMock.mockReturnValueOnce([]);
       rectIntersectionMock.mockReturnValueOnce([]);
       closestCenterMock.mockReturnValueOnce([{ id: "tabbar:right" }]);
-      expect(customCollisionDetection({} as never)).toEqual([{ id: "tabbar:right" }]);
+      expect(collisionDetection({} as never)).toEqual([{ id: "tabbar:right" }]);
     });
 
     test("wires drag-over state into self-collision cross-pane moves and ignores cancelled drops", async () => {

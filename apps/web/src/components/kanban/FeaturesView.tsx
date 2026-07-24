@@ -164,6 +164,20 @@ function toNativeChatMessage(
   };
 }
 
+function latestUserMessageTime(feature: FeaturePlan): number {
+  let latest = Number.NEGATIVE_INFINITY;
+
+  for (const message of feature.messages) {
+    if (message.role !== "user") continue;
+    const timestamp = Date.parse(message.createdAt);
+    if (!Number.isNaN(timestamp)) {
+      latest = Math.max(latest, timestamp);
+    }
+  }
+
+  return latest;
+}
+
 interface FeaturesViewProps {
   projectId: string;
 }
@@ -193,7 +207,14 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   }, [loadFeatures, projectId]);
 
   const projectFeatures = useMemo(
-    () => features.filter((feature) => feature.projectId === projectId),
+    () => features
+      .filter((feature) => feature.projectId === projectId)
+      .sort((a, b) => {
+        const recencyDifference = latestUserMessageTime(b) - latestUserMessageTime(a);
+        return Number.isNaN(recencyDifference) || recencyDifference === 0
+          ? a.order - b.order
+          : recencyDifference;
+      }),
     [features, projectId],
   );
 

@@ -106,7 +106,8 @@ function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
   };
 }
 
-function seedStores(feature: FeaturePlan) {
+function seedStores(featureOrFeatures: FeaturePlan | FeaturePlan[]) {
+  const features = Array.isArray(featureOrFeatures) ? featureOrFeatures : [featureOrFeatures];
   useProjectStore.setState({
     projects: [{
       id: "project-1",
@@ -120,7 +121,7 @@ function seedStores(feature: FeaturePlan) {
     error: null,
   });
   useFeaturePlanStore.setState({
-    features: [feature],
+    features,
     loadFeatures: loadFeaturesMock as unknown as ReturnType<typeof useFeaturePlanStore.getState>["loadFeatures"],
     updateFeature: updateFeatureMock as unknown as ReturnType<typeof useFeaturePlanStore.getState>["updateFeature"],
   });
@@ -157,6 +158,53 @@ beforeEach(() => {
   updateFeatureMock.mockClear();
   loadFeaturesMock.mockClear();
   useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
+});
+
+describe("FeaturesView conversation ordering", () => {
+  test("shows the feature with the most recent user message first", () => {
+    seedStores([
+      featureWithStories({
+        id: "feature-old",
+        title: "Older user message",
+        order: 0,
+        messages: [
+          {
+            id: "old-user",
+            role: "user",
+            content: "An older request",
+            createdAt: "2026-01-02T00:00:00.000Z",
+          },
+          {
+            id: "new-assistant",
+            role: "assistant",
+            content: "A newer assistant reply",
+            createdAt: "2026-01-04T00:00:00.000Z",
+          },
+        ],
+      }),
+      featureWithStories({
+        id: "feature-recent",
+        title: "Recent user message",
+        order: 1,
+        messages: [{
+          id: "recent-user",
+          role: "user",
+          content: "The latest request",
+          createdAt: "2026-01-03T00:00:00.000Z",
+        }],
+      }),
+    ]);
+
+    render(<FeaturesView projectId="project-1" />);
+
+    const featureButtons = screen.getAllByRole("button").filter((button) =>
+      button.textContent?.includes("user message")
+    );
+    expect(featureButtons.map((button) => button.textContent)).toEqual([
+      expect.stringContaining("Recent user message"),
+      expect.stringContaining("Older user message"),
+    ]);
+  });
 });
 
 describe("FeaturesView build action", () => {

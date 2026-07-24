@@ -13,6 +13,7 @@ import {
   getPendingQuestions,
   getPendingPlanApprovals,
   answerQuestion,
+  dismissQuestion,
   respondToPlanApproval,
   getMcpServers,
   getPlugins,
@@ -405,6 +406,25 @@ describe("claude-client", () => {
     test("returns false on error", async () => {
       mockFetchError();
       expect(await answerQuestion(client, "s-1", "q-1", [["yes"]])).toBe(false);
+    });
+  });
+
+  describe("dismissQuestion", () => {
+    test("returns true when the bridge accepts the dismissal", async () => {
+      mockFetchJson({ status: "dismissed" });
+      expect(await dismissQuestion(client, "s-1", "q-1")).toBe(true);
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        `${client.baseUrl}/session/s-1/questions/q-1`,
+        { method: "DELETE" },
+      );
+    });
+
+    test("returns false for HTTP and network failures", async () => {
+      mockFetchJson({ error: "gone" }, 404);
+      expect(await dismissQuestion(client, "s-1", "q-1")).toBe(false);
+
+      mockFetchError();
+      expect(await dismissQuestion(client, "s-1", "q-1")).toBe(false);
     });
   });
 

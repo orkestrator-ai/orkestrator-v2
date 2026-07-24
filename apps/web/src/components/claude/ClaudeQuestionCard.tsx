@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { ClaudeClient, ClaudeQuestionRequest, QuestionInfo, QuestionOption } from "@/lib/claude-client";
-import { answerQuestion } from "@/lib/claude-client";
+import { answerQuestion, dismissQuestion } from "@/lib/claude-client";
 import { useClaudeStore } from "@/stores/claudeStore";
 
 type SubmitAnswersHandler = (
@@ -391,14 +391,25 @@ export function ClaudeQuestionCard({
     [submitOnOptionSelect, isSubmitting, questionCount, submitAnswers],
   );
 
-  // Handle dismiss - just remove the question locally (server will handle timeout)
-  const handleDismiss = useCallback(() => {
-    if (onDismiss) {
-      void onDismiss();
-      return;
+  const handleDismiss = useCallback(async () => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      if (onDismiss) {
+        await onDismiss();
+        return;
+      }
+      if (!client || !sessionId) {
+        return;
+      }
+      const dismissed = await dismissQuestion(client, sessionId, question.id);
+      if (dismissed) {
+        removePendingQuestion(question.id);
+      }
+    } finally {
+      setIsSubmitting(false);
     }
-    removePendingQuestion(question.id);
-  }, [onDismiss, question.id, removePendingQuestion]);
+  }, [client, isSubmitting, onDismiss, question.id, removePendingQuestion, sessionId]);
 
   // Determine button text
   const isLastQuestion = currentQuestionIndex === questionCount - 1;

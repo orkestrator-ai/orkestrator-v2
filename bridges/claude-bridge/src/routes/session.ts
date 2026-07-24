@@ -9,6 +9,7 @@ import {
   sendPrompt,
   abortSession,
   answerQuestion,
+  dismissQuestion,
   getPendingQuestions,
   getSessionInitData,
   respondToPlanApproval,
@@ -21,6 +22,17 @@ import type {
 } from "../types/index.js";
 
 const session = new Hono();
+
+function isValidImageDataUrl(value: string): boolean {
+  const match = /^data:image\/(?:jpeg|png|gif|webp);base64,([\s\S]+)$/.exec(value);
+  if (!match) return false;
+  const data = match[1].replace(/\s+/g, "");
+  return (
+    data.length > 0
+    && data.length % 4 === 0
+    && /^[A-Za-z0-9+/]+={0,2}$/.test(data)
+  );
+}
 
 // Create a new session
 session.post("/create", async (c) => {
@@ -108,7 +120,7 @@ session.post("/:id/prompt", async (c) => {
 
   try {
     const body = await c.req.json();
-    const prompt = body.prompt as string;
+    const prompt = body.prompt;
     const model = body.model as string | undefined;
     const rawEffort = body.effort as string | undefined;
     const effort = rawEffort && ["low", "medium", "high", "xhigh", "max"].includes(rawEffort)
@@ -128,7 +140,33 @@ session.post("/:id/prompt", async (c) => {
       | undefined;
     const fastMode = typeof body.fastMode === "boolean" ? body.fastMode : undefined;
 
-    if (!prompt) {
+    const attachmentsAreValid = attachments === undefined || (
+      Array.isArray(attachments)
+      && attachments.every((attachment) =>
+        attachment
+        && (attachment.type === "file" || attachment.type === "image")
+        && typeof attachment.path === "string"
+        && (attachment.dataUrl === undefined || typeof attachment.dataUrl === "string")
+        && (attachment.filename === undefined || typeof attachment.filename === "string")
+        && (attachment.type === "image" || attachment.dataUrl === undefined)
+        && (
+          attachment.dataUrl === undefined
+          || isValidImageDataUrl(attachment.dataUrl)
+        )
+        && (
+          attachment.path.trim().length > 0
+          || (attachment.type === "image" && attachment.dataUrl !== undefined)
+        )
+      )
+    );
+    if (!attachmentsAreValid) {
+      return c.json({ error: "Attachments are invalid" }, 400);
+    }
+
+    if (
+      typeof prompt !== "string"
+      || (prompt.trim().length === 0 && (!attachments || attachments.length === 0))
+    ) {
       return c.json({ error: "Prompt is required" }, 400);
     }
 
@@ -156,6 +194,23 @@ session.post("/:id/prompt", async (c) => {
       500
     );
   }
+});
+
+// Dismiss a pending question
+session.delete("/:id/questions/:questionId", (c) => {
+  const sessionId = c.req.param("id");
+  const questionId = c.req.param("questionId");
+
+  if (!getSession(sessionId)) {
+    return c.json({ error: "Session not found" }, 404);
+  }
+
+  const pendingQuestion = getPendingQuestions(sessionId).find((question) => question.id === questionId);
+  if (!pendingQuestion || !dismissQuestion(questionId)) {
+    return c.json({ error: "Question not found or already resolved" }, 404);
+  }
+
+  return c.json({ status: "dismissed" });
 });
 
 // Abort a running session
@@ -305,6 +360,12 @@ session.post("/:id/plan-approvals/:approvalId/respond", async (c) => {
 
     if (typeof approved !== "boolean") {
       return c.json({ error: "'approved' boolean is required" }, 400);
+    }
+
+    const pendingApproval = getPendingPlanApprovals(sessionId)
+      .find((approval) => approval.id === approvalId);
+    if (!pendingApproval) {
+      return c.json({ error: "Plan approval not found or already responded" }, 404);
     }
 
     console.log("[session] Plan approval response received", {

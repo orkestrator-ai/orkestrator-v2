@@ -12,9 +12,11 @@ const realClaudeClientSnapshot = { ...realClaudeClient };
 const realClaudeStoreSnapshot = { ...realClaudeStore };
 
 const mockAnswerQuestion = mock(async () => true);
+const mockDismissQuestion = mock(async () => true);
 mock.module("@/lib/claude-client", () => ({
   ...realClaudeClientSnapshot,
   answerQuestion: mockAnswerQuestion,
+  dismissQuestion: mockDismissQuestion,
 }));
 
 const mockRemovePendingQuestion = mock(() => {});
@@ -105,6 +107,8 @@ function twoQuestions(): ClaudeQuestionRequest {
 afterEach(() => {
   cleanup();
   mockAnswerQuestion.mockClear();
+  mockDismissQuestion.mockReset();
+  mockDismissQuestion.mockImplementation(async () => true);
   mockRemovePendingQuestion.mockClear();
 });
 
@@ -504,7 +508,7 @@ describe("ClaudeQuestionCard", () => {
     }
   });
 
-  test("dismiss removes the native pending question by default", () => {
+test("dismiss releases the server question before removing it locally", async () => {
     render(
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
@@ -513,12 +517,59 @@ describe("ClaudeQuestionCard", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    });
 
+    expect(mockDismissQuestion).toHaveBeenCalledWith(client, "s-1", "q-1");
     expect(mockRemovePendingQuestion).toHaveBeenCalledWith("q-1");
   });
 
-  test("dismiss delegates to the callback path when provided", () => {
+  test("dismiss keeps the question pending when the server rejects it", async () => {
+    mockDismissQuestion.mockImplementationOnce(async () => false);
+    render(
+      <ClaudeQuestionCard
+        question={singleQuestionWithOptions()}
+        client={client}
+        sessionId="s-1"
+      />
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    });
+
+    expect(mockRemovePendingQuestion).not.toHaveBeenCalled();
+  });
+
+  test("dismiss disables the card and cannot be submitted twice while in flight", async () => {
+    let resolveDismiss!: (value: boolean) => void;
+    mockDismissQuestion.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => {
+        resolveDismiss = resolve;
+      }),
+    );
+    render(
+      <ClaudeQuestionCard
+        question={singleQuestionWithOptions()}
+        client={client}
+        sessionId="s-1"
+      />
+    );
+
+    const dismissButton = screen.getByRole("button", { name: "Dismiss" }) as HTMLButtonElement;
+    fireEvent.click(dismissButton);
+    expect(dismissButton.disabled).toBe(true);
+    fireEvent.click(dismissButton);
+    expect(mockDismissQuestion).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveDismiss(true);
+    });
+    expect(mockRemovePendingQuestion).toHaveBeenCalledWith("q-1");
+  });
+
+  test("dismiss delegates to the callback path when provided", async () => {
     const onDismiss = mock(() => {});
 
     render(
@@ -529,7 +580,9 @@ describe("ClaudeQuestionCard", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    });
 
     expect(onDismiss).toHaveBeenCalledTimes(1);
     expect(mockRemovePendingQuestion).not.toHaveBeenCalled();

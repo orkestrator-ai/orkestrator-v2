@@ -58,6 +58,7 @@ const mockGetSessionInitData = mock(() => ({
   slashCommands: [],
 }));
 const mockAnswerQuestion = mock(() => true);
+const mockDismissQuestion = mock(() => true);
 const mockGetPendingPlanApprovals = mock(() => []);
 const mockRespondToPlanApproval = mock(() => true);
 
@@ -72,6 +73,7 @@ mock.module("../services/session-manager.js", () => ({
   getPendingQuestions: mockGetPendingQuestions,
   getSessionInitData: mockGetSessionInitData,
   answerQuestion: mockAnswerQuestion,
+  dismissQuestion: mockDismissQuestion,
   getPendingPlanApprovals: mockGetPendingPlanApprovals,
   respondToPlanApproval: mockRespondToPlanApproval,
 }));
@@ -114,6 +116,8 @@ describe("session routes", () => {
     mockDeleteSession.mockClear();
     mockGetPendingQuestions.mockClear();
     mockAnswerQuestion.mockClear();
+    mockDismissQuestion.mockClear();
+    mockGetPendingPlanApprovals.mockClear();
     mockRespondToPlanApproval.mockClear();
   });
 
@@ -195,6 +199,58 @@ describe("session routes", () => {
     test("returns 400 when prompt is missing", async () => {
       const res = await jsonRequest("POST", "/session/s-1/prompt", {});
       expect(res.status).toBe(400);
+    });
+
+    test("accepts an image-only prompt", async () => {
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "",
+        attachments: [{
+          type: "image",
+          path: "",
+          filename: "screen.png",
+          dataUrl: "data:image/png;base64,aGVsbG8=",
+        }],
+      });
+
+      expect(res.status).toBe(202);
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        "s-1",
+        "",
+        expect.objectContaining({
+          attachments: expect.arrayContaining([
+            expect.objectContaining({ filename: "screen.png" }),
+          ]),
+        }),
+      );
+    });
+
+    test("rejects malformed attachments", async () => {
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "hello",
+        attachments: [{ type: "secret", path: 42 }],
+      });
+
+      expect(res.status).toBe(400);
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("rejects malformed image-only data and empty attachment sources", async () => {
+      const malformedData = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "",
+        attachments: [{
+          type: "image",
+          path: "",
+          dataUrl: "not base64",
+        }],
+      });
+      expect(malformedData.status).toBe(400);
+
+      const emptySource = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "",
+        attachments: [{ type: "image", path: "" }],
+      });
+      expect(emptySource.status).toBe(400);
+      expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 
     test("passes effort and permissionMode to sendPrompt", async () => {
@@ -490,6 +546,48 @@ describe("session routes", () => {
     });
   });
 
+  describe("DELETE /session/:id/questions/:questionId", () => {
+    test("dismisses a pending question owned by the session", async () => {
+      mockGetPendingQuestions.mockImplementationOnce(() => [{
+        id: "q-1",
+        sessionId: "s-1",
+        questions: [],
+      }]);
+
+      const res = await app.request("/session/s-1/questions/q-1", { method: "DELETE" });
+
+      expect(res.status).toBe(200);
+      expect(mockDismissQuestion).toHaveBeenCalledWith("q-1");
+    });
+
+    test("does not dismiss a question from another session", async () => {
+      mockGetPendingQuestions.mockImplementationOnce(() => []);
+
+      const res = await app.request("/session/s-1/questions/q-other", { method: "DELETE" });
+
+      expect(res.status).toBe(404);
+      expect(mockDismissQuestion).not.toHaveBeenCalled();
+    });
+
+    test("returns 404 for an unknown session", async () => {
+      const res = await app.request("/session/s-unknown/questions/q-1", { method: "DELETE" });
+      expect(res.status).toBe(404);
+      expect(mockDismissQuestion).not.toHaveBeenCalled();
+    });
+
+    test("returns 404 when the question resolves between snapshot and dismissal", async () => {
+      mockGetPendingQuestions.mockImplementationOnce(() => [{
+        id: "q-1",
+        sessionId: "s-1",
+        questions: [],
+      }]);
+      mockDismissQuestion.mockImplementationOnce(() => false);
+
+      const res = await app.request("/session/s-1/questions/q-1", { method: "DELETE" });
+      expect(res.status).toBe(404);
+    });
+  });
+
   // --- Error paths (500 branches) ---
   describe("error paths", () => {
     test("POST /session/create returns 500 when createSession throws", async () => {
@@ -524,6 +622,11 @@ describe("session routes", () => {
   // --- POST /session/:id/plan-approvals/:approvalId/respond ---
   describe("POST /session/:id/plan-approvals/:approvalId/respond", () => {
     test("returns approved status", async () => {
+      mockGetPendingPlanApprovals.mockImplementationOnce(() => [{
+        id: "a-1",
+        sessionId: "s-1",
+        toolUseId: "tool-1",
+      }]);
       const res = await jsonRequest("POST", "/session/s-1/plan-approvals/a-1/respond", {
         approved: true,
       });
@@ -533,6 +636,11 @@ describe("session routes", () => {
     });
 
     test("returns rejected status with feedback", async () => {
+      mockGetPendingPlanApprovals.mockImplementationOnce(() => [{
+        id: "a-1",
+        sessionId: "s-1",
+        toolUseId: "tool-1",
+      }]);
       const res = await jsonRequest("POST", "/session/s-1/plan-approvals/a-1/respond", {
         approved: false,
         feedback: "needs work",
@@ -553,6 +661,29 @@ describe("session routes", () => {
       const res = await jsonRequest("POST", "/session/s-unknown/plan-approvals/a-1/respond", {
         approved: true,
       });
+      expect(res.status).toBe(404);
+    });
+
+    test("does not allow responding to another session's approval", async () => {
+      mockGetPendingPlanApprovals.mockImplementationOnce(() => []);
+      const res = await jsonRequest("POST", "/session/s-1/plan-approvals/a-other/respond", {
+        approved: true,
+      });
+
+      expect(res.status).toBe(404);
+      expect(mockRespondToPlanApproval).not.toHaveBeenCalled();
+    });
+
+    test("returns 404 when the approval resolves between snapshot and response", async () => {
+      mockGetPendingPlanApprovals.mockImplementationOnce(() => [{
+        id: "a-1",
+        sessionId: "s-1",
+      }]);
+      mockRespondToPlanApproval.mockImplementationOnce(() => false);
+      const res = await jsonRequest("POST", "/session/s-1/plan-approvals/a-1/respond", {
+        approved: true,
+      });
+
       expect(res.status).toBe(404);
     });
   });

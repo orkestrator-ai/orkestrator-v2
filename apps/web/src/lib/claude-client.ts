@@ -551,6 +551,26 @@ export async function answerQuestion(
 }
 
 /**
+ * Dismiss a question and release the bridge-side SDK callback.
+ */
+export async function dismissQuestion(
+  client: ClaudeClient,
+  sessionId: string,
+  questionId: string,
+): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `${client.baseUrl}/session/${sessionId}/questions/${questionId}`,
+      { method: "DELETE" },
+    );
+    return response.ok;
+  } catch (error) {
+    console.error("[claude-client] Failed to dismiss question:", error);
+    return false;
+  }
+}
+
+/**
  * Respond to a plan approval request (approve or reject)
  */
 export async function respondToPlanApproval(

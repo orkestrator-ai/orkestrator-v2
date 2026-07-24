@@ -72,7 +72,8 @@ const planApprovalResolvers = new Map<
   }
 >();
 
-// Timeout for plan approval (5 minutes)
+// Timeouts for user interactions (5 minutes)
+const QUESTION_TIMEOUT_MS = 5 * 60 * 1000;
 const PLAN_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
@@ -248,19 +249,29 @@ async function generateTitleViaCli(userMessage: string): Promise<string | null> 
   }
 
   return new Promise<string | null>((resolve) => {
-    const child = spawn(cliPath!, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 15_000,
-    });
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(cliPath!, args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 15_000,
+      });
+    } catch (error) {
+      console.debug(
+        "[session-manager] CLI title generation spawn error:",
+        error instanceof Error ? error.message : String(error),
+      );
+      resolve(null);
+      return;
+    }
 
     let stdout = "";
     let stderr = "";
 
-    child.stdout.on("data", (data: Buffer) => {
+    child.stdout?.on("data", (data: Buffer) => {
       stdout += data.toString();
     });
 
-    child.stderr.on("data", (data: Buffer) => {
+    child.stderr?.on("data", (data: Buffer) => {
       stderr += data.toString();
     });
 
@@ -337,6 +348,11 @@ async function generateAndSetSessionTitle(
     });
   } catch (error) {
     console.debug("[session-manager] Title generation failed:", error);
+  } finally {
+    const session = sessions.get(sessionId);
+    if (session) {
+      session.titleGenerationPending = false;
+    }
   }
 }
 
@@ -394,8 +410,40 @@ function cleanupPendingPlanApprovals(sessionId: string): void {
         planApprovalResolvers.delete(approvalId);
       }
       pendingPlanApprovals.delete(approvalId);
+      eventEmitter.emit({
+        type: "plan.approval-responded",
+        sessionId,
+        data: { requestId: approvalId, approved: false, cancelled: true },
+      });
     }
   }
+}
+
+/**
+ * Clean up pending questions for a session.
+ * Rejects any waiting promises so SDK callbacks cannot remain suspended.
+ */
+function cleanupPendingQuestions(sessionId: string): void {
+  for (const [questionId, question] of pendingQuestions) {
+    if (question.sessionId === sessionId) {
+      const resolver = questionResolvers.get(questionId);
+      if (resolver) {
+        resolver.reject(new Error("Session terminated"));
+        questionResolvers.delete(questionId);
+      }
+      pendingQuestions.delete(questionId);
+      eventEmitter.emit({
+        type: "question.answered",
+        sessionId,
+        data: { requestId: questionId, cancelled: true },
+      });
+    }
+  }
+}
+
+function cleanupPendingInteractions(sessionId: string): void {
+  cleanupPendingQuestions(sessionId);
+  cleanupPendingPlanApprovals(sessionId);
 }
 
 /**
@@ -408,8 +456,7 @@ export function deleteSession(sessionId: string): boolean {
     if (session.abortController) {
       session.abortController.abort();
     }
-    // Clean up pending plan approvals
-    cleanupPendingPlanApprovals(sessionId);
+    cleanupPendingInteractions(sessionId);
     sessions.delete(sessionId);
     return true;
   }
@@ -434,8 +481,7 @@ export function abortSession(sessionId: string): boolean {
     session.status = "idle";
     session.abortController = undefined;
 
-    // Clean up pending plan approvals
-    cleanupPendingPlanApprovals(sessionId);
+    cleanupPendingInteractions(sessionId);
 
     eventEmitter.emit({
       type: "session.idle",
@@ -498,6 +544,8 @@ interface OrderedPartEntry {
   messageUuid?: string;
   /** Parent Task tool use ID - used to group child tools under their parent Task */
   parentTaskUseId?: string;
+  /** Position of this part within its SDK message's content array */
+  blockOffset?: number;
 }
 
 /**
@@ -580,6 +628,8 @@ function parseMessageContent(
   newTaskIds: string[];
   /** IDs of Task tools that completed in this message (to remove from active tasks) */
   completedTaskIds: string[];
+  /** Number of content blocks in this message (including ones that produced no part) */
+  contentBlockCount: number;
 } {
   const thinkingParts: NormalizedPart[] = [];
   const orderedParts: OrderedPartEntry[] = [];
@@ -587,7 +637,11 @@ function parseMessageContent(
   const completedTaskIds: string[] = [];
   let textContent = "";
 
-  const messageUuid = message.uuid as string | undefined;
+  const messageUuid = typeof message.uuid === "string" ? message.uuid : undefined;
+  const explicitParentTaskUseId =
+    typeof message.parent_tool_use_id === "string" && message.parent_tool_use_id.length > 0
+      ? message.parent_tool_use_id
+      : undefined;
 
   // Handle message.message.content array (from Anthropic SDK format)
   const contentBlocks = message.message?.content || [];
@@ -596,7 +650,8 @@ function parseMessageContent(
   // This is used for the positional heuristic: tools following a Task belong to it
   let currentTaskUseId: string | undefined;
 
-  for (const block of contentBlocks) {
+  for (let blockOffset = 0; blockOffset < contentBlocks.length; blockOffset += 1) {
+    const block = contentBlocks[blockOffset];
     if (block.type === "text") {
       textContent += block.text || "";
       // Track text in ordered parts so it maintains position relative to thinking/tools
@@ -604,6 +659,7 @@ function parseMessageContent(
         type: "text",
         value: block.text || "",
         messageUuid,
+        blockOffset,
       });
     } else if (block.type === "thinking") {
       const thinkingContent = block.thinking || "";
@@ -616,24 +672,23 @@ function parseMessageContent(
         type: "thinking",
         value: thinkingContent,
         messageUuid,
+        blockOffset,
       });
     } else if (block.type === "tool_use" && toolTracker) {
       const toolName = block.name || "Unknown tool";
-      const isEditTool =
-        toolName === "Edit" ||
-        toolName === "Write" ||
-        toolName === "edit" ||
-        toolName === "write";
+      const normalizedToolName = toolName.toLowerCase();
+      const isEditTool = normalizedToolName === "edit";
+      const isWriteTool = normalizedToolName === "write";
       const isTask = isTaskToolName(toolName);
 
       let toolDiff: ToolDiffMetadata | undefined;
-      if (isEditTool && block.input) {
+      if ((isEditTool || isWriteTool) && block.input) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const input = block.input as any;
         toolDiff = {
           filePath: input.file_path || input.filePath,
-          before: input.old_string || input.oldString,
-          after: input.new_string || input.newString,
+          before: isWriteTool ? "" : input.old_string || input.oldString,
+          after: isWriteTool ? input.content : input.new_string || input.newString,
         };
       }
 
@@ -646,7 +701,9 @@ function parseMessageContent(
       // - If no Task in this message, check activeTaskIds for a single active Task
       let parentTaskUseId: string | undefined;
       if (!isTask) {
-        if (currentTaskUseId) {
+        if (explicitParentTaskUseId) {
+          parentTaskUseId = explicitParentTaskUseId;
+        } else if (currentTaskUseId) {
           // Use the most recent Task from this message
           parentTaskUseId = currentTaskUseId;
         } else if (activeTaskIds && activeTaskIds.size === 1) {
@@ -659,7 +716,7 @@ function parseMessageContent(
       }
 
       // Register tool with tracker
-      if (block.id) {
+      if (typeof block.id === "string" && block.id.length > 0) {
         toolTracker.addTool(block.id, {
           type: "tool-invocation",
           content: toolName,
@@ -679,6 +736,7 @@ function parseMessageContent(
           value: block.id,
           messageUuid,
           parentTaskUseId,
+          blockOffset,
         });
 
         // If this is a Task tool, update tracking
@@ -689,7 +747,7 @@ function parseMessageContent(
       }
     } else if (block.type === "tool_result" && toolTracker) {
       // Update tool tracker with result
-      if (block.tool_use_id) {
+      if (typeof block.tool_use_id === "string" && block.tool_use_id.length > 0) {
         const resultContent = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
         toolTracker.updateToolResult(block.tool_use_id, {
           output: block.is_error ? undefined : resultContent,
@@ -706,7 +764,14 @@ function parseMessageContent(
     }
   }
 
-  return { content: textContent, thinkingParts, orderedParts, newTaskIds, completedTaskIds };
+  return {
+    content: textContent,
+    thinkingParts,
+    orderedParts,
+    newTaskIds,
+    completedTaskIds,
+    contentBlockCount: contentBlocks.length,
+  };
 }
 
 /**
@@ -767,6 +832,53 @@ function getImageMediaType(filePath: string): "image/jpeg" | "image/png" | "imag
   }
 }
 
+const SUPPORTED_IMAGE_MEDIA_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+]);
+
+function parseBase64ImageData(
+  value: string,
+): { data: string; mediaType?: "image/jpeg" | "image/png" | "image/gif" | "image/webp" } | null {
+  let data = value;
+  let mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp" | undefined;
+
+  if (value.startsWith("data:")) {
+    const match = /^data:([^;,]+);base64,([\s\S]+)$/.exec(value);
+    if (!match || !SUPPORTED_IMAGE_MEDIA_TYPES.has(match[1])) {
+      return null;
+    }
+    mediaType = match[1] as typeof mediaType;
+    data = match[2];
+  }
+
+  const normalized = data.replace(/\s+/g, "");
+  if (
+    normalized.length === 0
+    || normalized.length % 4 !== 0
+    || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)
+  ) {
+    return null;
+  }
+
+  return { data: normalized, mediaType };
+}
+
+function escapeXmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function attachmentTag(attachment: NonNullable<PromptOptions["attachments"]>[number]): string {
+  return `<attachment type="${escapeXmlAttribute(attachment.type)}" path="${escapeXmlAttribute(attachment.path)}" filename="${escapeXmlAttribute(attachment.filename || "")}" />`;
+}
+
 /**
  * Build the SDK prompt. When image attachments are present, returns an
  * AsyncIterable<SDKUserMessage> with inline base64 image content blocks so
@@ -785,26 +897,38 @@ async function buildSdkPrompt(
     return finalPrompt;
   }
 
-  // Build content blocks: text first, then images
-  const contentBlocks: ContentBlockParam[] = [
-    { type: "text", text: finalPrompt } as TextBlockParam,
-  ];
+  const contentBlocks: ContentBlockParam[] = [];
+  if (finalPrompt) {
+    contentBlocks.push({ type: "text", text: finalPrompt } as TextBlockParam);
+  }
+  let imageBlockCount = 0;
 
   for (const att of imageAttachments) {
     let base64Data: string | null = null;
+    let mediaType = getImageMediaType(att.path || att.filename || "image.png");
 
     // Prefer dataUrl from the frontend (already base64-encoded)
     if (att.dataUrl) {
-      const commaIdx = att.dataUrl.indexOf(",");
-      base64Data = commaIdx !== -1 ? att.dataUrl.slice(commaIdx + 1) : att.dataUrl;
-    } else if (att.path && existsSync(att.path)) {
+      const parsedData = parseBase64ImageData(att.dataUrl);
+      if (parsedData) {
+        base64Data = parsedData.data;
+        mediaType = parsedData.mediaType ?? mediaType;
+      }
+    }
+    if (!base64Data && att.path && existsSync(att.path)) {
       // Fall back to reading from disk (async to avoid blocking the event loop)
-      const buffer = await readFile(att.path);
-      base64Data = buffer.toString("base64");
+      try {
+        const buffer = await readFile(att.path);
+        base64Data = buffer.toString("base64");
+      } catch (error) {
+        console.warn("[session-manager] Failed to read image attachment", {
+          path: att.path,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     if (base64Data) {
-      const mediaType = getImageMediaType(att.path || att.filename || "image.png");
       contentBlocks.push({
         type: "image",
         source: {
@@ -813,7 +937,15 @@ async function buildSdkPrompt(
           data: base64Data,
         },
       } as ImageBlockParam);
+      imageBlockCount += 1;
     }
+  }
+
+  if (imageBlockCount === 0) {
+    if (finalPrompt.trim().length === 0) {
+      throw new Error("No valid image attachment was provided");
+    }
+    return finalPrompt;
   }
 
   // Wrap in an async iterable yielding a single SDKUserMessage
@@ -854,13 +986,14 @@ export async function sendPrompt(
   const abortController = new AbortController();
   session.abortController = abortController;
   session.status = "running";
+  session.error = undefined;
   session.lastActivity = new Date();
 
   // Build the display prompt (what the user sees) - includes all attachment references
   let displayPrompt = prompt;
   if (options?.attachments && options.attachments.length > 0) {
     const attachmentTags = options.attachments
-      .map((att) => `<attachment type="${att.type}" path="${att.path}" filename="${att.filename || ""}" />`)
+      .map(attachmentTag)
       .join("\n");
     displayPrompt = `${prompt}\n\n<attached-files>\n${attachmentTags}\n</attached-files>`;
   }
@@ -872,7 +1005,7 @@ export async function sendPrompt(
   const fileAttachments = options?.attachments?.filter((att) => att.type !== "image") ?? [];
   if (fileAttachments.length > 0) {
     const fileTags = fileAttachments
-      .map((att) => `<attachment type="${att.type}" path="${att.path}" filename="${att.filename || ""}" />`)
+      .map(attachmentTag)
       .join("\n");
     sdkTextPrompt = `${prompt}\n\n<attached-files>\n${fileTags}\n</attached-files>`;
   }
@@ -1050,8 +1183,15 @@ Plan mode is read-only: do not write or edit files until the user approves your 
               questionResolvers.set(questionId, { resolve, reject });
             });
 
+            let questionTimeoutId: ReturnType<typeof setTimeout> | undefined;
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              questionTimeoutId = setTimeout(() => {
+                reject(new Error("Question timed out after 5 minutes"));
+              }, QUESTION_TIMEOUT_MS);
+            });
+
             try {
-              const answers = await answerPromise;
+              const answers = await Promise.race([answerPromise, timeoutPromise]);
               console.log("[session-manager] Received answers for question:", questionId, answers);
 
               // Return the answers to the SDK
@@ -1064,10 +1204,20 @@ Plan mode is read-only: do not write or edit files until the user approves your 
               };
             } catch (error) {
               console.error("[session-manager] Error waiting for answer:", error);
-              // If rejected (e.g., dismissed), deny the tool use
-              return { behavior: "deny" as const, message: "User dismissed the question" };
+              const message = error instanceof Error
+                ? error.message
+                : "Question was cancelled";
+              if (pendingQuestions.has(questionId)) {
+                eventEmitter.emit({
+                  type: "question.answered",
+                  sessionId,
+                  data: { requestId: questionId, cancelled: true },
+                });
+              }
+              return { behavior: "deny" as const, message };
             } finally {
               // Cleanup
+              if (questionTimeoutId) clearTimeout(questionTimeoutId);
               pendingQuestions.delete(questionId);
               questionResolvers.delete(questionId);
             }
@@ -1168,6 +1318,17 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             } catch (error) {
               console.error("[session-manager] Error waiting for plan approval:", error);
               const errorMessage = error instanceof Error ? error.message : "Plan approval was cancelled";
+              if (pendingPlanApprovals.has(approvalId)) {
+                eventEmitter.emit({
+                  type: "plan.approval-responded",
+                  sessionId,
+                  data: {
+                    requestId: approvalId,
+                    approved: false,
+                    cancelled: true,
+                  },
+                });
+              }
               // If error (e.g., timeout or dismissed), deny the tool use
               return { behavior: "deny" as const, message: errorMessage };
             } finally {
@@ -1214,21 +1375,54 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // Tool tracker persists across all messages in this turn
     const toolTracker = new ToolTracker();
 
-    // Track accumulated ordered parts (text, thinking, and tools in chronological order)
-    // Parts are tracked per message UUID to preserve content from previous messages
-    // when a new assistant message starts streaming (prevents loss during think→tool→think sequences)
+    // Track accumulated ordered parts (text, thinking, and tools in chronological order).
+    //
+    // Parts are grouped by API message id (`msg_…`) and, within a message, by
+    // content-block index. This is the only identity that is stable across the
+    // SDK events that describe one block:
+    //   - every `stream_event` carries its own random `uuid`, so grouping deltas
+    //     by `uuid` produces one part per delta (a "Thinking" row per token);
+    //   - the SDK emits one non-streaming `assistant` message per content block,
+    //     each with a fresh `uuid` but the same `message.id`, so grouping those
+    //     by `uuid` appends a duplicate copy of already-streamed content.
+    // Grouping by (api message id, block index) makes deltas collapse onto the
+    // block they belong to and makes the final block overwrite what it streamed.
+    const blocksByApiMessage = new Map<string, Map<number, OrderedPartEntry>>();
+    // Blocks of each API message already reconciled from non-streaming `assistant`
+    // messages. Those messages don't carry the stream's block index, but they
+    // arrive in block order, so the running count is the index of the next block.
+    const finalizedBlockCountByApiMessage = new Map<string, number>();
+    // API message id of the stream currently being received (set by `message_start`).
+    let currentStreamApiMessageId: string | null = null;
+    // Fallback keys for messages that carry neither an API message id nor a uuid.
+    let syntheticMessageKeyCounter = 0;
+
+    // Flattened view of `blocksByApiMessage`, in message order then block order.
     let accumulatedOrderedParts: OrderedPartEntry[] = [];
-    const partialOrderedPartsByMessage = new Map<string, Map<number, OrderedPartEntry>>();
+
+    const getBlocksForMessage = (messageKey: string): Map<number, OrderedPartEntry> => {
+      let blocks = blocksByApiMessage.get(messageKey);
+      if (!blocks) {
+        blocks = new Map<number, OrderedPartEntry>();
+        blocksByApiMessage.set(messageKey, blocks);
+      }
+      return blocks;
+    };
+
+    const rebuildAccumulatedOrderedParts = () => {
+      const parts: OrderedPartEntry[] = [];
+      // Map iteration is insertion-ordered, which is API message arrival order.
+      for (const blocks of blocksByApiMessage.values()) {
+        for (const [, entry] of Array.from(blocks.entries()).sort(([a], [b]) => a - b)) {
+          parts.push(entry);
+        }
+      }
+      accumulatedOrderedParts = parts;
+    };
 
     // Track active (pending) Task tool IDs for parent tracking
     // This allows us to associate child tools with their parent Task
     const activeTaskIds = new Set<string>();
-
-    // Track the last message UUID to detect when we're receiving a new assistant message
-    // vs streaming updates to the same message. This allows us to:
-    // - Replace parts during streaming (same UUID)
-    // - Accumulate parts across multiple assistant messages in a turn (different UUID)
-    let lastAssistantMessageUuid: string | null = null;
 
     // Track plan rejection feedback so we can re-prompt Claude after the turn ends.
     // When ExitPlanMode is denied, the SDK may end the turn without Claude seeing
@@ -1276,56 +1470,75 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const applyPartialAssistantMessage = (partialMessage: any): boolean => {
-      const messageUuid = typeof partialMessage.uuid === "string"
-        ? partialMessage.uuid
-        : undefined;
       const streamEvent = partialMessage.event;
-      const blockIndex = typeof streamEvent?.index === "number"
-        ? streamEvent.index
-        : undefined;
+      const eventType = streamEvent?.type;
 
-      if (!messageUuid || blockIndex === undefined) {
+      // `message_start` is the only stream event carrying the API message id;
+      // every later event for the same message must inherit it.
+      if (eventType === "message_start") {
+        const apiMessageId = typeof streamEvent.message?.id === "string"
+          ? streamEvent.message.id
+          : undefined;
+        currentStreamApiMessageId = apiMessageId ?? null;
+        if (apiMessageId) {
+          getBlocksForMessage(apiMessageId);
+        }
         return false;
       }
 
-      let entriesForMessage = partialOrderedPartsByMessage.get(messageUuid);
-      if (!entriesForMessage) {
-        entriesForMessage = new Map<number, OrderedPartEntry>();
-        partialOrderedPartsByMessage.set(messageUuid, entriesForMessage);
+      if (eventType === "message_stop") {
+        currentStreamApiMessageId = null;
+        return false;
       }
 
+      const blockIndex = Number.isInteger(streamEvent?.index) && streamEvent.index >= 0
+        ? streamEvent.index
+        : undefined;
+      if (blockIndex === undefined) {
+        return false;
+      }
+
+      // Only fall back to the event uuid when no `message_start` was seen, which
+      // real SDK streams always send before any block event.
+      const messageKey = currentStreamApiMessageId
+        ?? (typeof partialMessage.uuid === "string" ? partialMessage.uuid : undefined);
+      if (!messageKey) {
+        return false;
+      }
+
+      const entriesForMessage = getBlocksForMessage(messageKey);
       let entry = entriesForMessage.get(blockIndex);
 
-      if (streamEvent.type === "content_block_start") {
+      if (eventType === "content_block_start") {
         const contentBlock = streamEvent.content_block;
         if (contentBlock?.type === "text") {
           entry = {
             type: "text",
             value: typeof contentBlock.text === "string" ? contentBlock.text : "",
-            messageUuid,
+            messageUuid: messageKey,
           };
         } else if (contentBlock?.type === "thinking") {
           entry = {
             type: "thinking",
             value: typeof contentBlock.thinking === "string" ? contentBlock.thinking : "",
-            messageUuid,
+            messageUuid: messageKey,
           };
         } else {
           return false;
         }
-      } else if (streamEvent.type === "content_block_delta") {
+      } else if (eventType === "content_block_delta") {
         const delta = streamEvent.delta;
         if (delta?.type === "text_delta") {
           entry = {
             type: "text",
             value: `${entry?.value ?? ""}${typeof delta.text === "string" ? delta.text : ""}`,
-            messageUuid,
+            messageUuid: messageKey,
           };
         } else if (delta?.type === "thinking_delta") {
           entry = {
             type: "thinking",
             value: `${entry?.value ?? ""}${typeof delta.thinking === "string" ? delta.thinking : ""}`,
-            messageUuid,
+            messageUuid: messageKey,
           };
         } else {
           return false;
@@ -1335,22 +1548,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       }
 
       entriesForMessage.set(blockIndex, entry);
-      const partialEntries = Array.from(entriesForMessage.entries())
-        .sort(([a], [b]) => a - b)
-        .map(([, part]) => part);
-
-      accumulatedOrderedParts = [
-        ...accumulatedOrderedParts.filter((part) => part.messageUuid !== messageUuid),
-        ...partialEntries,
-      ];
-      lastAssistantMessageUuid = messageUuid;
+      rebuildAccumulatedOrderedParts();
 
       const finalParts = buildMessageParts(accumulatedOrderedParts, toolTracker);
       const content = getMessageTextFromParts(finalParts);
 
       if (!currentAssistantMessage) {
         currentAssistantMessage = {
-          id: messageUuid,
+          id: messageKey,
           role: "assistant",
           content,
           parts: finalParts,
@@ -1503,7 +1708,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         }
 
         // Assistant message - parse content and register tools with tracker
-        const { content, orderedParts, newTaskIds } = parseMessageContent(
+        const { orderedParts, newTaskIds, contentBlockCount } = parseMessageContent(
           message,
           toolTracker,
           mcpServerNames,
@@ -1515,40 +1720,40 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           activeTaskIds.add(taskId);
         }
 
-        // Get the message UUID to detect new messages vs streaming updates
-        const messageUuid = message.uuid as string | undefined;
+        // Group by API message id so these blocks land on top of the partial
+        // events that streamed them (see `blocksByApiMessage`). The SDK sends one
+        // assistant message per content block, all sharing `message.id`, so the
+        // running finalized-block count gives each block its stream index.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const apiMessageId = (message as any).message?.id as string | undefined;
+        const messageKey = apiMessageId
+          ?? (message.uuid as string | undefined)
+          ?? `assistant-${(syntheticMessageKeyCounter += 1)}`;
 
-        // For ordered parts (thinking, tools, and text): we need to handle two cases:
-        // 1. Streaming update to same message (same UUID): replace parts from this message
-        // 2. New assistant message (different UUID): accumulate parts
-        // This preserves chronological order across think → tool → think sequences
-        if (orderedParts.length > 0) {
-          if (messageUuid && messageUuid === lastAssistantMessageUuid) {
-            // Same message - replace (streaming update)
-            // Keep parts from previous messages, replace parts from this message
-            const previousParts = accumulatedOrderedParts.filter(
-              (p) => p.messageUuid !== messageUuid
-            );
-            accumulatedOrderedParts = [...previousParts, ...orderedParts];
-          } else {
-            // New message - accumulate ordered parts
-            accumulatedOrderedParts = [...accumulatedOrderedParts, ...orderedParts];
-          }
+        const blocks = getBlocksForMessage(messageKey);
+        const blockIndexBase = finalizedBlockCountByApiMessage.get(messageKey) ?? 0;
+        for (const part of orderedParts) {
+          blocks.set(blockIndexBase + (part.blockOffset ?? 0), {
+            ...part,
+            messageUuid: messageKey,
+          });
         }
-
-        // Update the last message UUID
-        if (messageUuid) {
-          lastAssistantMessageUuid = messageUuid;
-        }
+        finalizedBlockCountByApiMessage.set(messageKey, blockIndexBase + contentBlockCount);
+        rebuildAccumulatedOrderedParts();
 
         // Build final parts maintaining chronological order
         const finalParts = buildMessageParts(accumulatedOrderedParts, toolTracker);
+        // Derive content from the accumulated parts rather than this SDK message
+        // alone. The SDK splits one API message into one `assistant` message per
+        // content block, so `content` here only holds the current block's text and
+        // would blank out the turn's text whenever the block is thinking/tool_use.
+        const accumulatedContent = getMessageTextFromParts(finalParts);
 
         if (!currentAssistantMessage) {
           currentAssistantMessage = {
-            id: message.uuid || generateMessageId(),
+            id: messageKey,
             role: "assistant",
-            content,
+            content: accumulatedContent,
             parts: finalParts,
             timestamp: new Date().toISOString(),
           };
@@ -1558,7 +1763,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             messageId: currentAssistantMessage.id,
           });
         } else {
-          currentAssistantMessage.content = content;
+          currentAssistantMessage.content = accumulatedContent;
           currentAssistantMessage.parts = finalParts;
           console.debug("[session-manager] Updated assistant message", {
             sessionId,
@@ -1646,14 +1851,18 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           console.log("[session-manager] Query completed successfully", { sessionId });
         } else {
           console.error("[session-manager] Query error:", resultMsg.subtype, { sessionId });
-          if (resultMsg.errors) {
-            session.error = resultMsg.errors.join("\n");
-          }
+          const resultError = resultMsg.errors?.filter(Boolean).join("\n")
+            || `Claude query failed: ${resultMsg.subtype}`;
+          throw new Error(resultError);
         }
       } else if (message.type === "stream_event") {
         applyPartialAssistantMessage(message);
       }
       // Note: AskUserQuestion tool handling is done in the canUseTool callback above
+    }
+
+    if (abortController.signal.aborted) {
+      return;
     }
 
     // If a plan was rejected with feedback but the SDK ended the turn without
@@ -1686,7 +1895,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         return;
       } catch (repromptError) {
         console.error("[session-manager] Failed to re-prompt with plan feedback:", repromptError);
-        // Fall through to normal idle handling
+        return Promise.reject(repromptError);
       }
     }
 
@@ -1732,16 +1941,15 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           "[session-manager] Failed to re-prompt after plan approval:",
           repromptError
         );
-        // Fall through to normal idle handling
+        return Promise.reject(repromptError);
       }
     }
 
     // Generate a session title from the first user message if title is still the default
-    const isDefaultTitle = session.title?.startsWith("Session ");
-    const firstUserMessage = session.messages.find((m) => m.role === "user");
-    if (isDefaultTitle && firstUserMessage && !session.titleGenerationPending) {
+    const isDefaultTitle = session.title === `Session ${session.id.slice(-6)}`;
+    if (isDefaultTitle && !options?._isReprompt && !session.titleGenerationPending) {
       session.titleGenerationPending = true;
-      generateAndSetSessionTitle(sessionId, firstUserMessage.content);
+      void generateAndSetSessionTitle(sessionId, prompt);
     }
 
     session.status = "idle";
@@ -1759,18 +1967,23 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       durationMs: Date.now() - startedAt,
     });
   } catch (error) {
+    if (abortController.signal.aborted) {
+      return;
+    }
     console.error("[session-manager] Error processing prompt:", error);
 
-    session.status = "error";
-    session.error = error instanceof Error ? error.message : String(error);
-    session.abortController = undefined;
+    if (session.abortController === abortController) {
+      session.status = "error";
+      session.error = error instanceof Error ? error.message : String(error);
+      session.abortController = undefined;
+      cleanupPendingInteractions(sessionId);
 
-    eventEmitter.emit({
-      type: "session.error",
-      sessionId,
-      data: { error: session.error },
-    });
-
+      eventEmitter.emit({
+        type: "session.error",
+        sessionId,
+        data: { error: session.error },
+      });
+    }
     throw error;
   } finally {
     if (heartbeat) {
@@ -1814,6 +2027,31 @@ export function answerQuestion(
     type: "question.answered",
     sessionId: question.sessionId,
     data: { requestId, answers },
+  });
+
+  return true;
+}
+
+/**
+ * Dismiss a pending question and release the SDK callback waiting for it.
+ */
+export function dismissQuestion(requestId: string): boolean {
+  const question = pendingQuestions.get(requestId);
+  if (!question) {
+    return false;
+  }
+
+  const resolver = questionResolvers.get(requestId);
+  if (resolver) {
+    resolver.reject(new Error("User dismissed the question"));
+    questionResolvers.delete(requestId);
+  }
+  pendingQuestions.delete(requestId);
+
+  eventEmitter.emit({
+    type: "question.answered",
+    sessionId: question.sessionId,
+    data: { requestId, dismissed: true },
   });
 
   return true;
@@ -1904,12 +2142,13 @@ export async function getAvailableModels(): Promise<Array<{
   supportsEffort?: boolean;
   supportedEffortLevels?: ("low" | "medium" | "high" | "xhigh" | "max")[];
 }>> {
+  let q: ReturnType<typeof query> | undefined;
   try {
     const cwd = process.env.CWD || process.cwd();
     console.log("[session-manager] Fetching supported models", { cwd });
     // Create a query object to access supportedModels()
     // We use maxTurns: 0 to prevent any actual processing
-    const q = query({
+    q = query({
       prompt: "",
       options: {
         maxTurns: 0,
@@ -1920,11 +2159,6 @@ export async function getAvailableModels(): Promise<Array<{
     // Get supported models from the query object
     const models = await q.supportedModels();
     console.log("[session-manager] Supported models fetched", { count: models.length });
-
-    // Clean up the query (don't consume the generator)
-    if (q.return) {
-      await q.return();
-    }
 
     return models.map((model: { value: string; displayName: string; description?: string; supportsFastMode?: boolean; supportsEffort?: boolean; supportedEffortLevels?: ("low" | "medium" | "high" | "xhigh" | "max")[] }) => ({
       id: model.value,
@@ -1967,5 +2201,13 @@ export async function getAvailableModels(): Promise<Array<{
         supportsEffort: false,
       },
     ];
+  } finally {
+    if (q?.return) {
+      try {
+        await q.return();
+      } catch (error) {
+        console.debug("[session-manager] Failed to clean up model query:", error);
+      }
+    }
   }
 }

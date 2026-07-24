@@ -1,4 +1,10 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, jest, mock, test } from "bun:test";
+import { EventEmitter } from "node:events";
+import * as realChildProcess from "node:child_process";
+import * as realFs from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Snapshot the real mcp-config / plugin-config modules BEFORE installing the
 // stub mocks below. Bun's `mock.module(...)` is process-global, so without
@@ -9,6 +15,26 @@ import * as realMcpConfig from "./mcp-config.js";
 import * as realPluginConfig from "./plugin-config.js";
 const mcpConfigSnapshot = { ...realMcpConfig };
 const pluginConfigSnapshot = { ...realPluginConfig };
+const childProcessSnapshot = { ...realChildProcess };
+const fsSnapshot = { ...realFs };
+const originalExistsSync = realFs.existsSync;
+const originalExecFileSync = realChildProcess.execFileSync;
+const originalSpawn = realChildProcess.spawn;
+
+const mockExistsSync = mock((path: realFs.PathLike) => originalExistsSync(path));
+const mockExecFileSync = mock(originalExecFileSync);
+const mockSpawn = mock(originalSpawn);
+
+mock.module("node:fs", () => ({
+  ...realFs,
+  existsSync: mockExistsSync,
+}));
+
+mock.module("node:child_process", () => ({
+  ...realChildProcess,
+  execFileSync: mockExecFileSync,
+  spawn: mockSpawn,
+}));
 
 // ---------------------------------------------------------------------------
 // Controllable mock for @anthropic-ai/claude-agent-sdk.query()
@@ -25,6 +51,7 @@ const pluginConfigSnapshot = { ...realPluginConfig };
 // agent loop.
 
 interface QueryCall {
+  prompt: unknown;
   options: {
     cwd?: string;
     model?: string;
@@ -78,6 +105,7 @@ const mockQuery = mock((args: { prompt: unknown; options: QueryCall["options"] }
   };
 
   const call: QueryCall = {
+    prompt: args.prompt,
     options: args.options,
     push: (msg) => {
       queue.push(msg);
@@ -144,13 +172,17 @@ mock.module("@anthropic-ai/claude-agent-sdk", () => ({
   query: mockQuery,
 }));
 
+const mockGetMcpServersForSdk = mock(async () => ({}));
+const mockGetMcpServerNames = mock(async () => new Set<string>());
+const mockGetPluginsForSdk = mock(async () => [] as Array<{ type: "local"; path: string }>);
+
 mock.module("./mcp-config.js", () => ({
-  getMcpServersForSdk: async () => ({}),
-  getMcpServerNames: async () => new Set<string>(),
+  getMcpServersForSdk: mockGetMcpServersForSdk,
+  getMcpServerNames: mockGetMcpServerNames,
 }));
 
 mock.module("./plugin-config.js", () => ({
-  getPluginsForSdk: async () => [],
+  getPluginsForSdk: mockGetPluginsForSdk,
 }));
 
 // Import AFTER mocks are installed so session-manager picks them up.
@@ -167,6 +199,7 @@ const {
   getSessionMessages,
   sendPrompt,
   answerQuestion,
+  dismissQuestion,
   getPendingQuestions,
   respondToPlanApproval,
   getPendingPlanApprovals,
@@ -207,6 +240,18 @@ afterEach(() => {
   pendingCalls.length = 0;
   queryWaiters.length = 0;
   mockQuery.mockClear();
+  mockExistsSync.mockReset();
+  mockExistsSync.mockImplementation((path) => originalExistsSync(path));
+  mockExecFileSync.mockReset();
+  mockExecFileSync.mockImplementation(originalExecFileSync);
+  mockSpawn.mockReset();
+  mockSpawn.mockImplementation(originalSpawn);
+  mockGetMcpServersForSdk.mockReset();
+  mockGetMcpServersForSdk.mockImplementation(async () => ({}));
+  mockGetMcpServerNames.mockReset();
+  mockGetMcpServerNames.mockImplementation(async () => new Set<string>());
+  mockGetPluginsForSdk.mockReset();
+  mockGetPluginsForSdk.mockImplementation(async () => []);
 });
 
 afterAll(() => {
@@ -214,7 +259,61 @@ afterAll(() => {
   // in the same `bun test` run get the real implementations.
   mock.module("./mcp-config.js", () => mcpConfigSnapshot);
   mock.module("./plugin-config.js", () => pluginConfigSnapshot);
+  mock.module("node:child_process", () => childProcessSnapshot);
+  mock.module("node:fs", () => fsSnapshot);
 });
+
+async function readSdkPrompt(call: QueryCall): Promise<unknown> {
+  if (typeof call.prompt === "string") return call.prompt;
+  const messages: unknown[] = [];
+  for await (const message of call.prompt as AsyncIterable<unknown>) {
+    messages.push(message);
+  }
+  return messages;
+}
+
+function createMockChildProcess(options: {
+  stdout?: string;
+  stderr?: string;
+  code?: number | null;
+  error?: Error;
+  defer?: boolean;
+}) {
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+  };
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+
+  const complete = () => {
+    if (options.error) {
+      child.emit("error", options.error);
+      return;
+    }
+    if (options.stdout) child.stdout.emit("data", Buffer.from(options.stdout));
+    if (options.stderr) child.stderr.emit("data", Buffer.from(options.stderr));
+    child.emit("close", options.code ?? 0);
+  };
+
+  if (!options.defer) queueMicrotask(complete);
+  return { child, complete };
+}
+
+async function runPromptWithMessages(
+  messages: unknown[],
+  options?: Parameters<typeof sendPrompt>[2],
+  prompt = "test prompt",
+) {
+  const session = createSession("Fixed title");
+  track(session.id);
+  const promptPromise = sendPrompt(session.id, prompt, options);
+  const call = await nextQueryCall();
+  for (const message of messages) call.push(message);
+  call.finish();
+  await promptPromise;
+  return { session: getSession(session.id)!, call };
+}
 
 // ---------------------------------------------------------------------------
 // Pure session-state CRUD
@@ -502,6 +601,281 @@ describe("sendPrompt", () => {
     }
   });
 
+  // The real SDK gives every `stream_event` its own random uuid and emits one
+  // non-streaming `assistant` message per content block, all sharing
+  // `message.id`. Grouping by uuid therefore produced one part per delta plus a
+  // duplicate copy of the finished block. These tests use that real shape.
+  test("merges deltas that each arrive with a unique stream_event uuid", async () => {
+    const session = createSession("streaming-unique-uuids");
+    track(session.id);
+
+    const { stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "Stream please");
+      const call = await nextQueryCall();
+
+      const streamEvent = (uuid: string, event: Record<string, unknown>) => {
+        call.push({
+          type: "stream_event",
+          uuid,
+          session_id: "sdk-session-unique",
+          parent_tool_use_id: null,
+          event,
+        });
+      };
+
+      streamEvent("evt-1", {
+        type: "message_start",
+        message: { id: "msg_stream_1", role: "assistant", content: [] },
+      });
+      streamEvent("evt-2", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "thinking", thinking: "" },
+      });
+      streamEvent("evt-3", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "I" },
+      });
+      streamEvent("evt-4", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "'ll check the repo" },
+      });
+      streamEvent("evt-5", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: " state." },
+      });
+      streamEvent("evt-6", { type: "content_block_stop", index: 0 });
+      streamEvent("evt-7", {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text", text: "" },
+      });
+      streamEvent("evt-8", {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "Test suite is still" },
+      });
+      streamEvent("evt-9", {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: " running." },
+      });
+
+      await waitFor(() => {
+        const assistant = getSessionMessages(session.id).find((m) => m.role === "assistant");
+        return assistant?.content === "Test suite is still running.";
+      });
+
+      const streamed = getSessionMessages(session.id).find((m) => m.role === "assistant");
+      expect(streamed?.parts.map((part) => part.type)).toEqual(["thinking", "text"]);
+      expect(streamed?.parts[0]?.content).toBe("I'll check the repo state.");
+      expect(streamed?.parts[1]?.content).toBe("Test suite is still running.");
+
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+    } finally {
+      stop();
+    }
+  });
+
+  test("final per-block assistant messages replace streamed blocks instead of duplicating them", async () => {
+    const session = createSession("streaming-final-blocks");
+    track(session.id);
+
+    const { stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "Think then answer");
+      const call = await nextQueryCall();
+
+      const streamEvent = (uuid: string, event: Record<string, unknown>) => {
+        call.push({
+          type: "stream_event",
+          uuid,
+          session_id: "sdk-session-final",
+          parent_tool_use_id: null,
+          event,
+        });
+      };
+
+      streamEvent("s-1", {
+        type: "message_start",
+        message: { id: "msg_final_1", role: "assistant", content: [] },
+      });
+      streamEvent("s-2", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "thinking", thinking: "" },
+      });
+      streamEvent("s-3", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "Reasoning" },
+      });
+      streamEvent("s-4", {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text", text: "" },
+      });
+      streamEvent("s-5", {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "Ans" },
+      });
+
+      await waitFor(() => {
+        const assistant = getSessionMessages(session.id).find((m) => m.role === "assistant");
+        return assistant?.content === "Ans";
+      });
+
+      // The SDK emits one assistant message per content block, each with a fresh
+      // uuid but the same API `message.id`.
+      call.push({
+        type: "assistant",
+        uuid: "final-uuid-a",
+        message: {
+          id: "msg_final_1",
+          content: [{ type: "thinking", thinking: "Reasoning complete." }],
+        },
+      });
+      call.push({
+        type: "assistant",
+        uuid: "final-uuid-b",
+        message: {
+          id: "msg_final_1",
+          content: [{ type: "text", text: "Answer final" }],
+        },
+      });
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+
+      await promptPromise;
+
+      const assistant = getSessionMessages(session.id).find((m) => m.role === "assistant");
+      expect(assistant?.parts.map((part) => part.type)).toEqual(["thinking", "text"]);
+      expect(assistant?.parts[0]?.content).toBe("Reasoning complete.");
+      expect(assistant?.parts[1]?.content).toBe("Answer final");
+      expect(assistant?.content).toBe("Answer final");
+    } finally {
+      stop();
+    }
+  });
+
+  test("keeps chronological order across api messages in a think → tool → answer turn", async () => {
+    const session = createSession("streaming-multi-message");
+    track(session.id);
+
+    const { stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "Run a command");
+      const call = await nextQueryCall();
+
+      const streamEvent = (uuid: string, event: Record<string, unknown>) => {
+        call.push({
+          type: "stream_event",
+          uuid,
+          session_id: "sdk-session-multi",
+          parent_tool_use_id: null,
+          event,
+        });
+      };
+
+      // First API message: thinking (index 0) then a tool_use (index 1).
+      streamEvent("m-1", {
+        type: "message_start",
+        message: { id: "msg_multi_1", role: "assistant", content: [] },
+      });
+      streamEvent("m-2", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "thinking", thinking: "" },
+      });
+      streamEvent("m-3", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "Need the repo state." },
+      });
+      call.push({
+        type: "assistant",
+        uuid: "multi-final-1",
+        message: {
+          id: "msg_multi_1",
+          content: [{ type: "thinking", thinking: "Need the repo state." }],
+        },
+      });
+      call.push({
+        type: "assistant",
+        uuid: "multi-final-2",
+        message: {
+          id: "msg_multi_1",
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-multi-1",
+              name: "Bash",
+              input: { command: "git status --porcelain" },
+            },
+          ],
+        },
+      });
+      streamEvent("m-4", { type: "message_stop" });
+
+      call.push({
+        type: "user",
+        uuid: "multi-user-1",
+        message: {
+          content: [
+            { type: "tool_result", tool_use_id: "tool-multi-1", content: "clean" },
+          ],
+        },
+      });
+
+      // Second API message: the answer text.
+      streamEvent("m-5", {
+        type: "message_start",
+        message: { id: "msg_multi_2", role: "assistant", content: [] },
+      });
+      streamEvent("m-6", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" },
+      });
+      streamEvent("m-7", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "Working tree is clean." },
+      });
+      call.push({
+        type: "assistant",
+        uuid: "multi-final-3",
+        message: {
+          id: "msg_multi_2",
+          content: [{ type: "text", text: "Working tree is clean." }],
+        },
+      });
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+
+      await promptPromise;
+
+      const assistant = getSessionMessages(session.id).find((m) => m.role === "assistant");
+      expect(assistant?.parts.map((part) => part.type)).toEqual([
+        "thinking",
+        "tool-invocation",
+        "text",
+      ]);
+      expect(assistant?.parts[0]?.content).toBe("Need the repo state.");
+      expect(assistant?.parts[2]?.content).toBe("Working tree is clean.");
+      expect(assistant?.content).toBe("Working tree is clean.");
+    } finally {
+      stop();
+    }
+  });
+
   test("rejects a second prompt while the session is already running", async () => {
     const session = createSession("busy");
     track(session.id);
@@ -571,6 +945,404 @@ describe("sendPrompt", () => {
       stop();
     }
   });
+
+  test("an aborted run cannot clobber an immediately restarted prompt", async () => {
+    const session = createSession("abort-restart");
+    track(session.id);
+    const firstPrompt = sendPrompt(session.id, "first");
+    await nextQueryCall();
+
+    expect(abortSession(session.id)).toBe(true);
+    const secondPrompt = sendPrompt(session.id, "second");
+    const secondCall = await nextQueryCall();
+    await firstPrompt;
+
+    expect(session.status).toBe("running");
+    expect(session.abortController).toBe(secondCall.options.abortController);
+
+    secondCall.push({ type: "result", subtype: "success" });
+    secondCall.finish();
+    await secondPrompt;
+    expect(session.status).toBe("idle");
+  });
+
+  test("ignores malformed stream indices and stream events without a usable message identity", async () => {
+    const events = [
+      -1,
+      1.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+    ].map((index) => ({
+      type: "stream_event",
+      uuid: "bad-stream",
+      event: {
+        type: "content_block_delta",
+        index,
+        delta: { type: "text_delta", text: "must not render" },
+      },
+    }));
+    events.push({
+      type: "stream_event",
+      uuid: undefined,
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "also ignored" },
+      },
+    } as never);
+
+    const { session } = await runPromptWithMessages([
+      ...events,
+      { type: "result", subtype: "success" },
+    ]);
+
+    expect(session.messages.filter((message) => message.role === "assistant")).toHaveLength(0);
+  });
+
+  test("uses a stream uuid fallback when no message_start arrives", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "stream_event",
+        uuid: "fallback-stream-id",
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "fallback text" },
+        },
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    const assistant = session.messages.find((message) => message.role === "assistant");
+    expect(assistant?.id).toBe("fallback-stream-id");
+    expect(assistant?.content).toBe("fallback text");
+  });
+
+  test("accepts finalized assistant blocks without prior streaming and preserves ignored offsets", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        message: {
+          id: "final-only",
+          content: [
+            { type: "unknown" },
+            { type: "text", text: "after ignored block" },
+          ],
+        },
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    const assistant = session.messages.find((message) => message.role === "assistant");
+    expect(assistant?.content).toBe("after ignored block");
+    expect(assistant?.parts).toEqual([
+      expect.objectContaining({ type: "text", content: "after ignored block" }),
+    ]);
+  });
+
+  test("builds Edit and Write diffs and ignores malformed tool identities", async () => {
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        uuid: "tool-message",
+        message: {
+          id: "tool-message",
+          content: [
+            {
+              type: "tool_use",
+              id: "edit-1",
+              name: "Edit",
+              input: { file_path: "a.ts", old_string: "before", new_string: "after" },
+            },
+            {
+              type: "tool_use",
+              id: "write-1",
+              name: "Write",
+              input: { file_path: "b.ts", content: "new file" },
+            },
+            { type: "tool_use", id: 42, name: "Bash", input: {} },
+            { type: "tool_use", id: "", name: "Bash", input: {} },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [
+            { type: "tool_result", tool_use_id: "edit-1", content: "ok" },
+            { type: "tool_result", tool_use_id: "write-1", content: [{ type: "text", text: "done" }] },
+            { type: "tool_result", tool_use_id: 42, content: "ignored" },
+          ],
+        },
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    const tools = session.messages
+      .find((message) => message.role === "assistant")
+      ?.parts.filter((part) => part.type === "tool-invocation") ?? [];
+    expect(tools).toHaveLength(2);
+    expect(tools[0]).toMatchObject({
+      toolUseId: "edit-1",
+      toolState: "success",
+      toolDiff: { filePath: "a.ts", before: "before", after: "after" },
+    });
+    expect(tools[1]).toMatchObject({
+      toolUseId: "write-1",
+      toolState: "success",
+      toolDiff: { filePath: "b.ts", before: "", after: "new file" },
+    });
+  });
+
+  test("uses explicit Task parents across concurrent tasks and longest MCP server prefixes", async () => {
+    mockGetMcpServerNames.mockImplementationOnce(async () =>
+      new Set(["team", "team_tools"]),
+    );
+    const { session } = await runPromptWithMessages([
+      {
+        type: "assistant",
+        message: {
+          id: "tasks",
+          content: [
+            { type: "tool_use", id: "task-a", name: "Task", input: {} },
+            { type: "tool_use", id: "task-b", name: "Task", input: {} },
+          ],
+        },
+      },
+      {
+        type: "assistant",
+        parent_tool_use_id: "task-a",
+        message: {
+          id: "child",
+          content: [
+            { type: "tool_use", id: "child-a", name: "mcp_team_tools_search", input: {} },
+          ],
+        },
+      },
+      { type: "result", subtype: "success" },
+    ]);
+
+    const child = session.messages
+      .find((message) => message.role === "assistant")
+      ?.parts.find((part) => part.toolUseId === "child-a");
+    expect(child).toMatchObject({
+      parentTaskUseId: "task-a",
+      isMcpTool: true,
+      mcpServerName: "team_tools",
+    });
+  });
+
+  test("sends valid images natively, omits empty image-only text, and escapes file metadata", async () => {
+    const { call } = await runPromptWithMessages(
+      [{ type: "result", subtype: "success" }],
+      {
+        attachments: [
+          {
+            type: "image",
+            path: "",
+            filename: "photo.jpg",
+            dataUrl: "data:image/webp;base64,aGVsbG8=",
+          },
+          {
+            type: "file",
+            path: `a&b<"'.txt`,
+            filename: `x&y<"'.txt`,
+          },
+        ],
+      },
+      "",
+    );
+
+    const sdkMessages = await readSdkPrompt(call) as Array<{
+      message: { content: Array<Record<string, unknown>> };
+    }>;
+    expect(sdkMessages).toHaveLength(1);
+    expect(sdkMessages[0].message.content).toHaveLength(2);
+    expect(sdkMessages[0].message.content[0]).toMatchObject({ type: "text" });
+    expect((sdkMessages[0].message.content[0] as { text: string }).text).toContain(
+      'path="a&amp;b&lt;&quot;&apos;.txt"',
+    );
+    expect(sdkMessages[0].message.content[1]).toMatchObject({
+      type: "image",
+      source: { media_type: "image/webp", data: "aGVsbG8=" },
+    });
+  });
+
+  test("omits the text block for a truly image-only SDK prompt", async () => {
+    const { call } = await runPromptWithMessages(
+      [{ type: "result", subtype: "success" }],
+      {
+        attachments: [{
+          type: "image",
+          path: "",
+          filename: "photo.png",
+          dataUrl: "data:image/png;base64,aGVsbG8=",
+        }],
+      },
+      "",
+    );
+
+    const sdkMessages = await readSdkPrompt(call) as Array<{
+      message: { content: Array<Record<string, unknown>> };
+    }>;
+    expect(sdkMessages[0].message.content).toEqual([
+      expect.objectContaining({ type: "image" }),
+    ]);
+  });
+
+  test("falls back to a string prompt when every image is malformed or missing", async () => {
+    const { call } = await runPromptWithMessages(
+      [{ type: "result", subtype: "success" }],
+      {
+        attachments: [
+          {
+            type: "image",
+            path: "/definitely/missing/image.png",
+            dataUrl: "data:image/png;base64,not-valid!",
+          },
+        ],
+      },
+      "describe this",
+    );
+
+    expect(call.prompt).toBe("describe this");
+  });
+
+  test("rejects an image-only prompt when no image can be decoded", async () => {
+    const session = createSession("invalid-image-only");
+    track(session.id);
+
+    await expect(sendPrompt(session.id, "", {
+      attachments: [{
+        type: "image",
+        path: "",
+        dataUrl: "data:image/png;base64,not-valid!",
+      }],
+    })).rejects.toThrow("No valid image attachment was provided");
+    expect(session.status).toBe("error");
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  test("reads image attachments from disk when no data URL is supplied", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "claude-bridge-test-"));
+    const imagePath = join(directory, "image.gif");
+    await writeFile(imagePath, Buffer.from("gif-data"));
+    try {
+      const { call } = await runPromptWithMessages(
+        [{ type: "result", subtype: "success" }],
+        { attachments: [{ type: "image", path: imagePath }] },
+      );
+      const sdkMessages = await readSdkPrompt(call) as Array<{
+        message: { content: Array<{ type: string; source?: { media_type: string; data: string } }> };
+      }>;
+      expect(sdkMessages[0].message.content[1]?.source).toEqual({
+        type: "base64",
+        media_type: "image/gif",
+        data: Buffer.from("gif-data").toString("base64"),
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("turns non-success SDK results into observable prompt failures and clears the error on retry", async () => {
+    const session = createSession("result-errors");
+    track(session.id);
+    const firstPrompt = sendPrompt(session.id, "first");
+    const firstCall = await nextQueryCall();
+    firstCall.push({ type: "result", subtype: "error_during_execution", errors: ["tool failed"] });
+    firstCall.finish();
+
+    await expect(firstPrompt).rejects.toThrow("tool failed");
+    expect(session.status).toBe("error");
+    expect(session.error).toBe("tool failed");
+
+    const retry = sendPrompt(session.id, "retry");
+    expect(session.error).toBeUndefined();
+    const retryCall = await nextQueryCall();
+    retryCall.push({ type: "result", subtype: "success" });
+    retryCall.finish();
+    await retry;
+    expect(session.status).toBe("idle");
+  });
+
+  test("forwards query configuration and captures init, compact, generic system, and context events", async () => {
+    mockGetMcpServersForSdk.mockImplementationOnce(async () => ({
+      local: { command: "safe-command", args: [] },
+    }));
+    mockGetMcpServerNames.mockImplementationOnce(async () => new Set(["local"]));
+    mockGetPluginsForSdk.mockImplementationOnce(async () => [
+      { type: "local", path: "/plugin" },
+    ]);
+    const { events, stop } = captureEvents();
+    const previousCwd = process.env.CWD;
+    process.env.CWD = "/project";
+    try {
+      const { session, call } = await runPromptWithMessages([
+        {
+          type: "system",
+          subtype: "init",
+          session_id: "sdk-init",
+          mcp_servers: [
+            { name: "local", status: "connected", tools: ["search"] },
+            { name: "plugin:extra", status: "failed", error: "offline" },
+          ],
+          plugins: [{ name: "plain", path: "/plain", status: "loaded" }],
+          slash_commands: ["/compact"],
+        },
+        {
+          type: "system",
+          subtype: "compact_boundary",
+          compact_metadata: { pre_tokens: 100, post_tokens: 20, trigger: "manual" },
+        },
+        { type: "system", subtype: "status", detail: "working" },
+        {
+          type: "result",
+          subtype: "success",
+          usage: {
+            input_tokens: 12,
+            output_tokens: 3,
+            context_window_tokens: "200k",
+            model: "claude-test",
+          },
+        },
+      ], {
+        model: "claude-test",
+        effort: "max",
+        fastMode: true,
+        permissionMode: "bypassPermissions",
+      });
+
+      expect(call.options).toMatchObject({
+        cwd: "/project",
+        model: "claude-test",
+        effort: "max",
+        permissionMode: "bypassPermissions",
+        allowDangerouslySkipPermissions: true,
+        settings: { fastMode: true },
+        resume: undefined,
+        mcpServers: { local: { command: "safe-command", args: [] } },
+        plugins: [{ type: "local", path: "/plugin" }],
+      });
+      expect(getSessionInitData(session.id)).toMatchObject({
+        mcpServers: [{ name: "local", status: "connected" }],
+        plugins: [
+          { name: "plugin:extra", status: "failed" },
+          { name: "plain", status: "loaded" },
+        ],
+      });
+      expect(events.some((event) => event.type === "system.compact")).toBe(true);
+      expect(events.some((event) => event.type === "system.message")).toBe(true);
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "session.updated",
+        data: { contextUsage: { usedTokens: 15, totalTokens: 200000, model: "claude-test" } },
+      }));
+    } finally {
+      if (previousCwd === undefined) delete process.env.CWD;
+      else process.env.CWD = previousCwd;
+      stop();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -616,6 +1388,115 @@ describe("AskUserQuestion flow", () => {
 
   test("answerQuestion returns false for unknown ids", () => {
     expect(answerQuestion("missing", {})).toBe(false);
+  });
+
+  test("dismissQuestion denies the SDK tool and removes the pending request", async () => {
+    const session = createSession("question-dismiss");
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "ask");
+    const call = await nextQueryCall();
+    const toolPromise = call.options.canUseTool!("AskUserQuestion", {
+      questions: [{ question: "Continue?" }],
+    });
+    await waitFor(() => getPendingQuestions(session.id).length === 1);
+    const question = getPendingQuestions(session.id)[0];
+
+    expect(dismissQuestion(question.id)).toBe(true);
+    expect(await toolPromise).toEqual({
+      behavior: "deny",
+      message: "User dismissed the question",
+    });
+    expect(getPendingQuestions(session.id)).toEqual([]);
+    expect(dismissQuestion(question.id)).toBe(false);
+
+    call.finish();
+    await promptPromise;
+  });
+
+  test("abort and query failures release pending questions instead of leaving callbacks suspended", async () => {
+    const abortedSession = createSession("question-abort");
+    track(abortedSession.id);
+    const abortedPrompt = sendPrompt(abortedSession.id, "ask");
+    const abortedCall = await nextQueryCall();
+    const abortedTool = abortedCall.options.canUseTool!("AskUserQuestion", {
+      questions: [{ question: "Abort?" }],
+    });
+    await waitFor(() => getPendingQuestions(abortedSession.id).length === 1);
+    expect(abortSession(abortedSession.id)).toBe(true);
+    expect((await abortedTool).behavior).toBe("deny");
+    expect(getPendingQuestions(abortedSession.id)).toEqual([]);
+    await abortedPrompt;
+
+    const failedSession = createSession("question-failure");
+    track(failedSession.id);
+    const failedPrompt = sendPrompt(failedSession.id, "ask");
+    const failedCall = await nextQueryCall();
+    const failedTool = failedCall.options.canUseTool!("AskUserQuestion", {
+      questions: [{ question: "Fail?" }],
+    });
+    await waitFor(() => getPendingQuestions(failedSession.id).length === 1);
+    failedCall.fail(new Error("query failed"));
+    await expect(failedPrompt).rejects.toThrow("query failed");
+    expect((await failedTool).behavior).toBe("deny");
+    expect(getPendingQuestions(failedSession.id)).toEqual([]);
+  });
+
+  test("pending question and plan approval getters isolate sessions", async () => {
+    const first = createSession("first");
+    const second = createSession("second");
+    track(first.id);
+    track(second.id);
+    const firstPrompt = sendPrompt(first.id, "first");
+    const secondPrompt = sendPrompt(second.id, "second");
+    const firstCall = await nextQueryCall();
+    const secondCall = await nextQueryCall();
+    const firstTool = firstCall.options.canUseTool!("AskUserQuestion", { questions: [] });
+    const secondTool = secondCall.options.canUseTool!("AskUserQuestion", { questions: [] });
+    await waitFor(() => getPendingQuestions().length === 2);
+
+    expect(getPendingQuestions(first.id)).toHaveLength(1);
+    expect(getPendingQuestions(second.id)).toHaveLength(1);
+
+    for (const question of getPendingQuestions()) dismissQuestion(question.id);
+    await Promise.all([firstTool, secondTool]);
+    firstCall.finish();
+    secondCall.finish();
+    await Promise.all([firstPrompt, secondPrompt]);
+  });
+
+  test("denies and removes an unanswered question after five minutes", async () => {
+    const session = createSession("question-timeout");
+    track(session.id);
+    const { events, stop } = captureEvents();
+    const promptPromise = sendPrompt(session.id, "ask");
+    const call = await nextQueryCall();
+
+    jest.useFakeTimers();
+    try {
+      const toolPromise = call.options.canUseTool!("AskUserQuestion", {
+        questions: [{ question: "Still there?" }],
+      });
+      await Promise.resolve();
+      expect(getPendingQuestions(session.id)).toHaveLength(1);
+
+      jest.advanceTimersByTime(5 * 60 * 1000);
+      await expect(toolPromise).resolves.toEqual({
+        behavior: "deny",
+        message: "Question timed out after 5 minutes",
+      });
+      expect(getPendingQuestions(session.id)).toEqual([]);
+    } finally {
+      jest.useRealTimers();
+    }
+
+    call.finish();
+    await promptPromise;
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "question.answered",
+      sessionId: session.id,
+      data: expect.objectContaining({ cancelled: true }),
+    }));
+    stop();
   });
 });
 
@@ -686,6 +1567,26 @@ describe("plan approval flow", () => {
     await promptPromise;
 
     expect(getSession(session.id)?.status).toBe("idle");
+  });
+
+  test("surfaces a failed plan-rejection re-prompt instead of reporting success", async () => {
+    const session = createSession("reprompt-failure");
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "make a plan", { permissionMode: "plan" });
+    const firstCall = await nextQueryCall();
+    const toolPromise = firstCall.options.canUseTool!("ExitPlanMode", {});
+    await waitFor(() => getPendingPlanApprovals(session.id).length === 1);
+    const approval = getPendingPlanApprovals(session.id)[0];
+    expect(respondToPlanApproval(approval.id, false, "change it")).toBe(true);
+    expect((await toolPromise).behavior).toBe("deny");
+    firstCall.finish();
+
+    const repromptCall = await nextQueryCall();
+    repromptCall.fail(new Error("reprompt failed"));
+
+    await expect(promptPromise).rejects.toThrow("reprompt failed");
+    expect(session.status).toBe("error");
+    expect(session.error).toBe("reprompt failed");
   });
 
   test("respondToPlanApproval returns false for unknown ids", () => {
@@ -821,6 +1722,174 @@ describe("plan approval flow", () => {
     expect(exitPart?.toolState).toBe("success");
     expect(exitPart?.toolError).toBeUndefined();
   });
+
+  test("deleteSession releases a pending plan approval", async () => {
+    const session = createSession("delete-plan");
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "plan", { permissionMode: "plan" });
+    const call = await nextQueryCall();
+    const toolPromise = call.options.canUseTool!("ExitPlanMode", {});
+    await waitFor(() => getPendingPlanApprovals(session.id).length === 1);
+
+    expect(deleteSession(session.id)).toBe(true);
+    expect((await toolPromise).behavior).toBe("deny");
+    expect(getPendingPlanApprovals(session.id)).toEqual([]);
+    await promptPromise;
+  });
+
+  test("EnterPlanMode emits its event and unrelated tools pass their input through", async () => {
+    const session = createSession("tool-routing");
+    track(session.id);
+    const { events, stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "tools");
+      const call = await nextQueryCall();
+      expect(await call.options.canUseTool!("EnterPlanMode", { reason: "plan" })).toEqual({
+        behavior: "allow",
+        updatedInput: { reason: "plan" },
+      });
+      expect(await call.options.canUseTool!("Read", { file_path: "a.ts" })).toEqual({
+        behavior: "allow",
+        updatedInput: { file_path: "a.ts" },
+      });
+      call.finish();
+      await promptPromise;
+      expect(events.some((event) => event.type === "plan.enter-requested")).toBe(true);
+    } finally {
+      stop();
+    }
+  });
+
+  test("denies and removes an unanswered plan approval after five minutes", async () => {
+    const session = createSession("plan-timeout");
+    track(session.id);
+    const { events, stop } = captureEvents();
+    const promptPromise = sendPrompt(session.id, "plan", { permissionMode: "plan" });
+    const call = await nextQueryCall();
+
+    jest.useFakeTimers();
+    try {
+      const toolPromise = call.options.canUseTool!("ExitPlanMode", {});
+      await Promise.resolve();
+      expect(getPendingPlanApprovals(session.id)).toHaveLength(1);
+
+      jest.advanceTimersByTime(5 * 60 * 1000);
+      await expect(toolPromise).resolves.toEqual({
+        behavior: "deny",
+        message: "Plan approval timed out after 5 minutes",
+      });
+      expect(getPendingPlanApprovals(session.id)).toEqual([]);
+    } finally {
+      jest.useRealTimers();
+    }
+
+    call.finish();
+    await promptPromise;
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "plan.approval-responded",
+      sessionId: session.id,
+      data: expect.objectContaining({ cancelled: true }),
+    }));
+    stop();
+  });
+});
+
+describe("session titles", () => {
+  test("uses the original prompt for CLI generation and clears the pending flag", async () => {
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("/claude"));
+    const { child, complete } = createMockChildProcess({
+      stdout: "Focused title\n",
+      defer: true,
+    });
+    mockSpawn.mockImplementationOnce(() => child as never);
+
+    const session = createSession();
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "original request", {
+      attachments: [{ type: "file", path: "/tmp/a.ts", filename: "a.ts" }],
+    });
+    const call = await nextQueryCall();
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+    complete();
+    await waitFor(() => getSession(session.id)?.title === "Focused title");
+
+    expect(mockSpawn.mock.calls[0]?.[1]).toContain("original request");
+    expect(mockSpawn.mock.calls[0]?.[1]?.join(" ")).not.toContain("attached-files");
+    expect(getSession(session.id)?.titleGenerationPending).toBe(false);
+  });
+
+  test("does not overwrite an explicit title that begins with Session", async () => {
+    const session = createSession("Session planning notes");
+    track(session.id);
+    const promptPromise = sendPrompt(session.id, "do work");
+    const call = await nextQueryCall();
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(session.title).toBe("Session planning notes");
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  test("falls back to normalized prompt text when spawn throws synchronously", async () => {
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("/claude"));
+    mockSpawn.mockImplementationOnce(() => {
+      throw new Error("spawn unavailable");
+    });
+    const session = createSession();
+    track(session.id);
+    const promptPromise = sendPrompt(
+      session.id,
+      "build the `new thing` safely and quickly. extra sentence",
+    );
+    const call = await nextQueryCall();
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+    await waitFor(() => session.titleGenerationPending === false);
+
+    expect(session.title).toBe("Build the safely and quickly");
+  });
+
+  test("falls back when the title CLI emits an error or exits unsuccessfully", async () => {
+    mockExistsSync.mockImplementation((path) => String(path).endsWith("/claude"));
+
+    const errored = createMockChildProcess({
+      error: new Error("child error"),
+      defer: true,
+    });
+    mockSpawn.mockImplementationOnce(() => errored.child as never);
+    const first = createSession();
+    track(first.id);
+    const firstPrompt = sendPrompt(first.id, "first fallback title");
+    const firstCall = await nextQueryCall();
+    firstCall.push({ type: "result", subtype: "success" });
+    firstCall.finish();
+    await firstPrompt;
+    errored.complete();
+    await waitFor(() => first.titleGenerationPending === false);
+    expect(first.title).toBe("First fallback title");
+
+    const unsuccessful = createMockChildProcess({
+      stderr: "command failed",
+      code: 1,
+      defer: true,
+    });
+    mockSpawn.mockImplementationOnce(() => unsuccessful.child as never);
+    const second = createSession();
+    track(second.id);
+    const secondPrompt = sendPrompt(second.id, "second fallback title");
+    const secondCall = await nextQueryCall();
+    secondCall.push({ type: "result", subtype: "success" });
+    secondCall.finish();
+    await secondPrompt;
+    unsuccessful.complete();
+    await waitFor(() => second.titleGenerationPending === false);
+    expect(second.title).toBe("Second fallback title");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -884,5 +1953,45 @@ describe("getAvailableModels", () => {
 
     // Haiku is the fast, non-reasoning tier.
     expect(byId.get("claude-haiku-4-5-20251001")?.supportsEffort).toBe(false);
+  });
+
+  test("cleans up the SDK query after success, failure, and cleanup errors", async () => {
+    const successReturn = mock(async () => ({ done: true, value: undefined }));
+    const successfulQuery = Object.assign(
+      (async function* () {})(),
+      {
+        supportedModels: async () => [],
+        return: successReturn,
+      },
+    );
+    mockQuery.mockImplementationOnce(() => successfulQuery as never);
+    expect(await getAvailableModels()).toEqual([]);
+    expect(successReturn).toHaveBeenCalledTimes(1);
+
+    const failedReturn = mock(async () => ({ done: true, value: undefined }));
+    const failingQuery = Object.assign(
+      (async function* () {})(),
+      {
+        supportedModels: async () => {
+          throw new Error("model lookup failed");
+        },
+        return: failedReturn,
+      },
+    );
+    mockQuery.mockImplementationOnce(() => failingQuery as never);
+    expect((await getAvailableModels()).length).toBeGreaterThan(0);
+    expect(failedReturn).toHaveBeenCalledTimes(1);
+
+    const cleanupFailure = Object.assign(
+      (async function* () {})(),
+      {
+        supportedModels: async () => [],
+        return: async () => {
+          throw new Error("cleanup failed");
+        },
+      },
+    );
+    mockQuery.mockImplementationOnce(() => cleanupFailure as never);
+    expect(await getAvailableModels()).toEqual([]);
   });
 });

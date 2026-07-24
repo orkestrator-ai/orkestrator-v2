@@ -498,6 +498,8 @@ interface OrderedPartEntry {
   messageUuid?: string;
   /** Parent Task tool use ID - used to group child tools under their parent Task */
   parentTaskUseId?: string;
+  /** Position of this part within its SDK message's content array */
+  blockOffset?: number;
 }
 
 /**
@@ -580,6 +582,8 @@ function parseMessageContent(
   newTaskIds: string[];
   /** IDs of Task tools that completed in this message (to remove from active tasks) */
   completedTaskIds: string[];
+  /** Number of content blocks in this message (including ones that produced no part) */
+  contentBlockCount: number;
 } {
   const thinkingParts: NormalizedPart[] = [];
   const orderedParts: OrderedPartEntry[] = [];
@@ -596,7 +600,8 @@ function parseMessageContent(
   // This is used for the positional heuristic: tools following a Task belong to it
   let currentTaskUseId: string | undefined;
 
-  for (const block of contentBlocks) {
+  for (let blockOffset = 0; blockOffset < contentBlocks.length; blockOffset += 1) {
+    const block = contentBlocks[blockOffset];
     if (block.type === "text") {
       textContent += block.text || "";
       // Track text in ordered parts so it maintains position relative to thinking/tools
@@ -604,6 +609,7 @@ function parseMessageContent(
         type: "text",
         value: block.text || "",
         messageUuid,
+        blockOffset,
       });
     } else if (block.type === "thinking") {
       const thinkingContent = block.thinking || "";
@@ -616,6 +622,7 @@ function parseMessageContent(
         type: "thinking",
         value: thinkingContent,
         messageUuid,
+        blockOffset,
       });
     } else if (block.type === "tool_use" && toolTracker) {
       const toolName = block.name || "Unknown tool";
@@ -679,6 +686,7 @@ function parseMessageContent(
           value: block.id,
           messageUuid,
           parentTaskUseId,
+          blockOffset,
         });
 
         // If this is a Task tool, update tracking
@@ -706,7 +714,14 @@ function parseMessageContent(
     }
   }
 
-  return { content: textContent, thinkingParts, orderedParts, newTaskIds, completedTaskIds };
+  return {
+    content: textContent,
+    thinkingParts,
+    orderedParts,
+    newTaskIds,
+    completedTaskIds,
+    contentBlockCount: contentBlocks.length,
+  };
 }
 
 /**
@@ -1214,21 +1229,54 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // Tool tracker persists across all messages in this turn
     const toolTracker = new ToolTracker();
 
-    // Track accumulated ordered parts (text, thinking, and tools in chronological order)
-    // Parts are tracked per message UUID to preserve content from previous messages
-    // when a new assistant message starts streaming (prevents loss during think→tool→think sequences)
+    // Track accumulated ordered parts (text, thinking, and tools in chronological order).
+    //
+    // Parts are grouped by API message id (`msg_…`) and, within a message, by
+    // content-block index. This is the only identity that is stable across the
+    // SDK events that describe one block:
+    //   - every `stream_event` carries its own random `uuid`, so grouping deltas
+    //     by `uuid` produces one part per delta (a "Thinking" row per token);
+    //   - the SDK emits one non-streaming `assistant` message per content block,
+    //     each with a fresh `uuid` but the same `message.id`, so grouping those
+    //     by `uuid` appends a duplicate copy of already-streamed content.
+    // Grouping by (api message id, block index) makes deltas collapse onto the
+    // block they belong to and makes the final block overwrite what it streamed.
+    const blocksByApiMessage = new Map<string, Map<number, OrderedPartEntry>>();
+    // Blocks of each API message already reconciled from non-streaming `assistant`
+    // messages. Those messages don't carry the stream's block index, but they
+    // arrive in block order, so the running count is the index of the next block.
+    const finalizedBlockCountByApiMessage = new Map<string, number>();
+    // API message id of the stream currently being received (set by `message_start`).
+    let currentStreamApiMessageId: string | null = null;
+    // Fallback keys for messages that carry neither an API message id nor a uuid.
+    let syntheticMessageKeyCounter = 0;
+
+    // Flattened view of `blocksByApiMessage`, in message order then block order.
     let accumulatedOrderedParts: OrderedPartEntry[] = [];
-    const partialOrderedPartsByMessage = new Map<string, Map<number, OrderedPartEntry>>();
+
+    const getBlocksForMessage = (messageKey: string): Map<number, OrderedPartEntry> => {
+      let blocks = blocksByApiMessage.get(messageKey);
+      if (!blocks) {
+        blocks = new Map<number, OrderedPartEntry>();
+        blocksByApiMessage.set(messageKey, blocks);
+      }
+      return blocks;
+    };
+
+    const rebuildAccumulatedOrderedParts = () => {
+      const parts: OrderedPartEntry[] = [];
+      // Map iteration is insertion-ordered, which is API message arrival order.
+      for (const blocks of blocksByApiMessage.values()) {
+        for (const [, entry] of Array.from(blocks.entries()).sort(([a], [b]) => a - b)) {
+          parts.push(entry);
+        }
+      }
+      accumulatedOrderedParts = parts;
+    };
 
     // Track active (pending) Task tool IDs for parent tracking
     // This allows us to associate child tools with their parent Task
     const activeTaskIds = new Set<string>();
-
-    // Track the last message UUID to detect when we're receiving a new assistant message
-    // vs streaming updates to the same message. This allows us to:
-    // - Replace parts during streaming (same UUID)
-    // - Accumulate parts across multiple assistant messages in a turn (different UUID)
-    let lastAssistantMessageUuid: string | null = null;
 
     // Track plan rejection feedback so we can re-prompt Claude after the turn ends.
     // When ExitPlanMode is denied, the SDK may end the turn without Claude seeing
@@ -1276,56 +1324,75 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const applyPartialAssistantMessage = (partialMessage: any): boolean => {
-      const messageUuid = typeof partialMessage.uuid === "string"
-        ? partialMessage.uuid
-        : undefined;
       const streamEvent = partialMessage.event;
-      const blockIndex = typeof streamEvent?.index === "number"
-        ? streamEvent.index
-        : undefined;
+      const eventType = streamEvent?.type;
 
-      if (!messageUuid || blockIndex === undefined) {
+      // `message_start` is the only stream event carrying the API message id;
+      // every later event for the same message must inherit it.
+      if (eventType === "message_start") {
+        const apiMessageId = typeof streamEvent.message?.id === "string"
+          ? streamEvent.message.id
+          : undefined;
+        currentStreamApiMessageId = apiMessageId ?? null;
+        if (apiMessageId) {
+          getBlocksForMessage(apiMessageId);
+        }
         return false;
       }
 
-      let entriesForMessage = partialOrderedPartsByMessage.get(messageUuid);
-      if (!entriesForMessage) {
-        entriesForMessage = new Map<number, OrderedPartEntry>();
-        partialOrderedPartsByMessage.set(messageUuid, entriesForMessage);
+      if (eventType === "message_stop") {
+        currentStreamApiMessageId = null;
+        return false;
       }
 
+      const blockIndex = typeof streamEvent?.index === "number"
+        ? streamEvent.index
+        : undefined;
+      if (blockIndex === undefined) {
+        return false;
+      }
+
+      // Only fall back to the event uuid when no `message_start` was seen, which
+      // real SDK streams always send before any block event.
+      const messageKey = currentStreamApiMessageId
+        ?? (typeof partialMessage.uuid === "string" ? partialMessage.uuid : undefined);
+      if (!messageKey) {
+        return false;
+      }
+
+      const entriesForMessage = getBlocksForMessage(messageKey);
       let entry = entriesForMessage.get(blockIndex);
 
-      if (streamEvent.type === "content_block_start") {
+      if (eventType === "content_block_start") {
         const contentBlock = streamEvent.content_block;
         if (contentBlock?.type === "text") {
           entry = {
             type: "text",
             value: typeof contentBlock.text === "string" ? contentBlock.text : "",
-            messageUuid,
+            messageUuid: messageKey,
           };
         } else if (contentBlock?.type === "thinking") {
           entry = {
             type: "thinking",
             value: typeof contentBlock.thinking === "string" ? contentBlock.thinking : "",
-            messageUuid,
+            messageUuid: messageKey,
           };
         } else {
           return false;
         }
-      } else if (streamEvent.type === "content_block_delta") {
+      } else if (eventType === "content_block_delta") {
         const delta = streamEvent.delta;
         if (delta?.type === "text_delta") {
           entry = {
             type: "text",
             value: `${entry?.value ?? ""}${typeof delta.text === "string" ? delta.text : ""}`,
-            messageUuid,
+            messageUuid: messageKey,
           };
         } else if (delta?.type === "thinking_delta") {
           entry = {
             type: "thinking",
             value: `${entry?.value ?? ""}${typeof delta.thinking === "string" ? delta.thinking : ""}`,
-            messageUuid,
+            messageUuid: messageKey,
           };
         } else {
           return false;
@@ -1335,22 +1402,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       }
 
       entriesForMessage.set(blockIndex, entry);
-      const partialEntries = Array.from(entriesForMessage.entries())
-        .sort(([a], [b]) => a - b)
-        .map(([, part]) => part);
-
-      accumulatedOrderedParts = [
-        ...accumulatedOrderedParts.filter((part) => part.messageUuid !== messageUuid),
-        ...partialEntries,
-      ];
-      lastAssistantMessageUuid = messageUuid;
+      rebuildAccumulatedOrderedParts();
 
       const finalParts = buildMessageParts(accumulatedOrderedParts, toolTracker);
       const content = getMessageTextFromParts(finalParts);
 
       if (!currentAssistantMessage) {
         currentAssistantMessage = {
-          id: messageUuid,
+          id: messageKey,
           role: "assistant",
           content,
           parts: finalParts,
@@ -1503,7 +1562,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         }
 
         // Assistant message - parse content and register tools with tracker
-        const { content, orderedParts, newTaskIds } = parseMessageContent(
+        const { orderedParts, newTaskIds, contentBlockCount } = parseMessageContent(
           message,
           toolTracker,
           mcpServerNames,
@@ -1515,40 +1574,40 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           activeTaskIds.add(taskId);
         }
 
-        // Get the message UUID to detect new messages vs streaming updates
-        const messageUuid = message.uuid as string | undefined;
+        // Group by API message id so these blocks land on top of the partial
+        // events that streamed them (see `blocksByApiMessage`). The SDK sends one
+        // assistant message per content block, all sharing `message.id`, so the
+        // running finalized-block count gives each block its stream index.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const apiMessageId = (message as any).message?.id as string | undefined;
+        const messageKey = apiMessageId
+          ?? (message.uuid as string | undefined)
+          ?? `assistant-${(syntheticMessageKeyCounter += 1)}`;
 
-        // For ordered parts (thinking, tools, and text): we need to handle two cases:
-        // 1. Streaming update to same message (same UUID): replace parts from this message
-        // 2. New assistant message (different UUID): accumulate parts
-        // This preserves chronological order across think → tool → think sequences
-        if (orderedParts.length > 0) {
-          if (messageUuid && messageUuid === lastAssistantMessageUuid) {
-            // Same message - replace (streaming update)
-            // Keep parts from previous messages, replace parts from this message
-            const previousParts = accumulatedOrderedParts.filter(
-              (p) => p.messageUuid !== messageUuid
-            );
-            accumulatedOrderedParts = [...previousParts, ...orderedParts];
-          } else {
-            // New message - accumulate ordered parts
-            accumulatedOrderedParts = [...accumulatedOrderedParts, ...orderedParts];
-          }
+        const blocks = getBlocksForMessage(messageKey);
+        const blockIndexBase = finalizedBlockCountByApiMessage.get(messageKey) ?? 0;
+        for (const part of orderedParts) {
+          blocks.set(blockIndexBase + (part.blockOffset ?? 0), {
+            ...part,
+            messageUuid: messageKey,
+          });
         }
-
-        // Update the last message UUID
-        if (messageUuid) {
-          lastAssistantMessageUuid = messageUuid;
-        }
+        finalizedBlockCountByApiMessage.set(messageKey, blockIndexBase + contentBlockCount);
+        rebuildAccumulatedOrderedParts();
 
         // Build final parts maintaining chronological order
         const finalParts = buildMessageParts(accumulatedOrderedParts, toolTracker);
+        // Derive content from the accumulated parts rather than this SDK message
+        // alone. The SDK splits one API message into one `assistant` message per
+        // content block, so `content` here only holds the current block's text and
+        // would blank out the turn's text whenever the block is thinking/tool_use.
+        const accumulatedContent = getMessageTextFromParts(finalParts);
 
         if (!currentAssistantMessage) {
           currentAssistantMessage = {
-            id: message.uuid || generateMessageId(),
+            id: messageKey,
             role: "assistant",
-            content,
+            content: accumulatedContent,
             parts: finalParts,
             timestamp: new Date().toISOString(),
           };
@@ -1558,7 +1617,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             messageId: currentAssistantMessage.id,
           });
         } else {
-          currentAssistantMessage.content = content;
+          currentAssistantMessage.content = accumulatedContent;
           currentAssistantMessage.parts = finalParts;
           console.debug("[session-manager] Updated assistant message", {
             sessionId,

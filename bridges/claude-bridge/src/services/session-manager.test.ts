@@ -502,6 +502,281 @@ describe("sendPrompt", () => {
     }
   });
 
+  // The real SDK gives every `stream_event` its own random uuid and emits one
+  // non-streaming `assistant` message per content block, all sharing
+  // `message.id`. Grouping by uuid therefore produced one part per delta plus a
+  // duplicate copy of the finished block. These tests use that real shape.
+  test("merges deltas that each arrive with a unique stream_event uuid", async () => {
+    const session = createSession("streaming-unique-uuids");
+    track(session.id);
+
+    const { stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "Stream please");
+      const call = await nextQueryCall();
+
+      const streamEvent = (uuid: string, event: Record<string, unknown>) => {
+        call.push({
+          type: "stream_event",
+          uuid,
+          session_id: "sdk-session-unique",
+          parent_tool_use_id: null,
+          event,
+        });
+      };
+
+      streamEvent("evt-1", {
+        type: "message_start",
+        message: { id: "msg_stream_1", role: "assistant", content: [] },
+      });
+      streamEvent("evt-2", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "thinking", thinking: "" },
+      });
+      streamEvent("evt-3", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "I" },
+      });
+      streamEvent("evt-4", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "'ll check the repo" },
+      });
+      streamEvent("evt-5", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: " state." },
+      });
+      streamEvent("evt-6", { type: "content_block_stop", index: 0 });
+      streamEvent("evt-7", {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text", text: "" },
+      });
+      streamEvent("evt-8", {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "Test suite is still" },
+      });
+      streamEvent("evt-9", {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: " running." },
+      });
+
+      await waitFor(() => {
+        const assistant = getSessionMessages(session.id).find((m) => m.role === "assistant");
+        return assistant?.content === "Test suite is still running.";
+      });
+
+      const streamed = getSessionMessages(session.id).find((m) => m.role === "assistant");
+      expect(streamed?.parts.map((part) => part.type)).toEqual(["thinking", "text"]);
+      expect(streamed?.parts[0]?.content).toBe("I'll check the repo state.");
+      expect(streamed?.parts[1]?.content).toBe("Test suite is still running.");
+
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+    } finally {
+      stop();
+    }
+  });
+
+  test("final per-block assistant messages replace streamed blocks instead of duplicating them", async () => {
+    const session = createSession("streaming-final-blocks");
+    track(session.id);
+
+    const { stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "Think then answer");
+      const call = await nextQueryCall();
+
+      const streamEvent = (uuid: string, event: Record<string, unknown>) => {
+        call.push({
+          type: "stream_event",
+          uuid,
+          session_id: "sdk-session-final",
+          parent_tool_use_id: null,
+          event,
+        });
+      };
+
+      streamEvent("s-1", {
+        type: "message_start",
+        message: { id: "msg_final_1", role: "assistant", content: [] },
+      });
+      streamEvent("s-2", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "thinking", thinking: "" },
+      });
+      streamEvent("s-3", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "Reasoning" },
+      });
+      streamEvent("s-4", {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text", text: "" },
+      });
+      streamEvent("s-5", {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "Ans" },
+      });
+
+      await waitFor(() => {
+        const assistant = getSessionMessages(session.id).find((m) => m.role === "assistant");
+        return assistant?.content === "Ans";
+      });
+
+      // The SDK emits one assistant message per content block, each with a fresh
+      // uuid but the same API `message.id`.
+      call.push({
+        type: "assistant",
+        uuid: "final-uuid-a",
+        message: {
+          id: "msg_final_1",
+          content: [{ type: "thinking", thinking: "Reasoning complete." }],
+        },
+      });
+      call.push({
+        type: "assistant",
+        uuid: "final-uuid-b",
+        message: {
+          id: "msg_final_1",
+          content: [{ type: "text", text: "Answer final" }],
+        },
+      });
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+
+      await promptPromise;
+
+      const assistant = getSessionMessages(session.id).find((m) => m.role === "assistant");
+      expect(assistant?.parts.map((part) => part.type)).toEqual(["thinking", "text"]);
+      expect(assistant?.parts[0]?.content).toBe("Reasoning complete.");
+      expect(assistant?.parts[1]?.content).toBe("Answer final");
+      expect(assistant?.content).toBe("Answer final");
+    } finally {
+      stop();
+    }
+  });
+
+  test("keeps chronological order across api messages in a think → tool → answer turn", async () => {
+    const session = createSession("streaming-multi-message");
+    track(session.id);
+
+    const { stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "Run a command");
+      const call = await nextQueryCall();
+
+      const streamEvent = (uuid: string, event: Record<string, unknown>) => {
+        call.push({
+          type: "stream_event",
+          uuid,
+          session_id: "sdk-session-multi",
+          parent_tool_use_id: null,
+          event,
+        });
+      };
+
+      // First API message: thinking (index 0) then a tool_use (index 1).
+      streamEvent("m-1", {
+        type: "message_start",
+        message: { id: "msg_multi_1", role: "assistant", content: [] },
+      });
+      streamEvent("m-2", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "thinking", thinking: "" },
+      });
+      streamEvent("m-3", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "Need the repo state." },
+      });
+      call.push({
+        type: "assistant",
+        uuid: "multi-final-1",
+        message: {
+          id: "msg_multi_1",
+          content: [{ type: "thinking", thinking: "Need the repo state." }],
+        },
+      });
+      call.push({
+        type: "assistant",
+        uuid: "multi-final-2",
+        message: {
+          id: "msg_multi_1",
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-multi-1",
+              name: "Bash",
+              input: { command: "git status --porcelain" },
+            },
+          ],
+        },
+      });
+      streamEvent("m-4", { type: "message_stop" });
+
+      call.push({
+        type: "user",
+        uuid: "multi-user-1",
+        message: {
+          content: [
+            { type: "tool_result", tool_use_id: "tool-multi-1", content: "clean" },
+          ],
+        },
+      });
+
+      // Second API message: the answer text.
+      streamEvent("m-5", {
+        type: "message_start",
+        message: { id: "msg_multi_2", role: "assistant", content: [] },
+      });
+      streamEvent("m-6", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" },
+      });
+      streamEvent("m-7", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "Working tree is clean." },
+      });
+      call.push({
+        type: "assistant",
+        uuid: "multi-final-3",
+        message: {
+          id: "msg_multi_2",
+          content: [{ type: "text", text: "Working tree is clean." }],
+        },
+      });
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+
+      await promptPromise;
+
+      const assistant = getSessionMessages(session.id).find((m) => m.role === "assistant");
+      expect(assistant?.parts.map((part) => part.type)).toEqual([
+        "thinking",
+        "tool-invocation",
+        "text",
+      ]);
+      expect(assistant?.parts[0]?.content).toBe("Need the repo state.");
+      expect(assistant?.parts[2]?.content).toBe("Working tree is clean.");
+      expect(assistant?.content).toBe("Working tree is clean.");
+    } finally {
+      stop();
+    }
+  });
+
   test("rejects a second prompt while the session is already running", async () => {
     const session = createSession("busy");
     track(session.id);

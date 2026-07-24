@@ -79,12 +79,18 @@ const closeIssueMock = mock(async () => undefined);
 const changeStatusMock = mock(async () => undefined);
 const addCommentMock = mock(async () => detail.comments[0]!);
 const editCommentMock = mock(async () => detail.comments[0]!);
-const startBuildMock = mock(
+const startBuildMock = mock<
+  (
+    issue: GitHubIssueBuildInput,
+    projectId: string,
+    environmentType: EnvironmentType,
+  ) => Promise<string | undefined>
+>(
   async (
     _issue: GitHubIssueBuildInput,
     _projectId: string,
     _environmentType: EnvironmentType,
-  ) => undefined,
+  ) => "pipeline-new",
 );
 const navigateToPipelineMock = mock(async () => undefined);
 const originalGitHubStoreState = useGitHubIssuesStore.getState();
@@ -112,7 +118,7 @@ describe("GitHubIssueDetail", () => {
     editCommentMock.mockReset();
     editCommentMock.mockResolvedValue(detail.comments[0]!);
     startBuildMock.mockReset();
-    startBuildMock.mockResolvedValue(undefined);
+    startBuildMock.mockResolvedValue("pipeline-new");
     navigateToPipelineMock.mockClear();
     openInBrowserMock.mockClear();
     useBuildPipelineStore.setState({
@@ -316,6 +322,19 @@ describe("GitHubIssueDetail", () => {
     });
   });
 
+  test("keeps the close confirmation open with an actionable failure", async () => {
+    closeIssueMock.mockRejectedValueOnce(new Error("Issue changed on GitHub"));
+    renderDetail();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close Issue" }));
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Close Issue" }).at(-1)!,
+    );
+
+    expect(await screen.findByText("Issue changed on GitHub")).toBeTruthy();
+    expect(screen.getByText("Close issue #42?")).toBeTruthy();
+  });
+
   test("starts a local build with the complete current issue snapshot", async () => {
     renderDetail();
 
@@ -388,6 +407,19 @@ describe("GitHubIssueDetail", () => {
         "containerized",
       );
     });
+  });
+
+  test("shows an actionable error when build startup returns no pipeline", async () => {
+    startBuildMock.mockResolvedValueOnce(undefined);
+    renderDetail();
+
+    fireEvent.click(screen.getByRole("button", { name: "Build Local" }));
+
+    expect(
+      await screen.findByText(
+        "The build pipeline could not be started. Review the error details and try again.",
+      ),
+    ).toBeTruthy();
   });
 
   test("keeps retry controls visible for every failed completion comment", async () => {

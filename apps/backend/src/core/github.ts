@@ -95,6 +95,7 @@ export class GitHubApiError extends Error {
 
 const GITHUB_API_BASE = "https://api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
+const GITHUB_REQUEST_TIMEOUT_MS = 30_000;
 const STATUS_LABEL_NAMES = Object.values(GITHUB_STATUS_LABELS);
 const ensureLabelLocks = new Map<string, Promise<void>>();
 const issueStatusLocks = new Map<string, Promise<unknown>>();
@@ -301,9 +302,14 @@ async function githubRequest<T>(
   }
 
   let response: Response;
+  const timeoutSignal = AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS);
+  const signal = init.signal
+    ? AbortSignal.any([init.signal, timeoutSignal])
+    : timeoutSignal;
   try {
     response = await fetchImpl(requestUrl(pathOrUrl), {
       ...init,
+      signal,
       headers: {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${credential}`,
@@ -313,6 +319,12 @@ async function githubRequest<T>(
       },
     });
   } catch {
+    if (timeoutSignal.aborted) {
+      throw new GitHubApiError(
+        `GitHub timed out while trying to ${operation}. Check your network connection and try again.`,
+        { code: "network" },
+      );
+    }
     throw new GitHubApiError(
       "Unable to reach GitHub. Check your network connection and try again.",
       { code: "network" },
@@ -756,8 +768,28 @@ function commentBelongsToIssue(value: unknown, ref: GitHubRepositoryRef, issueNu
   if (!issueUrl) return false;
   try {
     const url = new URL(issueUrl);
-    return url.origin === GITHUB_API_BASE
-      && url.pathname === `${repositoryPath(ref)}/issues/${issueNumber}`;
+    const parts = url.pathname.split("/");
+    if (
+      url.origin !== GITHUB_API_BASE
+      || url.username
+      || url.password
+      || url.search
+      || url.hash
+      || parts.length !== 6
+      || parts[1] !== "repos"
+      || parts[4] !== "issues"
+    ) {
+      return false;
+    }
+    const owner = decodeURIComponent(parts[2] ?? "");
+    const name = decodeURIComponent(parts[3] ?? "");
+    const issueNumberPart = parts[5] ?? "";
+    const targetIssueNumber = Number(issueNumberPart);
+    return owner.toLowerCase() === ref.owner.toLowerCase()
+      && name.toLowerCase() === ref.name.toLowerCase()
+      && /^[1-9]\d*$/.test(issueNumberPart)
+      && Number.isSafeInteger(targetIssueNumber)
+      && targetIssueNumber === issueNumber;
   } catch {
     return false;
   }

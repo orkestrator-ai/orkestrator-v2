@@ -99,6 +99,23 @@ interface GitHubIssuesViewProps {
   projectId: string;
 }
 
+export function resolveGitHubIssueDrop(
+  issues: readonly GitHubIssue[],
+  issueNumber: unknown,
+  destination: unknown,
+): { issue: GitHubIssue; status: GitHubIssueStatus } | null {
+  if (
+    typeof issueNumber !== "number"
+    || !GITHUB_WORKFLOW_STAGES.some((stage) => stage.id === destination)
+  ) {
+    return null;
+  }
+  const issue = issues.find((candidate) => candidate.number === issueNumber);
+  return issue
+    ? { issue, status: destination as GitHubIssueStatus }
+    : null;
+}
+
 export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
   const snapshot = useGitHubIssuesStore((state) => state.snapshots.get(projectId));
   const loading = useGitHubIssuesStore((state) =>
@@ -187,14 +204,13 @@ export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
       setActiveIssueNumber(null);
       const issueNumber = event.active.data.current?.issueNumber;
       const destination = event.over?.data.current?.status;
-      if (typeof issueNumber !== "number" || typeof destination !== "string") {
-        return;
-      }
-      const issue = snapshot?.issues.find(
-        (candidate) => candidate.number === issueNumber,
+      const drop = resolveGitHubIssueDrop(
+        snapshot?.issues ?? [],
+        issueNumber,
+        destination,
       );
-      if (!issue) return;
-      void handleStatusChange(issue, destination as GitHubIssueStatus);
+      if (!drop) return;
+      void handleStatusChange(drop.issue, drop.status);
     },
     [handleStatusChange, snapshot?.issues],
   );

@@ -72,14 +72,15 @@ function apiIssue(
 function apiComment(
   id: number,
   author = "ada",
-  options: { issueNumber?: number; body?: string; edited?: boolean } = {},
+  options: { issueNumber?: number; issueUrl?: string; body?: string; edited?: boolean } = {},
 ) {
   const createdAt = "2026-07-03T00:00:00.000Z";
   return {
     id,
     body: options.body ?? `Comment ${id}`,
     html_url: `https://github.com/octo-org/octo-repo/issues/1#issuecomment-${id}`,
-    issue_url: `https://api.github.com/repos/octo-org/octo-repo/issues/${options.issueNumber ?? 1}`,
+    issue_url: options.issueUrl
+      ?? `https://api.github.com/repos/octo-org/octo-repo/issues/${options.issueNumber ?? 1}`,
     user: apiUser(author),
     created_at: createdAt,
     updated_at: options.edited ? "2026-07-04T00:00:00.000Z" : createdAt,
@@ -415,7 +416,9 @@ describe("GitHub issue comments API", () => {
         expect(JSON.parse(String(init.body))).toEqual({ body: "Edited draft" });
         return jsonResponse(apiComment(13, "viewer", { body: "Edited draft", edited: true }));
       }
-      return jsonResponse(apiComment(13, "viewer"));
+      return jsonResponse(apiComment(13, "viewer", {
+        issueUrl: "https://api.github.com/repos/Octo-Org/Octo-Repo/issues/1",
+      }));
     });
 
     await expect(
@@ -468,6 +471,57 @@ describe("GitHub error handling", () => {
         { code: "network" },
       ),
     );
+  });
+
+  test("times out stalled requests actionably and releases the workflow-label lock", async () => {
+    const timeoutDescriptor = Object.getOwnPropertyDescriptor(AbortSignal, "timeout");
+    const timeoutControllers: AbortController[] = [];
+    const timeoutDurations: number[] = [];
+    Object.defineProperty(AbortSignal, "timeout", {
+      configurable: true,
+      value: (milliseconds: number) => {
+        timeoutDurations.push(milliseconds);
+        const controller = new AbortController();
+        timeoutControllers.push(controller);
+        return controller.signal;
+      },
+    });
+
+    let requests = 0;
+    const fetchMock = mock(async (
+      _input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      requests += 1;
+      if (requests > 1) {
+        return jsonResponse(Object.values(GITHUB_STATUS_LABELS).map(apiLabel));
+      }
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(init.signal?.reason ?? new DOMException("Aborted", "AbortError"));
+        }, { once: true });
+      });
+    });
+
+    try {
+      const stalled = ensureGitHubWorkflowLabels(token, repository, fetchMock as typeof fetch);
+      await Promise.resolve();
+      expect(timeoutDurations).toEqual([30_000]);
+      timeoutControllers[0]?.abort(new DOMException(`timed out with ${token}`, "TimeoutError"));
+      await expect(stalled).rejects.toEqual(new GitHubApiError(
+        "GitHub timed out while trying to load repository labels. Check your network connection and try again.",
+        { code: "network" },
+      ));
+
+      await expect(
+        ensureGitHubWorkflowLabels(token, repository, fetchMock as typeof fetch),
+      ).resolves.toBeUndefined();
+      expect(requests).toBe(2);
+    } finally {
+      if (timeoutDescriptor) {
+        Object.defineProperty(AbortSignal, "timeout", timeoutDescriptor);
+      }
+    }
   });
 
   test("rejects empty tokens, invalid identifiers, titles, statuses, and payloads before mutation", async () => {
@@ -529,22 +583,28 @@ describe("GitHub error handling", () => {
     ).rejects.toThrow("invalid list");
   });
 
-  test("rejects comment edits for a different issue and lets maintainers edit", async () => {
-    const wrongIssue = mock(async (input: string | URL | Request) => {
-      const url = new URL(String(input));
-      if (url.pathname.endsWith("/issues/comments/20")) {
-        return jsonResponse(apiComment(20, "viewer", { issueNumber: 2 }));
-      }
-      if (url.pathname === "/user") return jsonResponse(apiUser("viewer"));
-      return jsonResponse({
-        full_name: "octo-org/octo-repo",
-        html_url: "https://github.com/octo-org/octo-repo",
-        permissions: { push: true },
+  test("rejects comment edits for a different issue, repository, or origin and lets maintainers edit", async () => {
+    for (const issueUrl of [
+      "https://api.github.com/repos/octo-org/octo-repo/issues/2",
+      "https://api.github.com/repos/octo-org/other-repo/issues/1",
+      "https://example.com/repos/octo-org/octo-repo/issues/1",
+    ]) {
+      const invalidTarget = mock(async (input: string | URL | Request) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/issues/comments/20")) {
+          return jsonResponse(apiComment(20, "viewer", { issueUrl }));
+        }
+        if (url.pathname === "/user") return jsonResponse(apiUser("viewer"));
+        return jsonResponse({
+          full_name: "octo-org/octo-repo",
+          html_url: "https://github.com/octo-org/octo-repo",
+          permissions: { push: true },
+        });
       });
-    });
-    await expect(
-      updateGitHubIssueComment(token, repository, 1, 20, "Draft", wrongIssue as typeof fetch),
-    ).rejects.toThrow("does not belong");
+      await expect(
+        updateGitHubIssueComment(token, repository, 1, 20, "Draft", invalidTarget as typeof fetch),
+      ).rejects.toThrow("does not belong");
+    }
 
     const maintainer = mock(async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(String(input));

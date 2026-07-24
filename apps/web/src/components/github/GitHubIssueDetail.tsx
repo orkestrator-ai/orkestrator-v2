@@ -369,7 +369,7 @@ export function GitHubIssueDetailContent({
     setStartingType(environmentType);
     setBuildError(null);
     try {
-      await startBuildFromGitHubIssue(
+      const pipelineId = await startBuildFromGitHubIssue(
         {
           repositoryOwner: repository.owner,
           repositoryName: repository.name,
@@ -394,6 +394,9 @@ export function GitHubIssueDetailContent({
         projectId,
         environmentType,
       );
+      if (!pipelineId) {
+        setBuildError("The build pipeline could not be started. Review the error details and try again.");
+      }
     } catch (error) {
       setBuildError(errorMessage(error, "Could not start the build."));
     } finally {

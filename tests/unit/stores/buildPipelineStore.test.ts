@@ -639,6 +639,44 @@ describe("buildPipelineStore", () => {
       expect(useBuildPipelineStore.getState().pipelines.has(pending)).toBe(false);
     });
 
+    test("keeps an unresolved creation reservation during nondestructive refresh", () => {
+      const pending = useBuildPipelineStore
+        .getState()
+        .createPipeline(createPipelineParams({ taskId: "pending" }));
+
+      useBuildPipelineStore.getState().reconcilePipelinesForProject(
+        "project-1",
+        [],
+        {
+          removeMissingActive: false,
+          removeUnresolvedCreating: false,
+        },
+      );
+
+      expect(useBuildPipelineStore.getState().pipelines.has(pending)).toBe(true);
+    });
+
+    test("keeps a linked pipeline when destructive reconciliation is suppressed", () => {
+      const pipelineId = useBuildPipelineStore
+        .getState()
+        .createPipeline(createPipelineParams({ taskId: "linked" }));
+      useBuildPipelineStore
+        .getState()
+        .setPipelineEnvironment(pipelineId, "env-created");
+
+      useBuildPipelineStore.getState().reconcilePipelinesForProject(
+        "project-1",
+        [],
+        {
+          removeMissingActive: false,
+          removeUnresolvedCreating: false,
+        },
+      );
+
+      expect(useBuildPipelineStore.getState().pipelines.has(pipelineId)).toBe(true);
+      expect(useBuildPipelineStore.getState().buildEnvironmentIds).toContain("env-created");
+    });
+
     test("does not replace state when cleanup finds no matching pipeline", () => {
       const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
       useBuildPipelineStore.getState().setPipelineEnvironment(id, "env-existing");

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -897,6 +898,62 @@ describe("Electron StorageService", () => {
       commentId: "9019",
     });
     expect(await fs.readdir(dataDir)).not.toContain("github-completion-comments.json.lock");
+  });
+
+  test("serializes the complete GitHub completion transaction across storage instances", async () => {
+    const dataDir = await createTempDir("ork-storage-github-post-lock-");
+    const first = new StorageService(dataDir);
+    const second = new StorageService(dataDir);
+    await Promise.all([first.init(), second.init()]);
+
+    let releaseFirst!: () => void;
+    let markFirstEntered!: () => void;
+    const firstEntered = new Promise<void>((resolve) => {
+      markFirstEntered = resolve;
+    });
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const order: string[] = [];
+
+    const firstRun = first.withGitHubCompletionCommentLock("pipeline-shared", async () => {
+      order.push("first-start");
+      markFirstEntered();
+      await firstGate;
+      order.push("first-end");
+    });
+    await firstEntered;
+
+    const secondRun = second.withGitHubCompletionCommentLock("pipeline-shared", async () => {
+      order.push("second-start");
+      order.push("second-end");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(order).toEqual(["first-start"]);
+
+    releaseFirst();
+    await Promise.all([firstRun, secondRun]);
+    expect(order).toEqual(["first-start", "first-end", "second-start", "second-end"]);
+  });
+
+  test("recovers an abandoned GitHub completion transaction lock", async () => {
+    const dataDir = await createTempDir("ork-storage-github-stale-post-lock-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const pipelineId = "pipeline-abandoned";
+    const key = createHash("sha256").update(pipelineId).digest("hex");
+    const lockDir = path.join(dataDir, "github-completion-comment-locks");
+    const lockPath = path.join(lockDir, `${key}.lock`);
+    await fs.mkdir(lockDir, { recursive: true });
+    await fs.writeFile(lockPath, "abandoned");
+    const staleTime = new Date(Date.now() - 20_000);
+    await fs.utimes(lockPath, staleTime, staleTime);
+
+    await expect(storage.withGitHubCompletionCommentLock(
+      pipelineId,
+      async () => "recovered",
+    )).resolves.toBe("recovered");
+    await expect(fs.access(lockPath)).rejects.toThrow();
   });
 
   test("recovers GitHub completion comments from malformed persistence", async () => {

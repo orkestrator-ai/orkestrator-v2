@@ -164,6 +164,12 @@ interface BuildPipelineState {
       id: string;
       buildPipelineId?: string;
     }[],
+    options?: {
+      /** Remove nonterminal pipelines whose linked environment is missing. */
+      removeMissingActive?: boolean;
+      /** Remove an unlinked creation reservation not recovered by the snapshot. */
+      removeUnresolvedCreating?: boolean;
+    },
   ) => void;
 
   // Selectors
@@ -757,8 +763,12 @@ export const useBuildPipelineStore = create<BuildPipelineState>()(
       return { pipelines, buildEnvironmentIds };
     }),
 
-  reconcilePipelinesForProject: (projectId, environments) =>
+  reconcilePipelinesForProject: (projectId, environments, options = {}) =>
     set((state) => {
+      const {
+        removeMissingActive = true,
+        removeUnresolvedCreating = true,
+      } = options;
       const snapshots = Array.isArray(environments) ? environments : null;
       const environmentIds = snapshots
         ? new Set(snapshots.map((environment) => environment.id))
@@ -779,7 +789,10 @@ export const useBuildPipelineStore = create<BuildPipelineState>()(
           if (recoveredEnvironmentId) {
             pipelines.set(pipelineId, { ...pipeline, environmentId: recoveredEnvironmentId });
             changed = true;
-          } else if (pipeline.phase === "creating-environment") {
+          } else if (
+            removeUnresolvedCreating
+            && pipeline.phase === "creating-environment"
+          ) {
             // An authoritative environment snapshot without the durable
             // association means creation did not complete. Clear the local
             // reservation so the source issue can start another build.
@@ -790,6 +803,8 @@ export const useBuildPipelineStore = create<BuildPipelineState>()(
         }
 
         if (
+          removeMissingActive
+          &&
           pipeline.environmentId
           && !environmentIds.has(pipeline.environmentId)
           && pipeline.phase !== "complete"

@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   parseStoredDesktopConnections,
   type StoredDesktopConnections,
@@ -477,6 +477,11 @@ export class StorageService {
     return this.file("github-completion-comments.json");
   }
 
+  private githubCompletionCommentLockTarget(pipelineId: string): string {
+    const key = createHash("sha256").update(pipelineId).digest("hex");
+    return this.file(path.join("github-completion-comment-locks", key));
+  }
+
   private buffersDir(): string {
     return path.join(this.dataDir, "buffers");
   }
@@ -591,7 +596,12 @@ export class StorageService {
           await fs.rm(lockPath, { force: true });
           throw error;
         }
+        const heartbeat = setInterval(() => {
+          void handle.utimes(new Date(), new Date()).catch(() => undefined);
+        }, 5_000);
+        heartbeat.unref();
         return async () => {
+          clearInterval(heartbeat);
           await handle.close();
           const currentToken = await fs.readFile(lockPath, "utf8").catch(() => null);
           if (currentToken === token) await fs.rm(lockPath, { force: true });
@@ -1437,6 +1447,26 @@ export class StorageService {
       () => [],
     );
     return comments.find((comment) => comment.pipelineId === pipelineId) ?? null;
+  }
+
+  /**
+   * Serialize the complete scan/post/persist transaction for one GitHub-backed
+   * pipeline across backend processes sharing this data directory.
+   */
+  async withGitHubCompletionCommentLock<T>(
+    pipelineId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    if (!pipelineId.trim()) throw new Error("GitHub completion pipeline ID is required");
+    const release = await this.acquireMutationLock(
+      this.githubCompletionCommentLockTarget(pipelineId),
+      "GitHub completion comment posting",
+    );
+    try {
+      return await operation();
+    } finally {
+      await release();
+    }
   }
 
   async saveGitHubCompletionComment(

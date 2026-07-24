@@ -2715,39 +2715,63 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     const commentBody = asString(body, "body").trim();
     if (!commentBody) throw new Error("Completion comment cannot be empty");
 
-    return withGitHubCompletionCommentLock(runId, async () => {
-      const target = await requireGitHubProject(context, targetProjectId);
-      if (
-        target.repository.owner.toLowerCase() !== owner.toLowerCase()
-        || target.repository.name.toLowerCase() !== name.toLowerCase()
-      ) {
-        throw new Error(
-          `GitHub pipeline repository does not match the selected project (${target.repository.owner}/${target.repository.name}).`,
-        );
-      }
-      const existing = await context.storage.getGitHubCompletionComment(runId);
-      if (existing?.status === "posted" && existing.commentId) {
-        return {
-          status: "already-posted",
-          commentId: existing.commentId,
-          postedAt: existing.postedAt,
-        };
-      }
+    return withGitHubCompletionCommentLock(runId, () => (
+      context.storage.withGitHubCompletionCommentLock(runId, async () => {
+        const target = await requireGitHubProject(context, targetProjectId);
+        if (
+          target.repository.owner.toLowerCase() !== owner.toLowerCase()
+          || target.repository.name.toLowerCase() !== name.toLowerCase()
+        ) {
+          throw new Error(
+            `GitHub pipeline repository does not match the selected project (${target.repository.owner}/${target.repository.name}).`,
+          );
+        }
+        const existing = await context.storage.getGitHubCompletionComment(runId);
+        if (existing?.status === "posted" && existing.commentId) {
+          return {
+            status: "already-posted",
+            commentId: existing.commentId,
+            postedAt: existing.postedAt,
+          };
+        }
 
-      const { token, repository } = target;
-      const marker = `<!-- orkestrator-github-run:${runId} -->`;
-      try {
-        // Always scan before posting. This recovers the case where GitHub
-        // accepted a previous request but the response or local persistence
-        // failed, and makes explicit retries safe.
-        const comments = await listGitHubIssueComments(
-          token,
-          repository,
-          targetIssueNumber,
-        );
-        const matchingComment = comments.find((comment) => comment.body.includes(marker));
-        if (matchingComment) {
-          const commentId = String(matchingComment.id);
+        const { token, repository } = target;
+        const marker = `<!-- orkestrator-github-run:${runId} -->`;
+        try {
+          // Always scan before posting. This recovers the case where GitHub
+          // accepted a previous request but the response or local persistence
+          // failed, and makes explicit retries safe.
+          const comments = await listGitHubIssueComments(
+            token,
+            repository,
+            targetIssueNumber,
+          );
+          const matchingComment = comments.find((comment) => comment.body.includes(marker));
+          if (matchingComment) {
+            const commentId = String(matchingComment.id);
+            await context.storage.saveGitHubCompletionComment({
+              pipelineId: runId,
+              repositoryOwner: repository.owner,
+              repositoryName: repository.name,
+              issueNumber: targetIssueNumber,
+              status: "posted",
+              commentId,
+              postedAt: matchingComment.createdAt,
+            });
+            return {
+              status: "already-posted",
+              commentId,
+              postedAt: matchingComment.createdAt,
+            };
+          }
+
+          const comment = await postGitHubIssueComment(
+            token,
+            repository,
+            targetIssueNumber,
+            `${commentBody}\n\n${marker}`,
+          );
+          const commentId = String(comment.id);
           await context.storage.saveGitHubCompletionComment({
             pipelineId: runId,
             repositoryOwner: repository.owner,
@@ -2755,49 +2779,27 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
             issueNumber: targetIssueNumber,
             status: "posted",
             commentId,
-            postedAt: matchingComment.createdAt,
+            postedAt: comment.createdAt,
           });
           return {
-            status: "already-posted",
+            status: "posted",
             commentId,
-            postedAt: matchingComment.createdAt,
+            postedAt: comment.createdAt,
           };
+        } catch (error) {
+          const message = sanitizeGitHubError(error, token);
+          await context.storage.saveGitHubCompletionComment({
+            pipelineId: runId,
+            repositoryOwner: repository.owner,
+            repositoryName: repository.name,
+            issueNumber: targetIssueNumber,
+            status: "failed",
+            error: message,
+          });
+          throw new Error(message);
         }
-
-        const comment = await postGitHubIssueComment(
-          token,
-          repository,
-          targetIssueNumber,
-          `${commentBody}\n\n${marker}`,
-        );
-        const commentId = String(comment.id);
-        await context.storage.saveGitHubCompletionComment({
-          pipelineId: runId,
-          repositoryOwner: repository.owner,
-          repositoryName: repository.name,
-          issueNumber: targetIssueNumber,
-          status: "posted",
-          commentId,
-          postedAt: comment.createdAt,
-        });
-        return {
-          status: "posted",
-          commentId,
-          postedAt: comment.createdAt,
-        };
-      } catch (error) {
-        const message = sanitizeGitHubError(error, token);
-        await context.storage.saveGitHubCompletionComment({
-          pipelineId: runId,
-          repositoryOwner: repository.owner,
-          repositoryName: repository.name,
-          issueNumber: targetIssueNumber,
-          status: "failed",
-          error: message,
-        });
-        throw new Error(message);
-      }
-    });
+      })
+    ));
   });
   register("get_github_issues", async ({ projectId }, context) => {
     const target = await requireGitHubProject(context, asString(projectId, "projectId"));

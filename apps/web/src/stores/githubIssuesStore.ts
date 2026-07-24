@@ -278,9 +278,17 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
     });
     try {
       const issue = await updateGitHubIssue(projectId, issueNumber, updates);
+      const completedDetailRequestKey = invalidateIssueReads(
+        projectId,
+        issueNumber,
+      );
       set((state) => {
         const mutations = new Set(state.mutations);
         mutations.delete(mutationKey);
+        const loadingProjects = new Set(state.loadingProjects);
+        loadingProjects.delete(projectId);
+        const loadingDetails = new Set(state.loadingDetails);
+        loadingDetails.delete(completedDetailRequestKey);
         const snapshots = new Map(state.snapshots);
         const nextSnapshot = replaceIssue(snapshots.get(projectId), issue);
         if (nextSnapshot) snapshots.set(projectId, nextSnapshot);
@@ -288,7 +296,13 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
         const key = detailKey(projectId, issueNumber);
         const nextDetail = mergeIssueDetail(details.get(key), issue);
         if (nextDetail) details.set(key, nextDetail);
-        return { mutations, snapshots, details };
+        return {
+          mutations,
+          snapshots,
+          details,
+          loadingProjects,
+          loadingDetails,
+        };
       });
       return issue;
     } catch (error) {
@@ -325,15 +339,29 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
     });
     try {
       const issue = await closeGitHubIssue(projectId, issueNumber);
+      const completedDetailRequestKey = invalidateIssueReads(
+        projectId,
+        issueNumber,
+      );
       set((state) => {
         const mutations = new Set(state.mutations);
         mutations.delete(mutationKey);
+        const loadingProjects = new Set(state.loadingProjects);
+        loadingProjects.delete(projectId);
+        const loadingDetails = new Set(state.loadingDetails);
+        loadingDetails.delete(completedDetailRequestKey);
         const snapshots = new Map(state.snapshots);
         const nextSnapshot = replaceIssue(snapshots.get(projectId), issue);
         if (nextSnapshot) snapshots.set(projectId, nextSnapshot);
         const details = new Map(state.details);
         details.delete(detailKey(projectId, issueNumber));
-        return { mutations, snapshots, details };
+        return {
+          mutations,
+          snapshots,
+          details,
+          loadingProjects,
+          loadingDetails,
+        };
       });
     } catch (error) {
       set((state) => {
@@ -371,9 +399,17 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
     });
     try {
       const comment = await addGitHubIssueComment(projectId, issueNumber, body);
+      const completedDetailRequestKey = invalidateIssueReads(
+        projectId,
+        issueNumber,
+      );
       set((state) => {
         const mutations = new Set(state.mutations);
         mutations.delete(mutationKey);
+        const loadingProjects = new Set(state.loadingProjects);
+        loadingProjects.delete(projectId);
+        const loadingDetails = new Set(state.loadingDetails);
+        loadingDetails.delete(completedDetailRequestKey);
         const details = new Map(state.details);
         const key = detailKey(projectId, issueNumber);
         const detail = details.get(key);
@@ -398,7 +434,13 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
             })!,
           );
         }
-        return { mutations, details, snapshots };
+        return {
+          mutations,
+          details,
+          snapshots,
+          loadingProjects,
+          loadingDetails,
+        };
       });
       return comment;
     } catch (error) {
@@ -442,9 +484,17 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
         commentId,
         body,
       );
+      const completedDetailRequestKey = invalidateIssueReads(
+        projectId,
+        issueNumber,
+      );
       set((state) => {
         const mutations = new Set(state.mutations);
         mutations.delete(mutationKey);
+        const loadingProjects = new Set(state.loadingProjects);
+        loadingProjects.delete(projectId);
+        const loadingDetails = new Set(state.loadingDetails);
+        loadingDetails.delete(completedDetailRequestKey);
         const details = new Map(state.details);
         const key = detailKey(projectId, issueNumber);
         const detail = details.get(key);
@@ -456,7 +506,7 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
             ),
           });
         }
-        return { mutations, details };
+        return { mutations, details, loadingProjects, loadingDetails };
       });
       return comment;
     } catch (error) {

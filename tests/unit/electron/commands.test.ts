@@ -216,6 +216,10 @@ function createContext(
       emitted.push({ event, payload });
     }),
     storage: {
+      withGitHubCompletionCommentLock: mock(async (
+        _pipelineId: string,
+        operation: () => Promise<unknown>,
+      ) => operation()),
       getProject: mock(async (projectId: string) => projects.find((project) => project.id === projectId) ?? null),
       getRepositoryConfig: mock(async (projectId: string) => config.repositories[projectId as "project-1"] ?? { defaultBranch: "main", prBaseBranch: "main" }),
       loadConfig: mock(async () => config),
@@ -5173,6 +5177,66 @@ exit 0
         status: "posted",
         commentId: "9002",
       });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("persists a sanitized GitHub completion API failure for retry", async () => {
+    const originalFetch = globalThis.fetch;
+    const { context } = createContext(createEnvironment());
+    const commands = createCommandRegistry();
+    const secret = "github_secret_token";
+    let completionRecord: Record<string, unknown> | null = null;
+
+    Object.assign(context.storage, {
+      loadConfig: mock(async () => ({
+        version: "1.0.0",
+        global: { githubToken: secret },
+        repositories: {},
+      })),
+      getGitHubCompletionComment: mock(async () => completionRecord),
+      saveGitHubCompletionComment: mock(async (record: Record<string, unknown>) => {
+        completionRecord = record;
+        return record;
+      }),
+    });
+    globalThis.fetch = mock(async (
+      _url: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      if ((init?.method ?? "GET") === "GET") {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({
+        message: `Forbidden for Bearer ${secret}`,
+      }), {
+        status: 403,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    try {
+      await expect(commands.get("post_github_completion_comment")?.({
+        pipelineId: "pipeline-failed",
+        projectId: "project-1",
+        repositoryOwner: "acme",
+        repositoryName: "project",
+        issueNumber: 42,
+        body: "Result: Failed",
+      }, context)).rejects.toThrow("GitHub denied permission");
+      expect(completionRecord).toMatchObject({
+        pipelineId: "pipeline-failed",
+        repositoryOwner: "acme",
+        repositoryName: "project",
+        issueNumber: 42,
+        status: "failed",
+      });
+      expect(String(completionRecord?.error)).toContain("Issues write access");
+      expect(JSON.stringify(completionRecord)).not.toContain(secret);
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -25,7 +25,10 @@ import type {
   GitHubIssueDetail,
   GitHubIssueStatus,
 } from "@/types/github";
-import { GitHubIssuesView } from "./GitHubIssuesView";
+import {
+  GitHubIssuesView,
+  resolveGitHubIssueDrop,
+} from "./GitHubIssuesView";
 
 const repository = {
   owner: "acme",
@@ -164,6 +167,17 @@ describe("GitHubIssuesView", () => {
         "inprogress",
       );
     });
+  });
+
+  test("resolves valid drag destinations and ignores invalid drops", () => {
+    expect(resolveGitHubIssueDrop(issues, 2, "inprogress")).toEqual({
+      issue: issues[1]!,
+      status: "inprogress",
+    });
+    expect(resolveGitHubIssueDrop(issues, 999, "review")).toBeNull();
+    expect(resolveGitHubIssueDrop(issues, 2, "not-a-stage")).toBeNull();
+    expect(resolveGitHubIssueDrop(issues, "2", "review")).toBeNull();
+    expect(resolveGitHubIssueDrop(issues, 2, undefined)).toBeNull();
   });
 
   test("disables refresh while a status mutation is in progress", () => {

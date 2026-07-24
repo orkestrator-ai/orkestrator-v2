@@ -8,7 +8,7 @@ export function isLinearPipeline(pipeline: Pick<BuildPipeline, "source">): boole
 }
 
 export function isKanbanPipeline(pipeline: Pick<BuildPipeline, "source">): boolean {
-  return pipeline.source?.type !== "linear";
+  return pipeline.source === undefined || pipeline.source.type === "kanban";
 }
 
 export function movePipelineKanbanTask(

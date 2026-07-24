@@ -824,6 +824,45 @@ describe("Electron StorageService", () => {
     await expect(storage.getLinearAuth()).resolves.toBeNull();
   });
 
+  test("persists GitHub completion comment outcomes by pipeline", async () => {
+    const dataDir = await createTempDir("ork-storage-github-completion-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    await expect(storage.getGitHubCompletionComment("pipeline-github")).resolves.toBeNull();
+    await storage.saveGitHubCompletionComment({
+      pipelineId: "pipeline-github",
+      repositoryOwner: "acme",
+      repositoryName: "widget",
+      issueNumber: 42,
+      status: "posted",
+      commentId: "9001",
+      postedAt: "2026-07-24T12:00:00.000Z",
+    });
+
+    await expect(storage.getGitHubCompletionComment("pipeline-github")).resolves.toMatchObject({
+      repositoryOwner: "acme",
+      repositoryName: "widget",
+      issueNumber: 42,
+      status: "posted",
+      commentId: "9001",
+    });
+
+    await storage.saveGitHubCompletionComment({
+      pipelineId: "pipeline-github",
+      repositoryOwner: "acme",
+      repositoryName: "widget",
+      issueNumber: 42,
+      status: "failed",
+      error: "GitHub API unavailable",
+    });
+    await expect(storage.getGitHubCompletionComment("pipeline-github")).resolves.toMatchObject({
+      status: "failed",
+      error: "GitHub API unavailable",
+    });
+    expect(await fs.readdir(dataDir)).toContain("github-completion-comments.json");
+  });
+
   test("removes temporary Linear auth files when a secret write fails", async () => {
     const dataDir = await createTempDir("ork-storage-linear-failed-");
     const storage = new StorageService(dataDir);

@@ -4956,6 +4956,180 @@ exit 0
     }
   });
 
+  test("serializes and persists idempotent GitHub completion comments", async () => {
+    const originalFetch = globalThis.fetch;
+    const { context } = createContext(createEnvironment());
+    const commands = createCommandRegistry();
+    let completionRecord: {
+      pipelineId: string;
+      repositoryOwner: string;
+      repositoryName: string;
+      issueNumber: number;
+      status: "posted" | "failed";
+      commentId?: string;
+      postedAt?: string;
+      error?: string;
+    } | null = null;
+    let commentCreateCalls = 0;
+
+    Object.assign(context.storage, {
+      loadConfig: mock(async () => ({
+        version: "1.0.0",
+        global: { githubToken: "github_secret_token" },
+        repositories: {},
+      })),
+      getGitHubCompletionComment: mock(async () => completionRecord),
+      saveGitHubCompletionComment: mock(async (record: typeof completionRecord) => {
+        completionRecord = record;
+        return record;
+      }),
+    });
+
+    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "GET") {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      commentCreateCalls += 1;
+      const payload = JSON.parse(String(init?.body)) as { body: string };
+      expect(payload.body).toContain("<!-- orkestrator-github-run:pipeline-github -->");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return new Response(JSON.stringify({
+        id: 9001,
+        body: payload.body,
+        html_url: "https://github.com/acme/widget/issues/42#issuecomment-9001",
+        created_at: "2026-07-24T12:00:00.000Z",
+        updated_at: "2026-07-24T12:00:00.000Z",
+        user: { login: "ork-user" },
+      }), { status: 201, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    const args = {
+      pipelineId: "pipeline-github",
+      projectId: "project-1",
+      repositoryOwner: "acme",
+      repositoryName: "project",
+      issueNumber: 42,
+      body: "Result: Complete",
+    };
+    try {
+      const [first, second] = await Promise.all([
+        commands.get("post_github_completion_comment")?.(args, context),
+        commands.get("post_github_completion_comment")?.(args, context),
+      ]);
+
+      expect(commentCreateCalls).toBe(1);
+      expect(first).toEqual({
+        status: "posted",
+        commentId: "9001",
+        postedAt: "2026-07-24T12:00:00.000Z",
+      });
+      expect(second).toEqual({
+        status: "already-posted",
+        commentId: "9001",
+        postedAt: "2026-07-24T12:00:00.000Z",
+      });
+      expect(completionRecord).toMatchObject({
+        pipelineId: "pipeline-github",
+        repositoryOwner: "acme",
+        repositoryName: "project",
+        issueNumber: 42,
+        status: "posted",
+        commentId: "9001",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("recovers a GitHub completion comment accepted before local persistence", async () => {
+    const originalFetch = globalThis.fetch;
+    const { context } = createContext(createEnvironment());
+    const commands = createCommandRegistry();
+    let completionRecord: Record<string, unknown> | null = {
+      pipelineId: "pipeline-retry",
+      repositoryOwner: "acme",
+      repositoryName: "project",
+      issueNumber: 42,
+      status: "failed",
+      error: "Connection reset",
+    };
+    let commentCreateCalls = 0;
+
+    Object.assign(context.storage, {
+      loadConfig: mock(async () => ({
+        version: "1.0.0",
+        global: { githubToken: "github_secret_token" },
+        repositories: {},
+      })),
+      getGitHubCompletionComment: mock(async () => completionRecord),
+      saveGitHubCompletionComment: mock(async (record: Record<string, unknown>) => {
+        completionRecord = record;
+        return record;
+      }),
+    });
+    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      if ((init?.method ?? "GET") !== "GET") commentCreateCalls += 1;
+      return new Response(JSON.stringify([{
+        id: 9002,
+        body: "Done\n\n<!-- orkestrator-github-run:pipeline-retry -->",
+        html_url: "https://github.com/acme/widget/issues/42#issuecomment-9002",
+        created_at: "2026-07-24T12:05:00.000Z",
+        updated_at: "2026-07-24T12:05:00.000Z",
+        user: { login: "ork-user" },
+      }]), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    try {
+      await expect(commands.get("post_github_completion_comment")?.({
+        pipelineId: "pipeline-retry",
+        projectId: "project-1",
+        repositoryOwner: "acme",
+        repositoryName: "project",
+        issueNumber: 42,
+        body: "Result: Complete",
+      }, context)).resolves.toEqual({
+        status: "already-posted",
+        commentId: "9002",
+        postedAt: "2026-07-24T12:05:00.000Z",
+      });
+      expect(commentCreateCalls).toBe(0);
+      expect(completionRecord).toMatchObject({
+        status: "posted",
+        commentId: "9002",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("rejects a GitHub completion target outside the selected project repository", async () => {
+    const { context } = createContext(createEnvironment());
+    const commands = createCommandRegistry();
+    const getCompletion = mock(async () => null);
+    Object.assign(context.storage, {
+      loadConfig: mock(async () => ({
+        version: "1.0.0",
+        global: { githubToken: "github_secret_token" },
+        repositories: {},
+      })),
+      getGitHubCompletionComment: getCompletion,
+    });
+
+    await expect(commands.get("post_github_completion_comment")?.({
+      pipelineId: "pipeline-out-of-scope",
+      projectId: "project-1",
+      repositoryOwner: "other",
+      repositoryName: "repository",
+      issueNumber: 1,
+      body: "Result: Complete",
+    }, context)).rejects.toThrow("does not match the selected project");
+    expect(getCompletion).not.toHaveBeenCalled();
+  });
+
   test("starts container terminal sessions through docker exec in a PTY", async () => {
     const { context } = createContext(createEnvironment());
     const commands = createCommandRegistry();

@@ -165,6 +165,28 @@ const linearIssue: LinearIssueDetail = {
   }],
 };
 
+const githubIssue = {
+  repositoryOwner: "acme",
+  repositoryName: "widget",
+  number: 42,
+  url: "https://github.com/acme/widget/issues/42",
+  title: "Add GitHub builds",
+  body: "Use the complete issue context.",
+  labels: ["bug", "ork:inprogress"],
+  status: "In Progress",
+  authorLogin: "grace",
+  assigneeLogins: ["ada"],
+  createdAt: "2026-07-20T10:00:00.000Z",
+  updatedAt: "2026-07-24T10:00:00.000Z",
+  comments: [{
+    id: 100,
+    body: "Keep the existing labels unchanged.",
+    authorLogin: "ada",
+    createdAt: "2026-07-23T09:00:00.000Z",
+    updatedAt: "2026-07-23T09:05:00.000Z",
+  }],
+};
+
 describe("useBuildPipeline", () => {
   beforeEach(() => {
     mockCreateEnvironment.mockClear();
@@ -918,6 +940,110 @@ describe("useBuildPipeline", () => {
     expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
     expect(mockToastError).toHaveBeenCalledWith("Failed to start build pipeline", {
       description: "environment create failed",
+    });
+  });
+
+  test("startBuildFromGitHubIssue persists repository identity and a complete task snapshot", async () => {
+    usePaneLayoutStore.setState({
+      environments: new Map([
+        ["env-build", {
+          root: {
+            kind: "leaf",
+            id: "pane-build",
+            tabs: [],
+            activeTabId: null,
+          },
+          activePaneId: "pane-build",
+          containerId: "container-build",
+        }],
+      ]),
+      activeEnvironmentId: "env-visible",
+    });
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuildFromGitHubIssue(githubIssue, "project-1", "containerized");
+    });
+
+    const pipeline = Array.from(useBuildPipelineStore.getState().pipelines.values())[0]!;
+    expect(pipeline.taskId).toBe("github:acme/widget#42");
+    expect(pipeline.source).toEqual({
+      type: "github",
+      repositoryOwner: "acme",
+      repositoryName: "widget",
+      issueNumber: 42,
+      issueUrl: "https://github.com/acme/widget/issues/42",
+      status: "In Progress",
+      updatedAt: "2026-07-24T10:00:00.000Z",
+    });
+    expect(pipeline.taskSnapshot).toMatchObject({
+      title: "#42: Add GitHub builds",
+      description: "Use the complete issue context.",
+      acceptanceCriteria: "",
+      images: [],
+    });
+    expect(pipeline.taskSnapshot.comments.map((comment) => comment.text)).toEqual([
+      "GitHub issue: acme/widget#42",
+      "URL: https://github.com/acme/widget/issues/42",
+      "Status: In Progress",
+      "Author: @grace",
+      "Assignees: @ada",
+      "Labels: bug, ork:inprogress",
+      "Created: 2026-07-20T10:00:00.000Z",
+      "Updated: 2026-07-24T10:00:00.000Z",
+      "@ada (2026-07-23T09:05:00.000Z): Keep the existing labels unchanged.",
+    ]);
+  });
+
+  test("startBuildFromGitHubIssue rejects a second active pipeline for the repository issue", async () => {
+    useBuildPipelineStore.getState().createPipeline({
+      taskId: "github:acme/widget#42",
+      projectId: "project-1",
+      environmentType: "local",
+      agentType: "codex",
+      taskTitle: "#42: Add GitHub builds",
+      taskSnapshot: {
+        title: "#42: Add GitHub builds",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+      source: {
+        type: "github",
+        repositoryOwner: "ACME",
+        repositoryName: "Widget",
+        issueNumber: 42,
+        issueUrl: "https://github.com/acme/widget/issues/42",
+        status: "Todo",
+      },
+    });
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuildFromGitHubIssue(githubIssue, "project-1", "local");
+    });
+
+    expect(useBuildPipelineStore.getState().pipelines.size).toBe(1);
+    expect(mockCreateEnvironment).not.toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith("Failed to start build pipeline", {
+      description: "An active build already exists for acme/widget#42",
+    });
+  });
+
+  test("startBuildFromGitHubIssue removes the pending pipeline when environment creation fails", async () => {
+    mockCreateEnvironment.mockImplementationOnce(async () => {
+      throw new Error("github environment create failed");
+    });
+    const { result } = renderHook(() => useBuildPipeline());
+
+    await act(async () => {
+      await result.current.startBuildFromGitHubIssue(githubIssue, "project-1", "local");
+    });
+
+    expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
+    expect(mockToastError).toHaveBeenCalledWith("Failed to start build pipeline", {
+      description: "github environment create failed",
     });
   });
 

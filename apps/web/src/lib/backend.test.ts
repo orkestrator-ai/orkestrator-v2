@@ -30,6 +30,13 @@ const {
   getLinearConnection,
   getLinearIssue,
   getLinearIssues,
+  getGitHubIssues,
+  getGitHubIssue,
+  updateGitHubIssue,
+  updateGitHubIssueStatus,
+  closeGitHubIssue,
+  addGitHubIssueComment,
+  updateGitHubIssueComment,
   getSetupCommands,
   getGatewayTokenSettings,
   getWebClientStatus,
@@ -183,6 +190,44 @@ describe("backend setup wrappers", () => {
         body: "Done",
       }],
       ["disconnect_linear"],
+    ]);
+  });
+
+  test("calls GitHub issue Electron commands with project-scoped payloads", async () => {
+    await getGitHubIssues("project-1");
+    await getGitHubIssue("project-1", 42);
+    await updateGitHubIssue("project-1", 42, { title: "Title", body: "Body" });
+    await updateGitHubIssueStatus("project-1", 42, "inprogress");
+    await addGitHubIssueComment("project-1", 42, "Comment");
+    await updateGitHubIssueComment("project-1", 42, 9001, "Edited");
+    await closeGitHubIssue("project-1", 42);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["get_github_issues", { projectId: "project-1" }],
+      ["get_github_issue", { projectId: "project-1", issueNumber: 42 }],
+      ["update_github_issue", {
+        projectId: "project-1",
+        issueNumber: 42,
+        title: "Title",
+        body: "Body",
+      }],
+      ["update_github_issue_status", {
+        projectId: "project-1",
+        issueNumber: 42,
+        status: "inprogress",
+      }],
+      ["add_github_issue_comment", {
+        projectId: "project-1",
+        issueNumber: 42,
+        body: "Comment",
+      }],
+      ["update_github_issue_comment", {
+        projectId: "project-1",
+        issueNumber: 42,
+        commentId: 9001,
+        body: "Edited",
+      }],
+      ["close_github_issue", { projectId: "project-1", issueNumber: 42 }],
     ]);
   });
 });

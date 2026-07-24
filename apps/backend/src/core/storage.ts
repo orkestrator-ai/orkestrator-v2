@@ -119,6 +119,18 @@ type LinearCompletionComment = {
   updatedAt: string;
 };
 
+export type GitHubCompletionComment = {
+  pipelineId: string;
+  repositoryOwner: string;
+  repositoryName: string;
+  issueNumber: number;
+  status: "posted" | "failed";
+  commentId?: string;
+  postedAt?: string;
+  error?: string;
+  updatedAt: string;
+};
+
 async function resizeKanbanImage(rawBytes: Buffer): Promise<Buffer> {
   const { default: sharp } = await import("sharp");
   return sharp(rawBytes).resize({ width: 2000, height: 2000, fit: "inside", withoutEnlargement: true }).webp().toBuffer();
@@ -456,6 +468,10 @@ export class StorageService {
 
   private linearCompletionCommentsFile(): string {
     return this.file("linear-completion-comments.json");
+  }
+
+  private githubCompletionCommentsFile(): string {
+    return this.file("github-completion-comments.json");
   }
 
   private buffersDir(): string {
@@ -1373,6 +1389,32 @@ export class StorageService {
     if (index >= 0) comments[index] = nextRecord;
     else comments.push(nextRecord);
     await this.saveJson(this.linearCompletionCommentsFile(), comments);
+    return nextRecord;
+  }
+
+  async getGitHubCompletionComment(pipelineId: string): Promise<GitHubCompletionComment | null> {
+    const comments = await this.loadJson<GitHubCompletionComment[]>(
+      this.githubCompletionCommentsFile(),
+      () => [],
+    );
+    return comments.find((comment) => comment.pipelineId === pipelineId) ?? null;
+  }
+
+  async saveGitHubCompletionComment(
+    record: Omit<GitHubCompletionComment, "updatedAt"> & { updatedAt?: string },
+  ): Promise<GitHubCompletionComment> {
+    const comments = await this.loadJson<GitHubCompletionComment[]>(
+      this.githubCompletionCommentsFile(),
+      () => [],
+    );
+    const nextRecord: GitHubCompletionComment = {
+      ...record,
+      updatedAt: record.updatedAt ?? nowIso(),
+    };
+    const index = comments.findIndex((comment) => comment.pipelineId === record.pipelineId);
+    if (index >= 0) comments[index] = nextRecord;
+    else comments.push(nextRecord);
+    await this.saveJson(this.githubCompletionCommentsFile(), comments);
     return nextRecord;
   }
 

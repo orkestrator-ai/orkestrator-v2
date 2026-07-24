@@ -8,6 +8,7 @@ import { TerminalContainer } from "@/components/terminal";
 import { KanbanBoard } from "@/components/kanban";
 import { ProjectLauncher } from "@/components/projects";
 import { LinearPipelineCompletionMonitor } from "@/components/linear";
+import { GitHubPipelineCompletionMonitor } from "@/components/github/GitHubPipelineCompletionMonitor";
 import { TerminalProvider } from "@/contexts";
 import {
   getAllLeaves,
@@ -510,6 +511,7 @@ function App() {
       <TerminalProvider>
         <AppShell>
           <LinearPipelineCompletionMonitor />
+          <GitHubPipelineCompletionMonitor />
           {selectedEnvironment ? (
             <div className="relative h-full bg-background">
               <div className="absolute inset-0 z-10 bg-background">

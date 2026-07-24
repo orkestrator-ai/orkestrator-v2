@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach } from "bun:test";
 import {
+  BUILD_PIPELINE_STORAGE_KEY,
   isActiveBuildPhase,
   useBuildPipelineStore,
 } from "../../../apps/web/src/stores/buildPipelineStore";
@@ -74,6 +75,7 @@ function createPromptAttempt(
 
 describe("buildPipelineStore", () => {
   beforeEach(() => {
+    localStorage.removeItem(BUILD_PIPELINE_STORAGE_KEY);
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
@@ -173,6 +175,53 @@ describe("buildPipelineStore", () => {
       });
     });
 
+    test("stores and finds GitHub issue source metadata without repository collisions", () => {
+      const source = {
+        type: "github" as const,
+        repositoryOwner: "Acme",
+        repositoryName: "Widget",
+        issueNumber: 42,
+        issueUrl: "https://github.com/Acme/Widget/issues/42",
+        status: "In Progress",
+        updatedAt: "2026-07-24T10:00:00.000Z",
+      };
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams({
+        taskId: "github:acme/widget#42",
+        source,
+      }));
+
+      expect(useBuildPipelineStore.getState().pipelines.get(id)?.source).toEqual(source);
+      expect(
+        useBuildPipelineStore.getState().getPipelineForGitHubIssue("acme", "widget", 42),
+      ).toHaveProperty("id", id);
+      expect(
+        useBuildPipelineStore.getState().getPipelineForGitHubIssue("acme", "other", 42),
+      ).toBeUndefined();
+    });
+
+    test("only returns non-terminal GitHub issue pipelines when activeOnly is set", () => {
+      const params = createPipelineParams({
+        taskId: "github:acme/widget#42",
+        source: {
+          type: "github",
+          repositoryOwner: "acme",
+          repositoryName: "widget",
+          issueNumber: 42,
+          issueUrl: "https://github.com/acme/widget/issues/42",
+          status: "Todo",
+        },
+      });
+      const id = useBuildPipelineStore.getState().createPipeline(params);
+      useBuildPipelineStore.getState().setPhase(id, "complete");
+
+      expect(
+        useBuildPipelineStore.getState().getPipelineForGitHubIssue("acme", "widget", 42, true),
+      ).toBeUndefined();
+      expect(
+        useBuildPipelineStore.getState().getPipelineForGitHubIssue("acme", "widget", 42),
+      ).toHaveProperty("id", id);
+    });
+
     test("returns a unique ID for each pipeline", () => {
       const { createPipeline } = useBuildPipelineStore.getState();
       const id1 = createPipeline(createPipelineParams({ taskId: "task-1" }));
@@ -180,6 +229,62 @@ describe("buildPipelineStore", () => {
 
       expect(id1).not.toBe(id2);
       expect(useBuildPipelineStore.getState().pipelines.size).toBe(2);
+    });
+  });
+
+  describe("persistence", () => {
+    test("rehydrates pipeline source, phase, snapshot, and derived environment IDs", async () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams({
+        taskId: "github:acme/widget#42",
+        source: {
+          type: "github",
+          repositoryOwner: "acme",
+          repositoryName: "widget",
+          issueNumber: 42,
+          issueUrl: "https://github.com/acme/widget/issues/42",
+          status: "Review",
+        },
+      }));
+      useBuildPipelineStore.getState().setPipelineEnvironment(id, "env-github");
+      useBuildPipelineStore.getState().setPhase(id, "reviewing");
+      const stored = localStorage.getItem(BUILD_PIPELINE_STORAGE_KEY);
+      expect(stored).not.toBeNull();
+
+      useBuildPipelineStore.setState({
+        pipelines: new Map(),
+        buildEnvironmentIds: new Set(),
+      });
+      if (stored) localStorage.setItem(BUILD_PIPELINE_STORAGE_KEY, stored);
+      await useBuildPipelineStore.persist.rehydrate();
+
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(id);
+      expect(pipeline?.source).toMatchObject({
+        type: "github",
+        repositoryOwner: "acme",
+        repositoryName: "widget",
+        issueNumber: 42,
+      });
+      expect(pipeline?.phase).toBe("reviewing");
+      expect(pipeline?.taskSnapshot).toEqual(defaultTaskSnapshot);
+      expect(useBuildPipelineStore.getState().buildEnvironmentIds.has("env-github")).toBe(true);
+    });
+
+    test("clears an interrupted posting lease during rehydration so completion can retry", async () => {
+      const id = useBuildPipelineStore.getState().createPipeline(createPipelineParams());
+      useBuildPipelineStore.getState().setPhase(id, "complete");
+      useBuildPipelineStore.getState().setCompletionCommentStatus(id, "posting");
+      const stored = localStorage.getItem(BUILD_PIPELINE_STORAGE_KEY);
+
+      useBuildPipelineStore.setState({
+        pipelines: new Map(),
+        buildEnvironmentIds: new Set(),
+      });
+      if (stored) localStorage.setItem(BUILD_PIPELINE_STORAGE_KEY, stored);
+      await useBuildPipelineStore.persist.rehydrate();
+
+      expect(
+        useBuildPipelineStore.getState().pipelines.get(id)?.completionCommentStatus,
+      ).toBeUndefined();
     });
   });
 

@@ -22,6 +22,7 @@ import { KanbanTaskDialog } from "./KanbanTaskDialog";
 import { ProjectNotesView } from "./ProjectNotesView";
 import { FeaturesView } from "./FeaturesView";
 import { LinearTicketsView } from "@/components/linear";
+import { GitHubIssuesView } from "@/components/github";
 
 const COLUMNS: { id: KanbanStatus; label: string; color: string }[] = [
   { id: "backlog", label: "Backlog", color: "bg-zinc-500" },
@@ -278,6 +279,13 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
               </DragOverlay>
             </DndContext>
           </div>
+        </TabsContent>
+
+        <TabsContent
+          value="github"
+          className="m-0 min-h-0 flex-1 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col"
+        >
+          <GitHubIssuesView projectId={projectId} />
         </TabsContent>
 
         <TabsContent

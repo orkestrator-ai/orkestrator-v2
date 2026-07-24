@@ -82,6 +82,30 @@ type StartBuildOptions = {
   existingEnvironmentId?: string | null;
 };
 
+export type GitHubIssueBuildComment = {
+  id: string | number;
+  body: string;
+  authorLogin?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type GitHubIssueBuildInput = {
+  repositoryOwner: string;
+  repositoryName: string;
+  number: number;
+  url: string;
+  title: string;
+  body: string;
+  labels: string[];
+  status: string;
+  comments: GitHubIssueBuildComment[];
+  authorLogin?: string;
+  assigneeLogins?: string[];
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 async function resolveReusableBuildEnvironment(
   environmentId: string | null | undefined,
   projectId: string,
@@ -146,6 +170,62 @@ function linearIssueToTicketInput(issue: LinearIssueDetail, projectId: string): 
   };
 }
 
+function githubIssueToTicketInput(
+  issue: GitHubIssueBuildInput,
+  projectId: string,
+): BuildPipelineTicketInput {
+  const repository = `${issue.repositoryOwner}/${issue.repositoryName}`;
+  const identifier = `${repository}#${issue.number}`;
+  const metadata = [
+    `GitHub issue: ${identifier}`,
+    `URL: ${issue.url}`,
+    `Status: ${issue.status}`,
+    issue.authorLogin ? `Author: @${issue.authorLogin}` : "",
+    issue.assigneeLogins?.length ? `Assignees: ${issue.assigneeLogins.map((login) => `@${login}`).join(", ")}` : "",
+    issue.labels.length ? `Labels: ${issue.labels.join(", ")}` : "",
+    issue.createdAt ? `Created: ${issue.createdAt}` : "",
+    issue.updatedAt ? `Updated: ${issue.updatedAt}` : "",
+  ].filter(Boolean);
+  const comments = [
+    ...metadata.map((text) => ({ text })),
+    ...issue.comments.map((comment) => {
+      const author = comment.authorLogin ? `@${comment.authorLogin}` : "GitHub user";
+      const timestamp = comment.updatedAt ?? comment.createdAt;
+      return {
+        text: `${author}${timestamp ? ` (${timestamp})` : ""}: ${comment.body}`,
+      };
+    }),
+  ];
+
+  return {
+    id: `github:${repository.toLowerCase()}#${issue.number}`,
+    projectId,
+    title: `#${issue.number}: ${issue.title}`,
+    namingPrompt: [
+      `GitHub issue ${identifier}`,
+      issue.title,
+      issue.body,
+      issue.status,
+    ].filter((part) => part.trim().length > 0).join("\n\n"),
+    source: {
+      type: "github",
+      repositoryOwner: issue.repositoryOwner,
+      repositoryName: issue.repositoryName,
+      issueNumber: issue.number,
+      issueUrl: issue.url,
+      status: issue.status,
+      updatedAt: issue.updatedAt,
+    },
+    taskSnapshot: {
+      title: `#${issue.number}: ${issue.title}`,
+      description: issue.body,
+      acceptanceCriteria: "",
+      comments,
+      images: [],
+    },
+  };
+}
+
 export function useBuildPipeline() {
   const { createEnvironment, startEnvironment } = useEnvironments(null, { listenForRenameEvents: false });
   const { createPipeline, setPipelineEnvironment, setPhase, setPipelineError, removePipeline } = useBuildPipelineStore();
@@ -170,6 +250,18 @@ export function useBuildPipeline() {
           ticket.projectId,
         );
         const effectiveEnvironmentType = reusableEnvironment?.environmentType ?? environmentType;
+
+        if (ticket.source.type === "github") {
+          const existing = useBuildPipelineStore.getState().getPipelineForGitHubIssue(
+            ticket.source.repositoryOwner,
+            ticket.source.repositoryName,
+            ticket.source.issueNumber,
+            true,
+          );
+          if (existing) {
+            throw new Error(`An active build already exists for ${ticket.source.repositoryOwner}/${ticket.source.repositoryName}#${ticket.source.issueNumber}`);
+          }
+        }
 
         pipelineId = createPipeline({
           taskId: ticket.id,
@@ -274,12 +366,14 @@ export function useBuildPipeline() {
         await waitForPaneAndAddTab(configuredEnvironment.id, buildTabId, buildTabData);
 
         toast.success("Build pipeline started");
+        return pipelineId;
       } catch (error) {
         if (pipelineId) removePipeline(pipelineId);
         console.error("[useBuildPipeline] Failed to start build:", error);
         toast.error("Failed to start build pipeline", {
           description: error instanceof Error ? error.message : "Unknown error",
         });
+        return undefined;
       }
     },
     [config, createPipeline, createEnvironment, setPipelineEnvironment, setPhase, setPipelineError, removePipeline, selectProjectAndEnvironment, setProjectCollapsed, setOptions, startEnvironment]
@@ -339,6 +433,22 @@ export function useBuildPipeline() {
     [startBuildFromTicket]
   );
 
+  const startBuildFromGitHubIssue = useCallback(
+    async (
+      issue: GitHubIssueBuildInput,
+      projectId: string,
+      environmentType: EnvironmentType,
+      agentOverride?: DefaultAgent,
+      options?: StartBuildOptions,
+    ) => startBuildFromTicket(
+      githubIssueToTicketInput(issue, projectId),
+      environmentType,
+      agentOverride,
+      options,
+    ),
+    [startBuildFromTicket],
+  );
+
   const navigateToPipeline = useCallback(
     async (pipeline: Pick<BuildPipeline, "environmentId" | "projectId" | "taskId">) => {
       if (!pipeline.environmentId) return;
@@ -388,7 +498,13 @@ export function useBuildPipeline() {
     [selectProjectAndEnvironment, setProjectCollapsed]
   );
 
-  return { startBuild, startBuildFromLinearIssue, navigateToBuild, navigateToPipeline };
+  return {
+    startBuild,
+    startBuildFromLinearIssue,
+    startBuildFromGitHubIssue,
+    navigateToBuild,
+    navigateToPipeline,
+  };
 }
 
 /** Search pane tree for a build tab matching a task ID */

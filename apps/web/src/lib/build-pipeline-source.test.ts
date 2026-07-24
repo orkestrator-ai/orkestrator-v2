@@ -51,4 +51,29 @@ describe("build-pipeline-source helpers", () => {
     expect(addCommentMock).not.toHaveBeenCalled();
     expect(updateTaskMock).not.toHaveBeenCalled();
   });
+
+  test("does not mutate kanban tasks for GitHub-backed pipelines", () => {
+    const pipeline = {
+      taskId: "github:acme/widget#42",
+      source: {
+        type: "github" as const,
+        repositoryOwner: "acme",
+        repositoryName: "widget",
+        issueNumber: 42,
+        issueUrl: "https://github.com/acme/widget/issues/42",
+        status: "In Progress",
+      },
+    };
+
+    movePipelineKanbanTask(pipeline, "review");
+    addPipelineKanbanComment(pipeline, "Done");
+    updatePipelineKanbanPrMetadata(pipeline, {
+      prUrl: "https://github.com/acme/widget/pull/1",
+      prState: "open",
+    });
+
+    expect(moveTaskMock).not.toHaveBeenCalled();
+    expect(addCommentMock).not.toHaveBeenCalled();
+    expect(updateTaskMock).not.toHaveBeenCalled();
+  });
 });

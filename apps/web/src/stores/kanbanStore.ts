@@ -31,7 +31,10 @@ export function findTaskForEnvironment(environmentId: string): { task: KanbanTas
   const task = kanbanState.tasks.find((t) => t.environmentId === environmentId);
   if (task) return { task, taskId: task.id };
   const pipeline = Array.from(useBuildPipelineStore.getState().pipelines.values())
-    .find((p) => p.environmentId === environmentId && p.source?.type !== "linear");
+    .find((p) =>
+      p.environmentId === environmentId
+      && (p.source === undefined || p.source.type === "kanban")
+    );
   return { task: undefined, taskId: pipeline?.taskId };
 }
 

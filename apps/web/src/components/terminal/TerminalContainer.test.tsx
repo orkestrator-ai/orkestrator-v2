@@ -9,6 +9,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createSessionKey, useTerminalSessionStore } from "@/stores/terminalSessionStore";
 import type { PaneLeaf, PersistedPaneLayout } from "@/types/paneLayout";
 import type { EnsureEnvironmentSetupResult, EnvironmentSetupSession } from "@/types";
+import type { CollisionDetection } from "@dnd-kit/core";
 import * as realBackend from "@/lib/backend";
 import * as realSetupCommands from "@/lib/setup-commands";
 import { requestTerminalBrowserTab } from "@/lib/terminal-links";
@@ -28,9 +29,9 @@ type DndContextHarnessProps = {
 };
 
 let latestDndContextProps: DndContextHarnessProps | null = null;
-const pointerWithinMock = mock((_args: never): Array<{ id: string }> => []);
-const rectIntersectionMock = mock((_args: never): Array<{ id: string }> => []);
-const closestCenterMock = mock((_args: never): Array<{ id: string }> => []);
+const pointerWithinMock = mock<CollisionDetection>((_args) => []);
+const rectIntersectionMock = mock<CollisionDetection>((_args) => []);
+const closestCenterMock = mock<CollisionDetection>((_args) => []);
 
 mock.module("@dnd-kit/core", () => ({
   ...realDndKitCoreSnapshot,
@@ -2864,10 +2865,11 @@ describe("TerminalContainer", () => {
 
     test("prioritizes tabs in pointer and rectangle collisions, then falls back to closest center", () => {
       const collisionDetection = createTerminalCollisionDetection({
-        pointerDetection: pointerWithinMock as never,
-        rectangleDetection: rectIntersectionMock as never,
-        nearestDetection: closestCenterMock as never,
+        pointerDetection: pointerWithinMock,
+        rectangleDetection: rectIntersectionMock,
+        nearestDetection: closestCenterMock,
       });
+
       pointerWithinMock.mockReturnValueOnce([
         { id: "edge:left:right" },
         { id: "tab:a:pane:left" },

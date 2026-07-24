@@ -254,7 +254,14 @@ export function ReviewLaunchDialog({
             </Label>
             <Select value={selectedModel?.id ?? model} onValueChange={handleModelChange}>
               <SelectTrigger id="review-model" className="h-11 w-full border-zinc-700/80 bg-zinc-900">
-                <SelectValue placeholder="Choose a model" />
+                <span className="flex min-w-0 flex-1 flex-col text-left">
+                  <span className="truncate text-sm">{selectedModel?.name ?? "Choose a model"}</span>
+                  {selectedModel?.description && (
+                    <span className="truncate text-[11px] font-normal text-zinc-500">
+                      {selectedModel.description}
+                    </span>
+                  )}
+                </span>
               </SelectTrigger>
               <SelectContent position="popper" className="max-h-72">
                 {models.map((option) => (

@@ -19,6 +19,9 @@ run("turbo", [
   "--cache-dir", ".turbo",
 ]);
 run("bun", ["test", "tests"]);
+// The bridge packages have no `test` script of their own, so they are not part
+// of the turbo run above. Without this their suites never execute in CI.
+run("bun", ["test", "bridges"]);
 
 const xcodeDeveloperDirectory = process.env.DEVELOPER_DIR ?? "/Applications/Xcode.app/Contents/Developer";
 if (process.platform === "darwin" && existsSync(xcodeDeveloperDirectory)) {

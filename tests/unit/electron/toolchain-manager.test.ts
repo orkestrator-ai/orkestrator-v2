@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdir, mkdtemp, open, readlink, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, open, readFile, readlink, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -471,17 +471,232 @@ describe("pinned desktop toolchain cache", () => {
     })).rejects.toThrow("reported an unexpected version");
   });
 
-  if (process.platform === "darwin") {
-    test("rejects an unsigned macOS executable when repair is not allowed", async () => {
-      const dataDir = await createDataDir();
-      await expect(ensurePinnedToolchains({
-        dataDir,
-        artifacts: [artifacts[0]],
-        fetchImpl: createFetch(),
-        timingsForTests: { processTimeoutMs: 1_000 },
-      })).rejects.toThrow("invalid macOS code signature");
+  // `codesign` only exists on macOS. These report as skips elsewhere rather than
+  // disappearing silently, so the reduced coverage on Linux CI stays visible.
+  const darwinTest = test.skipIf(process.platform !== "darwin");
+
+  darwinTest("rejects an unsigned macOS executable when repair is not allowed", async () => {
+    const dataDir = await createDataDir();
+    await expect(ensurePinnedToolchains({
+      dataDir,
+      artifacts: [artifacts[0]],
+      fetchImpl: createFetch(),
+      timingsForTests: { processTimeoutMs: 1_000 },
+    })).rejects.toThrow("invalid macOS code signature");
+  });
+
+  // The ad-hoc re-signature is produced by the local `codesign`, so its bytes
+  // are not reproducible across machines and the manifest cannot pin them. This
+  // is the path that ships for the darwin OpenCode artifacts: verify upstream
+  // bytes, repair, re-verify, then record what the repair actually produced.
+  darwinTest("repairs an invalid macOS signature and revalidates from the install record", async () => {
+    const dataDir = await createDataDir();
+    const fetchImpl = createFetch();
+    const repairable: ToolchainArtifact = {
+      ...artifacts[0],
+      executable: { ...artifacts[0].executable, repairInvalidMacSignature: true },
+    };
+
+    const first = await ensurePinnedToolchains({
+      dataDir,
+      artifacts: [repairable],
+      fetchImpl,
+      timingsForTests: { processTimeoutMs: 10_000 },
     });
-  }
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    const installedPath = await readlink(path.join(first.binDir, "codex"));
+    const record = JSON.parse(await readFile(path.join(path.dirname(installedPath), ".installed.json"), "utf8"));
+    expect(record).toEqual({ size: EXECUTABLE_SIZE, sha256: EXECUTABLE_SHA256 });
+    expect((await lstat(path.join(path.dirname(installedPath), ".installed.json"))).mode & 0o777).toBe(0o600);
+
+    // The repaired binary is now trusted from the record, not from the manifest.
+    await ensurePinnedToolchains({
+      dataDir,
+      artifacts: [repairable],
+      fetchImpl,
+      timingsForTests: { processTimeoutMs: 10_000 },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  test("records the installed state for repair-flagged artifacts and reuses it without redownloading", async () => {
+    const dataDir = await createDataDir();
+    const fetchImpl = createFetch();
+    const repairable: ToolchainArtifact = {
+      ...artifacts[0],
+      executable: { ...artifacts[0].executable, repairInvalidMacSignature: true },
+    };
+
+    const first = await ensurePinnedToolchains({
+      dataDir,
+      artifacts: [repairable],
+      fetchImpl,
+      skipExecutableProbeForTests: true,
+    });
+    const installedPath = await readlink(path.join(first.binDir, "codex"));
+    expect(JSON.parse(await readFile(path.join(path.dirname(installedPath), ".installed.json"), "utf8")))
+      .toEqual({ size: EXECUTABLE_SIZE, sha256: EXECUTABLE_SHA256 });
+
+    await ensurePinnedToolchains({ dataDir, artifacts: [repairable], fetchImpl, skipExecutableProbeForTests: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  test("reinstalls a repair-flagged artifact whose install record is missing or malformed", async () => {
+    const repairable: ToolchainArtifact = {
+      ...artifacts[0],
+      executable: { ...artifacts[0].executable, repairInvalidMacSignature: true },
+    };
+
+    for (const damage of [
+      async (recordPath: string) => { await rm(recordPath, { force: true }); },
+      async (recordPath: string) => { await writeFile(recordPath, "not json"); },
+      async (recordPath: string) => { await writeFile(recordPath, JSON.stringify({ size: EXECUTABLE_SIZE })); },
+      async (recordPath: string) => {
+        await writeFile(recordPath, JSON.stringify({ size: EXECUTABLE_SIZE, sha256: "NOTAHASH" }));
+      },
+      async (recordPath: string) => {
+        await writeFile(recordPath, JSON.stringify({ size: -1, sha256: EXECUTABLE_SHA256 }));
+      },
+    ]) {
+      const dataDir = await createDataDir();
+      const fetchImpl = createFetch();
+      const first = await ensurePinnedToolchains({
+        dataDir,
+        artifacts: [repairable],
+        fetchImpl,
+        skipExecutableProbeForTests: true,
+      });
+      const installedPath = await readlink(path.join(first.binDir, "codex"));
+      await damage(path.join(path.dirname(installedPath), ".installed.json"));
+
+      await ensurePinnedToolchains({ dataDir, artifacts: [repairable], fetchImpl, skipExecutableProbeForTests: true });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  test("does not trust an install record that disagrees with the bytes on disk", async () => {
+    const dataDir = await createDataDir();
+    const fetchImpl = createFetch();
+    const repairable: ToolchainArtifact = {
+      ...artifacts[0],
+      executable: { ...artifacts[0].executable, repairInvalidMacSignature: true },
+    };
+    const first = await ensurePinnedToolchains({
+      dataDir,
+      artifacts: [repairable],
+      fetchImpl,
+      skipExecutableProbeForTests: true,
+    });
+    const installedPath = await readlink(path.join(first.binDir, "codex"));
+    await chmod(installedPath, 0o700);
+    await writeFile(installedPath, "corrupt");
+
+    await ensurePinnedToolchains({ dataDir, artifacts: [repairable], fetchImpl, skipExecutableProbeForTests: true });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect((await lstat(installedPath)).size).toBe(EXECUTABLE_SIZE);
+  });
+
+  test("still enforces pinned installed values when the manifest supplies them", async () => {
+    const dataDir = await createDataDir();
+    const fetchImpl = createFetch();
+    const pinned: ToolchainArtifact = {
+      ...artifacts[0],
+      executable: {
+        ...artifacts[0].executable,
+        installedSize: EXECUTABLE_SIZE,
+        installedSha256: EXECUTABLE_SHA256,
+      },
+    };
+
+    await ensurePinnedToolchains({ dataDir, artifacts: [pinned], fetchImpl, skipExecutableProbeForTests: true });
+    await ensurePinnedToolchains({ dataDir, artifacts: [pinned], fetchImpl, skipExecutableProbeForTests: true });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  test("rejects a cached executable that has been replaced by a symlink", async () => {
+    const dataDir = await createDataDir();
+    const fetchImpl = createFetch();
+    const first = await ensurePinnedToolchains({
+      dataDir,
+      artifacts: [artifacts[0]],
+      fetchImpl,
+      skipExecutableProbeForTests: true,
+    });
+    const installedPath = await readlink(path.join(first.binDir, "codex"));
+    const decoy = path.join(dataDir, "decoy");
+    await writeFile(decoy, "#!/bin/sh\nprintf \"tool 1.2.3\\n\"\n");
+    await rm(installedPath, { force: true });
+    await symlink(decoy, installedPath);
+
+    await ensurePinnedToolchains({ dataDir, artifacts: [artifacts[0]], fetchImpl, skipExecutableProbeForTests: true });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect((await lstat(installedPath)).isSymbolicLink()).toBe(false);
+  });
+
+  test("prunes superseded versions that have gone unused past the retention window", async () => {
+    const dataDir = await createDataDir();
+    const fetchImpl = createFetch();
+    const older = artifacts.map((artifact) => ({ ...artifact, version: "1.2.2" }));
+    const unrelated = path.join(dataDir, "toolchains", "opencode", "9.9.9");
+
+    await ensurePinnedToolchains({ dataDir, artifacts: older, fetchImpl, skipExecutableProbeForTests: true });
+    await mkdir(unrelated, { recursive: true });
+    const stale = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
+    for (const artifact of older) {
+      await utimes(path.join(dataDir, "toolchains", artifact.name, "1.2.2"), stale, stale);
+    }
+    await utimes(unrelated, stale, stale);
+
+    await ensurePinnedToolchains({ dataDir, artifacts, fetchImpl, skipExecutableProbeForTests: true });
+
+    for (const artifact of artifacts) {
+      const toolDir = path.join(dataDir, "toolchains", artifact.name);
+      await expect(lstat(path.join(toolDir, "1.2.2"))).rejects.toThrow();
+      await expect(lstat(path.join(toolDir, artifact.version))).resolves.toBeDefined();
+      // The activated symlink still resolves after the prune.
+      const target = await readlink(path.join(dataDir, "toolchains", "bin", artifact.name));
+      expect((await lstat(target)).size).toBe(EXECUTABLE_SIZE);
+    }
+    // Tools outside this run are left alone even when they are stale.
+    await expect(lstat(unrelated)).resolves.toBeDefined();
+  });
+
+  test("two app builds sharing the cache do not delete each other's toolchains", async () => {
+    // A second build of the app can legitimately share this cache while pinning
+    // an older version. Each refreshes its own directories on launch, so neither
+    // may prune the other's and trigger a re-download ping-pong.
+    const dataDir = await createDataDir();
+    const fetchImpl = createFetch();
+    const older = artifacts.map((artifact) => ({ ...artifact, version: "1.2.2" }));
+
+    for (const pinned of [older, artifacts, older, artifacts, older]) {
+      await ensurePinnedToolchains({ dataDir, artifacts: pinned, fetchImpl, skipExecutableProbeForTests: true });
+    }
+
+    // One download per artifact per version, and nothing was re-fetched.
+    expect(fetchImpl).toHaveBeenCalledTimes(artifacts.length * 2);
+    for (const artifact of artifacts) {
+      await expect(lstat(path.join(dataDir, "toolchains", artifact.name, "1.2.2"))).resolves.toBeDefined();
+      await expect(lstat(path.join(dataDir, "toolchains", artifact.name, artifact.version))).resolves.toBeDefined();
+    }
+
+    // Once the older build stops launching, its copies are eventually reclaimed.
+    await ensurePinnedToolchains({
+      dataDir,
+      artifacts,
+      fetchImpl,
+      skipExecutableProbeForTests: true,
+      timingsForTests: { retainSupersededMs: 0 },
+    });
+    for (const artifact of artifacts) {
+      await expect(lstat(path.join(dataDir, "toolchains", artifact.name, "1.2.2"))).rejects.toThrow();
+      await expect(lstat(path.join(dataDir, "toolchains", artifact.name, artifact.version))).resolves.toBeDefined();
+    }
+  });
 
   test("reports aggregate progress monotonically across parallel tools", async () => {
     const dataDir = await createDataDir();

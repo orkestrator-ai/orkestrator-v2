@@ -31,6 +31,28 @@ import {
 
 const temporaryDirectories: string[] = [];
 
+/**
+ * Locate the Codex CLI that ships with the pinned `@openai/codex-sdk`.
+ *
+ * The version comes from package.json so bumping the SDK cannot silently point
+ * this at a stale CLI, and both known bun layouts are tried so a hoisting change
+ * surfaces as a clear failure rather than a skipped test.
+ */
+function resolvePinnedCodexCli(): string {
+  const repoRoot = join(import.meta.dir, "../../..");
+  const { dependencies } = JSON.parse(
+    readFileSync(join(import.meta.dir, "..", "package.json"), "utf8"),
+  ) as { dependencies?: Record<string, string> };
+  const pinned = dependencies?.["@openai/codex-sdk"];
+  if (!pinned) throw new Error("codex-bridge/package.json must pin @openai/codex-sdk");
+
+  const candidates = [
+    join(repoRoot, "node_modules/.bun", `@openai+codex@${pinned}`, "node_modules/@openai/codex/bin/codex.js"),
+    join(repoRoot, "node_modules/@openai/codex/bin/codex.js"),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
+}
+
 function createTemporaryDirectory(prefix = "orkestrator-session-title-test-"): string {
   const directory = mkdtempSync(join(tmpdir(), prefix));
   temporaryDirectories.push(directory);
@@ -160,11 +182,15 @@ describe("Codex session titles", () => {
   });
 
   test("the pinned Codex parser accepts the production argument shape and secured catalog", () => {
-    const codexPath = join(
-      import.meta.dir,
-      "../../../node_modules/.bun/@openai+codex@0.145.0/node_modules/@openai/codex/bin/codex.js",
-    );
-    if (!existsSync(codexPath)) return;
+    // Resolved from the SDK pin rather than hardcoded, so a version bump cannot
+    // leave this pointing at a stale CLI. A missing binary fails loudly instead
+    // of returning early: a silent no-op here reads as coverage that is not
+    // actually running.
+    const codexPath = resolvePinnedCodexCli();
+    expect(
+      existsSync(codexPath),
+      `Pinned Codex CLI not found at ${codexPath}. Run \`bun install\` at the repo root.`,
+    ).toBe(true);
 
     const directory = createTemporaryDirectory();
     const outputPath = join(directory, "title.txt");

@@ -2,6 +2,8 @@ import { describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  CODEX_RELEASE_BASE,
+  OPENCODE_RELEASE_BASE,
   PINNED_TOOLCHAIN_ARTIFACTS,
   PINNED_TOOLCHAIN_VERSIONS,
   pinnedToolchainArtifacts,
@@ -160,6 +162,126 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(downloadScriptPin).toBe(sdkPin);
     expect(dockerfilePin).toBe(sdkPin);
     expect(PINNED_TOOLCHAIN_VERSIONS.opencode).toBe(sdkPin);
+  });
+
+  test("OpenCode: bundled binary download uses the same release base as the managed manifest", () => {
+    // The managed manifest and the bundling script must resolve to the same
+    // GitHub org. OpenCode moved from `sst` to `anomalyco`; without this the two
+    // could be updated independently and silently ship binaries from different
+    // repositories while every other test stayed green.
+    const script = read("scripts/download-opencode.sh");
+
+    expect(script).toContain(
+      'OPENCODE_URL="https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/${OPENCODE_ARCHIVE}"',
+    );
+    expect(OPENCODE_RELEASE_BASE).toBe(
+      `https://github.com/anomalyco/opencode/releases/download/v${PINNED_TOOLCHAIN_VERSIONS.opencode}`,
+    );
+    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === "opencode")) {
+      expect(artifact.archive.url.startsWith(`${OPENCODE_RELEASE_BASE}/`)).toBe(true);
+    }
+  });
+
+  test("OpenCode: download script names macOS zips and Linux tarballs like the release assets", () => {
+    const script = read("scripts/download-opencode.sh");
+
+    expect(script).toContain('OPENCODE_FILENAME="opencode-${PLATFORM}-${OPENCODE_ARCH}"');
+    expect(script).toContain('OPENCODE_ARCHIVE="$OPENCODE_FILENAME.tar.gz"');
+    expect(script).toContain('OPENCODE_ARCHIVE="$OPENCODE_FILENAME.zip"');
+
+    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === "opencode")) {
+      const expectedExtension = artifact.platform === "linux" ? ".tar.gz" : ".zip";
+      expect(artifact.archive.url.endsWith(
+        `opencode-${artifact.platform}-${artifact.architecture}${expectedExtension}`,
+      )).toBe(true);
+      expect(artifact.archive.format).toBe(artifact.platform === "linux" ? "tar.gz" : "zip");
+    }
+  });
+
+  test("Codex: managed manifest and download script share one release base", () => {
+    expect(CODEX_RELEASE_BASE).toBe(
+      `https://github.com/openai/codex/releases/download/rust-v${PINNED_TOOLCHAIN_VERSIONS.codex}`,
+    );
+    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === "codex")) {
+      expect(artifact.archive.url.startsWith(`${CODEX_RELEASE_BASE}/`)).toBe(true);
+    }
+  });
+
+  test("Claude: managed manifest and download script build the same npm tarball URL", () => {
+    const script = read("scripts/download-claude.sh");
+
+    expect(script).toContain('PACKAGE_NAME="claude-code-${PLATFORM}-${CLAUDE_ARCH}"');
+    expect(script).toContain(
+      'CLAUDE_URL="https://registry.npmjs.org/@anthropic-ai/${PACKAGE_NAME}/-/${PACKAGE_NAME}-${CLAUDE_VERSION}.tgz"',
+    );
+    expect(script).toContain('cp "$TEMP_DIR/package/claude" "$BINARIES_DIR/claude"');
+
+    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === "claude")) {
+      const pkg = `claude-code-${artifact.platform}-${artifact.architecture}`;
+      expect(artifact.archive.url).toBe(
+        `https://registry.npmjs.org/@anthropic-ai/${pkg}/-/${pkg}-${PINNED_TOOLCHAIN_VERSIONS.claude}.tgz`,
+      );
+      expect(artifact.archive.entryPath).toBe("package/claude");
+    }
+  });
+
+  test("every managed artifact URL carries its own pinned version", () => {
+    // Guards the failure mode where PINNED_TOOLCHAIN_VERSIONS, the Dockerfile and
+    // the download scripts are all bumped but a URL keeps a stale version: the
+    // stale binary's size and digest would still agree with each other, so the
+    // installer would happily verify and install the wrong release.
+    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS) {
+      expect(artifact.version).toBe(PINNED_TOOLCHAIN_VERSIONS[artifact.name]);
+      expect(artifact.archive.url).toContain(artifact.version);
+    }
+  });
+
+  test("every managed artifact allowlists the host it actually downloads from", () => {
+    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS) {
+      const { hostname, protocol } = new URL(artifact.archive.url);
+      expect(protocol).toBe("https:");
+      expect(artifact.archive.allowedHosts).toContain(hostname);
+    }
+  });
+
+  test("only artifacts that are re-signed locally omit pinned installed digests", () => {
+    // `repairInvalidMacSignature` re-signs the binary with the *local* codesign,
+    // whose output is not reproducible across machines. Pinning a post-repair
+    // digest in the manifest makes installation fail on any machine that
+    // produces different bytes, which blocks app startup entirely. Those
+    // artifacts must rely on the install record written at install time instead.
+    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS) {
+      const { repairInvalidMacSignature, installedSha256, installedSize } = artifact.executable;
+      if (repairInvalidMacSignature) {
+        expect(artifact.platform).toBe("darwin");
+        expect(installedSha256).toBeUndefined();
+        expect(installedSize).toBeUndefined();
+      } else {
+        expect(installedSha256 === undefined).toBe(installedSize === undefined);
+      }
+    }
+
+    // OpenCode ships unsigned macOS binaries on both architectures, so both must
+    // opt into repair or installation fails on that architecture.
+    const darwinOpenCode = PINNED_TOOLCHAIN_ARTIFACTS
+      .filter((artifact) => artifact.name === "opencode" && artifact.platform === "darwin");
+    expect(darwinOpenCode).toHaveLength(2);
+    for (const artifact of darwinOpenCode) {
+      expect(artifact.executable.repairInvalidMacSignature).toBe(true);
+    }
+  });
+
+  test("Docker: the pinned CLI versions are what the image actually installs", () => {
+    const dockerfile = read("docker/Dockerfile");
+
+    expect(dockerfile).toContain('npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"');
+    expect(dockerfile).toContain('npm install -g "@openai/codex@${CODEX_CLI_VERSION}"');
+    expect(dockerfile).toContain('--version "$OPENCODE_CLI_VERSION"');
+    // The three CLI paths the backend resolves at runtime.
+    expect(dockerfile).toContain("ENV CLAUDE_CLI_PATH=/usr/local/share/npm-global/bin/claude");
+    expect(dockerfile).toContain("ENV CODEX_CLI_PATH=/usr/local/share/npm-global/bin/codex");
+    expect(dockerfile).toContain("ENV OPENCODE_CLI_PATH=/home/node/.opencode/bin/opencode");
+    expect(dockerfile).toContain("/home/node/.opencode/bin");
   });
 
   test("managed manifest covers every supported platform and architecture with immutable checksums", () => {

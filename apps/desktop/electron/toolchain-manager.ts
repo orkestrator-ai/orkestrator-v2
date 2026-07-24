@@ -29,11 +29,13 @@ import {
 
 const TOOLCHAIN_DIRECTORY = "toolchains";
 const INSTALL_LOCK = ".install.lock";
+const INSTALL_RECORD = ".installed.json";
 const LOCK_STALE_AFTER_MS = 10 * 60 * 1_000;
 const LOCK_WAIT_TIMEOUT_MS = 12 * 60 * 1_000;
 const LOCK_POLL_MS = 250;
 const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1_000;
 const PROCESS_TIMEOUT_MS = 15_000;
+const RETAIN_SUPERSEDED_MS = 14 * 24 * 60 * 60 * 1_000;
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -54,6 +56,7 @@ type ToolchainManagerTimings = {
   lockPollMs: number;
   downloadTimeoutMs: number;
   processTimeoutMs: number;
+  retainSupersededMs: number;
 };
 
 const DEFAULT_TIMINGS: ToolchainManagerTimings = {
@@ -62,6 +65,7 @@ const DEFAULT_TIMINGS: ToolchainManagerTimings = {
   lockPollMs: LOCK_POLL_MS,
   downloadTimeoutMs: DOWNLOAD_TIMEOUT_MS,
   processTimeoutMs: PROCESS_TIMEOUT_MS,
+  retainSupersededMs: RETAIN_SUPERSEDED_MS,
 };
 
 export type EnsurePinnedToolchainsOptions = {
@@ -107,14 +111,69 @@ async function sha256File(filePath: string): Promise<string> {
   return hash.digest("hex");
 }
 
+type InstalledExecutableState = {
+  size: number;
+  sha256: string;
+};
+
+/**
+ * The on-disk state the manifest is able to pin ahead of time.
+ *
+ * Artifacts that need `repairInvalidMacSignature` are re-signed by the local
+ * `codesign` after their upstream bytes have already been verified against
+ * `executable.sha256`. That re-signature is not reproducible across machines,
+ * so there is nothing trustworthy to pin — those return `null` and fall back to
+ * the install record written at install time.
+ */
+function pinnedInstalledState(artifact: ToolchainArtifact): InstalledExecutableState | null {
+  const { size, sha256, installedSize, installedSha256, repairInvalidMacSignature } = artifact.executable;
+  if (installedSize !== undefined && installedSha256 !== undefined) {
+    return { size: installedSize, sha256: installedSha256 };
+  }
+  if (repairInvalidMacSignature) return null;
+  return { size, sha256 };
+}
+
+async function writeInstallRecord(directory: string, state: InstalledExecutableState): Promise<void> {
+  const handle = await open(path.join(directory, INSTALL_RECORD), "w", 0o600);
+  try {
+    await handle.writeFile(JSON.stringify(state), "utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readInstallRecord(directory: string): Promise<InstalledExecutableState | null> {
+  try {
+    const parsed = JSON.parse(
+      await readFile(path.join(directory, INSTALL_RECORD), "utf8"),
+    ) as Partial<InstalledExecutableState>;
+    if (typeof parsed.size !== "number" || !Number.isSafeInteger(parsed.size) || parsed.size <= 0) return null;
+    if (typeof parsed.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(parsed.sha256)) return null;
+    return { size: parsed.size, sha256: parsed.sha256 };
+  } catch {
+    return null;
+  }
+}
+
+async function expectedInstalledState(
+  rootDir: string,
+  artifact: ToolchainArtifact,
+): Promise<InstalledExecutableState | null> {
+  return pinnedInstalledState(artifact)
+    ?? await readInstallRecord(artifactDirectory(rootDir, artifact));
+}
+
 async function isValidExecutable(rootDir: string, artifact: ToolchainArtifact): Promise<boolean> {
   const executablePath = artifactExecutablePath(rootDir, artifact);
   try {
+    // A missing or malformed install record means we cannot vouch for the bytes
+    // on disk, so treat the artifact as absent and reinstall it.
+    const expected = await expectedInstalledState(rootDir, artifact);
+    if (!expected) return false;
     const file = await lstat(executablePath);
-    const expectedSize = artifact.executable.installedSize ?? artifact.executable.size;
-    const expectedSha256 = artifact.executable.installedSha256 ?? artifact.executable.sha256;
-    if (!file.isFile() || file.isSymbolicLink() || file.size !== expectedSize) return false;
-    if (await sha256File(executablePath) !== expectedSha256) return false;
+    if (!file.isFile() || file.isSymbolicLink() || file.size !== expected.size) return false;
+    if (await sha256File(executablePath) !== expected.sha256) return false;
     if ((file.mode & 0o777) !== 0o500) await chmod(executablePath, 0o500);
     return true;
   } catch {
@@ -593,11 +652,18 @@ async function installArtifact(
     }
 
     const installed = await lstat(executablePath);
-    const expectedInstalledSize = artifact.executable.installedSize ?? artifact.executable.size;
-    const expectedInstalledSha256 = artifact.executable.installedSha256 ?? artifact.executable.sha256;
-    if (installed.size !== expectedInstalledSize || await sha256File(executablePath) !== expectedInstalledSha256) {
+    const installedState: InstalledExecutableState = {
+      size: installed.size,
+      sha256: await sha256File(executablePath),
+    };
+    const pinned = pinnedInstalledState(artifact);
+    if (pinned && (installedState.size !== pinned.size || installedState.sha256 !== pinned.sha256)) {
       throw new Error(`${artifact.name} installed executable did not match the pinned manifest`);
     }
+    // Recorded inside the staging directory so it is published atomically with
+    // the executable by the rename below, and so a partially written record can
+    // never be paired with a different binary.
+    await writeInstallRecord(stagingDirectory, installedState);
     await chmod(executablePath, 0o500);
     if (!skipExecutableProbeForTests) {
       await probeExecutable(executablePath, artifact, timings.processTimeoutMs);
@@ -620,6 +686,65 @@ async function cleanStagingDirectories(rootDir: string): Promise<void> {
   await Promise.all(entries
     .filter((entry) => entry.isDirectory() && entry.name.startsWith(".staging-"))
     .map((entry) => rm(path.join(rootDir, entry.name), { recursive: true, force: true })));
+}
+
+/**
+ * Mark a version directory as still in use, so `pruneSupersededVersions` leaves
+ * it alone. Best-effort: a failure here only costs disk space.
+ */
+async function touchArtifactDirectory(rootDir: string, artifact: ToolchainArtifact): Promise<void> {
+  const now = new Date();
+  await utimes(artifactDirectory(rootDir, artifact), now, now).catch(() => undefined);
+}
+
+/**
+ * Remove installed versions of the managed tools that are no longer pinned.
+ *
+ * Only tools named in `artifacts` are considered, and only after their pinned
+ * version has been verified and activated, so a failed or partial run never
+ * deletes the copy that is still in use.
+ *
+ * Superseded versions are kept for `retainSupersededMs` after they were last
+ * used. Another build of the app can legitimately share this cache while
+ * pinning an older version; it refreshes its own directories on every launch
+ * (see `touchArtifactDirectory`), so the grace period stops the two builds from
+ * deleting and re-downloading each other's toolchains in a loop.
+ *
+ * Failures are non-fatal: reclaiming disk space must not be able to break
+ * startup.
+ */
+async function pruneSupersededVersions(
+  rootDir: string,
+  artifacts: readonly ToolchainArtifact[],
+  retainSupersededMs: number,
+): Promise<void> {
+  const keepByName = new Map<ToolchainName, Set<string>>();
+  for (const artifact of artifacts) {
+    const versions = keepByName.get(artifact.name) ?? new Set<string>();
+    versions.add(artifact.version);
+    keepByName.set(artifact.name, versions);
+  }
+
+  const staleBefore = Date.now() - retainSupersededMs;
+  await Promise.all(Array.from(keepByName, async ([name, keep]) => {
+    const toolDir = path.join(rootDir, name);
+    try {
+      const entries = await readdir(toolDir, { withFileTypes: true });
+      await Promise.all(entries
+        .filter((entry) => entry.isDirectory() && !keep.has(entry.name))
+        .map(async (entry) => {
+          const versionDir = path.join(toolDir, entry.name);
+          try {
+            if ((await stat(versionDir)).mtimeMs > staleBefore) return;
+            await rm(versionDir, { recursive: true, force: true });
+          } catch {
+            // Raced with another instance, or not readable. Try again next launch.
+          }
+        }));
+    } catch {
+      // Nothing installed for this tool yet, or the directory is unreadable.
+    }
+  }));
 }
 
 async function activateExecutables(
@@ -759,6 +884,11 @@ export async function ensurePinnedToolchains(
     throw new Error("One or more pinned Orkestrator tools failed final verification");
   }
   const result = await activateExecutables(rootDir, artifacts);
+  // Only once the pinned versions are verified and activated: every superseded
+  // version is a full copy of the binary (250-300MB each), so leaving them
+  // behind costs roughly a gigabyte per bump.
+  await Promise.all(artifacts.map((artifact) => touchArtifactDirectory(rootDir, artifact)));
+  await pruneSupersededVersions(rootDir, artifacts, timings.retainSupersededMs);
   artifacts.forEach((artifact) => toolFractions.set(artifact.name, 1));
   progress({
     phase: "ready",

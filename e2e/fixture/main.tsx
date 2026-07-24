@@ -7,6 +7,7 @@ import {
 } from "../../apps/web/src/components/environments/CreateEnvironmentDialog";
 import { BrowserTab } from "../../apps/web/src/components/browser/BrowserTab";
 import { CodexComposeBar } from "../../apps/web/src/components/codex/CodexComposeBar";
+import { AgentThinkingIndicator } from "../../apps/web/src/components/chat/AgentThinkingIndicator";
 
 declare global {
   interface Window {
@@ -95,6 +96,7 @@ function CodexComposeFixture() {
 function GlobalStylesFixture() {
   return (
     <main className="min-h-screen bg-background p-4 text-foreground">
+      <AgentThinkingIndicator agentName="Codex" />
       <div data-testid="sidebar-glass" className="sidebar-glass">Sidebar</div>
       <div data-testid="panel-surface" className="panel-surface">Panel</div>
       <div data-testid="drag-region" data-backend-drag-region>Drag region</div>

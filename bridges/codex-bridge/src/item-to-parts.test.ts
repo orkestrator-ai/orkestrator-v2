@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { itemToParts, stringifyUnknown } from "./index.js";
 import type { FileChangeDiffContext } from "./index.js";
 import type { ThreadItem } from "./codex-item-types.js";
+import type { EngineItem } from "./engine/types.js";
 
 const DUMMY_CWD = "/tmp/test-workspace";
 
@@ -52,6 +53,42 @@ describe("itemToParts", () => {
     expect(parts).toEqual([
       { type: "thinking", content: "Let me think about this..." },
     ]);
+  });
+
+  test("converts a plan to a labelled successful tool invocation", async () => {
+    const item: EngineItem = {
+      id: "plan-1",
+      type: "plan",
+      text: "1. Inspect\n2. Implement",
+    };
+
+    expect(await itemToParts(item, DUMMY_CWD)).toEqual([{
+      type: "tool-invocation",
+      content: "1. Inspect\n2. Implement",
+      toolName: "plan",
+      toolState: "success",
+      toolTitle: "Plan",
+      toolOutput: "1. Inspect\n2. Implement",
+    }]);
+  });
+
+  test("does not render subagent activity or collaboration timeline items", async () => {
+    const subagentActivity: EngineItem = {
+      id: "activity-1",
+      type: "subagent_activity",
+      activity: "interacted",
+      agent_thread_id: "thread-2",
+    };
+    const collaborationItem: EngineItem = {
+      id: "collab-1",
+      type: "collab_tool_call",
+      tool: "spawn_agent",
+      receiver_thread_ids: ["thread-2"],
+      status: "completed",
+    };
+
+    expect(await itemToParts(subagentActivity, DUMMY_CWD)).toEqual([]);
+    expect(await itemToParts(collaborationItem, DUMMY_CWD)).toEqual([]);
   });
 
   test("converts completed command_execution to success tool-invocation", async () => {
@@ -305,6 +342,52 @@ describe("itemToParts", () => {
     });
   });
 
+  test("returns no invocations for a file change with no changed files", async () => {
+    expect(await itemToParts({
+      id: "patch-empty",
+      type: "file_change",
+      changes: [],
+      status: "completed",
+    }, DUMMY_CWD)).toEqual([]);
+  });
+
+  test("recomputes file metadata against HEAD when no context or cache is supplied", async () => {
+    await withGitWorkspace(async (dir) => {
+      const filePath = join(dir, "uncached.txt");
+      writeFileSync(filePath, "base\n", "utf8");
+      execFileSync("git", ["add", "uncached.txt"], { cwd: dir, stdio: "ignore" });
+      execFileSync("git", ["commit", "-m", "initial"], {
+        cwd: dir,
+        stdio: "ignore",
+      });
+
+      const item: ThreadItem = {
+        id: "patch-uncached",
+        type: "file_change",
+        changes: [{ path: "uncached.txt", kind: "update" }],
+        status: "completed",
+      };
+
+      writeFileSync(filePath, "base\nfirst\n", "utf8");
+      const firstParts = await itemToParts(item, dir);
+      writeFileSync(filePath, "base\nfirst\nsecond\n", "utf8");
+      const secondParts = await itemToParts(item, dir);
+
+      expect(firstParts[0]?.toolDiff).toMatchObject({
+        additions: 1,
+        deletions: 0,
+        before: "base\n",
+        after: "base\nfirst\n",
+      });
+      expect(secondParts[0]?.toolDiff).toMatchObject({
+        additions: 2,
+        deletions: 0,
+        before: "base\n",
+        after: "base\nfirst\nsecond\n",
+      });
+    });
+  });
+
   test("handles missing file changes without throwing", async () => {
     await withGitWorkspace(async (dir) => {
       const parts = await itemToParts({
@@ -395,6 +478,9 @@ describe("itemToParts", () => {
     expect(part.toolArgs).toEqual({ url: "https://example.com" });
     expect(part.toolState).toBe("success");
     expect(part.toolTitle).toBe("my-server:fetch_data");
+    expect(part.toolOutput).toBe(
+      '{\n  "content": [],\n  "structured_content": {\n    "data": "test"\n  }\n}',
+    );
   });
 
   test("converts mcp_tool_call with failed status and error", async () => {

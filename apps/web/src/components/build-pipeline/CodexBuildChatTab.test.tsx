@@ -1,17 +1,28 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  classifyCodexPromptOutcome as realClassifyCodexPromptOutcome,
+  type CodexPromptSendOutcome,
+} from "@/lib/codex-client";
 
 const mockCheckHealth = mock(async () => true);
 const mockCreateClient = mock(() => ({ baseUrl: "http://127.0.0.1:9999" }));
 const mockCreateSession = mock(async () => ({ sessionId: "review-session", title: "Review Session" }));
 const mockGetSessionMessages = mock(async (_client?: unknown, _sessionId?: string): Promise<any[]> => []);
 const mockGetSessionStatus = mock(async (): Promise<{ status: "idle" | "running" | "error"; title?: string; error?: string }> => ({ status: "running" }));
-const mockSendPrompt = mock(async (
-  _client?: unknown,
-  _sessionId?: string,
-  _prompt?: string,
-  _options?: unknown,
-) => true);
+/**
+ * Returns the historical boolean by default, because most of this suite only
+ * cares whether a prompt was sent. Tests that exercise ambiguity resolve the
+ * real `CodexPromptSendOutcome` shapes instead.
+ */
+const mockSendPrompt = mock<
+  (
+    _client?: unknown,
+    _sessionId?: string,
+    _prompt?: string,
+    _options?: unknown,
+  ) => Promise<CodexPromptSendOutcome | boolean>
+>(async () => true);
 const mockAbortSession = mock(async () => true);
 const mockDetectPr = mock(async (): Promise<any> => null);
 const mockDetectPrLocal = mock(async (): Promise<any> => null);
@@ -31,6 +42,9 @@ mock.module("@/lib/codex-client", () => ({
   getSessionMessages: mockGetSessionMessages,
   getSessionStatus: mockGetSessionStatus,
   sendPrompt: mockSendPrompt,
+  // The real classifier: the component's handling of ambiguous sends is exactly
+  // what these tests need to exercise, so it must not be stubbed.
+  classifyCodexPromptOutcome: realClassifyCodexPromptOutcome,
 }));
 
 // NOTE: Do NOT mock @/hooks or @/hooks/useScrollLock here — it pollutes the
@@ -936,6 +950,70 @@ describe("CodexBuildChatTab", () => {
     expect(useCodexStore.getState().sessions.get(createdKey!)?.messages.at(-1)?.content).toBe(
       "Failed to send build prompt",
     );
+  });
+
+  test("fails the stage when an ambiguous send is proven not to have reached Codex", async () => {
+    /**
+     * Regression: an `unknown` outcome was treated as accepted. With the bridge
+     * idle and the prompt absent from the transcript, the poll then unlocked and
+     * the pipeline advanced a phase that had never run.
+     */
+    seedStartingPipeline();
+    mockSendPrompt.mockResolvedValue({ outcome: "unknown", requestId: "lost-1" });
+    mockGetSessionStatus.mockResolvedValue({ status: "idle" });
+    mockGetSessionMessages.mockResolvedValue([]);
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("failed");
+      expect(pipeline?.error).toBe("Failed to send build prompt");
+    });
+  });
+
+  test("accepts an ambiguous send that the bridge reports as running", async () => {
+    seedStartingPipeline();
+    mockSendPrompt.mockResolvedValue({ outcome: "unknown", requestId: "lost-2" });
+    // The turn really is executing, so this must not be reported as a failure —
+    // that would duplicate work the bridge is already doing.
+    mockGetSessionStatus.mockResolvedValue({ status: "running" });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalled());
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("building");
+      expect(pipeline?.error).toBeUndefined();
+    });
+  });
+
+  test("treats an accepted outcome object as success", async () => {
+    // The production client returns this shape; the suite otherwise stubs the
+    // historical boolean contract.
+    seedStartingPipeline();
+    mockSendPrompt.mockResolvedValue({ outcome: "accepted", status: "processing" });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalled());
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+    expect(pipeline?.phase).toBe("building");
+    expect(pipeline?.error).toBeUndefined();
+  });
+
+  test("fails the stage when the bridge definitively rejects the prompt", async () => {
+    seedStartingPipeline();
+    mockSendPrompt.mockResolvedValue({ outcome: "rejected", httpStatus: 409 });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.phase).toBe("failed");
+      expect(pipeline?.error).toBe("Failed to send build prompt");
+    });
   });
 
   test("fails the initial stage when its codex session cannot be created", async () => {

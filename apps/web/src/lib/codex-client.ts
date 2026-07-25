@@ -51,9 +51,16 @@ export type CodexReasoningEffort =
   | "ultra";
 export type CodexConversationMode = "build" | "plan";
 
+/**
+ * Where the catalog came from. `app-server` is authoritative (`model/list` on the
+ * live binary); `cache` is the bridge's persisted copy; `fallback` is the
+ * hardcoded catalog used when the engine cannot answer at all.
+ */
+export type CodexModelSource = "app-server" | "cache" | "fallback";
+
 interface CodexModelsResponse {
   models: CodexModel[];
-  source: "cache" | "fallback";
+  source: CodexModelSource;
 }
 
 interface CodexSlashCommandsResponse {
@@ -64,10 +71,44 @@ interface CodexSessionListResponse {
   sessions: CodexStoredSession[];
 }
 
+/**
+ * Detailed lifecycle phase, available on the app-server engine.
+ *
+ * `status` stays the three-state contract every existing caller reads.
+ * `cancelling` and `recovering` both report `status: "running"` on purpose: a turn
+ * in either phase may still be executing, so treating them as idle would let the
+ * build pipeline advance a phase or a tab start an overlapping prompt.
+ */
+export type CodexSessionPhase =
+  | "starting"
+  | "running"
+  | "cancelling"
+  | "recovering"
+  | "idle"
+  | "failed";
+
+const CODEX_SESSION_PHASES = new Set<CodexSessionPhase>([
+  "starting",
+  "running",
+  "cancelling",
+  "recovering",
+  "idle",
+  "failed",
+]);
+
+export function isCodexSessionPhase(value: unknown): value is CodexSessionPhase {
+  return typeof value === "string" && CODEX_SESSION_PHASES.has(value as CodexSessionPhase);
+}
+
 interface CodexSessionStatusResponse {
   status: "idle" | "running" | "error";
+  phase?: CodexSessionPhase;
   title?: string;
   error?: string;
+  threadId?: string | null;
+  turnId?: string;
+  requestId?: string;
+  engineGeneration?: number;
 }
 
 export interface CodexClient {
@@ -97,9 +138,21 @@ export interface CodexStoredSession {
 
 export interface CodexSessionStatus {
   status: "idle" | "running" | "error";
+  /** Absent on older bridges that do not report a phase. */
+  phase?: CodexSessionPhase;
   title?: string;
   error?: string;
+  threadId?: string | null;
+  turnId?: string;
+  /** The prompt request id this turn is executing, for reconnect reconciliation. */
+  requestId?: string;
+  engineGeneration?: number;
 }
+
+export type CodexSessionStatusLookupResult =
+  | { kind: "found"; session: CodexSessionStatus }
+  | { kind: "missing" }
+  | { kind: "unavailable"; error: Error };
 
 export interface CodexPromptAttachment {
   type: "image";
@@ -116,9 +169,181 @@ export interface CodexEvent {
     | "session.idle"
     | "session.error"
     | "session.title-updated"
-    | "message.updated";
+    | "message.updated"
+    | "session.approval-requested"
+    | "session.approval-resolved"
+    /** The bridge could not replay our gap; refetch state from scratch. */
+    | "session.reconcile-required";
   sessionId?: string;
   data?: Record<string, unknown>;
+  /**
+   * Monotonic bridge revision from the SSE `id:` field.
+   *
+   * Echoed back as `?since=` on reconnect so the bridge can replay only what we
+   * missed instead of us refetching the whole transcript.
+   */
+  revision?: number;
+}
+
+/** What Codex is asking permission for. */
+export type CodexApprovalKind = "command" | "file-change" | "permissions";
+
+export type CodexApprovalDecision = "approve" | "approve-for-session" | "deny" | "cancel";
+
+export interface CodexApprovalFileChange {
+  path: string;
+  kind: "add" | "delete" | "update";
+}
+
+/**
+ * A pending approval, as sent by the bridge.
+ *
+ * Mirrors `ApprovalRequest` in `bridges/codex-bridge/src/app-server/approvals.ts`.
+ * Most fields are optional because the underlying protocol methods disagree about
+ * which they populate — the v2 file-change approval, for instance, carries no
+ * changes at all.
+ */
+export interface CodexApproval {
+  approvalId: string;
+  kind: CodexApprovalKind;
+  method: string;
+  threadId: string | null;
+  turnId: string | null;
+  itemId: string | null;
+  requestedAt: number;
+  /** Auto-denies at this time, so the card can show a countdown. */
+  expiresAt: number;
+  command?: string;
+  cwd?: string;
+  changes?: CodexApprovalFileChange[];
+  permissions?: { network: boolean; fileSystem: boolean };
+  reason?: string;
+  grantRoot?: string;
+  networkHost?: string;
+  /**
+   * Whether the bridge could resolve enough action details for informed
+   * approval. The UI must fail closed when this is false.
+   */
+  actionable: boolean;
+  supportsApproveForSession: boolean;
+}
+
+/**
+ * Outcome of answering an approval.
+ *
+ * `stale` is expected, not exceptional: the five-minute window can close while the
+ * user is deciding, and a restart withdraws the request outright.
+ */
+export type CodexApprovalResponseResult = "applied" | "stale" | "forbidden" | "error";
+
+/**
+ * Reports an approval we refuse to render, and drops it.
+ *
+ * Never silent: the turn is *blocked* on this request, so an approval we cannot
+ * show is one nobody can answer, and it will hang until the bridge's five-minute
+ * auto-deny. Only the id and the offending field are logged — never the command,
+ * the cwd or any file content, which is exactly what the user has not yet agreed
+ * to expose.
+ */
+function rejectApproval(value: unknown, field: string): null {
+  const approvalId =
+    value
+    && typeof value === "object"
+    && typeof (value as Record<string, unknown>).approvalId === "string"
+      ? ((value as Record<string, string>).approvalId)
+      : undefined;
+  console.warn(
+    `[codex-client] Ignoring unrecognised Codex approval (invalid ${field})`,
+    { approvalId },
+  );
+  return null;
+}
+
+/**
+ * Validates one approval descriptor from the bridge.
+ *
+ * Exported so the SSE frame and the `/approvals` snapshot agree on what a usable
+ * approval is: the two paths deliver the same descriptor, and a card the user
+ * cannot act on is worse than no card at all.
+ */
+export function parseApproval(value: unknown): CodexApproval | null {
+  if (!value || typeof value !== "object") return rejectApproval(value, "payload");
+  const entry = value as Record<string, unknown>;
+  const kind = entry.kind;
+  // An empty id cannot be routed back to the bridge, so it is not answerable.
+  if (typeof entry.approvalId !== "string" || entry.approvalId.length === 0) {
+    return rejectApproval(entry, "approvalId");
+  }
+  if (kind !== "command" && kind !== "file-change" && kind !== "permissions") {
+    return rejectApproval(entry, "kind");
+  }
+  if (typeof entry.method !== "string") return rejectApproval(entry, "method");
+  if (entry.threadId !== null && typeof entry.threadId !== "string") {
+    return rejectApproval(entry, "threadId");
+  }
+  if (entry.turnId !== null && typeof entry.turnId !== "string") {
+    return rejectApproval(entry, "turnId");
+  }
+  if (entry.itemId !== null && typeof entry.itemId !== "string") {
+    return rejectApproval(entry, "itemId");
+  }
+  if (typeof entry.requestedAt !== "number" || !Number.isFinite(entry.requestedAt)) {
+    return rejectApproval(entry, "requestedAt");
+  }
+  if (typeof entry.expiresAt !== "number" || !Number.isFinite(entry.expiresAt)) {
+    return rejectApproval(entry, "expiresAt");
+  }
+  if (typeof entry.actionable !== "boolean") {
+    return rejectApproval(entry, "actionable");
+  }
+  if (typeof entry.supportsApproveForSession !== "boolean") {
+    return rejectApproval(entry, "supportsApproveForSession");
+  }
+
+  const changes = Array.isArray(entry.changes)
+    ? entry.changes.filter((change): change is CodexApprovalFileChange => {
+        if (!change || typeof change !== "object") return false;
+        const candidate = change as Record<string, unknown>;
+        return typeof candidate.path === "string"
+          && (
+            candidate.kind === "add"
+            || candidate.kind === "delete"
+            || candidate.kind === "update"
+          );
+      })
+    : undefined;
+  const permissions =
+    entry.permissions
+    && typeof entry.permissions === "object"
+    && typeof (entry.permissions as Record<string, unknown>).network === "boolean"
+    && typeof (entry.permissions as Record<string, unknown>).fileSystem === "boolean"
+      ? {
+          network: (entry.permissions as { network: boolean }).network,
+          fileSystem: (entry.permissions as { fileSystem: boolean }).fileSystem,
+        }
+      : undefined;
+  const optionalString = (key: string) =>
+    typeof entry[key] === "string" ? entry[key] as string : undefined;
+
+  return {
+    approvalId: entry.approvalId,
+    kind,
+    method: entry.method,
+    threadId: entry.threadId,
+    turnId: entry.turnId,
+    itemId: entry.itemId,
+    requestedAt: entry.requestedAt,
+    expiresAt: entry.expiresAt,
+    actionable: entry.actionable,
+    supportsApproveForSession: entry.supportsApproveForSession,
+    ...(optionalString("command") ? { command: optionalString("command") } : {}),
+    ...(optionalString("cwd") ? { cwd: optionalString("cwd") } : {}),
+    ...(changes ? { changes } : {}),
+    ...(permissions ? { permissions } : {}),
+    ...(optionalString("reason") ? { reason: optionalString("reason") } : {}),
+    ...(optionalString("grantRoot") ? { grantRoot: optionalString("grantRoot") } : {}),
+    ...(optionalString("networkHost") ? { networkHost: optionalString("networkHost") } : {}),
+  };
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -150,6 +375,39 @@ export async function checkHealth(client: CodexClient): Promise<boolean> {
   }
 }
 
+/** Engine and app-server detail from /global/health. */
+export interface CodexBridgeHealth {
+  status: "ok" | "error";
+  bridgeVersion?: string;
+  engine?: "app-server";
+  appServer?: {
+    state?: string;
+    generation?: number;
+    pid?: number | null;
+    codexVersion?: string;
+    restartCount?: number;
+    circuitOpen?: boolean;
+    lastError?: string;
+  };
+  activeThreads?: number;
+  activeTurns?: number;
+}
+
+/**
+ * Full health payload. Returns null when unreachable *or* when the engine has
+ * failed terminally (the bridge answers 503), so callers cannot mistake a dead
+ * app-server for a healthy bridge.
+ */
+export async function getBridgeHealth(client: CodexClient): Promise<CodexBridgeHealth | null> {
+  try {
+    const response = await fetchWithTimeout(`${client.baseUrl}/global/health`);
+    if (!response.ok) return null;
+    return (await response.json()) as CodexBridgeHealth;
+  } catch {
+    return null;
+  }
+}
+
 export async function getModels(client: CodexClient): Promise<CodexModelsResponse> {
   try {
     const response = await fetchWithTimeout(`${client.baseUrl}/global/models`);
@@ -164,7 +422,8 @@ export async function getModels(client: CodexClient): Promise<CodexModelsRespons
 
     return {
       models,
-      source: data.source === "cache" ? "cache" : "fallback",
+      source:
+        data.source === "app-server" || data.source === "cache" ? data.source : "fallback",
     };
   } catch (error) {
     console.error("[codex-client] Failed to get models:", error);
@@ -271,7 +530,7 @@ export async function updateSessionConfig(
     mode?: CodexConversationMode;
     fastMode?: boolean;
   },
-): Promise<boolean> {
+): Promise<CodexSessionConfigUpdateOutcome> {
   try {
     const response = await fetchWithTimeout(
       `${client.baseUrl}/session/${sessionId}/config`,
@@ -281,12 +540,61 @@ export async function updateSessionConfig(
         body: JSON.stringify(options),
       },
     );
-    return response.ok;
+    if (!response.ok) {
+      return { outcome: "rejected", httpStatus: response.status };
+    }
+
+    const body = (await response.json().catch(() => ({}))) as {
+      durable?: unknown;
+    };
+    return {
+      outcome: "applied",
+      // Older bridges did not report durability. Preserve compatibility while
+      // surfacing an explicit memory-only update from the app-server bridge.
+      durable: body.durable !== false,
+    };
   } catch (error) {
     console.error("[codex-client] Failed to update session config:", error);
-    return false;
+    // A timeout or reset after the bridge handled the request is ambiguous.
+    // Re-read the authoritative bridge config before asking the UI to roll back.
+    try {
+      const reconciliation = await fetchWithTimeout(
+        `${client.baseUrl}/session/${sessionId}/config`,
+      );
+      if (reconciliation.ok) {
+        const current = (await reconciliation.json()) as {
+          model?: unknown;
+          modelReasoningEffort?: unknown;
+          mode?: unknown;
+          fastMode?: unknown;
+          durable?: unknown;
+        };
+        const matches =
+          (options.model === undefined || current.model === options.model)
+          && (
+            options.modelReasoningEffort === undefined
+            || current.modelReasoningEffort === options.modelReasoningEffort
+          )
+          && (options.mode === undefined || current.mode === options.mode)
+          && (options.fastMode === undefined || current.fastMode === options.fastMode);
+        if (matches) {
+          return {
+            outcome: "applied",
+            durable: current.durable === true,
+          };
+        }
+      }
+    } catch {
+      // Still ambiguous; the caller keeps the warning/recovery state.
+    }
+    return { outcome: "unknown" };
   }
 }
+
+export type CodexSessionConfigUpdateOutcome =
+  | { outcome: "applied"; durable: boolean }
+  | { outcome: "rejected"; httpStatus: number }
+  | { outcome: "unknown" };
 
 export async function getSessionMessages(
   client: CodexClient,
@@ -313,16 +621,15 @@ export async function getSessionMessages(
   }
 }
 
-export async function getSessionStatus(
+export async function lookupSessionStatus(
   client: CodexClient,
   sessionId: string,
-  options: { throwOnError?: boolean } = {},
-): Promise<CodexSessionStatus | null> {
+): Promise<CodexSessionStatusLookupResult> {
   try {
     const response = await fetchWithTimeout(
       `${client.baseUrl}/session/${sessionId}/status`,
     );
-    if (response.status === 404) return null;
+    if (response.status === 404) return { kind: "missing" };
     if (!response.ok) {
       throw new Error(`Failed to get Codex session status: HTTP ${response.status}`);
     }
@@ -334,22 +641,102 @@ export async function getSessionStatus(
     ) {
       throw new Error("Codex session status response was malformed");
     }
+    // Spread in only when present, so the response shape is unchanged for a
+    // bridge that does not report them.
     return {
-      status: data.status,
-      title: typeof data.title === "string" ? data.title : undefined,
-      error: typeof data.error === "string" ? data.error : undefined,
+      kind: "found",
+      session: {
+        status: data.status,
+        title: typeof data.title === "string" ? data.title : undefined,
+        error: typeof data.error === "string" ? data.error : undefined,
+        ...(isCodexSessionPhase(data.phase) ? { phase: data.phase } : {}),
+        ...(typeof data.threadId === "string" ? { threadId: data.threadId } : {}),
+        ...(typeof data.turnId === "string" ? { turnId: data.turnId } : {}),
+        ...(typeof data.requestId === "string" ? { requestId: data.requestId } : {}),
+        ...(typeof data.engineGeneration === "number"
+          ? { engineGeneration: data.engineGeneration }
+          : {}),
+      },
     };
   } catch (error) {
     console.error("[codex-client] Failed to get session status:", error);
-    if (options.throwOnError) {
-      throw error instanceof Error
+    return {
+      kind: "unavailable",
+      error: error instanceof Error
         ? error
-        : new Error("Failed to get Codex session status");
-    }
-    return null;
+        : new Error("Failed to get Codex session status"),
+    };
   }
 }
 
+export async function getSessionStatus(
+  client: CodexClient,
+  sessionId: string,
+  options: { throwOnError?: boolean } = {},
+): Promise<CodexSessionStatus | null> {
+  const result = await lookupSessionStatus(client, sessionId);
+  if (result.kind === "found") return result.session;
+  if (result.kind === "unavailable" && options.throwOnError) {
+    throw result.error;
+  }
+  return null;
+}
+
+/**
+ * What the bridge returns when it accepts a prompt.
+ *
+ * `already-processed` means the bridge recognised the request id as one it has
+ * already run to completion — the guarantee that a retried dispatch cannot
+ * execute a turn twice. `turnId`/`threadId` let a reconnecting client reconcile
+ * against the turn actually running rather than guessing from prompt text.
+ */
+export interface CodexPromptAcceptedResponse {
+  status: "processing" | "already-processed";
+  requestId?: string;
+  threadId?: string | null;
+  turnId?: string;
+  duplicate?: boolean;
+}
+
+export type CodexPromptSendOutcome =
+  | ({ outcome: "accepted" } & CodexPromptAcceptedResponse)
+  | { outcome: "rejected"; httpStatus: number }
+  | { outcome: "unknown"; requestId: string };
+
+/**
+ * Classifies whatever a caller received from `sendPrompt`.
+ *
+ * Component tests still stub this client with its historical boolean/nullable
+ * contract, so the shapes are normalized in one shared place rather than in each
+ * caller. `unknown` is deliberately *not* folded into either definite answer:
+ * the bridge may already be executing the turn, so a caller must reconcile
+ * against authoritative state before unlocking, advancing or resending.
+ */
+export function classifyCodexPromptOutcome(
+  result: unknown,
+): "accepted" | "rejected" | "unknown" {
+  if (result === true) return "accepted";
+  if (result === false || result === null || result === undefined) return "rejected";
+  if (typeof result === "object") {
+    const outcome = (result as { outcome?: unknown }).outcome;
+    if (outcome === "accepted" || outcome === "rejected" || outcome === "unknown") {
+      return outcome;
+    }
+    // A bare acceptance payload from an older client stub.
+    const status = (result as { status?: unknown }).status;
+    if (status === "processing" || status === "already-processed") return "accepted";
+  }
+  return "rejected";
+}
+
+/**
+ * Sends a prompt.
+ *
+ * A non-2xx response proves the bridge rejected the request. A transport failure
+ * is different: the bridge may have accepted the prompt before the response was
+ * lost, so callers must reconcile authoritative session state rather than
+ * unlocking the composer or blindly retrying.
+ */
 export async function sendPrompt(
   client: CodexClient,
   sessionId: string,
@@ -358,7 +745,8 @@ export async function sendPrompt(
     attachments?: CodexPromptAttachment[];
     requestId?: string;
   },
-): Promise<boolean> {
+): Promise<CodexPromptSendOutcome> {
+  const requestId = options?.requestId ?? crypto.randomUUID();
   try {
     const response = await fetchWithTimeout(
       `${client.baseUrl}/session/${sessionId}/prompt`,
@@ -368,30 +756,109 @@ export async function sendPrompt(
         body: JSON.stringify({
           prompt,
           attachments: options?.attachments,
-          requestId: options?.requestId,
+          requestId,
         }),
       },
     );
-    return response.ok;
+    if (!response.ok) {
+      return { outcome: "rejected", httpStatus: response.status };
+    }
+
+    const data = (await response.json().catch(() => ({}))) as Partial<CodexPromptAcceptedResponse>;
+    return {
+      outcome: "accepted",
+      status: data.status === "already-processed" ? "already-processed" : "processing",
+      requestId: typeof data.requestId === "string" ? data.requestId : requestId,
+      threadId: typeof data.threadId === "string" ? data.threadId : null,
+      turnId: typeof data.turnId === "string" ? data.turnId : undefined,
+      duplicate: data.duplicate === true,
+    };
   } catch (error) {
     console.error("[codex-client] Failed to send prompt:", error);
-    return false;
+    return { outcome: "unknown", requestId };
   }
 }
+
+export type CodexAbortOutcome =
+  | { status: "accepted" }
+  | { status: "rejected"; httpStatus: number }
+  | { status: "unknown" };
 
 export async function abortSession(
   client: CodexClient,
   sessionId: string,
-): Promise<boolean> {
+): Promise<CodexAbortOutcome> {
   try {
     const response = await fetchWithTimeout(
       `${client.baseUrl}/session/${sessionId}/abort`,
       { method: "POST" },
     );
-    return response.ok;
+    return response.ok
+      ? { status: "accepted" }
+      : { status: "rejected", httpStatus: response.status };
   } catch (error) {
     console.error("[codex-client] Failed to abort session:", error);
-    return false;
+    // A timeout or connection reset does not prove the bridge missed the
+    // request. The caller must reconcile authoritative status before unlocking
+    // the composer or allowing another turn to start.
+    return { status: "unknown" };
+  }
+}
+
+/**
+ * Fetches approvals still awaiting a decision.
+ *
+ * This is the rehydration path required by the background-reliability rules: a tab
+ * that was unmounted while Codex asked for approval never saw the SSE frame, so it
+ * must be able to ask on mount rather than trusting live events.
+ */
+export async function fetchPendingApprovals(
+  client: CodexClient,
+  sessionId: string,
+): Promise<CodexApproval[]> {
+  const response = await fetchWithTimeout(
+    `${client.baseUrl}/session/${sessionId}/approvals`,
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to fetch pending Codex approvals: HTTP ${response.status}`);
+  }
+  const body = (await response.json()) as { approvals?: unknown };
+  if (!Array.isArray(body.approvals)) {
+    throw new Error("Pending Codex approvals response was malformed");
+  }
+  return body.approvals
+    .map(parseApproval)
+    .filter((approval): approval is CodexApproval => approval !== null);
+}
+
+/**
+ * Sends the user's decision.
+ *
+ * Distinguishes `stale` (409 — the window closed) from `error` (anything else),
+ * because the two need different UI: drop the card versus let the user retry.
+ */
+export async function respondToApproval(
+  client: CodexClient,
+  sessionId: string,
+  approvalId: string,
+  decision: CodexApprovalDecision,
+): Promise<CodexApprovalResponseResult> {
+  try {
+    const response = await fetchWithTimeout(
+      `${client.baseUrl}/session/${sessionId}/approvals/${encodeURIComponent(approvalId)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision }),
+      },
+    );
+    if (response.ok) return "applied";
+    if (response.status === 409) return "stale";
+    if (response.status === 403) return "forbidden";
+    return "error";
+  } catch (error) {
+    console.error("[codex-client] Failed to respond to approval:", error);
+    return "error";
   }
 }
 
@@ -411,9 +878,18 @@ export async function deleteSession(
   }
 }
 
+/**
+ * Subscribes to the bridge event stream.
+ *
+ * `since` is the last revision this client processed. Passing it lets the bridge
+ * replay the gap instead of the client refetching everything; if the gap is longer
+ * than the bridge retained, it answers with `session.reconcile-required` and the
+ * caller must resync. Omit it for a fresh subscription.
+ */
 export function subscribeToEvents(
   client: CodexClient,
   signal?: AbortSignal,
+  since?: number,
 ): AsyncIterable<CodexEvent> {
   return {
     [Symbol.asyncIterator](): AsyncIterator<CodexEvent> {
@@ -426,10 +902,14 @@ export function subscribeToEvents(
       const handleEvent = (event: MessageEvent) => {
         try {
           const data = JSON.parse(event.data);
+          // `lastEventId` is the SSE `id:` field. Parsed here so consumers get a
+          // number and never have to know the wire format.
+          const revision = Number.parseInt(event.lastEventId ?? "", 10);
           const codexEvent: CodexEvent = {
             type: event.type as CodexEvent["type"],
             sessionId: data.sessionId,
             data,
+            ...(Number.isSafeInteger(revision) && revision >= 0 ? { revision } : {}),
           };
 
           if (resolver) {
@@ -446,6 +926,7 @@ export function subscribeToEvents(
 
       const cleanup = () => {
         done = true;
+        signal?.removeEventListener("abort", cleanup);
         if (eventSource) {
           eventSource.close();
           eventSource = null;
@@ -455,29 +936,43 @@ export function subscribeToEvents(
         }
       };
 
-      signal?.addEventListener("abort", cleanup);
+      if (signal?.aborted) {
+        done = true;
+      } else {
+        signal?.addEventListener("abort", cleanup, { once: true });
 
-      eventSource = new EventSource(`${client.baseUrl}/event/subscribe`);
-      for (const eventType of [
-        "connected",
-        "keepalive",
-        "session.updated",
-        "session.idle",
-        "session.error",
-        "session.title-updated",
-        "message.updated",
-      ]) {
-        eventSource.addEventListener(eventType, handleEvent);
-      }
-
-      eventSource.onerror = () => {
-        if (rejecter && !done) {
-          rejecter(new Error("SSE connection error"));
-          resolver = null;
-          rejecter = null;
+        const url = new URL(`${client.baseUrl}/event/subscribe`);
+        // Only sent when we actually have a cursor; a fresh subscription must not
+        // ask for a replay from revision 0 and receive the whole ring.
+        if (since !== undefined && Number.isSafeInteger(since) && since >= 0) {
+          url.searchParams.set("since", String(since));
         }
-        cleanup();
-      };
+
+        eventSource = new EventSource(url.toString());
+        for (const eventType of [
+          "connected",
+          "keepalive",
+          "session.updated",
+          "session.idle",
+          "session.error",
+          "session.title-updated",
+          "message.updated",
+          "session.approval-requested",
+          "session.approval-resolved",
+          "session.reconcile-required",
+        ]) {
+          eventSource.addEventListener(eventType, handleEvent);
+        }
+
+        eventSource.onerror = () => {
+          if (rejecter && !done) {
+            rejecter(new Error("SSE connection error"));
+            resolver = null;
+            rejecter = null;
+          }
+          cleanup();
+        };
+      }
 
       return {
         next(): Promise<IteratorResult<CodexEvent>> {

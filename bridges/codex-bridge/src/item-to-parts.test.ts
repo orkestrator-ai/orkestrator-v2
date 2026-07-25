@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { itemToParts, stringifyUnknown } from "./index.js";
 import type { FileChangeDiffContext } from "./index.js";
-import type { ThreadItem } from "@openai/codex-sdk";
+import type { ThreadItem } from "./codex-item-types.js";
 
 const DUMMY_CWD = "/tmp/test-workspace";
 

@@ -31,6 +31,8 @@
     "download:opencode": "./scripts/download-opencode.sh",
     "download:codex": "./scripts/download-codex.sh",
     "download:binaries": "bun run download:bun && bun run download:claude && bun run download:opencode && bun run download:codex",
+    "codex:protocol": "bun scripts/generate-codex-app-server-protocol.ts",
+    "codex:protocol:check": "bun scripts/generate-codex-app-server-protocol.ts --check",
     "setup": "bun install && bun run build:claude-bridge && bun run build:codex-bridge",
     "build:all": "turbo --cwd . run build --cache-dir .turbo",
     "preview": "bun run --cwd apps/web preview",
@@ -40,6 +42,7 @@
     "test:unit": "bun test tests/unit",
     "verify:opencode:live": "RUN_LIVE_OPENCODE_COMPATIBILITY=1 bun test --cwd apps/web src/lib/opencode-live-compatibility.test.ts",
     "verify:toolchains:live": "RUN_LIVE_TOOLCHAIN_ARTIFACTS=1 bun scripts/verify-toolchain-artifacts.ts",
+    "verify:codex:protocol": "CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY=0 bun scripts/generate-codex-app-server-protocol.ts --check",
     "docker:build": "docker build -t orkestrator-v2:latest -f docker/Dockerfile .",
     "package": "bun install --frozen-lockfile && bun run download:bun && bun run build:all && bunx electron-builder && bun scripts/install-packaged-app.ts"
   },

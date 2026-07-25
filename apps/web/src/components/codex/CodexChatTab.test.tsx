@@ -5,8 +5,24 @@ import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
+import type {
+  CodexAbortOutcome,
+  CodexApproval,
+  CodexPromptAcceptedResponse,
+  CodexPromptSendOutcome,
+  CodexSessionConfigUpdateOutcome,
+  CodexSessionPhase,
+  CodexSessionStatusLookupResult,
+} from "@/lib/codex-client";
+import { mockToastError, mockToastWarning } from "../../../../../tests/mocks/sonner";
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
+
+// The SSE approval path runs its payload through the real `parseApproval`, so the
+// module mock below has to hand back the genuine validator: a permissive stub
+// would let the suite accept an approval the app would refuse to render.
+import * as realCodexClient from "@/lib/codex-client";
+const realCodexClientSnapshot = { ...realCodexClient };
 
 // Snapshot the real sibling modules before we install stubs so we can restore
 // them when this file finishes. Without this, Bun's global mock.module cache
@@ -45,19 +61,52 @@ type TestCodexMessage = NativeMessage & {
 };
 
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
-const mockSendPrompt = mock(async () => true);
+// Typed like the real client: the difference between `null`, `processing` and an
+// `already-processed` duplicate is exactly what the send path branches on.
+const mockSendPrompt = mock<
+  (
+    _client: unknown,
+    _sessionId: string,
+    _prompt: string,
+    _options?: { attachments?: unknown; requestId?: string },
+  ) => Promise<CodexPromptSendOutcome | CodexPromptAcceptedResponse | null>
+>(async () => ({ status: "processing" }));
 const mockGetSessionMessages = mock(async (): Promise<TestCodexMessage[]> => []);
 const mockSubscribeToEvents = mock(() => (async function* () {})());
-const mockUpdateSessionConfig = mock(async () => true);
-const mockAbortSession = mock(async () => true);
+const mockUpdateSessionConfig = mock<
+  (
+    _client: unknown,
+    _sessionId: string,
+    _config: unknown,
+  ) => Promise<CodexSessionConfigUpdateOutcome | boolean>
+>(async () => true);
+const mockAbortSession = mock<
+  (_client: unknown, _sessionId: string) => Promise<CodexAbortOutcome>
+>(async () => ({ status: "accepted" }));
+const mockFetchPendingApprovals = mock<
+  (_client: unknown, _sessionId: string) => Promise<CodexApproval[]>
+>(async () => []);
 const mockCreateSession = mock(async () => ({ sessionId: "session-1", title: "Test session" }));
 const mockGetSessionStatus = mock<
   (
     _client: unknown,
     _sessionId: string,
     _options?: { throwOnError?: boolean },
-  ) => Promise<{ status: string; title?: string; error?: string } | null>
+  ) => Promise<{
+    status: string;
+    phase?: CodexSessionPhase;
+    title?: string;
+    error?: string;
+  } | null>
 >(async () => ({ status: "idle" }));
+const mockLookupSessionStatus = mock<
+  (_client: unknown, _sessionId: string) => Promise<CodexSessionStatusLookupResult>
+>(async (client, sessionId) => {
+  const status = await mockGetSessionStatus(client, sessionId);
+  return status
+    ? { kind: "found", session: status as any }
+    : { kind: "unavailable", error: new Error("status unavailable") };
+});
 const mockResumeSession = mock(async () => null as null | {
   session: { sessionId: string; title?: string };
   messages: TestCodexMessage[];
@@ -94,10 +143,18 @@ mock.module("@/lib/codex-client", () => ({
   checkHealth: mockCheckHealth,
   createClient: mock(() => ({ baseUrl: "http://127.0.0.1:9999" })),
   createSession: mockCreateSession,
+  // Called on every reconcile. Stubbed so the suite does not attempt a real fetch
+  // to the fake bridge port on each state refresh.
+  fetchPendingApprovals: mockFetchPendingApprovals,
   getModels: mock(async () => ({ models: MOCK_MODELS, source: "fallback" })),
   getSlashCommands: mock(async () => []),
   getSessionMessages: mockGetSessionMessages,
   getSessionStatus: mockGetSessionStatus,
+  isCodexSessionPhase: (value: unknown) =>
+    typeof value === "string"
+    && ["starting", "running", "cancelling", "recovering", "idle", "failed"].includes(value),
+  lookupSessionStatus: mockLookupSessionStatus,
+  parseApproval: realCodexClientSnapshot.parseApproval,
   resumeSession: mockResumeSession,
   sendPrompt: mockSendPrompt,
   subscribeToEvents: mockSubscribeToEvents,
@@ -339,6 +396,22 @@ function createMessage(
   };
 }
 
+function createApproval(approvalId = "approval-1"): CodexApproval {
+  return {
+    approvalId,
+    kind: "command",
+    method: "item/commandExecution/requestApproval",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    itemId: "item-1",
+    requestedAt: Date.now(),
+    expiresAt: Date.now() + 300_000,
+    command: "bun test",
+    actionable: true,
+    supportsApproveForSession: false,
+  };
+}
+
 function createData(overrides: Partial<CodexNativeData> = {}): CodexNativeData {
   return {
     environmentId: ENVIRONMENT_ID,
@@ -462,6 +535,8 @@ function seedCodexStore(messages: ReturnType<typeof createMessage>[] = []) {
     selectedMode: new Map([[SESSION_KEY, "build"]]),
     selectedReasoningEffort: new Map([[SESSION_KEY, "medium"]]),
     fastMode: new Map(),
+    sessionPhase: new Map(),
+    pendingApprovals: new Map(),
   });
 }
 
@@ -491,7 +566,7 @@ describe("CodexChatTab", () => {
     mockRenameEnvironmentFromPrompt.mockClear();
     mockRenameEnvironmentFromPrompt.mockImplementation(async () => {});
     mockSendPrompt.mockClear();
-    mockSendPrompt.mockImplementation(async () => true);
+    mockSendPrompt.mockImplementation(async () => ({ status: "processing" }));
     mockGetSessionMessages.mockClear();
     mockGetSessionMessages.mockImplementation(async () => []);
     mockSubscribeToEvents.mockClear();
@@ -499,12 +574,22 @@ describe("CodexChatTab", () => {
     mockScrollToBottom.mockClear();
     mockUpdateSessionConfig.mockClear();
     mockUpdateSessionConfig.mockImplementation(async () => true);
+    mockToastWarning.mockClear();
     mockAbortSession.mockClear();
-    mockAbortSession.mockImplementation(async () => true);
+    mockAbortSession.mockImplementation(async () => ({ status: "accepted" as const }));
+    mockFetchPendingApprovals.mockClear();
+    mockFetchPendingApprovals.mockImplementation(async () => []);
     mockCreateSession.mockClear();
     mockCreateSession.mockImplementation(async () => ({ sessionId: "session-1", title: "Test session" }));
     mockGetSessionStatus.mockReset();
     mockGetSessionStatus.mockImplementation(async () => ({ status: "idle" }));
+    mockLookupSessionStatus.mockReset();
+    mockLookupSessionStatus.mockImplementation(async (client, sessionId) => {
+      const status = await mockGetSessionStatus(client, sessionId);
+      return status
+        ? { kind: "found", session: status as any }
+        : { kind: "unavailable", error: new Error("status unavailable") };
+    });
     mockResumeSession.mockReset();
     mockResumeSession.mockResolvedValue(null);
     mockCheckHealth.mockReset();
@@ -559,7 +644,7 @@ describe("CodexChatTab", () => {
         MOCK_CLIENT,
         SESSION_ID,
         composeText,
-        { attachments: undefined },
+        expect.objectContaining({ attachments: undefined, requestId: expect.any(String) }),
       );
     });
     const optimistic = useCodexStore.getState().getSession(SESSION_KEY)?.messages.find(
@@ -611,11 +696,7 @@ describe("CodexChatTab", () => {
         title: "Server title",
       });
     });
-    expect(mockGetSessionStatus).toHaveBeenCalledWith(
-      MOCK_CLIENT,
-      SESSION_ID,
-      { throwOnError: true },
-    );
+    expect(mockLookupSessionStatus).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID);
   });
 
   test("failed manual refreshes preserve the current transcript", async () => {
@@ -931,6 +1012,7 @@ describe("CodexChatTab", () => {
       const queued = useCodexStore.getState().messageQueue.get(SESSION_KEY)?.[0];
       expect(queued?.text).toBe(composeText);
       expect(queued?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expect(queued?.requestId).toBe(queued?.id);
     });
   });
 
@@ -1154,7 +1236,192 @@ describe("CodexChatTab", () => {
         isLoading: false,
       });
       expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.error).toBeUndefined();
+      expect(useCodexStore.getState().sessionPhase.has(SESSION_KEY)).toBe(false);
     });
+  });
+
+  test("a deferred running reconcile cannot overwrite a newer idle SSE event", async () => {
+    let markLookupStarted!: () => void;
+    const lookupStarted = new Promise<void>((resolve) => {
+      markLookupStarted = resolve;
+    });
+    let resolveLookup!: (result: CodexSessionStatusLookupResult) => void;
+    const deferredLookup = new Promise<CodexSessionStatusLookupResult>((resolve) => {
+      resolveLookup = resolve;
+    });
+    mockLookupSessionStatus.mockImplementationOnce(() => {
+      markLookupStarted();
+      return deferredLookup;
+    });
+    mockSubscribeToEvents.mockImplementation(() => (async function* () {
+      await lookupStarted;
+      yield {
+        type: "session.idle",
+        sessionId: SESSION_ID,
+        data: { title: "Authoritative idle title" },
+      };
+    })() as any);
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+    useCodexStore.getState().setSessionPhase(SESSION_KEY, "recovering");
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() => {
+      const state = useCodexStore.getState();
+      expect(state.sessions.get(SESSION_KEY)).toMatchObject({
+        isLoading: false,
+        title: "Authoritative idle title",
+      });
+      expect(state.sessionPhase.has(SESSION_KEY)).toBe(false);
+    });
+
+    await act(async () => {
+      resolveLookup({
+        kind: "found",
+        session: {
+          status: "running",
+          phase: "recovering",
+          title: "Stale running title",
+        },
+      });
+      await deferredLookup;
+    });
+
+    const state = useCodexStore.getState();
+    expect(state.sessions.get(SESSION_KEY)).toMatchObject({
+      isLoading: false,
+      title: "Authoritative idle title",
+    });
+    expect(state.sessionPhase.has(SESSION_KEY)).toBe(false);
+  });
+
+  test("a bridge-wide connected frame does not invalidate a pending reconcile", async () => {
+    let markLookupStarted!: () => void;
+    const lookupStarted = new Promise<void>((resolve) => {
+      markLookupStarted = resolve;
+    });
+    let markConnectedSent!: () => void;
+    const connectedSent = new Promise<void>((resolve) => {
+      markConnectedSent = resolve;
+    });
+    let resolveLookup!: (result: CodexSessionStatusLookupResult) => void;
+    const deferredLookup = new Promise<CodexSessionStatusLookupResult>((resolve) => {
+      resolveLookup = resolve;
+    });
+    mockLookupSessionStatus.mockImplementationOnce(() => {
+      markLookupStarted();
+      return deferredLookup;
+    });
+    mockSubscribeToEvents.mockImplementation(() => (async function* () {
+      await lookupStarted;
+      yield { type: "connected", data: {}, revision: 41 };
+      markConnectedSent();
+    })() as any);
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await connectedSent;
+
+    await act(async () => {
+      resolveLookup({
+        kind: "found",
+        session: {
+          status: "idle",
+          phase: "idle",
+          title: "Reconciled after connected",
+        },
+      });
+      await deferredLookup;
+    });
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+        isLoading: false,
+        title: "Reconciled after connected",
+      });
+    });
+  });
+
+  test("applies running SSE phases and clears them on terminal events", async () => {
+    let finishTurn!: () => void;
+    const finishTurnPromise = new Promise<void>((resolve) => {
+      finishTurn = resolve;
+    });
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+    mockSubscribeToEvents.mockImplementation(() => (async function* () {
+      yield {
+        type: "session.updated",
+        sessionId: SESSION_ID,
+        data: { status: "running", phase: "cancelling" },
+      };
+      await finishTurnPromise;
+      yield { type: "session.idle", sessionId: SESSION_ID, data: {} };
+    })() as any);
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessionPhase.get(SESSION_KEY)).toBe("cancelling");
+      expect(screen.getByText("Stopping…")).toBeTruthy();
+    });
+
+    finishTurn();
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessionPhase.has(SESSION_KEY)).toBe(false);
+      expect(screen.queryByText("Stopping…")).toBeNull();
+    });
+  });
+
+  test("keeps existing approvals when snapshot rehydration fails", async () => {
+    const existing = createApproval("existing-approval");
+    useCodexStore.getState().addPendingApproval(SESSION_KEY, existing);
+    mockFetchPendingApprovals.mockRejectedValue(new Error("approval endpoint offline"));
+
+    const originalError = console.error;
+    console.error = mock(() => {}) as unknown as typeof console.error;
+    try {
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockFetchPendingApprovals).toHaveBeenCalled());
+      expect(
+        useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.map((item) => item.approvalId),
+      ).toEqual(["existing-approval"]);
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("does not let a stale approval snapshot overwrite a newer SSE approval", async () => {
+    let resolveSnapshot!: (approvals: CodexApproval[]) => void;
+    const snapshot = new Promise<CodexApproval[]>((resolve) => {
+      resolveSnapshot = resolve;
+    });
+    const liveApproval = createApproval("live-approval");
+    mockFetchPendingApprovals.mockImplementationOnce(() => snapshot);
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+    mockSubscribeToEvents.mockImplementation(() => (async function* () {
+      yield {
+        type: "session.approval-requested",
+        sessionId: SESSION_ID,
+        data: { approval: liveApproval },
+      };
+    })() as any);
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+    await waitFor(() => {
+      expect(
+        useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.map((item) => item.approvalId),
+      ).toEqual(["live-approval"]);
+    });
+
+    resolveSnapshot([]);
+    await act(async () => {
+      await snapshot;
+    });
+    expect(
+      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.map((item) => item.approvalId),
+    ).toEqual(["live-approval"]);
   });
 
   test("reconciles the session after an SSE subscription failure", async () => {
@@ -1183,6 +1450,34 @@ describe("CodexChatTab", () => {
     }
   });
 
+  test("force-refreshes authoritative state when SSE replay is unavailable", async () => {
+    const reconciledMessage = createMessage("reconciled-message", "Recovered from replay gap");
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "recovering" });
+    mockGetSessionMessages.mockResolvedValue([reconciledMessage]);
+    mockSubscribeToEvents.mockImplementation(() => (async function* () {
+      yield {
+        type: "session.reconcile-required",
+        data: {},
+        revision: 42,
+      };
+      yield { type: "session.error", sessionId: SESSION_ID, data: { error: "done" } };
+    })() as any);
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
+        reconciledMessage,
+      ]);
+      expect(mockGetSessionMessages).toHaveBeenCalledWith(
+        MOCK_CLIENT,
+        SESSION_ID,
+        expect.objectContaining({ throwOnError: undefined }),
+      );
+    });
+  });
+
   test("watchdog refreshes a loading turn after activity becomes stale", async () => {
     installTimerHarness(10_000);
     let finishEvents!: () => void;
@@ -1198,15 +1493,14 @@ describe("CodexChatTab", () => {
     render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
     await waitFor(() => expect(mockGetSessionStatus).toHaveBeenCalled());
     mockGetSessionStatus.mockClear();
+    mockLookupSessionStatus.mockClear();
     mockGetSessionMessages.mockClear();
 
     mockedNow = 11_600;
     act(() => intervalCallback?.());
 
     await waitFor(() => {
-      expect(mockGetSessionStatus).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID, {
-        throwOnError: undefined,
-      });
+      expect(mockLookupSessionStatus).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID);
     });
     finishEvents();
   });
@@ -1310,7 +1604,7 @@ describe("CodexChatTab", () => {
         MOCK_CLIENT,
         SESSION_ID,
         "The plan is approved. Exit plan mode and implement it.",
-        { attachments: undefined },
+        expect.objectContaining({ attachments: undefined, requestId: expect.any(String) }),
       );
     });
     expect(useCodexStore.getState().selectedMode.get(SESSION_KEY)).toBe("build");
@@ -1488,7 +1782,7 @@ describe("CodexChatTab", () => {
         MOCK_CLIENT,
         SESSION_ID,
         composeText,
-        { attachments: undefined },
+        expect.objectContaining({ attachments: undefined, requestId: expect.any(String) }),
       );
     });
   });
@@ -1533,7 +1827,7 @@ describe("CodexChatTab", () => {
         MOCK_CLIENT,
         SESSION_ID,
         composeText,
-        { attachments: undefined },
+        expect.objectContaining({ attachments: undefined, requestId: expect.any(String) }),
       );
     });
 
@@ -1568,7 +1862,7 @@ describe("CodexChatTab", () => {
         MOCK_CLIENT,
         SESSION_ID,
         initialPrompt,
-        { attachments: undefined },
+        expect.objectContaining({ attachments: undefined, requestId: expect.any(String) }),
       );
     });
 
@@ -1603,7 +1897,7 @@ describe("CodexChatTab", () => {
         MOCK_CLIENT,
         SESSION_ID,
         initialPrompt,
-        { attachments: undefined },
+        expect.objectContaining({ attachments: undefined, requestId: expect.any(String) }),
       );
     });
   });
@@ -1723,7 +2017,7 @@ describe("CodexChatTab", () => {
         MOCK_CLIENT,
         SESSION_ID,
         "Run the hidden queued Codex prompt",
-        { attachments: undefined },
+        expect.objectContaining({ attachments: undefined, requestId: expect.any(String) }),
       );
     });
   });
@@ -1767,7 +2061,7 @@ describe("CodexChatTab", () => {
         MOCK_CLIENT,
         SESSION_ID,
         "Run after Codex setup",
-        { attachments: undefined },
+        expect.objectContaining({ attachments: undefined, requestId: expect.any(String) }),
       );
     });
   });
@@ -1837,7 +2131,7 @@ describe("CodexChatTab", () => {
         MOCK_CLIENT,
         SESSION_ID,
         composeText,
-        { attachments: undefined },
+        expect.objectContaining({ attachments: undefined, requestId: expect.any(String) }),
       );
     });
 
@@ -1849,7 +2143,7 @@ describe("CodexChatTab", () => {
 
   test("removes the optimistic prompt when Codex fails to send it", async () => {
     composeText = "This should not stick around";
-    mockSendPrompt.mockImplementation(async () => false);
+    mockSendPrompt.mockImplementation(async () => null);
 
     render(
       <CodexChatTab
@@ -1870,6 +2164,185 @@ describe("CodexChatTab", () => {
       expect(session?.messages.some((message) => message.content === composeText)).toBe(false);
       expect(session?.error).toBe("Failed to send prompt");
     });
+  });
+
+  test("keeps the turn locked when prompt acceptance is ambiguous and status is unavailable", async () => {
+    composeText = "Do not overlap this turn";
+    mockSendPrompt.mockResolvedValue({
+      outcome: "unknown",
+      requestId: "ambiguous-request",
+    });
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+    await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
+    mockLookupSessionStatus.mockResolvedValue({
+      kind: "unavailable",
+      error: new Error("offline"),
+    });
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.isLoading).toBe(true);
+      expect(useCodexStore.getState().sessionPhase.get(SESSION_KEY)).toBe("recovering");
+    });
+    expect(screen.getByTestId("codex-stop")).toBeTruthy();
+    expect(screen.getByText("Reconnecting to Codex…")).toBeTruthy();
+  });
+
+  test("withdraws the prompt when an ambiguous send is proven not to have landed", async () => {
+    composeText = "This prompt never reached Codex";
+    mockSendPrompt.mockResolvedValue({
+      outcome: "unknown",
+      requestId: "ambiguous-request",
+    });
+    // Authoritative idle with a transcript that does not contain the prompt.
+    mockLookupSessionStatus.mockResolvedValue({
+      kind: "found",
+      session: { status: "idle", title: "Idle" },
+    });
+    mockGetSessionMessages.mockResolvedValue([]);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+    await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.error).toBe(
+        "Could not confirm whether Codex received the prompt. You can send it again safely.",
+      );
+      expect(session?.isLoading).toBe(false);
+      // The local-only user message must not survive as something Codex saw.
+      expect(session?.messages.some((message) => message.role === "user")).toBe(false);
+    });
+    expect(useCodexStore.getState().sessionPhase.get(SESSION_KEY)).toBeUndefined();
+  });
+
+  test("keeps an ambiguous prompt locked when its reconcile is superseded", async () => {
+    /**
+     * A concurrent reconcile can win the sequence race, leaving the send path
+     * with a "stale" result it cannot act on. The turn must stay locked — the
+     * bridge may be running it — and the unconfirmed prompt is settled later by
+     * whichever path next sees an authoritative idle session.
+     */
+    composeText = "Superseded reconcile";
+    mockSendPrompt.mockResolvedValue({
+      outcome: "unknown",
+      requestId: "ambiguous-request",
+    });
+    mockLookupSessionStatus.mockResolvedValue({
+      kind: "found",
+      session: { status: "running", title: "Still running" },
+    });
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+    await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      // Never unlocked on an unproven dispatch.
+      expect(session?.isLoading).toBe(true);
+    });
+    expect(screen.getByTestId("codex-stop")).toBeTruthy();
+  });
+
+  test("settles an unresolved ambiguous prompt when recovery reports idle later", async () => {
+    /**
+     * Regression: when the send path's own reconcile could not conclude, nothing
+     * resolved the optimistic message. A later watchdog reconcile unlocked the
+     * session and cleared the error, leaving a user message in the transcript
+     * that Codex had never received.
+     */
+    composeText = "Lost during a bridge restart";
+    mockSendPrompt.mockResolvedValue({
+      outcome: "unknown",
+      requestId: "ambiguous-request",
+    });
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+    await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
+    mockLookupSessionStatus.mockResolvedValue({
+      kind: "unavailable",
+      error: new Error("offline"),
+    });
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+    });
+
+    // The bridge comes back and is authoritatively idle without the prompt.
+    mockGetSessionMessages.mockResolvedValue([]);
+    mockLookupSessionStatus.mockResolvedValue({
+      kind: "found",
+      session: { status: "idle", title: "Recovered" },
+    });
+
+    await waitFor(() => {
+      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.isLoading).toBe(false);
+      expect(session?.error).toBe(
+        "Could not confirm whether Codex received the prompt. You can send it again safely.",
+      );
+      expect(session?.messages.some((message) => message.role === "user")).toBe(false);
+    }, { timeout: 5_000 });
+  });
+
+  test("surfaces the HTTP status when the bridge definitively rejects a prompt", async () => {
+    composeText = "Rejected outright";
+    mockSendPrompt.mockResolvedValue({ outcome: "rejected", httpStatus: 409 });
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+    await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.error).toBe("Failed to send prompt (HTTP 409)");
+      // A definite rejection proves no turn started, so the composer unlocks.
+      expect(session?.isLoading).toBe(false);
+    });
+  });
+
+  test("reuses the idempotency key when the same failed prompt is retried", async () => {
+    composeText = "Retry this exact prompt";
+    mockSendPrompt
+      .mockImplementationOnce(async () => null)
+      .mockImplementationOnce(async () => ({ status: "processing" }));
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
+
+    const firstOptions = (mockSendPrompt.mock.calls[0] as unknown as unknown[])[3] as {
+      requestId: string;
+    };
+    const secondOptions = (mockSendPrompt.mock.calls[1] as unknown as unknown[])[3] as {
+      requestId: string;
+    };
+    expect(firstOptions.requestId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(secondOptions.requestId).toBe(firstOptions.requestId);
   });
 
   test("includes attachment parts in the optimistic prompt", async () => {
@@ -2005,7 +2478,7 @@ describe("CodexChatTab", () => {
         MOCK_CLIENT,
         SESSION_ID,
         "Handle the queued codex prompt",
-        { attachments: undefined },
+        expect.objectContaining({ attachments: undefined, requestId: "queue-1" }),
       );
     });
   });
@@ -2042,7 +2515,7 @@ describe("CodexChatTab", () => {
           MOCK_CLIENT,
           SESSION_ID,
           "Queued Codex failure",
-          { attachments: undefined },
+          expect.objectContaining({ attachments: undefined, requestId: expect.any(String) }),
         );
       });
 
@@ -2134,7 +2607,7 @@ describe("CodexChatTab", () => {
     ]);
   });
 
-  test("stop immediately clears loading and promotes the next queued prompt to draft", async () => {
+  test("stop stays loading while accepted cancellation completes and promotes the queue", async () => {
     const queuedAttachment = {
       id: "queued-attachment",
       type: "image" as const,
@@ -2144,6 +2617,7 @@ describe("CodexChatTab", () => {
     };
 
     useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
     useCodexStore.getState().addToQueue(SESSION_KEY, {
       id: "queue-1",
       text: "Queued prompt",
@@ -2163,10 +2637,10 @@ describe("CodexChatTab", () => {
       fastMode: true,
     });
 
-    let resolveAbort: ((value: boolean) => void) | undefined;
+    let resolveAbort: ((value: CodexAbortOutcome) => void) | undefined;
     mockAbortSession.mockImplementation(
       () =>
-        new Promise<boolean>((resolve) => {
+        new Promise<CodexAbortOutcome>((resolve) => {
           resolveAbort = resolve;
         }),
     );
@@ -2183,7 +2657,8 @@ describe("CodexChatTab", () => {
 
     await waitFor(() => {
       const state = useCodexStore.getState();
-      expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+      expect(state.sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+      expect(state.sessionPhase.get(SESSION_KEY)).toBe("cancelling");
       expect(state.draftText.get(SESSION_KEY)).toBe("Queued prompt");
       expect(state.messageQueue.get(SESSION_KEY)?.map((message) => message.text)).toEqual([
         "Second queued prompt",
@@ -2196,14 +2671,20 @@ describe("CodexChatTab", () => {
     });
     expect(mockAbortSession).toHaveBeenCalledWith(MOCK_CLIENT, SESSION_ID);
 
-    resolveAbort?.(true);
+    resolveAbort?.({ status: "accepted" });
   });
 
-  test("stop logs a failed abort after clearing local loading state", async () => {
+  test("a rejected abort remains locked when status cannot be reconciled", async () => {
     const originalError = console.error;
     const consoleError = mock(() => {});
     console.error = consoleError as unknown as typeof console.error;
-    mockAbortSession.mockImplementation(async () => false);
+    mockAbortSession.mockImplementation(async () => ({
+      status: "rejected",
+      httpStatus: 409,
+    }));
+    mockGetSessionStatus
+      .mockResolvedValueOnce({ status: "running", phase: "running" })
+      .mockResolvedValue(null);
     useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
     useCodexStore.getState().setSessionError(SESSION_KEY, "Previous error");
 
@@ -2220,9 +2701,93 @@ describe("CodexChatTab", () => {
 
       await waitFor(() => {
         const session = useCodexStore.getState().sessions.get(SESSION_KEY);
-        expect(session?.isLoading).toBe(false);
+        expect(session?.isLoading).toBe(true);
         expect(session?.error).toBeUndefined();
-        expect(consoleError).toHaveBeenCalledWith("[CodexChatTab] Failed to abort session");
+        expect(useCodexStore.getState().sessionPhase.get(SESSION_KEY)).toBe("cancelling");
+        expect(consoleError).toHaveBeenCalledWith(
+          "[CodexChatTab] Abort request was rejected with HTTP 409",
+        );
+      });
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("a rejected abort does not unlock while authoritative status is still running", async () => {
+    const originalError = console.error;
+    console.error = mock(() => {}) as unknown as typeof console.error;
+    mockAbortSession.mockResolvedValue({ status: "rejected", httpStatus: 409 });
+    mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "recovering" });
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    try {
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+      fireEvent.click(screen.getByTestId("codex-stop"));
+
+      await waitFor(() => {
+        expect(mockAbortSession).toHaveBeenCalled();
+        expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+        expect(useCodexStore.getState().sessionPhase.get(SESSION_KEY)).toBe("recovering");
+      });
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("an ambiguous abort keeps the composer locked when status cannot be reconciled", async () => {
+    const originalError = console.error;
+    console.error = mock(() => {}) as unknown as typeof console.error;
+    mockAbortSession.mockResolvedValue({ status: "unknown" });
+    mockGetSessionStatus.mockResolvedValue(null);
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    try {
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+      fireEvent.click(screen.getByTestId("codex-stop"));
+
+      await waitFor(() => expect(mockAbortSession).toHaveBeenCalled());
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+      expect(useCodexStore.getState().sessionPhase.get(SESSION_KEY)).toBe("cancelling");
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("an ambiguous abort unlocks when status authoritatively reports the session missing", async () => {
+    const originalError = console.error;
+    console.error = mock(() => {}) as unknown as typeof console.error;
+    mockAbortSession.mockResolvedValue({ status: "unknown" });
+    mockLookupSessionStatus.mockResolvedValue({ kind: "missing" });
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    try {
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+      fireEvent.click(screen.getByTestId("codex-stop"));
+
+      await waitFor(() => {
+        expect(mockAbortSession).toHaveBeenCalled();
+        expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+        expect(useCodexStore.getState().sessionPhase.has(SESSION_KEY)).toBe(false);
+      });
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("an ambiguous abort unlocks after authoritative idle reconciliation", async () => {
+    const originalError = console.error;
+    console.error = mock(() => {}) as unknown as typeof console.error;
+    mockAbortSession.mockResolvedValue({ status: "unknown" });
+    mockGetSessionStatus.mockResolvedValue({ status: "idle", phase: "idle" });
+    useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+    try {
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+      fireEvent.click(screen.getByTestId("codex-stop"));
+
+      await waitFor(() => {
+        expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+        expect(useCodexStore.getState().sessionPhase.has(SESSION_KEY)).toBe(false);
       });
     } finally {
       console.error = originalError;
@@ -2252,9 +2817,28 @@ describe("CodexChatTab", () => {
     });
   });
 
+  test("keeps an applied model change and warns when it was not persisted durably", async () => {
+    mockUpdateSessionConfig.mockResolvedValue({
+      outcome: "applied",
+      durable: false,
+    });
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    fireEvent.click(screen.getByTestId("codex-model-change"));
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().selectedModel.get(SESSION_KEY)).toBe("gpt-5.4-codex");
+      expect(mockToastWarning).toHaveBeenCalledWith(
+        "Codex settings were applied but not saved",
+        { description: "They may revert if the Codex bridge restarts." },
+      );
+    });
+  });
+
   test("rolls back rejected model changes and keeps the previous persisted defaults", async () => {
     mockUpdateSessionConfig.mockResolvedValue(false);
     render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+    await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
 
     fireEvent.click(screen.getByTestId("codex-model-change"));
 
@@ -2266,6 +2850,674 @@ describe("CodexChatTab", () => {
     expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.error).toBe(
       "Failed to update Codex session settings",
     );
+  });
+
+  describe("prompt idempotency keys", () => {
+    /** The options bag the send path passed on a given call. */
+    function sentOptions(callIndex: number): { requestId?: string } {
+      return (mockSendPrompt.mock.calls[callIndex]?.[3] ?? {}) as { requestId?: string };
+    }
+
+    test("rotates the key when the retried prompt is a different one", async () => {
+      // The stored key only makes a retry safe for the *same* logical prompt.
+      // Reusing it for different text would make the bridge answer
+      // `already-processed` for a prompt it has never seen.
+      seedEnvironment("review-table");
+      composeText = "Prompt A";
+      mockSendPrompt
+        .mockImplementationOnce(async () => null)
+        .mockImplementation(async () => ({ status: "processing" }));
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+      fireEvent.click(screen.getByTestId("codex-send"));
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+
+      composeText = "Prompt B";
+      fireEvent.click(screen.getByTestId("codex-send"));
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
+
+      expect(sentOptions(1).requestId).not.toBe(sentOptions(0).requestId);
+      expect(sentOptions(1).requestId).toMatch(/^[0-9a-f-]{36}$/);
+    });
+
+    test("stops reusing a failed prompt's key once any send has succeeded", async () => {
+      /**
+       * The key used to be cleared only when the same request id came back, so a
+       * key from one failed send outlived every later prompt. The bridge keeps a
+       * terminal dispatch record for 24 hours, so re-sending that text would be
+       * answered `already-processed` and silently dropped.
+       */
+      seedEnvironment("review-table");
+      composeText = "yes";
+      mockSendPrompt
+        .mockImplementationOnce(async () => null)
+        .mockImplementation(async () => ({ status: "processing" }));
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+      fireEvent.click(screen.getByTestId("codex-send"));
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+
+      composeText = "run the tests";
+      fireEvent.click(screen.getByTestId("codex-send"));
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
+
+      composeText = "yes";
+      fireEvent.click(screen.getByTestId("codex-send"));
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(3));
+
+      expect(sentOptions(2).requestId).not.toBe(sentOptions(0).requestId);
+    });
+
+    test("clears the stored key when the turn reaches idle", async () => {
+      seedEnvironment("review-table");
+      composeText = "yes";
+      mockSendPrompt
+        .mockImplementationOnce(async () => null)
+        .mockImplementation(async () => ({ status: "processing" }));
+      mockGetSessionStatus.mockResolvedValue({ status: "running" });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        yield { type: "session.idle", sessionId: SESSION_ID, data: {} };
+        await new Promise(() => {});
+      })() as any);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+      fireEvent.click(screen.getByTestId("codex-send"));
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+      // The failed send stored the key; the completed turn spends it.
+      await waitFor(() =>
+        expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false),
+      );
+
+      fireEvent.click(screen.getByTestId("codex-send"));
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
+      expect(sentOptions(1).requestId).not.toBe(sentOptions(0).requestId);
+    });
+
+    test("does not leave a phantom turn when the bridge already ran the prompt", async () => {
+      // `already-processed` is truthy, so it used to read as success: the
+      // optimistic message stayed and the spinner waited for a turn that was
+      // never going to start.
+      seedEnvironment("review-table");
+      composeText = "yes";
+      mockSendPrompt.mockImplementation(async () => ({
+        status: "already-processed",
+        duplicate: true,
+        requestId: "request-1",
+      }));
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+      fireEvent.click(screen.getByTestId("codex-send"));
+
+      await waitFor(() => {
+        expect(mockToastError).toHaveBeenCalledWith("Codex had already run this prompt", {
+          description: "It was not sent again. The transcript below is up to date.",
+        });
+      });
+      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.isLoading).toBe(false);
+      expect(session?.messages.some((message) => message.content === "yes")).toBe(false);
+    });
+  });
+
+  describe("queue draining", () => {
+    function queueEntry(overrides: { id: string; requestId?: string; text: string }) {
+      return {
+        attachments: [],
+        model: MOCK_MODELS[0]!.id,
+        mode: "build" as const,
+        reasoningEffort: "medium" as const,
+        fastMode: false,
+        ...overrides,
+      };
+    }
+
+    test("prefers a queued entry's persisted key over its row id", async () => {
+      // The row id and the idempotency key are not the same thing: a queue entry
+      // rewritten by a store migration must keep the key the bridge already knows.
+      seedEnvironment("review-table");
+      useCodexStore.getState().addToQueue(
+        SESSION_KEY,
+        queueEntry({ id: "row-1", requestId: "request-77", text: "Persisted key wins" }),
+      );
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+      await waitFor(() =>
+        expect(mockSendPrompt).toHaveBeenCalledWith(
+          MOCK_CLIENT,
+          SESSION_ID,
+          "Persisted key wins",
+          expect.objectContaining({ requestId: "request-77" }),
+        ),
+      );
+    });
+
+    test("drains two queued prompts in order, each with its own key", async () => {
+      seedEnvironment("review-table");
+      const store = useCodexStore.getState();
+      store.addToQueue(SESSION_KEY, queueEntry({ id: "row-1", requestId: "request-1", text: "First queued" }));
+      store.addToQueue(SESSION_KEY, queueEntry({ id: "row-2", requestId: "request-2", text: "Second queued" }));
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(2));
+      expect(mockSendPrompt.mock.calls.map((call) => call[2])).toEqual([
+        "First queued",
+        "Second queued",
+      ]);
+      expect(mockSendPrompt.mock.calls.map((call) => call[3]?.requestId)).toEqual([
+        "request-1",
+        "request-2",
+      ]);
+      expect(useCodexStore.getState().messageQueue.get(SESSION_KEY) ?? []).toEqual([]);
+    });
+
+    test("does not drain while the bridge is still connecting", async () => {
+      // No client means no session to send to; draining here would throw the
+      // queued prompt away.
+      seedEnvironment("review-table");
+      useCodexStore.setState((state) => ({ ...state, clients: new Map(), sessions: new Map() }));
+      mockGetCodexServerStatus.mockImplementation(() => new Promise(() => {}));
+      useCodexStore.getState().addToQueue(
+        SESSION_KEY,
+        queueEntry({ id: "row-1", text: "Queued before connect" }),
+      );
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(screen.getByText("Connecting Codex")).toBeTruthy();
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+      expect(useCodexStore.getState().messageQueue.get(SESSION_KEY)).toHaveLength(1);
+    });
+
+    test("waits for the running turn to finish before draining", async () => {
+      seedEnvironment("review-table");
+      mockGetSessionStatus.mockResolvedValue({ status: "running" });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        await new Promise(() => {});
+      })() as any);
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+      useCodexStore.getState().addToQueue(
+        SESSION_KEY,
+        queueEntry({ id: "row-1", requestId: "request-1", text: "Queued behind a turn" }),
+      );
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+
+      act(() => {
+        useCodexStore.getState().setSessionLoading(SESSION_KEY, false);
+      });
+
+      await waitFor(() =>
+        expect(mockSendPrompt).toHaveBeenCalledWith(
+          MOCK_CLIENT,
+          SESSION_ID,
+          "Queued behind a turn",
+          expect.objectContaining({ requestId: "request-1" }),
+        ),
+      );
+    });
+
+    test("a second mount cannot re-send the entry the first one is already sending", async () => {
+      /**
+       * Two mounts of the same tab (a background mount plus the visible one) both
+       * see the queue. The re-entrancy guard and the atomic dequeue are what stop
+       * one queued prompt from becoming two turns.
+       */
+      seedEnvironment("review-table");
+      let releaseSend!: (value: CodexPromptAcceptedResponse) => void;
+      mockSendPrompt.mockImplementation(
+        () => new Promise<CodexPromptAcceptedResponse>((resolve) => {
+          releaseSend = resolve;
+        }),
+      );
+      useCodexStore.getState().addToQueue(
+        SESSION_KEY,
+        queueEntry({ id: "row-1", requestId: "request-1", text: "Only once" }),
+      );
+
+      render(
+        <>
+          <CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />
+          <CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />
+        </>,
+      );
+
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(mockSendPrompt).toHaveBeenCalledTimes(1);
+      expect(useCodexStore.getState().messageQueue.get(SESSION_KEY) ?? []).toEqual([]);
+      releaseSend({ status: "processing" });
+    });
+  });
+
+  describe("manual refresh", () => {
+    test("refreshes messages without overwriting a newer live idle state", async () => {
+      /**
+       * Regression: the manual refresh shared one sequence counter with every
+       * background reconcile, so an overlapping SSE frame made it return "stale"
+       * — no refetch, and no error either. We still honour the transcript refresh,
+       * but the live state must win over the older HTTP snapshot.
+       */
+      const refreshed = createMessage("manual-refresh", "Manual refresh landed");
+      let markManualStarted!: () => void;
+      const manualStarted = new Promise<void>((resolve) => {
+        markManualStarted = resolve;
+      });
+      let markFrameSent!: () => void;
+      const frameSent = new Promise<void>((resolve) => {
+        markFrameSent = resolve;
+      });
+      let releaseManual!: (result: CodexSessionStatusLookupResult) => void;
+      const manualLookup = new Promise<CodexSessionStatusLookupResult>((resolve) => {
+        releaseManual = resolve;
+      });
+
+      mockGetSessionStatus.mockResolvedValue({ status: "running" });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        await manualStarted;
+        yield {
+          type: "session.idle",
+          sessionId: SESSION_ID,
+          data: { title: "Live completion" },
+        };
+        markFrameSent();
+        await new Promise(() => {});
+      })() as any);
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+      const { rerender } = render(
+        <CodexChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={0} />,
+      );
+      await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
+
+      mockLookupSessionStatus.mockImplementationOnce(() => {
+        markManualStarted();
+        return manualLookup;
+      });
+      mockGetSessionMessages.mockResolvedValue([refreshed]);
+
+      rerender(
+        <CodexChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={1} />,
+      );
+      await frameSent;
+
+      await act(async () => {
+        releaseManual({
+          kind: "found",
+          session: { status: "running", title: "Stale manual snapshot" },
+        });
+        await manualLookup;
+      });
+
+      await waitFor(() => {
+        expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
+          title: "Live completion",
+          isLoading: false,
+          messages: [refreshed],
+        });
+      });
+    });
+
+    test("an older manual refresh cannot overwrite the newer one", async () => {
+      let releaseFirst!: (result: CodexSessionStatusLookupResult) => void;
+      const firstLookup = new Promise<CodexSessionStatusLookupResult>((resolve) => {
+        releaseFirst = resolve;
+      });
+
+      const { rerender } = render(
+        <CodexChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={0} />,
+      );
+      await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
+
+      mockLookupSessionStatus.mockImplementationOnce(() => firstLookup);
+      rerender(
+        <CodexChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={1} />,
+      );
+      await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalledTimes(2));
+
+      mockLookupSessionStatus.mockResolvedValue({
+        kind: "found",
+        session: { status: "idle", title: "Newest manual refresh" },
+      });
+      rerender(
+        <CodexChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={2} />,
+      );
+      await waitFor(() =>
+        expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.title).toBe(
+          "Newest manual refresh",
+        ),
+      );
+
+      await act(async () => {
+        releaseFirst({
+          kind: "found",
+          session: { status: "running", title: "Superseded manual refresh" },
+        });
+        await firstLookup;
+      });
+
+      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.title).toBe("Newest manual refresh");
+      expect(session?.isLoading).toBe(false);
+    });
+
+    test("reports a session the bridge no longer has", async () => {
+      const originalError = console.error;
+      console.error = mock(() => {}) as unknown as typeof console.error;
+      try {
+        const { rerender } = render(
+          <CodexChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={0} />,
+        );
+        await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
+
+        mockLookupSessionStatus.mockResolvedValue({ kind: "missing" });
+        rerender(
+          <CodexChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={1} />,
+        );
+
+        await waitFor(() =>
+          expect(mockToastError).toHaveBeenCalledWith("Failed to refresh Codex tab", {
+            description: "The Codex session is no longer available on the server",
+          }),
+        );
+      } finally {
+        console.error = originalError;
+      }
+    });
+
+    test("reports a bridge that cannot answer", async () => {
+      const originalError = console.error;
+      console.error = mock(() => {}) as unknown as typeof console.error;
+      try {
+        const { rerender } = render(
+          <CodexChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={0} />,
+        );
+        await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
+
+        mockLookupSessionStatus.mockResolvedValue({
+          kind: "unavailable",
+          error: new Error("status transport failed"),
+        });
+        rerender(
+          <CodexChatTab tabId={TAB_ID} data={createData()} isActive refreshRequestId={1} />,
+        );
+
+        await waitFor(() =>
+          expect(mockToastError).toHaveBeenCalledWith("Failed to refresh Codex tab", {
+            description: "status transport failed",
+          }),
+        );
+      } finally {
+        console.error = originalError;
+      }
+    });
+  });
+
+  describe("approval rehydration", () => {
+    test("adopts approvals raised while the tab was unmounted", async () => {
+      // The whole point of the route: a tab that was not mounted saw no SSE frame,
+      // and its fresh subscription has no cursor for the bridge to replay from.
+      mockFetchPendingApprovals.mockResolvedValue([createApproval("apr-rehydrated")]);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() =>
+        expect(
+          useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.map((item) => item.approvalId),
+        ).toEqual(["apr-rehydrated"]),
+      );
+    });
+
+    test("drops an approval the bridge no longer reports", async () => {
+      useCodexStore.getState().addPendingApproval(SESSION_KEY, createApproval("apr-answered"));
+      mockFetchPendingApprovals.mockResolvedValue([]);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() =>
+        expect(useCodexStore.getState().pendingApprovals.has(SESSION_KEY)).toBe(false),
+      );
+    });
+
+    test("an unrelated SSE frame does not discard the approvals snapshot", async () => {
+      /**
+       * Regression: the snapshot was gated on the broad reconcile counter, which
+       * any current-session frame bumps. A single `message.updated` arriving while
+       * the snapshot was in flight threw away the only rehydration path, leaving
+       * the turn blocked on a card nobody could see.
+       */
+      let markFrameApplied!: () => void;
+      const frameApplied = new Promise<void>((resolve) => {
+        markFrameApplied = resolve;
+      });
+      let releaseSnapshot!: (approvals: CodexApproval[]) => void;
+      const snapshot = new Promise<CodexApproval[]>((resolve) => {
+        releaseSnapshot = resolve;
+      });
+
+      mockFetchPendingApprovals.mockImplementationOnce(() => snapshot);
+      mockGetSessionStatus.mockResolvedValue({ status: "running" });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        yield {
+          type: "message.updated",
+          sessionId: SESSION_ID,
+          data: { message: createMessage("streamed", "Streamed mid-snapshot") },
+        };
+        markFrameApplied();
+        await new Promise(() => {});
+      })() as any);
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await frameApplied;
+
+      await act(async () => {
+        releaseSnapshot([createApproval("apr-blocked")]);
+        await snapshot;
+      });
+
+      await waitFor(() =>
+        expect(
+          useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.map((item) => item.approvalId),
+        ).toEqual(["apr-blocked"]),
+      );
+    });
+
+    test("a stale snapshot cannot resurrect a just-resolved approval", async () => {
+      let markResolved!: () => void;
+      const resolvedFrameSent = new Promise<void>((resolve) => {
+        markResolved = resolve;
+      });
+      let releaseSnapshot!: (approvals: CodexApproval[]) => void;
+      const snapshot = new Promise<CodexApproval[]>((resolve) => {
+        releaseSnapshot = resolve;
+      });
+      const answered = createApproval("apr-answered");
+
+      useCodexStore.getState().addPendingApproval(SESSION_KEY, answered);
+      mockFetchPendingApprovals.mockImplementationOnce(() => snapshot);
+      mockGetSessionStatus.mockResolvedValue({ status: "running" });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        yield {
+          type: "session.approval-resolved",
+          sessionId: SESSION_ID,
+          data: { approvalId: "apr-answered" },
+        };
+        markResolved();
+        await new Promise(() => {});
+      })() as any);
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await resolvedFrameSent;
+      await waitFor(() =>
+        expect(useCodexStore.getState().pendingApprovals.has(SESSION_KEY)).toBe(false),
+      );
+
+      // The snapshot was taken before the decision landed; re-showing the card
+      // would invite the user to answer a request that is already gone.
+      await act(async () => {
+        releaseSnapshot([answered]);
+        await snapshot;
+      });
+
+      expect(useCodexStore.getState().pendingApprovals.has(SESSION_KEY)).toBe(false);
+    });
+
+    test.each([
+      ["an unknown kind", { kind: "network" }],
+      ["an empty approval id", { approvalId: "" }],
+      ["a missing deadline", { expiresAt: undefined }],
+    ])("rejects an SSE approval with %s", async (_label, overrides) => {
+      // The SSE frame is validated exactly like the HTTP snapshot: an approval the
+      // card cannot render is one the user can never answer.
+      const originalWarn = console.warn;
+      console.warn = mock(() => {}) as unknown as typeof console.warn;
+      try {
+        mockGetSessionStatus.mockResolvedValue({ status: "running" });
+        mockSubscribeToEvents.mockImplementation(() => (async function* () {
+          yield {
+            type: "session.approval-requested",
+            sessionId: SESSION_ID,
+            data: { approval: { ...createApproval("apr-malformed"), ...overrides } },
+          };
+          yield { type: "session.idle", sessionId: SESSION_ID, data: {} };
+        })() as any);
+        useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+        render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+        await waitFor(() =>
+          expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false),
+        );
+        expect(useCodexStore.getState().pendingApprovals.has(SESSION_KEY)).toBe(false);
+      } finally {
+        console.warn = originalWarn;
+      }
+    });
+  });
+
+  describe("event cursor", () => {
+    test("resumes from the last revision it saw, including other sessions' frames and keepalives", async () => {
+      /**
+       * The cursor tracks the bridge-wide stream, so every frame advances it —
+       * skipping another session's revision would make the next reconnect ask for
+       * frames we already have.
+       */
+      mockGetSessionStatus.mockResolvedValue({ status: "running" });
+      let attempt = 0;
+      mockSubscribeToEvents.mockImplementation(() => {
+        attempt += 1;
+        if (attempt === 1) {
+          return (async function* () {
+            yield { type: "message.updated", sessionId: "other-session", data: {}, revision: 7 };
+          })() as any;
+        }
+        if (attempt === 2) {
+          return (async function* () {
+            yield { type: "keepalive", data: {}, revision: 9 };
+          })() as any;
+        }
+        return (async function* () {
+          await new Promise(() => {});
+        })() as any;
+      });
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(
+        () => expect(mockSubscribeToEvents.mock.calls.length).toBeGreaterThanOrEqual(3),
+        { timeout: 5_000 },
+      );
+      const cursors = mockSubscribeToEvents.mock.calls
+        .slice(0, 3)
+        .map((call) => (call as unknown as unknown[])[2]);
+      expect(cursors).toEqual([undefined, 7, 9]);
+    });
+  });
+
+  describe("session.updated phases", () => {
+    test("a terminal phase clears the phase and re-enables the composer", async () => {
+      mockGetSessionStatus.mockResolvedValue({ status: "running", phase: "running" });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        yield { type: "session.updated", sessionId: SESSION_ID, data: { phase: "cancelling" } };
+        yield { type: "session.updated", sessionId: SESSION_ID, data: { phase: "idle" } };
+        await new Promise(() => {});
+      })() as any);
+      useCodexStore.getState().setSessionLoading(SESSION_KEY, true);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+
+      await waitFor(() => {
+        expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(false);
+        expect(useCodexStore.getState().sessionPhase.has(SESSION_KEY)).toBe(false);
+      });
+    });
+
+    test("an idle phase does not detach a turn whose prompt is still in flight", async () => {
+      /**
+       * Regression: the bridge emits `session.updated {phase:"idle"}` from its
+       * post-restart recovery for any thread with no active turn — including while
+       * our own prompt POST is in flight. Clearing the loading flag there tore down
+       * both the SSE subscription and the watchdog, and neither re-armed, so the
+       * transcript froze until the tab remounted.
+       */
+      seedEnvironment("review-table");
+      composeText = "Start the turn";
+      let markSendStarted!: () => void;
+      const sendStarted = new Promise<void>((resolve) => {
+        markSendStarted = resolve;
+      });
+      let releaseSend!: (value: CodexPromptAcceptedResponse) => void;
+      mockSendPrompt.mockImplementation(() => {
+        markSendStarted();
+        return new Promise<CodexPromptAcceptedResponse>((resolve) => {
+          releaseSend = resolve;
+        });
+      });
+      let markFrameSent!: () => void;
+      const frameSent = new Promise<void>((resolve) => {
+        markFrameSent = resolve;
+      });
+      mockSubscribeToEvents.mockImplementation(() => (async function* () {
+        await sendStarted;
+        yield { type: "session.updated", sessionId: SESSION_ID, data: { phase: "idle" } };
+        markFrameSent();
+        await new Promise(() => {});
+      })() as any);
+
+      render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive />);
+      await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
+
+      fireEvent.click(screen.getByTestId("codex-send"));
+      await frameSent;
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+      expect(screen.queryByText("Codex is thinking...")).not.toBeNull();
+      expect(mockSubscribeToEvents).toHaveBeenCalledTimes(1);
+
+      releaseSend({ status: "processing" });
+    });
   });
 
   describe("fast mode toggle", () => {

@@ -1,0 +1,27 @@
+{"jsonrpc":"2.0","method":"thread/started","params":{"thread":{"id":"01960000-0000-7000-8000-000000000001","cwd":"/replay/workspace"}}}
+{"jsonrpc":"2.0","id":1,"result":{"threadId":"01960000-0000-7000-8000-000000000001"}}
+{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"01960000-0000-7000-8000-000000000001","turn":{"id":"turn-1"}}}
+{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-1","item":{"id":"item-reasoning-1","type":"reasoning","summary":[],"content":[]}}}
+{"jsonrpc":"2.0","method":"item/reasoning/summaryTextDelta","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-1","itemId":"item-reasoning-1","summaryIndex":0,"delta":"Checking the"}}
+{"jsonrpc":"2.0","method":"item/reasoning/summaryTextDelta","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-1","itemId":"item-reasoning-1","summaryIndex":0,"delta":" test layout."}}
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-1","item":{"id":"item-reasoning-1","type":"reasoning","summary":["Checking the test layout."],"content":[]}}}
+{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-1","item":{"id":"item-cmd-1","type":"commandExecution","command":"ls -1","status":"inProgress"}}}
+{"jsonrpc":"2.0","method":"item/commandExecution/outputDelta","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-1","itemId":"item-cmd-1","delta":"README.md\n"}}
+{"jsonrpc":"2.0","method":"item/commandExecution/outputDelta","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-1","itemId":"item-cmd-1","delta":"src\n"}}
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-1","item":{"id":"item-cmd-1","type":"commandExecution","command":"ls -1","aggregatedOutput":"README.md\nsrc\n","status":"completed","exitCode":0}}}
+{"jsonrpc":"2.0","method":"item/started","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-1","item":{"id":"item-search-1","type":"webSearch","query":"bun test parallel"}}}
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-1","item":{"id":"item-search-1","type":"webSearch","query":"bun test parallel"}}}
+{"jsonrpc":"2.0","method":"item/fileChange/patchUpdated","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-1","itemId":"item-patch-1","changes":[{"path":"/replay/workspace/README.md","kind":{"type":"update"}}]}}
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-1","item":{"id":"item-patch-1","type":"fileChange","changes":[{"path":"/replay/workspace/README.md","kind":{"type":"update"}}],"status":"completed"}}}
+{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-1","itemId":"item-msg-1","delta":"Listed the"}}
+{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-1","itemId":"item-msg-1","delta":" workspace and updated the README."}}
+{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-1","item":{"id":"item-msg-1","type":"agentMessage","text":"Listed the workspace and updated the README."}}}
+{"jsonrpc":"2.0","method":"turn/diff/updated","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-1","diff":"diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1,2 @@\n Title\n+Added line\n"}}
+{"jsonrpc":"2.0","method":"thread/tokenUsage/updated","params":{"threadId":"01960000-0000-7000-8000-000000000001","usage":{"inputTokens":1200,"outputTokens":340}}}
+{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"01960000-0000-7000-8000-000000000001","turn":{"id":"turn-1","status":"completed"}}}
+{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"01960000-0000-7000-8000-000000000001","turn":{"id":"turn-2"}}}
+{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-2","itemId":"item-msg-2","delta":"Working on it"}}
+{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"01960000-0000-7000-8000-000000000001","turn":{"id":"turn-2","status":"interrupted"}}}
+{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"01960000-0000-7000-8000-000000000001","turn":{"id":"turn-3"}}}
+{"jsonrpc":"2.0","method":"error","params":{"threadId":"01960000-0000-7000-8000-000000000001","turnId":"turn-3","error":{"message":"You have hit your usage limit.","codexErrorInfo":"usageLimitExceeded"},"willRetry":false}}
+{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"01960000-0000-7000-8000-000000000001","turn":{"id":"turn-3","status":"failed","error":{"message":"You have hit your usage limit.","codexErrorInfo":"usageLimitExceeded"}}}}

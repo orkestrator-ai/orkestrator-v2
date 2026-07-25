@@ -8,7 +8,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { Environment, RepositoryConfig } from "../../../apps/backend/src/core/models";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
-import { APP_SLUG } from "../../../apps/backend/src/core/constants";
+import { APP_SLUG, APP_VERSION } from "../../../apps/backend/src/core/constants";
 
 const execFileAsync = promisify(execFile);
 const liveDockerTest = process.env.RUN_LIVE_DOCKER_TESTS === "1" ? test : test.skip;
@@ -290,11 +290,23 @@ function createContext(
   return { context, updates, emitted };
 }
 
+/**
+ * A `fetchedAt` the catalog cache will accept as fresh.
+ *
+ * `isFreshClaudeModelCatalog` applies a **5-minute** TTL, so a hardcoded absolute
+ * date is a time bomb: it reads as fresh only within five minutes of that instant
+ * and then fails forever. Keep this relative to now.
+ */
+function freshFetchedAt(): string {
+  return new Date().toISOString();
+}
+
 async function writeBridgeServer(
   appRoot: string,
   bridgeName: "claude-bridge" | "codex-bridge",
   environmentMarkerPath?: string,
   modelCatalog?: Record<string, unknown>,
+  versionMarkerPath?: string,
 ): Promise<void> {
   const bridgeDist = path.join(appRoot, "bridges", bridgeName, "dist");
   await fs.mkdir(bridgeDist, { recursive: true });
@@ -305,6 +317,9 @@ async function writeBridgeServer(
       const port = Number(process.env.PORT);
       ${environmentMarkerPath
         ? `require("node:fs").writeFileSync(${JSON.stringify(environmentMarkerPath)}, process.env.${bridgeName === "claude-bridge" ? "CLAUDE_CLI_PATH" : "CODEX_PATH"} ?? "");`
+        : ""}
+      ${versionMarkerPath
+        ? `require("node:fs").writeFileSync(${JSON.stringify(versionMarkerPath)}, process.env.ORKESTRATOR_VERSION ?? "");`
         : ""}
       http.createServer((req, res) => {
         if (req.url === "/global/health") {
@@ -4226,9 +4241,16 @@ exit 0
     const toolchainBinDir = await createTempDir("ork-electron-toolchain-");
     const worktreePath = await createTempDir("ork-electron-worktree-");
     const markerPath = path.join(appRoot, "codex-path.log");
+    const versionMarkerPath = path.join(appRoot, "codex-version.log");
     const managedCodexPath = path.join(toolchainBinDir, "codex");
     await fs.writeFile(managedCodexPath, "managed codex");
-    await writeBridgeServer(appRoot, "codex-bridge", markerPath);
+    await writeBridgeServer(
+      appRoot,
+      "codex-bridge",
+      markerPath,
+      undefined,
+      versionMarkerPath,
+    );
 
     const environment = createEnvironment({ worktreePath });
     const { context, updates } = createContext(environment);
@@ -4249,6 +4271,7 @@ exit 0
     expect(updates).toContainEqual({ localCodexPort: result.port, codexBridgePid: result.pid });
     await expect(requestOk(result.port, "/global/health")).resolves.toBe(true);
     expect(await fs.readFile(markerPath, "utf8")).toBe(managedCodexPath);
+    expect(await fs.readFile(versionMarkerPath, "utf8")).toBe(APP_VERSION);
 
     await commands.get("stop_local_codex_server_cmd")?.({ environmentId: environment.id }, context);
   });
@@ -4317,7 +4340,7 @@ exit 0
         },
       ],
       source: "sdk",
-      fetchedAt: new Date().toISOString(),
+      fetchedAt: freshFetchedAt(),
       sdkVersion: "0.2.1",
       cliVersion: "5.0.0",
     });
@@ -4427,7 +4450,7 @@ exit 0
         },
       ],
       source: "sdk",
-      fetchedAt: "2026-07-25T12:00:00.000Z",
+      fetchedAt: freshFetchedAt(),
       sdkVersion: "0.2.1",
       cliVersion: "5.0.0",
     });

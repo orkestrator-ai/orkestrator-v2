@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 process.env.CODEX_BRIDGE_NO_SERVER = "1";
+// Importing index.ts otherwise spawns a real app-server child, whose environment
+// refresh mutates process.env underneath these tests.
+process.env.CODEX_BRIDGE_NO_ENGINE = "1";
 
 const { __testing } = await import("./index.js");
 
@@ -189,7 +192,14 @@ describe("runtime environment refresh", () => {
     });
   });
 
-  test("prompt execution refreshes runtime PATH before starting Codex", async () => {
+  test("refreshing applies the helper's PATH into the bridge process", async () => {
+    /**
+     * The app-server child snapshots its environment at launch, so the bridge
+     * refreshes *its own* PATH before spawning and re-checks it before each
+     * dispatch (see runtime-env.ts `fingerprintRuntimeEnvironment` and the
+     * supervisor's environment-change restart). This asserts the refresh itself;
+     * the restart-on-change behaviour is covered in process-supervisor.test.ts.
+     */
     await withTempDir(async (dir) => {
       const helper = join(dir, "runtime-env.sh");
       const bin = join(dir, "bin");
@@ -207,31 +217,10 @@ describe("runtime environment refresh", () => {
       process.env.ORKESTRATOR_RUNTIME_ENV_SCRIPT = helper;
       process.env.PATH = "/usr/bin:/bin";
 
-      let observedPath: string | undefined;
-      const session = {
-        id: "runtime-env-session",
-        conversationMode: "build",
-        fastMode: false,
-        thread: {
-          runStreamed: async () => {
-            observedPath = process.env.PATH;
-            return { events: (async function* () {})() };
-          },
-        },
-        threadOptions: { workingDirectory: dir },
-        threadId: null,
-        messages: [],
-        status: "idle",
-        currentItems: new Map(),
-        currentItemOrder: [],
-        pendingAttachments: [],
-        lastAccessed: Date.now(),
-      };
+      await __testing.refreshRuntimeEnvironment();
 
-      await __testing.runPrompt(session, "hello");
-
-      expect(observedPath).toBe(`${bin}:/usr/bin:/bin`);
-      expect(session.status).toBe("idle");
+      // A tool installed after the bridge started is now on PATH.
+      expect(process.env.PATH).toBe(`${bin}:/usr/bin:/bin`);
     });
   });
 });

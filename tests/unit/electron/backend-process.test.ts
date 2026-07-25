@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -65,6 +65,7 @@ describe("Electron backend process supervisor", () => {
       ORKESTRATOR_TAILSCALE_SERVE_PORT: "8443",
       ORKESTRATOR_TAILSCALE_BIN: "/tmp/tailscale",
       ORKESTRATOR_TOOLCHAIN_BIN: "/tmp/untrusted-tools",
+      ORKESTRATOR_VERSION: "untrusted-shell-version",
     };
 
     const development = createBackendProcessEnvironment(parent, true, "/resources");
@@ -74,12 +75,92 @@ describe("Electron backend process supervisor", () => {
       ORKESTRATOR_GATEWAY_DISABLED: "0",
     });
     expect(parent.ORKESTRATOR_GATEWAY_TOKEN).toBe("not-forwarded");
+    expect(development.ORKESTRATOR_VERSION).toBeUndefined();
 
-    const production = createBackendProcessEnvironment(parent, false, "/resources");
+    const production = createBackendProcessEnvironment(
+      parent,
+      false,
+      "/resources",
+      "2.4.9",
+    );
     expect(production.NODE_PATH).toBe(
       [path.join("/resources", "backend", "vendor"), "/existing"].join(path.delimiter),
     );
+    expect(production.ORKESTRATOR_VERSION).toBe("2.4.9");
   });
+
+  test("treats a blank application version as absent rather than exporting an empty one", () => {
+    // `"" !== undefined`, so the naive check exported ORKESTRATOR_VERSION="",
+    // which the backend and both bridges read as a defined value and therefore
+    // do not replace with their own fallback.
+    const parent = { ORKESTRATOR_VERSION: "untrusted-shell-version" };
+    for (const blank of ["", "   ", "\t"]) {
+      expect(createBackendProcessEnvironment(parent, true, "/resources", blank))
+        .not.toHaveProperty("ORKESTRATOR_VERSION");
+    }
+    expect(createBackendProcessEnvironment(parent, true, "/resources", " 2.5.0 "))
+      .toMatchObject({ ORKESTRATOR_VERSION: "2.5.0" });
+  });
+
+  test("development mode still receives Electron's application version", () => {
+    // The combination main.ts actually ships: isDev with a real app version.
+    // NODE_PATH stays untouched in development, but the version must not.
+    const development = createBackendProcessEnvironment(
+      { NODE_PATH: "/existing" },
+      true,
+      "/resources",
+      "2.4.9",
+    );
+
+    expect(development).toEqual({
+      NODE_PATH: "/existing",
+      ORKESTRATOR_GATEWAY_DISABLED: "0",
+      ORKESTRATOR_VERSION: "2.4.9",
+    });
+  });
+
+  test("start threads the Electron application version into the spawned child", async () => {
+    // start -> launch -> createBackendProcessEnvironment is the only path that
+    // gives the backend and both bridges their version; deleting the argument
+    // from the call site broke nothing that any test could see.
+    globalThis.fetch = Bun.fetch;
+    const resourceRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-fake-backend-"));
+    directories.push(resourceRoot);
+    const marker = path.join(resourceRoot, "version-marker");
+    const authFile = path.join(resourceRoot, "auth.json");
+    await writeFile(authFile, JSON.stringify({ token: "fake-backend-token-1234567890" }));
+    await mkdir(path.join(resourceRoot, "bin"), { recursive: true });
+    // A stand-in for the packaged Bun runtime: records what it was handed and
+    // then speaks just enough of the readiness protocol to complete startup.
+    const fakeBun = path.join(resourceRoot, "bin", "bun");
+    await writeFile(fakeBun, `#!/bin/sh
+printf '%s' "\${ORKESTRATOR_VERSION-<unset>}" > ${JSON.stringify(marker)}
+printf '{"type":"orkestrator-backend-ready","url":"http://127.0.0.1:1/","authFile":"%s","bindAddress":"127.0.0.1","port":1}\\n' ${JSON.stringify(authFile)}
+sleep 5
+`);
+    await chmod(fakeBun, 0o755);
+
+    const errors = mock(() => undefined);
+    const realError = console.error;
+    console.error = errors as unknown as typeof console.error;
+    try {
+      const backendProcess = new BackendProcess();
+      processes.push(backendProcess);
+      await backendProcess.start({
+        isDev: false,
+        appVersion: "9.9.9-threaded",
+        appRoot: resourceRoot,
+        resourceRoot,
+        dataDir: resourceRoot,
+        gatewayPort: 0,
+        onEvent: () => undefined,
+      });
+
+      expect(await readFile(marker, "utf8")).toBe("9.9.9-threaded");
+    } finally {
+      console.error = realError;
+    }
+  }, SPAWN_TIMEOUT_MS);
 
   test("reports browser availability independently from the desktop control listener", () => {
     expect(getBrowserGatewayStatus(null)).toEqual({

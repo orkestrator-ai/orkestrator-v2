@@ -4,14 +4,21 @@ import {
   DEFAULT_CODEX_MODEL,
   abortSession,
   checkHealth,
+  classifyCodexPromptOutcome,
   createClient,
   createSession,
   deleteSession,
+  fetchPendingApprovals,
+  getBridgeHealth,
   getModels,
   getSessionMessages,
   getSessionStatus,
   getSlashCommands,
+  isCodexSessionPhase,
   listSessions,
+  lookupSessionStatus,
+  parseApproval,
+  respondToApproval,
   resumeSession,
   sendPrompt,
   subscribeToEvents,
@@ -73,6 +80,74 @@ describe("codex-client checkHealth", () => {
 
     mockFetchError(new Error("offline"));
     expect(await checkHealth(client)).toBe(false);
+  });
+});
+
+describe("codex-client getBridgeHealth", () => {
+  afterEach(restoreFetch);
+
+  test("returns engine details from a healthy bridge", async () => {
+    mockFetch(async () =>
+      Response.json({
+        status: "ok",
+        engine: "app-server",
+        appServer: { state: "running", generation: 3 },
+        activeTurns: 1,
+      }),
+    );
+
+    await expect(getBridgeHealth(client)).resolves.toMatchObject({
+      status: "ok",
+      engine: "app-server",
+      appServer: { state: "running", generation: 3 },
+      activeTurns: 1,
+    });
+  });
+
+  test("returns null for an unhealthy or unreachable bridge", async () => {
+    mockFetch(async () => new Response(null, { status: 503 }));
+    await expect(getBridgeHealth(client)).resolves.toBeNull();
+
+    mockFetchError(new Error("offline"));
+    await expect(getBridgeHealth(client)).resolves.toBeNull();
+  });
+});
+
+describe("codex-client request timeout", () => {
+  afterEach(restoreFetch);
+
+  test("abandons a hung bridge instead of hanging the caller", async () => {
+    const originalSetTimeout = globalThis.setTimeout;
+    let deadlineMs: number | undefined;
+    // Fire the deadline immediately so the real ten seconds are not spent here,
+    // while still proving the request is aborted rather than left pending.
+    globalThis.setTimeout = ((handler: TimerHandler, delay?: number) => {
+      deadlineMs = delay;
+      (handler as () => void)();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout;
+    globalThis.fetch = mock((_url: string, init: RequestInit) => {
+      if (init.signal?.aborted) {
+        return Promise.reject(
+          Object.assign(new Error("The operation was aborted."), { name: "AbortError" }),
+        );
+      }
+      // A bridge that accepted the connection and then stopped answering.
+      return new Promise<Response>(() => {});
+    }) as unknown as typeof fetch;
+
+    try {
+      // Consumers that swallow failures report unreachable…
+      expect(await checkHealth(client)).toBe(false);
+      expect(deadlineMs).toBe(10_000);
+      await expect(getSessionMessages(client, "session-1")).resolves.toEqual([]);
+      // …and the ones that must not guess surface the abort.
+      await expect(fetchPendingApprovals(client, "session-1")).rejects.toThrow(/aborted/i);
+      expect((await lookupSessionStatus(client, "session-1")).kind).toBe("unavailable");
+      expect(await abortSession(client, "session-1")).toEqual({ status: "unknown" });
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
   });
 });
 
@@ -340,15 +415,15 @@ describe("codex-client getSessionMessages", () => {
 describe("codex-client updateSessionConfig", () => {
   afterEach(restoreFetch);
 
-  test("posts session settings and returns true on ok response", async () => {
-    mockFetch(async () => new Response(null, { status: 200 }));
+  test("posts session settings and reports whether the update was durable", async () => {
+    mockFetch(async () => Response.json({ status: "updated", durable: true }));
 
     await expect(updateSessionConfig(client, "session-1", {
       model: "gpt-5.3-codex",
       modelReasoningEffort: "high",
       mode: "plan",
       fastMode: true,
-    })).resolves.toBe(true);
+    })).resolves.toEqual({ outcome: "applied", durable: true });
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "http://127.0.0.1:4000/session/session-1/config",
@@ -362,14 +437,104 @@ describe("codex-client updateSessionConfig", () => {
         }),
       }),
     );
+
+    mockFetch(async () => Response.json({ status: "updated", durable: false }));
+    await expect(
+      updateSessionConfig(client, "session-1", { mode: "build" }),
+    ).resolves.toEqual({ outcome: "applied", durable: false });
   });
 
-  test("returns false on non-ok or failed responses", async () => {
+  test("distinguishes a definite HTTP rejection from an ambiguous transport failure", async () => {
     mockFetch(async () => new Response(null, { status: 409 }));
-    await expect(updateSessionConfig(client, "session-1", { mode: "build" })).resolves.toBe(false);
+    await expect(
+      updateSessionConfig(client, "session-1", { mode: "build" }),
+    ).resolves.toEqual({ outcome: "rejected", httpStatus: 409 });
 
     mockFetchError(new Error("offline"));
-    await expect(updateSessionConfig(client, "session-1", { mode: "build" })).resolves.toBe(false);
+    await expect(
+      updateSessionConfig(client, "session-1", { mode: "build" }),
+    ).resolves.toEqual({ outcome: "unknown" });
+  });
+
+  test("reconciles an ambiguous update against the authoritative config", async () => {
+    let calls = 0;
+    mockFetch(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("response lost");
+      return Response.json({
+        model: "gpt-5.3-codex",
+        modelReasoningEffort: "high",
+        mode: "plan",
+        fastMode: true,
+        durable: false,
+      });
+    });
+
+    await expect(updateSessionConfig(client, "session-1", {
+      model: "gpt-5.3-codex",
+      modelReasoningEffort: "high",
+      mode: "plan",
+      fastMode: true,
+    })).resolves.toEqual({ outcome: "applied", durable: false });
+    expect(calls).toBe(2);
+  });
+
+  test("stays unknown when the authoritative config does not match the request", async () => {
+    let calls = 0;
+    mockFetch(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("response lost");
+      // The bridge is still on the old model, so this update did *not* land.
+      return Response.json({
+        model: "gpt-5.2-codex",
+        mode: "plan",
+        fastMode: true,
+        durable: true,
+      });
+    });
+
+    await expect(
+      updateSessionConfig(client, "session-1", { model: "gpt-5.3-codex", mode: "plan" }),
+    ).resolves.toEqual({ outcome: "unknown" });
+    expect(calls).toBe(2);
+  });
+
+  test("stays unknown when the reconciliation read is itself rejected", async () => {
+    let calls = 0;
+    mockFetch(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("response lost");
+      return new Response(null, { status: 404 });
+    });
+
+    await expect(
+      updateSessionConfig(client, "session-1", { mode: "build" }),
+    ).resolves.toEqual({ outcome: "unknown" });
+  });
+});
+
+describe("codex-client classifyCodexPromptOutcome", () => {
+  test("maps every send result shape to a definite classification", () => {
+    expect(classifyCodexPromptOutcome({ outcome: "accepted", status: "processing" }))
+      .toBe("accepted");
+    expect(classifyCodexPromptOutcome({ outcome: "rejected", httpStatus: 409 }))
+      .toBe("rejected");
+    expect(classifyCodexPromptOutcome({ outcome: "unknown", requestId: "r" }))
+      .toBe("unknown");
+
+    // Legacy shapes that component stubs still return.
+    expect(classifyCodexPromptOutcome(true)).toBe("accepted");
+    expect(classifyCodexPromptOutcome({ status: "processing" })).toBe("accepted");
+    expect(classifyCodexPromptOutcome({ status: "already-processed" })).toBe("accepted");
+
+    // Anything that does not positively indicate acceptance is a rejection —
+    // never an accidental "unknown", which callers treat as possibly-running.
+    expect(classifyCodexPromptOutcome(false)).toBe("rejected");
+    expect(classifyCodexPromptOutcome(null)).toBe("rejected");
+    expect(classifyCodexPromptOutcome(undefined)).toBe("rejected");
+    expect(classifyCodexPromptOutcome({})).toBe("rejected");
+    expect(classifyCodexPromptOutcome({ outcome: "weird" })).toBe("rejected");
+    expect(classifyCodexPromptOutcome("accepted")).toBe("rejected");
   });
 });
 
@@ -389,6 +554,49 @@ describe("codex-client getSessionStatus", () => {
       status: "error",
       title: "Session title",
       error: "Codex failed",
+    });
+  });
+
+  test("surfaces the app-server phase and turn identifiers when present", async () => {
+    mockFetch(async () =>
+      new Response(
+        JSON.stringify({
+          status: "running",
+          phase: "cancelling",
+          threadId: "thread-1",
+          turnId: "turn-2",
+          requestId: "req-3",
+          engineGeneration: 4,
+        }),
+        { status: 200 },
+      ),
+    );
+
+    // `cancelling` must still report `running`: the turn may be executing, so a
+    // caller that advanced on idle here could overlap it.
+    await expect(getSessionStatus(client, "session-1")).resolves.toMatchObject({
+      status: "running",
+      phase: "cancelling",
+      threadId: "thread-1",
+      turnId: "turn-2",
+      requestId: "req-3",
+      engineGeneration: 4,
+    });
+  });
+
+  test("accepts only known app-server lifecycle phases", async () => {
+    expect(isCodexSessionPhase("recovering")).toBe(true);
+    expect(isCodexSessionPhase("idle")).toBe(true);
+    expect(isCodexSessionPhase("surprising-future-phase")).toBe(false);
+    expect(isCodexSessionPhase(null)).toBe(false);
+
+    mockFetch(async () =>
+      Response.json({ status: "running", phase: "surprising-future-phase" }),
+    );
+    await expect(getSessionStatus(client, "session-1")).resolves.toEqual({
+      status: "running",
+      title: undefined,
+      error: undefined,
     });
   });
 
@@ -421,12 +629,44 @@ describe("codex-client getSessionStatus", () => {
     await expect(getSessionStatus(client, "session-1", { throwOnError: true }))
       .rejects.toThrow("offline");
   });
+
+  test("structured lookup distinguishes an authoritative 404 from unavailable status", async () => {
+    mockFetch(async () => Response.json({ status: "idle", phase: "idle" }));
+    await expect(lookupSessionStatus(client, "session-1")).resolves.toEqual({
+      kind: "found",
+      session: {
+        status: "idle",
+        phase: "idle",
+        title: undefined,
+        error: undefined,
+      },
+    });
+
+    mockFetch(async () => new Response(null, { status: 404 }));
+    await expect(lookupSessionStatus(client, "missing-session")).resolves.toEqual({
+      kind: "missing",
+    });
+
+    mockFetch(async () => new Response(null, { status: 503 }));
+    const unavailableHttp = await lookupSessionStatus(client, "session-1");
+    expect(unavailableHttp.kind).toBe("unavailable");
+    if (unavailableHttp.kind === "unavailable") {
+      expect(unavailableHttp.error.message).toContain("HTTP 503");
+    }
+
+    mockFetchError(new Error("timed out"));
+    const unavailableTransport = await lookupSessionStatus(client, "session-1");
+    expect(unavailableTransport.kind).toBe("unavailable");
+    if (unavailableTransport.kind === "unavailable") {
+      expect(unavailableTransport.error.message).toBe("timed out");
+    }
+  });
 });
 
 describe("codex-client sendPrompt", () => {
   afterEach(restoreFetch);
 
-  test("posts prompt attachments and an idempotency key and returns true on ok response", async () => {
+  test("posts prompt attachments and an idempotency key and reports acceptance", async () => {
     mockFetch(async () => new Response(null, { status: 202 }));
 
     await expect(sendPrompt(client, "session-1", "Review this", {
@@ -437,7 +677,11 @@ describe("codex-client sendPrompt", () => {
         filename: "screenshot.png",
       }],
       requestId: "request-1",
-    })).resolves.toBe(true);
+    })).resolves.toMatchObject({
+      outcome: "accepted",
+      status: "processing",
+      requestId: "request-1",
+    });
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "http://127.0.0.1:4000/session/session-1/prompt",
@@ -457,34 +701,88 @@ describe("codex-client sendPrompt", () => {
     );
   });
 
-  test("returns false on non-ok or failed responses", async () => {
+  test("distinguishes a definite HTTP rejection from an ambiguous transport failure", async () => {
     mockFetch(async () => new Response(null, { status: 409 }));
-    await expect(sendPrompt(client, "session-1", "Review this")).resolves.toBe(false);
+    await expect(sendPrompt(client, "session-1", "Review this")).resolves.toEqual({
+      outcome: "rejected",
+      httpStatus: 409,
+    });
 
     mockFetchError(new Error("offline"));
-    await expect(sendPrompt(client, "session-1", "Review this")).resolves.toBe(false);
+    await expect(sendPrompt(client, "session-1", "Review this")).resolves.toMatchObject({
+      outcome: "unknown",
+      requestId: expect.any(String),
+    });
+  });
+
+  test("surfaces the accepted turn identifiers for reconnect reconciliation", async () => {
+    mockFetch(async () =>
+      new Response(
+        JSON.stringify({
+          status: "processing",
+          requestId: "request-1",
+          threadId: "thread-9",
+          turnId: "turn-3",
+        }),
+        { status: 202 },
+      ),
+    );
+
+    await expect(
+      sendPrompt(client, "session-1", "Go", { requestId: "request-1" }),
+    ).resolves.toEqual({
+      outcome: "accepted",
+      status: "processing",
+      requestId: "request-1",
+      threadId: "thread-9",
+      turnId: "turn-3",
+      duplicate: false,
+    });
+  });
+
+  test("reports an already-processed duplicate so the caller does not retry", async () => {
+    mockFetch(async () =>
+      new Response(JSON.stringify({ status: "already-processed", duplicate: true }), {
+        status: 202,
+      }),
+    );
+
+    await expect(
+      sendPrompt(client, "session-1", "Go", { requestId: "request-1" }),
+    ).resolves.toMatchObject({
+      outcome: "accepted",
+      status: "already-processed",
+      duplicate: true,
+    });
   });
 });
 
 describe("codex-client abortSession", () => {
   afterEach(restoreFetch);
 
-  test("posts abort request and returns true on ok response", async () => {
+  test("posts abort request and reports an accepted outcome", async () => {
     mockFetch(async () => new Response(null, { status: 200 }));
 
-    await expect(abortSession(client, "session-1")).resolves.toBe(true);
+    await expect(abortSession(client, "session-1")).resolves.toEqual({
+      status: "accepted",
+    });
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "http://127.0.0.1:4000/session/session-1/abort",
       expect.objectContaining({ method: "POST" }),
     );
   });
 
-  test("returns false on non-ok or failed responses", async () => {
+  test("distinguishes a definite HTTP rejection from an ambiguous transport failure", async () => {
     mockFetch(async () => new Response(null, { status: 404 }));
-    await expect(abortSession(client, "session-1")).resolves.toBe(false);
+    await expect(abortSession(client, "session-1")).resolves.toEqual({
+      status: "rejected",
+      httpStatus: 404,
+    });
 
     mockFetchError(new Error("offline"));
-    await expect(abortSession(client, "session-1")).resolves.toBe(false);
+    await expect(abortSession(client, "session-1")).resolves.toEqual({
+      status: "unknown",
+    });
   });
 });
 
@@ -583,8 +881,12 @@ describe("codex-client subscribeToEvents", () => {
       this.listeners.set(type, listeners);
     }
 
-    emit(type: string, data: Record<string, unknown>) {
-      const event = { type, data: JSON.stringify(data) } as MessageEvent;
+    emit(type: string, data: Record<string, unknown>, lastEventId?: string) {
+      const event = {
+        type,
+        data: JSON.stringify(data),
+        ...(lastEventId === undefined ? {} : { lastEventId }),
+      } as MessageEvent;
       for (const listener of this.listeners.get(type) ?? []) listener(event);
     }
   }
@@ -629,5 +931,420 @@ describe("codex-client subscribeToEvents", () => {
 
     await expect(pending).rejects.toThrow("SSE connection error");
     expect(source.close).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not open a connection for an already-aborted signal", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const iterator = subscribeToEvents(client, controller.signal)[Symbol.asyncIterator]();
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+    expect(MockEventSource.instances).toHaveLength(0);
+  });
+
+  test("ignores malformed JSON and continues with the next valid event", async () => {
+    const originalError = console.error;
+    console.error = mock(() => {}) as unknown as typeof console.error;
+    try {
+      const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+      const pending = iterator.next();
+      const source = MockEventSource.instances[0]!;
+      const malformed = {
+        type: "session.updated",
+        data: "{not-json",
+        lastEventId: "",
+      } as MessageEvent;
+      for (const listener of source.listeners.get("session.updated") ?? []) {
+        listener(malformed);
+      }
+      source.emit("session.idle", { sessionId: "session-1" });
+
+      await expect(pending).resolves.toMatchObject({
+        done: false,
+        value: { type: "session.idle", sessionId: "session-1" },
+      });
+      await iterator.return?.();
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("iterator throw closes the source and rejects for the consumer", async () => {
+    const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+    const source = MockEventSource.instances[0]!;
+
+    await expect(iterator.throw?.(new Error("consumer gave up"))).rejects.toThrow(
+      "consumer gave up",
+    );
+    expect(source.close).toHaveBeenCalledTimes(1);
+    // The stream is finished, not wedged: a later read must resolve, not hang.
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+  });
+
+  test("buffers a burst that arrives before the consumer reads", async () => {
+    // The bridge can emit several frames between two `next()` calls; queueing them
+    // is what stops a fast turn from losing everything but its last event.
+    const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+    const source = MockEventSource.instances[0]!;
+
+    source.emit("session.updated", { sessionId: "session-1", phase: "running" }, "1");
+    source.emit("message.updated", { sessionId: "session-1" }, "2");
+    source.emit("session.idle", { sessionId: "session-1" }, "3");
+
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { type: "session.updated", revision: 1 },
+    });
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { type: "message.updated", revision: 2 },
+    });
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { type: "session.idle", revision: 3 },
+    });
+
+    await iterator.return?.();
+  });
+
+  test("iterator return closes the source and resolves a pending read", async () => {
+    const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    const source = MockEventSource.instances[0]!;
+
+    await iterator.return?.();
+    await expect(pending).resolves.toEqual({ done: true, value: undefined });
+    expect(source.close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("codex-client event cursor", () => {
+  const originalEventSource = globalThis.EventSource;
+  const instances: Array<{ url: string; listeners: Map<string, Array<(event: MessageEvent) => void>> }> = [];
+
+  class CursorMockEventSource {
+    readonly listeners = new Map<string, Array<(event: MessageEvent) => void>>();
+    readonly close = mock(() => {});
+    onerror: (() => void) | null = null;
+
+    constructor(readonly url: string) {
+      instances.push(this);
+    }
+
+    addEventListener(type: string, listener: (event: MessageEvent) => void) {
+      const listeners = this.listeners.get(type) ?? [];
+      listeners.push(listener);
+      this.listeners.set(type, listeners);
+    }
+
+    emit(type: string, data: Record<string, unknown>, lastEventId?: string) {
+      const event = {
+        type,
+        data: JSON.stringify(data),
+        ...(lastEventId === undefined ? {} : { lastEventId }),
+      } as MessageEvent;
+      for (const listener of this.listeners.get(type) ?? []) listener(event);
+    }
+  }
+
+  beforeEach(() => {
+    instances.length = 0;
+    (globalThis as unknown as { EventSource: unknown }).EventSource = CursorMockEventSource;
+  });
+
+  afterEach(() => {
+    (globalThis as unknown as { EventSource: unknown }).EventSource = originalEventSource;
+  });
+
+  test("omits ?since when no cursor is given", () => {
+    subscribeToEvents(client)[Symbol.asyncIterator]().next();
+    expect(instances[0]!.url).toBe("http://127.0.0.1:4000/event/subscribe");
+  });
+
+  test("sends ?since when a cursor is given, including zero", () => {
+    subscribeToEvents(client, undefined, 42)[Symbol.asyncIterator]().next();
+    expect(instances[0]!.url).toContain("since=42");
+
+    subscribeToEvents(client, undefined, 0)[Symbol.asyncIterator]().next();
+    // Cursor 0 is meaningful ("I have nothing yet"), so it must be sent.
+    expect(instances[1]!.url).toContain("since=0");
+  });
+
+  test("ignores a nonsensical cursor rather than sending it", () => {
+    subscribeToEvents(client, undefined, -1)[Symbol.asyncIterator]().next();
+    expect(instances[0]!.url).not.toContain("since");
+
+    subscribeToEvents(client, undefined, 1.5)[Symbol.asyncIterator]().next();
+    expect(instances[1]!.url).not.toContain("since");
+  });
+
+  test("exposes the SSE id as a numeric revision", async () => {
+    const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    (instances[0] as unknown as CursorMockEventSource).emit(
+      "session.idle",
+      { sessionId: "s1" },
+      "17",
+    );
+
+    const result = await pending;
+    expect(result.value.revision).toBe(17);
+  });
+
+  test("omits the revision when the id is absent or unparseable", async () => {
+    const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+    const first = iterator.next();
+    (instances[0] as unknown as CursorMockEventSource).emit("session.idle", { sessionId: "s1" });
+    expect((await first).value.revision).toBeUndefined();
+
+    const second = iterator.next();
+    (instances[0] as unknown as CursorMockEventSource).emit(
+      "session.idle",
+      { sessionId: "s1" },
+      "not-a-number",
+    );
+    expect((await second).value.revision).toBeUndefined();
+  });
+
+  test("subscribes to the approval and reconcile event types", () => {
+    subscribeToEvents(client)[Symbol.asyncIterator]().next();
+    const types = [...instances[0]!.listeners.keys()];
+    expect(types).toContain("session.approval-requested");
+    expect(types).toContain("session.approval-resolved");
+    expect(types).toContain("session.reconcile-required");
+  });
+});
+
+describe("codex-client approvals", () => {
+  afterEach(restoreFetch);
+
+  test("fetchPendingApprovals returns the list", async () => {
+    const approval = {
+      approvalId: "apr-1-1",
+      kind: "command",
+      method: "item/commandExecution/requestApproval",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-1",
+      requestedAt: 1,
+      expiresAt: 2,
+      command: "ls",
+      actionable: true,
+      supportsApproveForSession: true,
+    };
+    mockFetch(() =>
+      Response.json({
+        approvals: [approval],
+      }),
+    );
+
+    const approvals = await fetchPendingApprovals(client, "session-1");
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]!.approvalId).toBe("apr-1-1");
+  });
+
+  test("filters malformed approval entries and sanitizes malformed optional fields", async () => {
+    mockFetch(() =>
+      Response.json({
+        approvals: [
+          { approvalId: "missing-required-fields" },
+          {
+            approvalId: "apr-valid",
+            kind: "permissions",
+            method: "item/permissions/requestApproval",
+            threadId: null,
+            turnId: null,
+            itemId: null,
+            requestedAt: 1,
+            expiresAt: 2,
+            permissions: { network: "yes", fileSystem: true },
+            changes: [{ path: "/valid", kind: "update" }, { nope: true }],
+            actionable: false,
+            supportsApproveForSession: false,
+          },
+        ],
+      }),
+    );
+
+    const approvals = await fetchPendingApprovals(client, "session-1");
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({
+      approvalId: "apr-valid",
+      changes: [{ path: "/valid", kind: "update" }],
+    });
+    expect(approvals[0]?.permissions).toBeUndefined();
+  });
+
+  test("fetchPendingApprovals rejects bad responses so callers preserve existing state", async () => {
+    mockFetch(() => new Response("nope", { status: 500 }));
+    await expect(fetchPendingApprovals(client, "session-1")).rejects.toThrow("HTTP 500");
+
+    mockFetch(() => Response.json({ approvals: "not-an-array" }));
+    await expect(fetchPendingApprovals(client, "session-1")).rejects.toThrow("malformed");
+
+    mockFetchError(new Error("network down"));
+    await expect(fetchPendingApprovals(client, "session-1")).rejects.toThrow("network down");
+  });
+
+  /**
+   * The turn is *blocked* on an approval, so a descriptor we refuse to render is
+   * a turn that hangs until the bridge's five-minute auto-deny. These assert the
+   * exact field contract with `describeApproval` in the bridge, and that every
+   * rejection is reported rather than dropped on the floor.
+   */
+  describe("parseApproval", () => {
+    const VALID = {
+      approvalId: "apr-1",
+      kind: "command",
+      method: "item/commandExecution/requestApproval",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-1",
+      requestedAt: 1,
+      expiresAt: 2,
+      command: "rm -rf build",
+      cwd: "/workspace",
+      actionable: true,
+      supportsApproveForSession: true,
+    };
+
+    let warn = mock((..._args: unknown[]) => {});
+    const originalWarn = console.warn;
+
+    beforeEach(() => {
+      warn = mock((..._args: unknown[]) => {});
+      console.warn = warn as unknown as typeof console.warn;
+    });
+
+    afterEach(() => {
+      console.warn = originalWarn;
+    });
+
+    test("accepts the descriptor the bridge actually sends", () => {
+      expect(parseApproval(VALID)).toMatchObject({
+        approvalId: "apr-1",
+        kind: "command",
+        command: "rm -rf build",
+        cwd: "/workspace",
+        supportsApproveForSession: true,
+      });
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    test.each([
+      ["a non-object payload", null],
+      ["a missing approvalId", { ...VALID, approvalId: 7 }],
+      ["an unknown kind", { ...VALID, kind: "network" }],
+      ["a non-string method", { ...VALID, method: 12 }],
+      ["a non-string, non-null threadId", { ...VALID, threadId: 5 }],
+      ["a non-string, non-null turnId", { ...VALID, turnId: {} }],
+      ["a non-string, non-null itemId", { ...VALID, itemId: [] }],
+      ["a non-finite requestedAt", { ...VALID, requestedAt: Number.NaN }],
+      ["a missing expiresAt", { ...VALID, expiresAt: undefined }],
+      ["a non-finite expiresAt", { ...VALID, expiresAt: Number.POSITIVE_INFINITY }],
+      ["a missing actionable flag", { ...VALID, actionable: undefined }],
+      ["a non-boolean actionable flag", { ...VALID, actionable: "yes" }],
+      ["a non-boolean supportsApproveForSession", { ...VALID, supportsApproveForSession: "yes" }],
+    ])("rejects and warns about %s", (_label, payload) => {
+      expect(parseApproval(payload)).toBeNull();
+      expect(warn).toHaveBeenCalledTimes(1);
+      const [message] = warn.mock.calls[0] as unknown as [string, { approvalId?: string }];
+      expect(message).toContain("unrecognised Codex approval");
+      // Never the command, the cwd or any file content: the user has not agreed
+      // to run this yet, and the log is shared.
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("rm -rf build");
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("/workspace");
+    });
+
+    test("names the approval it dropped when the id survived", () => {
+      parseApproval({ ...VALID, kind: "network" });
+      const [, context] = warn.mock.calls[0] as unknown as [string, { approvalId?: string }];
+      expect(context).toEqual({ approvalId: "apr-1" });
+    });
+
+    test.each([
+      ["command", 42],
+      ["cwd", {}],
+      ["reason", null],
+      ["grantRoot", []],
+      ["networkHost", 7],
+    ])("drops a malformed optional %s rather than the whole request", (field, value) => {
+      // These are cosmetic. Rejecting the request over one would block a turn the
+      // user could otherwise answer.
+      const parsed = parseApproval({ ...VALID, command: undefined, [field]: value });
+      expect(parsed).not.toBeNull();
+      expect(parsed?.[field as "command"]).toBeUndefined();
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    test("tolerates a changes field that is not a well-formed list", () => {
+      // The v2 file-change method sends no changes at all, so an absent or odd
+      // list is normal rather than a parse failure.
+      expect(parseApproval({ ...VALID, changes: "all of them" })?.changes).toBeUndefined();
+      expect(
+        parseApproval({
+          ...VALID,
+          changes: [null, "src/a.ts", { path: "/workspace/a.ts", kind: "delete" }, { path: 1, kind: "add" }],
+        })?.changes,
+      ).toEqual([{ path: "/workspace/a.ts", kind: "delete" }]);
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
+  test("respondToApproval posts the decision", async () => {
+    const fetchMock = mock(() => Response.json({ status: "applied" }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    expect(await respondToApproval(client, "session-1", "apr-1-1", "approve")).toBe("applied");
+
+    // `mock(() => …)` infers a zero-arg signature, so the recorded call args
+    // need widening before they can be read.
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:4000/session/session-1/approvals/apr-1-1");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({ decision: "approve" });
+  });
+
+  test("distinguishes stale, forbidden and error outcomes", async () => {
+    // The UI reacts differently to each: drop the card for the first two, offer a
+    // retry for the third.
+    mockFetch(() => new Response("{}", { status: 409 }));
+    expect(await respondToApproval(client, "s", "a", "deny")).toBe("stale");
+
+    mockFetch(() => new Response("{}", { status: 403 }));
+    expect(await respondToApproval(client, "s", "a", "deny")).toBe("forbidden");
+
+    mockFetch(() => new Response("{}", { status: 500 }));
+    expect(await respondToApproval(client, "s", "a", "deny")).toBe("error");
+
+    mockFetchError(new Error("offline"));
+    expect(await respondToApproval(client, "s", "a", "deny")).toBe("error");
+  });
+
+  test("reports the entries it drops so a protocol change is not silent", async () => {
+    const originalWarn = console.warn;
+    const warn = mock(() => {});
+    console.warn = warn as unknown as typeof console.warn;
+    try {
+      mockFetch(() =>
+        Response.json({
+          approvals: [{ approvalId: "apr-broken", kind: "future-kind", command: "rm -rf /" }],
+        }),
+      );
+
+      await expect(fetchPendingApprovals(client, "session-1")).resolves.toEqual([]);
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("encodes the approval id into the path", async () => {
+    const fetchMock = mock(() => Response.json({ status: "applied" }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await respondToApproval(client, "session-1", "apr/1?x", "deny");
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(url).toContain("apr%2F1%3Fx");
   });
 });

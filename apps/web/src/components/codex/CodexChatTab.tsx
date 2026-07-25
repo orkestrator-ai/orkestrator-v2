@@ -18,17 +18,24 @@ import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import {
   type CodexConversationMode,
   type CodexMessage,
+  type CodexPromptAcceptedResponse,
   type CodexPromptAttachment,
+  type CodexPromptSendOutcome,
   type CodexReasoningEffort,
+  type CodexSessionConfigUpdateOutcome,
   DEFAULT_CODEX_MODEL,
   abortSession,
   checkHealth,
   createClient,
   createSession,
+  fetchPendingApprovals,
   getModels,
   getSlashCommands,
   getSessionMessages,
   getSessionStatus,
+  isCodexSessionPhase,
+  lookupSessionStatus,
+  parseApproval,
   resumeSession,
   sendPrompt,
   subscribeToEvents,
@@ -47,6 +54,7 @@ import { SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
 import { CodexComposeBar } from "./CodexComposeBar";
+import { CodexApprovalCard } from "./CodexApprovalCard";
 import { CodexPlanModeCard } from "./CodexPlanModeCard";
 import { CodexResumeSessionDialog } from "./CodexResumeSessionDialog";
 import { hasPendingInitialPrompt } from "./reconcile-guards";
@@ -82,7 +90,60 @@ const DEFAULT_REASONING_EFFORT: CodexReasoningEffort = "medium";
 type CodexSendHandler = (
   text: string,
   attachments: CodexAttachment[],
+  requestId?: string,
 ) => Promise<void>;
+interface ReconcileSessionOptions {
+  forceRefreshMessages?: boolean;
+  throwOnError?: boolean;
+  /**
+   * The user asked for this refresh.
+   *
+   * Manual requests are tracked on their own sequence so only a *newer manual*
+   * refresh can supersede one. Sharing the background sequence made an overlapping
+   * watchdog tick or SSE frame turn the user's refresh into a silent no-op.
+   */
+  manual?: boolean;
+}
+type ReconcileSessionResult = "applied" | "missing" | "unavailable" | "stale";
+
+/**
+ * Bun component tests historically stubbed these clients with their old
+ * boolean/nullable return values. Normalize those shapes at the UI boundary so
+ * the production client can expose the ambiguity without making unrelated
+ * caller tests lie about success.
+ */
+function normalizePromptSendOutcome(value: unknown): CodexPromptSendOutcome {
+  if (value && typeof value === "object") {
+    const entry = value as Record<string, unknown>;
+    if (
+      entry.outcome === "accepted"
+      || entry.outcome === "rejected"
+      || entry.outcome === "unknown"
+    ) {
+      return value as CodexPromptSendOutcome;
+    }
+    if (entry.status === "processing" || entry.status === "already-processed") {
+      return {
+        outcome: "accepted",
+        ...(value as CodexPromptAcceptedResponse),
+      };
+    }
+  }
+  if (value === true) return { outcome: "accepted", status: "processing" };
+  return { outcome: "rejected", httpStatus: 0 };
+}
+
+function normalizeConfigUpdateOutcome(value: unknown): CodexSessionConfigUpdateOutcome {
+  if (value && typeof value === "object") {
+    const outcome = (value as { outcome?: unknown }).outcome;
+    if (outcome === "applied" || outcome === "rejected" || outcome === "unknown") {
+      return value as CodexSessionConfigUpdateOutcome;
+    }
+  }
+  return value === true
+    ? { outcome: "applied", durable: true }
+    : { outcome: "rejected", httpStatus: 0 };
+}
 
 export function CodexChatTab({
   tabId,
@@ -114,8 +175,43 @@ export function CodexChatTab({
   const isProcessingQueueRef = useRef(false);
   const isWatchdogRefreshInFlightRef = useRef(false);
   const lastHandledRefreshRequestIdRef = useRef(0);
-  const manualRefreshSequenceRef = useRef(0);
+  const reconcileSequenceRef = useRef(0);
+  const manualReconcileSequenceRef = useRef(0);
+  /**
+   * Number of prompt dispatches whose HTTP request has not settled.
+   *
+   * A turn we are about to start is not visible in any bridge status yet, so this
+   * is the only signal that an "idle" phase describes the *previous* turn.
+   */
+  const dispatchInFlightRef = useRef(0);
+  const approvalSnapshotSequenceRef = useRef(0);
+  const approvalActivitySequenceRef = useRef(0);
+  const reconcileSessionStateRef = useRef<
+    (options?: ReconcileSessionOptions) => Promise<ReconcileSessionResult>
+  >(async () => "unavailable");
+  const retryablePromptRef = useRef<{
+    fingerprint: string;
+    requestId: string;
+  } | null>(null);
+  /**
+   * An optimistic user message whose dispatch was never confirmed.
+   *
+   * The send path can only resolve a lost response when its own reconcile
+   * returns an authoritative state. When it cannot — the reconcile was
+   * superseded, or the bridge was unreachable and recovery happens later — the
+   * message would otherwise sit in the transcript forever as something Codex
+   * appears to have been told but never received. Whichever path next observes
+   * an authoritative idle session settles it.
+   */
+  const unconfirmedDispatchRef = useRef<{ userMessageId: string } | null>(null);
   const refreshControllerRef = useRef(createCodexSessionRefreshController());
+  /**
+   * Last bridge event revision this tab processed.
+   *
+   * A ref, not state: it is written from inside the SSE loop on every frame and
+   * must never trigger a render or be captured stale by the loop's closure.
+   */
+  const eventCursorRef = useRef<number | null>(null);
   const sessionKey = useMemo(
     () => createCodexSessionKey(environmentId, tabId),
     [environmentId, tabId],
@@ -182,6 +278,10 @@ export function CodexChatTab({
     setSessionLoading,
     setSessionError,
     setSessionTitle,
+    setSessionPhase,
+    setPendingApprovals,
+    addPendingApproval,
+    removePendingApproval,
     setSelectedModel,
     setSelectedMode,
     setSelectedReasoningEffort,
@@ -190,6 +290,8 @@ export function CodexChatTab({
     removeFromQueue,
     clients: clientsMap,
     sessions: sessionsMap,
+    sessionPhase: sessionPhaseMap,
+    pendingApprovals: pendingApprovalsMap,
     selectedModel: selectedModelMap,
     selectedMode: selectedModeMap,
     selectedReasoningEffort: selectedReasoningEffortMap,
@@ -201,6 +303,10 @@ export function CodexChatTab({
   const client = useMemo(
     () => clientsMap.get(environmentId),
     [clientsMap, environmentId],
+  );
+  const pendingApprovals = useMemo(
+    () => pendingApprovalsMap.get(sessionKey) ?? [],
+    [pendingApprovalsMap, sessionKey],
   );
   // Setup completion awareness - block initialization until setup scripts finish
   const setupScriptsRunning = useEnvironmentStore(
@@ -226,6 +332,11 @@ export function CodexChatTab({
   const session = useMemo(
     () => sessionsMap.get(sessionKey),
     [sessionsMap, sessionKey],
+  );
+  /** Undefined until the bridge reports a phase for this session. */
+  const sessionPhase = useMemo(
+    () => sessionPhaseMap.get(sessionKey),
+    [sessionPhaseMap, sessionKey],
   );
   const showAddressAll = Boolean(
     isReviewTab &&
@@ -317,6 +428,8 @@ export function CodexChatTab({
     ),
   );
   const handleSendRef = useRef<CodexSendHandler | null>(null);
+  /** Lets a finished drain start the next one without re-declaring the callback. */
+  const processQueueRef = useRef<() => void>(() => {});
   const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
     session?.isLoading,
     session?.sessionId,
@@ -368,14 +481,68 @@ export function CodexChatTab({
   );
 
   useEffect(() => {
+    reconcileSequenceRef.current += 1;
+    manualReconcileSequenceRef.current += 1;
     refreshControllerRef.current = createCodexSessionRefreshController();
     refreshControllerRef.current.markActivity();
+    approvalSnapshotSequenceRef.current += 1;
+    approvalActivitySequenceRef.current += 1;
+    retryablePromptRef.current = null;
+    unconfirmedDispatchRef.current = null;
   }, [sessionKey, session?.sessionId]);
 
+  /**
+   * Settles an unconfirmed dispatch against an authoritative idle session.
+   *
+   * Call only once the transcript has been refreshed from the bridge: if the
+   * optimistic message survived that refresh, the server never recorded the
+   * prompt, so it must be withdrawn and offered for retry instead of sitting in
+   * the transcript as if Codex had seen it.
+   */
+  const resolveUnconfirmedDispatch = useCallback(() => {
+    const pending = unconfirmedDispatchRef.current;
+    if (!pending) return;
+    unconfirmedDispatchRef.current = null;
+
+    const current = useCodexStore.getState().sessions.get(sessionKey);
+    const stillPresent = current?.messages.some(
+      (message) => message.id === pending.userMessageId,
+    ) === true;
+    if (!stillPresent) {
+      // The bridge echoed the prompt, so the dispatch did land and its key is
+      // spent.
+      retryablePromptRef.current = null;
+      return;
+    }
+
+    removeMessage(sessionKey, pending.userMessageId);
+    setSessionError(
+      sessionKey,
+      "Could not confirm whether Codex received the prompt. You can send it again safely.",
+    );
+  }, [removeMessage, sessionKey, setSessionError]);
+
   const handleSend = useCallback(
-    async (text: string, attachments: CodexAttachment[]) => {
+    async (
+      text: string,
+      attachments: CodexAttachment[],
+      logicalRequestId?: string,
+    ) => {
       if (!client || !session?.sessionId) return;
 
+      const fingerprint = JSON.stringify({
+        text,
+        attachments: attachments.map(({ path, previewUrl, name }) => ({
+          path,
+          previewUrl,
+          name,
+        })),
+      });
+      const requestId =
+        logicalRequestId
+        ?? (retryablePromptRef.current?.fingerprint === fingerprint
+          ? retryablePromptRef.current.requestId
+          : createUuid());
       const userMessage = createOptimisticNativeMessage(
         `${OPTIMISTIC_MESSAGE_PREFIX}${createUuid()}`,
         text,
@@ -411,13 +578,118 @@ export function CodexChatTab({
         dataUrl: attachment.previewUrl,
         filename: attachment.name,
       }));
-      const sent = await sendPrompt(client, session.sessionId, text, {
-        attachments: promptAttachments.length > 0 ? promptAttachments : undefined,
-      });
-      if (!sent) {
+      dispatchInFlightRef.current += 1;
+      let rawSendOutcome: Awaited<ReturnType<typeof sendPrompt>>;
+      try {
+        rawSendOutcome = await sendPrompt(client, session.sessionId, text, {
+          attachments: promptAttachments.length > 0 ? promptAttachments : undefined,
+          requestId,
+        });
+      } finally {
+        dispatchInFlightRef.current -= 1;
+      }
+      const sent = normalizePromptSendOutcome(rawSendOutcome);
+      if (sent.outcome === "rejected") {
+        // A concrete HTTP rejection proves no turn is starting, so it is safe to
+        // unlock and let the user correct or retry the prompt.
+        retryablePromptRef.current = { fingerprint, requestId };
         removeMessage(sessionKey, userMessage.id);
         setSessionLoading(sessionKey, false);
-        setSessionError(sessionKey, "Failed to send prompt");
+        setSessionError(
+          sessionKey,
+          sent.httpStatus > 0
+            ? `Failed to send prompt (HTTP ${sent.httpStatus})`
+            : "Failed to send prompt",
+        );
+        return;
+      }
+
+      if (sent.outcome === "unknown") {
+        /**
+         * Do not unlock on a lost response.
+         *
+         * The bridge may already be running this request. Dropping `isLoading`
+         * here would tear down both SSE and the watchdog and let a second prompt
+         * overlap it. Keep the idempotency key for an explicit retry, mark the
+         * phase as recovering, and reconcile before deciding whether the composer
+         * can safely be released.
+         */
+        retryablePromptRef.current = { fingerprint, requestId };
+        // Claimed before reconciling: if this reconcile cannot conclude, a later
+        // authoritative idle state has to finish the job rather than silently
+        // unlocking and stranding the message.
+        unconfirmedDispatchRef.current = { userMessageId: userMessage.id };
+        setSessionPhase(sessionKey, "recovering");
+        const reconciliation = await reconcileSessionStateRef.current({
+          forceRefreshMessages: true,
+        });
+        const reconciledSession = useCodexStore.getState().sessions.get(sessionKey);
+
+        if (reconciliation === "missing") {
+          unconfirmedDispatchRef.current = null;
+          removeMessage(sessionKey, userMessage.id);
+          setSessionPhase(sessionKey, undefined);
+          setSessionLoading(sessionKey, false);
+          setSessionError(sessionKey, "The Codex session is no longer available");
+        } else if (reconciliation === "unavailable") {
+          // Keep the lock. The running turn remains authoritative until status or
+          // an SSE terminal event proves otherwise.
+          setSessionError(
+            sessionKey,
+            "Lost connection while sending the prompt. Reconnecting to Codex…",
+          );
+        } else if (
+          reconciliation === "applied"
+          && reconciledSession?.isLoading !== true
+        ) {
+          const optimisticStillPresent = reconciledSession?.messages.some(
+            (message) => message.id === userMessage.id,
+          ) === true;
+          unconfirmedDispatchRef.current = null;
+          if (optimisticStillPresent) {
+            // Authoritative idle state did not echo the prompt, so expose a
+            // retryable failure rather than leaving a local-only user message.
+            removeMessage(sessionKey, userMessage.id);
+            setSessionError(
+              sessionKey,
+              "Could not confirm whether Codex received the prompt. You can send it again safely.",
+            );
+          } else {
+            // The transcript proves the request completed despite the lost
+            // response; its idempotency key is now spent.
+            retryablePromptRef.current = null;
+            setSessionError(sessionKey, undefined);
+          }
+          setSessionPhase(sessionKey, undefined);
+        }
+        return;
+      }
+      /**
+       * Any accepted dispatch spends the stored key.
+       *
+       * It used to be cleared only when the *same* request id came back, so a key
+       * from a failed send outlived arbitrarily many unrelated prompts — and the
+       * bridge's dispatch journal remembers a terminal record for 24 hours. A user
+       * re-sending short text ("yes") would then hit the `already-processed` branch
+       * below forever instead of running a turn.
+       */
+      retryablePromptRef.current = null;
+
+      if (sent.status === "already-processed" && sent.duplicate) {
+        /**
+         * The bridge recognised this request id as one it already ran to
+         * completion, so no turn is starting. Treating it as a success would leave
+         * an optimistic message and a permanent spinner waiting for a turn that
+         * will never report.
+         */
+        removeMessage(sessionKey, userMessage.id);
+        setSessionLoading(sessionKey, false);
+        // A toast rather than the session error, which the next idle reconcile
+        // clears — the user needs to know their prompt did not start a turn.
+        toast.error("Codex had already run this prompt", {
+          description: "It was not sent again. The transcript below is up to date.",
+        });
+        await refreshMessages(client, session.sessionId);
         return;
       }
       await refreshMessages(client, session.sessionId);
@@ -442,8 +714,10 @@ export function CodexChatTab({
 
   const handleQueue = useCallback(
     (text: string, attachments: CodexAttachment[]) => {
+      const requestId = createUuid();
       addToQueue(sessionKey, {
-        id: createUuid(),
+        id: requestId,
+        requestId,
         text,
         attachments,
         model: selectedModel,
@@ -476,7 +750,11 @@ export function CodexChatTab({
 
     isProcessingQueueRef.current = true;
 
-    const sendPromise = handleSendRef.current?.(nextMessage.text, nextMessage.attachments);
+    const sendPromise = handleSendRef.current?.(
+      nextMessage.text,
+      nextMessage.attachments,
+      nextMessage.requestId ?? nextMessage.id,
+    );
 
     if (!sendPromise) {
       isProcessingQueueRef.current = false;
@@ -496,8 +774,22 @@ export function CodexChatTab({
       })
       .finally(() => {
         isProcessingQueueRef.current = false;
-        // Don't recurse here — the useEffect watching isLoading/queueLength
-        // will call processQueue again when the session becomes idle.
+        /**
+         * Normally the effect watching isLoading/queueLength drives the next
+         * drain, so this does not recurse. But that effect can fire *while* this
+         * send is still in flight — the re-entrancy guard above turns that into a
+         * no-op — and if the turn settled in the same pass there is no later
+         * dependency change to retry on, stranding the rest of the queue. Only
+         * re-enter when the queue is genuinely idle with work left; each pass
+         * dequeues one entry, so this cannot spin.
+         */
+        const settled = useCodexStore.getState();
+        if (
+          (settled.messageQueue.get(sessionKey)?.length ?? 0) > 0
+          && settled.sessions.get(sessionKey)?.isLoading !== true
+        ) {
+          processQueueRef.current();
+        }
       });
   }, [
     client,
@@ -508,6 +800,10 @@ export function CodexChatTab({
     setSessionError,
     setSessionLoading,
   ]);
+
+  useEffect(() => {
+    processQueueRef.current = processQueue;
+  }, [processQueue]);
 
   const promoteNextQueuedPromptToDraft = useCallback(() => {
     const store = useCodexStore.getState();
@@ -535,12 +831,40 @@ export function CodexChatTab({
     if (!client || !session?.sessionId) return;
 
     promoteNextQueuedPromptToDraft();
-    setSessionLoading(sessionKey, false);
     setSessionError(sessionKey, undefined);
 
-    const success = await abortSession(client, session.sessionId);
-    if (!success) {
-      console.error("[CodexChatTab] Failed to abort session");
+    /**
+     * Stay in a loading state and show "Stopping…".
+     *
+     * `turn/interrupt` is asynchronous on the app-server engine: the turn is not
+     * over until a terminal interrupted event arrives. Clearing the loading flag
+     * here would re-enable the composer, and the next prompt would be rejected
+     * with a 409 because the bridge still has a turn in flight. The status poll
+     * and SSE clear the phase once the turn actually ends.
+     */
+    setSessionPhase(sessionKey, "cancelling");
+
+    const outcome = await abortSession(client, session.sessionId);
+    if (outcome.status === "accepted") {
+      return;
+    }
+
+    console.error(
+      outcome.status === "unknown"
+        ? "[CodexChatTab] Abort outcome is unknown; reconciling session"
+        : `[CodexChatTab] Abort request was rejected with HTTP ${outcome.httpStatus}`,
+    );
+
+    const reconciliation = await reconcileSessionStateRef.current({
+      forceRefreshMessages: true,
+    });
+
+    if (reconciliation === "missing") {
+      // Only an authoritative missing-session response proves there is no turn
+      // left to stop. A rejected interrupt does not prove that the pre-existing
+      // turn ended, and an unavailable lookup cannot safely release the lock.
+      setSessionPhase(sessionKey, undefined);
+      setSessionLoading(sessionKey, false);
     }
   }, [
     client,
@@ -549,6 +873,7 @@ export function CodexChatTab({
     sessionKey,
     setSessionError,
     setSessionLoading,
+    setSessionPhase,
   ]);
 
   useEffect(() => {
@@ -787,7 +1112,10 @@ export function CodexChatTab({
         const availableSlashCommands = await getSlashCommands(nextClient);
         const codexState = useCodexStore.getState();
         if (
-          modelsSource === "cache"
+          // `app-server` is authoritative (model/list on the live binary), so it
+          // replaces a stored catalog just as a warm cache does.
+          modelsSource === "app-server"
+          || modelsSource === "cache"
           || codexState.models.length === 0
           || availableModels.length > codexState.models.length
         ) {
@@ -929,18 +1257,32 @@ export function CodexChatTab({
         return false;
       }
 
-      const updated = await updateCodexSessionConfig(client, session.sessionId, {
+      const rawOutcome = await updateCodexSessionConfig(client, session.sessionId, {
         model,
         modelReasoningEffort: nextReasoningEffort,
         mode,
         fastMode,
       });
+      const outcome = normalizeConfigUpdateOutcome(rawOutcome);
 
-      if (!updated) {
-        setSessionError(sessionKey, "Failed to update Codex session settings");
+      if (outcome.outcome === "applied") {
+        if (!outcome.durable) {
+          toast.warning("Codex settings were applied but not saved", {
+            description: "They may revert if the Codex bridge restarts.",
+          });
+        }
+        return true;
       }
 
-      return updated;
+      setSessionError(
+        sessionKey,
+        outcome.outcome === "unknown"
+          ? "Could not confirm whether Codex session settings were updated"
+          : outcome.httpStatus > 0
+            ? `Failed to update Codex session settings (HTTP ${outcome.httpStatus})`
+            : "Failed to update Codex session settings",
+      );
+      return false;
     },
     [client, session?.isLoading, session?.sessionId, sessionKey, setSessionError],
   );
@@ -1111,37 +1453,130 @@ export function CodexChatTab({
     && latestAssistantHasReviewContent
     && latestAssistantMessage.id !== dismissedPlanReviewMessageId;
 
-  const reconcileSessionState = useCallback(async (options?: {
-    forceRefreshMessages?: boolean;
-    throwOnError?: boolean;
-    manualRequestSequence?: number;
-  }) => {
+  /**
+   * Approvals are shown regardless of `isLoading`.
+   *
+   * They are deliberately not gated on a running turn: the request *is* what is
+   * holding the turn open, and gating on our own view of loading state would hide
+   * the only control that can unblock it if those two ever disagree.
+   */
+  const showApprovals =
+    pendingApprovals.length > 0 && !!client && !!session?.sessionId;
+
+  const reconcileSessionState = useCallback(async (
+    options?: ReconcileSessionOptions,
+  ): Promise<ReconcileSessionResult> => {
     if (
       connectionState !== "connected"
       || !client
       || !session?.sessionId
     ) {
-      return;
+      return "unavailable";
     }
 
-    const shouldApply = () =>
-      options?.manualRequestSequence === undefined ||
-      options.manualRequestSequence === manualRefreshSequenceRef.current;
-    const status = await getSessionStatus(client, session.sessionId, {
-      throwOnError: options?.throwOnError,
-    });
-    if (!shouldApply()) return;
-    if (!status) {
+    /**
+     * A background reconcile is invalidated by anything newer — another
+     * reconcile, or any live SSE frame for this session. A manual one is only
+     * invalidated by a newer *manual* refresh: the user asked for this, and a
+     * watchdog tick or a `message.updated` frame arriving mid-flight must not
+     * turn their refresh into a silent no-op.
+     */
+    const reconcileSequence = ++reconcileSequenceRef.current;
+    const manualSequence = options?.manual
+      ? ++manualReconcileSequenceRef.current
+      : manualReconcileSequenceRef.current;
+    const isLatestManual = () =>
+      manualSequence === manualReconcileSequenceRef.current;
+    const isLatestLiveState = () =>
+      reconcileSequence === reconcileSequenceRef.current;
+    const shouldApply = options?.manual ? isLatestManual : isLatestLiveState;
+    const lookup = await lookupSessionStatus(client, session.sessionId);
+    if (!shouldApply()) return "stale";
+
+    if (lookup.kind === "missing") {
       if (options?.throwOnError) {
         throw new Error("The Codex session is no longer available on the server");
       }
-      return;
+      return "missing";
     }
+    if (lookup.kind === "unavailable") {
+      if (options?.throwOnError) {
+        throw lookup.error;
+      }
+      return "unavailable";
+    }
+
+    if (options?.manual && !isLatestLiveState()) {
+      /**
+       * A live SSE frame landed after the manual status request began, so its
+       * status/title/phase is newer than this HTTP snapshot and must win.
+       *
+       * Still honour the user's refresh by fetching the transcript *after* that
+       * event. This avoids the old silent no-op without letting a stale `running`
+       * response re-lock a session that just emitted `session.idle` (or a stale
+       * `idle` response unlock a newly running turn).
+       */
+      const messageRefreshSequence = reconcileSequenceRef.current;
+      await refreshMessages(client, session.sessionId, {
+        throwOnError: options.throwOnError,
+        shouldApply: () =>
+          isLatestManual()
+          && messageRefreshSequence === reconcileSequenceRef.current,
+      });
+      return "applied";
+    }
+
+    const status = lookup.session;
     refreshControllerRef.current.markActivity();
+
+    /**
+     * Rehydrate approvals from the bridge on every reconcile.
+     *
+     * This is the authoritative path, not the SSE frame: a tab that was unmounted
+     * (or an environment that was in the background) when Codex asked for approval
+     * never saw the event, and the turn is blocked until someone answers.
+     */
+    const approvalSnapshotSequence = ++approvalSnapshotSequenceRef.current;
+    const approvalActivitySequence = approvalActivitySequenceRef.current;
+    void fetchPendingApprovals(client, session.sessionId)
+      .then((approvals) => {
+        /**
+         * Deliberately not gated on the reconcile sequence.
+         *
+         * This snapshot is the *only* rehydration path for a tab that was
+         * unmounted when the approval was raised — its resubscription has no
+         * cursor, so the bridge replays nothing. Discarding it because an
+         * unrelated `message.updated` frame arrived meanwhile would leave the
+         * turn blocked on a card nobody can see. The two approval-specific
+         * counters below are the correct invalidation: a newer snapshot, or a
+         * live approval event that already moved the list.
+         */
+        if (
+          approvalSnapshotSequence === approvalSnapshotSequenceRef.current
+          && approvalActivitySequence === approvalActivitySequenceRef.current
+        ) {
+          setPendingApprovals(sessionKey, approvals);
+        }
+      })
+      .catch((error: unknown) => {
+        console.error("[CodexChatTab] Failed to rehydrate approvals:", error);
+      });
 
     if (typeof status.title === "string" && status.title.trim().length > 0) {
       setSessionTitle(sessionKey, status.title);
     }
+
+    /**
+     * Track the engine's own phase.
+     *
+     * `cancelling` and `recovering` arrive as `status: "running"`, so this is the
+     * only place the distinction is visible. Clearing it on a terminal status is
+     * what lets the composer re-enable after a stop actually completes.
+     */
+    setSessionPhase(
+      sessionKey,
+      status.status === "running" ? status.phase : undefined,
+    );
 
     if (status.status === "idle") {
       setSessionLoading(sessionKey, false);
@@ -1150,7 +1585,10 @@ export function CodexChatTab({
         throwOnError: options?.throwOnError,
         shouldApply,
       });
-      return;
+      // Authoritative idle plus a fresh transcript is exactly what an earlier
+      // unresolved dispatch was waiting for.
+      if (shouldApply()) resolveUnconfirmedDispatch();
+      return "applied";
     }
 
     if (status.status === "error") {
@@ -1162,7 +1600,7 @@ export function CodexChatTab({
         throwOnError: options?.throwOnError,
         shouldApply,
       });
-      return;
+      return "applied";
     }
 
     setSessionLoading(sessionKey, true);
@@ -1172,16 +1610,24 @@ export function CodexChatTab({
         shouldApply,
       });
     }
+    return "applied";
   }, [
     client,
     connectionState,
     refreshMessages,
+    resolveUnconfirmedDispatch,
     session?.sessionId,
     sessionKey,
+    setPendingApprovals,
     setSessionError,
     setSessionLoading,
+    setSessionPhase,
     setSessionTitle,
   ]);
+
+  useEffect(() => {
+    reconcileSessionStateRef.current = reconcileSessionState;
+  }, [reconcileSessionState]);
 
   useEffect(() => {
     if (
@@ -1194,11 +1640,17 @@ export function CodexChatTab({
     }
 
     lastHandledRefreshRequestIdRef.current = refreshRequestId;
-    const manualRequestSequence = ++manualRefreshSequenceRef.current;
     void reconcileSessionState({
       forceRefreshMessages: true,
       throwOnError: true,
-      manualRequestSequence,
+      manual: true,
+    }).then((result) => {
+      if (result === "stale") {
+        // Only a newer manual refresh can get here, and that request owns the
+        // outcome. Logged rather than swallowed so a refresh that legitimately
+        // did nothing is still traceable.
+        console.debug("[CodexChatTab] Manual refresh superseded by a newer refresh");
+      }
     }).catch((error) => {
       console.error("[CodexChatTab] Manual refresh failed:", error);
       toast.error("Failed to refresh Codex tab", {
@@ -1253,18 +1705,84 @@ export function CodexChatTab({
 
     (async () => {
       while (!abortController.signal.aborted && isTurnActive()) {
+        /**
+         * Reconnect from where we left off.
+         *
+         * The cursor is what turns a dropped stream from "refetch the whole
+         * transcript" into "send me the four frames I missed". It is only null on
+         * the very first attempt; after that the bridge replays, or tells us it
+         * cannot and we fall back to a full reconcile.
+         */
+        const cursor = eventCursorRef.current;
+        let receivedAnyFrame = false;
+
         try {
-          for await (const event of subscribeToEvents(client, abortController.signal)) {
+          for await (const event of subscribeToEvents(
+            client,
+            abortController.signal,
+            cursor ?? undefined,
+          )) {
             if (!event || typeof event.type !== "string") {
               console.warn("[CodexChatTab] Received malformed event, skipping");
               continue;
             }
 
-            if (event.sessionId && event.sessionId !== session.sessionId) {
+            receivedAnyFrame = true;
+
+            // Advanced for *every* frame, including other sessions' and keepalives:
+            // the cursor tracks the bridge-wide stream, so skipping any revision
+            // would make the next reconnect ask for frames we already have.
+            if (typeof event.revision === "number") {
+              eventCursorRef.current = event.revision;
+            }
+
+            if (event.type === "session.reconcile-required") {
+              /**
+               * Our gap was longer than the bridge's ring, or the bridge restarted
+               * and our cursor is from a revision sequence that no longer exists.
+               * This is the one case that still needs the expensive full resync.
+               *
+               * The cursor update above is what stops this repeating: this frame
+               * carries the bridge's current revision, so the next reconnect asks
+               * from a position the bridge can actually serve.
+               */
+              console.warn("[CodexChatTab] Event replay unavailable; reconciling");
+              await reconcileSessionState({ forceRefreshMessages: true });
               continue;
             }
 
+            if (event.sessionId !== session.sessionId) {
+              continue;
+            }
+
+            // Any current-session SSE event is newer than a status snapshot
+            // that was already in flight. Invalidate every reconcile source
+            // (initial hydration, watchdog, reconnect, stop, and manual refresh)
+            // before applying the live event so a delayed snapshot cannot roll
+            // idle/error/phase/title/approval state backwards.
+            reconcileSequenceRef.current += 1;
             refreshControllerRef.current.markActivity();
+
+            if (event.type === "session.approval-requested") {
+              // Validated exactly like the `/approvals` snapshot: an SSE frame is
+              // no more trustworthy than an HTTP body, and the two paths must not
+              // disagree about what a renderable approval is.
+              const approval = parseApproval(event.data?.approval);
+              if (approval) {
+                approvalActivitySequenceRef.current += 1;
+                addPendingApproval(sessionKey, approval);
+              }
+              continue;
+            }
+
+            if (event.type === "session.approval-resolved") {
+              const approvalId = event.data?.approvalId;
+              if (typeof approvalId === "string") {
+                approvalActivitySequenceRef.current += 1;
+                removePendingApproval(sessionKey, approvalId);
+              }
+              continue;
+            }
 
             if (event.type === "message.updated") {
               const message = event.data?.message as CodexMessage | undefined;
@@ -1277,11 +1795,34 @@ export function CodexChatTab({
             }
 
             if (event.type === "session.updated") {
-              setSessionLoading(sessionKey, true);
+              const phase = event.data?.phase;
+              if (isCodexSessionPhase(phase)) {
+                const terminal = phase === "idle" || phase === "failed";
+                setSessionPhase(sessionKey, terminal ? undefined : phase);
+                /**
+                 * A terminal phase here can be recovery reporting that the
+                 * *previous* turn is over while our own prompt POST is still in
+                 * flight. Clearing the loading flag then tears down both this
+                 * subscription and the watchdog, and neither re-arms, so the
+                 * transcript freezes until the tab remounts. `session.idle` and
+                 * `session.error` remain authoritative for unlocking.
+                 */
+                if (!terminal || dispatchInFlightRef.current === 0) {
+                  setSessionLoading(sessionKey, !terminal);
+                }
+              } else {
+                setSessionLoading(sessionKey, true);
+              }
               continue;
             }
 
             if (event.type === "session.idle") {
+              // The turn this session was running has finished, so any idempotency
+              // key held for an ambiguous earlier dispatch is spent: reusing it
+              // would make the bridge answer `already-processed` for a genuinely
+              // new prompt.
+              retryablePromptRef.current = null;
+              setSessionPhase(sessionKey, undefined);
               setSessionLoading(sessionKey, false);
               setSessionError(sessionKey, undefined);
               const title = event.data?.title;
@@ -1289,6 +1830,9 @@ export function CodexChatTab({
                 setSessionTitle(sessionKey, title);
               }
               await refreshMessages(client, session.sessionId);
+              // The transcript is now authoritative for this idle turn, so an
+              // earlier unconfirmed dispatch can finally be settled.
+              resolveUnconfirmedDispatch();
               continue;
             }
 
@@ -1305,6 +1849,7 @@ export function CodexChatTab({
                 typeof event.data?.error === "string"
                   ? event.data.error
                   : "Codex session failed";
+              setSessionPhase(sessionKey, undefined);
               setSessionLoading(sessionKey, false);
               setSessionError(sessionKey, error);
               setErrorMessage(error);
@@ -1320,7 +1865,19 @@ export function CodexChatTab({
           break;
         }
 
-        await reconcileSessionState();
+        /**
+         * Only resync when the replay could not have covered us.
+         *
+         * If we received at least one frame, the bridge either replayed our gap or
+         * told us to reconcile — either way the state is current, and a blanket
+         * `/messages` refetch on every blip is pure waste on a long session. If we
+         * received nothing, the connection itself failed, and reconciling is how a
+         * dead session or a stopped bridge gets detected instead of looping here
+         * forever.
+         */
+        if (!receivedAnyFrame) {
+          await reconcileSessionState();
+        }
 
         if (abortController.signal.aborted || !isTurnActive()) {
           break;
@@ -1334,15 +1891,19 @@ export function CodexChatTab({
       abortController.abort();
     };
   }, [
+    addPendingApproval,
     client,
     connectionState,
     refreshMessages,
     reconcileSessionState,
+    removePendingApproval,
+    resolveUnconfirmedDispatch,
     session?.isLoading,
     session?.sessionId,
     sessionKey,
     setSessionError,
     setSessionLoading,
+    setSessionPhase,
     setSessionTitle,
     upsertMessage,
   ]);
@@ -1503,7 +2064,20 @@ export function CodexChatTab({
                 <div className="px-2 @sm:px-4 py-3">
                   <div className="mx-auto max-w-3xl min-w-0">
                     <div className="flex items-center gap-2 text-muted-foreground">
-                      <AgentThinkingIndicator agentName="Codex" />
+                      {/*
+                        Distinguish the transient app-server phases. Both are
+                        still "loading" — the turn may be executing — but they mean
+                        something different to the user than ordinary thinking.
+                      */}
+                      {sessionPhase === "cancelling" ? (
+                        <span role="status" className="text-xs">Stopping…</span>
+                      ) : sessionPhase === "recovering" ? (
+                        <span role="status" className="text-xs">
+                          Reconnecting to Codex…
+                        </span>
+                      ) : (
+                        <AgentThinkingIndicator agentName="Codex" />
+                      )}
                       {elapsedSeconds !== null && elapsedSeconds > 0 && (
                         <span className="text-xs text-muted-foreground/50">
                           {formatElapsed(elapsedSeconds)}
@@ -1537,8 +2111,26 @@ export function CodexChatTab({
       <NativeComposeDock
         centered={centerCompose}
         topAccessory={
-          !isAtBottom || showPlanModeCard ? (
+          !isAtBottom || showPlanModeCard || showApprovals ? (
             <div className="flex w-full flex-col gap-2">
+              {/*
+                * Pinned directly above the composer rather than placed in the
+                * message list: the turn is *blocked* on these, so they must be
+                * visible without scrolling, and they must not move as new
+                * messages stream in.
+                */}
+              {showApprovals
+                ? pendingApprovals.map((approval) => (
+                    <CodexApprovalCard
+                      key={approval.approvalId}
+                      approval={approval}
+                      client={client!}
+                      sessionId={session!.sessionId!}
+                      sessionKey={sessionKey}
+                    />
+                  ))
+                : null}
+
               {!isAtBottom ? (
                 <button
                   type="button"

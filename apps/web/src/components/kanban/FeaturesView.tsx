@@ -26,6 +26,7 @@ import { useVirtuosoScrollState } from "@/hooks";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useEnvironments } from "@/hooks/useEnvironments";
 import {
+  classifyCodexPromptOutcome,
   createClient,
   createSession,
   getSessionMessages,
@@ -57,6 +58,13 @@ type RightPaneTab = "chat" | "stories" | `story:${string}`;
 
 const POLL_INTERVAL_MS = 1_500;
 const POLL_TIMEOUT_MS = 10 * 60 * 1000;
+/**
+ * How long an idle session with no new reply is tolerated before giving up.
+ *
+ * Only has to cover the gap between the bridge accepting a prompt and reporting
+ * the turn as running, which is sub-second; the rest is margin.
+ */
+const IDLE_WITHOUT_REPLY_TIMEOUT_MS = 8_000;
 const RIGHT_PANE_CONTENT_CLASS =
   "h-full min-h-0 overflow-hidden data-[state=active]:flex data-[state=active]:flex-col";
 const COMPACT_TAB_LIST_CLASS = "h-8 bg-zinc-900/80";
@@ -72,6 +80,13 @@ function storyChatDraftId(featureId: string, storyId: string): string {
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function wasCodexPromptAccepted(result: unknown): boolean {
+  // A lost response does not prove the prompt was rejected, so keep waiting for
+  // authoritative state rather than resending. `waitForCodexReply` gives up
+  // quickly if the session turns out to be idle with nothing new.
+  return classifyCodexPromptOutcome(result) !== "rejected";
 }
 
 function messageContent(message: CodexMessage): string {
@@ -112,6 +127,7 @@ async function waitForCodexReply(
   baselineAssistantIds: ReadonlySet<string>,
 ): Promise<string | null> {
   const startedAt = Date.now();
+  let idleWithoutReplySince: number | null = null;
 
   while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
     const status = await getSessionStatus(client, sessionId);
@@ -124,6 +140,26 @@ async function waitForCodexReply(
     const reply = latestAssistantMessage(messages, { excludeIds: baselineAssistantIds });
     if (status?.status === "idle" && reply) {
       return reply.content;
+    }
+
+    /**
+     * Give up early on a session that is idle with nothing new.
+     *
+     * A prompt whose response was lost may never have reached the bridge. Left
+     * alone this loop would hold the chat for the full ten-minute timeout and
+     * then claim Codex is "still working" about a session that is doing nothing.
+     * A short grace period still absorbs the gap between accepting a prompt and
+     * the turn being reported as running.
+     */
+    if (status?.status === "idle" && !reply) {
+      idleWithoutReplySince ??= Date.now();
+      if (Date.now() - idleWithoutReplySince >= IDLE_WITHOUT_REPLY_TIMEOUT_MS) {
+        throw new Error(
+          "Codex did not receive the prompt. Please try sending it again.",
+        );
+      }
+    } else {
+      idleWithoutReplySince = null;
     }
 
     await wait(POLL_INTERVAL_MS);
@@ -439,7 +475,9 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         });
 
         const sent = await sendPrompt(client, sessionId, prompt);
-        if (!sent) throw new Error("Failed to send feature planning prompt");
+        if (!wasCodexPromptAccepted(sent)) {
+          throw new Error("Failed to send feature planning prompt");
+        }
 
         const assistantContent = await waitForCodexReply(
           client,
@@ -550,7 +588,9 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         const baselineMessages = await getSessionMessages(client, sessionId);
         const prompt = createStoryRefinementPrompt(latestStory, trimmed);
         const sent = await sendPrompt(client, sessionId, prompt);
-        if (!sent) throw new Error("Failed to send story refinement prompt");
+        if (!wasCodexPromptAccepted(sent)) {
+          throw new Error("Failed to send story refinement prompt");
+        }
 
         const assistantContent = await waitForCodexReply(
           client,

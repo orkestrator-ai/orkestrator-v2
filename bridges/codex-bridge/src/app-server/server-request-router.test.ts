@@ -1,0 +1,525 @@
+import { describe, test, expect } from "bun:test";
+import {
+  KNOWN_SERVER_REQUEST_METHODS,
+  ServerRequestRouter,
+  type ServerRequestRouterOptions,
+} from "./server-request-router.js";
+import {
+  INTERACTIVE_APPROVAL_METHODS,
+  type ApprovalDecision,
+  type ApprovalRequest,
+  type ApprovalResolution,
+} from "./approvals.js";
+import type { InboundServerRequest } from "./envelope-validation.js";
+
+interface Answer {
+  generation: number;
+  id: string | number;
+  result?: unknown;
+  error?: { code: number; message: string };
+}
+
+function harness(overrides: Partial<ServerRequestRouterOptions> = {}) {
+  const answers: Answer[] = [];
+  const violations: Array<{ method: string; detail: string }> = [];
+  const transcript: Array<{ threadId: string | null; message: string }> = [];
+
+  const router = new ServerRequestRouter({
+    respond: async (generation, id, result) => {
+      answers.push({ generation, id, result });
+    },
+    respondWithError: async (generation, id, code, message) => {
+      answers.push({ generation, id, error: { code, message } });
+    },
+    onInvariantViolation: (method, detail) => violations.push({ method, detail }),
+    reportToTranscript: ({ threadId, message }) => transcript.push({ threadId, message }),
+    ...overrides,
+  });
+
+  return { router, answers, violations, transcript };
+}
+
+function request(method: string, id: string | number = "srv-1"): InboundServerRequest {
+  return {
+    kind: "server-request",
+    id,
+    method,
+    params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1" },
+  };
+}
+
+const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+describe("exhaustiveness", () => {
+  /**
+   * The core invariant: silence hangs a turn forever. Every method in the pinned
+   * union must produce exactly one response.
+   */
+  test.each(KNOWN_SERVER_REQUEST_METHODS)("%s is always answered", async (method) => {
+    const h = harness();
+    h.router.handle(request(method), 1);
+    await settle();
+
+    expect(h.answers).toHaveLength(1);
+    expect(h.answers[0]!.id).toBe("srv-1");
+    // Either a result or an error, but never nothing.
+    expect(h.answers[0]!.result !== undefined || h.answers[0]!.error !== undefined).toBe(true);
+    expect(h.router.getPending()).toHaveLength(0);
+  });
+
+  test("an unknown method gets a protocol error rather than a hang", async () => {
+    const unknown: string[] = [];
+    const h = harness({ onUnknownRequest: (method) => unknown.push(method) });
+    h.router.handle(request("orkestrator/from/the/future"), 1);
+    await settle();
+
+    expect(h.answers[0]!.error?.code).toBe(-32601);
+    expect(unknown).toEqual(["orkestrator/from/the/future"]);
+    expect(h.router.getMetrics().unknown).toBe(1);
+  });
+});
+
+describe("approval requests", () => {
+  test("command approval is declined, not approved", async () => {
+    const h = harness();
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+
+    // Declining refuses the command; approving would authorise something the
+    // user never saw.
+    expect(h.answers[0]!.result).toEqual({ decision: "decline" });
+  });
+
+  test("file-change approval is declined", async () => {
+    const h = harness();
+    h.router.handle(request("item/fileChange/requestApproval"), 1);
+    await settle();
+    expect(h.answers[0]!.result).toEqual({ decision: "decline" });
+  });
+
+  test("legacy approval paths use the snake_case denied shape", async () => {
+    for (const method of ["execCommandApproval", "applyPatchApproval"]) {
+      const h = harness();
+      h.router.handle(request(method), 1);
+      await settle();
+
+      expect(h.answers[0]!.result).toMatchObject({
+        decision: { denied: { rejection: expect.any(String) } },
+      });
+    }
+  });
+
+  test("an approval request is recorded as an invariant violation", async () => {
+    const h = harness();
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+
+    // We asked for approvalPolicy=never, so this means policy diverged.
+    expect(h.violations[0]!.detail).toContain("approvalPolicy=never");
+  });
+
+  test("the user is told why the action was refused", async () => {
+    const h = harness();
+    h.router.handle(request("item/fileChange/requestApproval"), 1);
+    await settle();
+
+    expect(h.transcript[0]!.threadId).toBe("thread-1");
+    expect(h.transcript[0]!.message).toContain("declined");
+  });
+});
+
+describe("requests needing UI we do not have", () => {
+  test("user input is answered with empty answers rather than left pending", async () => {
+    const h = harness();
+    h.router.handle(request("item/tool/requestUserInput"), 1);
+    await settle();
+
+    expect(h.answers[0]!.result).toEqual({ answers: {} });
+    expect(h.transcript[0]!.message).toContain("cancelled");
+  });
+
+  test("MCP elicitation is cancelled with the documented action shape", async () => {
+    const h = harness();
+    h.router.handle(request("mcpServer/elicitation/request"), 1);
+    await settle();
+
+    expect(h.answers[0]!.result).toEqual({ action: "cancel", content: null, _meta: null });
+    expect(h.violations[0]!.detail).toContain("capability opt-out");
+  });
+
+  test("permission escalation is cancelled instead of fabricating a grant", async () => {
+    const h = harness();
+    h.router.handle(request("item/permissions/requestApproval"), 1);
+    await settle();
+
+    // There is no valid "decline" shape here, so an error is the honest answer.
+    expect(h.answers[0]!.error?.code).toBe(-32601);
+    expect(h.answers[0]!.result).toBeUndefined();
+  });
+
+  test("a dynamic tool call is reported failed, not silently succeeded", async () => {
+    const h = harness();
+    h.router.handle(request("item/tool/call"), 1);
+    await settle();
+
+    expect(h.answers[0]!.result).toEqual({ contentItems: [], success: false });
+  });
+
+  test("auth refresh and attestation return errors, never invented values", async () => {
+    for (const method of ["account/chatgptAuthTokens/refresh", "attestation/generate"]) {
+      const h = harness();
+      h.router.handle(request(method), 1);
+      await settle();
+
+      expect(h.answers[0]!.error).toBeDefined();
+      expect(h.answers[0]!.result).toBeUndefined();
+    }
+  });
+});
+
+describe("bookkeeping", () => {
+  test("tracks id, method, thread, turn, item and resolution", async () => {
+    const h = harness();
+    h.router.handle(request("item/fileChange/requestApproval", 42), 7);
+    await settle();
+
+    const record = h.router.getHistory()[0]!;
+    expect(record).toMatchObject({
+      id: 42,
+      method: "item/fileChange/requestApproval",
+      generation: 7,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-1",
+      resolution: "declined",
+    });
+    expect(record.resolvedAt).toBeGreaterThanOrEqual(record.receivedAt);
+  });
+
+  test("counts declines and cancellations separately", async () => {
+    const h = harness();
+    h.router.handle(request("item/fileChange/requestApproval", "a"), 1);
+    h.router.handle(request("item/tool/requestUserInput", "b"), 1);
+    await settle();
+
+    const metrics = h.router.getMetrics();
+    expect(metrics.total).toBe(2);
+    expect(metrics.declined).toBe(1);
+    expect(metrics.cancelled).toBe(1);
+    expect(metrics.pending).toBe(0);
+  });
+
+  test("the same id from two generations is tracked independently", async () => {
+    const h = harness();
+    h.router.handle(request("item/fileChange/requestApproval", "srv-1"), 1);
+    h.router.handle(request("item/fileChange/requestApproval", "srv-1"), 2);
+    await settle();
+
+    expect(h.answers.map((answer) => answer.generation)).toEqual([1, 2]);
+    expect(h.router.getHistory()).toHaveLength(2);
+  });
+
+  test("a failure to send does not leave the request pending", async () => {
+    const h = harness({
+      respond: async () => {
+        throw new Error("generation died mid-response");
+      },
+    });
+    h.router.handle(request("item/fileChange/requestApproval"), 1);
+    await settle();
+
+    expect(h.router.getPending()).toHaveLength(0);
+    expect(h.router.getHistory()[0]!.resolution).toBe("declined");
+  });
+
+  test("history is bounded so a hostile peer cannot grow it without limit", async () => {
+    const h = harness();
+    for (let index = 0; index < 260; index += 1) {
+      h.router.handle(request("item/fileChange/requestApproval", index), 1);
+    }
+    await settle();
+
+    expect(h.router.getHistory().length).toBeLessThanOrEqual(200);
+  });
+
+  test("a response whose write never flushes is recorded, not answered twice", async () => {
+    let released: (() => void) | null = null;
+    const h = harness({
+      responseTimeoutMs: 5,
+      // Never resolves: models a back-pressured stdin on a dying child.
+      respond: () =>
+        new Promise<void>((resolve) => {
+          released = resolve;
+        }),
+    });
+
+    h.router.handle(request("item/fileChange/requestApproval"), 1);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    // Writing again down the same stuck pipe cannot help, and a second response
+    // would risk answering one request twice — so record it and stop.
+    expect(h.router.getMetrics().timedOut).toBe(1);
+    expect(h.answers).toHaveLength(0);
+    expect(h.router.getPending()).toHaveLength(1);
+
+    released?.();
+    await settle();
+    // Once the write flushes the request settles normally.
+    expect(h.router.getPending()).toHaveLength(0);
+    expect(h.router.getHistory().at(-1)?.resolution).toBe("declined");
+  });
+});
+
+describe("interactive approvals", () => {
+  /**
+   * Every test here guards one half of the same invariant: an approval must be
+   * answered exactly once, and when in doubt it must be answered *no*.
+   */
+  function approvalHarness(
+    overrides: Partial<ServerRequestRouterOptions> = {},
+    options: { accept?: boolean } = {},
+  ) {
+    const presented: ApprovalRequest[] = [];
+    const resolved: Array<{
+      approvalId: string;
+      decision: ApprovalDecision;
+      resolution: ApprovalResolution;
+    }> = [];
+
+    const h = harness({
+      presentApproval: (approval) => {
+        presented.push(approval);
+        return options.accept !== false;
+      },
+      onApprovalResolved: (approval, decision, resolution) => {
+        resolved.push({ approvalId: approval.approvalId, decision, resolution });
+      },
+      approvalTimeoutMs: 50,
+      ...overrides,
+    });
+
+    return { ...h, presented, resolved };
+  }
+
+  test("parks the request instead of auto-declining", async () => {
+    const h = approvalHarness();
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+
+    // Nothing answered yet: the user is looking at it.
+    expect(h.answers).toHaveLength(0);
+    expect(h.presented).toHaveLength(1);
+    expect(h.router.getParkedApprovals()).toHaveLength(1);
+    expect(h.router.getMetrics().awaitingUser).toBe(1);
+  });
+
+  test("an approval is sent as accept and recorded as user-approved", async () => {
+    const h = approvalHarness();
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+
+    const approvalId = h.presented[0]!.approvalId;
+    expect(h.router.resolveApproval(approvalId, "approve")).toBe(true);
+    await settle();
+
+    expect(h.answers).toEqual([{ generation: 1, id: "srv-1", result: { decision: "accept" } }]);
+    expect(h.router.getMetrics().approvalsApproved).toBe(1);
+    expect(h.router.getHistory().at(-1)?.resolution).toBe("user-approved");
+    // An approval needs no transcript note.
+    expect(h.transcript).toHaveLength(0);
+  });
+
+  test("a denial is sent as decline and explained in the transcript", async () => {
+    const h = approvalHarness();
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+
+    h.router.resolveApproval(h.presented[0]!.approvalId, "deny");
+    await settle();
+
+    expect(h.answers[0]!.result).toEqual({ decision: "decline" });
+    expect(h.transcript[0]!.message).toContain("You declined");
+    expect(h.router.getMetrics().approvalsDenied).toBe(1);
+  });
+
+  test("answering twice is ignored", async () => {
+    const h = approvalHarness();
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+
+    const approvalId = h.presented[0]!.approvalId;
+    expect(h.router.resolveApproval(approvalId, "approve")).toBe(true);
+    // A double click, or a click racing the expiry timer.
+    expect(h.router.resolveApproval(approvalId, "deny")).toBe(false);
+    await settle();
+
+    expect(h.answers).toHaveLength(1);
+    expect(h.answers[0]!.result).toEqual({ decision: "accept" });
+  });
+
+  test("an unanswered approval expires as a denial", async () => {
+    const h = approvalHarness();
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+    await Bun.sleep(80);
+
+    // Deny, never approve: an ignored prompt must not authorise anything.
+    expect(h.answers[0]!.result).toEqual({ decision: "decline" });
+    expect(h.resolved[0]!.resolution).toBe("timed-out");
+    expect(h.router.getMetrics().approvalsExpired).toBe(1);
+    expect(h.transcript[0]!.message).toContain("expired");
+  });
+
+  test("the fast backstop does not fire while a human is deciding", async () => {
+    // The 10s backstop exists for a branch that fails to answer. A parked approval
+    // has legitimately not answered yet, and answering here would resolve a prompt
+    // the user is still reading.
+    const h = approvalHarness({ responseTimeoutMs: 10, approvalTimeoutMs: 5_000 });
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+    await Bun.sleep(40);
+
+    expect(h.answers).toHaveLength(0);
+    expect(h.router.getParkedApprovals()).toHaveLength(1);
+    expect(h.router.getMetrics().timedOut).toBe(0);
+  });
+
+  test("falls back to auto-decline when the UI will not take it", async () => {
+    const h = approvalHarness({}, { accept: false });
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+
+    // Exactly the pre-approval behaviour, so attaching a UI is purely additive.
+    expect(h.answers).toHaveLength(1);
+    expect(h.answers[0]!.result).toEqual({ decision: "decline" });
+    expect(h.violations).toHaveLength(1);
+    expect(h.router.getParkedApprovals()).toHaveLength(0);
+  });
+
+  test("a presentApproval that throws falls back rather than hanging the turn", async () => {
+    const h = harness({
+      presentApproval: () => {
+        throw new Error("renderer exploded");
+      },
+    });
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+
+    expect(h.answers).toHaveLength(1);
+    expect(h.answers[0]!.result).toEqual({ decision: "decline" });
+  });
+
+  test("with no presentApproval installed nothing changes", async () => {
+    const h = harness();
+    h.router.handle(request("item/fileChange/requestApproval"), 1);
+    await settle();
+
+    expect(h.answers[0]!.result).toEqual({ decision: "decline" });
+    expect(h.router.getMetrics().approvalsPresented).toBe(0);
+  });
+
+  test("abandonGeneration withdraws the card without answering the dead child", async () => {
+    const h = approvalHarness({ approvalTimeoutMs: 5_000 });
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+
+    h.router.abandonGeneration(1);
+    await settle();
+
+    // app-server has forgotten the request, so writing to it is pointless — but the
+    // UI still has a card up and the transcript needs to explain the gap.
+    expect(h.answers).toHaveLength(0);
+    expect(h.resolved[0]!.resolution).toBe("engine-restarted");
+    expect(h.transcript[0]!.message).toContain("restarted");
+    expect(h.router.getParkedApprovals()).toHaveLength(0);
+    expect(h.router.getHistory().at(-1)?.resolution).toBe("user-declined");
+  });
+
+  test("abandonGeneration leaves a different generation's approval alone", async () => {
+    const h = approvalHarness({ approvalTimeoutMs: 5_000 });
+    h.router.handle(request("item/commandExecution/requestApproval", "srv-1"), 1);
+    h.router.handle(request("item/commandExecution/requestApproval", "srv-2"), 2);
+    await settle();
+
+    h.router.abandonGeneration(1);
+    await settle();
+
+    const remaining = h.router.getParkedApprovals();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.generation).toBe(2);
+  });
+
+  test("abandonThread answers on the way out so the turn is not left waiting", async () => {
+    const h = approvalHarness({ approvalTimeoutMs: 5_000 });
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+
+    h.router.abandonThread("thread-1");
+    await settle();
+
+    // The child is still alive here, so it *must* be answered — unlike a restart.
+    expect(h.answers[0]!.result).toEqual({ decision: "decline" });
+    expect(h.resolved[0]!.resolution).toBe("session-closed");
+  });
+
+  test("abandonThread ignores approvals on other threads", async () => {
+    const h = approvalHarness({ approvalTimeoutMs: 5_000 });
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+
+    h.router.abandonThread("some-other-thread");
+    await settle();
+
+    expect(h.answers).toHaveLength(0);
+    expect(h.router.getParkedApprovals()).toHaveLength(1);
+  });
+
+  test("resolving an unknown approval id reports false", () => {
+    const h = approvalHarness();
+    expect(h.router.resolveApproval("apr-does-not-exist", "approve")).toBe(false);
+  });
+
+  test("approval ids are unique and generation-scoped", async () => {
+    const h = approvalHarness({ approvalTimeoutMs: 5_000 });
+    h.router.handle(request("item/commandExecution/requestApproval", "a"), 1);
+    h.router.handle(request("item/fileChange/requestApproval", "b"), 2);
+    await settle();
+
+    const ids = h.presented.map((approval) => approval.approvalId);
+    expect(new Set(ids).size).toBe(2);
+    // The generation is in the id, so an id from a dead child can never collide
+    // with one from its replacement.
+    expect(ids[0]).toContain("-1-");
+    expect(ids[1]).toContain("-2-");
+  });
+
+  test("each interactive method parks and answers in its own shape", async () => {
+    for (const method of INTERACTIVE_APPROVAL_METHODS) {
+      const h = approvalHarness({ approvalTimeoutMs: 5_000 });
+      h.router.handle(request(method), 1);
+      await settle();
+
+      expect(h.presented).toHaveLength(1);
+      h.router.resolveApproval(h.presented[0]!.approvalId, "approve");
+      await settle();
+
+      expect(h.answers).toHaveLength(1);
+      expect(h.answers[0]!.error).toBeUndefined();
+    }
+  });
+
+  test("non-approval server requests are never parked", async () => {
+    const nonApprovals = KNOWN_SERVER_REQUEST_METHODS.filter(
+      (method) => !INTERACTIVE_APPROVAL_METHODS.includes(method as never),
+    );
+
+    for (const method of nonApprovals) {
+      const h = approvalHarness({ approvalTimeoutMs: 5_000 });
+      h.router.handle(request(method), 1);
+      await settle();
+
+      expect(h.presented).toHaveLength(0);
+      expect(h.answers).toHaveLength(1);
+    }
+  });
+});

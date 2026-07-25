@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { createOptimisticNativeMessage } from "@/lib/chat/client-only-messages";
+import { CODEX_MODELS, DEFAULT_CODEX_MODEL, type CodexApproval } from "@/lib/codex-client";
 import {
   createCodexSessionKey,
   useCodexStore,
@@ -21,7 +22,27 @@ function resetCodexStore() {
     selectedModel: new Map(),
     selectedMode: new Map(),
     selectedReasoningEffort: new Map(),
+    fastMode: new Map(),
+    sessionPhase: new Map(),
+    pendingApprovals: new Map(),
   });
+}
+
+/** Minimal approval, with only the fields the store keys on. */
+function approval(approvalId: string): CodexApproval {
+  return {
+    approvalId,
+    kind: "command",
+    method: "item/commandExecution/requestApproval",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    itemId: "item-1",
+    requestedAt: 0,
+    expiresAt: 300_000,
+    command: "ls",
+    actionable: true,
+    supportsApproveForSession: true,
+  };
 }
 
 describe("codexStore message helpers", () => {
@@ -194,6 +215,8 @@ describe("codexStore cleanup and queue helpers", () => {
     store.setSelectedModel(sessionKeyB, "gpt-4");
     store.setSelectedMode(sessionKeyA, "plan");
     store.setSelectedReasoningEffort(sessionKeyA, "high");
+    store.setSessionPhase(sessionKeyA, "recovering");
+    store.setSessionPhase(sessionKeyB, "running");
     store.setDraftText(sessionKeyA, "draft");
     store.addAttachment(sessionKeyA, {
       id: "att-a",
@@ -222,6 +245,8 @@ describe("codexStore cleanup and queue helpers", () => {
     expect(store.getQueueLength(sessionKeyA)).toBe(0);
     expect(useCodexStore.getState().selectedModel.get(sessionKeyA)).toBeUndefined();
     expect(useCodexStore.getState().selectedModel.get(sessionKeyB)).toBe("gpt-4");
+    expect(useCodexStore.getState().sessionPhase.get(sessionKeyA)).toBeUndefined();
+    expect(useCodexStore.getState().sessionPhase.get(sessionKeyB)).toBe("running");
     expect(useCodexStore.getState().slashCommands.get("env-1")).toBeUndefined();
     expect(useCodexStore.getState().slashCommands.get("env-2")).toEqual([
       { name: "/keep", source: "builtin" },
@@ -270,5 +295,238 @@ describe("codexStore cleanup and queue helpers", () => {
 
     expect(store.getQueueLength(queueA)).toBe(0);
     expect(store.getQueueLength(queueB)).toBe(1);
+  });
+
+  test("carries a queued prompt's idempotency key through the whole queue lifecycle", () => {
+    // The key is the only thing stopping a drained-then-retried entry from
+    // becoming two app-server turns, so it has to survive every hop.
+    const store = useCodexStore.getState();
+    store.addToQueue(SESSION_KEY, {
+      id: "entry-1",
+      requestId: "request-1",
+      text: "first",
+      attachments: [],
+      model: "gpt-5",
+      mode: "build",
+      reasoningEffort: "medium",
+      fastMode: false,
+    });
+    store.addToQueue(SESSION_KEY, {
+      id: "entry-2",
+      requestId: "request-2",
+      text: "second",
+      attachments: [],
+      model: "gpt-5",
+      mode: "build",
+      reasoningEffort: "medium",
+      fastMode: false,
+    });
+
+    expect(store.getQueuedMessages(SESSION_KEY).map((item) => item.requestId)).toEqual([
+      "request-1",
+      "request-2",
+    ]);
+    expect(store.removeFromQueue(SESSION_KEY)?.requestId).toBe("request-1");
+    expect(store.getQueuedMessages(SESSION_KEY).map((item) => item.requestId)).toEqual([
+      "request-2",
+    ]);
+
+    const survivingKey = createCodexSessionKey("env-2", "tab-1");
+    store.addToQueue(survivingKey, {
+      id: "entry-3",
+      requestId: "request-3",
+      text: "other env",
+      attachments: [],
+      model: "gpt-5",
+      mode: "build",
+      reasoningEffort: "medium",
+      fastMode: false,
+    });
+
+    store.clearEnvironment("env-1");
+
+    expect(useCodexStore.getState().messageQueue.get(SESSION_KEY)).toBeUndefined();
+    expect(store.getQueuedMessages(survivingKey).map((item) => item.requestId)).toEqual([
+      "request-3",
+    ]);
+  });
+});
+
+describe("codexStore selection defaults", () => {
+  beforeEach(resetCodexStore);
+
+  test("setModels falls back to the bundled catalog for an empty list", () => {
+    // An empty catalog would leave the model picker unusable, so the bundled one
+    // is the floor.
+    useCodexStore.getState().setModels([{ id: "custom", name: "Custom" }]);
+    expect(useCodexStore.getState().models.map((model) => model.id)).toEqual(["custom"]);
+
+    useCodexStore.getState().setModels([]);
+    expect(useCodexStore.getState().models).toEqual(CODEX_MODELS);
+  });
+
+  test("setSlashCommands drops the environment key when the bridge reports none", () => {
+    const store = useCodexStore.getState();
+    store.setSlashCommands("env-1", [{ name: "/fix", source: "prompt" }]);
+    expect(useCodexStore.getState().slashCommands.has("env-1")).toBe(true);
+
+    store.setSlashCommands("env-1", []);
+    expect(useCodexStore.getState().slashCommands.has("env-1")).toBe(false);
+  });
+
+  test("setSelectedModel refuses an empty id and keeps the default", () => {
+    const store = useCodexStore.getState();
+    store.setSelectedModel(SESSION_KEY, "");
+    expect(useCodexStore.getState().selectedModel.get(SESSION_KEY)).toBe(DEFAULT_CODEX_MODEL);
+  });
+});
+
+describe("codexStore session phases", () => {
+  beforeEach(resetCodexStore);
+
+  test("sets, replaces, and clears a phase without rerendering for identical values", () => {
+    const store = useCodexStore.getState();
+    store.setSessionPhase(SESSION_KEY, "cancelling");
+    expect(useCodexStore.getState().sessionPhase.get(SESSION_KEY)).toBe("cancelling");
+
+    const before = useCodexStore.getState().sessionPhase;
+    store.setSessionPhase(SESSION_KEY, "cancelling");
+    expect(useCodexStore.getState().sessionPhase).toBe(before);
+
+    store.setSessionPhase(SESSION_KEY, "recovering");
+    expect(useCodexStore.getState().sessionPhase.get(SESSION_KEY)).toBe("recovering");
+
+    store.setSessionPhase(SESSION_KEY, undefined);
+    expect(useCodexStore.getState().sessionPhase.has(SESSION_KEY)).toBe(false);
+  });
+});
+
+describe("codexStore pending approvals", () => {
+  const OTHER_KEY = createCodexSessionKey("env-1", "tab-2");
+
+  beforeEach(resetCodexStore);
+
+  test("adds approvals in arrival order, scoped per session", () => {
+    const store = useCodexStore.getState();
+    store.addPendingApproval(SESSION_KEY, approval("apr-1"));
+    store.addPendingApproval(SESSION_KEY, approval("apr-2"));
+    store.addPendingApproval(OTHER_KEY, approval("apr-3"));
+
+    expect(
+      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.map((a) => a.approvalId),
+    ).toEqual(["apr-1", "apr-2"]);
+    expect(
+      useCodexStore.getState().pendingApprovals.get(OTHER_KEY)?.map((a) => a.approvalId),
+    ).toEqual(["apr-3"]);
+  });
+
+  test("ignores a duplicate approval id", () => {
+    // A replayed SSE frame can deliver the same approval twice; rendering two
+    // cards for one request would let the user answer it twice.
+    const store = useCodexStore.getState();
+    store.addPendingApproval(SESSION_KEY, approval("apr-1"));
+    const before = useCodexStore.getState().pendingApprovals;
+    store.addPendingApproval(SESSION_KEY, approval("apr-1"));
+
+    expect(useCodexStore.getState().pendingApprovals.get(SESSION_KEY)).toHaveLength(1);
+    // Same object identity: a no-op must not trigger a rerender.
+    expect(useCodexStore.getState().pendingApprovals).toBe(before);
+  });
+
+  test("removes by id and drops the key when the last one goes", () => {
+    const store = useCodexStore.getState();
+    store.addPendingApproval(SESSION_KEY, approval("apr-1"));
+    store.addPendingApproval(SESSION_KEY, approval("apr-2"));
+
+    store.removePendingApproval(SESSION_KEY, "apr-1");
+    expect(
+      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.map((a) => a.approvalId),
+    ).toEqual(["apr-2"]);
+
+    store.removePendingApproval(SESSION_KEY, "apr-2");
+    expect(useCodexStore.getState().pendingApprovals.has(SESSION_KEY)).toBe(false);
+  });
+
+  test("removing an unknown id is a no-op that does not rerender", () => {
+    const store = useCodexStore.getState();
+    store.addPendingApproval(SESSION_KEY, approval("apr-1"));
+    const before = useCodexStore.getState().pendingApprovals;
+
+    store.removePendingApproval(SESSION_KEY, "apr-missing");
+    store.removePendingApproval("env-1:nonexistent", "apr-1");
+
+    expect(useCodexStore.getState().pendingApprovals).toBe(before);
+  });
+
+  test("setPendingApprovals replaces the list — the rehydration path", () => {
+    const store = useCodexStore.getState();
+    store.addPendingApproval(SESSION_KEY, approval("stale-1"));
+
+    // The bridge is authoritative: whatever it reports is the whole truth, so an
+    // approval it no longer knows about must disappear.
+    store.setPendingApprovals(SESSION_KEY, [approval("apr-9")]);
+    expect(
+      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.map((a) => a.approvalId),
+    ).toEqual(["apr-9"]);
+
+    store.setPendingApprovals(SESSION_KEY, []);
+    expect(useCodexStore.getState().pendingApprovals.has(SESSION_KEY)).toBe(false);
+  });
+
+  test("setPendingApprovals with an identical list does not rerender", () => {
+    // Called on every reconcile, so an unchanged poll must be free.
+    const store = useCodexStore.getState();
+    store.setPendingApprovals(SESSION_KEY, [approval("apr-1"), approval("apr-2")]);
+    const before = useCodexStore.getState().pendingApprovals;
+
+    store.setPendingApprovals(SESSION_KEY, [approval("apr-1"), approval("apr-2")]);
+    expect(useCodexStore.getState().pendingApprovals).toBe(before);
+
+    // A reordering is a real change.
+    store.setPendingApprovals(SESSION_KEY, [approval("apr-2"), approval("apr-1")]);
+    expect(useCodexStore.getState().pendingApprovals).not.toBe(before);
+  });
+
+  test("an empty snapshot for a session with no approvals does not rerender", () => {
+    // Reconcile calls this on every tick, so the common case must be free.
+    const store = useCodexStore.getState();
+    const before = useCodexStore.getState().pendingApprovals;
+
+    store.setPendingApprovals(SESSION_KEY, []);
+    expect(useCodexStore.getState().pendingApprovals).toBe(before);
+  });
+
+  test("adopts a refreshed deadline or command for the same approval ids", () => {
+    // The short-circuit used to compare ids only, so a re-reported approval with a
+    // moved `expiresAt` was discarded and the card counted down to a deadline the
+    // bridge no longer held.
+    const store = useCodexStore.getState();
+    store.setPendingApprovals(SESSION_KEY, [approval("apr-1")]);
+
+    store.setPendingApprovals(SESSION_KEY, [
+      { ...approval("apr-1"), expiresAt: 900_000 },
+    ]);
+    expect(
+      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.expiresAt,
+    ).toBe(900_000);
+
+    store.setPendingApprovals(SESSION_KEY, [
+      { ...approval("apr-1"), expiresAt: 900_000, command: "rm -rf build" },
+    ]);
+    expect(
+      useCodexStore.getState().pendingApprovals.get(SESSION_KEY)?.[0]?.command,
+    ).toBe("rm -rf build");
+  });
+
+  test("clearEnvironment drops approvals for that environment only", () => {
+    const store = useCodexStore.getState();
+    const otherEnvKey = createCodexSessionKey("env-2", "tab-1");
+    store.addPendingApproval(SESSION_KEY, approval("apr-1"));
+    store.addPendingApproval(otherEnvKey, approval("apr-2"));
+
+    store.clearEnvironment("env-1");
+
+    expect(useCodexStore.getState().pendingApprovals.has(SESSION_KEY)).toBe(false);
+    expect(useCodexStore.getState().pendingApprovals.has(otherEnvKey)).toBe(true);
   });
 });

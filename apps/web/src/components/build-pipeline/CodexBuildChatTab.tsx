@@ -18,6 +18,7 @@ import type {
 import {
   abortSession,
   checkHealth,
+  classifyCodexPromptOutcome,
   createClient,
   createSession,
   getSessionMessages,
@@ -26,6 +27,7 @@ import {
   type CodexClient,
   type CodexMessage,
   type CodexPromptAttachment,
+  type CodexPromptSendOutcome,
   type CodexReasoningEffort,
 } from "@/lib/codex-client";
 import { createCodexSessionKey } from "@/stores/codexStore";
@@ -100,6 +102,10 @@ const SESSION_PHASE_LABELS: Record<string, string> = {
   "resolve-conflicts": "Conflict Resolution Session",
 };
 
+function wasCodexPromptAccepted(result: unknown): boolean {
+  return classifyCodexPromptOutcome(result) === "accepted";
+}
+
 function SessionDivider({ session, index }: { session: PipelineSession; index: number }) {
   const label = SESSION_PHASE_LABELS[session.phase] || session.phase;
   const iterationSuffix = session.iteration > 0 ? ` (Iteration ${session.iteration + 1})` : "";
@@ -172,6 +178,38 @@ function hasCompletedPrompt(messages: CodexMessage[], prompt: string): boolean {
   return messages
     .slice(promptIndex + 1)
     .some((message) => message.role === "assistant" && message.content.trim().length > 0);
+}
+
+/**
+ * Turns a lost prompt response into a definite answer.
+ *
+ * Returns an accepted outcome only when the bridge itself shows the turn running
+ * or the transcript already contains a reply to this prompt. Anything else —
+ * including a bridge we cannot reach — is reported as rejected so the pipeline
+ * stops and surfaces the failure rather than advancing past a phase that may
+ * never have run.
+ */
+async function verifyAmbiguousDispatch(
+  activeClient: CodexClient,
+  sdkSessionId: string,
+  prompt: string,
+): Promise<CodexPromptSendOutcome> {
+  try {
+    const [status, messages] = await Promise.all([
+      getSessionStatus(activeClient, sdkSessionId, { throwOnError: true }),
+      getSessionMessages(activeClient, sdkSessionId, { throwOnError: true }),
+    ]);
+    if (
+      status?.status === "running"
+      || (status?.status === "idle" && hasCompletedPrompt(messages, prompt))
+    ) {
+      return { outcome: "accepted", status: "processing" };
+    }
+  } catch {
+    // Unreachable bridge: still ambiguous, and an ambiguous turn must not
+    // advance the pipeline.
+  }
+  return { outcome: "rejected", httpStatus: 0 };
 }
 
 function appendCodexMessage(sessionKey: string, message: CodexMessage) {
@@ -658,10 +696,22 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       if (!ownsAttempt) return false;
 
       try {
-        return await sendPrompt(activeClient, sdkSessionId, prompt, {
+        const sent = await sendPrompt(activeClient, sdkSessionId, prompt, {
           attachments: options.attachments,
           requestId,
         });
+        if (classifyCodexPromptOutcome(sent) !== "unknown") return sent;
+
+        /**
+         * Resolve the ambiguity before returning.
+         *
+         * A lost response does not say whether the turn is running. Reporting it
+         * as accepted would let the poll unlock and the pipeline advance a phase
+         * whose prompt may never have been dispatched; reporting it as rejected
+         * could duplicate a turn that is already executing. The bridge's own
+         * status and transcript are the only authority, so ask them.
+         */
+        return await verifyAmbiguousDispatch(activeClient, sdkSessionId, prompt);
       } finally {
         completePromptAttempt(pipelineId, attemptId);
       }
@@ -693,7 +743,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         attachments,
       });
 
-      if (!success) {
+      if (!wasCodexPromptAccepted(success)) {
         if (isPipelinePaused()) return;
         const message = "Failed to send build prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
@@ -741,7 +791,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         attachments: taskImagesToAttachments(task.images),
       });
 
-      if (!success) {
+      if (!wasCodexPromptAccepted(success)) {
         if (isPipelinePaused()) return;
         const message = "Failed to send review prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
@@ -789,7 +839,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         attachments: taskImagesToAttachments(task.images),
       });
 
-      if (!success) {
+      if (!wasCodexPromptAccepted(success)) {
         if (isPipelinePaused()) return;
         const message = "Failed to send verification prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
@@ -836,7 +886,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         attachments: taskImagesToAttachments(task.images),
       });
 
-      if (!success) {
+      if (!wasCodexPromptAccepted(success)) {
         if (isPipelinePaused()) return;
         const message = "Failed to send fix prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
@@ -876,7 +926,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         phase: "creating-pr",
         useTaskImages: false,
       });
-      if (!success) {
+      if (!wasCodexPromptAccepted(success)) {
         if (isPipelinePaused()) return;
         const message = "Failed to send PR creation prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
@@ -929,7 +979,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         phase: "resolving-conflicts",
         useTaskImages: false,
       });
-      if (!success) {
+      if (!wasCodexPromptAccepted(success)) {
         if (isPipelinePaused()) return;
         const message = "Failed to send conflict resolution prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
@@ -970,7 +1020,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         phase: "addressing",
         useTaskImages: false,
       });
-      if (!success) {
+      if (!wasCodexPromptAccepted(success)) {
         if (isPipelinePaused()) return;
         const message = "Failed to send address issues prompt";
         appendCodexMessage(reviewSession.sessionKey, buildErrorMessage(message));
@@ -1481,7 +1531,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     appendCodexMessage(currentSession.sessionKey, buildUserMessage(text.trim()));
 
     const success = await sendPrompt(client, currentSession.sdkSessionId, text.trim());
-    if (!success) {
+    if (!wasCodexPromptAccepted(success)) {
       const message = "Failed to send message to the agent";
       appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
       setSessionLoading(currentSession.sessionKey, false);
@@ -1556,7 +1606,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       phase: resumedPhase,
       useTaskImages: false,
     });
-    if (!success) {
+    if (!wasCodexPromptAccepted(success)) {
       if (isPipelinePaused()) return;
       const message = "Failed to resume build pipeline";
       appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
@@ -1749,7 +1799,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         requestId: context.requestId,
       });
       if (!stillOwnsReconnect()) return;
-      if (!success) {
+      if (!wasCodexPromptAccepted(success)) {
         const [retryStatus, retryMessages] = await Promise.all([
           getSessionStatus(activeClient, currentSession.sdkSessionId, { throwOnError: true }),
           getSessionMessages(activeClient, currentSession.sdkSessionId, { throwOnError: true }),

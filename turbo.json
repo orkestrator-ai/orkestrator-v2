@@ -15,7 +15,8 @@
     },
     "test:workspace": {
       "dependsOn": ["build"],
-      "outputs": []
+      "outputs": [],
+      "passThroughEnv": ["ORKESTRATOR_TEST_WORKERS"]
     },
     "dev": {
       "cache": false,

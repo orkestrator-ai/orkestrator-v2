@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BINARIES_DIR="$PROJECT_ROOT/binaries"
 
-# Codex CLI version to bundle — should match @openai/codex-sdk version in bridges/codex-bridge/package.json
+# Codex CLI version to bundle — must match config/codex-version.json.
 CODEX_VERSION="0.145.0"
 
 # Detect architecture

@@ -55,6 +55,44 @@ function getDockerfileBaseImageTag(): string {
   return match[1];
 }
 
+interface ArtifactIntegrityValues {
+  target: string;
+  values: Array<readonly [field: string, value: string]>;
+}
+
+function findCrossArtifactIntegrityCollisions(
+  artifacts: ArtifactIntegrityValues[],
+): Array<{
+  field: string;
+  target: string;
+  collidesWith: string;
+  collidingField: string;
+}> {
+  const seen = new Map<string, { field: string; target: string }>();
+  const collisions: Array<{
+    field: string;
+    target: string;
+    collidesWith: string;
+    collidingField: string;
+  }> = [];
+  for (const artifact of artifacts) {
+    for (const [field, value] of artifact.values) {
+      const previous = seen.get(value);
+      if (previous && previous.target !== artifact.target) {
+        collisions.push({
+          field,
+          target: artifact.target,
+          collidesWith: previous.target,
+          collidingField: previous.field,
+        });
+      } else if (!previous) {
+        seen.set(value, { field, target: artifact.target });
+      }
+    }
+  }
+  return collisions;
+}
+
 describe("version drift between SDK pins and managed/container CLIs", () => {
   test("Bun: host-bundled runtime matches the container base image", () => {
     // The bridges run on Bun both on the host (bundled binary) and inside the
@@ -109,20 +147,107 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     );
   });
 
-  test("Codex: SDK pin, managed binary, download script, and Docker CLI all match", () => {
-    const sdkPin = expectExactVersion(
-      "bridges/codex-bridge/package.json",
-      "@openai/codex-sdk",
-    );
-    const downloadScriptPin = getShellVar(
-      "scripts/download-codex.sh",
-      "CODEX_VERSION",
-    );
-    const dockerfilePin = getDockerfileArg("CODEX_CLI_VERSION");
+  test("Codex: managed binary, download script, and Docker CLI all match", () => {
+    // The bridge no longer depends on @openai/codex-sdk — it talks to
+    // `codex app-server` over JSON-RPC — so config/codex-version.json is the only
+    // pin, and the CLI version still matters for the binary and the image.
+    const configPin = (
+      JSON.parse(read("config/codex-version.json")) as { version: string }
+    ).version;
 
-    expect(downloadScriptPin).toBe(sdkPin);
-    expect(dockerfilePin).toBe(sdkPin);
-    expect(PINNED_TOOLCHAIN_VERSIONS.codex).toBe(sdkPin);
+    expect(getShellVar("scripts/download-codex.sh", "CODEX_VERSION")).toBe(configPin);
+    expect(getDockerfileArg("CODEX_CLI_VERSION")).toBe(configPin);
+    expect(PINNED_TOOLCHAIN_VERSIONS.codex).toBe(configPin);
+  });
+
+  test("Codex: the bridge does not depend on the Codex SDK", () => {
+    // A stray dependency would resurrect a second execution path and re-introduce
+    // the drift this consolidation removed.
+    const pkg = JSON.parse(read("bridges/codex-bridge/package.json")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    expect(pkg.dependencies?.["@openai/codex-sdk"]).toBeUndefined();
+    expect(pkg.devDependencies?.["@openai/codex-sdk"]).toBeUndefined();
+  });
+
+  test("Codex: config/codex-version.json is the single source of truth for every pin", () => {
+    // The app-server binary and the generated protocol bindings are only valid
+    // as a matched pair, so every place that names a Codex version has to agree
+    // with this one file.
+    const config = JSON.parse(read("config/codex-version.json")) as {
+      version: string;
+      appServerProtocol: { generatedFrom: string; outputDir: string };
+    };
+
+    expect(config.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(config.appServerProtocol.generatedFrom).toBe(config.version);
+    expect(config.appServerProtocol.outputDir).toBe(
+      "bridges/codex-bridge/src/app-server/generated",
+    );
+    expect(getShellVar("scripts/download-codex.sh", "CODEX_VERSION")).toBe(config.version);
+    expect(getDockerfileArg("CODEX_CLI_VERSION")).toBe(config.version);
+    expect(PINNED_TOOLCHAIN_VERSIONS.codex).toBe(config.version);
+  });
+
+  test("Codex: committed app-server protocol manifest matches the pinned version", () => {
+    // A full regeneration needs the pinned binary, which normal CI does not
+    // have. This cheap check still catches the common failure: bumping the
+    // version without regenerating the bindings.
+    const config = JSON.parse(read("config/codex-version.json")) as {
+      version: string;
+      appServerProtocol: { outputDir: string };
+    };
+    const manifest = JSON.parse(
+      read(join(config.appServerProtocol.outputDir, "protocol-manifest.json")),
+    ) as {
+      codexVersion: string;
+      typescriptDigest: string;
+      schemaDigest: string;
+      typescriptFileCount: number;
+      schemaFileCount: number;
+      clientRequestMethods: string[];
+      serverNotificationMethods: string[];
+      serverRequestMethods: string[];
+    };
+
+    expect(manifest.codexVersion).toBe(config.version);
+    expect(manifest.typescriptDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(manifest.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(manifest.typescriptFileCount).toBeGreaterThan(0);
+    expect(manifest.schemaFileCount).toBeGreaterThan(0);
+
+    // Every method the bridge depends on must exist in the pinned protocol.
+    // These are the exact methods bridges/codex-bridge/src/app-server calls.
+    for (const method of [
+      "initialize",
+      "thread/start",
+      "thread/resume",
+      "thread/read",
+      "thread/list",
+      "thread/unsubscribe",
+      "thread/name/set",
+      "turn/start",
+      "turn/interrupt",
+      "model/list",
+    ]) {
+      expect(manifest.clientRequestMethods).toContain(method);
+    }
+    for (const method of [
+      "thread/started",
+      "turn/started",
+      "turn/completed",
+      "item/started",
+      "item/completed",
+      "item/agentMessage/delta",
+      "item/commandExecution/outputDelta",
+      "item/fileChange/patchUpdated",
+      "error",
+    ]) {
+      expect(manifest.serverNotificationMethods).toContain(method);
+    }
+    // The router must stay exhaustive over this union.
+    expect(manifest.serverRequestMethods.length).toBeGreaterThan(0);
   });
 
   test("Codex: bundled binary download uses the Rust release artifact URL", () => {
@@ -317,6 +442,53 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
     expect(actual).toEqual(expected);
     expect(PINNED_TOOLCHAIN_ARTIFACTS).toHaveLength(expected.size);
+  });
+
+  test("no pinned checksum is shared between two different artifacts", () => {
+    /**
+     * Shape checks (`/^[a-f0-9]{64}$/`) cannot tell a real digest from a
+     * plausible one, and nothing in CI downloads the releases: live verification
+     * is `RUN_LIVE_TOOLCHAIN_ARTIFACTS=1 bun scripts/verify-toolchain-artifacts.ts`
+     * (see `bun run verify:toolchains:live`), which is a manual step in the
+     * upgrade guide.
+     *
+     * The realistic offline-detectable failure is a version bump that updates
+     * every version string but re-uses one artifact's digest for another — a
+     * copy-paste while filling in the twelve entries from `--emit` output.
+     * Distinct binaries cannot share a digest or an exact byte count, so any
+     * collision here is a manifest mistake, and it would otherwise sail through
+     * the entire suite.
+     */
+    const values = PINNED_TOOLCHAIN_ARTIFACTS.map((artifact) => ({
+      target: `${artifact.name}:${artifact.platform}:${artifact.architecture}`,
+      values: [
+        ["archive.url", artifact.archive.url],
+        ["archive.sha256", artifact.archive.sha256],
+        ["executable.sha256", artifact.executable.sha256],
+        ...(artifact.executable.installedSha256
+          ? [["executable.installedSha256", artifact.executable.installedSha256] as const]
+          : []),
+      ] as Array<readonly [string, string]>,
+    }));
+    expect(findCrossArtifactIntegrityCollisions(values)).toEqual([]);
+
+    // Regression: include the field independently from the lookup key. A copied
+    // archive digest must collide with another artifact's executable digest.
+    expect(findCrossArtifactIntegrityCollisions([
+      { target: "first", values: [["archive.sha256", "same-digest"]] },
+      { target: "second", values: [["executable.sha256", "same-digest"]] },
+    ])).toEqual([{
+      field: "executable.sha256",
+      target: "second",
+      collidesWith: "first",
+      collidingField: "archive.sha256",
+    }]);
+
+    // Sizes may legitimately repeat across fields of the same artifact, but two
+    // different downloads having byte-identical archives would mean one URL
+    // points at the wrong release.
+    const archiveSizes = PINNED_TOOLCHAIN_ARTIFACTS.map((artifact) => artifact.archive.size);
+    expect(new Set(archiveSizes).size).toBe(archiveSizes.length);
   });
 
   test("selects exactly one complete tool set for each supported target", () => {

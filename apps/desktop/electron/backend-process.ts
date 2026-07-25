@@ -31,8 +31,21 @@ export function createBackendProcessEnvironment(
   parentEnv: NodeJS.ProcessEnv,
   isDev: boolean,
   resourceRoot: string,
+  appVersion?: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...parentEnv, ORKESTRATOR_GATEWAY_DISABLED: "0" };
+  const version = appVersion?.trim();
+  if (version) {
+    // Always prefer Electron's authoritative application version over a value
+    // inherited from the shell that launched the desktop app.
+    env.ORKESTRATOR_VERSION = version;
+  } else {
+    // An empty or blank version is absent, not a version. Exporting `""` would
+    // leave the backend and both bridges reading a defined-but-useless value
+    // instead of falling back to their own default, and it would still shadow
+    // whatever the shell had set.
+    delete env.ORKESTRATOR_VERSION;
+  }
   if (!isDev) {
     env.NODE_PATH = [path.join(resourceRoot, "backend", "vendor"), env.NODE_PATH]
       .filter(Boolean)
@@ -163,6 +176,7 @@ export class BackendProcess {
 
   async start(options: {
     isDev: boolean;
+    appVersion?: string;
     appRoot: string;
     resourceRoot: string;
     dataDir: string;
@@ -187,6 +201,7 @@ export class BackendProcess {
 
   private async launch(options: {
     isDev: boolean;
+    appVersion?: string;
     appRoot: string;
     resourceRoot: string;
     dataDir: string;
@@ -227,7 +242,12 @@ export class BackendProcess {
     if (options.rendererDevServerUrl) args.push("--renderer-dev-server-url", options.rendererDevServerUrl);
 
     // Isolate desktop startup from any remote-service configuration in the parent shell.
-    const env = createBackendProcessEnvironment(process.env, options.isDev, options.resourceRoot);
+    const env = createBackendProcessEnvironment(
+      process.env,
+      options.isDev,
+      options.resourceRoot,
+      options.appVersion,
+    );
     const child = spawn(bun, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     this.child = child;
     child.stderr?.on("data", (chunk) => process.stderr.write(`[Backend] ${chunk}`));

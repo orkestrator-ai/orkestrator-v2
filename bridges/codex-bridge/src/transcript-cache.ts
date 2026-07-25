@@ -13,7 +13,57 @@ interface CachedTranscript {
   records: TranscriptRecord[];
 }
 
+/**
+ * Full-transcript cache, bounded by retained bytes.
+ *
+ * Rollouts are large — 30MB+ for a long conversation — and parsing one into
+ * `lines` plus `records` costs roughly 4x its size on the heap. Unbounded, this
+ * map grew to the size of the entire Codex history: measured at ~5.3GB of heap
+ * for a 1.6GB store, retained for the life of the bridge.
+ *
+ * `Map` iterates in insertion order, and `readCachedTranscript` re-inserts on
+ * every hit, so evicting the first key is an LRU eviction.
+ */
 const transcriptCache = new Map<string, CachedTranscript>();
+
+/** Heap cost is ~4x the on-disk bytes, so this is roughly 256MB of heap. */
+export const MAX_TRANSCRIPT_CACHE_BYTES = 64 * 1024 * 1024;
+
+/**
+ * How much of a rollout to read when only its metadata is wanted.
+ *
+ * `session_meta` is the first record and the first user message follows shortly
+ * after, so the head is enough to build a session-list entry. Reading whole files
+ * for this is what made listing sessions load the entire history into memory.
+ */
+export const TRANSCRIPT_HEAD_BYTES = 64 * 1024;
+
+let cachedBytes = 0;
+
+function evictTranscriptCache(): void {
+  while (cachedBytes > MAX_TRANSCRIPT_CACHE_BYTES) {
+    const oldest = transcriptCache.keys().next().value;
+    if (oldest === undefined) break;
+    const evicted = transcriptCache.get(oldest);
+    transcriptCache.delete(oldest);
+    cachedBytes -= evicted?.size ?? 0;
+  }
+  if (cachedBytes < 0) cachedBytes = 0;
+}
+
+function storeTranscript(path: string, transcript: CachedTranscript): void {
+  const previous = transcriptCache.get(path);
+  if (previous) cachedBytes -= previous.size;
+  // Delete before set so the re-inserted entry moves to the newest position.
+  transcriptCache.delete(path);
+  transcriptCache.set(path, transcript);
+  cachedBytes += transcript.size;
+  evictTranscriptCache();
+}
+
+export function getTranscriptCacheStats(): { entries: number; bytes: number } {
+  return { entries: transcriptCache.size, bytes: cachedBytes };
+}
 
 function normalizeTranscriptLines(lines: string[]): string[] {
   return lines
@@ -100,11 +150,14 @@ export async function readCachedTranscript(path: string): Promise<CachedTranscri
       (size === cached.size && modifiedAtNs !== cached.modifiedAtNs)
     ) {
       const loaded = await loadTranscriptFromScratch(path);
-      transcriptCache.set(path, loaded);
+      storeTranscript(path, loaded);
       return loaded;
     }
 
     if (size === cached.size) {
+      // Re-insert so a repeatedly-read transcript is not evicted before a
+      // transcript nobody has touched since startup.
+      storeTranscript(path, cached);
       return cached;
     }
 
@@ -124,10 +177,13 @@ export async function readCachedTranscript(path: string): Promise<CachedTranscri
           ? [...cached.records, ...parseTranscriptRecords(appendedLines)]
           : cached.records,
     };
-    transcriptCache.set(path, next);
+    storeTranscript(path, next);
     return next;
   } catch {
+    const dropped = transcriptCache.get(path);
     transcriptCache.delete(path);
+    cachedBytes -= dropped?.size ?? 0;
+    if (cachedBytes < 0) cachedBytes = 0;
     return {
       fileId: "",
       size: 0,
@@ -141,4 +197,35 @@ export async function readCachedTranscript(path: string): Promise<CachedTranscri
 
 export function clearTranscriptCache(): void {
   transcriptCache.clear();
+  cachedBytes = 0;
+}
+
+/**
+ * Reads only the head of a rollout and parses the records found there.
+ *
+ * For building a session-list entry we need `session_meta` (id, cwd, timestamp)
+ * and the first user message (fallback title) — both near the start. Reading the
+ * whole file to find them is what made listing sessions pull the entire Codex
+ * history into memory.
+ *
+ * Deliberately **not** cached: metadata scans touch every rollout on disk, so
+ * caching them is exactly the unbounded growth this avoids. The head is cheap to
+ * re-read.
+ */
+export async function readTranscriptHead(
+  path: string,
+  maxBytes: number = TRANSCRIPT_HEAD_BYTES,
+): Promise<{ records: TranscriptRecord[]; truncated: boolean }> {
+  try {
+    const stats = await stat(path);
+    const head = await readTranscriptChunk(path, 0, Math.min(maxBytes, Number(stats.size)));
+    // Drop a trailing partial line: parsing half a JSON record would throw.
+    const { lines } = splitTranscriptChunk(head, "");
+    return {
+      records: parseTranscriptRecords(lines),
+      truncated: Number(stats.size) > maxBytes,
+    };
+  } catch {
+    return { records: [], truncated: false };
+  }
 }

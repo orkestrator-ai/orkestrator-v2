@@ -49,29 +49,79 @@ describe("monorepo orchestration scripts", () => {
     expect(source).toContain('name.startsWith("claude-agent-sdk-")');
   });
 
-  test("full tests stop on workspace failure before running root tests", () => {
+  test("full tests run workspace, root, bridge, and protocol checks concurrently", () => {
+    // The groups are independent, so they run at once rather than in sequence.
+    // Behaviour is asserted properly in tests/unit/test-all.test.ts; this only
+    // pins the shape of the orchestration.
     const source = read("scripts/test-all.ts");
-    const workspaceRun = source.indexOf('run("turbo"');
-    const rootRun = source.indexOf('run("bun", ["test", "tests"]');
-    expect(workspaceRun).toBeGreaterThan(-1);
-    expect(rootRun).toBeGreaterThan(workspaceRun);
-    expect(source).toContain("return result.status ?? 1");
-    expect(source).toContain("process.exit(status)");
+    expect(source).toContain("Promise.all(");
     expect(source).toContain('"--filter=@orkestrator/web-public"');
-    expect(source).toContain('run("bun", ["scripts/test-ios.ts"])');
+    expect(source).toContain('args: ["run", "codex:protocol:check"]');
+    expect(source).toContain('args: ["scripts/test-ios.ts"]');
     expect(source).toContain('dependencies.platform === "darwin"');
+    expect(source).toContain("process.exit(status)");
+    // A signal-terminated group (null status) must count as a failure.
+    expect(source).toContain("result.status ?? 1");
+  });
+
+  test("full tests report every failing group instead of stopping at the first", () => {
+    // With concurrency the other groups have already run, so surfacing them all
+    // avoids a second full run just to see the next failure.
+    const source = read("scripts/test-all.ts");
+    expect(source).toContain("Failing groups:");
   });
 
   test("full tests cover the bridge packages, which have no workspace test script", () => {
     // bridges/* are not in the turbo `test:workspace` filters and declare no
     // `test` script, so they only run if test-all.ts invokes them directly.
     const source = read("scripts/test-all.ts");
-    expect(source).toContain('run("bun", ["test", "bridges"])');
+    expect(source).toContain('args: ["test", "bridges"');
 
     for (const bridge of ["bridges/claude-bridge/package.json", "bridges/codex-bridge/package.json"]) {
       const scripts = (JSON.parse(read(bridge)) as { scripts?: Record<string, string> }).scripts ?? {};
       expect(scripts.test).toBeUndefined();
     }
+  });
+
+  test("test runners are configured to run test files in parallel", () => {
+    // The suite is dominated by I/O waits, so file-level parallelism is where the
+    // wall-clock win comes from. The workspace scripts take their bound from
+    // ORKESTRATOR_TEST_WORKERS, which test-all sets for the Turbo group, and fall
+    // back to a fixed count so a bare `bun run test:workspace` still works.
+    const source = read("scripts/test-all.ts");
+    expect(source).toContain("--parallel=");
+    expect(source).toContain("ORKESTRATOR_TEST_WORKERS");
+
+    for (const pkg of [
+      "apps/web/package.json",
+      "apps/backend/package.json",
+      "apps/web-public/package.json",
+    ]) {
+      const scripts = (JSON.parse(read(pkg)) as { scripts?: Record<string, string> }).scripts ?? {};
+      expect(scripts.test).toContain("--parallel");
+      expect(scripts["test:workspace"]).toContain("--parallel=${ORKESTRATOR_TEST_WORKERS:-2}");
+    }
+  });
+
+  test("the workspace worker count is never passed through Turbo's `--` separator", () => {
+    // Turbo hashes passthrough arguments into the requested task *and its
+    // dependencies*, so `-- --parallel=N` gave `bun run build` and `bun run test`
+    // different `#build` hashes and re-ran `tsc && vite build` on every
+    // alternation between the two commands.
+    const source = read("scripts/test-all.ts");
+    expect(source).not.toContain('"--",');
+
+    const turbo = JSON.parse(read("turbo.json")) as {
+      tasks?: Record<string, { passThroughEnv?: string[]; env?: string[] }>;
+    };
+    const workspaceTask = turbo.tasks?.["test:workspace"] ?? {};
+    // passThroughEnv, not env: the worker count must reach the task without
+    // becoming part of its hash.
+    expect([
+      ...(workspaceTask.passThroughEnv ?? []),
+      ...(workspaceTask.env ?? []),
+    ]).toContain("ORKESTRATOR_TEST_WORKERS");
+    expect(workspaceTask.env ?? []).not.toContain("ORKESTRATOR_TEST_WORKERS");
   });
 
   test("iOS development and test scripts use Bun entrypoints", () => {

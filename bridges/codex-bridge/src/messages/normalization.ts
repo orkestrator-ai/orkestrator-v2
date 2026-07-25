@@ -30,6 +30,12 @@ import type { FileChangeDiffContext, NormalizedPart, ToolDiffMetadata } from "./
 
 const execFile = promisify(execFileCallback);
 const COMMAND_OUTPUT_TRUNCATION_NOTICE = "\n… output truncated";
+const INVISIBLE_TEXT_ONLY =
+  /^(?:\p{White_Space}|\uFEFF|\p{Default_Ignorable_Code_Point})*$/u;
+
+export function hasVisibleText(value: string): boolean {
+  return !INVISIBLE_TEXT_ONLY.test(value);
+}
 
 export function capCommandOutput(
   output: string,
@@ -75,17 +81,38 @@ export async function readGitHeadTextFile(
   }
 }
 
-export async function runGitDiffNoIndex(
+interface GitDiffIo {
+  makeTempDir(prefix: string): Promise<string>;
+  writeTextFile(path: string, content: string): Promise<void>;
+  removeTempDir(path: string): Promise<void>;
+  execute(cwd: string, args: string[]): Promise<{ stdout: string }>;
+}
+
+const defaultGitDiffIo: GitDiffIo = {
+  makeTempDir: (prefix) => mkdtemp(prefix),
+  writeTextFile: (path, content) => writeFile(path, content, "utf8"),
+  removeTempDir: (path) => rm(path, { recursive: true, force: true }),
+  execute: async (cwd, args) => {
+    const { stdout } = await execFile("git", args, {
+      cwd,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    return { stdout };
+  },
+};
+
+async function runGitDiffNoIndexWithIo(
   cwd: string,
   relativePath: string,
   before: string | undefined,
   after: string | undefined,
+  io: GitDiffIo,
 ): Promise<string | undefined> {
   if ((before ?? "") === (after ?? "")) {
     return undefined;
   }
 
-  const tempDir = await mkdtemp(join(tmpdir(), "orkestrator-codex-diff-"));
+  const tempDir = await io.makeTempDir(join(tmpdir(), "orkestrator-codex-diff-"));
   const beforePath = join(tempDir, "before");
   const afterPath = join(tempDir, "after");
   const normalizeOutput = (output: string) =>
@@ -96,8 +123,8 @@ export async function runGitDiffNoIndex(
       .split(afterPath).join(`b/${relativePath}`);
 
   try {
-    await writeFile(beforePath, before ?? "", "utf8");
-    await writeFile(afterPath, after ?? "", "utf8");
+    await io.writeTextFile(beforePath, before ?? "");
+    await io.writeTextFile(afterPath, after ?? "");
 
     const args = [
       "diff",
@@ -110,31 +137,64 @@ export async function runGitDiffNoIndex(
     ];
 
     try {
-      const { stdout } = await execFile("git", args, {
-        cwd,
-        maxBuffer: 2 * 1024 * 1024,
-      });
+      const { stdout } = await io.execute(cwd, args);
       const output = stdout.trimEnd();
       return output.length > 0 ? normalizeOutput(output) : undefined;
     } catch (error) {
+      // `git diff --no-index` uses exit code 1 for an ordinary difference.
+      // Every other failure is fatal. In particular, maxBuffer failures may
+      // carry truncated stdout, which must never be presented as a complete
+      // patch.
+      if ((error as { code?: unknown }).code !== 1) {
+        return undefined;
+      }
       const stdout = typeof (error as { stdout?: unknown }).stdout === "string"
         ? (error as { stdout: string }).stdout.trimEnd()
         : "";
       return stdout.length > 0 ? normalizeOutput(stdout) : undefined;
     }
   } finally {
-    await rm(tempDir, { recursive: true, force: true });
+    await io.removeTempDir(tempDir);
   }
 }
+
+export async function runGitDiffNoIndex(
+  cwd: string,
+  relativePath: string,
+  before: string | undefined,
+  after: string | undefined,
+): Promise<string | undefined> {
+  return runGitDiffNoIndexWithIo(cwd, relativePath, before, after, defaultGitDiffIo);
+}
+
+export const __testing = {
+  runGitDiffNoIndexWithIo,
+};
 
 export function countDiffLines(diff: string): { additions: number; deletions: number } {
   let additions = 0;
   let deletions = 0;
+  let inHunk = false;
 
   for (const line of diff.split("\n")) {
-    if (line.startsWith("+") && !line.startsWith("+++")) {
+    if (line.startsWith("diff --git ")) {
+      inHunk = false;
+      continue;
+    }
+    if (line.startsWith("@@")) {
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk) {
+      continue;
+    }
+
+    // Once inside a hunk, every leading + / - is a body marker. This is the
+    // only reliable way to distinguish file headers from body content such as
+    // `++ value`, whose encoded diff line is the identical `+++ value`.
+    if (line.startsWith("+")) {
       additions += 1;
-    } else if (line.startsWith("-") && !line.startsWith("---")) {
+    } else if (line.startsWith("-")) {
       deletions += 1;
     }
   }
@@ -209,7 +269,7 @@ export async function itemToParts(
     case "agent_message":
       return [{ type: "text", content: item.text }];
     case "reasoning":
-      return item.text.trim().length > 0
+      return hasVisibleText(item.text)
         ? [{ type: "thinking", content: item.text }]
         : [];
     case "command_execution": {

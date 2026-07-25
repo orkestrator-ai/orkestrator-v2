@@ -10,6 +10,11 @@ import { CodexComposeBar } from "../../apps/web/src/components/codex/CodexCompos
 import { AgentThinkingIndicator } from "../../apps/web/src/components/chat/AgentThinkingIndicator";
 import { DiffViewerTab } from "../../apps/web/src/components/terminal/DiffViewerTab";
 import { ChangedFileItem } from "../../apps/web/src/components/files-panel/ChangedFileItem";
+import {
+  ReviewLaunchDialog,
+  type ReviewLaunchSelection,
+  type ReviewModelCatalog,
+} from "../../apps/web/src/components/review/ReviewLaunchDialog";
 import type { GitFileChange } from "../../apps/web/src/lib/backend";
 
 declare global {
@@ -92,6 +97,61 @@ function CodexComposeFixture() {
         />
         <output data-testid="codex-send-count">{sentCount}</output>
       </section>
+    </main>
+  );
+}
+
+const reviewModelCatalog = {
+  claude: [
+    {
+      id: "claude-sonnet",
+      name: "Claude Sonnet",
+      description: "Balanced reviews for everyday code changes",
+      reasoningEfforts: ["low", "high"],
+    },
+  ],
+  codex: [
+    {
+      id: "codex-review",
+      name: "Codex Review",
+      description: "Detailed code review with repository context",
+      reasoningEfforts: ["medium", "high"],
+    },
+  ],
+  opencode: [
+    {
+      id: "provider/opencode-review",
+      name: "OpenCode Review",
+      description: "Provider-managed review model",
+      reasoningEfforts: ["fast", "deep"],
+    },
+  ],
+} satisfies ReviewModelCatalog;
+
+function ReviewLaunchDialogFixture() {
+  const [open, setOpen] = useState(true);
+  const [selection, setSelection] = useState<ReviewLaunchSelection | null>(null);
+
+  return (
+    <main className="min-h-screen bg-background p-4 text-foreground">
+      <button type="button" onClick={() => setOpen(true)}>
+        Reopen review dialog
+      </button>
+      <output data-testid="review-launch-selection">
+        {selection
+          ? `${selection.tabType}|${selection.model}|${selection.reasoningEffort ?? "default"}`
+          : ""}
+      </output>
+      <ReviewLaunchDialog
+        open={open}
+        onOpenChange={setOpen}
+        defaultTabType="claude-cli"
+        catalog={reviewModelCatalog}
+        onConfirm={(nextSelection) => {
+          setSelection(nextSelection);
+          setOpen(false);
+        }}
+      />
     </main>
   );
 }
@@ -206,6 +266,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/browser") return <BrowserFixture />;
   if (window.location.pathname === "/codex-compose") return <CodexComposeFixture />;
   if (window.location.pathname === "/path-truncation") return <PathTruncationFixture />;
+  if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   return <CreateEnvironmentFixture />;
 }

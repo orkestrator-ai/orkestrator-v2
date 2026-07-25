@@ -7,6 +7,7 @@ import {
   getReviewAgent,
   type ReviewLaunchSelection,
   type ReviewModelCatalog,
+  type ReviewTabType,
 } from "./ReviewLaunchDialog";
 
 afterEach(cleanup);
@@ -159,12 +160,64 @@ describe("ReviewLaunchDialog", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Reopen" }));
-    expect(screen.getByRole("radio", { name: "Claude" }).getAttribute("aria-checked")).toBe("true");
-    expect(
+    const claudeRadio = screen.getByRole("radio", { name: "Claude" }) as HTMLInputElement;
+    const cliRadio =
       within(screen.getByRole("radiogroup", { name: "Claude mode" }))
-        .getByRole("radio", { name: /^CLI/ })
-        .getAttribute("aria-checked"),
-    ).toBe("true");
+        .getByRole("radio", { name: /^CLI/ }) as HTMLInputElement;
+    expect(claudeRadio.checked).toBe(true);
+    expect(cliRadio.checked).toBe(true);
+  });
+
+  test("uses roving focus and arrow-key selection in the provider and mode radio groups", () => {
+    render(
+      <ReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultTabType="claude-cli"
+        catalog={catalog}
+        onConfirm={() => undefined}
+      />,
+    );
+
+    const providerGroup = screen.getByRole("radiogroup", { name: "Review provider" });
+    const claudeRadio = within(providerGroup).getByRole("radio", { name: "Claude" });
+    const codexRadio = within(providerGroup).getByRole("radio", { name: "Codex" });
+    const openCodeRadio = within(providerGroup).getByRole("radio", { name: "OpenCode" });
+    expect(claudeRadio.tabIndex).toBe(0);
+    expect(codexRadio.tabIndex).toBe(-1);
+
+    claudeRadio.focus();
+    fireEvent.keyDown(claudeRadio, { key: "ArrowDown" });
+
+    expect(document.activeElement).toBe(codexRadio);
+    expect((codexRadio as HTMLInputElement).checked).toBe(true);
+    expect(codexRadio.tabIndex).toBe(0);
+    expect(claudeRadio.tabIndex).toBe(-1);
+
+    fireEvent.keyDown(codexRadio, { key: "End" });
+    expect(document.activeElement).toBe(openCodeRadio);
+    expect((openCodeRadio as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.keyDown(openCodeRadio, { key: "Home" });
+    expect(document.activeElement).toBe(claudeRadio);
+    expect((claudeRadio as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.keyDown(claudeRadio, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(openCodeRadio);
+    fireEvent.keyDown(openCodeRadio, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(codexRadio);
+    expect((codexRadio as HTMLInputElement).checked).toBe(true);
+
+    const modeGroup = screen.getByRole("radiogroup", { name: "Codex mode" });
+    const cliRadio = within(modeGroup).getByRole("radio", { name: /^CLI/ });
+    const nativeRadio = within(modeGroup).getByRole("radio", { name: /^Native/ });
+    cliRadio.focus();
+    fireEvent.keyDown(cliRadio, { key: "ArrowRight" });
+
+    expect(document.activeElement).toBe(nativeRadio);
+    expect((nativeRadio as HTMLInputElement).checked).toBe(true);
+    expect(nativeRadio.tabIndex).toBe(0);
+    expect(cliRadio.tabIndex).toBe(-1);
   });
 
   test("keeps a compatible mode when the provider changes and falls back when needed", () => {
@@ -285,7 +338,7 @@ describe("ReviewLaunchDialog", () => {
     });
   });
 
-  test("falls back to the first current model when the open dialog receives a new catalog", () => {
+  test("reconciles the model and effort when the open dialog receives a new catalog", async () => {
     const onConfirm = mock((_selection: ReviewLaunchSelection) => undefined);
     const props = {
       open: true,
@@ -296,6 +349,10 @@ describe("ReviewLaunchDialog", () => {
     const { rerender } = render(<ReviewLaunchDialog {...props} catalog={catalog} />);
 
     expect(screen.getByRole("combobox", { name: "Model" }).textContent).toContain("Claude A");
+    const effortSelect = screen.getByRole("combobox", { name: "Reasoning effort" });
+    fireEvent.keyDown(effortSelect, { key: "Enter" });
+    fireEvent.click(screen.getByRole("option", { name: "High" }));
+    await waitFor(() => expect(effortSelect.textContent).toContain("High"));
 
     const updatedCatalog: ReviewModelCatalog = {
       ...catalog,
@@ -311,8 +368,12 @@ describe("ReviewLaunchDialog", () => {
     rerender(<ReviewLaunchDialog {...props} catalog={updatedCatalog} />);
 
     const modelSelect = screen.getByRole("combobox", { name: "Model" });
-    expect(modelSelect.textContent).toContain("Claude New");
-    expect(modelSelect.textContent).toContain("Current catalog model");
+    await waitFor(() => {
+      expect(modelSelect.textContent).toContain("Claude New");
+      expect(modelSelect.textContent).toContain("Current catalog model");
+      expect(effortSelect.textContent).toContain("Default");
+    });
+    expect(screen.getByText("Claude CLI · Claude New · default effort")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "OK" }));
     expect(onConfirm).toHaveBeenCalledWith({
@@ -377,4 +438,6 @@ test("getReviewAgent maps every public review tab option", () => {
   for (const option of REVIEW_TAB_OPTIONS) {
     expect(getReviewAgent(option.value)).toBe(option.agent);
   }
+
+  expect(getReviewAgent("invalid-review-tab" as ReviewTabType)).toBe("claude");
 });

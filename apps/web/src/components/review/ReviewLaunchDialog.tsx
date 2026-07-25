@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Bot, BrainCircuit, TerminalSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -147,6 +147,43 @@ function defaultEffortFor(
   return preferred && options.includes(preferred) ? preferred : "default";
 }
 
+function handleRadioNavigation<T extends string>(
+  event: React.KeyboardEvent<HTMLInputElement>,
+  values: readonly T[],
+  currentValue: T,
+  onValueChange: (value: T) => void,
+  radioRefs: Map<T, HTMLInputElement>,
+) {
+  const currentIndex = Math.max(values.indexOf(currentValue), 0);
+  let nextIndex: number;
+
+  switch (event.key) {
+    case "ArrowRight":
+    case "ArrowDown":
+      nextIndex = (currentIndex + 1) % values.length;
+      break;
+    case "ArrowLeft":
+    case "ArrowUp":
+      nextIndex = (currentIndex - 1 + values.length) % values.length;
+      break;
+    case "Home":
+      nextIndex = 0;
+      break;
+    case "End":
+      nextIndex = values.length - 1;
+      break;
+    default:
+      return;
+  }
+
+  const nextValue = values[nextIndex];
+  if (!nextValue) return;
+
+  event.preventDefault();
+  onValueChange(nextValue);
+  radioRefs.get(nextValue)?.focus();
+}
+
 export function ReviewLaunchDialog({
   open,
   onOpenChange,
@@ -163,18 +200,51 @@ export function ReviewLaunchDialog({
     defaultEffortFor(defaultTabType, initialModel, catalog, preferredReasoningEfforts),
   );
   const wasOpenRef = useRef(false);
+  const radioGroupId = useId();
+  const providerRadioRefs = useRef(new Map<ReviewAgent, HTMLInputElement>());
+  const modeRadioRefs = useRef(new Map<ReviewTabType, HTMLInputElement>());
 
   useEffect(() => {
-    if (open && !wasOpenRef.current) {
+    const justOpened = open && !wasOpenRef.current;
+    wasOpenRef.current = open;
+    if (!open) return;
+
+    if (justOpened) {
       const nextModel = firstModelFor(defaultTabType, catalog, preferredModels);
       setTabType(defaultTabType);
       setModel(nextModel);
       setReasoningEffort(
         defaultEffortFor(defaultTabType, nextModel, catalog, preferredReasoningEfforts),
       );
+      return;
     }
-    wasOpenRef.current = open;
-  }, [catalog, defaultTabType, open, preferredModels, preferredReasoningEfforts]);
+
+    const currentModels = catalog[getReviewAgent(tabType)];
+    const currentModelExists = currentModels.some((option) => option.id === model);
+    const nextModel = currentModelExists
+      ? model
+      : firstModelFor(tabType, catalog, preferredModels);
+    const nextEffortOptions =
+      currentModels.find((option) => option.id === nextModel)?.reasoningEfforts ?? [];
+    const currentEffortIsValid =
+      currentModelExists
+      && (reasoningEffort === "default" || nextEffortOptions.includes(reasoningEffort));
+    const nextEffort = currentEffortIsValid
+      ? reasoningEffort
+      : defaultEffortFor(tabType, nextModel, catalog, preferredReasoningEfforts);
+
+    if (nextModel !== model) setModel(nextModel);
+    if (nextEffort !== reasoningEffort) setReasoningEffort(nextEffort);
+  }, [
+    catalog,
+    defaultTabType,
+    model,
+    open,
+    preferredModels,
+    preferredReasoningEfforts,
+    reasoningEffort,
+    tabType,
+  ]);
 
   const agent = getReviewAgent(tabType);
   const agentLabel = REVIEW_AGENT_OPTIONS.find((option) => option.value === agent)?.label ?? agent;
@@ -183,14 +253,19 @@ export function ReviewLaunchDialog({
   const selectedModel = models.find((option) => option.id === model) ?? models[0];
   const reasoningEfforts = selectedModel?.reasoningEfforts ?? [];
   const effortAvailable = reasoningEfforts.length > 0 && tabType !== "opencode-cli";
+  const effectiveReasoningEffort =
+    effortAvailable
+    && (reasoningEffort === "default" || reasoningEfforts.includes(reasoningEffort))
+      ? reasoningEffort
+      : "default";
 
   const summary = useMemo(() => {
     const tabLabel = REVIEW_TAB_OPTIONS.find((option) => option.value === tabType)?.label ?? tabType;
-    const effortLabel = reasoningEffort === "default"
+    const effortLabel = effectiveReasoningEffort === "default"
       ? "default effort"
-      : `${reasoningEffort} effort`;
+      : `${effectiveReasoningEffort} effort`;
     return `${tabLabel} · ${selectedModel?.name ?? model} · ${effortAvailable ? effortLabel : "default effort"}`;
-  }, [effortAvailable, model, reasoningEffort, selectedModel?.name, tabType]);
+  }, [effectiveReasoningEffort, effortAvailable, model, selectedModel?.name, tabType]);
 
   const handleAgentChange = (nextAgent: ReviewAgent) => {
     const currentMode = REVIEW_TAB_OPTIONS.find((option) => option.value === tabType)?.mode;
@@ -240,7 +315,9 @@ export function ReviewLaunchDialog({
               tabType,
               model: selectedModel?.id ?? model,
               reasoningEffort:
-                effortAvailable && reasoningEffort !== "default" ? reasoningEffort : undefined,
+                effectiveReasoningEffort !== "default"
+                  ? effectiveReasoningEffort
+                  : undefined,
             });
           }}
         >
@@ -263,24 +340,48 @@ export function ReviewLaunchDialog({
                     Provider
                   </p>
                   <div className="grid gap-1.5" role="radiogroup" aria-label="Review provider">
-                    {REVIEW_AGENT_OPTIONS.map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        role="radio"
-                        aria-checked={agent === option.value}
-                        onClick={() => handleAgentChange(option.value)}
-                        className={cn(
-                          "flex min-w-0 items-center gap-2 rounded-lg border px-2.5 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70",
-                          agent === option.value
-                            ? "border-blue-400/55 bg-blue-500/10 text-zinc-100"
-                            : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900",
-                        )}
-                      >
-                        <AgentIcon agent={option.value} className="size-4 shrink-0" />
-                        <span className="min-w-0 truncate text-sm font-medium">{option.label}</span>
-                      </button>
-                    ))}
+                    {REVIEW_AGENT_OPTIONS.map((option) => {
+                      const selected = agent === option.value;
+                      const inputId = `${radioGroupId}-provider-${option.value}`;
+                      return (
+                        <div key={option.value} className="relative min-w-0">
+                          <input
+                            ref={(node) => {
+                              if (node) providerRadioRefs.current.set(option.value, node);
+                              else providerRadioRefs.current.delete(option.value);
+                            }}
+                            id={inputId}
+                            type="radio"
+                            name={`${radioGroupId}-provider`}
+                            value={option.value}
+                            checked={selected}
+                            tabIndex={selected ? 0 : -1}
+                            onChange={() => handleAgentChange(option.value)}
+                            onKeyDown={(event) =>
+                              handleRadioNavigation(
+                                event,
+                                REVIEW_AGENT_OPTIONS.map(({ value }) => value),
+                                agent,
+                                handleAgentChange,
+                                providerRadioRefs.current,
+                              )}
+                            className="peer sr-only"
+                          />
+                          <label
+                            htmlFor={inputId}
+                            className={cn(
+                              "flex min-w-0 cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2.5 text-left transition-colors peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/70",
+                              selected
+                                ? "border-blue-400/55 bg-blue-500/10 text-zinc-100"
+                                : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900",
+                            )}
+                          >
+                            <AgentIcon agent={option.value} className="size-4 shrink-0" />
+                            <span className="min-w-0 truncate text-sm font-medium">{option.label}</span>
+                          </label>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -289,28 +390,52 @@ export function ReviewLaunchDialog({
                     Mode
                   </p>
                   <div className="grid gap-1.5" role="radiogroup" aria-label={`${agentLabel} mode`}>
-                    {availableModes.map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        role="radio"
-                        aria-checked={tabType === option.value}
-                        onClick={() => setTabType(option.value)}
-                        className={cn(
-                          "min-w-0 rounded-lg border px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70",
-                          tabType === option.value
-                            ? "border-blue-400/55 bg-blue-500/10 text-zinc-100"
-                            : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900",
-                        )}
-                      >
-                        <span className="block truncate text-sm font-medium">
-                          {REVIEW_MODE_LABELS[option.mode]}
-                        </span>
-                        <span className="hidden truncate text-[11px] text-zinc-500 min-[390px]:block">
-                          {option.description}
-                        </span>
-                      </button>
-                    ))}
+                    {availableModes.map((option) => {
+                      const selected = tabType === option.value;
+                      const inputId = `${radioGroupId}-mode-${option.value}`;
+                      return (
+                        <div key={option.value} className="relative min-w-0">
+                          <input
+                            ref={(node) => {
+                              if (node) modeRadioRefs.current.set(option.value, node);
+                              else modeRadioRefs.current.delete(option.value);
+                            }}
+                            id={inputId}
+                            type="radio"
+                            name={`${radioGroupId}-mode`}
+                            value={option.value}
+                            checked={selected}
+                            tabIndex={selected ? 0 : -1}
+                            onChange={() => setTabType(option.value)}
+                            onKeyDown={(event) =>
+                              handleRadioNavigation(
+                                event,
+                                availableModes.map(({ value }) => value),
+                                tabType,
+                                setTabType,
+                                modeRadioRefs.current,
+                              )}
+                            className="peer sr-only"
+                          />
+                          <label
+                            htmlFor={inputId}
+                            className={cn(
+                              "block min-w-0 cursor-pointer rounded-lg border px-2.5 py-2 text-left transition-colors peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/70",
+                              selected
+                                ? "border-blue-400/55 bg-blue-500/10 text-zinc-100"
+                                : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900",
+                            )}
+                          >
+                            <span className="block truncate text-sm font-medium">
+                              {REVIEW_MODE_LABELS[option.mode]}
+                            </span>
+                            <span className="hidden truncate text-[11px] text-zinc-500 min-[390px]:block">
+                              {option.description}
+                            </span>
+                          </label>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -353,7 +478,7 @@ export function ReviewLaunchDialog({
                 Reasoning effort
               </Label>
               <Select
-                value={effortAvailable ? reasoningEffort : "default"}
+                value={effectiveReasoningEffort}
                 onValueChange={setReasoningEffort}
                 disabled={!effortAvailable}
               >

@@ -231,24 +231,65 @@ export interface CodexApproval {
  */
 export type CodexApprovalResponseResult = "applied" | "stale" | "forbidden" | "error";
 
-function parseApproval(value: unknown): CodexApproval | null {
-  if (!value || typeof value !== "object") return null;
+/**
+ * Reports an approval we refuse to render, and drops it.
+ *
+ * Never silent: the turn is *blocked* on this request, so an approval we cannot
+ * show is one nobody can answer, and it will hang until the bridge's five-minute
+ * auto-deny. Only the id and the offending field are logged — never the command,
+ * the cwd or any file content, which is exactly what the user has not yet agreed
+ * to expose.
+ */
+function rejectApproval(value: unknown, field: string): null {
+  const approvalId =
+    value
+    && typeof value === "object"
+    && typeof (value as Record<string, unknown>).approvalId === "string"
+      ? ((value as Record<string, string>).approvalId)
+      : undefined;
+  console.warn(
+    `[codex-client] Ignoring unrecognised Codex approval (invalid ${field})`,
+    { approvalId },
+  );
+  return null;
+}
+
+/**
+ * Validates one approval descriptor from the bridge.
+ *
+ * Exported so the SSE frame and the `/approvals` snapshot agree on what a usable
+ * approval is: the two paths deliver the same descriptor, and a card the user
+ * cannot act on is worse than no card at all.
+ */
+export function parseApproval(value: unknown): CodexApproval | null {
+  if (!value || typeof value !== "object") return rejectApproval(value, "payload");
   const entry = value as Record<string, unknown>;
   const kind = entry.kind;
-  if (
-    typeof entry.approvalId !== "string"
-    || (kind !== "command" && kind !== "file-change" && kind !== "permissions")
-    || typeof entry.method !== "string"
-    || (entry.threadId !== null && typeof entry.threadId !== "string")
-    || (entry.turnId !== null && typeof entry.turnId !== "string")
-    || (entry.itemId !== null && typeof entry.itemId !== "string")
-    || typeof entry.requestedAt !== "number"
-    || !Number.isFinite(entry.requestedAt)
-    || typeof entry.expiresAt !== "number"
-    || !Number.isFinite(entry.expiresAt)
-    || typeof entry.supportsApproveForSession !== "boolean"
-  ) {
-    return null;
+  // An empty id cannot be routed back to the bridge, so it is not answerable.
+  if (typeof entry.approvalId !== "string" || entry.approvalId.length === 0) {
+    return rejectApproval(entry, "approvalId");
+  }
+  if (kind !== "command" && kind !== "file-change" && kind !== "permissions") {
+    return rejectApproval(entry, "kind");
+  }
+  if (typeof entry.method !== "string") return rejectApproval(entry, "method");
+  if (entry.threadId !== null && typeof entry.threadId !== "string") {
+    return rejectApproval(entry, "threadId");
+  }
+  if (entry.turnId !== null && typeof entry.turnId !== "string") {
+    return rejectApproval(entry, "turnId");
+  }
+  if (entry.itemId !== null && typeof entry.itemId !== "string") {
+    return rejectApproval(entry, "itemId");
+  }
+  if (typeof entry.requestedAt !== "number" || !Number.isFinite(entry.requestedAt)) {
+    return rejectApproval(entry, "requestedAt");
+  }
+  if (typeof entry.expiresAt !== "number" || !Number.isFinite(entry.expiresAt)) {
+    return rejectApproval(entry, "expiresAt");
+  }
+  if (typeof entry.supportsApproveForSession !== "boolean") {
+    return rejectApproval(entry, "supportsApproveForSession");
   }
 
   const changes = Array.isArray(entry.changes)

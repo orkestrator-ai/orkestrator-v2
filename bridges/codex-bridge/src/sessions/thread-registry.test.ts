@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import {
+  MAX_LOCAL_MESSAGES,
   OverlappingTurnError,
   ThreadRegistry,
   phaseToExternalStatus,
@@ -7,6 +8,7 @@ import {
 } from "./thread-registry.js";
 import { TurnAccumulator } from "./turn-accumulator.js";
 import type { EngineTurnConfig } from "../engine/types.js";
+import type { NormalizedMessage } from "../messages/types.js";
 
 const CONFIG: EngineTurnConfig = { mode: "build", model: "gpt-5.6-sol" };
 
@@ -60,6 +62,74 @@ describe("lazy thread creation", () => {
     const registry = makeRegistry();
     createSession(registry, "s1", "thread-1");
     expect(registry.referenceCount("thread-1")).toBe(1);
+  });
+});
+
+describe("restoring a durable session", () => {
+  test("a restored session is not attached until something needs its transcript", () => {
+    const registry = new ThreadRegistry({ now: () => 5_000 });
+    const restored = registry.restoreSession({
+      id: "s1",
+      threadId: "thread-1",
+      config: CONFIG,
+      lastAccessed: 1_000,
+    });
+
+    // Startup stays bounded when many old tabs are retained: `thread/resume` is
+    // deferred to the first route that actually reads thread state.
+    expect(registry.listThreads()).toHaveLength(0);
+    expect(registry.getThreadForSession("s1")).toBeUndefined();
+    expect(restored.threadId).toBe("thread-1");
+  });
+
+  test("a restored session is back-dated to its persisted activity", () => {
+    const registry = new ThreadRegistry({ now: () => 5_000 });
+    const restored = registry.restoreSession({
+      id: "s1",
+      threadId: "thread-1",
+      config: CONFIG,
+      lastAccessed: 1_000,
+    });
+
+    // The retention sweep reads `createdAt`; stamping it with the restart time
+    // would make every old session look brand new after every bridge restart.
+    expect(restored.createdAt).toBe(1_000);
+    expect(restored.lastAccessed).toBe(1_000);
+    expect(restored.localMessages).toEqual([]);
+    expect(restored.pendingAttachments).toEqual([]);
+  });
+});
+
+describe("local slash-command transcript", () => {
+  function localMessage(id: string): NormalizedMessage {
+    return { id, role: "assistant", content: id, parts: [], createdAt: new Date().toISOString() };
+  }
+
+  test("keeps only the most recent entries", () => {
+    const registry = makeRegistry();
+    const session = createSession(registry, "s1");
+
+    for (let index = 0; index < MAX_LOCAL_MESSAGES + 10; index += 1) {
+      registry.appendLocalMessages(session, localMessage(`m${index}`));
+    }
+
+    // These survive detaching and have no rollout to reload from, so nothing else
+    // would ever evict them.
+    expect(session.localMessages).toHaveLength(MAX_LOCAL_MESSAGES);
+    expect(session.localMessages[0]!.id).toBe("m10");
+    expect(session.localMessages.at(-1)!.id).toBe(`m${MAX_LOCAL_MESSAGES + 9}`);
+  });
+
+  test("a batch larger than the cap is trimmed to the newest entries", () => {
+    const registry = makeRegistry();
+    const session = createSession(registry, "s1");
+    registry.appendLocalMessages(
+      session,
+      ...Array.from({ length: MAX_LOCAL_MESSAGES + 5 }, (_, index) => localMessage(`m${index}`)),
+    );
+
+    expect(session.localMessages).toHaveLength(MAX_LOCAL_MESSAGES);
+    expect(session.localMessages[0]!.id).toBe("m5");
   });
 });
 

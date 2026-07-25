@@ -84,12 +84,12 @@ describe("monorepo orchestration scripts", () => {
 
   test("test runners are configured to run test files in parallel", () => {
     // The suite is dominated by I/O waits, so file-level parallelism is where the
-    // wall-clock win comes from. The workspace scripts deliberately omit an
-    // unbounded flag: test-all injects the planned `--parallel=N` after Turbo's
-    // argument separator.
+    // wall-clock win comes from. The workspace scripts take their bound from
+    // ORKESTRATOR_TEST_WORKERS, which test-all sets for the Turbo group, and fall
+    // back to a fixed count so a bare `bun run test:workspace` still works.
     const source = read("scripts/test-all.ts");
     expect(source).toContain("--parallel=");
-    expect(source).toContain('"--",');
+    expect(source).toContain("ORKESTRATOR_TEST_WORKERS");
 
     for (const pkg of [
       "apps/web/package.json",
@@ -98,8 +98,29 @@ describe("monorepo orchestration scripts", () => {
     ]) {
       const scripts = (JSON.parse(read(pkg)) as { scripts?: Record<string, string> }).scripts ?? {};
       expect(scripts.test).toContain("--parallel");
-      expect(scripts["test:workspace"]).not.toContain("--parallel");
+      expect(scripts["test:workspace"]).toContain("--parallel=${ORKESTRATOR_TEST_WORKERS:-2}");
     }
+  });
+
+  test("the workspace worker count is never passed through Turbo's `--` separator", () => {
+    // Turbo hashes passthrough arguments into the requested task *and its
+    // dependencies*, so `-- --parallel=N` gave `bun run build` and `bun run test`
+    // different `#build` hashes and re-ran `tsc && vite build` on every
+    // alternation between the two commands.
+    const source = read("scripts/test-all.ts");
+    expect(source).not.toContain('"--",');
+
+    const turbo = JSON.parse(read("turbo.json")) as {
+      tasks?: Record<string, { passThroughEnv?: string[]; env?: string[] }>;
+    };
+    const workspaceTask = turbo.tasks?.["test:workspace"] ?? {};
+    // passThroughEnv, not env: the worker count must reach the task without
+    // becoming part of its hash.
+    expect([
+      ...(workspaceTask.passThroughEnv ?? []),
+      ...(workspaceTask.env ?? []),
+    ]).toContain("ORKESTRATOR_TEST_WORKERS");
+    expect(workspaceTask.env ?? []).not.toContain("ORKESTRATOR_TEST_WORKERS");
   });
 
   test("iOS development and test scripts use Bun entrypoints", () => {

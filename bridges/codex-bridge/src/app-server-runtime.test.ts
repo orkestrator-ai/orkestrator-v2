@@ -1,14 +1,20 @@
 import { afterEach, beforeEach, describe, test, expect } from "bun:test";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AppServerRuntime, type RuntimeSseEvent } from "./app-server-runtime.js";
+import {
+  AppServerRuntime,
+  MAX_PENDING_EVENTS_PER_TURN,
+  MAX_PENDING_TURNS,
+  type RuntimeSseEvent,
+} from "./app-server-runtime.js";
 import { AppServerEngine } from "./engine/app-server-engine.js";
 import type { AppServerSupervisorOptions } from "./app-server/process-supervisor.js";
 import { FakeReadable, FakeWritable } from "./app-server/testing/fake-app-server.js";
-import { phaseToExternalStatus } from "./sessions/thread-registry.js";
-import { BridgeSessionStore } from "./sessions/persistence.js";
+import { MAX_LOCAL_MESSAGES, phaseToExternalStatus } from "./sessions/thread-registry.js";
+import { BridgeSessionStore, hashCwd } from "./sessions/persistence.js";
+import type { EngineEvent } from "./engine/types.js";
 
 /**
  * Returned by a handler to model a request app-server never answers — the exact
@@ -171,6 +177,8 @@ async function harness(
     threadIdleMs?: number;
     sessionRetentionMs?: number;
     sweepIntervalMs?: number;
+    environmentDrainTimeoutMs?: number;
+    ambiguousRecoveryTimeoutMs?: number;
     fingerprintEnvironment?: () => string;
   } = {},
 ): Promise<Harness> {
@@ -221,6 +229,12 @@ async function harness(
       : {}),
     // Tests drive the sweep explicitly rather than waiting on a timer.
     sweepIntervalMs: options.sweepIntervalMs ?? 0,
+    ...(options.environmentDrainTimeoutMs !== undefined
+      ? { environmentDrainTimeoutMs: options.environmentDrainTimeoutMs }
+      : {}),
+    ...(options.ambiguousRecoveryTimeoutMs !== undefined
+      ? { ambiguousRecoveryTimeoutMs: options.ambiguousRecoveryTimeoutMs }
+      : {}),
   });
   await runtime.start();
 
@@ -269,6 +283,85 @@ describe("session lifecycle", () => {
 
     expect(await h.runtime.getMessages("session-restored")).toEqual([]);
     expect(h.child().requests.some((request) => request.method === "thread/resume")).toBe(true);
+  });
+
+  test("resume without a thread id is rejected rather than creating a session", async () => {
+    const h = await harness();
+    expect(await h.runtime.resumeSession({ threadId: "   ", mode: "build" })).toBeNull();
+    expect(await h.runtime.resumeSession({ mode: "build" })).toBeNull();
+    expect(h.runtime.getRegistry().listSessions()).toHaveLength(0);
+  });
+
+  test("resuming a thread whose rollout is gone falls back to the parser", async () => {
+    const h = await harness({
+      "thread/resume": () => {
+        const error = new Error("thread/resume: no rollout found for thread id thread-gone");
+        (error as { rpcCode?: number }).rpcCode = -32600;
+        throw error;
+      },
+    });
+
+    // The user still sees the conversation; the next prompt starts a fresh thread
+    // with reconstructed context.
+    const resumed = await h.runtime.resumeSession({ threadId: "thread-gone", mode: "build" });
+    expect(resumed).toMatchObject({ threadId: "thread-gone", messages: [] });
+    expect(h.runtime.getRegistry().getSession(resumed!.sessionId)?.threadId).toBeNull();
+  });
+
+  test("resuming rethrows an ambiguous failure instead of forking a thread", async () => {
+    const h = await harness({
+      "thread/resume": () => {
+        throw new Error("temporary transport failure");
+      },
+    });
+
+    // Falling back here would rebuild the conversation in a *new* thread while the
+    // original is merely unreachable.
+    await expect(
+      h.runtime.resumeSession({ threadId: "thread-1", mode: "build" }),
+    ).rejects.toThrow("temporary transport failure");
+  });
+
+  test("re-attaching hydrates the transcript and adopts the Codex thread name", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-named",
+        threadId: "thread-named",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+      }),
+    );
+
+    const h = await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-named", { name: "Codex Name" }) }),
+    });
+
+    expect(await h.runtime.getMessages("session-named")).toEqual([]);
+    // app-server's own name outranks anything reconstructed from the rollout.
+    expect(h.runtime.getStatus("session-named")).toMatchObject({ title: "Codex Name" });
+    expect(h.runtime.getRegistry().getSession("session-named")?.titleSource).toBe("codex");
+  });
+
+  test("re-attaching an unnamed thread leaves the title to the rollout", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-unnamed",
+        threadId: "thread-unnamed",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+      }),
+    );
+
+    const h = await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-unnamed") }),
+    });
+
+    expect(await h.runtime.getMessages("session-unnamed")).toEqual([]);
+    const session = h.runtime.getRegistry().getSession("session-unnamed")!;
+    expect(session.title).toBeUndefined();
+    expect(session.titleSource).toBeUndefined();
   });
 
   test("create does not materialize a Codex thread", async () => {
@@ -364,11 +457,99 @@ describe("session lifecycle", () => {
     h.engine.configureThread = async () => {
       throw new Error("configure rejected");
     };
-    await expect(h.runtime.updateConfig(sessionId, { mode: "build" })).rejects.toThrow(
-      "configure rejected",
-    );
+    // Reported, not thrown: the route answers 503 rather than leaking a 500, and
+    // both memory and disk stay on the configuration the engine accepted.
+    expect(await h.runtime.updateConfig(sessionId, { mode: "build" })).toBe("unavailable");
     expect((await store.load())[0]?.config.mode).toBe("plan");
     expect(h.runtime.getRegistry().getSession(sessionId)?.config.mode).toBe("plan");
+  });
+
+  test("an unresumable session reports unavailable instead of throwing", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "materialize",
+      requestId: "req-config-503",
+      attachments: [],
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    // Force the slow path, then fail it the way an in-flight restart would.
+    h.runtime.getRegistry().getThread("thread-1")!.unsubscribed = true;
+    h.engine.resumeThread = async () => {
+      throw new Error("temporary transport failure");
+    };
+
+    expect(await h.runtime.updateConfig(sessionId, { mode: "plan" })).toBe("unavailable");
+    expect(h.runtime.getRegistry().getSession(sessionId)?.config.mode).toBe("build");
+  });
+
+  test("a running session found only after re-attaching is still refused", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "materialize",
+      requestId: "req-config-race",
+      attachments: [],
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const registry = h.runtime.getRegistry();
+    const context = registry.getThread("thread-1")!;
+    // Idle when the route looks, running by the time the handle is valid again:
+    // configuring here would change the sandbox under an executing turn.
+    context.unsubscribed = true;
+    const resume = h.engine.resumeThread.bind(h.engine);
+    h.engine.resumeThread = async (...args) => {
+      const result = await resume(...args);
+      registry.setPhase(context, "running");
+      return result;
+    };
+
+    expect(await h.runtime.updateConfig(sessionId, { mode: "plan" })).toBe("running");
+    expect(registry.getSession(sessionId)?.config.mode).toBe("build");
+  });
+
+  test("a configuration change that cannot be persisted is reported, not claimed", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "materialize",
+      requestId: "req-config-disk",
+      attachments: [],
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    const recordsDir = join(
+      codexHome,
+      "orkestrator-bridge",
+      `bridge-sessions-${hashCwd("/tmp/ws")}`,
+    );
+    chmodSync(recordsDir, 0o500);
+    try {
+      // The store warns and resolves on a write failure, so "updated" here would
+      // be a lie: after a restart the stale plan/build mode is re-hydrated into
+      // thread/resume, silently restoring the old sandbox.
+      expect(await h.runtime.updateConfig(sessionId, { mode: "plan" })).toBe("memory-only");
+      expect((await store.load())[0]?.config.mode).toBe("build");
+      // Memory still matches the engine, which did accept the change.
+      expect(h.runtime.getRegistry().getSession(sessionId)?.config.mode).toBe("plan");
+    } finally {
+      chmodSync(recordsDir, 0o700);
+    }
   });
 
   test("a full turn streams deltas and finalizes the transcript", async () => {
@@ -551,10 +732,23 @@ describe("at-most-once dispatch", () => {
     expect(h.runtime.getStatus(sessionId)!.phase).toBe("failed");
   });
 
-  test("an ambiguous dispatch reports recovering, never idle", async () => {
+  /**
+   * `recovering` after an ambiguous dispatch must be transient.
+   *
+   * It maps to `running`, so a thread left there rejects every later prompt with
+   * a 409 and the session is bricked — the exact failure the phase exists to
+   * avoid. Reconciliation, never a re-dispatch, is what resolves it.
+   */
+  test("an ambiguous dispatch that never ran fails, and does not brick the session", async () => {
     let hangNextTurn = false;
+    let turns = 0;
     const h = await harness({
-      "turn/start": () => (hangNextTurn ? NO_RESPONSE : { turn: { id: "turn-1" } }),
+      "turn/start": () => {
+        turns += 1;
+        return hangNextTurn ? NO_RESPONSE : { turn: { id: `turn-${turns}` } };
+      },
+      // No turn carries req-1, so the write provably never landed.
+      "thread/read": () => ({ thread: threadPayload("thread-1", { turns: [] }) }),
     });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     // Materialize the thread with a first successful turn.
@@ -576,13 +770,127 @@ describe("at-most-once dispatch", () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     h.child().exit(1);
     const outcome = await pending;
+    await h.drain();
 
     expect(outcome).toMatchObject({ ok: false, status: 503 });
-    const status = h.runtime.getStatus(sessionId)!;
-    // The write may have landed, so the turn might be running. Reporting idle
-    // would let the build pipeline advance on it.
-    expect(status.phase).toBe("recovering");
-    expect(phaseToExternalStatus(status.phase)).toBe("running");
+    // Reconciled to a definite phase, and never silently idle while the turn
+    // might still have been running.
+    expect(h.runtime.getStatus(sessionId)!.phase).not.toBe("recovering");
+    // Absent means it provably did not run, so the id is reusable.
+    expect(h.runtime.getJournal().classify("req-1").action).toBe("dispatch");
+
+    hangNextTurn = false;
+    const next = await h.runtime.prompt(sessionId, {
+      prompt: "third",
+      requestId: "req-2",
+      attachments: [],
+    });
+    expect(next.ok).toBe(true);
+  });
+
+  test("an ambiguous dispatch that did run stays running until its terminal event", async () => {
+    let hangNextTurn = false;
+    const h = await harness({
+      "turn/start": () => (hangNextTurn ? NO_RESPONSE : { turn: { id: "turn-1" } }),
+      // The write landed: app-server is executing this request right now.
+      "thread/read": () => ({
+        thread: threadPayload("thread-1", {
+          turns: [
+            {
+              id: "turn-9",
+              status: "inProgress",
+              items: [{ type: "userMessage", clientId: "req-1" }],
+            },
+          ],
+        }),
+      }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "first", requestId: "req-0", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    hangNextTurn = true;
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "second",
+      requestId: "req-1",
+      attachments: [],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    h.child().exit(1);
+    expect(await pending).toMatchObject({ ok: false, status: 503 });
+    await h.drain();
+
+    // Reporting idle here would let the build pipeline advance on a live turn.
+    expect(phaseToExternalStatus(h.runtime.getStatus(sessionId)!.phase)).toBe("running");
+    expect(h.runtime.getJournal().get("req-1")).toMatchObject({ state: "accepted" });
+
+    // The adopted turn is tracked, so its terminal event finalizes normally.
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-9", status: "completed" },
+    });
+    await h.drain();
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
+  });
+
+  test("a recovering thread is failed by the backstop when reconciliation cannot answer", async () => {
+    let hangNextTurn = false;
+    const h = await harness(
+      {
+        "turn/start": () => (hangNextTurn ? NO_RESPONSE : { turn: { id: "turn-1" } }),
+        // Reconciliation is as broken as the dispatch was.
+        "thread/read": () => {
+          throw new Error("thread/read unavailable");
+        },
+      },
+      { ambiguousRecoveryTimeoutMs: 20 },
+    );
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "first", requestId: "req-0", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    hangNextTurn = true;
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "second",
+      requestId: "req-1",
+      attachments: [],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    h.child().exit(1);
+    expect(await pending).toMatchObject({ ok: false, status: 503 });
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    // Unresolvable, but bounded: `recovering` can never be permanent.
+    expect(h.runtime.getStatus(sessionId)!.phase).not.toBe("recovering");
+    hangNextTurn = false;
+    expect((await h.runtime.prompt(sessionId, {
+      prompt: "third",
+      requestId: "req-2",
+      attachments: [],
+    })).ok).toBe(true);
+  });
+
+  test("an ambiguous dispatch with no request id fails rather than parking", async () => {
+    const h = await harness({
+      "turn/start": () => NO_RESPONSE,
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    const pending = h.runtime.prompt(sessionId, { prompt: "no id", attachments: [] });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    h.child().exit(1);
+    expect(await pending).toMatchObject({ ok: false, status: 503 });
+
+    // Nothing identifies the dispatch, so there is nothing to reconcile against.
+    expect(h.runtime.getStatus(sessionId)!.phase).toBe("failed");
   });
 
   test("an ambiguous request that did run is reconciled as already-processed", async () => {
@@ -764,6 +1072,41 @@ describe("same thread in two tabs", () => {
     expect(h.child().requests.filter((r) => r.method === "turn/start")).toHaveLength(1);
   });
 
+  /**
+   * Two persisted records may legitimately point at one thread, and a restored
+   * session never passes through `attach`. Every emit path iterates
+   * `bridgeSessionIds`, so a session missing from that set gets no status, no
+   * messages and no approval cards — not even for prompts it sends itself.
+   */
+  test("a restored session joins the thread another session already holds", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    for (const bridgeSessionId of ["session-one", "session-two"]) {
+      await store.upsert(
+        store.toRecord({
+          bridgeSessionId,
+          threadId: "thread-shared",
+          cwd: "/tmp/ws",
+          config: { mode: "build", sandbox: "danger-full-access" },
+        }),
+      );
+    }
+
+    const h = await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-shared") }),
+    });
+
+    expect(await h.runtime.getMessages("session-one")).toEqual([]);
+    expect(await h.runtime.getMessages("session-two")).toEqual([]);
+    expect(h.runtime.getRegistry().getThread("thread-shared")!.bridgeSessionIds.size).toBe(2);
+
+    h.events.length = 0;
+    await h.runtime.prompt("session-two", { prompt: "x", requestId: "req-1", attachments: [] });
+    const notified = new Set(
+      h.events.filter((event) => event.type === "session.updated").map((event) => event.sessionId),
+    );
+    expect([...notified].sort()).toEqual(["session-one", "session-two"]);
+  });
+
   test("closing one tab keeps the thread subscribed for the other", async () => {
     const h = await harness({ "thread/resume": () => ({ thread: threadPayload("thread-7") }) });
     const a = await h.runtime.resumeSession({ threadId: "thread-7", mode: "build" });
@@ -901,6 +1244,204 @@ describe("environment refresh", () => {
     expect(h.children).toHaveLength(2);
     expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(true);
   });
+
+  /**
+   * The drain runs *inside* the supervisor's `drainPromise`, and `ensureReady`
+   * blocks on that promise — so anything the drain waits for that itself needs an
+   * RPC is a mutual wait that wedges every thread in the environment. The deadline
+   * is what turns that from "the bridge is dead" into "one turn was interrupted".
+   */
+  test("the drain gives up at its deadline instead of wedging every thread", async () => {
+    let fingerprint = "sha256:one";
+    const h = await harness(
+      { "thread/resume": (params) => ({ thread: threadPayload(String(params.threadId)) }) },
+      { fingerprintEnvironment: () => fingerprint, environmentDrainTimeoutMs: 40 },
+    );
+    const first = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(first.sessionId, {
+      prompt: "never finishes",
+      requestId: "req-a",
+      attachments: [],
+    });
+    const second = await h.runtime.resumeSession({ threadId: "thread-2", mode: "build" });
+    fingerprint = "sha256:two";
+
+    const outcome = await Promise.race([
+      h.runtime.prompt(second!.sessionId, {
+        prompt: "next task",
+        requestId: "req-b",
+        attachments: [],
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("drain never gave up")), 2_000),
+      ),
+    ]);
+
+    expect(outcome.ok).toBe(true);
+    expect(h.children).toHaveLength(2);
+  });
+
+  test.each(["failed", "stopped"] as const)(
+    "the drain stops waiting when the engine is %s",
+    async (state) => {
+      let fingerprint = "sha256:one";
+      const h = await harness(
+        { "thread/resume": (params) => ({ thread: threadPayload(String(params.threadId)) }) },
+        { fingerprintEnvironment: () => fingerprint },
+      );
+      const first = h.runtime.createSession({ mode: "build" });
+      await h.runtime.prompt(first.sessionId, {
+        prompt: "long task",
+        requestId: "req-a",
+        attachments: [],
+      });
+      const second = await h.runtime.resumeSession({ threadId: "thread-2", mode: "build" });
+
+      const health = h.engine.getHealth.bind(h.engine);
+      h.engine.getHealth = () => ({ ...health(), state });
+      fingerprint = "sha256:two";
+
+      // Nothing will ever report terminal on a dead engine, so waiting for the
+      // running turn would be waiting forever.
+      const outcome = await Promise.race([
+        h.runtime.prompt(second!.sessionId, {
+          prompt: "next task",
+          requestId: "req-b",
+          attachments: [],
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("drain did not bail out")), 1_000),
+        ),
+      ]);
+      expect(outcome.ok).toBe(true);
+      expect(h.children).toHaveLength(2);
+    },
+  );
+
+  test("the drain stops waiting once the bridge itself is shutting down", async () => {
+    let fingerprint = "sha256:one";
+    const h = await harness(
+      { "thread/resume": (params) => ({ thread: threadPayload(String(params.threadId)) }) },
+      { fingerprintEnvironment: () => fingerprint },
+    );
+    const first = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(first.sessionId, {
+      prompt: "long task",
+      requestId: "req-a",
+      attachments: [],
+    });
+    const second = await h.runtime.resumeSession({ threadId: "thread-2", mode: "build" });
+
+    const health = h.engine.getHealth.bind(h.engine);
+    // A shutdown drain has already released its generation; the environment drain
+    // that owns this wait still has a live child, which is why `draining` alone is
+    // not an exit.
+    h.engine.getHealth = () => ({ ...health(), state: "draining", pid: null });
+    fingerprint = "sha256:two";
+
+    const outcome = await Promise.race([
+      h.runtime.prompt(second!.sessionId, {
+        prompt: "next task",
+        requestId: "req-b",
+        attachments: [],
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("drain did not bail out")), 1_000),
+      ),
+    ]);
+    expect(outcome.ok).toBe(true);
+  });
+
+  /**
+   * Regression: a prompt that has claimed `dispatchInFlight` but not yet reached
+   * `turn/start` is waiting on an RPC — which is queued behind the drain — while
+   * the drain waits for it to go idle. Neither can move, and every other thread is
+   * stuck behind the same drain.
+   */
+  test("a prompt parked before turn/start cannot deadlock another thread's restart", async () => {
+    let fingerprint = "sha256:one";
+    const h = await harness(
+      { "thread/resume": (params) => ({ thread: threadPayload(String(params.threadId)) }) },
+      { fingerprintEnvironment: () => fingerprint, environmentDrainTimeoutMs: 40 },
+    );
+    const a = await h.runtime.resumeSession({ threadId: "thread-a", mode: "build" });
+    const b = await h.runtime.resumeSession({ threadId: "thread-b", mode: "build" });
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let gated = false;
+    const startTurn = h.engine.startTurn.bind(h.engine);
+    h.engine.startTurn = async (options) => {
+      // Only thread B's dispatch is parked; it has already claimed the thread.
+      if (!gated) {
+        gated = true;
+        await gate;
+      }
+      return startTurn(options);
+    };
+
+    const promptB = h.runtime.prompt(b!.sessionId, {
+      prompt: "parked",
+      requestId: "req-b",
+      attachments: [],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(h.runtime.getRegistry().getThread("thread-b")!.dispatchInFlight).toBe(true);
+
+    fingerprint = "sha256:two";
+    const outcomeA = await Promise.race([
+      h.runtime.prompt(a!.sessionId, { prompt: "a", requestId: "req-a", attachments: [] }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("thread A deadlocked behind the drain")), 3_000),
+      ),
+    ]);
+    expect(outcomeA.ok).toBe(true);
+
+    release();
+    await Promise.race([
+      promptB,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("thread B never settled")), 3_000),
+      ),
+    ]);
+  });
+
+  test("a thread never waits on its own in-flight dispatch", async () => {
+    const h = await harness(
+      { "thread/resume": (params) => ({ thread: threadPayload(String(params.threadId)) }) },
+      { environmentDrainTimeoutMs: 5_000 },
+    );
+    await h.runtime.resumeSession({ threadId: "thread-solo", mode: "build" });
+    h.runtime.getRegistry().getThread("thread-solo")!.dispatchInFlight = true;
+
+    // Driven directly: a caller can only reach the drain once its own thread has
+    // passed the overlapping-turn guard, so the exclusion is unreachable through
+    // `prompt` — but it is the difference between a drain and a wait on itself.
+    const runtime = h.runtime as unknown as {
+      waitForAllThreadsIdle: (
+        generation: number,
+        options?: { excludeThreadId?: string | null },
+      ) => Promise<void>;
+    };
+    const generation = h.engine.info().generation;
+
+    await Promise.race([
+      runtime.waitForAllThreadsIdle(generation, { excludeThreadId: "thread-solo" }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("a thread waited on itself")), 500),
+      ),
+    ]);
+
+    // Without the exclusion the same wait runs to its deadline.
+    let settled = false;
+    void runtime.waitForAllThreadsIdle(generation).then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(settled).toBe(false);
+  });
 });
 
 describe("notifications that race the turn/start response", () => {
@@ -939,6 +1480,59 @@ describe("notifications that race the turn/start response", () => {
     expect(messages[1]!.content).toBe("instant answer");
     expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
     expect(h.runtime.getJournal().get("req-1")).toMatchObject({ state: "terminal" });
+  });
+
+  test("the pre-registration buffer sheds the oldest parked turn", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+
+    // Driven directly: a peer that behaves this badly is exactly what the bound
+    // exists for, and scripting thousands of notifications proves nothing extra.
+    const runtime = h.runtime as unknown as {
+      bufferEvent: (threadId: string, turnId: string, event: EngineEvent) => void;
+      threadState: Map<string, { pendingEvents: Map<string, unknown[]> }>;
+    };
+    const event = (turnId: string): EngineEvent => ({
+      kind: "turn.started",
+      threadId: "thread-1",
+      turnId,
+      engineGeneration: 1,
+    });
+
+    for (let index = 0; index < MAX_PENDING_TURNS + 3; index += 1) {
+      runtime.bufferEvent("thread-1", `parked-${index}`, event(`parked-${index}`));
+    }
+
+    const pending = runtime.threadState.get("thread-1")!.pendingEvents;
+    expect(pending.size).toBe(MAX_PENDING_TURNS);
+    expect(pending.has("parked-0")).toBe(false);
+    expect(pending.has(`parked-${MAX_PENDING_TURNS + 2}`)).toBe(true);
+  });
+
+  test("the pre-registration buffer caps one turn's queue", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+
+    const runtime = h.runtime as unknown as {
+      bufferEvent: (threadId: string, turnId: string, event: EngineEvent) => void;
+      threadState: Map<string, { pendingEvents: Map<string, unknown[]> }>;
+    };
+    for (let index = 0; index < MAX_PENDING_EVENTS_PER_TURN + 50; index += 1) {
+      runtime.bufferEvent("thread-1", "flood", {
+        kind: "item.text.delta",
+        threadId: "thread-1",
+        turnId: "flood",
+        itemId: "i1",
+        delta: "x",
+        engineGeneration: 1,
+      });
+    }
+
+    expect(runtime.threadState.get("thread-1")!.pendingEvents.get("flood")).toHaveLength(
+      MAX_PENDING_EVENTS_PER_TURN,
+    );
   });
 
   test("a stale event from a previous turn is still discarded", async () => {
@@ -1180,6 +1774,112 @@ describe("crash recovery", () => {
     expect(h.runtime.getStatus(sessionId)!.status).toBe("running");
   });
 
+  test("a turn with no request id is reported interrupted, not left running", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    // No request id, so there is nothing to reconcile against after the crash.
+    await h.runtime.prompt(sessionId, { prompt: "x", attachments: [] });
+
+    h.child().exit(1);
+    await h.engine.getSupervisor().ensureReady();
+    await h.drain();
+
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
+    expect(h.events.some((event) => event.type === "session.idle")).toBe(true);
+  });
+
+  test("a turn that failed on the dead child is finalized as failed", async () => {
+    const h = await harness({
+      "thread/read": () => ({
+        thread: threadPayload("thread-1", {
+          turns: [
+            {
+              id: "turn-1",
+              status: "failed",
+              items: [{ type: "userMessage", clientId: "req-1" }],
+            },
+          ],
+        }),
+      }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+
+    h.child().exit(1);
+    await h.engine.getSupervisor().ensureReady();
+    await h.drain();
+
+    // The real status, not a generic "restarted" failure.
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "error", phase: "failed" });
+    expect(h.runtime.getJournal().get("req-1")).toMatchObject({
+      state: "terminal",
+      terminalStatus: "failed",
+    });
+  });
+
+  /**
+   * Two restarts in quick succession are ordinary (a crash during a controlled
+   * restart). Both recovery passes walk the same registry and rebind the same
+   * contexts, so interleaving them would let the second overwrite handles the
+   * first is still installing.
+   */
+  test("overlapping generation changes recover one pass at a time", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const order: string[] = [];
+    let pass = 0;
+    const resume = h.engine.resumeThread.bind(h.engine);
+    h.engine.resumeThread = async (...args) => {
+      const id = (pass += 1);
+      order.push(`start:${id}`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const result = await resume(...args);
+      order.push(`end:${id}`);
+      return result;
+    };
+
+    // Emitted directly: the point is two generation events landing back to back,
+    // which a scripted child cannot produce deterministically.
+    const engine = h.engine as unknown as { emit: (event: EngineEvent) => void };
+    engine.emit({ kind: "engine.generation", generation: 2, previous: 1, engineGeneration: 2 });
+    engine.emit({ kind: "engine.generation", generation: 3, previous: 2, engineGeneration: 3 });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(order).toEqual(["start:1", "end:1", "start:2", "end:2"]);
+  });
+
+  test("a thread no session can reach is released, not just forgotten", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const runtime = h.runtime as unknown as { threadState: Map<string, unknown> };
+    expect(runtime.threadState.has("thread-1")).toBe(true);
+    // Orphaned: no bridge session can ever address this thread again.
+    h.runtime.getRegistry().getThread("thread-1")!.bridgeSessionIds.clear();
+
+    h.child().exit(1);
+    await h.engine.getSupervisor().ensureReady();
+    await h.drain();
+
+    expect(h.runtime.getRegistry().getThread("thread-1")).toBeUndefined();
+    // The render state holds the diff baselines and the coalescer holds a timer;
+    // dropping the map entry alone leaks both.
+    expect(runtime.threadState.has("thread-1")).toBe(false);
+  });
+
   test("events from the dead generation are ignored", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
@@ -1403,10 +2103,37 @@ describe("idle detach and transparent re-attach", () => {
     clock += 60_000;
     await h.runtime.sweepIdle();
 
-    await expect(h.runtime.getMessages(sessionId)).rejects.toThrow("temporary transport failure");
+    // A read must not 500 on an ambiguous re-attach: the transcript the bridge
+    // still knows about is a better answer than an error page.
+    expect(await h.runtime.getMessages(sessionId)).toEqual([]);
     expect(h.runtime.getRegistry().getSession(sessionId)!.threadId).toBe("thread-1");
     expect(await h.runtime.getMessages(sessionId)).toEqual([]);
     expect(resumeAttempts).toBe(2);
+  });
+
+  test("a read falls back to the last known transcript rather than failing", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "hello", requestId: "req-1", attachments: [] });
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id: "i1", type: "agentMessage", text: "answer" },
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    // Force the slow path and fail it the way an in-flight restart would.
+    h.runtime.getRegistry().getThread("thread-1")!.unsubscribed = true;
+    h.engine.resumeThread = async () => {
+      throw new Error("temporary transport failure");
+    };
+
+    const messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages.map((message) => message.content)).toEqual(["hello", "answer"]);
   });
 
   test("a prompt never forks when transient re-attach fails", async () => {
@@ -1558,6 +2285,146 @@ describe("idle detach and transparent re-attach", () => {
     await second.runtime.stop();
   });
 
+  test("activity heartbeats are bounded by an hour in production settings", async () => {
+    let clock = 1_000_000;
+    // Default retention (seven days), so the interval is the one-hour cap rather
+    // than half of a deliberately short test window.
+    const h = await harness({}, { now: () => clock, threadIdleMs: 0, sweepIntervalMs: 0 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "materialize",
+      requestId: "req-hourly",
+      attachments: [],
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws", now: () => clock });
+    const written = Date.parse((await store.load())[0]!.lastAccessed);
+
+    // A mounted tab polls many times an hour; every touch must not be a write.
+    clock += 59 * 60 * 1000;
+    await h.runtime.getMessages(sessionId);
+    expect(Date.parse((await store.load())[0]!.lastAccessed)).toBe(written);
+
+    clock += 2 * 60 * 1000;
+    await h.runtime.getMessages(sessionId);
+    expect(Date.parse((await store.load())[0]!.lastAccessed)).toBe(clock);
+  });
+
+  test("disabled retention still heartbeats on the hourly interval", async () => {
+    let clock = 1_000_000;
+    const h = await harness({}, {
+      now: () => clock,
+      threadIdleMs: 0,
+      sessionRetentionMs: 0,
+      sweepIntervalMs: 0,
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "materialize",
+      requestId: "req-no-retention",
+      attachments: [],
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const store = new BridgeSessionStore({
+      codexHome,
+      cwd: "/tmp/ws",
+      now: () => clock,
+      retentionMs: 7 * 24 * 60 * 60 * 1000,
+    });
+    const written = Date.parse((await store.load())[0]!.lastAccessed);
+
+    // Retention 0 has no half-window to shrink to, so the hourly default applies.
+    clock += 30 * 60 * 1000;
+    await h.runtime.getMessages(sessionId);
+    expect(Date.parse((await store.load())[0]!.lastAccessed)).toBe(written);
+
+    clock += 31 * 60 * 1000;
+    await h.runtime.getMessages(sessionId);
+    expect(Date.parse((await store.load())[0]!.lastAccessed)).toBe(clock);
+  });
+
+  test("shutdown waits for an in-flight registry write", async () => {
+    let clock = 1_000_000;
+    const h = await harness({}, {
+      now: () => clock,
+      threadIdleMs: 0,
+      sessionRetentionMs: 10_000,
+      sweepIntervalMs: 0,
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "materialize",
+      requestId: "req-shutdown",
+      attachments: [],
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const store = (h.runtime as unknown as { store: BridgeSessionStore }).store;
+    const upsert = store.upsert.bind(store);
+    let landed = false;
+    store.upsert = async (record) => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await upsert(record);
+      landed = true;
+    };
+
+    // `getStatus` heartbeats without awaiting, so this write is genuinely in
+    // flight when shutdown begins. Abandoning it loses the record the UI's
+    // session id resolves through after a restart.
+    clock += 6_000;
+    h.runtime.getStatus(sessionId);
+    await h.runtime.stop();
+
+    expect(landed).toBe(true);
+    const verifier = new BridgeSessionStore({
+      codexHome,
+      cwd: "/tmp/ws",
+      now: () => clock,
+      retentionMs: 10_000,
+    });
+    expect(Date.parse((await verifier.load())[0]!.lastAccessed)).toBe(clock);
+  });
+
+  test("a thread dropped for a missing rollout releases its runtime state", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const runtime = h.runtime as unknown as { threadState: Map<string, unknown> };
+    expect(runtime.threadState.has("thread-1")).toBe(true);
+
+    // Force the slow path, then delete the rollout underneath it.
+    h.runtime.getRegistry().getThread("thread-1")!.unsubscribed = true;
+    h.engine.resumeThread = async () => {
+      throw new Error("thread/resume: no rollout found for thread id thread-1");
+    };
+
+    expect(await h.runtime.getMessages(sessionId)).toEqual([]);
+    expect(h.runtime.getRegistry().getSession(sessionId)!.threadId).toBeNull();
+    // The diff baselines are the largest per-thread allocation, and the coalescer
+    // owns a live timer; neither can be reclaimed by a thread that never returns.
+    expect(runtime.threadState.has("thread-1")).toBe(false);
+  });
+
   test("detaching can be disabled", async () => {
     let clock = 1_000_000;
     const h = await harness({}, { now: () => clock, threadIdleMs: 0, sweepIntervalMs: 0 });
@@ -1667,6 +2534,54 @@ describe("titles", () => {
     ).toBe(true);
   });
 
+  /**
+   * Title generation is slow enough to outlive the prompt that started it. A
+   * superseded result must not overwrite a newer title, or the tab silently
+   * renames itself back to a conversation the user has moved on from.
+   */
+  test("a superseded title generation does not overwrite the newer title", async () => {
+    let resolveFirst!: (title: string) => void;
+    let calls = 0;
+    const h = await harness({}, {
+      generateTitle: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return new Promise<string>((resolve) => {
+            resolveFirst = resolve;
+          });
+        }
+        return "Second Title";
+      },
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "first", requestId: "req-1", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    // A restored session retries generation, which is how a second generation can
+    // start while the first is still in flight.
+    const session = h.runtime.getRegistry().getSession(sessionId)!;
+    session.titleGenerationAttempted = false;
+    session.title = undefined;
+    session.titleSource = undefined;
+
+    await h.runtime.prompt(sessionId, { prompt: "second", requestId: "req-2", attachments: [] });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.title).toBe("Second Title");
+
+    resolveFirst("First Title");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(session.title).toBe("Second Title");
+    expect(
+      h.events.some(
+        (event) => event.type === "session.title-updated" && event.data?.title === "First Title",
+      ),
+    ).toBe(false);
+  });
+
   test("a prompt fallback title is emitted immediately", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
@@ -1697,6 +2612,61 @@ describe("slash commands", () => {
     expect(messages).toHaveLength(2);
     expect(messages?.[0]?.content).toBe("/help");
     expect(messages?.[1]?.content).toContain("Available Codex slash commands");
+  });
+
+  /**
+   * Local replies have no rollout item, so their timestamp is the only ordering
+   * key they share with the model's transcript. Concatenating would show them
+   * after work that actually happened later.
+   */
+  test("local replies are interleaved into a materialized transcript by time", async () => {
+    let clock = 1_000_000;
+    const h = await harness({}, { now: () => clock });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    await h.runtime.prompt(sessionId, { prompt: "/help", requestId: "req-help", attachments: [] });
+
+    clock += 5_000;
+    await h.runtime.prompt(sessionId, { prompt: "real work", requestId: "req-1", attachments: [] });
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id: "i1", type: "agentMessage", text: "done" },
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const messages = (await h.runtime.getMessages(sessionId))!;
+    expect(messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    // The /help exchange predates the Codex turn, so it sorts first.
+    expect(messages[0]!.content).toBe("/help");
+    expect(messages[2]!.content).toBe("real work");
+    const timestamps = messages.map((message) => message.createdAt);
+    expect([...timestamps].sort()).toEqual(timestamps);
+  });
+
+  test("the local transcript is capped rather than growing for the life of the tab", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+
+    const rounds = MAX_LOCAL_MESSAGES; // two entries each, so comfortably over the cap
+    for (let round = 0; round < rounds; round += 1) {
+      await h.runtime.prompt(sessionId, { prompt: "/help", attachments: [] });
+    }
+
+    const session = h.runtime.getRegistry().getSession(sessionId)!;
+    // Nothing else ever evicts these: they survive detaching, and there is no
+    // rollout to reload them from.
+    expect(session.localMessages).toHaveLength(MAX_LOCAL_MESSAGES);
+    expect(session.localMessages.at(-1)!.content).toContain("Available Codex slash commands");
   });
 });
 

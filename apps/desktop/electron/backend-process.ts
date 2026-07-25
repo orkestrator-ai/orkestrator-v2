@@ -34,11 +34,16 @@ export function createBackendProcessEnvironment(
   appVersion?: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...parentEnv, ORKESTRATOR_GATEWAY_DISABLED: "0" };
-  if (appVersion !== undefined) {
+  const version = appVersion?.trim();
+  if (version) {
     // Always prefer Electron's authoritative application version over a value
     // inherited from the shell that launched the desktop app.
-    env.ORKESTRATOR_VERSION = appVersion;
+    env.ORKESTRATOR_VERSION = version;
   } else {
+    // An empty or blank version is absent, not a version. Exporting `""` would
+    // leave the backend and both bridges reading a defined-but-useless value
+    // instead of falling back to their own default, and it would still shadow
+    // whatever the shell had set.
     delete env.ORKESTRATOR_VERSION;
   }
   if (!isDev) {

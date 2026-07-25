@@ -9,7 +9,7 @@
     "dev:web": "bunx vite --host 127.0.0.1",
     "preview": "bunx vite preview",
     "test": "bun test src --parallel",
-    "test:workspace": "bun test src",
+    "test:workspace": "bun test src --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
     "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {

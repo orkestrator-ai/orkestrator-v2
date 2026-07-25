@@ -697,7 +697,19 @@ app.post("/session/:id/config", async (c) => {
   if (outcome === "running") {
     return c.json({ error: "Cannot update settings while session is running" }, 409);
   }
-  return c.json({ status: "updated" });
+  if (outcome === "unavailable") {
+    // The engine could not be reached to apply the change, so nothing was
+    // updated anywhere. Reporting success here would leave the UI showing a
+    // mode the next turn would not actually run under.
+    return c.json({ error: "Codex is temporarily unavailable" }, 503);
+  }
+  if (outcome === "memory-only") {
+    // The engine accepted the change, so this turn is correct — only the
+    // durable record failed. Say so rather than claiming a clean write: the
+    // setting silently reverts on the next bridge restart.
+    return c.json({ status: "updated", durable: false });
+  }
+  return c.json({ status: "updated", durable: true });
 });
 
 app.get("/session/:id/messages", async (c) => {

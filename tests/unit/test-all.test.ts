@@ -4,8 +4,11 @@ import {
   defaultRunGroup,
   main,
   MAX_AGGREGATE_TEST_WORKERS,
+  MIN_AGGREGATE_TEST_WORKERS,
+  MIN_BRIDGE_WORKERS,
   planWorkers,
   runAllTests,
+  WORKSPACE_WORKERS_ENV,
   type CommandResult,
   type TestAllDependencies,
   type TestGroup,
@@ -95,8 +98,12 @@ describe("scripts/test-all.ts", () => {
       [WORKSPACE, ROOT, BRIDGES].sort(),
     );
     for (const invocation of invocations) {
-      expect(invocation.env).toEqual(dependencies.env);
+      // Every group inherits the parent environment; only the Turbo group adds
+      // to it, and it must add rather than replace.
+      expect(invocation.env).toMatchObject(dependencies.env);
     }
+    expect(invocations.find((entry) => entry.name === ROOT)?.env).toEqual(dependencies.env);
+    expect(invocations.find((entry) => entry.name === BRIDGES)?.env).toEqual(dependencies.env);
   });
 
   test("the three groups run concurrently, not one after another", async () => {
@@ -128,24 +135,82 @@ describe("scripts/test-all.ts", () => {
     const bridgeGroup = groups.find((group) => group.name === BRIDGES)!;
 
     expect(workspaceGroup.args).toContain("--concurrency=2");
-    expect(workspaceGroup.args.slice(-2)).toEqual(["--", "--parallel=2"]);
-    expect(rootGroup.args).toContain("--parallel=5");
-    expect(bridgeGroup.args).toContain("--parallel=1");
+    expect(workspaceGroup.env).toEqual({ [WORKSPACE_WORKERS_ENV]: "2" });
+    expect(rootGroup.args).toContain("--parallel=4");
+    expect(bridgeGroup.args).toContain("--parallel=2");
+  });
+
+  test("the workspace worker count travels by environment, never through Turbo's `--`", () => {
+    // Turbo folds passthrough arguments into the hash of the requested task and
+    // of its `dependsOn` tasks, so `--` here would give `bun run build` and
+    // `bun run test` different `@orkestrator/*#build` hashes and re-run
+    // `tsc && vite build` on every alternation between the two.
+    const workspaceGroup = buildConcurrentGroups(10).find(
+      (group) => group.name === WORKSPACE,
+    )!;
+
+    expect(workspaceGroup.args).not.toContain("--");
+    expect(workspaceGroup.args.some((argument) => argument.startsWith("--parallel"))).toBe(false);
+    expect(WORKSPACE_WORKERS_ENV).toBe("ORKESTRATOR_TEST_WORKERS");
+  });
+
+  test("the workspace group's environment is layered onto the inherited one", async () => {
+    const { dependencies, invocations } = createDependencies({
+      environment: { TEST_ALL_MARKER: "preserved" },
+    });
+
+    await runAllTests(dependencies);
+    const workspace = invocations.find((entry) => entry.name === WORKSPACE)!;
+    expect(workspace.env.TEST_ALL_MARKER).toBe("preserved");
+    expect(workspace.env[WORKSPACE_WORKERS_ENV]).toMatch(/^\d+$/);
+    // The caller's environment object must not be mutated: the other two groups
+    // receive it directly.
+    expect(dependencies.env[WORKSPACE_WORKERS_ENV]).toBeUndefined();
   });
 
   test("worker plan bounds aggregate Bun workers across every active package task", () => {
-    for (const cores of [1, 2, 4, 8, 20]) {
+    // Every field is a worker count handed straight to `--parallel` / Turbo's
+    // `--concurrency`, so a zero or negative anywhere is a broken command line,
+    // not merely a slow run. Degenerate inputs are included because `cores`
+    // ultimately comes from `availableParallelism()`.
+    for (const cores of [
+      -8, -1, 0, 0.5, 1, 1.9, 2, 3, 3.7, 4, 5, 6, 7, 8, 9, 10, 12, 16, 18, 20, 24, 32, 64,
+      Number.NaN, Number.POSITIVE_INFINITY,
+    ]) {
       const plan = planWorkers(cores);
+      const budget = Math.min(
+        MAX_AGGREGATE_TEST_WORKERS,
+        Math.max(
+          MIN_AGGREGATE_TEST_WORKERS,
+          Number.isFinite(cores) ? Math.floor(cores) : MIN_AGGREGATE_TEST_WORKERS,
+        ),
+      );
       const aggregate = plan.root
         + plan.bridges
         + plan.workspace * plan.workspaceConcurrency;
-      expect(aggregate).toBeLessThanOrEqual(
-        Math.min(MAX_AGGREGATE_TEST_WORKERS, Math.max(3, cores)),
-      );
+
+      // Exactly the budget, everywhere: `root` absorbs the integer-division
+      // remainder, so the plan neither oversubscribes nor leaves workers idle.
+      expect({ cores, aggregate }).toEqual({ cores, aggregate: budget });
+      expect(plan.root).toBeGreaterThanOrEqual(1);
+      expect(plan.bridges).toBeGreaterThanOrEqual(MIN_BRIDGE_WORKERS);
+      expect(plan.workspace).toBeGreaterThanOrEqual(1);
       expect(plan.workspaceConcurrency).toBeGreaterThanOrEqual(1);
       expect(plan.workspaceConcurrency).toBeLessThanOrEqual(3);
+      for (const value of Object.values(plan)) expect(Number.isInteger(value)).toBe(true);
     }
+  });
 
+  test("the bridge group keeps a real worker pool on every machine size", () => {
+    // Regression: a proportional 20% share of the capped budget floors to 1 at
+    // every reachable core count, which left the ~50-file bridge suite running
+    // single-worker on an 18-core workstation.
+    for (const cores of [1, 2, 4, 8, 10, 16, 18, 24, 32]) {
+      expect(planWorkers(cores).bridges).toBe(2);
+    }
+  });
+
+  test("the root suite outgrows the bridge pool once the budget can pay for it", () => {
     const large = planWorkers(20);
     expect(large.root).toBeGreaterThan(large.bridges);
     expect(
@@ -153,6 +218,8 @@ describe("scripts/test-all.ts", () => {
       + large.bridges
       + large.workspace * large.workspaceConcurrency,
     ).toBe(MAX_AGGREGATE_TEST_WORKERS);
+    // Beyond the cap the plan is constant: more cores must not multiply peak heap.
+    expect(planWorkers(64)).toEqual(planWorkers(MAX_AGGREGATE_TEST_WORKERS));
   });
 
   test("still runs the bridge suites, which turbo does not cover", () => {
@@ -173,7 +240,7 @@ describe("scripts/test-all.ts", () => {
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/web");
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/backend");
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/web-public");
-    expect(workspaceGroup.args.at(-1)).toMatch(/^--parallel=\d+$/);
+    expect(workspaceGroup.env?.[WORKSPACE_WORKERS_ENV]).toMatch(/^\d+$/);
   });
 
   test("reports every failing group rather than stopping at the first", async () => {

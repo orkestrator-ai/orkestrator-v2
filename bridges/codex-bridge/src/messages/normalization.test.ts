@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_MAX_COMMAND_OUTPUT_CHARS } from "../sessions/turn-accumulator.js";
-import { itemToParts } from "./normalization.js";
+import { capCommandOutput, itemToParts } from "./normalization.js";
 
 describe("command normalization bounds", () => {
   test("caps oversized authoritative command output for both output and error", async () => {
@@ -14,8 +14,41 @@ describe("command normalization bounds", () => {
     }, "/tmp");
 
     expect(part?.toolOutput?.length).toBeLessThan(oversized.length);
+    // The cap is a memory bound, so the truncated result must fit *inside* it —
+    // appending the notice must not push it back over.
+    expect(part?.toolOutput?.length).toBeLessThanOrEqual(
+      DEFAULT_MAX_COMMAND_OUTPUT_CHARS,
+    );
     expect(part?.toolOutput).toEndWith("… output truncated");
     expect(part?.toolError).toBe(part?.toolOutput);
+  });
+
+  test("passes output of exactly the cap through untouched", async () => {
+    // Boundary for the `<=`: one character either way is silently invisible in
+    // the oversized and ordinary cases above.
+    const exact = "y".repeat(DEFAULT_MAX_COMMAND_OUTPUT_CHARS);
+    expect(capCommandOutput(exact)).toBe(exact);
+    expect(capCommandOutput(exact).length).toBe(DEFAULT_MAX_COMMAND_OUTPUT_CHARS);
+
+    const [part] = await itemToParts({
+      id: "exact",
+      type: "command_execution",
+      command: "generate",
+      aggregated_output: exact,
+      status: "completed",
+    }, "/tmp");
+    expect(part?.toolOutput).toBe(exact);
+
+    expect(capCommandOutput("z".repeat(DEFAULT_MAX_COMMAND_OUTPUT_CHARS + 1))).not.toBe(
+      exact,
+    );
+  });
+
+  test("never slices from the end when the cap is tighter than the notice", () => {
+    // `maxChars - notice.length` goes negative here; an unguarded slice would
+    // return the *tail* of the output and grow the result instead of capping it.
+    expect(capCommandOutput("abcdefghij", 3)).toBe("\n… output truncated");
+    expect(capCommandOutput("abcdefghij", 0)).toBe("\n… output truncated");
   });
 
   test("keeps ordinary output byte-for-byte and supplies a default failure", async () => {

@@ -13,7 +13,10 @@ or a new item variant that silently renders as nothing.
 ## Recording a new one
 
 ```bash
-CODEX_BRIDGE_RECORD_NOTIFICATIONS=/tmp/codex-recordings bun run dev
+# Both variables are required: recording persists prompts and file contents, so
+# it never activates from a single stray value in a checked-out `.env`.
+CODEX_BRIDGE_RECORD_NOTIFICATIONS=/tmp/codex-recordings \
+  CODEX_BRIDGE_RECORD_CONFIRM=1 bun run dev
 # …drive the scenario in the UI, then:
 bun scripts/scrub-codex-recording.ts /tmp/codex-recordings/<file>.jsonl \
   bridges/codex-bridge/src/testing/fixtures/<scenario>.jsonl

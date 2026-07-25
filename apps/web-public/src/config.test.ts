@@ -12,9 +12,13 @@ describe("public client deployment configuration", () => {
     expect(manifest.name).toBe("@orkestrator/web-public");
     expect(manifest.scripts.build).toContain("tsc");
     expect(manifest.scripts.build).toContain("vite build");
-    // scripts/test-all.ts appends an explicit `--parallel=N` so every package
-    // task participates in the same aggregate worker budget.
-    expect(manifest.scripts["test:workspace"]).toBe("bun test src");
+    // scripts/test-all.ts supplies the worker count through the environment so
+    // every package task shares the aggregate budget. It deliberately does not
+    // use Turbo's `--` separator, which would fold into the dependency `build`
+    // task's hash and split the cache between `bun run build` and `bun run test`.
+    expect(manifest.scripts["test:workspace"]).toBe(
+      "bun test src --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
+    );
 
     const tsconfig = JSON.parse(read("tsconfig.json")) as { compilerOptions: { strict: boolean; paths: unknown } };
     expect(tsconfig.compilerOptions.strict).toBe(true);

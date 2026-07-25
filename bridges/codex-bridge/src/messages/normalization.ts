@@ -31,15 +31,15 @@ import type { FileChangeDiffContext, NormalizedPart, ToolDiffMetadata } from "./
 const execFile = promisify(execFileCallback);
 const COMMAND_OUTPUT_TRUNCATION_NOTICE = "\n… output truncated";
 
-function capCommandOutput(output: string): string {
-  if (output.length <= DEFAULT_MAX_COMMAND_OUTPUT_CHARS) return output;
-  return (
-    output.slice(
-      0,
-      DEFAULT_MAX_COMMAND_OUTPUT_CHARS - COMMAND_OUTPUT_TRUNCATION_NOTICE.length,
-    )
-    + COMMAND_OUTPUT_TRUNCATION_NOTICE
-  );
+export function capCommandOutput(
+  output: string,
+  maxChars: number = DEFAULT_MAX_COMMAND_OUTPUT_CHARS,
+): string {
+  if (output.length <= maxChars) return output;
+  // A cap tighter than the notice would make the slice length negative, which
+  // slices from the *end* and returns more than the cap instead of less.
+  const keep = Math.max(0, maxChars - COMMAND_OUTPUT_TRUNCATION_NOTICE.length);
+  return output.slice(0, keep) + COMMAND_OUTPUT_TRUNCATION_NOTICE;
 }
 
 export function stringifyUnknown(value: unknown): string | undefined {

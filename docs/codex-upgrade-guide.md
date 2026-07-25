@@ -277,7 +277,10 @@ Committed fixtures are recordings of an *older* Codex. After a significant bump,
 recording fresh ones is what keeps this check honest:
 
 ```bash
-CODEX_BRIDGE_RECORD_NOTIFICATIONS=/tmp/codex-recordings bun run dev
+# Both variables are required: recording persists prompts and file contents, so
+# it never activates from a single stray value in a checked-out `.env`.
+CODEX_BRIDGE_RECORD_NOTIFICATIONS=/tmp/codex-recordings \
+  CODEX_BRIDGE_RECORD_CONFIRM=1 bun run dev
 # …drive the scenario in the UI, then:
 bun scripts/scrub-codex-recording.ts /tmp/codex-recordings/<file>.jsonl \
   bridges/codex-bridge/src/testing/fixtures/<scenario>.jsonl
@@ -371,7 +374,8 @@ just the bindings, the lever is downgrading the pin above, not switching engines
 | `CODEX_PATH` | Binary the bridge runs |
 | `CODEX_BRIDGE_NO_ENGINE` | Set to `1` to import the bridge without spawning app-server |
 | `CODEX_BRIDGE_NO_SERVER` | Set to `1` to import the bridge without binding a port |
-| `CODEX_BRIDGE_RECORD_NOTIFICATIONS` | Directory to record the inbound app-server stream into, for replay fixtures. Recordings contain prompts and file contents — scrub before committing. |
+| `CODEX_BRIDGE_RECORD_NOTIFICATIONS` | Directory to record the inbound app-server stream into, for replay fixtures. Requires `CODEX_BRIDGE_RECORD_CONFIRM=1` as well. Recordings contain prompts and file contents — scrub before committing. |
+| `CODEX_BRIDGE_RECORD_CONFIRM` | Must be `1` to arm recording. The second variable exists so a stray directory value alone cannot silently start persisting user data. |
 | `CODEX_BRIDGE_RECORD_MAX_BYTES` | Caps one recording (default 64MB) |
 | `RUN_LIVE_CODEX_APP_SERVER` | Enables real-binary contract tests |
 | `RUN_LIVE_TOOLCHAIN_ARTIFACTS` | Enables artifact download/verification |

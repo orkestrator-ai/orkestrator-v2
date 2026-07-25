@@ -223,10 +223,14 @@ When touching the app-server engine:
 - Subscribe *before* computing an SSE replay, buffering into an array, then flush
   past the replayed range. Replaying first and subscribing second drops anything
   emitted in between — the exact gap the cursor exists to close.
-- Recordings (`CODEX_BRIDGE_RECORD_NOTIFICATIONS`) contain prompts, file contents
-  and absolute paths. Always run `scripts/scrub-codex-recording.ts` and read the
-  diff before committing one as a fixture. The recorder itself must stay O(1) in
-  the read loop — buffer and flush off-loop, never await a write.
+- Recordings (`CODEX_BRIDGE_RECORD_NOTIFICATIONS`, armed by
+  `CODEX_BRIDGE_RECORD_CONFIRM=1`) contain prompts, file contents and absolute
+  paths. Always run `scripts/scrub-codex-recording.ts` and read the diff before
+  committing one as a fixture; a test scrubs the fixtures directory and fails on
+  any hit, but the scrubber only catches secrets and identity — it does not
+  redact prompt or file content unless you pass `--strip-content`. The recorder
+  itself must stay O(1) in the read loop — buffer and flush off-loop, never await
+  a write.
 
 ### Backend
 

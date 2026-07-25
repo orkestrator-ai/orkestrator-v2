@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
+import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { __testing } from "../../scripts/generate-codex-app-server-protocol";
 
@@ -187,6 +188,110 @@ describe("generator binary resolution", () => {
       "/stale/codex",
       "codex",
     ]);
+  });
+
+  const DARWIN_ROOT = "/Users/tester/Library/Application Support/orkestrator-v2/toolchains";
+
+  for (const scenario of [
+    {
+      name: "darwin resolves the managed root under Application Support",
+      options: { platform: "darwin" as const, architecture: "arm64", homeDirectory: "/Users/tester" },
+      expected: [`${DARWIN_ROOT}/codex/0.145.0/darwin-arm64/codex`, "codex"],
+    },
+    {
+      name: "darwin x64 keeps its own managed directory",
+      options: { platform: "darwin" as const, architecture: "x64", homeDirectory: "/Users/tester" },
+      expected: [`${DARWIN_ROOT}/codex/0.145.0/darwin-x64/codex`, "codex"],
+    },
+    {
+      // The installer only publishes arm64 and x64 builds, so anything else has
+      // to resolve somewhere rather than producing a `codex-ia32` path that can
+      // never exist.
+      name: "an unknown architecture falls back to the x64 build",
+      options: { platform: "linux" as const, architecture: "ia32", homeDirectory: "/home/t", xdgConfigHome: "/cfg" },
+      expected: ["/cfg/orkestrator-v2/toolchains/codex/0.145.0/linux-x64/codex", "codex"],
+    },
+    {
+      name: "a non-darwin platform uses the XDG config root",
+      options: { platform: "freebsd" as const, architecture: "arm64", homeDirectory: "/home/t", xdgConfigHome: "/cfg" },
+      expected: ["/cfg/orkestrator-v2/toolchains/codex/0.145.0/linux-arm64/codex", "codex"],
+    },
+    {
+      name: "an explicit CODEX_PATH is tried after the managed copy",
+      options: {
+        platform: "linux" as const,
+        architecture: "arm64",
+        homeDirectory: "/home/t",
+        xdgConfigHome: "/cfg",
+        codexPath: "  /opt/codex  ",
+      },
+      expected: ["/cfg/orkestrator-v2/toolchains/codex/0.145.0/linux-arm64/codex", "/opt/codex", "codex"],
+    },
+    {
+      // Regression: an exported-but-empty CODEX_PATH used to be pushed verbatim,
+      // so resolution tried to execute "" and reported a confusing failure for
+      // every candidate after it.
+      name: "a blank CODEX_PATH is ignored rather than tried",
+      options: {
+        platform: "linux" as const,
+        architecture: "arm64",
+        homeDirectory: "/home/t",
+        xdgConfigHome: "/cfg",
+        codexPath: "   ",
+      },
+      expected: ["/cfg/orkestrator-v2/toolchains/codex/0.145.0/linux-arm64/codex", "codex"],
+    },
+    {
+      name: "an empty CODEX_PATH is ignored rather than tried",
+      options: {
+        platform: "linux" as const,
+        architecture: "arm64",
+        homeDirectory: "/home/t",
+        xdgConfigHome: "/cfg",
+        codexPath: "",
+      },
+      expected: ["/cfg/orkestrator-v2/toolchains/codex/0.145.0/linux-arm64/codex", "codex"],
+    },
+  ]) {
+    test(`candidateBinaries: ${scenario.name}`, () => {
+      const previous = process.env.CODEX_PATH;
+      delete process.env.CODEX_PATH;
+      try {
+        expect(candidateBinaries("0.145.0", scenario.options)).toEqual(scenario.expected);
+      } finally {
+        if (previous === undefined) delete process.env.CODEX_PATH;
+        else process.env.CODEX_PATH = previous;
+      }
+    });
+  }
+
+  test("candidateBinaries falls back to the ambient platform, arch, home, and CODEX_PATH", () => {
+    const previousCodexPath = process.env.CODEX_PATH;
+    const previousXdg = process.env.XDG_CONFIG_HOME;
+    process.env.CODEX_PATH = "/from/env/codex";
+    process.env.XDG_CONFIG_HOME = "/xdg-from-env";
+    try {
+      const candidates = candidateBinaries("0.145.0");
+      const arch = process.arch === "arm64" ? "arm64" : "x64";
+      const expectedRoot = platform() === "darwin"
+        ? join(homedir(), "Library", "Application Support", "orkestrator-v2", "toolchains")
+        : join("/xdg-from-env", "orkestrator-v2", "toolchains");
+
+      expect(candidates).toEqual([
+        join(expectedRoot, "codex", "0.145.0", `${platform() === "darwin" ? "darwin" : "linux"}-${arch}`, "codex"),
+        "/from/env/codex",
+        "codex",
+      ]);
+
+      // A blank environment value is skipped just like a blank option.
+      process.env.CODEX_PATH = "  ";
+      expect(candidateBinaries("0.145.0")).toHaveLength(2);
+    } finally {
+      if (previousCodexPath === undefined) delete process.env.CODEX_PATH;
+      else process.env.CODEX_PATH = previousCodexPath;
+      if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = previousXdg;
+    }
   });
 
   /**

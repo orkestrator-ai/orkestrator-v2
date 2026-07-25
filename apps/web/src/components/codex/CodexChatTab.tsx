@@ -16,7 +16,6 @@ import { formatElapsed } from "@/lib/format-elapsed";
 import { createUuid } from "@/lib/uuid";
 import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import {
-  type CodexApproval,
   type CodexConversationMode,
   type CodexMessage,
   type CodexPromptAttachment,
@@ -33,6 +32,7 @@ import {
   getSessionStatus,
   isCodexSessionPhase,
   lookupSessionStatus,
+  parseApproval,
   resumeSession,
   sendPrompt,
   subscribeToEvents,
@@ -92,6 +92,14 @@ type CodexSendHandler = (
 interface ReconcileSessionOptions {
   forceRefreshMessages?: boolean;
   throwOnError?: boolean;
+  /**
+   * The user asked for this refresh.
+   *
+   * Manual requests are tracked on their own sequence so only a *newer manual*
+   * refresh can supersede one. Sharing the background sequence made an overlapping
+   * watchdog tick or SSE frame turn the user's refresh into a silent no-op.
+   */
+  manual?: boolean;
 }
 type ReconcileSessionResult = "applied" | "missing" | "unavailable" | "stale";
 
@@ -126,6 +134,14 @@ export function CodexChatTab({
   const isWatchdogRefreshInFlightRef = useRef(false);
   const lastHandledRefreshRequestIdRef = useRef(0);
   const reconcileSequenceRef = useRef(0);
+  const manualReconcileSequenceRef = useRef(0);
+  /**
+   * Number of prompt dispatches whose HTTP request has not settled.
+   *
+   * A turn we are about to start is not visible in any bridge status yet, so this
+   * is the only signal that an "idle" phase describes the *previous* turn.
+   */
+  const dispatchInFlightRef = useRef(0);
   const approvalSnapshotSequenceRef = useRef(0);
   const approvalActivitySequenceRef = useRef(0);
   const reconcileSessionStateRef = useRef<
@@ -359,6 +375,8 @@ export function CodexChatTab({
     ),
   );
   const handleSendRef = useRef<CodexSendHandler | null>(null);
+  /** Lets a finished drain start the next one without re-declaring the callback. */
+  const processQueueRef = useRef<() => void>(() => {});
   const { elapsedSeconds, finalElapsedSeconds } = useElapsedTimer(
     session?.isLoading,
     session?.sessionId,
@@ -411,6 +429,7 @@ export function CodexChatTab({
 
   useEffect(() => {
     reconcileSequenceRef.current += 1;
+    manualReconcileSequenceRef.current += 1;
     refreshControllerRef.current = createCodexSessionRefreshController();
     refreshControllerRef.current.markActivity();
     approvalSnapshotSequenceRef.current += 1;
@@ -474,10 +493,16 @@ export function CodexChatTab({
         dataUrl: attachment.previewUrl,
         filename: attachment.name,
       }));
-      const sent = await sendPrompt(client, session.sessionId, text, {
-        attachments: promptAttachments.length > 0 ? promptAttachments : undefined,
-        requestId,
-      });
+      dispatchInFlightRef.current += 1;
+      let sent: Awaited<ReturnType<typeof sendPrompt>>;
+      try {
+        sent = await sendPrompt(client, session.sessionId, text, {
+          attachments: promptAttachments.length > 0 ? promptAttachments : undefined,
+          requestId,
+        });
+      } finally {
+        dispatchInFlightRef.current -= 1;
+      }
       if (!sent) {
         // `sendPrompt` cannot distinguish a rejected HTTP response from a lost
         // response after the bridge accepted the request. Keep the idempotency
@@ -488,8 +513,33 @@ export function CodexChatTab({
         setSessionError(sessionKey, "Failed to send prompt");
         return;
       }
-      if (retryablePromptRef.current?.requestId === requestId) {
-        retryablePromptRef.current = null;
+      /**
+       * Any accepted dispatch spends the stored key.
+       *
+       * It used to be cleared only when the *same* request id came back, so a key
+       * from a failed send outlived arbitrarily many unrelated prompts — and the
+       * bridge's dispatch journal remembers a terminal record for 24 hours. A user
+       * re-sending short text ("yes") would then hit the `already-processed` branch
+       * below forever instead of running a turn.
+       */
+      retryablePromptRef.current = null;
+
+      if (sent.status === "already-processed" && sent.duplicate) {
+        /**
+         * The bridge recognised this request id as one it already ran to
+         * completion, so no turn is starting. Treating it as a success would leave
+         * an optimistic message and a permanent spinner waiting for a turn that
+         * will never report.
+         */
+        removeMessage(sessionKey, userMessage.id);
+        setSessionLoading(sessionKey, false);
+        // A toast rather than the session error, which the next idle reconcile
+        // clears — the user needs to know their prompt did not start a turn.
+        toast.error("Codex had already run this prompt", {
+          description: "It was not sent again. The transcript below is up to date.",
+        });
+        await refreshMessages(client, session.sessionId);
+        return;
       }
       await refreshMessages(client, session.sessionId);
     },
@@ -573,8 +623,22 @@ export function CodexChatTab({
       })
       .finally(() => {
         isProcessingQueueRef.current = false;
-        // Don't recurse here — the useEffect watching isLoading/queueLength
-        // will call processQueue again when the session becomes idle.
+        /**
+         * Normally the effect watching isLoading/queueLength drives the next
+         * drain, so this does not recurse. But that effect can fire *while* this
+         * send is still in flight — the re-entrancy guard above turns that into a
+         * no-op — and if the turn settled in the same pass there is no later
+         * dependency change to retry on, stranding the rest of the queue. Only
+         * re-enter when the queue is genuinely idle with work left; each pass
+         * dequeues one entry, so this cannot spin.
+         */
+        const settled = useCodexStore.getState();
+        if (
+          (settled.messageQueue.get(sessionKey)?.length ?? 0) > 0
+          && settled.sessions.get(sessionKey)?.isLoading !== true
+        ) {
+          processQueueRef.current();
+        }
       });
   }, [
     client,
@@ -585,6 +649,10 @@ export function CodexChatTab({
     setSessionError,
     setSessionLoading,
   ]);
+
+  useEffect(() => {
+    processQueueRef.current = processQueue;
+  }, [processQueue]);
 
   const promoteNextQueuedPromptToDraft = useCallback(() => {
     const store = useCodexStore.getState();
@@ -1241,8 +1309,20 @@ export function CodexChatTab({
       return "unavailable";
     }
 
+    /**
+     * A background reconcile is invalidated by anything newer — another
+     * reconcile, or any live SSE frame for this session. A manual one is only
+     * invalidated by a newer *manual* refresh: the user asked for this, and a
+     * watchdog tick or a `message.updated` frame arriving mid-flight must not
+     * turn their refresh into a silent no-op.
+     */
     const reconcileSequence = ++reconcileSequenceRef.current;
-    const shouldApply = () => reconcileSequence === reconcileSequenceRef.current;
+    const manualSequence = options?.manual
+      ? ++manualReconcileSequenceRef.current
+      : manualReconcileSequenceRef.current;
+    const shouldApply = options?.manual
+      ? () => manualSequence === manualReconcileSequenceRef.current
+      : () => reconcileSequence === reconcileSequenceRef.current;
     const lookup = await lookupSessionStatus(client, session.sessionId);
     if (!shouldApply()) return "stale";
     if (lookup.kind === "missing") {
@@ -1271,9 +1351,19 @@ export function CodexChatTab({
     const approvalActivitySequence = approvalActivitySequenceRef.current;
     void fetchPendingApprovals(client, session.sessionId)
       .then((approvals) => {
+        /**
+         * Deliberately not gated on the reconcile sequence.
+         *
+         * This snapshot is the *only* rehydration path for a tab that was
+         * unmounted when the approval was raised — its resubscription has no
+         * cursor, so the bridge replays nothing. Discarding it because an
+         * unrelated `message.updated` frame arrived meanwhile would leave the
+         * turn blocked on a card nobody can see. The two approval-specific
+         * counters below are the correct invalidation: a newer snapshot, or a
+         * live approval event that already moved the list.
+         */
         if (
-          shouldApply()
-          && approvalSnapshotSequence === approvalSnapshotSequenceRef.current
+          approvalSnapshotSequence === approvalSnapshotSequenceRef.current
           && approvalActivitySequence === approvalActivitySequenceRef.current
         ) {
           setPendingApprovals(sessionKey, approvals);
@@ -1360,6 +1450,14 @@ export function CodexChatTab({
     void reconcileSessionState({
       forceRefreshMessages: true,
       throwOnError: true,
+      manual: true,
+    }).then((result) => {
+      if (result === "stale") {
+        // Only a newer manual refresh can get here, and that request owns the
+        // outcome. Logged rather than swallowed so a refresh that legitimately
+        // did nothing is still traceable.
+        console.debug("[CodexChatTab] Manual refresh superseded by a newer refresh");
+      }
     }).catch((error) => {
       console.error("[CodexChatTab] Manual refresh failed:", error);
       toast.error("Failed to refresh Codex tab", {
@@ -1473,8 +1571,11 @@ export function CodexChatTab({
             refreshControllerRef.current.markActivity();
 
             if (event.type === "session.approval-requested") {
-              const approval = event.data?.approval as CodexApproval | undefined;
-              if (approval?.approvalId) {
+              // Validated exactly like the `/approvals` snapshot: an SSE frame is
+              // no more trustworthy than an HTTP body, and the two paths must not
+              // disagree about what a renderable approval is.
+              const approval = parseApproval(event.data?.approval);
+              if (approval) {
                 approvalActivitySequenceRef.current += 1;
                 addPendingApproval(sessionKey, approval);
               }
@@ -1505,7 +1606,17 @@ export function CodexChatTab({
               if (isCodexSessionPhase(phase)) {
                 const terminal = phase === "idle" || phase === "failed";
                 setSessionPhase(sessionKey, terminal ? undefined : phase);
-                setSessionLoading(sessionKey, !terminal);
+                /**
+                 * A terminal phase here can be recovery reporting that the
+                 * *previous* turn is over while our own prompt POST is still in
+                 * flight. Clearing the loading flag then tears down both this
+                 * subscription and the watchdog, and neither re-arms, so the
+                 * transcript freezes until the tab remounts. `session.idle` and
+                 * `session.error` remain authoritative for unlocking.
+                 */
+                if (!terminal || dispatchInFlightRef.current === 0) {
+                  setSessionLoading(sessionKey, !terminal);
+                }
               } else {
                 setSessionLoading(sessionKey, true);
               }
@@ -1513,6 +1624,11 @@ export function CodexChatTab({
             }
 
             if (event.type === "session.idle") {
+              // The turn this session was running has finished, so any idempotency
+              // key held for an ambiguous earlier dispatch is spent: reusing it
+              // would make the bridge answer `already-processed` for a genuinely
+              // new prompt.
+              retryablePromptRef.current = null;
               setSessionPhase(sessionKey, undefined);
               setSessionLoading(sessionKey, false);
               setSessionError(sessionKey, undefined);

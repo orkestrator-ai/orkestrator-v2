@@ -41,6 +41,16 @@ export type SessionPhase =
 
 export type ExternalSessionStatus = "idle" | "running" | "error";
 
+/**
+ * Cap on a session's built-in slash-command transcript.
+ *
+ * These entries have no Codex rollout behind them and survive `detachThread`
+ * (which clears `ThreadContext.messages`), so this is the one transcript buffer
+ * with no other eviction path. Bounded like every other in-memory buffer rather
+ * than growing for the lifetime of the tab.
+ */
+export const MAX_LOCAL_MESSAGES = 50;
+
 export function phaseToExternalStatus(phase: SessionPhase): ExternalSessionStatus {
   switch (phase) {
     case "starting":
@@ -215,6 +225,18 @@ export class ThreadRegistry {
 
   listSessions(): BridgeSession[] {
     return [...this.sessions.values()];
+  }
+
+  /**
+   * Appends built-in command output as a ring buffer.
+   *
+   * A tab that runs `/help` a few hundred times would otherwise retain every
+   * response for as long as the session id is resolvable.
+   */
+  appendLocalMessages(session: BridgeSession, ...messages: NormalizedMessage[]): void {
+    session.localMessages.push(...messages);
+    const excess = session.localMessages.length - MAX_LOCAL_MESSAGES;
+    if (excess > 0) session.localMessages.splice(0, excess);
   }
 
   getThread(threadId: string): ThreadContext | undefined {

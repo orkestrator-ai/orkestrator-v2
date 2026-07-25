@@ -7,6 +7,9 @@
  *
  *  1. **Within a group** — `bun test --parallel=N` runs test *files* across an
  *     explicitly bounded worker pool. This is where almost all of the win is.
+ *     The Turbo group receives its bound through `ORKESTRATOR_TEST_WORKERS`
+ *     rather than Turbo's `--` passthrough, which would be hashed into the
+ *     dependency `build` tasks and split the build cache in two.
  *  2. **Across groups** — the workspace, root and bridge suites are independent,
  *     so they run concurrently instead of one after another.
  *
@@ -36,6 +39,8 @@ export interface TestGroup {
   name: string;
   command: string;
   args: string[];
+  /** Extra variables layered over the inherited environment for this group. */
+  env?: Record<string, string>;
 }
 
 export interface TestAllDependencies {
@@ -114,27 +119,56 @@ export interface WorkerPlan {
  */
 export const MAX_AGGREGATE_TEST_WORKERS = 10;
 
+/**
+ * The bridge suites are ~50 files. A single worker made that group the long pole
+ * of the whole run, so it gets a hard floor rather than a proportional share:
+ * within `MAX_AGGREGATE_TEST_WORKERS` every proportional share of 20% rounds
+ * down to one, which is how the floor was silently lost.
+ */
+export const MIN_BRIDGE_WORKERS = 2;
+
+/** root(1) + bridges(2) + one worker for one workspace package task. */
+export const MIN_AGGREGATE_TEST_WORKERS = 1 + MIN_BRIDGE_WORKERS + 1;
+
+/**
+ * The env var carrying the planned per-package worker count into the Turbo
+ * group. It is deliberately *not* passed after Turbo's `--` separator: turbo
+ * folds passthrough arguments into the hash of the requested task **and its
+ * dependencies**, so `bun run build` and `bun run test` would compute different
+ * `build` hashes and re-run `tsc && vite build` on every alternation.
+ *
+ * turbo.json declares it under `test:workspace.passThroughEnv`, which forwards
+ * it in strict env mode while keeping it out of the hash.
+ */
+export const WORKSPACE_WORKERS_ENV = "ORKESTRATOR_TEST_WORKERS";
+
 export function planWorkers(cores: number): WorkerPlan {
-  // Three independent groups execute concurrently, so three workers is the
-  // irreducible minimum. Above that, never plan more Bun workers than logical
-  // cores across root + bridges + active workspace package tasks.
+  // Never plan more Bun workers than logical cores across root + bridges +
+  // active workspace package tasks, and never fewer than one per group.
   const budget = Math.min(
     MAX_AGGREGATE_TEST_WORKERS,
-    Math.max(3, Number.isFinite(cores) ? Math.floor(cores) : 1),
+    Math.max(
+      MIN_AGGREGATE_TEST_WORKERS,
+      Number.isFinite(cores) ? Math.floor(cores) : MIN_AGGREGATE_TEST_WORKERS,
+    ),
   );
-  const workspaceConcurrency = Math.min(
-    3,
-    Math.max(1, Math.floor(budget / 4)),
-  );
-  const remainingAfterWorkspaceMinimum = budget - workspaceConcurrency;
-  const bridges = Math.max(1, Math.floor(remainingAfterWorkspaceMinimum * 0.2));
-  let root = Math.max(1, Math.floor(remainingAfterWorkspaceMinimum * 0.6));
+  const bridges = Math.max(MIN_BRIDGE_WORKERS, Math.round(budget * 0.2));
+  // Each concurrent package task costs at least one whole worker, so widen
+  // Turbo's concurrency only once the budget can pay for it.
+  const workspaceConcurrency = Math.min(3, Math.max(1, Math.floor(budget / 4)));
+  // The root suite is the largest single group, so it takes its share off the
+  // top instead of the remainder, and no package task may out-size it.
+  const rootShare = Math.max(1, Math.floor(budget * 0.4));
   const workspace = Math.max(
     1,
-    Math.floor((budget - root - bridges) / workspaceConcurrency),
+    Math.min(
+      rootShare,
+      Math.floor((budget - rootShare - bridges) / workspaceConcurrency),
+    ),
   );
-  const used = root + bridges + workspace * workspaceConcurrency;
-  root += budget - used;
+  // Root also absorbs whatever the integer division above left unallocated, so
+  // the plan spends exactly the budget rather than under-subscribing.
+  const root = Math.max(1, budget - bridges - workspace * workspaceConcurrency);
   return { workspace, workspaceConcurrency, root, bridges };
 }
 
@@ -152,9 +186,8 @@ export function buildConcurrentGroups(cores: number): TestGroup[] {
         "--filter=@orkestrator/web-public",
         `--concurrency=${workers.workspaceConcurrency}`,
         "--cache-dir", ".turbo",
-        "--",
-        `--parallel=${workers.workspace}`,
       ],
+      env: { [WORKSPACE_WORKERS_ENV]: String(workers.workspace) },
     },
     {
       name: "root (tests/)",
@@ -187,7 +220,10 @@ export async function runAllTests(
   const results = await Promise.all(
     groups.map(async (group) => {
       const groupStartedAt = Date.now();
-      const result = await dependencies.runGroup(group, dependencies.env);
+      const result = await dependencies.runGroup(
+        group,
+        group.env ? { ...dependencies.env, ...group.env } : dependencies.env,
+      );
       return { group, result, elapsedMs: Date.now() - groupStartedAt };
     }),
   );

@@ -1,11 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import {
+  APP_SERVER_OVERLOAD_CODE,
   AppServerCircuitOpenError,
   AppServerProcessExitError,
   AppServerProtocolError,
   AppServerRpcError,
   AppServerTimeoutError,
   AppServerUnavailableError,
+  JSON_RPC_INTERNAL_ERROR,
+  JSON_RPC_INVALID_PARAMS,
+  JSON_RPC_INVALID_REQUEST,
+  JSON_RPC_METHOD_NOT_FOUND,
+  classifyDispatchFailure,
   codexErrorInfoToCode,
   isMissingRolloutError,
   isSafeToRetryImmediately,
@@ -48,6 +54,58 @@ describe("app-server error taxonomy", () => {
     expect(new AppServerCircuitOpenError(5, "boom")).toMatchObject({ failures: 5 });
   });
 
+  test("classifies only an explicit overload as a rejected dispatch", () => {
+    const rpc = (code: number) =>
+      new AppServerRpcError("turn/start", { code, message: `code ${code}` });
+
+    // Referencing the constant rather than -32001: if the documented overload
+    // code ever moves, this must fail rather than silently keep retrying a code
+    // that no longer promises non-execution.
+    expect(classifyDispatchFailure(rpc(APP_SERVER_OVERLOAD_CODE))).toBe("rejected");
+
+    // Everything else may have been acted on before the error came back, so it
+    // has to be reconciled against thread/read instead of retried.
+    for (const code of [
+      JSON_RPC_INVALID_REQUEST,
+      JSON_RPC_METHOD_NOT_FOUND,
+      JSON_RPC_INVALID_PARAMS,
+      JSON_RPC_INTERNAL_ERROR,
+      -32000,
+      1234,
+      0,
+    ]) {
+      expect(classifyDispatchFailure(rpc(code))).toBe("ambiguous");
+    }
+
+    for (const error of [
+      new AppServerTimeoutError("turn/start", 10),
+      new AppServerProcessExitError("gone", { generation: 2 }),
+      new AppServerProtocolError("bad frame"),
+      new AppServerUnavailableError("draining"),
+      new AppServerCircuitOpenError(3),
+      new Error("write EPIPE"),
+      "boom",
+      undefined,
+    ]) {
+      expect(classifyDispatchFailure(error)).toBe("ambiguous");
+    }
+  });
+
+  test("refuses an immediate retry for every non-overload failure", () => {
+    expect(
+      isSafeToRetryImmediately(
+        new AppServerRpcError("turn/start", {
+          code: JSON_RPC_INTERNAL_ERROR,
+          message: "boom",
+        }),
+      ),
+    ).toBe(false);
+    expect(isSafeToRetryImmediately(new AppServerTimeoutError("turn/start", 1))).toBe(
+      false,
+    );
+    expect(isSafeToRetryImmediately(new Error("overload"))).toBe(false);
+  });
+
   test("maps each transport error class into a stable engine error", () => {
     expect(
       toEngineError(new AppServerRpcError("turn/start", {
@@ -66,6 +124,25 @@ describe("app-server error taxonomy", () => {
     expect(toEngineError(new AppServerUnavailableError("failed"))).toMatchObject({
       code: "unavailable",
     });
+    // Only overload is reported retryable, and only a string `data` is surfaced —
+    // arbitrary objects may carry prompt or path content.
+    expect(
+      toEngineError(new AppServerRpcError("turn/start", {
+        code: APP_SERVER_OVERLOAD_CODE,
+        message: "busy",
+        data: "retry shortly",
+      })),
+    ).toMatchObject({
+      code: String(APP_SERVER_OVERLOAD_CODE),
+      retryable: true,
+      details: "retry shortly",
+    });
+    // Circuit-open has no transport code of its own and must fall through to the
+    // generic branch rather than being mislabelled as one of the above.
+    const circuit = toEngineError(new AppServerCircuitOpenError(4, "spawn failed"));
+    expect(circuit.code).toBeUndefined();
+    expect(circuit.retryable).toBe(false);
+    expect(circuit.message).toContain("4 times");
     expect(toEngineError("plain")).toEqual({ message: "plain", retryable: false });
   });
 
@@ -76,10 +153,32 @@ describe("app-server error taxonomy", () => {
     });
     expect(isUnmaterializedThreadError(unmaterialized)).toBe(true);
     expect(isUnmaterializedThreadError(new Error("not materialized"))).toBe(false);
+    // app-server's wording has varied in case; the match must not depend on it.
+    expect(
+      isUnmaterializedThreadError(
+        new AppServerRpcError("thread/read", {
+          code: -32600,
+          message: "Thread is NOT MATERIALIZED yet",
+        }),
+      ),
+    ).toBe(true);
     expect(
       isMissingRolloutError("thread/resume: no rollout found for thread id t1"),
     ).toBe(true);
     expect(isMissingRolloutError("thread/read: no rollout found for thread id t1")).toBe(false);
+    // The message usually arrives wrapped in an Error, not as a bare string.
+    expect(
+      isMissingRolloutError(
+        new AppServerRpcError("thread/resume", {
+          code: -32603,
+          message: "No rollout found for thread id t1",
+        }),
+      ),
+    ).toBe(true);
+    expect(isMissingRolloutError(new Error("thread/resume failed: spawn error"))).toBe(
+      false,
+    );
+    expect(isMissingRolloutError(undefined)).toBe(false);
   });
 
   test("normalizes Codex error discriminants without guessing malformed objects", () => {

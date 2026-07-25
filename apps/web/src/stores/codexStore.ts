@@ -104,6 +104,40 @@ interface CodexState extends CodexChatSlice {
   clearEnvironment: (environmentId: string) => void;
 }
 
+/**
+ * True when two descriptors are interchangeable, so a snapshot can be ignored.
+ *
+ * Compares the payload and not just the id: the bridge re-reports a pending
+ * approval with a refreshed `expiresAt` (and may revise the command text after a
+ * generation change), and treating those as "same list" would leave the card
+ * counting down to a deadline that has already moved.
+ */
+function isSameApproval(a: CodexApproval, b: CodexApproval | undefined): boolean {
+  if (a === b) return true;
+  if (!b) return false;
+  return a.approvalId === b.approvalId
+    && a.kind === b.kind
+    && a.method === b.method
+    && a.threadId === b.threadId
+    && a.turnId === b.turnId
+    && a.itemId === b.itemId
+    && a.requestedAt === b.requestedAt
+    && a.expiresAt === b.expiresAt
+    && a.command === b.command
+    && a.cwd === b.cwd
+    && a.reason === b.reason
+    && a.grantRoot === b.grantRoot
+    && a.networkHost === b.networkHost
+    && a.supportsApproveForSession === b.supportsApproveForSession
+    && a.permissions?.network === b.permissions?.network
+    && a.permissions?.fileSystem === b.permissions?.fileSystem
+    && (a.changes?.length ?? 0) === (b.changes?.length ?? 0)
+    && (a.changes ?? []).every(
+      (change, index) =>
+        change.path === b.changes?.[index]?.path && change.kind === b.changes?.[index]?.kind,
+    );
+}
+
 export const useCodexStore = create<CodexState>()((set, get, api) => ({
   ...createNativeChatStoreSlice<
     CodexClient,
@@ -175,11 +209,13 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
 
   setPendingApprovals: (sessionKey, approvals) =>
     set((state) => {
-      const existing = state.pendingApprovals.get(sessionKey);
-      // Cheap identity check so a poll returning the same list does not rerender.
+      const existing = state.pendingApprovals.get(sessionKey) ?? [];
+      // Cheap identity check so a poll returning an unchanged list does not
+      // rerender — reconcile calls this on every tick, including with an empty
+      // list, so an always-new Map here would rerender the whole tab.
       if (
-        (existing?.length ?? 0) === approvals.length
-        && (existing ?? []).every((entry, index) => entry.approvalId === approvals[index]?.approvalId)
+        existing.length === approvals.length
+        && existing.every((entry, index) => isSameApproval(entry, approvals[index]))
       ) {
         return state;
       }

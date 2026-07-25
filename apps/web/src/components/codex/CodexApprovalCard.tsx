@@ -19,7 +19,14 @@ interface CodexApprovalCardProps {
 
 /** Formats the remaining time as `m:ss`, or null once expired. */
 function formatRemaining(msRemaining: number): string | null {
-  if (msRemaining <= 0) return null;
+  /**
+   * Fail closed on a deadline we cannot read.
+   *
+   * A missing or non-numeric `expiresAt` used to render `NaN:NaN` next to live
+   * Approve/Decline buttons. This card is the control that runs commands, so an
+   * approval we cannot describe must look inert rather than actionable.
+   */
+  if (!Number.isFinite(msRemaining) || msRemaining <= 0) return null;
   const totalSeconds = Math.ceil(msRemaining / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
@@ -212,10 +219,15 @@ export function CodexApprovalCard({
               >
                 {submitting === "cancel" ? "Cancelling…" : "Cancel turn"}
               </Button>
+              {/*
+                * Deliberately quieter than "Approve": it is the much broader
+                * grant ("yes, and stop asking"), so it must not read as an
+                * equal-weight alternative to approving this one request.
+                */}
               {approval.supportsApproveForSession && (
                 <Button
                   size="sm"
-                  variant="outline"
+                  variant="ghost"
                   disabled={submitting !== null}
                   onClick={() => void respond("approve-for-session")}
                 >

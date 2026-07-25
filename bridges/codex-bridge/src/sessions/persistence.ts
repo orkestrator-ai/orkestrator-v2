@@ -21,6 +21,7 @@ import {
   readdir,
   rename,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
@@ -169,6 +170,13 @@ export interface BridgeSessionStoreOptions {
 
 const DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * How long an orphaned `*.tmp` is left alone before it is collected. It only has
+ * to outlast the write→rename window of any live writer — including one in
+ * another process — so an hour is several orders of magnitude of headroom.
+ */
+const TEMP_FILE_GRACE_MS = 60 * 60 * 1000;
+
 export class BridgeSessionStore {
   private readonly codexHome: string;
   private readonly cwdHash: string;
@@ -204,11 +212,23 @@ export class BridgeSessionStore {
     return join(this.recordsDir(), `${this.recordKey(bridgeSessionId)}.json`);
   }
 
-  /** Returns only entries for this cwd that are still within retention. */
+  /**
+   * Returns only entries for this cwd that are still within retention.
+   *
+   * Load is also the sweep: nothing else ever visits this directory, so expired
+   * tombstones and abandoned temp files are collected here. Every deletion is
+   * best effort — a shared or read-only `CODEX_HOME` must degrade to "cache we
+   * could not tidy", never to a rejected load.
+   */
   async load(): Promise<PersistedBridgeSession[]> {
     const cutoff = this.now() - this.retentionMs;
     const legacy = await this.loadLegacy(cutoff);
-    await this.migrateLegacy(legacy);
+    // A failed migration is a cache miss, not a fatal error: this store holds no
+    // user data, and letting it throw here leaves the engine unstarted for the
+    // whole process lifetime because nothing retries load().
+    await this.migrateLegacy(legacy).catch((error) =>
+      this.warnPersistenceFailure(error),
+    );
 
     let names: string[];
     try {
@@ -218,25 +238,47 @@ export class BridgeSessionStore {
     }
 
     const records = await Promise.all(
-      names
-        .filter((name) => name.endsWith(".json"))
-        .map(async (name) => {
-          try {
-            const value = JSON.parse(
-              await readFile(join(this.recordsDir(), name), "utf8"),
-            ) as unknown;
-            if (isPersistedSessionTombstone(value)) return null;
-            return isPersistedBridgeSession(value, this.cwdHash, cutoff)
-              ? value
-              : null;
-          } catch {
+      names.map(async (name) => {
+        const path = join(this.recordsDir(), name);
+        if (name.endsWith(".tmp")) {
+          await this.collectStaleTemporary(path);
+          return null;
+        }
+        if (!name.endsWith(".json")) return null;
+        try {
+          const value = JSON.parse(await readFile(path, "utf8")) as unknown;
+          if (isPersistedSessionTombstone(value)) {
+            // A tombstone only exists to stop legacy migration re-publishing a
+            // record that was deleted. Past retention the legacy entry it shields
+            // against is itself expired, so keeping it would mean every session
+            // ever created leaves a permanent file behind.
+            if (Date.parse(value.deletedAt) < cutoff) {
+              await rm(path, { force: true }).catch(() => undefined);
+            }
             return null;
           }
-        }),
+          return isPersistedBridgeSession(value, this.cwdHash, cutoff)
+            ? value
+            : null;
+        } catch {
+          return null;
+        }
+      }),
     );
     return records.filter(
       (record): record is PersistedBridgeSession => record !== null,
     );
+  }
+
+  /** Removes a `writeAtomicPath` temp file that no live writer can still rename. */
+  private async collectStaleTemporary(path: string): Promise<void> {
+    try {
+      const info = await stat(path);
+      if (this.now() - info.mtimeMs < TEMP_FILE_GRACE_MS) return;
+      await rm(path, { force: true });
+    } catch {
+      // Already collected by another process, or not ours to delete.
+    }
   }
 
   /** Upserts one independent record; different session ids never share a write target. */
@@ -246,6 +288,13 @@ export class BridgeSessionStore {
     await attempt.catch((error) => this.warnPersistenceFailure(error));
   }
 
+  /**
+   * Publishes a tombstone rather than unlinking, so a legacy migration that has
+   * already read the aggregate file into memory cannot re-publish the record.
+   * The tombstone is written unconditionally — "the aggregate file is gone" is
+   * not proof no process is still holding its contents — and is collected by
+   * `load()` once it passes retention.
+   */
   async remove(bridgeSessionId: string): Promise<void> {
     const attempt = this.writeChain.then(async () => {
       await mkdir(this.recordsDir(), { recursive: true });

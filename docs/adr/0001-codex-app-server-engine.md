@@ -390,7 +390,8 @@ identically. `sdk-exec-engine.ts` is deleted; there is no second engine to compa
 against. Cross-engine parity can no longer be tested at all.
 
 What replaced it is a single-engine **regression** harness:
-`CODEX_BRIDGE_RECORD_NOTIFICATIONS` captures the raw inbound stream verbatim, and
+`CODEX_BRIDGE_RECORD_NOTIFICATIONS` (armed by `CODEX_BRIDGE_RECORD_CONFIRM=1`)
+captures the raw inbound stream verbatim, and
 `replay-recording.ts` drives it back through the production pipeline
 (`parseInboundLine` → `reduceNotification` → `TurnAccumulator` → `renderTurn`),
 snapshotting the structure and asserting no unknown methods or unrenderable items.

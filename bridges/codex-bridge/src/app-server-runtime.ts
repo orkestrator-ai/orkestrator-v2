@@ -110,6 +110,10 @@ export interface AppServerRuntimeOptions {
   sessionRetentionMs?: number;
   /** How often the idle sweep runs. 0 disables the timer (tests drive it). */
   sweepIntervalMs?: number;
+  /** Longest an environment restart waits for other threads to go quiet. */
+  environmentDrainTimeoutMs?: number;
+  /** Longest a thread may sit in `recovering` after an ambiguous dispatch. */
+  ambiguousRecoveryTimeoutMs?: number;
 }
 
 interface ThreadRuntimeState {
@@ -129,8 +133,8 @@ interface ThreadRuntimeState {
 }
 
 /** Bounds the pre-registration buffer so a misbehaving peer cannot grow it. */
-const MAX_PENDING_EVENTS_PER_TURN = 2_000;
-const MAX_PENDING_TURNS = 8;
+export const MAX_PENDING_EVENTS_PER_TURN = 2_000;
+export const MAX_PENDING_TURNS = 8;
 
 /**
  * How long a thread may sit untouched before it is detached.
@@ -159,6 +163,38 @@ export const DEFAULT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
  */
 export const DEFAULT_SESSION_ACTIVITY_PERSIST_INTERVAL_MS = 60 * 60 * 1000;
 
+/**
+ * Hard deadline on the pre-restart drain.
+ *
+ * The drain runs *inside* `AppServerSupervisor.drainPromise`, and `ensureReady`
+ * blocks on that promise — so every RPC in the environment is queued behind this
+ * wait. An unbounded wait therefore cannot be "just slow": a thread that never
+ * reports terminal (a prompt parked before `turn/start`, a lost notification)
+ * wedges the whole bridge. Past the deadline the restart proceeds and the
+ * unfinished turn is reconciled by generation recovery like any other crash.
+ */
+export const DEFAULT_ENVIRONMENT_DRAIN_TIMEOUT_MS = 30 * 1000;
+
+/**
+ * Hard deadline on `recovering` after an ambiguous dispatch.
+ *
+ * `recovering` reports `running`, so a thread left there rejects every later
+ * prompt with a 409. Reconciliation normally settles it immediately; this is the
+ * backstop for when reconciliation itself cannot answer.
+ */
+export const DEFAULT_AMBIGUOUS_RECOVERY_TIMEOUT_MS = 30 * 1000;
+
+/**
+ * Safety net for the idle wait, which is otherwise woken by turn transitions.
+ *
+ * Deliberately coarse: the wake-ups do the real work, so a tight poll would only
+ * burn CPU for the length of a Codex turn.
+ */
+const IDLE_WAIT_POLL_MS = 100;
+
+const AMBIGUOUS_DISPATCH_FAILURE_MESSAGE =
+  "Codex never confirmed this turn. Check the conversation before sending it again.";
+
 export interface PromptAcceptedResult {
   status: "processing" | "already-processed";
   requestId?: string;
@@ -176,6 +212,7 @@ export class AppServerRuntime {
   private readonly now: () => number;
   private modelCache: BridgeModel[] | null = null;
   private started = false;
+  private stopping = false;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
   private detachedThreads = 0;
   private reattachedThreads = 0;
@@ -185,6 +222,15 @@ export class AppServerRuntime {
   private readonly pendingSessionWrites = new Set<Promise<void>>();
   /** Serializes and exposes generation recovery to request paths. */
   private generationRecovery: Promise<void> = Promise.resolve();
+  /**
+   * Wake-ups for the pre-restart drain.
+   *
+   * Turn transitions are the only thing that can end the wait, so the drain
+   * listens for them rather than polling the registry at speed.
+   */
+  private readonly idleWaiters = new Set<() => void>();
+  /** Forces `recovering` → `failed`, keyed by thread, so it can never be permanent. */
+  private readonly recoveryBackstops = new Map<string, ReturnType<typeof setTimeout>>();
   /**
    * Approvals the UI has been told about and can still answer.
    *
@@ -335,10 +381,15 @@ export class AppServerRuntime {
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     this.sweepTimer = null;
-    for (const state of this.threadState.values()) state.coalescer.stop();
-    this.threadState.clear();
+    for (const timer of this.recoveryBackstops.values()) clearTimeout(timer);
+    this.recoveryBackstops.clear();
+    for (const threadId of [...this.threadState.keys()]) this.releaseThreadRuntimeState(threadId);
+    // Nothing will report terminal after this, so release the drain rather than
+    // holding shutdown for its full deadline.
+    this.notifyThreadActivity();
     await Promise.allSettled([...this.pendingSessionWrites]);
     await this.options.engine.stop();
   }
@@ -395,13 +446,7 @@ export class AppServerRuntime {
    */
   private async detachThread(context: ThreadContext): Promise<void> {
     const sessionIds = [...context.bridgeSessionIds];
-    const state = this.threadState.get(context.threadId);
-    if (state) {
-      state.coalescer.stop();
-      releaseTurnRenderState(state.render);
-      state.pendingEvents.clear();
-      this.threadState.delete(context.threadId);
-    }
+    this.releaseThreadRuntimeState(context.threadId);
 
     this.registry.detachThread(context.threadId);
     if (!context.materialized) {
@@ -416,6 +461,28 @@ export class AppServerRuntime {
 
     this.detachedThreads += 1;
     await this.options.engine.unsubscribeThread(context.engineHandle).catch(() => undefined);
+  }
+
+  /**
+   * Frees everything this process holds for a thread.
+   *
+   * Must be called on *every* path that drops a thread, not just the idle sweep.
+   * The render state carries the diff baselines — the largest per-thread
+   * allocation — and the coalescer owns a live timer, so forgetting a thread
+   * without this leaks both for a conversation that can never come back.
+   */
+  private releaseThreadRuntimeState(threadId: string): void {
+    const timer = this.recoveryBackstops.get(threadId);
+    if (timer) {
+      clearTimeout(timer);
+      this.recoveryBackstops.delete(threadId);
+    }
+    const state = this.threadState.get(threadId);
+    if (!state) return;
+    state.coalescer.stop();
+    releaseTurnRenderState(state.render);
+    state.pendingEvents.clear();
+    this.threadState.delete(threadId);
   }
 
   /**
@@ -438,6 +505,12 @@ export class AppServerRuntime {
       && !existing.unsubscribed
       && existing.engineGeneration === generation
     ) {
+      // `getThreadForSession` resolves by thread id alone, with no membership
+      // check. A session restored from disk onto a thread another session had
+      // already attached would otherwise never join `bridgeSessionIds` — and
+      // every emit path iterates that set, so the tab would receive no status,
+      // no messages and no approval cards, not even for its own prompts.
+      existing.bridgeSessionIds.add(sessionId);
       return existing;
     }
     // No thread id yet: lazy creation on first prompt, nothing to re-attach.
@@ -446,19 +519,16 @@ export class AppServerRuntime {
     const threadId = session.threadId;
     try {
       const thread = await this.options.engine.resumeThread(threadId, { config: session.config });
-      const context = existing ?? this.registry.attach(sessionId, threadId, {
+      // Always through `attach`: it is idempotent for an existing context, and it
+      // is the only thing that registers this session in `bridgeSessionIds`.
+      const context = this.registry.attach(sessionId, threadId, {
         engineHandle: thread.handle,
         engineGeneration: generation,
         cwd: thread.cwd,
         name: thread.name,
       });
-      if (existing) {
-        existing.engineHandle = thread.handle;
-        existing.engineGeneration = generation;
-        existing.cwd = thread.cwd ?? existing.cwd;
-        existing.name = thread.name ?? existing.name;
-        existing.unsubscribed = false;
-      }
+      context.cwd = thread.cwd ?? context.cwd;
+      context.name = thread.name ?? context.name;
       // It had a rollout to resume from, so it is materialized by definition.
       context.materialized = true;
       if (context.messages.length === 0) {
@@ -480,7 +550,15 @@ export class AppServerRuntime {
           .listSessions()
           .filter((entry) => entry.threadId === threadId)
           .map((entry) => entry.id);
-        if (existing) this.registry.detachThread(threadId);
+        if (existing) {
+          // Same teardown as a normal detach: the render state and coalescer must
+          // go with the thread, and this one is never coming back.
+          this.releaseThreadRuntimeState(threadId);
+          this.registry.detachThread(threadId);
+          await this.options.engine
+            .unsubscribeThread(existing.engineHandle)
+            .catch(() => undefined);
+        }
         this.registry.clearThreadBinding(threadId);
         await Promise.all(
           staleSessionIds.map(async (id) => {
@@ -730,6 +808,10 @@ export class AppServerRuntime {
         .sessionsForThread(context.threadId)
         .find((entry) => entry !== undefined);
       if (!session) {
+        // No session can ever address this thread again, so free its state as
+        // well as its registry entry. The engine handle belongs to the dead
+        // generation, so there is nothing left to unsubscribe.
+        this.releaseThreadRuntimeState(context.threadId);
         this.registry.removeThread(context.threadId);
         continue;
       }
@@ -743,6 +825,7 @@ export class AppServerRuntime {
         // instead of dispatching through a stale pre-restart handle.
         if (!context.materialized) {
           const sessionIds = [...context.bridgeSessionIds];
+          this.releaseThreadRuntimeState(context.threadId);
           this.registry.detachThread(context.threadId);
           this.registry.clearThreadBinding(context.threadId);
           await Promise.all(
@@ -865,6 +948,8 @@ export class AppServerRuntime {
       turn.error?.message,
     );
     state.assistantMessageId = undefined;
+    // A terminal turn is the event a pre-restart drain is waiting for.
+    this.notifyThreadActivity();
 
     for (const sessionId of context.bridgeSessionIds) {
       const session = this.registry.getSession(sessionId);
@@ -910,6 +995,9 @@ export class AppServerRuntime {
   }
 
   private emitStatus(context: ThreadContext): void {
+    // Every phase transition passes through here, so it is also where a drain
+    // waiting on this thread finds out that it may be finished.
+    this.notifyThreadActivity();
     for (const sessionId of context.bridgeSessionIds) {
       this.options.emit({
         type: "session.updated",
@@ -1021,10 +1109,20 @@ export class AppServerRuntime {
     };
   }
 
+  /**
+   * Applies a configuration change to the engine, memory and disk.
+   *
+   * `unavailable` and `memory-only` are deliberately distinct from `updated`: the
+   * caller must be able to tell "the engine is running this" from "only this
+   * process believes it". The persisted config is re-hydrated into
+   * `resumeThread`/`startTurn` after a restart, and plan ↔ build is
+   * read-only ↔ danger-full-access, so silently reporting success on a failed
+   * write is a sandbox regression waiting for the next restart.
+   */
   async updateConfig(
     sessionId: string,
     body: Record<string, unknown>,
-  ): Promise<"updated" | "not-found" | "running"> {
+  ): Promise<"updated" | "not-found" | "running" | "unavailable" | "memory-only"> {
     const session = this.registry.getSession(sessionId);
     if (!session) return "not-found";
     await this.touchSession(sessionId);
@@ -1032,28 +1130,55 @@ export class AppServerRuntime {
     if (context && phaseToExternalStatus(context.phase) === "running") return "running";
 
     const nextConfig = this.toEngineConfig(body);
-    // ensureAttached fast-returns a healthy current-generation context, but
-    // re-resumes one invalidated by a failed generation recovery. Never update
-    // configuration through a handle owned by the dead child.
-    const attached = await this.ensureAttached(sessionId);
-    if (attached && phaseToExternalStatus(attached.phase) === "running") return "running";
-    if (attached) {
-      // Configuration is transactional from the bridge's perspective: a failed
-      // engine update must leave both memory and the durable session record on
-      // the last configuration the engine actually accepted.
-      await this.options.engine.configureThread(attached.engineHandle, nextConfig);
+    let attached: ThreadContext | undefined;
+    try {
+      // ensureAttached fast-returns a healthy current-generation context, but
+      // re-resumes one invalidated by a failed generation recovery. Never update
+      // configuration through a handle owned by the dead child.
+      attached = await this.ensureAttached(sessionId);
+      if (attached && phaseToExternalStatus(attached.phase) === "running") return "running";
+      if (attached) {
+        // Configuration is transactional from the bridge's perspective: a failed
+        // engine update must leave both memory and the durable session record on
+        // the last configuration the engine actually accepted.
+        await this.options.engine.configureThread(attached.engineHandle, nextConfig);
+      }
+    } catch (error) {
+      // A transient resume, an in-flight restart or an open circuit are all
+      // retryable. Reported as an outcome rather than thrown so the route answers
+      // 503 instead of leaking a stack trace as a 500.
+      console.warn(
+        `[codex-bridge] Could not apply configuration for session ${sessionId}:`,
+        error instanceof Error ? error.message : error,
+      );
+      return "unavailable";
     }
+
     session.config = nextConfig;
     this.registry.touch(sessionId);
-    await this.persistSession(session);
-    return "updated";
+    return (await this.persistSessionVerified(session)) ? "updated" : "memory-only";
   }
 
   async getMessages(sessionId: string): Promise<NormalizedMessage[] | null> {
     const session = this.registry.getSession(sessionId);
     if (!session) return null;
     await this.touchSession(sessionId);
-    const context = await this.ensureAttached(sessionId);
+
+    let context: ThreadContext | undefined;
+    try {
+      context = await this.ensureAttached(sessionId);
+    } catch (error) {
+      // A read must never fail on an ambiguous re-attach. The binding is
+      // deliberately preserved for the next attempt (see ensureAttached), so the
+      // honest answer here is the last transcript we know about rather than a 500
+      // in place of a conversation.
+      console.warn(
+        `[codex-bridge] Serving the last known transcript for session ${sessionId}:`,
+        error instanceof Error ? error.message : error,
+      );
+      const known = this.registry.getThreadForSession(sessionId);
+      return known ? this.messagesForSession(session, known) : [...session.localMessages];
+    }
     if (!context) return [...session.localMessages];
 
     // Rehydrate the streaming message so a tab that reconnects mid-turn catches
@@ -1107,8 +1232,7 @@ export class AppServerRuntime {
       // this canonical thread can still show and answer the same approval.
       this.options.engine.abandonThreadApprovals(removedThread.threadId);
       // Last reference: release the thread but never delete the rollout.
-      this.threadState.get(removedThread.threadId)?.coalescer.stop();
-      this.threadState.delete(removedThread.threadId);
+      this.releaseThreadRuntimeState(removedThread.threadId);
       await this.options.engine.unsubscribeThread(removedThread.engineHandle).catch(() => undefined);
     }
     return true;
@@ -1135,6 +1259,36 @@ export class AppServerRuntime {
       await write;
     } finally {
       this.pendingSessionWrites.delete(write);
+    }
+  }
+
+  /**
+   * Persists and reports whether the record actually landed.
+   *
+   * `BridgeSessionStore.upsert` warns and resolves on failure, so an awaited
+   * write proves nothing on its own. Reading the record back is the only signal
+   * available from outside the store, and it is affordable on the configuration
+   * path: that route is rare and user-initiated, unlike the activity heartbeat.
+   *
+   * A session with no thread yet has nothing durable to write, which is the
+   * designed state rather than a failure.
+   */
+  private async persistSessionVerified(session: BridgeSession): Promise<boolean> {
+    if (!session.threadId) return true;
+    await this.persistSession(session);
+    try {
+      const persisted = (await this.store.load()).find(
+        (record) => record.bridgeSessionId === session.id,
+      );
+      if (!persisted) return false;
+      // Round-tripped so both sides drop `undefined` members identically; key
+      // order is the store's own serialization of this same object.
+      return (
+        JSON.stringify(persisted.config)
+        === JSON.stringify(JSON.parse(JSON.stringify(session.config)))
+      );
+    } catch {
+      return false;
     }
   }
 
@@ -1274,10 +1428,14 @@ export class AppServerRuntime {
     // 2. A persistent child snapshots its environment at launch, so re-read
     //    PATH-ish variables and restart before dispatching if they moved.
     const generationBeforeDrain = this.options.engine.info().generation;
+    // This thread is excluded from its own drain. The wait runs inside the
+    // supervisor's `drainPromise` and every RPC queues behind it, so waiting on
+    // work this call is itself about to perform would be a wait on ourselves.
+    const drainingThreadId = context?.threadId ?? null;
     await this.options.engine.ensureEnvironmentIsCurrent({
-      hasActiveTurns: () =>
-        this.registry.listThreads().some((entry) => this.threadHasActiveWork(entry)),
-      waitForIdle: () => this.waitForAllThreadsIdle(generationBeforeDrain),
+      hasActiveTurns: () => this.hasActiveWorkOtherThan(drainingThreadId),
+      waitForIdle: () =>
+        this.waitForAllThreadsIdle(generationBeforeDrain, { excludeThreadId: drainingThreadId }),
     });
     // A controlled environment restart and an unexpected child death both
     // announce the new generation before ensureEnvironmentIsCurrent resolves.
@@ -1414,7 +1572,7 @@ export class AppServerRuntime {
         this.registry.setPhase(context, "failed", classified.engineError.message);
         if (requestId) await this.journal.forget(requestId);
       } else {
-        this.registry.setPhase(context, "recovering");
+        await this.settleAmbiguousDispatch(context, requestId, assistantMessage.id);
       }
       this.emitStatus(context);
       this.options.emit({
@@ -1424,6 +1582,117 @@ export class AppServerRuntime {
       });
       return { ok: false, status: 503, error: classified.engineError.message };
     }
+  }
+
+  /**
+   * Resolves an ambiguous `turn/start` failure to a definite phase.
+   *
+   * The dispatch is **never** re-sent — only an explicit overload proves a turn
+   * did not run — but leaving the thread in `recovering` is not neutral either:
+   * it reports `running`, so `assertNoActiveTurn` rejects every later prompt with
+   * a 409 and the session is bricked. `thread/read` is the one authority that can
+   * say whether the write landed, so ask it and settle from the answer.
+   */
+  private async settleAmbiguousDispatch(
+    context: ThreadContext,
+    requestId: string | undefined,
+    assistantMessageId: string,
+  ): Promise<void> {
+    this.registry.setPhase(context, "recovering");
+    if (!requestId) {
+      // Nothing to reconcile against: an unidentified dispatch can never be
+      // resolved, so failing it is more honest than a phase nothing will clear.
+      this.registry.setPhase(context, "failed", AMBIGUOUS_DISPATCH_FAILURE_MESSAGE);
+      return;
+    }
+
+    // Armed before the read so a reconciliation that hangs or throws still ends
+    // in a definite phase.
+    this.scheduleRecoveryBackstop(context);
+    let outcome: Awaited<ReturnType<AppServerEngine["reconcileRequest"]>>;
+    try {
+      outcome = await this.options.engine.reconcileRequest(context.threadId, requestId);
+    } catch (error) {
+      console.warn(
+        `[codex-bridge] Could not reconcile ${requestId} on thread ${context.threadId}:`,
+        error instanceof Error ? error.message : error,
+      );
+      return;
+    }
+
+    if (outcome.result === "attach") {
+      // It really is executing. Adopt the turn so its terminal event finalizes
+      // the transcript instead of arriving for a turn nobody is tracking.
+      await this.journal.markAccepted(requestId, {
+        threadId: context.threadId,
+        turnId: outcome.turnId!,
+      });
+      const accumulator = new TurnAccumulator({
+        threadId: context.threadId,
+        turnId: outcome.turnId!,
+        requestId,
+        engineGeneration: this.options.engine.info().generation,
+        assistantMessageId,
+      });
+      accumulator.markRunning();
+      context.activeTurn = accumulator;
+      this.clearRecoveryBackstop(context.threadId);
+      this.registry.setPhase(context, "running");
+      const state = this.stateFor(context.threadId);
+      state.render = beginTurnRenderState(state.render);
+      state.assistantMessageId = assistantMessageId;
+      // Anything that arrived for this turn while it had no owner.
+      this.drainPendingEvents(context, outcome.turnId!);
+      return;
+    }
+
+    this.clearRecoveryBackstop(context.threadId);
+    context.activeTurn = null;
+    if (outcome.result === "terminal") {
+      await this.journal.markTerminal(requestId, outcome.status ?? "completed", {
+        threadId: context.threadId,
+        turnId: outcome.turnId,
+      });
+      this.registry.setPhase(
+        context,
+        outcome.status === "failed" ? "failed" : "idle",
+        AMBIGUOUS_DISPATCH_FAILURE_MESSAGE,
+      );
+      this.notifyThreadActivity();
+      return;
+    }
+
+    // Absent: provably never executed, so release the id for a clean retry.
+    await this.journal.forget(requestId);
+    this.registry.setPhase(context, "failed", AMBIGUOUS_DISPATCH_FAILURE_MESSAGE);
+    this.notifyThreadActivity();
+  }
+
+  /** Forces `recovering` → `failed` so the phase can never be permanent. */
+  private scheduleRecoveryBackstop(context: ThreadContext): void {
+    this.clearRecoveryBackstop(context.threadId);
+    const timeoutMs =
+      this.options.ambiguousRecoveryTimeoutMs ?? DEFAULT_AMBIGUOUS_RECOVERY_TIMEOUT_MS;
+    const timer = setTimeout(() => {
+      this.recoveryBackstops.delete(context.threadId);
+      const current = this.registry.getThread(context.threadId);
+      // Anything that resolved it — reconciliation, generation recovery, a late
+      // terminal event — has already moved it on.
+      if (!current || current.phase !== "recovering") return;
+      current.activeTurn = null;
+      this.registry.setPhase(current, "failed", AMBIGUOUS_DISPATCH_FAILURE_MESSAGE);
+      this.emitStatus(current);
+      this.notifyThreadActivity();
+    }, timeoutMs);
+    timer.unref?.();
+    this.recoveryBackstops.set(context.threadId, timer);
+  }
+
+  private clearRecoveryBackstop(threadId: string): void {
+    const timer = this.recoveryBackstops.get(threadId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.recoveryBackstops.delete(threadId);
   }
 
   private appendUserMessage(
@@ -1586,7 +1855,9 @@ export class AppServerRuntime {
       parts: [{ type: "text", content: response }],
       createdAt: new Date(this.now()).toISOString(),
     };
-    session.localMessages.push(userMessage, assistantMessage);
+    // Capped: these have no rollout to fall back on and survive detaching, so
+    // they are the one transcript buffer nothing else ever evicts.
+    this.registry.appendLocalMessages(session, userMessage, assistantMessage);
 
     if (!session.title) {
       session.title = buildFallbackSessionTitle(prompt);
@@ -1630,21 +1901,82 @@ export class AppServerRuntime {
     );
   }
 
-  private async waitForAllThreadsIdle(expectedGeneration: EngineGeneration): Promise<void> {
-    while (this.registry.listThreads().some((entry) => this.threadHasActiveWork(entry))) {
-      const health = this.options.engine.getHealth();
-      if (
-        this.options.engine.info().generation !== expectedGeneration
-        || health.state === "restarting"
-        || health.state === "failed"
-        || health.state === "stopped"
-      ) {
+  /** Active work anywhere except the thread asking, which never waits on itself. */
+  private hasActiveWorkOtherThan(threadId: string | null | undefined): boolean {
+    return this.registry
+      .listThreads()
+      .some((entry) => entry.threadId !== threadId && this.threadHasActiveWork(entry));
+  }
+
+  /** Wakes the drain; over-notifying is free because it re-checks the registry. */
+  private notifyThreadActivity(): void {
+    if (this.idleWaiters.size === 0) return;
+    const waiters = [...this.idleWaiters];
+    this.idleWaiters.clear();
+    for (const wake of waiters) wake();
+  }
+
+  /**
+   * Waits for other threads' turns to finish before the child is replaced.
+   *
+   * Three properties are load-bearing, because this runs inside the supervisor's
+   * drain and therefore blocks *every* RPC in the environment:
+   *
+   *   - it is driven by turn transitions, not by a spin;
+   *   - it never waits on the calling thread, which is about to dispatch itself;
+   *   - it gives up at a deadline, so a turn that never reports terminal costs one
+   *     interrupted turn rather than a wedged bridge.
+   */
+  private async waitForAllThreadsIdle(
+    expectedGeneration: EngineGeneration,
+    options: { excludeThreadId?: string | null } = {},
+  ): Promise<void> {
+    // Deliberately real time, not the injected clock: this bounds an actual wait
+    // on real timers, and a frozen test clock must not disable the deadline.
+    const deadline =
+      Date.now() + (this.options.environmentDrainTimeoutMs ?? DEFAULT_ENVIRONMENT_DRAIN_TIMEOUT_MS);
+
+    while (this.hasActiveWorkOtherThan(options.excludeThreadId)) {
+      if (this.stopping || this.shouldAbandonDrain(expectedGeneration)) return;
+      if (Date.now() >= deadline) {
+        console.warn(
+          "[codex-bridge] Restarting app-server with turns still in flight: the drain deadline expired.",
+        );
         return;
       }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 10);
-      });
+      await this.waitForThreadActivity();
     }
+  }
+
+  /** True when nothing this drain is waiting for can still finish. */
+  private shouldAbandonDrain(expectedGeneration: EngineGeneration): boolean {
+    if (this.options.engine.info().generation !== expectedGeneration) return true;
+    const health = this.options.engine.getHealth();
+    if (health.state === "restarting" || health.state === "failed" || health.state === "stopped") {
+      return true;
+    }
+    // `draining` covers two cases. The environment drain that called us still
+    // owns a live child, so its turns can genuinely still finish; a shutdown
+    // drain has already released the generation, so nothing ever will.
+    return health.state === "draining" && health.pid === null;
+  }
+
+  private waitForThreadActivity(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const wake = (): void => {
+        clearTimeout(timer);
+        this.idleWaiters.delete(wake);
+        resolve();
+      };
+      // Backstop only: a phase change that forgets to notify must not strand the
+      // drain until its deadline.
+      const timer = setTimeout(() => {
+        this.idleWaiters.delete(wake);
+        resolve();
+      }, IDLE_WAIT_POLL_MS);
+      timer.unref?.();
+      this.idleWaiters.add(wake);
+    });
   }
 
   // ------------------------------------------------------------------- abort

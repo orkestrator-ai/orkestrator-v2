@@ -16,6 +16,7 @@ import {
   isCodexSessionPhase,
   listSessions,
   lookupSessionStatus,
+  parseApproval,
   respondToApproval,
   resumeSession,
   sendPrompt,
@@ -108,6 +109,44 @@ describe("codex-client getBridgeHealth", () => {
 
     mockFetchError(new Error("offline"));
     await expect(getBridgeHealth(client)).resolves.toBeNull();
+  });
+});
+
+describe("codex-client request timeout", () => {
+  afterEach(restoreFetch);
+
+  test("abandons a hung bridge instead of hanging the caller", async () => {
+    const originalSetTimeout = globalThis.setTimeout;
+    let deadlineMs: number | undefined;
+    // Fire the deadline immediately so the real ten seconds are not spent here,
+    // while still proving the request is aborted rather than left pending.
+    globalThis.setTimeout = ((handler: TimerHandler, delay?: number) => {
+      deadlineMs = delay;
+      (handler as () => void)();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout;
+    globalThis.fetch = mock((_url: string, init: RequestInit) => {
+      if (init.signal?.aborted) {
+        return Promise.reject(
+          Object.assign(new Error("The operation was aborted."), { name: "AbortError" }),
+        );
+      }
+      // A bridge that accepted the connection and then stopped answering.
+      return new Promise<Response>(() => {});
+    }) as unknown as typeof fetch;
+
+    try {
+      // Consumers that swallow failures report unreachable…
+      expect(await checkHealth(client)).toBe(false);
+      expect(deadlineMs).toBe(10_000);
+      await expect(getSessionMessages(client, "session-1")).resolves.toEqual([]);
+      // …and the ones that must not guess surface the abort.
+      await expect(fetchPendingApprovals(client, "session-1")).rejects.toThrow(/aborted/i);
+      expect((await lookupSessionStatus(client, "session-1")).kind).toBe("unavailable");
+      expect(await abortSession(client, "session-1")).toEqual({ status: "unknown" });
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
   });
 });
 
@@ -825,6 +864,44 @@ describe("codex-client subscribeToEvents", () => {
     }
   });
 
+  test("iterator throw closes the source and rejects for the consumer", async () => {
+    const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+    const source = MockEventSource.instances[0]!;
+
+    await expect(iterator.throw?.(new Error("consumer gave up"))).rejects.toThrow(
+      "consumer gave up",
+    );
+    expect(source.close).toHaveBeenCalledTimes(1);
+    // The stream is finished, not wedged: a later read must resolve, not hang.
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+  });
+
+  test("buffers a burst that arrives before the consumer reads", async () => {
+    // The bridge can emit several frames between two `next()` calls; queueing them
+    // is what stops a fast turn from losing everything but its last event.
+    const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+    const source = MockEventSource.instances[0]!;
+
+    source.emit("session.updated", { sessionId: "session-1", phase: "running" }, "1");
+    source.emit("message.updated", { sessionId: "session-1" }, "2");
+    source.emit("session.idle", { sessionId: "session-1" }, "3");
+
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { type: "session.updated", revision: 1 },
+    });
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { type: "message.updated", revision: 2 },
+    });
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { type: "session.idle", revision: 3 },
+    });
+
+    await iterator.return?.();
+  });
+
   test("iterator return closes the source and resolves a pending read", async () => {
     const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
     const pending = iterator.next();
@@ -1002,6 +1079,108 @@ describe("codex-client approvals", () => {
     await expect(fetchPendingApprovals(client, "session-1")).rejects.toThrow("network down");
   });
 
+  /**
+   * The turn is *blocked* on an approval, so a descriptor we refuse to render is
+   * a turn that hangs until the bridge's five-minute auto-deny. These assert the
+   * exact field contract with `describeApproval` in the bridge, and that every
+   * rejection is reported rather than dropped on the floor.
+   */
+  describe("parseApproval", () => {
+    const VALID = {
+      approvalId: "apr-1",
+      kind: "command",
+      method: "item/commandExecution/requestApproval",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-1",
+      requestedAt: 1,
+      expiresAt: 2,
+      command: "rm -rf build",
+      cwd: "/workspace",
+      supportsApproveForSession: true,
+    };
+
+    let warn = mock((..._args: unknown[]) => {});
+    const originalWarn = console.warn;
+
+    beforeEach(() => {
+      warn = mock((..._args: unknown[]) => {});
+      console.warn = warn as unknown as typeof console.warn;
+    });
+
+    afterEach(() => {
+      console.warn = originalWarn;
+    });
+
+    test("accepts the descriptor the bridge actually sends", () => {
+      expect(parseApproval(VALID)).toMatchObject({
+        approvalId: "apr-1",
+        kind: "command",
+        command: "rm -rf build",
+        cwd: "/workspace",
+        supportsApproveForSession: true,
+      });
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    test.each([
+      ["a non-object payload", null],
+      ["a missing approvalId", { ...VALID, approvalId: 7 }],
+      ["an unknown kind", { ...VALID, kind: "network" }],
+      ["a non-string method", { ...VALID, method: 12 }],
+      ["a non-string, non-null threadId", { ...VALID, threadId: 5 }],
+      ["a non-string, non-null turnId", { ...VALID, turnId: {} }],
+      ["a non-string, non-null itemId", { ...VALID, itemId: [] }],
+      ["a non-finite requestedAt", { ...VALID, requestedAt: Number.NaN }],
+      ["a missing expiresAt", { ...VALID, expiresAt: undefined }],
+      ["a non-finite expiresAt", { ...VALID, expiresAt: Number.POSITIVE_INFINITY }],
+      ["a non-boolean supportsApproveForSession", { ...VALID, supportsApproveForSession: "yes" }],
+    ])("rejects and warns about %s", (_label, payload) => {
+      expect(parseApproval(payload)).toBeNull();
+      expect(warn).toHaveBeenCalledTimes(1);
+      const [message] = warn.mock.calls[0] as unknown as [string, { approvalId?: string }];
+      expect(message).toContain("unrecognised Codex approval");
+      // Never the command, the cwd or any file content: the user has not agreed
+      // to run this yet, and the log is shared.
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("rm -rf build");
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("/workspace");
+    });
+
+    test("names the approval it dropped when the id survived", () => {
+      parseApproval({ ...VALID, kind: "network" });
+      const [, context] = warn.mock.calls[0] as unknown as [string, { approvalId?: string }];
+      expect(context).toEqual({ approvalId: "apr-1" });
+    });
+
+    test.each([
+      ["command", 42],
+      ["cwd", {}],
+      ["reason", null],
+      ["grantRoot", []],
+      ["networkHost", 7],
+    ])("drops a malformed optional %s rather than the whole request", (field, value) => {
+      // These are cosmetic. Rejecting the request over one would block a turn the
+      // user could otherwise answer.
+      const parsed = parseApproval({ ...VALID, command: undefined, [field]: value });
+      expect(parsed).not.toBeNull();
+      expect(parsed?.[field as "command"]).toBeUndefined();
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    test("tolerates a changes field that is not a well-formed list", () => {
+      // The v2 file-change method sends no changes at all, so an absent or odd
+      // list is normal rather than a parse failure.
+      expect(parseApproval({ ...VALID, changes: "all of them" })?.changes).toBeUndefined();
+      expect(
+        parseApproval({
+          ...VALID,
+          changes: [null, "src/a.ts", { path: "/workspace/a.ts", kind: "delete" }, { path: 1, kind: "add" }],
+        })?.changes,
+      ).toEqual([{ path: "/workspace/a.ts", kind: "delete" }]);
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
   test("respondToApproval posts the decision", async () => {
     const fetchMock = mock(() => Response.json({ status: "applied" }));
     globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -1030,6 +1209,24 @@ describe("codex-client approvals", () => {
 
     mockFetchError(new Error("offline"));
     expect(await respondToApproval(client, "s", "a", "deny")).toBe("error");
+  });
+
+  test("reports the entries it drops so a protocol change is not silent", async () => {
+    const originalWarn = console.warn;
+    const warn = mock(() => {});
+    console.warn = warn as unknown as typeof console.warn;
+    try {
+      mockFetch(() =>
+        Response.json({
+          approvals: [{ approvalId: "apr-broken", kind: "future-kind", command: "rm -rf /" }],
+        }),
+      );
+
+      await expect(fetchPendingApprovals(client, "session-1")).resolves.toEqual([]);
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   test("encodes the approval id into the path", async () => {

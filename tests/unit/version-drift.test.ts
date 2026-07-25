@@ -406,6 +406,46 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(PINNED_TOOLCHAIN_ARTIFACTS).toHaveLength(expected.size);
   });
 
+  test("no pinned checksum is shared between two different artifacts", () => {
+    /**
+     * Shape checks (`/^[a-f0-9]{64}$/`) cannot tell a real digest from a
+     * plausible one, and nothing in CI downloads the releases: live verification
+     * is `RUN_LIVE_TOOLCHAIN_ARTIFACTS=1 bun scripts/verify-toolchain-artifacts.ts`
+     * (see `bun run verify:toolchains:live`), which is a manual step in the
+     * upgrade guide.
+     *
+     * The realistic offline-detectable failure is a version bump that updates
+     * every version string but re-uses one artifact's digest for another — a
+     * copy-paste while filling in the twelve entries from `--emit` output.
+     * Distinct binaries cannot share a digest or an exact byte count, so any
+     * collision here is a manifest mistake, and it would otherwise sail through
+     * the entire suite.
+     */
+    const seen = new Map<string, string>();
+    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS) {
+      const target = `${artifact.name}:${artifact.platform}:${artifact.architecture}`;
+      for (const [field, value] of [
+        ["archive.url", artifact.archive.url],
+        ["archive.sha256", artifact.archive.sha256],
+        ["executable.sha256", artifact.executable.sha256],
+        ...(artifact.executable.installedSha256
+          ? [["executable.installedSha256", artifact.executable.installedSha256] as const]
+          : []),
+      ] as Array<[string, string]>) {
+        const key = `${field}=${value}`;
+        expect({ field, target, collidesWith: seen.get(key) ?? null })
+          .toEqual({ field, target, collidesWith: null });
+        seen.set(key, target);
+      }
+    }
+
+    // Sizes may legitimately repeat across fields of the same artifact, but two
+    // different downloads having byte-identical archives would mean one URL
+    // points at the wrong release.
+    const archiveSizes = PINNED_TOOLCHAIN_ARTIFACTS.map((artifact) => artifact.archive.size);
+    expect(new Set(archiveSizes).size).toBe(archiveSizes.length);
+  });
+
   test("selects exactly one complete tool set for each supported target", () => {
     for (const platform of ["darwin", "linux"] as const) {
       for (const architecture of ["arm64", "x64"] as const) {

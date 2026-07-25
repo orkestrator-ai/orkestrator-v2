@@ -150,8 +150,10 @@ describe("CodexApprovalCard", () => {
     ]);
     expect(screen.getByRole("button", { name: "Decline" }).dataset.variant).toBe("default");
     expect(screen.getByRole("button", { name: "Approve" }).dataset.variant).toBe("outline");
+    // "Approve for session" is the far broader grant, so it must not look like an
+    // equal-weight sibling of the one-off approval sitting next to it.
     expect(screen.getByRole("button", { name: "Approve for session" }).dataset.variant).toBe(
-      "outline",
+      "ghost",
     );
   });
 
@@ -266,5 +268,113 @@ describe("CodexApprovalCard", () => {
     renderCard(makeApproval({ grantRoot: "/workspace" }));
     expect(screen.getByText(/write access under/)).toBeTruthy();
     expect(screen.getByText("/workspace")).toBeTruthy();
+  });
+
+  test("fails closed on an approval with no readable deadline", () => {
+    // A descriptor the bridge could not fully describe used to render "NaN:NaN"
+    // beside live Approve/Decline buttons. This card is what actually runs the
+    // command, so an unreadable request must offer nothing to click.
+    renderCard(makeApproval({ expiresAt: undefined as unknown as number }));
+
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Decline" })).toBeNull();
+    expect(screen.queryByText(/NaN/)).toBeNull();
+    expect(screen.getByText("This request expired and was declined.")).toBeTruthy();
+  });
+
+  test("a different button cannot be used while a decision is in flight", async () => {
+    // The safety-critical variant of double submission: declining and then
+    // approving the same request would send two contradictory answers.
+    let release: ((value: CodexApprovalResponseResult) => void) | undefined;
+    respondMock.mockImplementation(
+      () => new Promise<CodexApprovalResponseResult>((resolve) => {
+        release = resolve;
+      }),
+    );
+
+    renderCard(makeApproval());
+    fireEvent.click(screen.getByRole("button", { name: "Decline" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Declining…" })).toBeTruthy());
+
+    const approve = screen.getByRole("button", { name: "Approve" });
+    expect(approve.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(approve);
+
+    expect(respondMock).toHaveBeenCalledTimes(1);
+    expect((respondMock.mock.calls[0] as unknown as unknown[])[3]).toBe("deny");
+    release?.("applied");
+  });
+
+  test.each([
+    ["Decline", "Declining…"],
+    ["Cancel turn", "Cancelling…"],
+    ["Approve for session", "Approving…"],
+  ])("%s shows its own in-flight label", async (label, inFlightLabel) => {
+    let release: ((value: CodexApprovalResponseResult) => void) | undefined;
+    respondMock.mockImplementation(
+      () => new Promise<CodexApprovalResponseResult>((resolve) => {
+        release = resolve;
+      }),
+    );
+
+    renderCard(makeApproval());
+    fireEvent.click(screen.getByRole("button", { name: label }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: inFlightLabel })).toBeTruthy());
+    release?.("applied");
+  });
+
+  test("a retry after a transport error sends the decision again and clears the card", async () => {
+    respondMock
+      .mockImplementationOnce(async () => "error")
+      .mockImplementation(async () => "applied");
+
+    renderCard(makeApproval());
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+
+    // The whole point of keeping the card is that the second attempt works.
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() => {
+      expect(respondMock).toHaveBeenCalledTimes(2);
+      expect(useCodexStore.getState().pendingApprovals.has(SESSION_KEY)).toBe(false);
+    });
+  });
+
+  test("counts down in m:ss", () => {
+    renderCard(makeApproval({ expiresAt: Date.now() + 65_000 }));
+    expect(screen.getByText("1:05")).toBeTruthy();
+
+    cleanup();
+    renderCard(makeApproval({ expiresAt: Date.now() + 1_000 }));
+    expect(screen.getByText("0:01")).toBeTruthy();
+  });
+
+  test("clears the countdown interval when the card unmounts", () => {
+    const originalClearInterval = globalThis.clearInterval;
+    let cleared = 0;
+    globalThis.clearInterval = ((handle: Parameters<typeof clearInterval>[0]) => {
+      cleared += 1;
+      originalClearInterval(handle);
+    }) as typeof clearInterval;
+
+    try {
+      // A card that outlives its interval keeps ticking for every approval the
+      // user has ever seen.
+      renderCard(makeApproval()).unmount();
+      expect(cleared).toBeGreaterThan(0);
+    } finally {
+      globalThis.clearInterval = originalClearInterval;
+    }
+  });
+
+  test.each([
+    [{ kind: "permissions" as const }, "shield-alert"],
+    [{ kind: "file-change" as const }, "file-diff"],
+    [{ networkHost: "registry.npmjs.org" }, "globe"],
+    [{}, "terminal"],
+  ])("picks the icon that matches the request", (overrides, expectedIcon) => {
+    const { container } = renderCard(makeApproval(overrides));
+    expect(container.querySelector("svg")?.getAttribute("class")).toContain(expectedIcon);
   });
 });

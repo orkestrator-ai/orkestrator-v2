@@ -8,6 +8,9 @@ import {
 import { BrowserTab } from "../../apps/web/src/components/browser/BrowserTab";
 import { CodexComposeBar } from "../../apps/web/src/components/codex/CodexComposeBar";
 import { AgentThinkingIndicator } from "../../apps/web/src/components/chat/AgentThinkingIndicator";
+import { DiffViewerTab } from "../../apps/web/src/components/terminal/DiffViewerTab";
+import { ChangedFileItem } from "../../apps/web/src/components/files-panel/ChangedFileItem";
+import type { GitFileChange } from "../../apps/web/src/lib/backend";
 
 declare global {
   interface Window {
@@ -141,9 +144,68 @@ function GlobalStylesFixture() {
   );
 }
 
+const pathFixtures = {
+  posix: "packages/a-very-long-directory-name/src/components/ImportantButton.tsx",
+  windows: String.raw`packages\a-very-long-directory-name\src\components\ImportantPanel.tsx`,
+} as const;
+
+const changedFileFixture = {
+  path: pathFixtures.posix,
+  directory: "packages/a-very-long-directory-name/src/components",
+  filename: "ImportantButton.tsx",
+  additions: 0,
+  deletions: 0,
+  status: "M",
+} satisfies GitFileChange;
+
+function PathTruncationFixture() {
+  window.orkestrator = {
+    invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
+      if (command !== "read_container_file") {
+        throw new Error(`Unexpected fixture command: ${command}`);
+      }
+
+      return {
+        path: String(args?.filePath ?? ""),
+        content: "export {};",
+        language: "typescript",
+      } as T;
+    },
+  } as Window["orkestrator"];
+
+  return (
+    <main className="min-h-screen bg-background p-4 text-foreground">
+      <section
+        data-testid="changed-file-path-pane"
+        className="mb-4 border border-border"
+        style={{ width: "640px" }}
+      >
+        <ChangedFileItem change={changedFileFixture} />
+      </section>
+      {Object.entries(pathFixtures).map(([kind, filePath]) => (
+        <section
+          key={kind}
+          data-testid={`${kind}-path-pane`}
+          className="relative mb-4 h-48 overflow-hidden border border-border"
+          style={{ width: "640px" }}
+        >
+          <DiffViewerTab
+            filePath={filePath}
+            containerId="fixture-container"
+            baseBranch="main"
+            gitStatus="A"
+            isActive
+          />
+        </section>
+      ))}
+    </main>
+  );
+}
+
 function fixtureForPath() {
   if (window.location.pathname === "/browser") return <BrowserFixture />;
   if (window.location.pathname === "/codex-compose") return <CodexComposeFixture />;
+  if (window.location.pathname === "/path-truncation") return <PathTruncationFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   return <CreateEnvironmentFixture />;
 }

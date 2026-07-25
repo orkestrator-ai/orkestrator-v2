@@ -28,14 +28,14 @@ export function ChangedFileItem({ change, onClick, onRevert, onDelete }: Changed
     >
       <FileIcon filename={change.filename} className="h-4 w-4 shrink-0" />
 
-      <div className="min-w-0 overflow-hidden text-left">
-        <div className="truncate">
+      <div className="flex min-w-0 overflow-hidden text-left">
+        <div className="flex min-w-0 flex-1 overflow-hidden">
           {change.directory && (
-            <span className="text-xs text-muted-foreground">
+            <span className="min-w-0 flex-1 truncate text-left text-xs text-muted-foreground [direction:rtl]">
               {change.directory}/
             </span>
           )}
-          <span className="text-foreground">{change.filename}</span>
+          <span className="min-w-0 shrink truncate text-foreground">{change.filename}</span>
         </div>
       </div>
 

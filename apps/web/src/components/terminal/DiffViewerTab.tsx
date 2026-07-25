@@ -324,15 +324,35 @@ function DiffHeader({
   statusIcon,
   statusText,
 }: DiffHeaderProps) {
+  const separatorIndex = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  const directory = separatorIndex >= 0 ? filePath.slice(0, separatorIndex + 1) : "";
+  const filename = separatorIndex >= 0 ? filePath.slice(separatorIndex + 1) : filePath;
+
   return (
-    <div className="flex items-center justify-between border-b border-border bg-background px-4 py-2">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        {statusIcon}
-        <span className="truncate font-mono">{filePath}</span>
-        <span className="text-xs opacity-60">vs {baseBranch}</span>
+    <div className="flex items-center gap-2 border-b border-border bg-background px-4 py-2">
+      <div className="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
+        <span className="shrink-0">{statusIcon}</span>
+        <span
+          className="flex min-w-0 flex-1 overflow-hidden font-mono"
+          title={filePath}
+          aria-label={filePath}
+        >
+          {directory && (
+            <span
+              aria-hidden="true"
+              className="min-w-0 flex-1 truncate text-left [direction:rtl]"
+            >
+              {directory}
+            </span>
+          )}
+          <span aria-hidden="true" className="min-w-0 shrink truncate">
+            {filename}
+          </span>
+        </span>
+        <span className="shrink-0 text-xs opacity-60">vs {baseBranch}</span>
         <span
           className={cn(
-            "rounded px-1.5 py-0.5 text-xs",
+            "shrink-0 rounded px-1.5 py-0.5 text-xs",
             statusText === "New file" && "bg-green-500/20 text-green-400",
             statusText === "Modified" && "bg-yellow-500/20 text-yellow-400",
             statusText === "Deleted" && "bg-red-500/20 text-red-400"
@@ -341,7 +361,7 @@ function DiffHeader({
           {statusText}
         </span>
       </div>
-      <div className="flex items-center gap-1">
+      <div className="flex shrink-0 items-center gap-1">
         {/* Diff mode toggle */}
         <Button
           variant="ghost"

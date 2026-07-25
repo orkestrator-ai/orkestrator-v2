@@ -183,12 +183,17 @@ describe("Files panel components", () => {
     const onClick = mock(() => {});
     render(<ChangedFileItem change={change} onClick={onClick} />);
 
-    expect(screen.getByText("src/components/")).toBeTruthy();
-    expect(screen.getByText("Button.tsx")).toBeTruthy();
+    const directory = screen.getByText("src/components/");
+    const filename = screen.getByText("Button.tsx");
+    expect(directory.className).toContain("[direction:rtl]");
+    expect(directory.className).toContain("flex-1");
+    expect(filename.className).toContain("shrink");
+    expect(filename.className).toContain("truncate");
     expect(screen.getByText("+12").className).toContain("text-green-500");
     expect(screen.getByText("-3").className).toContain("text-red-400");
 
-    fireEvent.click(screen.getByTitle("src/components/Button.tsx"));
+    const fileButton = screen.getByTitle("src/components/Button.tsx");
+    fireEvent.click(fileButton);
     expect(onClick).toHaveBeenCalledWith("src/components/Button.tsx");
   });
 

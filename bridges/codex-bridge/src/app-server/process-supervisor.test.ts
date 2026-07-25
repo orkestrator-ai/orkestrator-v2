@@ -1,5 +1,8 @@
-import { describe, test, expect } from "bun:test";
+import { afterEach, describe, test, expect, spyOn } from "bun:test";
 import { EventEmitter } from "node:events";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import {
   AppServerSupervisor,
   parseVersionFromUserAgent,
@@ -12,7 +15,10 @@ import {
 } from "./errors.js";
 import { FakeReadable, FakeWritable } from "./testing/fake-app-server.js";
 import type { EngineState } from "../engine/types.js";
-import type { InboundNotification, InboundServerRequest } from "./envelope-validation.js";
+import type {
+  InboundNotification,
+  InboundServerRequest,
+} from "./envelope-validation.js";
 
 /**
  * Minimal stand-in for a spawned app-server child. Tests control whether
@@ -37,7 +43,10 @@ class FakeChild extends EventEmitter {
     super();
     // Answer `initialize` as soon as the client writes it.
     const original = this.stdin.write.bind(this.stdin);
-    this.stdin.write = (chunk: string, callback?: (error?: Error | null) => void) => {
+    this.stdin.write = (
+      chunk: string,
+      callback?: (error?: Error | null) => void,
+    ) => {
       const result = original(chunk, callback);
       queueMicrotask(() => this.maybeAnswer(chunk));
       return result;
@@ -65,7 +74,9 @@ class FakeChild extends EventEmitter {
       jsonrpc: "2.0",
       id: message.id,
       result: {
-        userAgent: this.behaviour.userAgent ?? "orkestrator/0.145.0 (Mac OS 26.5; arm64)",
+        userAgent:
+          this.behaviour.userAgent ??
+          "orkestrator/0.145.0 (Mac OS 26.5; arm64)",
         codexHome: "/tmp/codex-home",
         platformFamily: "unix",
         platformOs: "macos",
@@ -89,9 +100,23 @@ class FakeChild extends EventEmitter {
 }
 
 class FakeStderr {
+  private readonly listeners: Array<(chunk: string) => void> = [];
   setEncoding(): void {}
-  on(): void {}
+  on(event: string, listener: (chunk: string) => void): void {
+    if (event === "data") this.listeners.push(listener);
+  }
+  emitData(chunk: string): void {
+    for (const listener of this.listeners) listener(chunk);
+  }
 }
+
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const path of temporaryDirectories.splice(0)) {
+    rmSync(path, { recursive: true, force: true });
+  }
+});
 
 interface Harness {
   supervisor: AppServerSupervisor;
@@ -99,14 +124,21 @@ interface Harness {
   setFingerprint: (value: string) => void;
   children: FakeChild[];
   states: Array<{ state: EngineState; detail?: string }>;
-  notifications: Array<{ notification: InboundNotification; generation: number }>;
+  notifications: Array<{
+    notification: InboundNotification;
+    generation: number;
+  }>;
   serverRequests: Array<{ request: InboundServerRequest; generation: number }>;
   generationReady: Array<{ generation: number; previous: number }>;
 }
 
 function harness(
   options: {
-    behaviours?: Array<{ failInitialize?: boolean; hangInitialize?: boolean; pid?: number }>;
+    behaviours?: Array<{
+      failInitialize?: boolean;
+      hangInitialize?: boolean;
+      pid?: number;
+    }>;
     supervisor?: Partial<AppServerSupervisorOptions>;
   } = {},
 ): Harness {
@@ -132,13 +164,18 @@ function harness(
     fingerprintEnvironment: () => currentFingerprint,
     onNotification: (notification, _threadId, generation) =>
       notifications.push({ notification, generation }),
-    onServerRequest: (request, generation) => serverRequests.push({ request, generation }),
+    onServerRequest: (request, generation) =>
+      serverRequests.push({ request, generation }),
     onStateChange: (state, detail) => states.push({ state, detail }),
-    onGenerationReady: (generation, previous) => generationReady.push({ generation, previous }),
+    onGenerationReady: (generation, previous) =>
+      generationReady.push({ generation, previous }),
     spawnProcess: (() => {
       const behaviour = options.behaviours?.[spawnIndex] ?? {};
       spawnIndex += 1;
-      const child = new FakeChild(behaviour.pid ?? 1000 + spawnIndex, behaviour);
+      const child = new FakeChild(
+        behaviour.pid ?? 1000 + spawnIndex,
+        behaviour,
+      );
       children.push(child);
       return child;
     }) as unknown as AppServerSupervisorOptions["spawnProcess"],
@@ -191,12 +228,19 @@ describe("startup", () => {
   });
 
   test("passes --stdio and config overrides without a shell", async () => {
-    const spawnCalls: Array<{ command: string; args: string[]; options: Record<string, unknown> }> =
-      [];
+    const spawnCalls: Array<{
+      command: string;
+      args: string[];
+      options: Record<string, unknown>;
+    }> = [];
     const h = harness({
       supervisor: {
         configOverrides: { "features.goals": "true" },
-        spawnProcess: ((command: string, args: string[], spawnOptions: Record<string, unknown>) => {
+        spawnProcess: ((
+          command: string,
+          args: string[],
+          spawnOptions: Record<string, unknown>,
+        ) => {
           spawnCalls.push({ command, args, options: spawnOptions });
           return new FakeChild(4242);
         }) as unknown as AppServerSupervisorOptions["spawnProcess"],
@@ -204,7 +248,12 @@ describe("startup", () => {
     });
     await h.supervisor.ensureReady();
 
-    expect(spawnCalls[0]!.args).toEqual(["app-server", "--stdio", "-c", "features.goals=true"]);
+    expect(spawnCalls[0]!.args).toEqual([
+      "app-server",
+      "--stdio",
+      "-c",
+      "features.goals=true",
+    ]);
     expect(spawnCalls[0]!.options.shell).toBe(false);
     expect(spawnCalls[0]!.options.cwd).toBe("/tmp/workspace");
   });
@@ -214,6 +263,253 @@ describe("startup", () => {
     await h.supervisor.ensureReady();
     expect(h.supervisor.getHealth().codexVersion).toBe("0.145.0");
     expect(h.supervisor.getHealth().codexHome).toBe("/tmp/codex-home");
+  });
+
+  test("suppresses stderr payloads that may contain prompts or file contents", async () => {
+    const h = harness();
+    const error = spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await h.supervisor.ensureReady();
+      h.children[0]!.stderr.emitData(
+        '{"level":"error","message":"sentinel-private-prompt"}\n',
+      );
+      h.children[0]!.stderr.emitData("sentinel-private-file-content\n");
+
+      const output = error.mock.calls.flat().map(String).join("\n");
+      expect(output).toContain("stderr output suppressed");
+      expect(output).not.toContain("sentinel-private-prompt");
+      expect(output).not.toContain("sentinel-private-file-content");
+      expect(error).toHaveBeenCalledTimes(1);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  test("reaps only a positively identified orphan and ignores PID reuse", async () => {
+    const codexHome = mkdtempSync(join(tmpdir(), "supervisor-pidfile-"));
+    temporaryDirectories.push(codexHome);
+    const signalled: number[] = [];
+    const make = (matches: boolean) =>
+      harness({
+        supervisor: {
+          codexHome,
+          pidFileEnabled: true,
+          isProcessAlive: (pid) => pid === 4242,
+          matchesPidFileProcess: async () => matches,
+          signalPidFileProcess: (pid) => signalled.push(pid),
+        },
+      });
+
+    const first = make(false);
+    const pidFilePath = (
+      first.supervisor as unknown as {
+        pidFilePath: () => string;
+      }
+    ).pidFilePath();
+    const writeRecord = () => {
+      mkdirSync(dirname(pidFilePath), { recursive: true });
+      writeFileSync(
+        pidFilePath,
+        JSON.stringify({
+          pid: 4242,
+          bridgePid: 3131,
+          cwd: "/tmp/workspace",
+          startedAt: new Date().toISOString(),
+          instanceId: "instance-token",
+        }),
+        "utf8",
+      );
+    };
+    // The owning bridge is considered dead; the child PID exists but does not
+    // match the random instance token, as happens after PID reuse.
+    writeRecord();
+    await first.supervisor.ensureReady();
+    expect(signalled).toEqual([]);
+
+    const second = make(true);
+    writeRecord();
+    await second.supervisor.ensureReady();
+    expect(signalled).toEqual([4242]);
+  });
+
+  test("does not take over or erase a pidfile owned by another live bridge", async () => {
+    const codexHome = mkdtempSync(join(tmpdir(), "supervisor-live-owner-"));
+    temporaryDirectories.push(codexHome);
+    const h = harness({
+      supervisor: {
+        codexHome,
+        pidFileEnabled: true,
+        circuitBreakerThreshold: 1,
+        isProcessAlive: (pid) => pid === 3131,
+      },
+    });
+    const pidFilePath = (
+      h.supervisor as unknown as {
+        pidFilePath: () => string;
+      }
+    ).pidFilePath();
+    mkdirSync(dirname(pidFilePath), { recursive: true });
+    const record = JSON.stringify({
+      pid: 4242,
+      bridgePid: 3131,
+      cwd: "/tmp/workspace",
+      startedAt: new Date().toISOString(),
+      instanceId: "live-owner",
+    });
+    writeFileSync(pidFilePath, record, "utf8");
+
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(
+      AppServerCircuitOpenError,
+    );
+    expect(h.children).toHaveLength(0);
+    expect(await Bun.file(pidFilePath).text()).toBe(record);
+  });
+
+  test("atomically admits only one of two simultaneous supervisors", async () => {
+    const codexHome = mkdtempSync(
+      join(tmpdir(), "supervisor-contended-owner-"),
+    );
+    temporaryDirectories.push(codexHome);
+    let arrivals = 0;
+    let releaseBarrier!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const refreshEnvironment = async () => {
+      arrivals += 1;
+      if (arrivals === 2) releaseBarrier();
+      await barrier;
+    };
+    const unsafeSignals: number[] = [];
+    const make = () =>
+      harness({
+        supervisor: {
+          codexHome,
+          pidFileEnabled: true,
+          circuitBreakerThreshold: 1,
+          refreshEnvironment,
+          isProcessAlive: (pid) => pid === process.pid,
+          signalPidFileProcess: (pid) => unsafeSignals.push(pid),
+        },
+      });
+    const first = make();
+    const second = make();
+
+    const results = await Promise.allSettled([
+      first.supervisor.ensureReady(),
+      second.supervisor.ensureReady(),
+    ]);
+
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === "rejected"),
+    ).toHaveLength(1);
+    expect(first.children.length + second.children.length).toBe(1);
+    expect(unsafeSignals).toEqual([]);
+
+    // Mark the fake child exited before cleanup so the test cannot send an OS
+    // signal to a fabricated PID.
+    const winner = first.children.length === 1 ? first : second;
+    winner.children[0]!.exit(0);
+    await Promise.all([first.supervisor.stop(), second.supervisor.stop()]);
+  });
+
+  test("two stale-owner reclaimers cannot remove the winning replacement", async () => {
+    const codexHome = mkdtempSync(
+      join(tmpdir(), "supervisor-stale-contention-"),
+    );
+    temporaryDirectories.push(codexHome);
+    let arrivals = 0;
+    let releaseBarrier!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const refreshEnvironment = async () => {
+      arrivals += 1;
+      if (arrivals === 2) releaseBarrier();
+      await barrier;
+    };
+    const unsafeSignals: number[] = [];
+    const make = () =>
+      harness({
+        supervisor: {
+          codexHome,
+          pidFileEnabled: true,
+          circuitBreakerThreshold: 1,
+          refreshEnvironment,
+          isProcessAlive: (pid) => pid === process.pid,
+          signalPidFileProcess: (pid) => unsafeSignals.push(pid),
+        },
+      });
+    const first = make();
+    const second = make();
+    const pidFilePath = (
+      first.supervisor as unknown as {
+        pidFilePath: () => string;
+      }
+    ).pidFilePath();
+    mkdirSync(dirname(pidFilePath), { recursive: true });
+    writeFileSync(
+      pidFilePath,
+      JSON.stringify({
+        pid: 4242,
+        bridgePid: 3131,
+        cwd: "/tmp/workspace",
+        startedAt: "2026-07-25T12:00:00.000Z",
+        instanceId: "stale-child",
+      }),
+      "utf8",
+    );
+
+    const results = await Promise.allSettled([
+      first.supervisor.ensureReady(),
+      second.supervisor.ensureReady(),
+    ]);
+
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === "rejected"),
+    ).toHaveLength(1);
+    expect(first.children.length + second.children.length).toBe(1);
+    expect(unsafeSignals).toEqual([]);
+
+    const winner = first.children.length === 1 ? first : second;
+    winner.children[0]!.exit(0);
+    await Promise.all([first.supervisor.stop(), second.supervisor.stop()]);
+  });
+
+  test("token-checked shutdown does not remove replacement ownership", async () => {
+    const codexHome = mkdtempSync(join(tmpdir(), "supervisor-replaced-owner-"));
+    temporaryDirectories.push(codexHome);
+    const h = harness({
+      supervisor: {
+        codexHome,
+        pidFileEnabled: true,
+        isProcessAlive: (pid) => pid === process.pid,
+      },
+    });
+    await h.supervisor.ensureReady();
+    const pidFilePath = (
+      h.supervisor as unknown as {
+        pidFilePath: () => string;
+      }
+    ).pidFilePath();
+    const replacement = JSON.stringify({
+      ownerToken: "replacement-owner",
+      bridgePid: process.pid,
+      cwd: "/tmp/workspace",
+      acquiredAt: new Date().toISOString(),
+    });
+    writeFileSync(pidFilePath, replacement, "utf8");
+
+    h.children[0]!.exit(0);
+    await h.supervisor.stop();
+
+    expect(await Bun.file(pidFilePath).text()).toBe(replacement);
   });
 
   test("retries when initialize is refused, then succeeds", async () => {
@@ -229,12 +525,16 @@ describe("startup", () => {
     const h = harness({
       supervisor: {
         spawnProcess: (() =>
-          new FakeChild(undefined)) as unknown as AppServerSupervisorOptions["spawnProcess"],
+          new FakeChild(
+            undefined,
+          )) as unknown as AppServerSupervisorOptions["spawnProcess"],
         circuitBreakerThreshold: 1,
       },
     });
 
-    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(
+      AppServerCircuitOpenError,
+    );
   });
 
   test("concurrent ensureReady calls share one startup", async () => {
@@ -258,7 +558,9 @@ describe("circuit breaker", () => {
       supervisor: { circuitBreakerThreshold: 3 },
     });
 
-    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(
+      AppServerCircuitOpenError,
+    );
     // Bounded attempts, not an infinite restart loop.
     expect(h.children).toHaveLength(3);
     expect(h.supervisor.getState()).toBe("failed");
@@ -271,9 +573,13 @@ describe("circuit breaker", () => {
       supervisor: { circuitBreakerThreshold: 2 },
     });
 
-    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(
+      AppServerCircuitOpenError,
+    );
     const spawnedAfterFirstFailure = h.children.length;
-    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(AppServerCircuitOpenError);
+    await expect(h.supervisor.ensureReady()).rejects.toBeInstanceOf(
+      AppServerCircuitOpenError,
+    );
     // No further spawn attempts once the breaker is open.
     expect(h.children).toHaveLength(spawnedAfterFirstFailure);
   });
@@ -364,11 +670,17 @@ describe("unexpected exit", () => {
     await h.supervisor.ensureReady();
 
     // Generation 1 is gone; app-server has forgotten the request.
-    await h.supervisor.respondToServerRequest(1, "srv-1", { decision: "denied" });
+    await h.supervisor.respondToServerRequest(1, "srv-1", {
+      decision: "denied",
+    });
     expect(firstChild.stdin.parsed().some((m) => m.id === "srv-1")).toBe(false);
 
-    await h.supervisor.respondToServerRequest(2, "srv-2", { decision: "denied" });
-    expect(h.children[1]!.stdin.parsed().some((m) => m.id === "srv-2")).toBe(true);
+    await h.supervisor.respondToServerRequest(2, "srv-2", {
+      decision: "denied",
+    });
+    expect(h.children[1]!.stdin.parsed().some((m) => m.id === "srv-2")).toBe(
+      true,
+    );
   });
 });
 
@@ -441,9 +753,11 @@ describe("shutdown", () => {
 
     await h.supervisor.stop();
 
-    expect(child.stdin.writableEnded || child.exitCode !== null || child.signalCode !== null).toBe(
-      true,
-    );
+    expect(
+      child.stdin.writableEnded ||
+        child.exitCode !== null ||
+        child.signalCode !== null,
+    ).toBe(true);
     expect(h.supervisor.getState()).toBe("stopped");
   });
 
@@ -452,7 +766,9 @@ describe("shutdown", () => {
     await h.supervisor.ensureReady();
     await h.supervisor.stop();
 
-    await expect(h.supervisor.request("thread/read")).rejects.toThrow(/stopped/);
+    await expect(h.supervisor.request("thread/read")).rejects.toThrow(
+      /stopped/,
+    );
     expect(h.children).toHaveLength(1);
   });
 
@@ -478,7 +794,9 @@ describe("shutdown", () => {
 describe("parseVersionFromUserAgent", () => {
   test("extracts the semver from a real user agent", () => {
     expect(
-      parseVersionFromUserAgent("orkestrator/0.145.0 (Mac OS 26.5.2; arm64) unknown (orkestrator; 2.4.9)"),
+      parseVersionFromUserAgent(
+        "orkestrator/0.145.0 (Mac OS 26.5.2; arm64) unknown (orkestrator; 2.4.9)",
+      ),
     ).toBe("0.145.0");
   });
 

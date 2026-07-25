@@ -24,7 +24,7 @@ export interface JsonRpcErrorBody {
   data?: unknown;
 }
 
-/** A well-formed JSON-RPC error response: the server rejected this request. */
+/** A well-formed JSON-RPC error response; only overload proves non-execution. */
 export class AppServerRpcError extends Error {
   readonly code: number;
   readonly data?: unknown;
@@ -138,11 +138,11 @@ export class AppServerCircuitOpenError extends Error {
 export type DispatchFailureClass = "rejected" | "ambiguous";
 
 export function classifyDispatchFailure(error: unknown): DispatchFailureClass {
-  if (error instanceof AppServerRpcError) {
-    // A structured error response means the request was parsed and refused.
-    // Overload explicitly states it was not enqueued.
-    return "rejected";
-  }
+  // Only the explicit overload response promises that the request was not
+  // enqueued. Other structured RPC errors can still be returned after the
+  // server accepted enough of the request to start work, so they require the
+  // same thread/read reconciliation as transport failures.
+  if (error instanceof AppServerRpcError && error.isOverload()) return "rejected";
   // Timeouts, process exits, write failures and protocol violations all leave
   // open the possibility that the server acted on the request.
   return "ambiguous";

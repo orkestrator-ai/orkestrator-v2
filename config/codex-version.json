@@ -2,7 +2,6 @@
   "$comment": [
     "Single source of truth for the pinned Codex CLI / app-server version.",
     "Every other pin in the repo must agree with `version`:",
-    "  - bridges/codex-bridge/package.json  -> dependencies['@openai/codex-sdk']",
     "  - scripts/download-codex.sh          -> CODEX_VERSION",
     "  - apps/desktop/electron/toolchain-manifest.ts -> PINNED_TOOLCHAIN_VERSIONS.codex",
     "  - docker/Dockerfile                  -> ARG CODEX_CLI_VERSION",

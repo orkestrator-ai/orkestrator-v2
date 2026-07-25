@@ -37,6 +37,13 @@ export interface CodexAttachment {
 
 export interface CodexQueuedMessage {
   id: string;
+  /**
+   * Idempotency key for this logical prompt.
+   *
+   * Kept on the queue entry so draining, remounting, or retrying the same entry
+   * cannot accidentally turn one queued action into two app-server turns.
+   */
+  requestId?: string;
   text: string;
   attachments: CodexAttachment[];
   model: string;

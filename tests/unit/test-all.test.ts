@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildConcurrentGroups,
+  defaultRunGroup,
   main,
+  MAX_AGGREGATE_TEST_WORKERS,
   planWorkers,
   runAllTests,
   type CommandResult,
@@ -121,22 +123,36 @@ describe("scripts/test-all.ts", () => {
 
   test("passes a bounded worker count so concurrent groups cannot oversubscribe", () => {
     const groups = buildConcurrentGroups(10);
+    const workspaceGroup = groups.find((group) => group.name === WORKSPACE)!;
     const rootGroup = groups.find((group) => group.name === ROOT)!;
     const bridgeGroup = groups.find((group) => group.name === BRIDGES)!;
 
-    expect(rootGroup.args).toContain("--parallel=6");
-    expect(bridgeGroup.args).toContain("--parallel=2");
+    expect(workspaceGroup.args).toContain("--concurrency=2");
+    expect(workspaceGroup.args.slice(-2)).toEqual(["--", "--parallel=2"]);
+    expect(rootGroup.args).toContain("--parallel=5");
+    expect(bridgeGroup.args).toContain("--parallel=1");
   });
 
-  test("worker plan leaves headroom and never drops below two", () => {
-    // A 1-2 core CI runner must still get a usable pool rather than 1 worker.
-    expect(planWorkers(1)).toEqual({ root: 2, bridges: 2 });
-    expect(planWorkers(2)).toEqual({ root: 2, bridges: 2 });
+  test("worker plan bounds aggregate Bun workers across every active package task", () => {
+    for (const cores of [1, 2, 4, 8, 20]) {
+      const plan = planWorkers(cores);
+      const aggregate = plan.root
+        + plan.bridges
+        + plan.workspace * plan.workspaceConcurrency;
+      expect(aggregate).toBeLessThanOrEqual(
+        Math.min(MAX_AGGREGATE_TEST_WORKERS, Math.max(3, cores)),
+      );
+      expect(plan.workspaceConcurrency).toBeGreaterThanOrEqual(1);
+      expect(plan.workspaceConcurrency).toBeLessThanOrEqual(3);
+    }
 
-    // On a large machine the shares stay within the core count in total.
     const large = planWorkers(20);
-    expect(large.root + large.bridges).toBeLessThanOrEqual(20);
     expect(large.root).toBeGreaterThan(large.bridges);
+    expect(
+      large.root
+      + large.bridges
+      + large.workspace * large.workspaceConcurrency,
+    ).toBe(MAX_AGGREGATE_TEST_WORKERS);
   });
 
   test("still runs the bridge suites, which turbo does not cover", () => {
@@ -145,6 +161,19 @@ describe("scripts/test-all.ts", () => {
 
     expect(bridgeGroup.command).toBe("bun");
     expect(bridgeGroup.args.slice(0, 2)).toEqual(["test", "bridges"]);
+  });
+
+  test("runs workspace tests as Turbo package tasks with explicit Bun parallelism", () => {
+    const workspaceGroup = buildConcurrentGroups(8).find(
+      (group) => group.name === WORKSPACE,
+    )!;
+
+    expect(workspaceGroup.command).toBe("turbo");
+    expect(workspaceGroup.args.slice(0, 2)).toEqual(["run", "test:workspace"]);
+    expect(workspaceGroup.args).toContain("--filter=@orkestrator/web");
+    expect(workspaceGroup.args).toContain("--filter=@orkestrator/backend");
+    expect(workspaceGroup.args).toContain("--filter=@orkestrator/web-public");
+    expect(workspaceGroup.args.at(-1)).toMatch(/^--parallel=\d+$/);
   });
 
   test("reports every failing group rather than stopping at the first", async () => {
@@ -289,5 +318,28 @@ describe("scripts/test-all.ts", () => {
     });
 
     expect(exitStatuses).toEqual([]);
+  });
+
+  test("default runner captures child output and close status", async () => {
+    const result = await defaultRunGroup({
+      name: "fixture",
+      command: process.execPath,
+      args: ["-e", "process.stdout.write('out'); process.stderr.write('err')"],
+    }, process.env);
+
+    expect(result.status).toBe(0);
+    expect(result.output).toContain("out");
+    expect(result.output).toContain("err");
+  });
+
+  test("default runner converts spawn errors into a failed result", async () => {
+    const result = await defaultRunGroup({
+      name: "missing",
+      command: "/definitely/not/a/real/executable",
+      args: [],
+    }, process.env);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toMatch(/ENOENT|not found/i);
   });
 });

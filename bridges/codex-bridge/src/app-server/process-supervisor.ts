@@ -20,18 +20,41 @@
  * It never falls back to the SDK engine on failure: running the same pending
  * turn through two mechanisms could execute it twice.
  */
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  execFile,
+  spawn,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
+import { randomUUID } from "node:crypto";
+import {
+  link,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  stat,
+  type FileHandle,
+} from "node:fs/promises";
 import { join } from "node:path";
 import {
   AppServerCircuitOpenError,
   AppServerProcessExitError,
   AppServerUnavailableError,
 } from "./errors.js";
-import { JsonlRpcClient, SerialQueue, type RpcMetricsSnapshot } from "./jsonl-rpc-client.js";
-import { createRecorderFromEnv, type NotificationRecorder } from "./notification-recorder.js";
-import type { InboundNotification, InboundServerRequest } from "./envelope-validation.js";
+import {
+  JsonlRpcClient,
+  SerialQueue,
+  type RpcMetricsSnapshot,
+} from "./jsonl-rpc-client.js";
+import {
+  createRecorderFromEnv,
+  type NotificationRecorder,
+} from "./notification-recorder.js";
+import type {
+  InboundNotification,
+  InboundServerRequest,
+} from "./envelope-validation.js";
 import {
   fingerprintRuntimeEnvironment,
   refreshRuntimeEnvironment,
@@ -60,10 +83,16 @@ export interface AppServerSupervisorOptions {
     threadId: string | null,
     generation: EngineGeneration,
   ) => void;
-  onServerRequest: (request: InboundServerRequest, generation: EngineGeneration) => void;
+  onServerRequest: (
+    request: InboundServerRequest,
+    generation: EngineGeneration,
+  ) => void;
   onStateChange?: (state: EngineState, detail?: string) => void;
   /** Called after a successful restart so callers can resume their threads. */
-  onGenerationReady?: (generation: EngineGeneration, previous: EngineGeneration) => void;
+  onGenerationReady?: (
+    generation: EngineGeneration,
+    previous: EngineGeneration,
+  ) => void;
   /** Injected in tests. */
   spawnProcess?: typeof spawn;
   refreshEnvironment?: () => Promise<void>;
@@ -78,7 +107,9 @@ export interface AppServerSupervisorOptions {
    * Builds a per-generation recorder for replay fixtures, or returns null when
    * recording is off. Injectable so tests do not touch the real filesystem.
    */
-  createRecorder?: (generation: EngineGeneration) => NotificationRecorder | null;
+  createRecorder?: (
+    generation: EngineGeneration,
+  ) => NotificationRecorder | null;
   now?: () => number;
   /** Backoff schedule; jitter is applied on top. */
   backoffScheduleMs?: number[];
@@ -88,6 +119,14 @@ export interface AppServerSupervisorOptions {
   shutdownGraceMs?: number;
   /** Disables pidfile bookkeeping in tests. */
   pidFileEnabled?: boolean;
+  /**
+   * Verifies that a recorded PID still belongs to the exact child instance.
+   * Production uses a random environment token; injectable for pidfile tests.
+   */
+  matchesPidFileProcess?: (pid: number, instanceId: string) => Promise<boolean>;
+  /** Process primitives are injectable so pidfile safety can be tested without signals. */
+  isProcessAlive?: (pid: number) => boolean;
+  signalPidFileProcess?: (pid: number) => void;
 }
 
 export interface AppServerHealth {
@@ -118,12 +157,24 @@ interface Generation {
   initialize: InitializeResult;
   startedAt: number;
   recorder: NotificationRecorder | null;
+  instanceId: string;
+}
+
+interface PidOwnershipRecord {
+  ownerToken?: string;
+  bridgePid?: number;
+  cwd?: string;
+  acquiredAt?: string;
+  pid?: number;
+  startedAt?: string;
+  instanceId?: string;
 }
 
 const DEFAULT_BACKOFF_MS = [250, 500, 1_000, 2_000, 5_000, 10_000];
 const DEFAULT_CIRCUIT_THRESHOLD = 5;
 const DEFAULT_CIRCUIT_WINDOW_MS = 60_000;
 const DEFAULT_SHUTDOWN_GRACE_MS = 5_000;
+const INCOMPLETE_PIDFILE_GRACE_MS = 1_000;
 
 export class AppServerSupervisor {
   private readonly options: AppServerSupervisorOptions;
@@ -158,15 +209,20 @@ export class AppServerSupervisor {
   private unknownServerRequests = 0;
   /** Set while draining so no new turn can be dispatched mid-restart. */
   private drainPromise: Promise<void> | null = null;
+  /** Stable for this supervisor; child `instanceId`s change each generation. */
+  private readonly pidOwnerToken = randomUUID();
+  private pidOwnershipHeld = false;
 
   constructor(options: AppServerSupervisorOptions) {
     this.options = options;
     this.now = options.now ?? Date.now;
     this.backoffSchedule = options.backoffScheduleMs ?? DEFAULT_BACKOFF_MS;
-    this.circuitThreshold = options.circuitBreakerThreshold ?? DEFAULT_CIRCUIT_THRESHOLD;
+    this.circuitThreshold =
+      options.circuitBreakerThreshold ?? DEFAULT_CIRCUIT_THRESHOLD;
     this.circuitWindowMs = options.circuitWindowMs ?? DEFAULT_CIRCUIT_WINDOW_MS;
     this.shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
-    this.fingerprintEnvironment = options.fingerprintEnvironment ?? fingerprintRuntimeEnvironment;
+    this.fingerprintEnvironment =
+      options.fingerprintEnvironment ?? fingerprintRuntimeEnvironment;
   }
 
   getState(): EngineState {
@@ -178,7 +234,11 @@ export class AppServerSupervisor {
   }
 
   isReady(): boolean {
-    return this.state === "ready" && this.current !== null && !this.current.client.isClosed();
+    return (
+      this.state === "ready" &&
+      this.current !== null &&
+      !this.current.client.isClosed()
+    );
   }
 
   getHealth(): AppServerHealth {
@@ -187,7 +247,9 @@ export class AppServerSupervisor {
       generation: this.getGeneration(),
       pid: this.current?.child.pid ?? null,
       codexHome: this.current?.initialize.codexHome,
-      codexVersion: parseVersionFromUserAgent(this.current?.initialize.userAgent),
+      codexVersion: parseVersionFromUserAgent(
+        this.current?.initialize.userAgent,
+      ),
       restartCount: this.restartCount,
       environmentFingerprint: this.current?.environmentFingerprint ?? null,
       lastError: this.lastError,
@@ -235,9 +297,16 @@ export class AppServerSupervisor {
   private async ensureStarted(): Promise<Generation> {
     if (this.stopping) throw new AppServerUnavailableError("stopped");
     if (this.circuitOpen) {
-      throw new AppServerCircuitOpenError(this.restartFailures.length, this.lastError);
+      throw new AppServerCircuitOpenError(
+        this.restartFailures.length,
+        this.lastError,
+      );
     }
-    if (this.current && !this.current.client.isClosed() && this.state === "ready") {
+    if (
+      this.current &&
+      !this.current.client.isClosed() &&
+      this.state === "ready"
+    ) {
       return this.current;
     }
     this.startPromise ??= this.startWithRetry().finally(() => {
@@ -302,7 +371,10 @@ export class AppServerSupervisor {
         this.recordFailure();
         if (this.circuitOpen) {
           this.setState("failed", this.lastError);
-          throw new AppServerCircuitOpenError(this.restartFailures.length, this.lastError);
+          throw new AppServerCircuitOpenError(
+            this.restartFailures.length,
+            this.lastError,
+          );
         }
         const delay = this.backoffDelay(attempt);
         attempt += 1;
@@ -327,7 +399,9 @@ export class AppServerSupervisor {
   /** Full jitter, so several environments restarting together do not synchronise. */
   private backoffDelay(attempt: number): number {
     const base =
-      this.backoffSchedule[Math.min(attempt, this.backoffSchedule.length - 1)] ?? 1_000;
+      this.backoffSchedule[
+        Math.min(attempt, this.backoffSchedule.length - 1)
+      ] ?? 1_000;
     return Math.floor(base / 2 + Math.random() * (base / 2));
   }
 
@@ -338,16 +412,26 @@ export class AppServerSupervisor {
     // cannot see later changes.
     await (this.options.refreshEnvironment ?? refreshRuntimeEnvironment)();
     const environmentFingerprint = this.fingerprintEnvironment();
+    const instanceId = randomUUID();
+    const instanceStartedAt = this.now();
 
-    if (this.options.pidFileEnabled !== false) {
-      await this.killStalePidFileChild();
+    if (this.options.pidFileEnabled !== false && !this.pidOwnershipHeld) {
+      const available = await this.acquirePidFileOwnership(instanceId);
+      if (!available) {
+        throw new AppServerUnavailableError(
+          "unavailable",
+          "another live bridge already supervises app-server for this workspace",
+        );
+      }
     }
 
     this.generationCounter += 1;
     const generationId = this.generationCounter;
 
     const args = ["app-server", "--stdio"];
-    for (const [key, value] of Object.entries(this.options.configOverrides ?? {})) {
+    for (const [key, value] of Object.entries(
+      this.options.configOverrides ?? {},
+    )) {
       args.push("-c", `${key}=${value}`);
     }
 
@@ -359,6 +443,7 @@ export class AppServerSupervisor {
         CODEX_HOME: this.options.codexHome,
         // Structured stderr so supervisor logs stay parseable.
         LOG_FORMAT: "json",
+        ORKESTRATOR_APP_SERVER_INSTANCE_ID: instanceId,
       },
       // Never a shell: arguments must not be re-parsed.
       shell: false,
@@ -374,18 +459,36 @@ export class AppServerSupervisor {
       });
     }
 
+    if (this.options.pidFileEnabled !== false) {
+      try {
+        // Publish the PID before the handshake. If the bridge dies while
+        // initialize is pending, the next owner can still identify and reap
+        // this exact process rather than leaving an orphan.
+        await this.updateOwnedPidFile(child.pid, instanceId, instanceStartedAt);
+      } catch (error) {
+        await this.terminateChild(child);
+        throw error;
+      }
+    }
+
+    let reportedSuppressedStderr = false;
     child.stderr?.setEncoding?.("utf8");
     child.stderr?.on("data", (chunk: string) => {
-      // app-server logs structured JSON here. Surface it without inspecting
-      // payloads, which can contain prompt text.
-      const text = chunk.toString().trim();
-      if (text) console.error(`[codex-bridge][app-server:${generationId}] ${text}`);
+      // app-server stderr can contain prompts, file contents, and tool output.
+      // Never copy it into the durable application log. A single metadata-only
+      // marker keeps the failure observable without retaining user data.
+      if (chunk.toString().trim() && !reportedSuppressedStderr) {
+        reportedSuppressedStderr = true;
+        console.error(
+          `[codex-bridge][app-server:${generationId}] stderr output suppressed`,
+        );
+      }
     });
 
-    const recorder =
-      (this.options.createRecorder ?? ((generation) => createRecorderFromEnv({ generation })))(
-        generationId,
-      );
+    const recorder = (
+      this.options.createRecorder ??
+      ((generation) => createRecorderFromEnv({ generation }))
+    )(generationId);
     if (recorder) {
       console.error(
         `[codex-bridge][app-server:${generationId}] recording notifications to ${recorder.getStats().fileName}`,
@@ -398,12 +501,17 @@ export class AppServerSupervisor {
       stdout: child.stdout,
       onNotification: (notification, threadId) =>
         this.options.onNotification(notification, threadId, generationId),
-      onServerRequest: (request) => this.options.onServerRequest(request, generationId),
+      onServerRequest: (request) =>
+        this.options.onServerRequest(request, generationId),
       onProtocolViolation: (detail) => {
         this.unknownNotifications += 1;
-        console.error(`[codex-bridge][app-server:${generationId}] protocol: ${detail}`);
+        console.error(
+          `[codex-bridge][app-server:${generationId}] protocol: ${detail}`,
+        );
       },
-      ...(recorder ? { recordInboundLine: (line: string) => recorder.record(line) } : {}),
+      ...(recorder
+        ? { recordInboundLine: (line: string) => recorder.record(line) }
+        : {}),
     });
 
     let exited = false;
@@ -463,15 +571,13 @@ export class AppServerSupervisor {
       initialize,
       startedAt: this.now(),
       recorder,
+      instanceId,
     };
     const previous = this.lastReadyGeneration;
     this.current = generation;
     this.lastReadyGeneration = generationId;
     this.setState("ready");
 
-    if (this.options.pidFileEnabled !== false) {
-      await this.writePidFile(child.pid);
-    }
     if (previous !== 0) {
       this.restartCount += 1;
       // Every referenced thread has to be re-read or resumed against the new
@@ -573,7 +679,9 @@ export class AppServerSupervisor {
 
     if (generation) {
       generation.client.close(
-        new AppServerProcessExitError("bridge shutting down", { generation: generation.id }),
+        new AppServerProcessExitError("bridge shutting down", {
+          generation: generation.id,
+        }),
       );
       // Flushed before the child dies so a recording survives a clean shutdown.
       await generation.recorder?.close();
@@ -581,12 +689,14 @@ export class AppServerSupervisor {
     }
     this.notificationQueue.clear();
     if (this.options.pidFileEnabled !== false) {
-      await rm(this.pidFilePath(), { force: true }).catch(() => undefined);
+      await this.releasePidFileOwnership();
     }
     this.setState("stopped");
   }
 
-  private async terminateChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+  private async terminateChild(
+    child: ChildProcessWithoutNullStreams,
+  ): Promise<void> {
     if (child.exitCode !== null || child.signalCode !== null) return;
 
     try {
@@ -596,7 +706,8 @@ export class AppServerSupervisor {
     }
 
     const exited = new Promise<void>((resolve) => {
-      if (child.exitCode !== null || child.signalCode !== null) return resolve();
+      if (child.exitCode !== null || child.signalCode !== null)
+        return resolve();
       child.once("exit", () => resolve());
     });
 
@@ -646,46 +757,196 @@ export class AppServerSupervisor {
   }
 
   private pidFilePath(): string {
-    return join(this.pidFileDir(), `app-server-${hashPath(this.options.cwd)}.pid`);
+    return join(
+      this.pidFileDir(),
+      `app-server-${hashPath(this.options.cwd)}.pid`,
+    );
   }
 
-  private async writePidFile(pid: number): Promise<void> {
+  private async updateOwnedPidFile(
+    pid: number,
+    instanceId: string,
+    instanceStartedAt: number,
+  ): Promise<void> {
+    const path = this.pidFilePath();
+    const current = JSON.parse(
+      await readFile(path, "utf8"),
+    ) as PidOwnershipRecord;
+    if (current.ownerToken !== this.pidOwnerToken) {
+      this.pidOwnershipHeld = false;
+      throw new AppServerUnavailableError(
+        "unavailable",
+        "app-server pidfile ownership changed before child publication",
+      );
+    }
+    const payload = Buffer.from(
+      JSON.stringify({
+        ownerToken: this.pidOwnerToken,
+        bridgePid: process.pid,
+        cwd: this.options.cwd,
+        acquiredAt: current.acquiredAt ?? new Date(this.now()).toISOString(),
+        pid,
+        startedAt: new Date(instanceStartedAt).toISOString(),
+        instanceId,
+      }),
+      "utf8",
+    );
+    const temporary = `${path}.${this.pidOwnerToken}.update`;
+    const handle = await open(temporary, "wx", 0o600);
     try {
-      await mkdir(this.pidFileDir(), { recursive: true });
-      await writeFile(
-        this.pidFilePath(),
-        JSON.stringify({
-          pid,
-          bridgePid: process.pid,
-          cwd: this.options.cwd,
-          startedAt: new Date(this.now()).toISOString(),
-        }),
-        "utf8",
-      );
-    } catch (error) {
-      console.warn(
-        "[codex-bridge] Failed to write app-server pidfile:",
-        error instanceof Error ? error.message : error,
-      );
+      await handle.write(payload, 0, payload.length, 0);
+      await handle.sync();
+      await handle.close();
+
+      // Validate again immediately before publication. The public record is
+      // never truncated: readers see the complete starting record or the
+      // complete PID-bearing replacement.
+      const latest = JSON.parse(
+        await readFile(path, "utf8"),
+      ) as PidOwnershipRecord;
+      if (latest.ownerToken !== this.pidOwnerToken) {
+        this.pidOwnershipHeld = false;
+        throw new AppServerUnavailableError(
+          "unavailable",
+          "app-server pidfile ownership changed before child publication",
+        );
+      }
+      await rename(temporary, path);
+    } finally {
+      await handle.close().catch(() => undefined);
+      await rm(temporary, { force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Atomically claims startup ownership before spawning. `open(..., "wx")` is
+   * the cross-process compare-and-set: only one bridge can create the record.
+   */
+  private async acquirePidFileOwnership(instanceId: string): Promise<boolean> {
+    await mkdir(this.pidFileDir(), { recursive: true });
+
+    for (;;) {
+      try {
+        const handle = await open(this.pidFilePath(), "wx", 0o600);
+        try {
+          const record: PidOwnershipRecord = {
+            ownerToken: this.pidOwnerToken,
+            bridgePid: process.pid,
+            cwd: this.options.cwd,
+            acquiredAt: new Date(this.now()).toISOString(),
+            instanceId,
+          };
+          await handle.writeFile(JSON.stringify(record), "utf8");
+          await handle.sync();
+          this.pidOwnershipHeld = true;
+          return true;
+        } catch (error) {
+          await this.quarantineClaimedPidFile(handle);
+          throw error;
+        } finally {
+          await handle.close().catch(() => undefined);
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+
+      const reclaimed = await this.reclaimStalePidFile();
+      if (!reclaimed) return false;
     }
   }
 
   /**
    * Cleans up an orphan from a previous bridge that was SIGKILLed (or a container
-   * that died abruptly). Targets only the recorded pid — never a broad
-   * `pkill codex`, which would also kill the session-title generator or an
-   * unrelated Codex the developer is running.
+   * that died abruptly). The stale record is atomically quarantined before it is
+   * removed, so a contender can never unlink a successor's ownership record.
    */
-  private async killStalePidFileChild(): Promise<void> {
+  private async reclaimStalePidFile(): Promise<boolean> {
     const path = this.pidFilePath();
-    if (!existsSync(path)) return;
-
+    let record: PidOwnershipRecord | null = null;
+    let observedRaw: string | null = null;
     try {
-      const raw = await readFile(path, "utf8");
-      const record = JSON.parse(raw) as { pid?: unknown; bridgePid?: unknown };
-      const pid = typeof record.pid === "number" ? record.pid : null;
-      if (pid && pid !== process.pid && isProcessAlive(pid)) {
-        console.error(`[codex-bridge] Reaping stale app-server pid ${pid}`);
+      observedRaw = await readFile(path, "utf8");
+      record = JSON.parse(observedRaw) as PidOwnershipRecord;
+    } catch {
+      // The winner may still be publishing its owner record.
+    }
+
+    const bridgePid =
+      typeof record?.bridgePid === "number" ? record.bridgePid : null;
+    const validCurrentOwner =
+      record &&
+      bridgePid !== null &&
+      bridgePid > 0 &&
+      record.cwd === this.options.cwd &&
+      typeof record.ownerToken === "string" &&
+      record.ownerToken.length > 0 &&
+      typeof record.acquiredAt === "string" &&
+      Number.isFinite(Date.parse(record.acquiredAt));
+    const validLegacyOwner =
+      record &&
+      record.ownerToken === undefined &&
+      bridgePid !== null &&
+      bridgePid > 0 &&
+      record.cwd === this.options.cwd &&
+      typeof record.instanceId === "string" &&
+      record.instanceId.length > 0 &&
+      typeof record.startedAt === "string" &&
+      Number.isFinite(Date.parse(record.startedAt));
+    const validOwner = validCurrentOwner || validLegacyOwner;
+
+    if (validOwner && bridgePid !== null) {
+      const processIsAlive = this.options.isProcessAlive ?? isProcessAlive;
+      // This includes another supervisor in the same process. Ownership is per
+      // supervisor token, not merely per bridge PID.
+      if (processIsAlive(bridgePid)) return false;
+    } else {
+      try {
+        const metadata = await stat(path);
+        if (Date.now() - metadata.mtimeMs < INCOMPLETE_PIDFILE_GRACE_MS)
+          return false;
+      } catch {
+        return true;
+      }
+    }
+
+    const pid = typeof record?.pid === "number" ? record.pid : null;
+    const instanceId =
+      typeof record?.instanceId === "string" ? record.instanceId : null;
+    const startedAt =
+      typeof record?.startedAt === "string"
+        ? Date.parse(record.startedAt)
+        : Number.NaN;
+    const processIsAlive = this.options.isProcessAlive ?? isProcessAlive;
+    const matches =
+      pid &&
+      pid !== process.pid &&
+      instanceId &&
+      record?.cwd === this.options.cwd &&
+      Number.isFinite(startedAt) &&
+      processIsAlive(pid) &&
+      (await (this.options.matchesPidFileProcess
+        ? this.options.matchesPidFileProcess(pid, instanceId)
+        : matchesAppServerInstance(
+            pid,
+            instanceId,
+            startedAt,
+            this.options.codexPath,
+          )));
+
+    const quarantineToken =
+      typeof record?.ownerToken === "string" ? record.ownerToken : randomUUID();
+    // A persistently unreadable record is not safe to remove and must not make
+    // the acquisition loop spin forever.
+    if (observedRaw === null) return false;
+    if (!(await this.quarantineObservedPidFile(observedRaw, quarantineToken))) {
+      return true;
+    }
+
+    if (matches) {
+      console.error(`[codex-bridge] Reaping stale app-server pid ${pid}`);
+      if (this.options.signalPidFileProcess) {
+        this.options.signalPidFileProcess(pid);
+      } else {
         try {
           if (process.platform !== "win32") process.kill(-pid, "SIGKILL");
           else process.kill(pid, "SIGKILL");
@@ -697,12 +958,166 @@ export class AppServerSupervisor {
           }
         }
       }
+    }
+    return true;
+  }
+
+  private async quarantineObservedPidFile(
+    observedRaw: string,
+    quarantineToken: string,
+  ): Promise<boolean> {
+    const path = this.pidFilePath();
+    const quarantinePath = `${path}.${quarantineToken}.stale`;
+    try {
+      await rename(path, quarantinePath);
     } catch {
-      // Unreadable pidfile is not actionable.
+      return false;
+    }
+
+    try {
+      const movedRaw = await readFile(quarantinePath, "utf8");
+      if (movedRaw !== observedRaw) {
+        // A contender replaced the stale record after our read. Restore that
+        // exact inode only when the public path is still empty; never overwrite
+        // a still-newer owner.
+        await link(quarantinePath, path).catch(() => undefined);
+        return false;
+      }
+      return true;
     } finally {
-      await rm(path, { force: true }).catch(() => undefined);
+      await rm(quarantinePath, { force: true }).catch(() => undefined);
     }
   }
+
+  private async releasePidFileOwnership(): Promise<void> {
+    if (!this.pidOwnershipHeld) return;
+    this.pidOwnershipHeld = false;
+    const path = this.pidFilePath();
+    try {
+      const record = JSON.parse(
+        await readFile(path, "utf8"),
+      ) as PidOwnershipRecord;
+      if (record.ownerToken !== this.pidOwnerToken) return;
+      await this.quarantineOwnedPidFile();
+    } catch {
+      // Already removed or replaced by a different owner.
+    }
+  }
+
+  private async quarantineOwnedPidFile(): Promise<boolean> {
+    const path = this.pidFilePath();
+    const quarantinePath = `${path}.${this.pidOwnerToken}.release`;
+    try {
+      await rename(path, quarantinePath);
+    } catch {
+      return false;
+    }
+
+    try {
+      const moved = JSON.parse(
+        await readFile(quarantinePath, "utf8"),
+      ) as PidOwnershipRecord;
+      if (moved.ownerToken !== this.pidOwnerToken) {
+        await link(quarantinePath, path).catch(() => undefined);
+        return false;
+      }
+      return true;
+    } finally {
+      await rm(quarantinePath, { force: true }).catch(() => undefined);
+    }
+  }
+
+  private async quarantineClaimedPidFile(handle: FileHandle): Promise<boolean> {
+    const path = this.pidFilePath();
+    const quarantinePath = `${path}.${this.pidOwnerToken}.failed`;
+    let claimedIdentity: { dev: number | bigint; ino: number | bigint };
+    try {
+      const metadata = await handle.stat({ bigint: true });
+      claimedIdentity = { dev: metadata.dev, ino: metadata.ino };
+    } catch {
+      return false;
+    }
+
+    try {
+      await rename(path, quarantinePath);
+    } catch {
+      return false;
+    }
+
+    try {
+      const moved = await stat(quarantinePath, { bigint: true });
+      if (
+        moved.dev !== claimedIdentity.dev ||
+        moved.ino !== claimedIdentity.ino
+      ) {
+        // Ownership was replaced while our publication failed. Restore the
+        // moved successor only if the public path is still unclaimed.
+        await link(quarantinePath, path).catch(() => undefined);
+        return false;
+      }
+      return true;
+    } finally {
+      await rm(quarantinePath, { force: true }).catch(() => undefined);
+    }
+  }
+}
+
+async function matchesAppServerInstance(
+  pid: number,
+  instanceId: string,
+  expectedStartedAt: number,
+  codexPath: string,
+): Promise<boolean> {
+  const token = `ORKESTRATOR_APP_SERVER_INSTANCE_ID=${instanceId}`;
+  if (process.platform === "linux") {
+    try {
+      const [environment, commandLine] = await Promise.all([
+        readFile(`/proc/${pid}/environ`),
+        readFile(`/proc/${pid}/cmdline`),
+      ]);
+      const environmentEntries = environment.toString("utf8").split("\0");
+      const command = commandLine.toString("utf8").split("\0");
+      return (
+        environmentEntries.includes(token) &&
+        command.some((entry) => entry === "app-server") &&
+        command.some((entry) => entry === "--stdio")
+      );
+    } catch {
+      return false;
+    }
+  }
+  if (process.platform === "darwin") {
+    try {
+      const output = await new Promise<string>((resolve, reject) => {
+        execFile(
+          "/bin/ps",
+          ["-p", String(pid), "-o", "lstart=", "-o", "command="],
+          { maxBuffer: 1024 * 1024 },
+          (error, stdout) => {
+            if (error) reject(error);
+            else resolve(stdout);
+          },
+        );
+      });
+      // Darwin does not expose another process's environment reliably. Pair
+      // the recorded launch time with the exact executable/arguments instead;
+      // a reused PID cannot match the old process start time.
+      const startedAtText = output.slice(0, 24).trim();
+      const command = output.slice(24).trim();
+      const actualStartedAt = Date.parse(startedAtText);
+      return (
+        Number.isFinite(actualStartedAt) &&
+        Math.abs(actualStartedAt - expectedStartedAt) < 2_000 &&
+        command.includes(codexPath) &&
+        command.includes("app-server") &&
+        command.includes("--stdio")
+      );
+    } catch {
+      return false;
+    }
+  }
+  // Refuse to signal on platforms where exact instance identity is unavailable.
+  return false;
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -726,7 +1141,9 @@ function hashPath(value: string): string {
 }
 
 /** `orkestrator/0.145.0 (Mac OS ...)` → `0.145.0`. */
-export function parseVersionFromUserAgent(userAgent: string | undefined): string | undefined {
+export function parseVersionFromUserAgent(
+  userAgent: string | undefined,
+): string | undefined {
   if (!userAgent) return undefined;
   return userAgent.match(/\/(\d+\.\d+\.\d+)/)?.[1];
 }

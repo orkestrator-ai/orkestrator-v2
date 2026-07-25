@@ -1890,7 +1890,7 @@ async function startLocalServer(
   } else {
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "codex-bridge");
-    // Point the bundled codex-sdk at our shipped codex binary so it does not
+    // Point app-server supervision at our shipped Codex binary so it does not
     // depend on a system install / PATH lookup in the packaged app.
     env.CODEX_PATH = resolveCodexBinary(context);
     // Forwarded to app-server as clientInfo.version.

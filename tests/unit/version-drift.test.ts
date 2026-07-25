@@ -144,6 +144,9 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
     expect(config.version).toMatch(/^\d+\.\d+\.\d+$/);
     expect(config.appServerProtocol.generatedFrom).toBe(config.version);
+    expect(config.appServerProtocol.outputDir).toBe(
+      "bridges/codex-bridge/src/app-server/generated",
+    );
     expect(getShellVar("scripts/download-codex.sh", "CODEX_VERSION")).toBe(config.version);
     expect(getDockerfileArg("CODEX_CLI_VERSION")).toBe(config.version);
     expect(PINNED_TOOLCHAIN_VERSIONS.codex).toBe(config.version);
@@ -164,6 +167,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       typescriptDigest: string;
       schemaDigest: string;
       typescriptFileCount: number;
+      schemaFileCount: number;
       clientRequestMethods: string[];
       serverNotificationMethods: string[];
       serverRequestMethods: string[];
@@ -173,6 +177,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(manifest.typescriptDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(manifest.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(manifest.typescriptFileCount).toBeGreaterThan(0);
+    expect(manifest.schemaFileCount).toBeGreaterThan(0);
 
     // Every method the bridge depends on must exist in the pinned protocol.
     // These are the exact methods bridges/codex-bridge/src/app-server calls.

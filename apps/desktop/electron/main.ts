@@ -162,6 +162,7 @@ async function startApplication(): Promise<void> {
   if (!toolchainBinDir) return;
   backend = await backendProcess.start({
     isDev,
+    appVersion: app.getVersion(),
     dataDir,
     appRoot,
     resourceRoot,

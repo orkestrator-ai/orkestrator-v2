@@ -29,6 +29,9 @@ describe("codex bridge process environment", () => {
     const commands = read("apps/backend/src/core/commands.ts");
     expect(commands).toContain("env.ORKESTRATOR_VERSION = APP_VERSION;");
     expect(commands).toContain('export ORKESTRATOR_VERSION="${APP_VERSION}"');
+
+    const desktopMain = read("apps/desktop/electron/main.ts");
+    expect(desktopMain).toContain("appVersion: app.getVersion()");
   });
 
   /**
@@ -66,5 +69,37 @@ describe("codex bridge process environment", () => {
     expect(sanitizeAppVersion("   ")).toBe("0.0.0");
     // The exported constant is always shell-safe, whatever the environment holds.
     expect(APP_VERSION).toMatch(/^[A-Za-z0-9._+-]{1,64}$/);
+  });
+
+  test("the exported constant sanitizes a hostile child-process environment", async () => {
+    const constantsPath = join(
+      repoRoot,
+      "apps",
+      "backend",
+      "src",
+      "core",
+      "constants.ts",
+    );
+    const child = Bun.spawn([
+      process.execPath,
+      "-e",
+      `import { APP_VERSION } from ${JSON.stringify(constantsPath)}; process.stdout.write(APP_VERSION);`,
+    ], {
+      env: {
+        ...process.env,
+        ORKESTRATOR_VERSION: '"$(untrusted-command)"',
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    expect(stdout).toBe("0.0.0");
   });
 });

@@ -12,11 +12,9 @@ describe("public client deployment configuration", () => {
     expect(manifest.name).toBe("@orkestrator/web-public");
     expect(manifest.scripts.build).toContain("tsc");
     expect(manifest.scripts.build).toContain("vite build");
-    // Asserts intent rather than the exact string, so adding a runner flag does
-    // not fail an unrelated packaging test.
-    expect(manifest.scripts["test:workspace"]).toContain("bun test src");
-    // Test files run across worker processes; see scripts/test-all.ts.
-    expect(manifest.scripts["test:workspace"]).toContain("--parallel");
+    // scripts/test-all.ts appends an explicit `--parallel=N` so every package
+    // task participates in the same aggregate worker budget.
+    expect(manifest.scripts["test:workspace"]).toBe("bun test src");
 
     const tsconfig = JSON.parse(read("tsconfig.json")) as { compilerOptions: { strict: boolean; paths: unknown } };
     expect(tsconfig.compilerOptions.strict).toBe(true);

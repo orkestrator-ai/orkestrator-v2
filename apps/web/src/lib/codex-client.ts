@@ -87,6 +87,19 @@ export type CodexSessionPhase =
   | "idle"
   | "failed";
 
+const CODEX_SESSION_PHASES = new Set<CodexSessionPhase>([
+  "starting",
+  "running",
+  "cancelling",
+  "recovering",
+  "idle",
+  "failed",
+]);
+
+export function isCodexSessionPhase(value: unknown): value is CodexSessionPhase {
+  return typeof value === "string" && CODEX_SESSION_PHASES.has(value as CodexSessionPhase);
+}
+
 interface CodexSessionStatusResponse {
   status: "idle" | "running" | "error";
   phase?: CodexSessionPhase;
@@ -135,6 +148,11 @@ export interface CodexSessionStatus {
   requestId?: string;
   engineGeneration?: number;
 }
+
+export type CodexSessionStatusLookupResult =
+  | { kind: "found"; session: CodexSessionStatus }
+  | { kind: "missing" }
+  | { kind: "unavailable"; error: Error };
 
 export interface CodexPromptAttachment {
   type: "image";
@@ -212,6 +230,71 @@ export interface CodexApproval {
  * user is deciding, and a restart withdraws the request outright.
  */
 export type CodexApprovalResponseResult = "applied" | "stale" | "forbidden" | "error";
+
+function parseApproval(value: unknown): CodexApproval | null {
+  if (!value || typeof value !== "object") return null;
+  const entry = value as Record<string, unknown>;
+  const kind = entry.kind;
+  if (
+    typeof entry.approvalId !== "string"
+    || (kind !== "command" && kind !== "file-change" && kind !== "permissions")
+    || typeof entry.method !== "string"
+    || (entry.threadId !== null && typeof entry.threadId !== "string")
+    || (entry.turnId !== null && typeof entry.turnId !== "string")
+    || (entry.itemId !== null && typeof entry.itemId !== "string")
+    || typeof entry.requestedAt !== "number"
+    || !Number.isFinite(entry.requestedAt)
+    || typeof entry.expiresAt !== "number"
+    || !Number.isFinite(entry.expiresAt)
+    || typeof entry.supportsApproveForSession !== "boolean"
+  ) {
+    return null;
+  }
+
+  const changes = Array.isArray(entry.changes)
+    ? entry.changes.filter((change): change is CodexApprovalFileChange => {
+        if (!change || typeof change !== "object") return false;
+        const candidate = change as Record<string, unknown>;
+        return typeof candidate.path === "string"
+          && (
+            candidate.kind === "add"
+            || candidate.kind === "delete"
+            || candidate.kind === "update"
+          );
+      })
+    : undefined;
+  const permissions =
+    entry.permissions
+    && typeof entry.permissions === "object"
+    && typeof (entry.permissions as Record<string, unknown>).network === "boolean"
+    && typeof (entry.permissions as Record<string, unknown>).fileSystem === "boolean"
+      ? {
+          network: (entry.permissions as { network: boolean }).network,
+          fileSystem: (entry.permissions as { fileSystem: boolean }).fileSystem,
+        }
+      : undefined;
+  const optionalString = (key: string) =>
+    typeof entry[key] === "string" ? entry[key] as string : undefined;
+
+  return {
+    approvalId: entry.approvalId,
+    kind,
+    method: entry.method,
+    threadId: entry.threadId,
+    turnId: entry.turnId,
+    itemId: entry.itemId,
+    requestedAt: entry.requestedAt,
+    expiresAt: entry.expiresAt,
+    supportsApproveForSession: entry.supportsApproveForSession,
+    ...(optionalString("command") ? { command: optionalString("command") } : {}),
+    ...(optionalString("cwd") ? { cwd: optionalString("cwd") } : {}),
+    ...(changes ? { changes } : {}),
+    ...(permissions ? { permissions } : {}),
+    ...(optionalString("reason") ? { reason: optionalString("reason") } : {}),
+    ...(optionalString("grantRoot") ? { grantRoot: optionalString("grantRoot") } : {}),
+    ...(optionalString("networkHost") ? { networkHost: optionalString("networkHost") } : {}),
+  };
+}
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -439,16 +522,15 @@ export async function getSessionMessages(
   }
 }
 
-export async function getSessionStatus(
+export async function lookupSessionStatus(
   client: CodexClient,
   sessionId: string,
-  options: { throwOnError?: boolean } = {},
-): Promise<CodexSessionStatus | null> {
+): Promise<CodexSessionStatusLookupResult> {
   try {
     const response = await fetchWithTimeout(
       `${client.baseUrl}/session/${sessionId}/status`,
     );
-    if (response.status === 404) return null;
+    if (response.status === 404) return { kind: "missing" };
     if (!response.ok) {
       throw new Error(`Failed to get Codex session status: HTTP ${response.status}`);
     }
@@ -463,26 +545,42 @@ export async function getSessionStatus(
     // Spread in only when present, so the response shape is unchanged for a
     // bridge that does not report them.
     return {
-      status: data.status,
-      title: typeof data.title === "string" ? data.title : undefined,
-      error: typeof data.error === "string" ? data.error : undefined,
-      ...(typeof data.phase === "string" ? { phase: data.phase as CodexSessionPhase } : {}),
-      ...(typeof data.threadId === "string" ? { threadId: data.threadId } : {}),
-      ...(typeof data.turnId === "string" ? { turnId: data.turnId } : {}),
-      ...(typeof data.requestId === "string" ? { requestId: data.requestId } : {}),
-      ...(typeof data.engineGeneration === "number"
-        ? { engineGeneration: data.engineGeneration }
-        : {}),
+      kind: "found",
+      session: {
+        status: data.status,
+        title: typeof data.title === "string" ? data.title : undefined,
+        error: typeof data.error === "string" ? data.error : undefined,
+        ...(isCodexSessionPhase(data.phase) ? { phase: data.phase } : {}),
+        ...(typeof data.threadId === "string" ? { threadId: data.threadId } : {}),
+        ...(typeof data.turnId === "string" ? { turnId: data.turnId } : {}),
+        ...(typeof data.requestId === "string" ? { requestId: data.requestId } : {}),
+        ...(typeof data.engineGeneration === "number"
+          ? { engineGeneration: data.engineGeneration }
+          : {}),
+      },
     };
   } catch (error) {
     console.error("[codex-client] Failed to get session status:", error);
-    if (options.throwOnError) {
-      throw error instanceof Error
+    return {
+      kind: "unavailable",
+      error: error instanceof Error
         ? error
-        : new Error("Failed to get Codex session status");
-    }
-    return null;
+        : new Error("Failed to get Codex session status"),
+    };
   }
+}
+
+export async function getSessionStatus(
+  client: CodexClient,
+  sessionId: string,
+  options: { throwOnError?: boolean } = {},
+): Promise<CodexSessionStatus | null> {
+  const result = await lookupSessionStatus(client, sessionId);
+  if (result.kind === "found") return result.session;
+  if (result.kind === "unavailable" && options.throwOnError) {
+    throw result.error;
+  }
+  return null;
 }
 
 /**
@@ -546,19 +644,29 @@ export async function sendPrompt(
   }
 }
 
+export type CodexAbortOutcome =
+  | { status: "accepted" }
+  | { status: "rejected"; httpStatus: number }
+  | { status: "unknown" };
+
 export async function abortSession(
   client: CodexClient,
   sessionId: string,
-): Promise<boolean> {
+): Promise<CodexAbortOutcome> {
   try {
     const response = await fetchWithTimeout(
       `${client.baseUrl}/session/${sessionId}/abort`,
       { method: "POST" },
     );
-    return response.ok;
+    return response.ok
+      ? { status: "accepted" }
+      : { status: "rejected", httpStatus: response.status };
   } catch (error) {
     console.error("[codex-client] Failed to abort session:", error);
-    return false;
+    // A timeout or connection reset does not prove the bridge missed the
+    // request. The caller must reconcile authoritative status before unlocking
+    // the composer or allowing another turn to start.
+    return { status: "unknown" };
   }
 }
 
@@ -573,17 +681,19 @@ export async function fetchPendingApprovals(
   client: CodexClient,
   sessionId: string,
 ): Promise<CodexApproval[]> {
-  try {
-    const response = await fetchWithTimeout(
-      `${client.baseUrl}/session/${sessionId}/approvals`,
-    );
-    if (!response.ok) return [];
-    const body = (await response.json()) as { approvals?: unknown };
-    return Array.isArray(body.approvals) ? (body.approvals as CodexApproval[]) : [];
-  } catch (error) {
-    console.error("[codex-client] Failed to fetch pending approvals:", error);
-    return [];
+  const response = await fetchWithTimeout(
+    `${client.baseUrl}/session/${sessionId}/approvals`,
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to fetch pending Codex approvals: HTTP ${response.status}`);
   }
+  const body = (await response.json()) as { approvals?: unknown };
+  if (!Array.isArray(body.approvals)) {
+    throw new Error("Pending Codex approvals response was malformed");
+  }
+  return body.approvals
+    .map(parseApproval)
+    .filter((approval): approval is CodexApproval => approval !== null);
 }
 
 /**
@@ -681,6 +791,7 @@ export function subscribeToEvents(
 
       const cleanup = () => {
         done = true;
+        signal?.removeEventListener("abort", cleanup);
         if (eventSource) {
           eventSource.close();
           eventSource = null;
@@ -690,39 +801,43 @@ export function subscribeToEvents(
         }
       };
 
-      signal?.addEventListener("abort", cleanup);
+      if (signal?.aborted) {
+        done = true;
+      } else {
+        signal?.addEventListener("abort", cleanup, { once: true });
 
-      const url = new URL(`${client.baseUrl}/event/subscribe`);
-      // Only sent when we actually have a cursor; a fresh subscription must not
-      // ask for a replay from revision 0 and receive the whole ring.
-      if (since !== undefined && Number.isSafeInteger(since) && since >= 0) {
-        url.searchParams.set("since", String(since));
-      }
-
-      eventSource = new EventSource(url.toString());
-      for (const eventType of [
-        "connected",
-        "keepalive",
-        "session.updated",
-        "session.idle",
-        "session.error",
-        "session.title-updated",
-        "message.updated",
-        "session.approval-requested",
-        "session.approval-resolved",
-        "session.reconcile-required",
-      ]) {
-        eventSource.addEventListener(eventType, handleEvent);
-      }
-
-      eventSource.onerror = () => {
-        if (rejecter && !done) {
-          rejecter(new Error("SSE connection error"));
-          resolver = null;
-          rejecter = null;
+        const url = new URL(`${client.baseUrl}/event/subscribe`);
+        // Only sent when we actually have a cursor; a fresh subscription must not
+        // ask for a replay from revision 0 and receive the whole ring.
+        if (since !== undefined && Number.isSafeInteger(since) && since >= 0) {
+          url.searchParams.set("since", String(since));
         }
-        cleanup();
-      };
+
+        eventSource = new EventSource(url.toString());
+        for (const eventType of [
+          "connected",
+          "keepalive",
+          "session.updated",
+          "session.idle",
+          "session.error",
+          "session.title-updated",
+          "message.updated",
+          "session.approval-requested",
+          "session.approval-resolved",
+          "session.reconcile-required",
+        ]) {
+          eventSource.addEventListener(eventType, handleEvent);
+        }
+
+        eventSource.onerror = () => {
+          if (rejecter && !done) {
+            rejecter(new Error("SSE connection error"));
+            resolver = null;
+            rejecter = null;
+          }
+          cleanup();
+        };
+      }
 
       return {
         next(): Promise<IteratorResult<CodexEvent>> {

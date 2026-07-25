@@ -200,9 +200,17 @@ export function CodexApprovalCard({
                 size="sm"
                 variant="default"
                 disabled={submitting !== null}
-                onClick={() => void respond("approve")}
+                onClick={() => void respond("deny")}
               >
-                {submitting === "approve" ? "Approving…" : "Approve"}
+                {submitting === "deny" ? "Declining…" : "Decline"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={submitting !== null}
+                onClick={() => void respond("cancel")}
+              >
+                {submitting === "cancel" ? "Cancelling…" : "Cancel turn"}
               </Button>
               {approval.supportsApproveForSession && (
                 <Button
@@ -218,17 +226,9 @@ export function CodexApprovalCard({
                 size="sm"
                 variant="outline"
                 disabled={submitting !== null}
-                onClick={() => void respond("deny")}
+                onClick={() => void respond("approve")}
               >
-                {submitting === "deny" ? "Declining…" : "Decline"}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={submitting !== null}
-                onClick={() => void respond("cancel")}
-              >
-                {submitting === "cancel" ? "Cancelling…" : "Cancel turn"}
+                {submitting === "approve" ? "Approving…" : "Approve"}
               </Button>
             </div>
           )}

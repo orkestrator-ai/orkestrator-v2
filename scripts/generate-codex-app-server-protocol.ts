@@ -60,22 +60,42 @@ async function readVersionConfig(): Promise<CodexVersionConfig> {
  * version, then whatever `codex` is on PATH. The version is verified either
  * way, so a wrong PATH binary fails loudly rather than generating stale types.
  */
-function candidateBinaries(pinnedVersion: string): string[] {
+export interface CandidateBinaryOptions {
+  platform?: NodeJS.Platform;
+  architecture?: string;
+  homeDirectory?: string;
+  xdgConfigHome?: string;
+  codexPath?: string;
+}
+
+export function candidateBinaries(
+  pinnedVersion: string,
+  options: CandidateBinaryOptions = {},
+): string[] {
   const candidates: string[] = [];
-  const arch = process.arch === "arm64" ? "arm64" : "x64";
+  const currentPlatform = options.platform ?? platform();
+  const currentArchitecture = options.architecture ?? process.arch;
+  const homeDirectory = options.homeDirectory ?? homedir();
+  const arch = currentArchitecture === "arm64" ? "arm64" : "x64";
   const managedRoots =
-    platform() === "darwin"
-      ? [join(homedir(), "Library", "Application Support", "orkestrator-v2", "toolchains")]
+    currentPlatform === "darwin"
+      ? [join(homeDirectory, "Library", "Application Support", "orkestrator-v2", "toolchains")]
       : [
-          join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "orkestrator-v2", "toolchains"),
+          join(
+            options.xdgConfigHome ?? process.env.XDG_CONFIG_HOME ?? join(homeDirectory, ".config"),
+            "orkestrator-v2",
+            "toolchains",
+          ),
         ];
   for (const root of managedRoots) {
     candidates.push(
-      join(root, "codex", pinnedVersion, `${platform() === "darwin" ? "darwin" : "linux"}-${arch}`, "codex"),
+      join(root, "codex", pinnedVersion, `${currentPlatform === "darwin" ? "darwin" : "linux"}-${arch}`, "codex"),
     );
   }
 
-  candidates.push(process.env.CODEX_PATH?.trim() || "codex");
+  const configuredPath = options.codexPath ?? process.env.CODEX_PATH;
+  if (configuredPath?.trim()) candidates.push(configuredPath.trim());
+  candidates.push("codex");
   return candidates;
 }
 
@@ -455,6 +475,7 @@ if (import.meta.main) {
 }
 
 export const __testing = {
+  candidateBinaries,
   normalizeGeneratedSource,
   canonicalizeJson,
   digestFiles,

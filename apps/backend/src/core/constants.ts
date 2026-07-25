@@ -27,4 +27,4 @@ export function sanitizeAppVersion(raw: string | undefined): string {
   return /^[A-Za-z0-9._+-]{1,64}$/.test(trimmed) ? trimmed : "0.0.0";
 }
 
-export const APP_VERSION = process.env.ORKESTRATOR_VERSION?.trim() || "0.0.0";
+export const APP_VERSION = sanitizeAppVersion(process.env.ORKESTRATOR_VERSION);

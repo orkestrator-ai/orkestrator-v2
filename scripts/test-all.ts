@@ -5,8 +5,8 @@
  * that boot real backend processes, bind ports, and drive happy-dom) rather than
  * CPU:
  *
- *  1. **Within a group** — `bun test --parallel` runs test *files* across worker
- *     processes. This is where almost all of the win is.
+ *  1. **Within a group** — `bun test --parallel=N` runs test *files* across an
+ *     explicitly bounded worker pool. This is where almost all of the win is.
  *  2. **Across groups** — the workspace, root and bridge suites are independent,
  *     so they run concurrently instead of one after another.
  *
@@ -50,7 +50,7 @@ export interface TestAllDependencies {
   log: (message: string) => void;
 }
 
-function defaultRunGroup(
+export function defaultRunGroup(
   group: TestGroup,
   env: NodeJS.ProcessEnv,
 ): Promise<CommandResult> {
@@ -88,19 +88,54 @@ const defaultDependencies: TestAllDependencies = {
 };
 
 /**
- * Splits the available cores across the concurrent groups.
+ * Splits the available cores across the concurrent groups and the package tasks
+ * inside the workspace Turbo group.
  *
  * Left to itself each group would spawn one worker per core, so three groups
  * would oversubscribe the machine threefold — tolerable on an 18-core
  * workstation, liable to thrash a 2-core CI runner. The root suite gets the
  * largest share because it is by far the biggest and slowest.
  */
-export function planWorkers(cores: number): { root: number; bridges: number } {
-  const usable = Math.max(1, cores);
-  return {
-    root: Math.max(2, Math.round(usable * 0.6)),
-    bridges: Math.max(2, Math.round(usable * 0.2)),
-  };
+export interface WorkerPlan {
+  /** Bun workers used by each active workspace package task. */
+  workspace: number;
+  /** Maximum workspace package tasks Turbo may execute at once. */
+  workspaceConcurrency: number;
+  root: number;
+  bridges: number;
+}
+
+/**
+ * UI suites retain a substantial happy-dom/React graph per worker. On larger
+ * developer machines, matching every logical core can exhaust memory while the
+ * root and bridge groups are alive alongside Turbo's package tasks. Keep a
+ * measured amount of parallelism without allowing core count alone to multiply
+ * the suite's peak heap indefinitely.
+ */
+export const MAX_AGGREGATE_TEST_WORKERS = 10;
+
+export function planWorkers(cores: number): WorkerPlan {
+  // Three independent groups execute concurrently, so three workers is the
+  // irreducible minimum. Above that, never plan more Bun workers than logical
+  // cores across root + bridges + active workspace package tasks.
+  const budget = Math.min(
+    MAX_AGGREGATE_TEST_WORKERS,
+    Math.max(3, Number.isFinite(cores) ? Math.floor(cores) : 1),
+  );
+  const workspaceConcurrency = Math.min(
+    3,
+    Math.max(1, Math.floor(budget / 4)),
+  );
+  const remainingAfterWorkspaceMinimum = budget - workspaceConcurrency;
+  const bridges = Math.max(1, Math.floor(remainingAfterWorkspaceMinimum * 0.2));
+  let root = Math.max(1, Math.floor(remainingAfterWorkspaceMinimum * 0.6));
+  const workspace = Math.max(
+    1,
+    Math.floor((budget - root - bridges) / workspaceConcurrency),
+  );
+  const used = root + bridges + workspace * workspaceConcurrency;
+  root += budget - used;
+  return { workspace, workspaceConcurrency, root, bridges };
 }
 
 export function buildConcurrentGroups(cores: number): TestGroup[] {
@@ -110,12 +145,15 @@ export function buildConcurrentGroups(cores: number): TestGroup[] {
       name: "workspace (web, backend, web-public)",
       command: "turbo",
       args: [
-        "--cwd", ".",
         "run", "test:workspace",
+        "--cwd", ".",
         "--filter=@orkestrator/web",
         "--filter=@orkestrator/backend",
         "--filter=@orkestrator/web-public",
+        `--concurrency=${workers.workspaceConcurrency}`,
         "--cache-dir", ".turbo",
+        "--",
+        `--parallel=${workers.workspace}`,
       ],
     },
     {

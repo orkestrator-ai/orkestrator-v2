@@ -217,6 +217,7 @@ describe("dispatch lock", () => {
     ).rejects.toThrow("dispatch failed");
 
     await expect(registry.withDispatchLock(session, async () => "ok")).resolves.toBe("ok");
+    expect(registry.dispatchLockCount()).toBe(0);
   });
 
   test("two sessions on the same thread share one lock", async () => {
@@ -234,6 +235,7 @@ describe("dispatch lock", () => {
 
     await Promise.all([first, second]);
     expect(order).toEqual(["a:start", "a:end", "b:start"]);
+    expect(registry.dispatchLockCount()).toBe(0);
   });
 
   test("sessions without a thread lock independently, keyed by session", async () => {

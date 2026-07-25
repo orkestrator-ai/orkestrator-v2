@@ -8,6 +8,7 @@ import { AppServerEngine } from "./engine/app-server-engine.js";
 import type { AppServerSupervisorOptions } from "./app-server/process-supervisor.js";
 import { FakeReadable, FakeWritable } from "./app-server/testing/fake-app-server.js";
 import { phaseToExternalStatus } from "./sessions/thread-registry.js";
+import { BridgeSessionStore } from "./sessions/persistence.js";
 
 /**
  * Returned by a handler to model a request app-server never answers — the exact
@@ -170,6 +171,7 @@ async function harness(
     threadIdleMs?: number;
     sessionRetentionMs?: number;
     sweepIntervalMs?: number;
+    fingerprintEnvironment?: () => string;
   } = {},
 ): Promise<Harness> {
   const merged = { ...BASE_HANDLERS, ...handlers };
@@ -187,6 +189,9 @@ async function harness(
       shutdownGraceMs: 5,
       backoffScheduleMs: [1],
       refreshEnvironment: async () => undefined,
+      ...(options.fingerprintEnvironment
+        ? { fingerprintEnvironment: options.fingerprintEnvironment }
+        : {}),
       spawnProcess: (() => {
         index += 1;
         const child = new ScriptedChild(2000 + index, merged);
@@ -237,6 +242,35 @@ async function harness(
 }
 
 describe("session lifecycle", () => {
+  test("restores durable bridge session ids lazily after a runtime restart", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-restored",
+        threadId: "thread-restored",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+        title: "Restored",
+        titleSource: "explicit",
+        lastAcceptedRequestId: "req-old",
+      }),
+    );
+
+    const h = await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-restored") }),
+    });
+
+    expect(h.runtime.getStatus("session-restored")).toMatchObject({
+      status: "idle",
+      threadId: "thread-restored",
+      title: "Restored",
+    });
+    expect(h.child().requests.some((request) => request.method === "thread/resume")).toBe(false);
+
+    expect(await h.runtime.getMessages("session-restored")).toEqual([]);
+    expect(h.child().requests.some((request) => request.method === "thread/resume")).toBe(true);
+  });
+
   test("create does not materialize a Codex thread", async () => {
     const h = await harness();
     const created = h.runtime.createSession({ mode: "build" });
@@ -285,6 +319,56 @@ describe("session lifecycle", () => {
       turnId: "turn-1",
       requestId: "req-1",
     });
+  });
+
+  test("config persistence changes only after configure succeeds", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "materialize",
+      requestId: "req-config",
+      attachments: [],
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const configure = h.engine.configureThread.bind(h.engine);
+    const order: string[] = [];
+    h.engine.configureThread = async (handle, config) => {
+      order.push("configure:start");
+      await gate;
+      await configure(handle, config);
+      order.push("configure:done");
+    };
+
+    const pending = h.runtime.updateConfig(sessionId, { mode: "plan" });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect((await store.load())[0]?.config.mode).toBe("build");
+    expect(h.runtime.getRegistry().getSession(sessionId)?.config.mode).toBe("build");
+
+    release();
+    expect(await pending).toBe("updated");
+    order.push("returned");
+    expect(order).toEqual(["configure:start", "configure:done", "returned"]);
+    expect((await store.load())[0]?.config.mode).toBe("plan");
+    expect(h.runtime.getRegistry().getSession(sessionId)?.config.mode).toBe("plan");
+
+    h.engine.configureThread = async () => {
+      throw new Error("configure rejected");
+    };
+    await expect(h.runtime.updateConfig(sessionId, { mode: "build" })).rejects.toThrow(
+      "configure rejected",
+    );
+    expect((await store.load())[0]?.config.mode).toBe("plan");
+    expect(h.runtime.getRegistry().getSession(sessionId)?.config.mode).toBe("plan");
   });
 
   test("a full turn streams deltas and finalizes the transcript", async () => {
@@ -696,6 +780,129 @@ describe("same thread in two tabs", () => {
   });
 });
 
+describe("environment refresh", () => {
+  test("re-resumes an idle loaded thread before dispatching on a controlled restart", async () => {
+    let fingerprint = "sha256:one";
+    const h = await harness(
+      {
+        "thread/resume": (params) => ({
+          thread: threadPayload(String(params.threadId)),
+        }),
+      },
+      { fingerprintEnvironment: () => fingerprint },
+    );
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "materialize",
+      requestId: "req-before-refresh",
+      attachments: [],
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+    expect(h.runtime.getStatus(sessionId)?.phase).toBe("idle");
+
+    fingerprint = "sha256:two";
+    expect((await h.runtime.prompt(sessionId, {
+      prompt: "after refresh",
+      requestId: "req-after-refresh",
+      attachments: [],
+    })).ok).toBe(true);
+
+    expect(h.children).toHaveLength(2);
+    const replacementMethods = h.child().requests.map((request) => request.method);
+    expect(replacementMethods.indexOf("thread/resume")).toBeGreaterThanOrEqual(0);
+    expect(replacementMethods.indexOf("thread/resume")).toBeLessThan(
+      replacementMethods.indexOf("turn/start"),
+    );
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "running",
+      phase: "running",
+      engineGeneration: 2,
+    });
+  });
+
+  test("waits for active work in another thread before restarting the shared child", async () => {
+    let fingerprint = "sha256:one";
+    const h = await harness(
+      {
+        "thread/resume": (params) => ({
+          thread: threadPayload(String(params.threadId)),
+        }),
+      },
+      { fingerprintEnvironment: () => fingerprint },
+    );
+    const first = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(first.sessionId, {
+      prompt: "long task",
+      requestId: "req-a",
+      attachments: [],
+    });
+    const second = await h.runtime.resumeSession({ threadId: "thread-2", mode: "build" });
+    fingerprint = "sha256:two";
+
+    let settled = false;
+    const pending = h.runtime.prompt(second!.sessionId, {
+      prompt: "next task",
+      requestId: "req-b",
+      attachments: [],
+    }).finally(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+    expect(h.children).toHaveLength(1);
+
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+    expect((await pending).ok).toBe(true);
+    expect(h.children).toHaveLength(2);
+  });
+
+  test("a child death terminates the drain and settles after generation recovery", async () => {
+    let fingerprint = "sha256:one";
+    const h = await harness(
+      {
+        "thread/resume": (params) => ({
+          thread: threadPayload(String(params.threadId)),
+        }),
+      },
+      { fingerprintEnvironment: () => fingerprint },
+    );
+    const first = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(first.sessionId, {
+      prompt: "long task",
+      requestId: "req-a",
+      attachments: [],
+    });
+    const second = await h.runtime.resumeSession({ threadId: "thread-2", mode: "build" });
+    fingerprint = "sha256:two";
+
+    const pending = h.runtime.prompt(second!.sessionId, {
+      prompt: "after crash",
+      requestId: "req-b",
+      attachments: [],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    h.child().exit(1);
+
+    const outcome = await Promise.race([
+      pending,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("environment drain did not settle")), 500),
+      ),
+    ]);
+    expect(outcome.ok).toBe(true);
+    expect(h.children).toHaveLength(2);
+    expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(true);
+  });
+});
+
 describe("notifications that race the turn/start response", () => {
   /**
    * `turn/start`'s response and its notifications travel on independent paths, so
@@ -768,6 +975,126 @@ describe("notifications that race the turn/start response", () => {
 });
 
 describe("crash recovery", () => {
+  test("generation recovery durably clears an unmaterialized thread binding", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const context = h.runtime.getRegistry().attach(sessionId, "thread-ghost", {
+      engineHandle: "thread-ghost",
+      engineGeneration: h.engine.info().generation,
+    });
+    expect(context.materialized).toBe(false);
+
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: sessionId,
+        threadId: "thread-ghost",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+      }),
+    );
+
+    await h.engine.getSupervisor().restartNow("test generation replacement");
+    await h.drain();
+
+    expect(h.runtime.getRegistry().getSession(sessionId)?.threadId).toBeNull();
+    expect(await store.load()).toEqual([]);
+  });
+
+  test("a failed rebind is resumed before a later prompt uses the replacement child", async () => {
+    let resumeAttempts = 0;
+    const h = await harness({
+      "thread/resume": () => {
+        resumeAttempts += 1;
+        if (resumeAttempts === 1) {
+          const error = new Error("temporary resume failure");
+          (error as { rpcCode?: number }).rpcCode = -32603;
+          throw error;
+        }
+        return { thread: threadPayload("thread-1") };
+      },
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "materialize",
+      requestId: "req-before-crash",
+      attachments: [],
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    h.child().exit(1);
+    await h.engine.getSupervisor().ensureReady();
+    await h.drain();
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "error",
+      phase: "failed",
+      error: expect.stringContaining("temporary resume failure"),
+    });
+
+    const outcome = await h.runtime.prompt(sessionId, {
+      prompt: "retry after rebind",
+      requestId: "req-after-crash",
+      attachments: [],
+    });
+    expect(outcome.ok).toBe(true);
+    expect(resumeAttempts).toBe(2);
+    const methods = h.child().requests.map((request) => request.method);
+    expect(methods.lastIndexOf("thread/resume")).toBeLessThan(
+      methods.indexOf("turn/start"),
+    );
+  });
+
+  test("a prompt waits for generation recovery before dispatching on the refreshed handle", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "first",
+      requestId: "req-1",
+      attachments: [],
+    });
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const resume = h.engine.resumeThread.bind(h.engine);
+    const order: string[] = [];
+    h.engine.resumeThread = async (...args) => {
+      order.push("recovery:start");
+      await gate;
+      const result = await resume(...args);
+      order.push("recovery:done");
+      return result;
+    };
+
+    h.child().exit(1);
+    await h.engine.getSupervisor().ensureReady();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(order).toEqual(["recovery:start"]);
+
+    let settled = false;
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "second",
+      requestId: "req-2",
+      attachments: [],
+    }).finally(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(settled).toBe(false);
+    expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(false);
+
+    release();
+    expect((await pending).ok).toBe(true);
+    const methods = h.child().requests.map((request) => request.method);
+    expect(methods.indexOf("thread/resume")).toBeLessThan(methods.indexOf("turn/start"));
+    expect(order).toEqual(["recovery:start", "recovery:done"]);
+  });
+
   test("an active turn becomes recovering, not idle or error", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
@@ -990,11 +1317,35 @@ describe("idle detach and transparent re-attach", () => {
       engineHandle: "thread-ghost",
     });
     expect(context.materialized).toBe(false);
+    const store = new BridgeSessionStore({
+      codexHome,
+      cwd: "/tmp/ws",
+      now: () => clock,
+    });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: sessionId,
+        threadId: "thread-ghost",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+      }),
+    );
 
     clock += 60_000;
     await h.runtime.sweepIdle();
 
     expect(h.runtime.getRegistry().getSession(sessionId)!.threadId).toBeNull();
+    expect(await store.load()).toEqual([]);
+
+    // A bridge restart must not resurrect the rollout-less thread id that was
+    // cleared in memory by the sweep.
+    await h.runtime.stop();
+    const restarted = await harness({}, {
+      now: () => clock,
+      threadIdleMs: 1_000,
+      sweepIntervalMs: 0,
+    });
+    expect(restarted.runtime.getStatus(sessionId)).toBeNull();
   });
 
   test("a re-attach failure clears the binding instead of stranding the session", async () => {
@@ -1023,6 +1374,103 @@ describe("idle detach and transparent re-attach", () => {
     // Rollout deleted underneath us: the session must recover, not wedge.
     expect(await h.runtime.getMessages(sessionId)).toEqual([]);
     expect(h.runtime.getRegistry().getSession(sessionId)!.threadId).toBeNull();
+  });
+
+  test("a transient re-attach failure preserves the original thread for retry", async () => {
+    let clock = 1_000_000;
+    let resumeAttempts = 0;
+    const h = await harness(
+      {
+        "thread/resume": () => {
+          resumeAttempts += 1;
+          if (resumeAttempts === 1) {
+            const error = new Error("temporary transport failure");
+            (error as { rpcCode?: number }).rpcCode = -32603;
+            throw error;
+          }
+          return { thread: threadPayload("thread-1") };
+        },
+      },
+      { now: () => clock, threadIdleMs: 1_000 },
+    );
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+    clock += 60_000;
+    await h.runtime.sweepIdle();
+
+    await expect(h.runtime.getMessages(sessionId)).rejects.toThrow("temporary transport failure");
+    expect(h.runtime.getRegistry().getSession(sessionId)!.threadId).toBe("thread-1");
+    expect(await h.runtime.getMessages(sessionId)).toEqual([]);
+    expect(resumeAttempts).toBe(2);
+  });
+
+  test("a prompt never forks when transient re-attach fails", async () => {
+    let clock = 1_000_000;
+    let resumeAttempts = 0;
+    const h = await harness(
+      {
+        "thread/resume": () => {
+          resumeAttempts += 1;
+          if (resumeAttempts === 1) {
+            const error = new Error("temporary transport failure");
+            (error as { rpcCode?: number }).rpcCode = -32603;
+            throw error;
+          }
+          return { thread: threadPayload("thread-1") };
+        },
+      },
+      { now: () => clock, threadIdleMs: 1_000 },
+    );
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "first", requestId: "req-1", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+    clock += 60_000;
+    await h.runtime.sweepIdle();
+    h.child().requests.length = 0;
+
+    expect(await h.runtime.prompt(sessionId, {
+      prompt: "retry later",
+      requestId: "req-2",
+      attachments: [],
+    })).toMatchObject({ ok: false, status: 503 });
+    expect(h.runtime.getRegistry().getSession(sessionId)?.threadId).toBe("thread-1");
+    expect(h.child().requests.map((request) => request.method)).toEqual(["thread/resume"]);
+
+    expect((await h.runtime.prompt(sessionId, {
+      prompt: "retry now",
+      requestId: "req-3",
+      attachments: [],
+    })).ok).toBe(true);
+    const methods = h.child().requests.map((request) => request.method);
+    expect(methods).toContain("thread/resume");
+    expect(methods).not.toContain("thread/start");
+  });
+
+  test("a resumed history thread remains materialized when swept", async () => {
+    let clock = 1_000_000;
+    const h = await harness(
+      { "thread/resume": () => ({ thread: threadPayload("thread-history") }) },
+      { now: () => clock, threadIdleMs: 1_000 },
+    );
+    const resumed = await h.runtime.resumeSession({ threadId: "thread-history", mode: "build" });
+    expect(
+      h.runtime.getRegistry().getThread("thread-history")?.materialized,
+    ).toBe(true);
+
+    clock += 60_000;
+    await h.runtime.sweepIdle();
+    expect(h.runtime.getRegistry().getSession(resumed!.sessionId)?.threadId).toBe(
+      "thread-history",
+    );
   });
 
   test("a long-dead session id is eventually forgotten", async () => {
@@ -1057,6 +1505,57 @@ describe("idle detach and transparent re-attach", () => {
 
     expect(await h.runtime.sweepIdle()).toMatchObject({ forgotten: 0 });
     expect(h.runtime.getRegistry().getSession(sessionId)).toBeDefined();
+  });
+
+  test("normal activity refreshes durable retention across a runtime restart", async () => {
+    let clock = 1_000_000;
+    const options = {
+      now: () => clock,
+      threadIdleMs: 0,
+      sessionRetentionMs: 10_000,
+      sweepIntervalMs: 0,
+    };
+    const first = await harness({}, options);
+    const { sessionId } = first.runtime.createSession({ mode: "build" });
+    await first.runtime.prompt(sessionId, {
+      prompt: "materialize",
+      requestId: "req-retained",
+      attachments: [],
+    });
+    first.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await first.drain();
+
+    // Past half of the short retention window, an ordinary messages read carries
+    // the in-memory touch to disk. Repeated status polls inside that window share
+    // the same bounded heartbeat rather than writing on every request.
+    clock += 6_000;
+    await first.runtime.getMessages(sessionId);
+    const store = new BridgeSessionStore({
+      codexHome,
+      cwd: "/tmp/ws",
+      now: () => clock,
+      retentionMs: 10_000,
+    });
+    expect(Date.parse((await store.load())[0]!.lastAccessed)).toBe(clock);
+    first.runtime.getStatus(sessionId);
+    first.runtime.getStatus(sessionId);
+    expect(Date.parse((await store.load())[0]!.lastAccessed)).toBe(clock);
+    await first.runtime.stop();
+
+    // The original creation time is now outside retention, but the durable
+    // activity heartbeat is not, so the same bridge id must survive restart.
+    clock += 6_000;
+    const second = await harness({}, options);
+    expect(await second.runtime.getMessages(sessionId)).not.toBeNull();
+    expect(second.runtime.getStatus(sessionId)).toMatchObject({
+      status: "idle",
+      phase: "idle",
+      threadId: "thread-1",
+    });
+    await second.runtime.stop();
   });
 
   test("detaching can be disabled", async () => {
@@ -1194,6 +1693,10 @@ describe("slash commands", () => {
     expect(
       (assistant?.data?.message as { content: string } | undefined)?.content,
     ).toContain("Available Codex slash commands");
+    const messages = await h.runtime.getMessages(sessionId);
+    expect(messages).toHaveLength(2);
+    expect(messages?.[0]?.content).toBe("/help");
+    expect(messages?.[1]?.content).toContain("Available Codex slash commands");
   });
 });
 
@@ -1329,6 +1832,38 @@ describe("interactive approvals", () => {
     // forever on a prompt whose UI has gone.
     expect(h.child().stdin.lines.join("")).toContain('"decision":"decline"');
     expect(h.runtime.listApprovals(sessionId)).toHaveLength(0);
+  });
+
+  test("closing one of two tabs leaves the shared approval actionable", async () => {
+    const h = await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-1") }),
+    });
+    const first = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(first.sessionId, {
+      prompt: "go",
+      requestId: "req-1",
+      attachments: [],
+    });
+    const second = await h.runtime.resumeSession({ threadId: "thread-1", mode: "build" });
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 9002,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        command: "touch allowed",
+        cwd: "/tmp/ws",
+      },
+    });
+    await h.drain();
+
+    const approvalId = h.runtime.listApprovals(second!.sessionId)[0]!.approvalId;
+    await h.runtime.deleteSession(first.sessionId);
+    await h.drain();
+    expect(h.child().stdin.lines.join("")).not.toContain('"decision":"decline"');
+    expect(h.runtime.respondToApproval(second!.sessionId, approvalId, "deny")).toBe("applied");
   });
 
   test("a file-change approval is described as such", async () => {

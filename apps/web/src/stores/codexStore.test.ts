@@ -22,6 +22,8 @@ function resetCodexStore() {
     selectedModel: new Map(),
     selectedMode: new Map(),
     selectedReasoningEffort: new Map(),
+    fastMode: new Map(),
+    sessionPhase: new Map(),
     pendingApprovals: new Map(),
   });
 }
@@ -212,6 +214,8 @@ describe("codexStore cleanup and queue helpers", () => {
     store.setSelectedModel(sessionKeyB, "gpt-4");
     store.setSelectedMode(sessionKeyA, "plan");
     store.setSelectedReasoningEffort(sessionKeyA, "high");
+    store.setSessionPhase(sessionKeyA, "recovering");
+    store.setSessionPhase(sessionKeyB, "running");
     store.setDraftText(sessionKeyA, "draft");
     store.addAttachment(sessionKeyA, {
       id: "att-a",
@@ -240,6 +244,8 @@ describe("codexStore cleanup and queue helpers", () => {
     expect(store.getQueueLength(sessionKeyA)).toBe(0);
     expect(useCodexStore.getState().selectedModel.get(sessionKeyA)).toBeUndefined();
     expect(useCodexStore.getState().selectedModel.get(sessionKeyB)).toBe("gpt-4");
+    expect(useCodexStore.getState().sessionPhase.get(sessionKeyA)).toBeUndefined();
+    expect(useCodexStore.getState().sessionPhase.get(sessionKeyB)).toBe("running");
     expect(useCodexStore.getState().slashCommands.get("env-1")).toBeUndefined();
     expect(useCodexStore.getState().slashCommands.get("env-2")).toEqual([
       { name: "/keep", source: "builtin" },
@@ -288,6 +294,26 @@ describe("codexStore cleanup and queue helpers", () => {
 
     expect(store.getQueueLength(queueA)).toBe(0);
     expect(store.getQueueLength(queueB)).toBe(1);
+  });
+});
+
+describe("codexStore session phases", () => {
+  beforeEach(resetCodexStore);
+
+  test("sets, replaces, and clears a phase without rerendering for identical values", () => {
+    const store = useCodexStore.getState();
+    store.setSessionPhase(SESSION_KEY, "cancelling");
+    expect(useCodexStore.getState().sessionPhase.get(SESSION_KEY)).toBe("cancelling");
+
+    const before = useCodexStore.getState().sessionPhase;
+    store.setSessionPhase(SESSION_KEY, "cancelling");
+    expect(useCodexStore.getState().sessionPhase).toBe(before);
+
+    store.setSessionPhase(SESSION_KEY, "recovering");
+    expect(useCodexStore.getState().sessionPhase.get(SESSION_KEY)).toBe("recovering");
+
+    store.setSessionPhase(SESSION_KEY, undefined);
+    expect(useCodexStore.getState().sessionPhase.has(SESSION_KEY)).toBe(false);
   });
 });
 

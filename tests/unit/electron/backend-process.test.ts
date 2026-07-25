@@ -65,6 +65,7 @@ describe("Electron backend process supervisor", () => {
       ORKESTRATOR_TAILSCALE_SERVE_PORT: "8443",
       ORKESTRATOR_TAILSCALE_BIN: "/tmp/tailscale",
       ORKESTRATOR_TOOLCHAIN_BIN: "/tmp/untrusted-tools",
+      ORKESTRATOR_VERSION: "untrusted-shell-version",
     };
 
     const development = createBackendProcessEnvironment(parent, true, "/resources");
@@ -74,11 +75,18 @@ describe("Electron backend process supervisor", () => {
       ORKESTRATOR_GATEWAY_DISABLED: "0",
     });
     expect(parent.ORKESTRATOR_GATEWAY_TOKEN).toBe("not-forwarded");
+    expect(development.ORKESTRATOR_VERSION).toBeUndefined();
 
-    const production = createBackendProcessEnvironment(parent, false, "/resources");
+    const production = createBackendProcessEnvironment(
+      parent,
+      false,
+      "/resources",
+      "2.4.9",
+    );
     expect(production.NODE_PATH).toBe(
       [path.join("/resources", "backend", "vendor"), "/existing"].join(path.delimiter),
     );
+    expect(production.ORKESTRATOR_VERSION).toBe("2.4.9");
   });
 
   test("reports browser availability independently from the desktop control listener", () => {

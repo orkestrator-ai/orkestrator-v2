@@ -18,6 +18,7 @@ import { promisify } from "node:util";
 import type { ThreadItem } from "../codex-item-types.js";
 import { mapTodoArgs, summarizeTodoList } from "../todo-helpers.js";
 import type { EngineItem } from "../engine/types.js";
+import { DEFAULT_MAX_COMMAND_OUTPUT_CHARS } from "../sessions/turn-accumulator.js";
 import {
   applyDiffBudget,
   isBaselineWorthKeeping,
@@ -28,6 +29,18 @@ import {
 import type { FileChangeDiffContext, NormalizedPart, ToolDiffMetadata } from "./types.js";
 
 const execFile = promisify(execFileCallback);
+const COMMAND_OUTPUT_TRUNCATION_NOTICE = "\n… output truncated";
+
+function capCommandOutput(output: string): string {
+  if (output.length <= DEFAULT_MAX_COMMAND_OUTPUT_CHARS) return output;
+  return (
+    output.slice(
+      0,
+      DEFAULT_MAX_COMMAND_OUTPUT_CHARS - COMMAND_OUTPUT_TRUNCATION_NOTICE.length,
+    )
+    + COMMAND_OUTPUT_TRUNCATION_NOTICE
+  );
+}
 
 export function stringifyUnknown(value: unknown): string | undefined {
   if (value === undefined) return undefined;
@@ -197,7 +210,8 @@ export async function itemToParts(
       return [{ type: "text", content: item.text }];
     case "reasoning":
       return [{ type: "thinking", content: item.text }];
-    case "command_execution":
+    case "command_execution": {
+      const output = capCommandOutput(item.aggregated_output);
       return [{
         type: "tool-invocation",
         content: item.command,
@@ -210,9 +224,10 @@ export async function itemToParts(
               ? "success"
               : "pending",
         toolTitle: item.command,
-        toolOutput: item.aggregated_output || undefined,
-        toolError: item.status === "failed" ? item.aggregated_output || "Command failed" : undefined,
+        toolOutput: output || undefined,
+        toolError: item.status === "failed" ? output || "Command failed" : undefined,
       }];
+    }
     case "file_change":
       return Promise.all(
         item.changes.map(async (change, index) => ({

@@ -125,6 +125,36 @@ describe("CodexApprovalCard", () => {
     expect(screen.queryByText("Filesystem access beyond the workspace")).toBeNull();
   });
 
+  test("shows a filesystem-only permission request", () => {
+    renderCard(
+      makeApproval({
+        kind: "permissions",
+        command: undefined,
+        permissions: { network: false, fileSystem: true },
+      }),
+    );
+
+    expect(screen.getByText("Filesystem access beyond the workspace")).toBeTruthy();
+    expect(screen.queryByText("Network access")).toBeNull();
+  });
+
+  test("orders denial first and makes it the only primary action", () => {
+    renderCard(makeApproval());
+
+    const buttons = screen.getAllByRole("button");
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      "Decline",
+      "Cancel turn",
+      "Approve for session",
+      "Approve",
+    ]);
+    expect(screen.getByRole("button", { name: "Decline" }).dataset.variant).toBe("default");
+    expect(screen.getByRole("button", { name: "Approve" }).dataset.variant).toBe("outline");
+    expect(screen.getByRole("button", { name: "Approve for session" }).dataset.variant).toBe(
+      "outline",
+    );
+  });
+
   test.each([
     ["Approve", "approve"],
     ["Approve for session", "approve-for-session"],
@@ -217,6 +247,19 @@ describe("CodexApprovalCard", () => {
     // a lie.
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     expect(screen.getByText("This request expired and was declined.")).toBeTruthy();
+  });
+
+  test("removes the actions when a live countdown expires", async () => {
+    renderCard(makeApproval({ expiresAt: Date.now() + 25 }));
+    expect(screen.getByRole("button", { name: "Decline" })).toBeTruthy();
+
+    await waitFor(
+      () => {
+        expect(screen.queryByRole("button", { name: "Decline" })).toBeNull();
+        expect(screen.getByText("This request expired and was declined.")).toBeTruthy();
+      },
+      { timeout: 1_500 },
+    );
   });
 
   test("mentions the requested grant root when there is one", () => {

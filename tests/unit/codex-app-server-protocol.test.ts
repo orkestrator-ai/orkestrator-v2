@@ -9,6 +9,7 @@ const {
   digestFiles,
   extractMethods,
   describeDifferences,
+  candidateBinaries,
 } = __testing;
 
 const repoRoot = join(import.meta.dir, "..", "..");
@@ -173,6 +174,20 @@ describe("generator binary resolution", () => {
     ]);
     return { code, output: `${stdout}${stderr}` };
   }
+
+  test("a stale CODEX_PATH still falls back to codex on PATH", () => {
+    expect(candidateBinaries("0.145.0", {
+      platform: "linux",
+      architecture: "x64",
+      homeDirectory: "/home/tester",
+      xdgConfigHome: "/config",
+      codexPath: "/stale/codex",
+    })).toEqual([
+      "/config/orkestrator-v2/toolchains/codex/0.145.0/linux-x64/codex",
+      "/stale/codex",
+      "codex",
+    ]);
+  });
 
   /**
    * An explicit override is an assertion, not a hint. Falling back to

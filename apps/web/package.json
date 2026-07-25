@@ -9,7 +9,7 @@
     "dev:web": "bunx vite --host 127.0.0.1",
     "preview": "bunx vite preview",
     "test": "bun test src --parallel",
-    "test:workspace": "bun test src --parallel",
+    "test:workspace": "bun test src",
     "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {

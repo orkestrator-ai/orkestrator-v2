@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import {
   PINNED_TOOLCHAIN_ARTIFACTS,
   type ToolchainArtifact,
@@ -20,6 +22,11 @@ type Filters = {
   tool?: ToolchainName;
   platform?: ToolchainPlatform;
   architecture?: ToolchainArchitecture;
+};
+
+export type VerifyToolchainArguments = {
+  emit: boolean;
+  filters: Filters;
 };
 
 const MAX_REDIRECTS = 10;
@@ -47,6 +54,20 @@ export function parseFilters(args: string[]): Filters {
   return filters;
 }
 
+export function parseArguments(args: string[]): VerifyToolchainArguments {
+  let emit = false;
+  const filterArgs: string[] = [];
+  for (const argument of args) {
+    if (argument === "--emit") {
+      if (emit) throw new Error("Duplicate mode --emit");
+      emit = true;
+    } else {
+      filterArgs.push(argument);
+    }
+  }
+  return { emit, filters: parseFilters(filterArgs) };
+}
+
 export function validateDownloadUrl(url: URL, allowedHosts: readonly string[]): void {
   if (url.protocol !== "https:") {
     throw new Error(`Refusing non-HTTPS artifact URL: ${url.href}`);
@@ -56,11 +77,19 @@ export function validateDownloadUrl(url: URL, allowedHosts: readonly string[]): 
   }
 }
 
-async function fetchArtifact(artifact: ToolchainArtifact): Promise<Response> {
+export type FetchArtifact = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
+
+export async function fetchArtifact(
+  artifact: ToolchainArtifact,
+  fetchImpl: FetchArtifact = fetch,
+): Promise<Response> {
   let current = new URL(artifact.archive.url);
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
     validateDownloadUrl(current, artifact.archive.allowedHosts);
-    const response = await fetch(current, {
+    const response = await fetchImpl(current, {
       redirect: "manual",
       signal: AbortSignal.timeout(ARTIFACT_DOWNLOAD_TIMEOUT_MS),
     });
@@ -120,7 +149,7 @@ export function expectDigest(
   }
 }
 
-async function hashExecutable(
+export async function hashExecutable(
   artifact: ToolchainArtifact,
   archivePath: string,
 ): Promise<Digest> {
@@ -149,19 +178,23 @@ function formatManifestSize(size: number): string {
   return size.toLocaleString("en-US").replace(/,/g, "_");
 }
 
-async function verifyArtifact(
+export async function verifyArtifact(
   artifact: ToolchainArtifact,
   temporaryRoot: string,
-  options: { emit?: boolean } = {},
+  options: { emit?: boolean; fetchImpl?: FetchArtifact } = {},
 ): Promise<void> {
   const target = `${artifact.name}:${artifact.platform}:${artifact.architecture}`;
   console.log(`${options.emit ? "Hashing" : "Verifying"} ${target} ${artifact.version}`);
-  const response = await fetchArtifact(artifact);
+  const response = await fetchArtifact(artifact, options.fetchImpl);
   const archivePath = join(
     temporaryRoot,
     `${artifact.name}-${artifact.platform}-${artifact.architecture}.${artifact.archive.format}`,
   );
-  await Bun.write(archivePath, response);
+  if (!response.body) throw new Error(`Artifact response omitted a body: ${artifact.archive.url}`);
+  await pipeline(
+    Readable.fromWeb(response.body as globalThis.ReadableStream<Uint8Array>),
+    createWriteStream(archivePath),
+  );
 
   const archiveDigest = await hashFile(archivePath);
   const executableDigest = await hashExecutable(artifact, archivePath);
@@ -200,11 +233,9 @@ async function main(): Promise<void> {
     );
   }
 
-  const args = process.argv.slice(2);
   // `--emit` prints the computed digests instead of asserting them, for the
   // version-bump workflow in docs/codex-upgrade-guide.md.
-  const emit = args.includes("--emit");
-  const filters = parseFilters(args);
+  const { emit, filters } = parseArguments(process.argv.slice(2));
   const selected = PINNED_TOOLCHAIN_ARTIFACTS.filter((artifact) =>
     (!filters.tool || artifact.name === filters.tool)
     && (!filters.platform || artifact.platform === filters.platform)

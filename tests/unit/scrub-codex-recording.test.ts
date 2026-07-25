@@ -5,9 +5,26 @@
  * must never break JSON framing.
  */
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { scrub } from "../../scripts/scrub-codex-recording.ts";
+
+const scriptPath = join(import.meta.dir, "..", "..", "scripts", "scrub-codex-recording.ts");
+
+async function runCli(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  const child = Bun.spawn([process.execPath, scriptPath, ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  return { code, stdout, stderr };
+}
 
 describe("scrub-codex-recording", () => {
   test("redacts provider keys by prefix", () => {
@@ -123,5 +140,63 @@ describe("scrub-codex-recording", () => {
     const contents = await Bun.file(path).text();
     // Guards the fixture against someone pasting real data into it later.
     expect(scrub(contents).totalHits).toBe(0);
+  });
+
+  test("CLI check mode accepts clean input and rejects unsanitized input without writing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ork-scrub-test-"));
+    try {
+      const cleanPath = join(root, "clean.jsonl");
+      const dirtyPath = join(root, "dirty.jsonl");
+      const clean = '{"jsonrpc":"2.0","method":"turn/started"}\n';
+      const dirty = '{"token":"abcdefghijklmnopqrstuvwx"}\n';
+      await writeFile(cleanPath, clean);
+      await writeFile(dirtyPath, dirty);
+
+      const cleanResult = await runCli([cleanPath, "--check"]);
+      expect(cleanResult.code).toBe(0);
+      expect(cleanResult.stdout).toContain("--check: clean");
+      expect(await readFile(cleanPath, "utf8")).toBe(clean);
+
+      const dirtyResult = await runCli([dirtyPath, "--check"]);
+      expect(dirtyResult.code).toBe(1);
+      expect(dirtyResult.stderr).toContain("still contains data that needs scrubbing");
+      expect(await readFile(dirtyPath, "utf8")).toBe(dirty);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("CLI writes scrubbed output to an explicit target", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ork-scrub-test-"));
+    try {
+      const inputPath = join(root, "raw.jsonl");
+      const outputPath = join(root, "scrubbed.jsonl");
+      await writeFile(inputPath, '{"apiKey":"abcdefghijklmnopqrstuvwx"}\n');
+
+      const result = await runCli([inputPath, outputPath]);
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain(`Wrote ${outputPath}`);
+      expect(await readFile(outputPath, "utf8")).toContain("«redacted»");
+      expect(await readFile(inputPath, "utf8")).toContain("abcdefghijklmnopqrstuvwx");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("CLI rejects malformed JSONL and reports file read failures", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ork-scrub-test-"));
+    try {
+      const malformedPath = join(root, "malformed.jsonl");
+      await writeFile(malformedPath, '{"jsonrpc":\n');
+      const malformed = await runCli([malformedPath, "--check"]);
+      expect(malformed.code).toBe(1);
+      expect(malformed.stderr).toContain("no longer valid JSON");
+
+      const missing = await runCli([join(root, "missing.jsonl"), "--check"]);
+      expect(missing.code).toBe(1);
+      expect(missing.stderr).toMatch(/ENOENT|no such file/i);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

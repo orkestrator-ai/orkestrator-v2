@@ -8,11 +8,14 @@ import {
   createSession,
   deleteSession,
   fetchPendingApprovals,
+  getBridgeHealth,
   getModels,
   getSessionMessages,
   getSessionStatus,
   getSlashCommands,
+  isCodexSessionPhase,
   listSessions,
+  lookupSessionStatus,
   respondToApproval,
   resumeSession,
   sendPrompt,
@@ -75,6 +78,36 @@ describe("codex-client checkHealth", () => {
 
     mockFetchError(new Error("offline"));
     expect(await checkHealth(client)).toBe(false);
+  });
+});
+
+describe("codex-client getBridgeHealth", () => {
+  afterEach(restoreFetch);
+
+  test("returns engine details from a healthy bridge", async () => {
+    mockFetch(async () =>
+      Response.json({
+        status: "ok",
+        engine: "app-server",
+        appServer: { state: "running", generation: 3 },
+        activeTurns: 1,
+      }),
+    );
+
+    await expect(getBridgeHealth(client)).resolves.toMatchObject({
+      status: "ok",
+      engine: "app-server",
+      appServer: { state: "running", generation: 3 },
+      activeTurns: 1,
+    });
+  });
+
+  test("returns null for an unhealthy or unreachable bridge", async () => {
+    mockFetch(async () => new Response(null, { status: 503 }));
+    await expect(getBridgeHealth(client)).resolves.toBeNull();
+
+    mockFetchError(new Error("offline"));
+    await expect(getBridgeHealth(client)).resolves.toBeNull();
   });
 });
 
@@ -421,6 +454,22 @@ describe("codex-client getSessionStatus", () => {
     });
   });
 
+  test("accepts only known app-server lifecycle phases", async () => {
+    expect(isCodexSessionPhase("recovering")).toBe(true);
+    expect(isCodexSessionPhase("idle")).toBe(true);
+    expect(isCodexSessionPhase("surprising-future-phase")).toBe(false);
+    expect(isCodexSessionPhase(null)).toBe(false);
+
+    mockFetch(async () =>
+      Response.json({ status: "running", phase: "surprising-future-phase" }),
+    );
+    await expect(getSessionStatus(client, "session-1")).resolves.toEqual({
+      status: "running",
+      title: undefined,
+      error: undefined,
+    });
+  });
+
   test("returns null for invalid, non-ok, or failed responses", async () => {
     mockFetch(async () =>
       new Response(JSON.stringify({ status: "paused" }), { status: 200 }),
@@ -449,6 +498,38 @@ describe("codex-client getSessionStatus", () => {
     mockFetchError(new Error("offline"));
     await expect(getSessionStatus(client, "session-1", { throwOnError: true }))
       .rejects.toThrow("offline");
+  });
+
+  test("structured lookup distinguishes an authoritative 404 from unavailable status", async () => {
+    mockFetch(async () => Response.json({ status: "idle", phase: "idle" }));
+    await expect(lookupSessionStatus(client, "session-1")).resolves.toEqual({
+      kind: "found",
+      session: {
+        status: "idle",
+        phase: "idle",
+        title: undefined,
+        error: undefined,
+      },
+    });
+
+    mockFetch(async () => new Response(null, { status: 404 }));
+    await expect(lookupSessionStatus(client, "missing-session")).resolves.toEqual({
+      kind: "missing",
+    });
+
+    mockFetch(async () => new Response(null, { status: 503 }));
+    const unavailableHttp = await lookupSessionStatus(client, "session-1");
+    expect(unavailableHttp.kind).toBe("unavailable");
+    if (unavailableHttp.kind === "unavailable") {
+      expect(unavailableHttp.error.message).toContain("HTTP 503");
+    }
+
+    mockFetchError(new Error("timed out"));
+    const unavailableTransport = await lookupSessionStatus(client, "session-1");
+    expect(unavailableTransport.kind).toBe("unavailable");
+    if (unavailableTransport.kind === "unavailable") {
+      expect(unavailableTransport.error.message).toBe("timed out");
+    }
   });
 });
 
@@ -535,22 +616,29 @@ describe("codex-client sendPrompt", () => {
 describe("codex-client abortSession", () => {
   afterEach(restoreFetch);
 
-  test("posts abort request and returns true on ok response", async () => {
+  test("posts abort request and reports an accepted outcome", async () => {
     mockFetch(async () => new Response(null, { status: 200 }));
 
-    await expect(abortSession(client, "session-1")).resolves.toBe(true);
+    await expect(abortSession(client, "session-1")).resolves.toEqual({
+      status: "accepted",
+    });
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "http://127.0.0.1:4000/session/session-1/abort",
       expect.objectContaining({ method: "POST" }),
     );
   });
 
-  test("returns false on non-ok or failed responses", async () => {
+  test("distinguishes a definite HTTP rejection from an ambiguous transport failure", async () => {
     mockFetch(async () => new Response(null, { status: 404 }));
-    await expect(abortSession(client, "session-1")).resolves.toBe(false);
+    await expect(abortSession(client, "session-1")).resolves.toEqual({
+      status: "rejected",
+      httpStatus: 404,
+    });
 
     mockFetchError(new Error("offline"));
-    await expect(abortSession(client, "session-1")).resolves.toBe(false);
+    await expect(abortSession(client, "session-1")).resolves.toEqual({
+      status: "unknown",
+    });
   });
 });
 
@@ -700,6 +788,52 @@ describe("codex-client subscribeToEvents", () => {
     await expect(pending).rejects.toThrow("SSE connection error");
     expect(source.close).toHaveBeenCalledTimes(1);
   });
+
+  test("does not open a connection for an already-aborted signal", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const iterator = subscribeToEvents(client, controller.signal)[Symbol.asyncIterator]();
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+    expect(MockEventSource.instances).toHaveLength(0);
+  });
+
+  test("ignores malformed JSON and continues with the next valid event", async () => {
+    const originalError = console.error;
+    console.error = mock(() => {}) as unknown as typeof console.error;
+    try {
+      const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+      const pending = iterator.next();
+      const source = MockEventSource.instances[0]!;
+      const malformed = {
+        type: "session.updated",
+        data: "{not-json",
+        lastEventId: "",
+      } as MessageEvent;
+      for (const listener of source.listeners.get("session.updated") ?? []) {
+        listener(malformed);
+      }
+      source.emit("session.idle", { sessionId: "session-1" });
+
+      await expect(pending).resolves.toMatchObject({
+        done: false,
+        value: { type: "session.idle", sessionId: "session-1" },
+      });
+      await iterator.return?.();
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("iterator return closes the source and resolves a pending read", async () => {
+    const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    const source = MockEventSource.instances[0]!;
+
+    await iterator.return?.();
+    await expect(pending).resolves.toEqual({ done: true, value: undefined });
+    expect(source.close).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("codex-client event cursor", () => {
@@ -803,9 +937,21 @@ describe("codex-client approvals", () => {
   afterEach(restoreFetch);
 
   test("fetchPendingApprovals returns the list", async () => {
+    const approval = {
+      approvalId: "apr-1-1",
+      kind: "command",
+      method: "item/commandExecution/requestApproval",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-1",
+      requestedAt: 1,
+      expiresAt: 2,
+      command: "ls",
+      supportsApproveForSession: true,
+    };
     mockFetch(() =>
       Response.json({
-        approvals: [{ approvalId: "apr-1-1", kind: "command", command: "ls" }],
+        approvals: [approval],
       }),
     );
 
@@ -814,17 +960,46 @@ describe("codex-client approvals", () => {
     expect(approvals[0]!.approvalId).toBe("apr-1-1");
   });
 
-  test("fetchPendingApprovals returns [] on a bad response or a malformed body", async () => {
-    // Must never throw: this runs inside reconcile, and a failure here would take
-    // out the whole state refresh.
+  test("filters malformed approval entries and sanitizes malformed optional fields", async () => {
+    mockFetch(() =>
+      Response.json({
+        approvals: [
+          { approvalId: "missing-required-fields" },
+          {
+            approvalId: "apr-valid",
+            kind: "permissions",
+            method: "item/permissions/requestApproval",
+            threadId: null,
+            turnId: null,
+            itemId: null,
+            requestedAt: 1,
+            expiresAt: 2,
+            permissions: { network: "yes", fileSystem: true },
+            changes: [{ path: "/valid", kind: "update" }, { nope: true }],
+            supportsApproveForSession: false,
+          },
+        ],
+      }),
+    );
+
+    const approvals = await fetchPendingApprovals(client, "session-1");
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({
+      approvalId: "apr-valid",
+      changes: [{ path: "/valid", kind: "update" }],
+    });
+    expect(approvals[0]?.permissions).toBeUndefined();
+  });
+
+  test("fetchPendingApprovals rejects bad responses so callers preserve existing state", async () => {
     mockFetch(() => new Response("nope", { status: 500 }));
-    expect(await fetchPendingApprovals(client, "session-1")).toEqual([]);
+    await expect(fetchPendingApprovals(client, "session-1")).rejects.toThrow("HTTP 500");
 
     mockFetch(() => Response.json({ approvals: "not-an-array" }));
-    expect(await fetchPendingApprovals(client, "session-1")).toEqual([]);
+    await expect(fetchPendingApprovals(client, "session-1")).rejects.toThrow("malformed");
 
     mockFetchError(new Error("network down"));
-    expect(await fetchPendingApprovals(client, "session-1")).toEqual([]);
+    await expect(fetchPendingApprovals(client, "session-1")).rejects.toThrow("network down");
   });
 
   test("respondToApproval posts the decision", async () => {

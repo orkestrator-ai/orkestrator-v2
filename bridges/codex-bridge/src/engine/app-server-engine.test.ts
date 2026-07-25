@@ -488,6 +488,30 @@ describe("turn dispatch", () => {
     expect(failure).toMatchObject({ class: "ambiguous", retryImmediately: false });
   });
 
+  test("a non-overload RPC error is ambiguous and requires reconciliation", async () => {
+    const h = harness({
+      "thread/start": () => ({ thread: thread("t1") }),
+      "turn/start": () => {
+        const error = new Error("internal failure after acceptance");
+        (error as { rpcCode?: number }).rpcCode = -32603;
+        throw error;
+      },
+    });
+    await h.engine.start();
+    const started = await h.engine.startThread({ config: BUILD });
+
+    const failure = await h.engine
+      .startTurn({
+        handle: started.handle,
+        input: [{ type: "text", text: "x" }],
+        config: BUILD,
+        requestId: "req-ambiguous",
+      })
+      .catch((error: unknown) => h.engine.classifyFailure(error));
+
+    expect(failure).toMatchObject({ class: "ambiguous", retryImmediately: false });
+  });
+
   test("dispatching on an unknown handle fails loudly", async () => {
     const h = harness();
     await h.engine.start();

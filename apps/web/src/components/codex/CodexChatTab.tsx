@@ -31,6 +31,8 @@ import {
   getSlashCommands,
   getSessionMessages,
   getSessionStatus,
+  isCodexSessionPhase,
+  lookupSessionStatus,
   resumeSession,
   sendPrompt,
   subscribeToEvents,
@@ -85,7 +87,13 @@ const DEFAULT_REASONING_EFFORT: CodexReasoningEffort = "medium";
 type CodexSendHandler = (
   text: string,
   attachments: CodexAttachment[],
+  requestId?: string,
 ) => Promise<void>;
+interface ReconcileSessionOptions {
+  forceRefreshMessages?: boolean;
+  throwOnError?: boolean;
+}
+type ReconcileSessionResult = "applied" | "missing" | "unavailable" | "stale";
 
 export function CodexChatTab({
   tabId,
@@ -117,7 +125,16 @@ export function CodexChatTab({
   const isProcessingQueueRef = useRef(false);
   const isWatchdogRefreshInFlightRef = useRef(false);
   const lastHandledRefreshRequestIdRef = useRef(0);
-  const manualRefreshSequenceRef = useRef(0);
+  const reconcileSequenceRef = useRef(0);
+  const approvalSnapshotSequenceRef = useRef(0);
+  const approvalActivitySequenceRef = useRef(0);
+  const reconcileSessionStateRef = useRef<
+    (options?: ReconcileSessionOptions) => Promise<ReconcileSessionResult>
+  >(async () => "unavailable");
+  const retryablePromptRef = useRef<{
+    fingerprint: string;
+    requestId: string;
+  } | null>(null);
   const refreshControllerRef = useRef(createCodexSessionRefreshController());
   /**
    * Last bridge event revision this tab processed.
@@ -393,14 +410,35 @@ export function CodexChatTab({
   );
 
   useEffect(() => {
+    reconcileSequenceRef.current += 1;
     refreshControllerRef.current = createCodexSessionRefreshController();
     refreshControllerRef.current.markActivity();
+    approvalSnapshotSequenceRef.current += 1;
+    approvalActivitySequenceRef.current += 1;
+    retryablePromptRef.current = null;
   }, [sessionKey, session?.sessionId]);
 
   const handleSend = useCallback(
-    async (text: string, attachments: CodexAttachment[]) => {
+    async (
+      text: string,
+      attachments: CodexAttachment[],
+      logicalRequestId?: string,
+    ) => {
       if (!client || !session?.sessionId) return;
 
+      const fingerprint = JSON.stringify({
+        text,
+        attachments: attachments.map(({ path, previewUrl, name }) => ({
+          path,
+          previewUrl,
+          name,
+        })),
+      });
+      const requestId =
+        logicalRequestId
+        ?? (retryablePromptRef.current?.fingerprint === fingerprint
+          ? retryablePromptRef.current.requestId
+          : createUuid());
       const userMessage = createOptimisticNativeMessage(
         `${OPTIMISTIC_MESSAGE_PREFIX}${createUuid()}`,
         text,
@@ -438,12 +476,20 @@ export function CodexChatTab({
       }));
       const sent = await sendPrompt(client, session.sessionId, text, {
         attachments: promptAttachments.length > 0 ? promptAttachments : undefined,
+        requestId,
       });
       if (!sent) {
+        // `sendPrompt` cannot distinguish a rejected HTTP response from a lost
+        // response after the bridge accepted the request. Keep the idempotency
+        // key so an explicit retry of the same logical prompt is safe.
+        retryablePromptRef.current = { fingerprint, requestId };
         removeMessage(sessionKey, userMessage.id);
         setSessionLoading(sessionKey, false);
         setSessionError(sessionKey, "Failed to send prompt");
         return;
+      }
+      if (retryablePromptRef.current?.requestId === requestId) {
+        retryablePromptRef.current = null;
       }
       await refreshMessages(client, session.sessionId);
     },
@@ -467,8 +513,10 @@ export function CodexChatTab({
 
   const handleQueue = useCallback(
     (text: string, attachments: CodexAttachment[]) => {
+      const requestId = createUuid();
       addToQueue(sessionKey, {
-        id: createUuid(),
+        id: requestId,
+        requestId,
         text,
         attachments,
         model: selectedModel,
@@ -501,7 +549,11 @@ export function CodexChatTab({
 
     isProcessingQueueRef.current = true;
 
-    const sendPromise = handleSendRef.current?.(nextMessage.text, nextMessage.attachments);
+    const sendPromise = handleSendRef.current?.(
+      nextMessage.text,
+      nextMessage.attachments,
+      nextMessage.requestId ?? nextMessage.id,
+    );
 
     if (!sendPromise) {
       isProcessingQueueRef.current = false;
@@ -573,10 +625,25 @@ export function CodexChatTab({
      */
     setSessionPhase(sessionKey, "cancelling");
 
-    const success = await abortSession(client, session.sessionId);
-    if (!success) {
-      console.error("[CodexChatTab] Failed to abort session");
-      // The request never landed, so nothing is cancelling.
+    const outcome = await abortSession(client, session.sessionId);
+    if (outcome.status === "accepted") {
+      return;
+    }
+
+    console.error(
+      outcome.status === "unknown"
+        ? "[CodexChatTab] Abort outcome is unknown; reconciling session"
+        : `[CodexChatTab] Abort request was rejected with HTTP ${outcome.httpStatus}`,
+    );
+
+    const reconciliation = await reconcileSessionStateRef.current({
+      forceRefreshMessages: true,
+    });
+
+    if (reconciliation === "missing") {
+      // Only an authoritative missing-session response proves there is no turn
+      // left to stop. A rejected interrupt does not prove that the pre-existing
+      // turn ended, and an unavailable lookup cannot safely release the lock.
       setSessionPhase(sessionKey, undefined);
       setSessionLoading(sessionKey, false);
     }
@@ -1163,32 +1230,34 @@ export function CodexChatTab({
   const showApprovals =
     pendingApprovals.length > 0 && !!client && !!session?.sessionId;
 
-  const reconcileSessionState = useCallback(async (options?: {
-    forceRefreshMessages?: boolean;
-    throwOnError?: boolean;
-    manualRequestSequence?: number;
-  }) => {
+  const reconcileSessionState = useCallback(async (
+    options?: ReconcileSessionOptions,
+  ): Promise<ReconcileSessionResult> => {
     if (
       connectionState !== "connected"
       || !client
       || !session?.sessionId
     ) {
-      return;
+      return "unavailable";
     }
 
-    const shouldApply = () =>
-      options?.manualRequestSequence === undefined ||
-      options.manualRequestSequence === manualRefreshSequenceRef.current;
-    const status = await getSessionStatus(client, session.sessionId, {
-      throwOnError: options?.throwOnError,
-    });
-    if (!shouldApply()) return;
-    if (!status) {
+    const reconcileSequence = ++reconcileSequenceRef.current;
+    const shouldApply = () => reconcileSequence === reconcileSequenceRef.current;
+    const lookup = await lookupSessionStatus(client, session.sessionId);
+    if (!shouldApply()) return "stale";
+    if (lookup.kind === "missing") {
       if (options?.throwOnError) {
         throw new Error("The Codex session is no longer available on the server");
       }
-      return;
+      return "missing";
     }
+    if (lookup.kind === "unavailable") {
+      if (options?.throwOnError) {
+        throw lookup.error;
+      }
+      return "unavailable";
+    }
+    const status = lookup.session;
     refreshControllerRef.current.markActivity();
 
     /**
@@ -1198,9 +1267,17 @@ export function CodexChatTab({
      * (or an environment that was in the background) when Codex asked for approval
      * never saw the event, and the turn is blocked until someone answers.
      */
+    const approvalSnapshotSequence = ++approvalSnapshotSequenceRef.current;
+    const approvalActivitySequence = approvalActivitySequenceRef.current;
     void fetchPendingApprovals(client, session.sessionId)
       .then((approvals) => {
-        if (shouldApply()) setPendingApprovals(sessionKey, approvals);
+        if (
+          shouldApply()
+          && approvalSnapshotSequence === approvalSnapshotSequenceRef.current
+          && approvalActivitySequence === approvalActivitySequenceRef.current
+        ) {
+          setPendingApprovals(sessionKey, approvals);
+        }
       })
       .catch((error: unknown) => {
         console.error("[CodexChatTab] Failed to rehydrate approvals:", error);
@@ -1229,7 +1306,7 @@ export function CodexChatTab({
         throwOnError: options?.throwOnError,
         shouldApply,
       });
-      return;
+      return "applied";
     }
 
     if (status.status === "error") {
@@ -1241,7 +1318,7 @@ export function CodexChatTab({
         throwOnError: options?.throwOnError,
         shouldApply,
       });
-      return;
+      return "applied";
     }
 
     setSessionLoading(sessionKey, true);
@@ -1251,6 +1328,7 @@ export function CodexChatTab({
         shouldApply,
       });
     }
+    return "applied";
   }, [
     client,
     connectionState,
@@ -1260,8 +1338,13 @@ export function CodexChatTab({
     setPendingApprovals,
     setSessionError,
     setSessionLoading,
+    setSessionPhase,
     setSessionTitle,
   ]);
+
+  useEffect(() => {
+    reconcileSessionStateRef.current = reconcileSessionState;
+  }, [reconcileSessionState]);
 
   useEffect(() => {
     if (
@@ -1274,11 +1357,9 @@ export function CodexChatTab({
     }
 
     lastHandledRefreshRequestIdRef.current = refreshRequestId;
-    const manualRequestSequence = ++manualRefreshSequenceRef.current;
     void reconcileSessionState({
       forceRefreshMessages: true,
       throwOnError: true,
-      manualRequestSequence,
     }).catch((error) => {
       console.error("[CodexChatTab] Manual refresh failed:", error);
       toast.error("Failed to refresh Codex tab", {
@@ -1379,21 +1460,31 @@ export function CodexChatTab({
               continue;
             }
 
-            if (event.sessionId && event.sessionId !== session.sessionId) {
+            if (event.sessionId !== session.sessionId) {
               continue;
             }
 
+            // Any current-session SSE event is newer than a status snapshot
+            // that was already in flight. Invalidate every reconcile source
+            // (initial hydration, watchdog, reconnect, stop, and manual refresh)
+            // before applying the live event so a delayed snapshot cannot roll
+            // idle/error/phase/title/approval state backwards.
+            reconcileSequenceRef.current += 1;
             refreshControllerRef.current.markActivity();
 
             if (event.type === "session.approval-requested") {
               const approval = event.data?.approval as CodexApproval | undefined;
-              if (approval?.approvalId) addPendingApproval(sessionKey, approval);
+              if (approval?.approvalId) {
+                approvalActivitySequenceRef.current += 1;
+                addPendingApproval(sessionKey, approval);
+              }
               continue;
             }
 
             if (event.type === "session.approval-resolved") {
               const approvalId = event.data?.approvalId;
               if (typeof approvalId === "string") {
+                approvalActivitySequenceRef.current += 1;
                 removePendingApproval(sessionKey, approvalId);
               }
               continue;
@@ -1410,11 +1501,19 @@ export function CodexChatTab({
             }
 
             if (event.type === "session.updated") {
-              setSessionLoading(sessionKey, true);
+              const phase = event.data?.phase;
+              if (isCodexSessionPhase(phase)) {
+                const terminal = phase === "idle" || phase === "failed";
+                setSessionPhase(sessionKey, terminal ? undefined : phase);
+                setSessionLoading(sessionKey, !terminal);
+              } else {
+                setSessionLoading(sessionKey, true);
+              }
               continue;
             }
 
             if (event.type === "session.idle") {
+              setSessionPhase(sessionKey, undefined);
               setSessionLoading(sessionKey, false);
               setSessionError(sessionKey, undefined);
               const title = event.data?.title;
@@ -1438,6 +1537,7 @@ export function CodexChatTab({
                 typeof event.data?.error === "string"
                   ? event.data.error
                   : "Codex session failed";
+              setSessionPhase(sessionKey, undefined);
               setSessionLoading(sessionKey, false);
               setSessionError(sessionKey, error);
               setErrorMessage(error);
@@ -1490,6 +1590,7 @@ export function CodexChatTab({
     sessionKey,
     setSessionError,
     setSessionLoading,
+    setSessionPhase,
     setSessionTitle,
     upsertMessage,
   ]);

@@ -69,6 +69,8 @@ export interface BridgeSession {
   createdAt: number;
   /** Attachments staged by the current prompt request. */
   pendingAttachments: PromptAttachmentInput[];
+  /** Built-in slash-command transcript entries, which have no Codex rollout. */
+  localMessages: NormalizedMessage[];
 }
 
 export interface PromptAttachmentInput {
@@ -121,19 +123,21 @@ class ThreadLock {
     const previous = this.chains.get(threadKey) ?? Promise.resolve();
     const attempt = previous.then(task, task);
     // Swallow rejection for the *chain* only; `attempt` still rejects to caller.
-    this.chains.set(
-      threadKey,
-      attempt.catch(() => undefined),
-    );
+    const chain = attempt.catch(() => undefined);
+    this.chains.set(threadKey, chain);
     try {
       return await attempt;
     } finally {
-      if (this.chains.get(threadKey) === attempt) this.chains.delete(threadKey);
+      if (this.chains.get(threadKey) === chain) this.chains.delete(threadKey);
     }
   }
 
   isBusy(threadKey: string): boolean {
     return this.chains.has(threadKey);
+  }
+
+  size(): number {
+    return this.chains.size;
   }
 }
 
@@ -161,15 +165,42 @@ export class ThreadRegistry {
     this.now = options.now ?? Date.now;
   }
 
-  createSession(session: Omit<BridgeSession, "lastAccessed" | "createdAt" | "pendingAttachments">): BridgeSession {
+  createSession(
+    session: Omit<
+      BridgeSession,
+      "lastAccessed" | "createdAt" | "pendingAttachments" | "localMessages"
+    >,
+  ): BridgeSession {
     const record: BridgeSession = {
       ...session,
       pendingAttachments: [],
+      localMessages: [],
       lastAccessed: this.now(),
       createdAt: this.now(),
     };
     this.sessions.set(record.id, record);
     if (record.threadId) this.attach(record.id, record.threadId, { engineHandle: record.threadId });
+    return record;
+  }
+
+  /**
+   * Restores a durable bridge id without eagerly subscribing its Codex thread.
+   * The first route that needs transcript state re-attaches through
+   * `thread/resume`, keeping startup bounded when many old tabs are retained.
+   */
+  restoreSession(
+    session: Omit<
+      BridgeSession,
+      "lastAccessed" | "createdAt" | "pendingAttachments" | "localMessages"
+    > & { lastAccessed: number },
+  ): BridgeSession {
+    const record: BridgeSession = {
+      ...session,
+      pendingAttachments: [],
+      localMessages: [],
+      createdAt: session.lastAccessed,
+    };
+    this.sessions.set(record.id, record);
     return record;
   }
 
@@ -334,6 +365,11 @@ export class ThreadRegistry {
    */
   withDispatchLock<T>(session: BridgeSession, task: () => Promise<T>): Promise<T> {
     return this.lock.run(session.threadId ?? `session:${session.id}`, task);
+  }
+
+  /** Exposed for health/tests so retained completed locks cannot go unnoticed. */
+  dispatchLockCount(): number {
+    return this.lock.size();
   }
 
   /**

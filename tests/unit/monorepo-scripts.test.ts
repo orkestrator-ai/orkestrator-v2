@@ -84,9 +84,12 @@ describe("monorepo orchestration scripts", () => {
 
   test("test runners are configured to run test files in parallel", () => {
     // The suite is dominated by I/O waits, so file-level parallelism is where the
-    // wall-clock win comes from. A regression here silently triples CI time.
+    // wall-clock win comes from. The workspace scripts deliberately omit an
+    // unbounded flag: test-all injects the planned `--parallel=N` after Turbo's
+    // argument separator.
     const source = read("scripts/test-all.ts");
     expect(source).toContain("--parallel=");
+    expect(source).toContain('"--",');
 
     for (const pkg of [
       "apps/web/package.json",
@@ -94,7 +97,8 @@ describe("monorepo orchestration scripts", () => {
       "apps/web-public/package.json",
     ]) {
       const scripts = (JSON.parse(read(pkg)) as { scripts?: Record<string, string> }).scripts ?? {};
-      expect(scripts["test:workspace"]).toContain("--parallel");
+      expect(scripts.test).toContain("--parallel");
+      expect(scripts["test:workspace"]).not.toContain("--parallel");
     }
   });
 

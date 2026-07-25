@@ -30,7 +30,19 @@ async function readUntil(
   const startedAt = Date.now();
   let buffer = "";
   while (Date.now() - startedAt < timeoutMs) {
-    const { value, done } = await reader.read();
+    const remainingMs = Math.max(1, timeoutMs - (Date.now() - startedAt));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const { value, done } = await Promise.race([
+      reader.read(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Timed out waiting for SSE chunk. Buffer so far: ${buffer}`)),
+          remainingMs,
+        );
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
     if (done) break;
     buffer += decoder.decode(value);
     if (predicate(buffer)) return buffer;
@@ -48,10 +60,19 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void
 }
 
 describe("GET /subscribe (SSE)", () => {
-  // Hono's `app.request({ signal })` doesn't reliably propagate the abort to
-  // `c.req.raw.signal`, which makes per-test cleanup of the SSE handler racy.
-  // We exercise the full happy path in one test that holds a single connection.
+  test("the test reader times out when an SSE stream stalls", async () => {
+    const reader = new ReadableStream<Uint8Array>().getReader();
+    try {
+      await expect(readUntil(reader, () => false, 10)).rejects.toThrow(
+        "Timed out waiting for SSE chunk",
+      );
+    } finally {
+      await reader.cancel();
+    }
+  });
+
   test("opens with a connected event and forwards emitted events to the stream", async () => {
+    const subscribersBefore = eventEmitter.subscriberCount;
     const controller = new AbortController();
     const res = await app.request("/subscribe", { signal: controller.signal });
 
@@ -84,6 +105,52 @@ describe("GET /subscribe (SSE)", () => {
     } finally {
       controller.abort();
       await reader?.cancel().catch(() => {});
+      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
+    }
+  });
+
+  test("broadcasts to multiple clients and removes both subscribers on abort", async () => {
+    const subscribersBefore = eventEmitter.subscriberCount;
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const firstResponse = await app.request("/subscribe", {
+      signal: firstController.signal,
+    });
+    const secondResponse = await app.request("/subscribe", {
+      signal: secondController.signal,
+    });
+    const firstReader = firstResponse.body?.getReader();
+    const secondReader = secondResponse.body?.getReader();
+    expect(firstReader).toBeDefined();
+    expect(secondReader).toBeDefined();
+
+    try {
+      await Promise.all([
+        readUntil(firstReader!, (buffer) => buffer.includes("event: connected")),
+        readUntil(secondReader!, (buffer) => buffer.includes("event: connected")),
+      ]);
+      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore + 2);
+
+      eventEmitter.emit({
+        type: "message.updated",
+        sessionId: "shared-session",
+        data: { message: { id: "message-1" } },
+      });
+
+      const [firstEvent, secondEvent] = await Promise.all([
+        readUntil(firstReader!, (buffer) => buffer.includes("event: message.updated")),
+        readUntil(secondReader!, (buffer) => buffer.includes("event: message.updated")),
+      ]);
+      expect(firstEvent).toContain('"sessionId":"shared-session"');
+      expect(secondEvent).toContain('"sessionId":"shared-session"');
+    } finally {
+      firstController.abort();
+      secondController.abort();
+      await Promise.all([
+        firstReader?.cancel().catch(() => {}),
+        secondReader?.cancel().catch(() => {}),
+      ]);
+      await waitFor(() => eventEmitter.subscriberCount === subscribersBefore);
     }
   });
 });

@@ -100,6 +100,20 @@ const SESSION_PHASE_LABELS: Record<string, string> = {
   "resolve-conflicts": "Conflict Resolution Session",
 };
 
+function wasCodexPromptAccepted(result: unknown): boolean {
+  if (result === true) return true;
+  return Boolean(
+    result
+    && typeof result === "object"
+    && (
+      (result as { outcome?: unknown }).outcome === "accepted"
+      // Unknown means the bridge may already be executing. Keep the pipeline
+      // waiting for authoritative status rather than unlocking or duplicating it.
+      || (result as { outcome?: unknown }).outcome === "unknown"
+    ),
+  );
+}
+
 function SessionDivider({ session, index }: { session: PipelineSession; index: number }) {
   const label = SESSION_PHASE_LABELS[session.phase] || session.phase;
   const iterationSuffix = session.iteration > 0 ? ` (Iteration ${session.iteration + 1})` : "";
@@ -693,7 +707,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         attachments,
       });
 
-      if (!success) {
+      if (!wasCodexPromptAccepted(success)) {
         if (isPipelinePaused()) return;
         const message = "Failed to send build prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
@@ -741,7 +755,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         attachments: taskImagesToAttachments(task.images),
       });
 
-      if (!success) {
+      if (!wasCodexPromptAccepted(success)) {
         if (isPipelinePaused()) return;
         const message = "Failed to send review prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
@@ -789,7 +803,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         attachments: taskImagesToAttachments(task.images),
       });
 
-      if (!success) {
+      if (!wasCodexPromptAccepted(success)) {
         if (isPipelinePaused()) return;
         const message = "Failed to send verification prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
@@ -836,7 +850,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         attachments: taskImagesToAttachments(task.images),
       });
 
-      if (!success) {
+      if (!wasCodexPromptAccepted(success)) {
         if (isPipelinePaused()) return;
         const message = "Failed to send fix prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
@@ -876,7 +890,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         phase: "creating-pr",
         useTaskImages: false,
       });
-      if (!success) {
+      if (!wasCodexPromptAccepted(success)) {
         if (isPipelinePaused()) return;
         const message = "Failed to send PR creation prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
@@ -929,7 +943,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         phase: "resolving-conflicts",
         useTaskImages: false,
       });
-      if (!success) {
+      if (!wasCodexPromptAccepted(success)) {
         if (isPipelinePaused()) return;
         const message = "Failed to send conflict resolution prompt";
         appendCodexMessage(result.sessionKey, buildErrorMessage(message));
@@ -970,7 +984,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         phase: "addressing",
         useTaskImages: false,
       });
-      if (!success) {
+      if (!wasCodexPromptAccepted(success)) {
         if (isPipelinePaused()) return;
         const message = "Failed to send address issues prompt";
         appendCodexMessage(reviewSession.sessionKey, buildErrorMessage(message));
@@ -1481,7 +1495,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     appendCodexMessage(currentSession.sessionKey, buildUserMessage(text.trim()));
 
     const success = await sendPrompt(client, currentSession.sdkSessionId, text.trim());
-    if (!success) {
+    if (!wasCodexPromptAccepted(success)) {
       const message = "Failed to send message to the agent";
       appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
       setSessionLoading(currentSession.sessionKey, false);
@@ -1556,7 +1570,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       phase: resumedPhase,
       useTaskImages: false,
     });
-    if (!success) {
+    if (!wasCodexPromptAccepted(success)) {
       if (isPipelinePaused()) return;
       const message = "Failed to resume build pipeline";
       appendCodexMessage(currentSession.sessionKey, buildErrorMessage(message));
@@ -1749,7 +1763,7 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         requestId: context.requestId,
       });
       if (!stillOwnsReconnect()) return;
-      if (!success) {
+      if (!wasCodexPromptAccepted(success)) {
         const [retryStatus, retryMessages] = await Promise.all([
           getSessionStatus(activeClient, currentSession.sdkSessionId, { throwOnError: true }),
           getSessionMessages(activeClient, currentSession.sdkSessionId, { throwOnError: true }),

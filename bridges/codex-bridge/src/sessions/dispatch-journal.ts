@@ -166,7 +166,9 @@ export class DispatchJournal {
       updatedAt: timestamp,
     };
     this.records.set(record.requestId, record);
-    await this.flush();
+    // This write is the safety boundary for at-most-once dispatch. If it did not
+    // reach disk, the caller must not proceed to turn/start.
+    await this.flush({ failClosed: true });
     return record;
   }
 
@@ -247,7 +249,7 @@ export class DispatchJournal {
     }
   }
 
-  private flush(): Promise<void> {
+  private flush(options: { failClosed?: boolean } = {}): Promise<void> {
     this.collectGarbage();
     if (!this.persist) return Promise.resolve();
 
@@ -270,6 +272,7 @@ export class DispatchJournal {
           "[codex-bridge] Failed to persist dispatch journal:",
           error instanceof Error ? error.message : error,
         );
+        if (options.failClosed) throw error;
       }
     });
     this.writeChain = attempt.catch(() => undefined);

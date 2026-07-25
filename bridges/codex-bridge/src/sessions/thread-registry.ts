@@ -81,6 +81,12 @@ export interface BridgeSession {
   pendingAttachments: PromptAttachmentInput[];
   /** Built-in slash-command transcript entries, which have no Codex rollout. */
   localMessages: NormalizedMessage[];
+  /**
+   * True when `localMessages` contains history recovered from a rollout that
+   * app-server could no longer resume. The first accepted turn on the replacement
+   * thread carries a bounded copy so the model does not silently lose context.
+   */
+  recoveredContextPending: boolean;
 }
 
 export interface PromptAttachmentInput {
@@ -178,13 +184,18 @@ export class ThreadRegistry {
   createSession(
     session: Omit<
       BridgeSession,
-      "lastAccessed" | "createdAt" | "pendingAttachments" | "localMessages"
+      | "lastAccessed"
+      | "createdAt"
+      | "pendingAttachments"
+      | "localMessages"
+      | "recoveredContextPending"
     >,
   ): BridgeSession {
     const record: BridgeSession = {
       ...session,
       pendingAttachments: [],
       localMessages: [],
+      recoveredContextPending: false,
       lastAccessed: this.now(),
       createdAt: this.now(),
     };
@@ -201,13 +212,18 @@ export class ThreadRegistry {
   restoreSession(
     session: Omit<
       BridgeSession,
-      "lastAccessed" | "createdAt" | "pendingAttachments" | "localMessages"
+      | "lastAccessed"
+      | "createdAt"
+      | "pendingAttachments"
+      | "localMessages"
+      | "recoveredContextPending"
     > & { lastAccessed: number },
   ): BridgeSession {
     const record: BridgeSession = {
       ...session,
       pendingAttachments: [],
       localMessages: [],
+      recoveredContextPending: false,
       createdAt: session.lastAccessed,
     };
     this.sessions.set(record.id, record);

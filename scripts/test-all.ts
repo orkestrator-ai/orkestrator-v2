@@ -10,10 +10,10 @@
  *     The Turbo group receives its bound through `ORKESTRATOR_TEST_WORKERS`
  *     rather than Turbo's `--` passthrough, which would be hashed into the
  *     dependency `build` tasks and split the build cache in two.
- *  2. **Across groups** — the workspace, root and bridge suites are independent,
- *     so they run concurrently instead of one after another.
+ *  2. **Across groups** — the workspace, root, bridge, and protocol checks are
+ *     independent, so they run concurrently instead of one after another.
  *
- * Group output is buffered and printed as a labelled block. Interleaving three
+ * Group output is buffered and printed as a labelled block. Interleaving
  * concurrent `bun test` streams would make failures much harder to read, and a
  * test log is only useful if you can tell which suite a failure came from.
  *
@@ -96,10 +96,11 @@ const defaultDependencies: TestAllDependencies = {
  * Splits the available cores across the concurrent groups and the package tasks
  * inside the workspace Turbo group.
  *
- * Left to itself each group would spawn one worker per core, so three groups
- * would oversubscribe the machine threefold — tolerable on an 18-core
- * workstation, liable to thrash a 2-core CI runner. The root suite gets the
- * largest share because it is by far the biggest and slowest.
+ * Left to itself each Bun test group would spawn one worker per core, so the
+ * three worker-consuming groups would oversubscribe the machine threefold —
+ * tolerable on an 18-core workstation, liable to thrash a 2-core CI runner.
+ * The protocol check does not allocate a Bun test worker pool. The root suite
+ * gets the largest share because it is by far the biggest and slowest.
  */
 export interface WorkerPlan {
   /** Bun workers used by each active workspace package task. */
@@ -141,6 +142,8 @@ export const MIN_AGGREGATE_TEST_WORKERS = 1 + MIN_BRIDGE_WORKERS + 1;
  * it in strict env mode while keeping it out of the hash.
  */
 export const WORKSPACE_WORKERS_ENV = "ORKESTRATOR_TEST_WORKERS";
+export const ALLOW_MISSING_PROTOCOL_BINARY_ENV =
+  "CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY";
 
 export function planWorkers(cores: number): WorkerPlan {
   // Never plan more Bun workers than logical cores across root + bridges +
@@ -200,6 +203,17 @@ export function buildConcurrentGroups(cores: number): TestGroup[] {
       name: "bridges",
       command: "bun",
       args: ["test", "bridges", `--parallel=${workers.bridges}`],
+    },
+    {
+      // Always validates the committed TypeScript lockfile. On developer
+      // machines with the pinned binary it additionally regenerates and checks
+      // the full TypeScript + JSON Schema contract. Minimal CI environments may
+      // lack that managed binary, so the generator has an explicit offline
+      // fallback for this pipeline only.
+      name: "codex protocol lockfile",
+      command: "bun",
+      args: ["run", "codex:protocol:check"],
+      env: { [ALLOW_MISSING_PROTOCOL_BINARY_ENV]: "1" },
     },
   ];
 }

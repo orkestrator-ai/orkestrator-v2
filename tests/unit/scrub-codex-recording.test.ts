@@ -11,6 +11,7 @@ import { homedir } from "node:os";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
+  __testing,
   buildRedactions,
   censusByMethod,
   parseArguments,
@@ -132,6 +133,16 @@ describe("scrub-codex-recording", () => {
       expect(() => JSON.parse(line)).not.toThrow();
     }
     expect(output).not.toContain("sk-abcdefghijklmnopqrstuvwx");
+  });
+
+  test("validation detects a custom redaction that breaks JSON framing", () => {
+    const result = scrub('{"value":"safe"}', [{
+      name: "unsafe-custom-redaction",
+      pattern: /safe/g,
+      replacement: '"',
+    }]);
+
+    expect(__testing.validateJsonl(result.output)).toEqual({ lines: 1, invalid: 1 });
   });
 
   test("clean input is reported as having no hits", () => {
@@ -326,6 +337,21 @@ describe("scrub-codex-recording", () => {
     }
   });
 
+  test("CLI scrubs in place when no output path is supplied", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ork-scrub-test-"));
+    try {
+      const inputPath = join(root, "raw.jsonl");
+      await writeFile(inputPath, '{"apiKey":"abcdefghijklmnopqrstuvwx"}\n');
+
+      const result = await runCli([inputPath]);
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain(`Wrote ${inputPath}`);
+      expect(await readFile(inputPath, "utf8")).toContain("«redacted»");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("CLI --check fails on a foreign home path with an explicit identity", async () => {
     const root = await mkdtemp(join(tmpdir(), "ork-scrub-test-"));
     try {
@@ -363,6 +389,26 @@ describe("scrub-codex-recording", () => {
         method: "item/agentMessage/delta",
         params: { delta: "" },
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("CLI --check --strip-content validates the virtual output without writing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ork-scrub-test-"));
+    try {
+      const inputPath = join(root, "raw.jsonl");
+      const original = `${JSON.stringify({
+        method: "item/agentMessage/delta",
+        params: { delta: "private prose with no secret-shaped token" },
+      })}\n`;
+      await writeFile(inputPath, original);
+
+      const result = await runCli([inputPath, "--check", "--strip-content"]);
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain("Blanked 1 content field(s)");
+      expect(result.stdout).toContain("--check: no redaction pattern matched");
+      expect(await readFile(inputPath, "utf8")).toBe(original);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

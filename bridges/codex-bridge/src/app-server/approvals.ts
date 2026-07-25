@@ -111,6 +111,11 @@ export interface ApprovalRequest {
   networkHost?: string;
   /** True when the protocol has a real "and stop asking" variant for this method. */
   supportsApproveForSession: boolean;
+  /**
+   * False when the bridge could not recover enough action detail for an informed
+   * approval. The renderer may still offer deny/cancel, but must not approve it.
+   */
+  actionable: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -138,6 +143,15 @@ function commandText(value: unknown): string | undefined {
     return parts.length > 0 ? parts.join(" ") : undefined;
   }
   return undefined;
+}
+
+/** Best-effort fallback when recent app-server versions omit the top-level command. */
+function commandActionsText(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const commands = value
+    .map((entry) => (isRecord(entry) ? str(entry.command) : undefined))
+    .filter((entry): entry is string => entry !== undefined);
+  return commands.length > 0 ? [...new Set(commands)].join("\n") : undefined;
 }
 
 /**
@@ -186,6 +200,16 @@ export function describeApproval(options: {
     ? str(params.networkApprovalContext.host)
     : undefined;
 
+  const command =
+    commandText(params.command) ?? commandActionsText(params.commandActions);
+  const actionable =
+    kind === "command"
+      ? command !== undefined
+      : kind === "file-change"
+        ? Boolean(changes?.length)
+        : permissions !== undefined
+          && (permissions.network || permissions.fileSystem);
+
   return {
     approvalId: options.approvalId,
     kind,
@@ -198,7 +222,7 @@ export function describeApproval(options: {
     generation: options.generation,
     requestedAt: options.requestedAt,
     expiresAt: options.expiresAt,
-    ...(commandText(params.command) ? { command: commandText(params.command) } : {}),
+    ...(command ? { command } : {}),
     ...(str(params.cwd) ? { cwd: str(params.cwd) } : {}),
     ...(changes?.length ? { changes } : {}),
     ...(permissions ? { permissions } : {}),
@@ -212,6 +236,7 @@ export function describeApproval(options: {
      * the UI so a future method without it can say so.
      */
     supportsApproveForSession: true,
+    actionable,
   };
 }
 

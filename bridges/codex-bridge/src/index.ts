@@ -123,6 +123,12 @@ export const app = new Hono();
 /** Overridden in tests so title generation does not spawn a real `codex exec`. */
 type SessionTitleGenerator = (prompt: string) => Promise<string>;
 let sessionTitleGeneratorForTesting: SessionTitleGenerator | null = null;
+interface SseRouteTestHooks {
+  afterSubscriberRegistered?: () => Promise<void> | void;
+  beforeBufferedDrain?: () => Promise<void> | void;
+  beforeBufferedWrite?: (revision: number) => Promise<void> | void;
+}
+let sseRouteTestHooks: SseRouteTestHooks | null = null;
 function setSessionTitleGeneratorForTesting(generator: SessionTitleGenerator | null): void {
   sessionTitleGeneratorForTesting = generator;
 }
@@ -566,6 +572,9 @@ export const __testing = {
   runtimeForTesting: () => appServerRuntime,
   sanitizeLogFileComponentForTesting: sanitizeLogFileComponent,
   setSessionTitleGeneratorForTesting,
+  setSseRouteTestHooksForTesting: (hooks: SseRouteTestHooks | null) => {
+    sseRouteTestHooks = hooks;
+  },
   startBridgeServerForTesting: startBridgeServer,
   startSseKeepaliveForTesting: startSseKeepalive,
   subscribeForTesting: (
@@ -599,6 +608,26 @@ function createOpenSseWriter<T>(
   return async (event) => {
     if (!isOpen()) return;
     await write(event);
+  };
+}
+
+/**
+ * Appends writes to a per-connection promise chain.
+ *
+ * `emit()` deliberately does not await subscribers, so without this queue two
+ * live events can call Hono's stream writer concurrently and complete out of
+ * revision order.
+ */
+function createSerializedSseWriter<T>(
+  write: (event: T) => Promise<void>,
+): (event: T) => Promise<void> {
+  let tail: Promise<void> = Promise.resolve();
+  return (event) => {
+    const attempt = tail.then(() => write(event));
+    // Keep later frames flowing after a failed write; the returned attempt still
+    // rejects so the endpoint or emit() can report the original failure.
+    tail = attempt.catch(() => undefined);
+    return attempt;
   };
 }
 
@@ -712,6 +741,12 @@ app.post("/session/:id/config", async (c) => {
   return c.json({ status: "updated", durable: true });
 });
 
+app.get("/session/:id/config", async (c) => {
+  const config = await appServerRuntime.getConfig(c.req.param("id"));
+  if (!config) return c.json({ error: "Session not found" }, 404);
+  return c.json(config);
+});
+
 app.get("/session/:id/messages", async (c) => {
   const messages = await appServerRuntime.getMessages(c.req.param("id"));
   if (!messages) return c.json({ error: "Session not found" }, 404);
@@ -757,13 +792,16 @@ app.post("/session/:id/prompt", async (c) => {
   if (!prompt && attachments.length === 0) {
     return c.json({ error: "Prompt or image attachment is required" }, 400);
   }
-  if (body.requestId !== undefined && (!requestId || requestId.length > 200)) {
-    return c.json({ error: "requestId must be a non-empty string of at most 200 characters" }, 400);
+  if (!requestId || requestId.length > 200) {
+    return c.json(
+      { error: "requestId must be a non-empty string of at most 200 characters" },
+      400,
+    );
   }
 
   const outcome = await appServerRuntime.prompt(sessionId, {
     prompt,
-    requestId: requestId || undefined,
+    requestId,
     attachments,
   });
   if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
@@ -830,9 +868,11 @@ app.get("/event/subscribe", (c) => {
 
   return streamSSE(c, async (stream) => {
     let open = true;
-    const writeWhileOpen = createOpenSseWriter(
-      () => open,
-      (event: { event: string; data: string; id?: string }) => stream.writeSSE(event),
+    const writeWhileOpen = createSerializedSseWriter(
+      createOpenSseWriter(
+        () => open,
+        (event: { event: string; data: string; id?: string }) => stream.writeSSE(event),
+      ),
     );
 
     const frameFor = (event: SseEvent, revision: number) => ({
@@ -854,8 +894,11 @@ app.get("/event/subscribe", (c) => {
      * exists to close. So we subscribe first, replay, then flush anything that
      * arrived during the replay, skipping revisions the replay already covered.
      */
+    // Snapshot the fresh-client anchor before subscribing. These statements are
+    // synchronous, so no event can land between the snapshot and registration.
+    const anchorRevision = cursor ?? eventRing.latestRevision;
     let buffered: Array<{ event: SseEvent; revision: number }> | null = [];
-    let highestSent = cursor ?? 0;
+    let highestSent = anchorRevision;
 
     const listener = async (event: SseEvent, revision: number) => {
       if (buffered) {
@@ -871,6 +914,9 @@ app.get("/event/subscribe", (c) => {
     const keepalive = startSseKeepalive(writeWhileOpen);
 
     try {
+      if (sseRouteTestHooks?.afterSubscriberRegistered) {
+        await sseRouteTestHooks.afterSubscriberRegistered();
+      }
       const replay = cursor === null ? null : eventRing.since(cursor);
 
       await writeWhileOpen({
@@ -885,11 +931,11 @@ app.get("/event/subscribe", (c) => {
          * it had just asked to be replayed. Echoing its cursor back makes the
          * handshake idempotent.
          */
-        id: String(cursor ?? eventRing.latestRevision),
+        id: String(anchorRevision),
         data: JSON.stringify({
           status: "connected",
           timestamp: new Date().toISOString(),
-          revision: eventRing.latestRevision,
+          revision: replay?.latestRevision ?? anchorRevision,
           // Tells the client whether the frames that follow are a replay or a
           // fresh start, so it knows if it still owes itself a reconcile.
           replayed: replay?.complete === true ? replay.events.length : 0,
@@ -901,7 +947,7 @@ app.get("/event/subscribe", (c) => {
         // sending a partial history that would look whole.
         await writeWhileOpen({
           event: "session.reconcile-required",
-          id: String(eventRing.latestRevision),
+          id: String(replay.latestRevision),
           data: JSON.stringify({
             reason: "cursor-expired",
             requestedRevision: cursor,
@@ -917,14 +963,25 @@ app.get("/event/subscribe", (c) => {
         }
       }
 
-      // Switch to live mode and drain whatever landed during the replay.
-      const pending = buffered;
-      buffered = null;
-      for (const entry of pending ?? []) {
+      if (sseRouteTestHooks?.beforeBufferedDrain) {
+        await sseRouteTestHooks.beforeBufferedDrain();
+      }
+
+      // Drain while remaining in buffered mode. Any event that lands during an
+      // awaited write is appended to the same array and consumed by this loop,
+      // so a later live revision cannot leapfrog an earlier buffered one.
+      let pendingIndex = 0;
+      while (buffered && pendingIndex < buffered.length) {
+        const entry = buffered[pendingIndex]!;
+        pendingIndex += 1;
         if (entry.revision <= highestSent) continue;
         highestSent = entry.revision;
+        if (sseRouteTestHooks?.beforeBufferedWrite) {
+          await sseRouteTestHooks.beforeBufferedWrite(entry.revision);
+        }
         await writeWhileOpen(frameFor(entry.event, entry.revision));
       }
+      buffered = null;
 
       await new Promise<void>((resolve) => {
         c.req.raw.signal.addEventListener("abort", () => resolve());

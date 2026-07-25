@@ -104,6 +104,16 @@ describe("synthetic-full-turn fixture", () => {
     expect(command?.toolState).toBe("pending");
   });
 
+  test("applies the caller's command-output memory cap", async () => {
+    const lines = readFixture("synthetic-full-turn.jsonl").filter(
+      (line) => !line.includes('"aggregatedOutput"'),
+    );
+    const summary = await replayRecording(lines, { maxCommandOutputChars: 4 });
+    const command = summary.turns[0]?.parts.find((part) => part.toolName === "bash");
+
+    expect(command?.toolOutput).toBe("READ\n… output truncated");
+  });
+
   test("ignored bookkeeping notifications do not become unknown methods", async () => {
     const summary = await replayRecording(readFixture("synthetic-full-turn.jsonl"));
     // The fixture contains thread/tokenUsage/updated, which is deliberately
@@ -123,6 +133,40 @@ describe("synthetic-full-turn fixture", () => {
     ];
     const summary = await replayRecording(lines);
     expect(summary.unknownMethods).toEqual(["turn/somethingBrandNew"]);
+  });
+
+  test("classifies responses, server requests, invalid lines, and unsupported items", async () => {
+    const summary = await replayRecording([
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }),
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1" },
+      }),
+      "{not valid json",
+      JSON.stringify({ __recorderNotice: "metadata, not protocol" }),
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "item-1", type: "futureItemVariant" },
+        },
+      }),
+    ]);
+
+    expect(summary.counts).toEqual({
+      notifications: 1,
+      responses: 1,
+      serverRequests: 1,
+    });
+    expect(summary.serverRequestMethods).toEqual([
+      "item/commandExecution/requestApproval",
+    ]);
+    expect(summary.invalidLines).toBe(1);
+    expect(summary.unsupportedItemTypes).toEqual(["futureItemVariant"]);
   });
 });
 

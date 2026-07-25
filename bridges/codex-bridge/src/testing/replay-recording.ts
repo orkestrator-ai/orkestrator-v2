@@ -77,6 +77,7 @@ function applyEvent(
     order: string[];
     generation: EngineGeneration;
     renderState: TurnRenderState | undefined;
+    maxCommandOutputChars: number | undefined;
   },
 ): void {
   const turnId = "turnId" in event ? event.turnId : undefined;
@@ -90,6 +91,7 @@ function applyEvent(
       engineGeneration: state.generation,
       assistantMessageId: `replay-${turnId}`,
       startedAt: new Date(0).toISOString(),
+      maxCommandOutputChars: state.maxCommandOutputChars,
     });
     state.turns.set(turnId, turn);
     state.order.push(turnId);
@@ -144,6 +146,7 @@ export async function replayRecording(
     order: [] as string[],
     generation,
     renderState: undefined as TurnRenderState | undefined,
+    maxCommandOutputChars: options.maxCommandOutputChars,
   };
 
   const unknownMethods: string[] = [];

@@ -19,17 +19,29 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { homedir, platform, tmpdir } from "node:os";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 const execFile = promisify(execFileCallback);
 
 const repoRoot = join(import.meta.dir, "..");
 const versionConfigPath = join(repoRoot, "config", "codex-version.json");
+export const EXPECTED_PROTOCOL_OUTPUT_DIR =
+  "bridges/codex-bridge/src/app-server/generated";
+export const ALLOW_MISSING_PROTOCOL_BINARY_ENV =
+  "CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY";
 
-interface CodexVersionConfig {
+export interface CodexVersionConfig {
   version: string;
   appServerProtocol: { generatedFrom: string; outputDir: string };
 }
@@ -53,6 +65,85 @@ export interface ProtocolManifest {
 
 async function readVersionConfig(): Promise<CodexVersionConfig> {
   return JSON.parse(await readFile(versionConfigPath, "utf8")) as CodexVersionConfig;
+}
+
+export interface ProtocolGeneratorArguments {
+  check: boolean;
+}
+
+export function parseArguments(args: string[]): ProtocolGeneratorArguments {
+  if (args.length === 0) return { check: false };
+  if (args.length === 1 && args[0] === "--check") return { check: true };
+  throw new Error(
+    "usage: bun scripts/generate-codex-app-server-protocol.ts [--check]",
+  );
+}
+
+export function validateVersionConfig(config: CodexVersionConfig): void {
+  if (!/^\d+\.\d+\.\d+$/.test(config.version)) {
+    throw new Error(
+      `config/codex-version.json: version must be an exact semver, received ${JSON.stringify(config.version)}`,
+    );
+  }
+  if (config.appServerProtocol.generatedFrom !== config.version) {
+    throw new Error(
+      `config/codex-version.json: appServerProtocol.generatedFrom (${config.appServerProtocol.generatedFrom}) must equal version (${config.version})`,
+    );
+  }
+}
+
+function isPathInside(parent: string, child: string): boolean {
+  const pathFromParent = relative(parent, child);
+  return pathFromParent.length > 0
+    && pathFromParent !== ".."
+    && !pathFromParent.startsWith(`..${sep}`)
+    && !isAbsolute(pathFromParent);
+}
+
+/**
+ * Resolves the configured output through its nearest existing ancestor and
+ * refuses both lexical traversal and committed symlink escapes before `write()`
+ * performs its recursive removal.
+ */
+export async function resolveProtocolOutputDir(
+  configuredOutputDir: string,
+  root: string = repoRoot,
+): Promise<string> {
+  if (configuredOutputDir !== EXPECTED_PROTOCOL_OUTPUT_DIR) {
+    throw new Error(
+      `config/codex-version.json: appServerProtocol.outputDir must be ${EXPECTED_PROTOCOL_OUTPUT_DIR}`,
+    );
+  }
+
+  const lexicalRoot = resolve(root);
+  const lexicalTarget = resolve(lexicalRoot, configuredOutputDir);
+  if (!isPathInside(lexicalRoot, lexicalTarget)) {
+    throw new Error("Refusing protocol output path outside the repository");
+  }
+
+  let existingAncestor = lexicalTarget;
+  while (!existsSync(existingAncestor)) {
+    const parent = dirname(existingAncestor);
+    if (parent === existingAncestor) {
+      throw new Error("Could not resolve a safe protocol output ancestor");
+    }
+    existingAncestor = parent;
+  }
+
+  const [realRoot, realAncestor] = await Promise.all([
+    realpath(lexicalRoot),
+    realpath(existingAncestor),
+  ]);
+  const realTarget = resolve(
+    realAncestor,
+    relative(existingAncestor, lexicalTarget),
+  );
+  if (!isPathInside(realRoot, realTarget)) {
+    throw new Error(
+      "Refusing protocol output path whose existing ancestor resolves outside the repository",
+    );
+  }
+  return realTarget;
 }
 
 /**
@@ -346,6 +437,17 @@ async function readCommitted(outputDir: string): Promise<GeneratedProtocol | nul
 
 function describeDifferences(expected: GeneratedProtocol, actual: GeneratedProtocol): string[] {
   const problems: string[] = [];
+  for (const key of [
+    "codexVersion",
+    "typescriptFileCount",
+    "schemaFileCount",
+  ] as const) {
+    if (expected.manifest[key] !== actual.manifest[key]) {
+      problems.push(
+        `${key} differs (committed ${actual.manifest[key]}, generated ${expected.manifest[key]})`,
+      );
+    }
+  }
   if (expected.manifest.typescriptDigest !== actual.manifest.typescriptDigest) {
     problems.push(
       `TypeScript binding digest differs (committed ${actual.manifest.typescriptDigest}, generated ${expected.manifest.typescriptDigest})`,
@@ -382,9 +484,65 @@ function describeDifferences(expected: GeneratedProtocol, actual: GeneratedProto
   return problems;
 }
 
+function describeCommittedSelfConsistency(
+  committed: GeneratedProtocol,
+  pinnedVersion: string,
+): string[] {
+  const problems: string[] = [];
+  if (committed.manifest.codexVersion !== pinnedVersion) {
+    problems.push(
+      `codexVersion differs from config (manifest ${committed.manifest.codexVersion}, config ${pinnedVersion})`,
+    );
+  }
+
+  const actualDigest = digestFiles(committed.typescript);
+  if (committed.manifest.typescriptDigest !== actualDigest) {
+    problems.push(
+      `TypeScript binding digest does not describe the committed tree (manifest ${committed.manifest.typescriptDigest}, actual ${actualDigest})`,
+    );
+  }
+  if (committed.manifest.typescriptFileCount !== committed.typescript.length) {
+    problems.push(
+      `typescriptFileCount differs from the committed tree (manifest ${committed.manifest.typescriptFileCount}, actual ${committed.typescript.length})`,
+    );
+  }
+
+  const byPath = new Map(
+    committed.typescript.map((file) => [file.path, file.content]),
+  );
+  for (const [manifestKey, bindingPath] of [
+    ["clientRequestMethods", "ClientRequest.ts"],
+    ["serverNotificationMethods", "ServerNotification.ts"],
+    ["serverRequestMethods", "ServerRequest.ts"],
+  ] as const) {
+    const source = byPath.get(bindingPath);
+    if (source === undefined) {
+      problems.push(`Missing committed binding: typescript/${bindingPath}`);
+      continue;
+    }
+    const actualMethods = extractMethods(source);
+    const committedMethods = [...committed.manifest[manifestKey]].sort();
+    if (JSON.stringify(actualMethods) !== JSON.stringify(committedMethods)) {
+      problems.push(
+        `${manifestKey} does not describe typescript/${bindingPath}`,
+      );
+    }
+  }
+  return problems;
+}
+
 async function write(outputDir: string, generated: GeneratedProtocol): Promise<void> {
   const tsRoot = join(outputDir, "typescript");
-  await rm(tsRoot, { recursive: true, force: true });
+  const manifestPath = join(outputDir, "protocol-manifest.json");
+  const readmePath = join(outputDir, "README.md");
+  // Remove known generated leaves before writing. `writeFile` follows a symlink,
+  // so overwriting a committed symlink here could otherwise escape the validated
+  // output directory even though the directory itself is safely contained.
+  await Promise.all([
+    rm(tsRoot, { recursive: true, force: true }),
+    rm(manifestPath, { force: true }),
+    rm(readmePath, { force: true }),
+  ]);
   for (const file of generated.typescript) {
     const absolute = join(tsRoot, ...file.path.split("/"));
     await mkdir(dirname(absolute), { recursive: true });
@@ -393,12 +551,12 @@ async function write(outputDir: string, generated: GeneratedProtocol): Promise<v
 
   await mkdir(outputDir, { recursive: true });
   await writeFile(
-    join(outputDir, "protocol-manifest.json"),
+    manifestPath,
     `${JSON.stringify(generated.manifest, null, 2)}\n`,
     "utf8",
   );
   await writeFile(
-    join(outputDir, "README.md"),
+    readmePath,
     [
       "# Generated Codex app-server protocol",
       "",
@@ -407,8 +565,9 @@ async function write(outputDir: string, generated: GeneratedProtocol): Promise<v
       `pinned in \`config/codex-version.json\` (currently ${generated.manifest.codexVersion}).`,
       "",
       "These bindings are only valid for the version that generated them, so they",
-      "are treated as a lockfile. CI runs the generator with `--check`, which",
-      "regenerates into a temp directory and fails on any difference.",
+      "are treated as a lockfile. The full test pipeline runs the generator with",
+      "`--check`: it always verifies the committed TypeScript digest, file count",
+      "and method surface, and regenerates from the pinned binary when available.",
       "",
       "`protocol-manifest.json` additionally records a digest of the JSON Schema",
       "bundle. The schema is not committed (nothing reads it at runtime) but the",
@@ -423,17 +582,50 @@ async function write(outputDir: string, generated: GeneratedProtocol): Promise<v
 }
 
 async function main(): Promise<void> {
-  const check = process.argv.includes("--check");
+  const { check } = parseArguments(process.argv.slice(2));
   const config = await readVersionConfig();
-  const outputDir = join(repoRoot, config.appServerProtocol.outputDir);
+  validateVersionConfig(config);
+  const outputDir = await resolveProtocolOutputDir(
+    config.appServerProtocol.outputDir,
+  );
 
-  if (config.appServerProtocol.generatedFrom !== config.version) {
-    throw new Error(
-      `config/codex-version.json: appServerProtocol.generatedFrom (${config.appServerProtocol.generatedFrom}) must equal version (${config.version})`,
+  let committed: GeneratedProtocol | null = null;
+  if (check) {
+    committed = await readCommitted(outputDir);
+    if (!committed) {
+      throw new Error(
+        `No committed protocol artifacts at ${config.appServerProtocol.outputDir}. Run the generator without --check.`,
+      );
+    }
+    const selfConsistencyProblems = describeCommittedSelfConsistency(
+      committed,
+      config.version,
     );
+    if (selfConsistencyProblems.length > 0) {
+      throw new Error(
+        [
+          "Committed protocol artifacts are internally inconsistent:",
+          ...selfConsistencyProblems.map((problem) => `  - ${problem}`),
+        ].join("\n"),
+      );
+    }
   }
 
-  const codexBinary = await resolveCodexBinary(config.version);
+  let codexBinary: string;
+  try {
+    codexBinary = await resolveCodexBinary(config.version);
+  } catch (error) {
+    const allowMissing =
+      check
+      && !process.env.CODEX_PROTOCOL_BINARY?.trim()
+      && process.env[ALLOW_MISSING_PROTOCOL_BINARY_ENV] === "1";
+    if (!allowMissing) throw error;
+    console.log(
+      "[codex-protocol] Committed TypeScript lockfile is internally consistent; "
+      + "the pinned binary is unavailable, so binary/schema regeneration was skipped.",
+    );
+    return;
+  }
   console.log(`[codex-protocol] Using ${codexBinary} (codex ${config.version})`);
   const generated = await generate(codexBinary, config.version);
 
@@ -447,14 +639,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const committed = await readCommitted(outputDir);
-  if (!committed) {
-    throw new Error(
-      `No committed protocol artifacts at ${config.appServerProtocol.outputDir}. Run the generator without --check.`,
-    );
-  }
-
-  const problems = describeDifferences(generated, committed);
+  const problems = describeDifferences(generated, committed!);
   if (problems.length > 0) {
     console.error("[codex-protocol] Committed artifacts do not match the pinned binary:");
     for (const problem of problems.slice(0, 40)) console.error(`  - ${problem}`);
@@ -481,4 +666,7 @@ export const __testing = {
   digestFiles,
   extractMethods,
   describeDifferences,
+  describeCommittedSelfConsistency,
+  generate,
+  write,
 };

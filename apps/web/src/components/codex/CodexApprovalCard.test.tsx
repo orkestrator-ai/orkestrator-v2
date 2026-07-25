@@ -50,6 +50,7 @@ function makeApproval(overrides: Partial<CodexApproval> = {}): CodexApproval {
     // Comfortably in the future so the countdown does not read as expired.
     expiresAt: Date.now() + 300_000,
     command: "rm -rf build",
+    actionable: true,
     supportsApproveForSession: true,
     ...overrides,
   };
@@ -180,6 +181,29 @@ describe("CodexApprovalCard", () => {
     renderCard(makeApproval({ supportsApproveForSession: false }));
     expect(screen.queryByRole("button", { name: "Approve for session" })).toBeNull();
     expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
+  });
+
+  test("fails closed when the bridge cannot resolve actionable details", () => {
+    renderCard(makeApproval({ actionable: false }));
+
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Approve for session" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Decline" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cancel turn" })).toBeTruthy();
+    expect(screen.getByText(/does not include enough detail to approve safely/)).toBeTruthy();
+  });
+
+  test("permission cancellation aborts the turn through the cancel decision", async () => {
+    renderCard(makeApproval({
+      kind: "permissions",
+      command: undefined,
+      permissions: undefined,
+      actionable: false,
+    }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel turn" }));
+    await waitFor(() => expect(respondMock).toHaveBeenCalledTimes(1));
+    expect((respondMock.mock.calls[0] as unknown as unknown[])[3]).toBe("cancel");
   });
 
   test("removes the approval from the store once applied", async () => {

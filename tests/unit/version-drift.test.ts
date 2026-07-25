@@ -55,6 +55,44 @@ function getDockerfileBaseImageTag(): string {
   return match[1];
 }
 
+interface ArtifactIntegrityValues {
+  target: string;
+  values: Array<readonly [field: string, value: string]>;
+}
+
+function findCrossArtifactIntegrityCollisions(
+  artifacts: ArtifactIntegrityValues[],
+): Array<{
+  field: string;
+  target: string;
+  collidesWith: string;
+  collidingField: string;
+}> {
+  const seen = new Map<string, { field: string; target: string }>();
+  const collisions: Array<{
+    field: string;
+    target: string;
+    collidesWith: string;
+    collidingField: string;
+  }> = [];
+  for (const artifact of artifacts) {
+    for (const [field, value] of artifact.values) {
+      const previous = seen.get(value);
+      if (previous && previous.target !== artifact.target) {
+        collisions.push({
+          field,
+          target: artifact.target,
+          collidesWith: previous.target,
+          collidingField: previous.field,
+        });
+      } else if (!previous) {
+        seen.set(value, { field, target: artifact.target });
+      }
+    }
+  }
+  return collisions;
+}
+
 describe("version drift between SDK pins and managed/container CLIs", () => {
   test("Bun: host-bundled runtime matches the container base image", () => {
     // The bridges run on Bun both on the host (bundled binary) and inside the
@@ -421,23 +459,30 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
      * collision here is a manifest mistake, and it would otherwise sail through
      * the entire suite.
      */
-    const seen = new Map<string, string>();
-    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS) {
-      const target = `${artifact.name}:${artifact.platform}:${artifact.architecture}`;
-      for (const [field, value] of [
+    const values = PINNED_TOOLCHAIN_ARTIFACTS.map((artifact) => ({
+      target: `${artifact.name}:${artifact.platform}:${artifact.architecture}`,
+      values: [
         ["archive.url", artifact.archive.url],
         ["archive.sha256", artifact.archive.sha256],
         ["executable.sha256", artifact.executable.sha256],
         ...(artifact.executable.installedSha256
           ? [["executable.installedSha256", artifact.executable.installedSha256] as const]
           : []),
-      ] as Array<[string, string]>) {
-        const key = `${field}=${value}`;
-        expect({ field, target, collidesWith: seen.get(key) ?? null })
-          .toEqual({ field, target, collidesWith: null });
-        seen.set(key, target);
-      }
-    }
+      ] as Array<readonly [string, string]>,
+    }));
+    expect(findCrossArtifactIntegrityCollisions(values)).toEqual([]);
+
+    // Regression: include the field independently from the lookup key. A copied
+    // archive digest must collide with another artifact's executable digest.
+    expect(findCrossArtifactIntegrityCollisions([
+      { target: "first", values: [["archive.sha256", "same-digest"]] },
+      { target: "second", values: [["executable.sha256", "same-digest"]] },
+    ])).toEqual([{
+      field: "executable.sha256",
+      target: "second",
+      collidesWith: "first",
+      collidingField: "archive.sha256",
+    }]);
 
     // Sizes may legitimately repeat across fields of the same artifact, but two
     // different downloads having byte-identical archives would mean one URL

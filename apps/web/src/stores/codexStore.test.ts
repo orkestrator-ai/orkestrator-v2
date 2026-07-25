@@ -40,6 +40,7 @@ function approval(approvalId: string): CodexApproval {
     requestedAt: 0,
     expiresAt: 300_000,
     command: "ls",
+    actionable: true,
     supportsApproveForSession: true,
   };
 }

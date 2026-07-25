@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  ALLOW_MISSING_PROTOCOL_BINARY_ENV,
   buildConcurrentGroups,
   defaultRunGroup,
   main,
@@ -88,25 +89,30 @@ function createDependencies(
 const WORKSPACE = "workspace (web, backend, web-public)";
 const ROOT = "root (tests/)";
 const BRIDGES = "bridges";
+const PROTOCOL = "codex protocol lockfile";
 
 describe("scripts/test-all.ts", () => {
-  test("runs the workspace, root, and bridge groups with inherited environment", async () => {
+  test("runs every non-iOS group with inherited environment", async () => {
     const { dependencies, invocations } = createDependencies();
 
     expect(await runAllTests(dependencies)).toBe(0);
     expect(invocations.map((entry) => entry.name).sort()).toEqual(
-      [WORKSPACE, ROOT, BRIDGES].sort(),
+      [WORKSPACE, ROOT, BRIDGES, PROTOCOL].sort(),
     );
     for (const invocation of invocations) {
-      // Every group inherits the parent environment; only the Turbo group adds
-      // to it, and it must add rather than replace.
+      // Every group inherits the parent environment. Group-specific variables
+      // must be layered onto it rather than replacing it.
       expect(invocation.env).toMatchObject(dependencies.env);
     }
     expect(invocations.find((entry) => entry.name === ROOT)?.env).toEqual(dependencies.env);
     expect(invocations.find((entry) => entry.name === BRIDGES)?.env).toEqual(dependencies.env);
+    expect(invocations.find((entry) => entry.name === PROTOCOL)?.env).toMatchObject({
+      ...dependencies.env,
+      [ALLOW_MISSING_PROTOCOL_BINARY_ENV]: "1",
+    });
   });
 
-  test("the three groups run concurrently, not one after another", async () => {
+  test("the non-iOS groups run concurrently, not one after another", async () => {
     let release = () => {};
     const gate = {
       name: WORKSPACE,
@@ -117,12 +123,13 @@ describe("scripts/test-all.ts", () => {
     const { dependencies, started } = createDependencies({ gate });
 
     const run = runAllTests(dependencies);
-    // Let the other two groups start while the workspace group is still blocked.
+    // Let the other groups start while the workspace group is still blocked.
     await new Promise((resolve) => setTimeout(resolve, 5));
 
     // Sequential execution would have started only the first group by now.
     expect(started).toContain(ROOT);
     expect(started).toContain(BRIDGES);
+    expect(started).toContain(PROTOCOL);
 
     release();
     expect(await run).toBe(0);
@@ -163,8 +170,7 @@ describe("scripts/test-all.ts", () => {
     const workspace = invocations.find((entry) => entry.name === WORKSPACE)!;
     expect(workspace.env.TEST_ALL_MARKER).toBe("preserved");
     expect(workspace.env[WORKSPACE_WORKERS_ENV]).toMatch(/^\d+$/);
-    // The caller's environment object must not be mutated: the other two groups
-    // receive it directly.
+    // The caller's environment object must not be mutated.
     expect(dependencies.env[WORKSPACE_WORKERS_ENV]).toBeUndefined();
   });
 
@@ -230,6 +236,18 @@ describe("scripts/test-all.ts", () => {
     expect(bridgeGroup.args.slice(0, 2)).toEqual(["test", "bridges"]);
   });
 
+  test("runs the Codex protocol check with an explicit offline fallback", () => {
+    const protocolGroup = buildConcurrentGroups(8).find(
+      (group) => group.name === PROTOCOL,
+    )!;
+
+    expect(protocolGroup.command).toBe("bun");
+    expect(protocolGroup.args).toEqual(["run", "codex:protocol:check"]);
+    expect(protocolGroup.env).toEqual({
+      [ALLOW_MISSING_PROTOCOL_BINARY_ENV]: "1",
+    });
+  });
+
   test("runs workspace tests as Turbo package tasks with explicit Bun parallelism", () => {
     const workspaceGroup = buildConcurrentGroups(8).find(
       (group) => group.name === WORKSPACE,
@@ -249,8 +267,8 @@ describe("scripts/test-all.ts", () => {
     });
 
     expect(await runAllTests(dependencies)).toBe(7);
-    // All three still ran; a re-run should not be needed to see both failures.
-    expect(invocations).toHaveLength(3);
+    // Every group still ran; a re-run should not be needed to see both failures.
+    expect(invocations).toHaveLength(4);
     const report = logs.join("\n");
     expect(report).toContain(`FAIL  ${ROOT}`);
     expect(report).toContain(`FAIL  ${BRIDGES}`);
@@ -293,6 +311,7 @@ describe("scripts/test-all.ts", () => {
     const report = logs.join("\n");
     expect(report.indexOf(WORKSPACE)).toBeLessThan(report.indexOf(ROOT));
     expect(report.indexOf(ROOT)).toBeLessThan(report.indexOf(BRIDGES));
+    expect(report.indexOf(BRIDGES)).toBeLessThan(report.indexOf(PROTOCOL));
   });
 
   test("runs iOS last and only after the other groups pass", async () => {
@@ -340,7 +359,7 @@ describe("scripts/test-all.ts", () => {
     });
 
     expect(await runAllTests(dependencies)).toBe(10);
-    expect(invocations).toHaveLength(4);
+    expect(invocations).toHaveLength(5);
   });
 
   test("skips iOS tests when Xcode is missing on macOS", async () => {
@@ -351,7 +370,7 @@ describe("scripts/test-all.ts", () => {
 
     expect(await runAllTests(dependencies)).toBe(0);
     expect(existsChecks).toHaveLength(1);
-    expect(invocations).toHaveLength(3);
+    expect(invocations).toHaveLength(4);
   });
 
   test("does not inspect Xcode or run iOS tests on non-macOS platforms", async () => {
@@ -362,7 +381,7 @@ describe("scripts/test-all.ts", () => {
 
     expect(await runAllTests(dependencies)).toBe(0);
     expect(existsChecks).toHaveLength(0);
-    expect(invocations).toHaveLength(3);
+    expect(invocations).toHaveLength(4);
   });
 
   test("CLI entrypoint exits with the failing group status", async () => {

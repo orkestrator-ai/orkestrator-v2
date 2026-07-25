@@ -18,8 +18,11 @@ import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import {
   type CodexConversationMode,
   type CodexMessage,
+  type CodexPromptAcceptedResponse,
   type CodexPromptAttachment,
+  type CodexPromptSendOutcome,
   type CodexReasoningEffort,
+  type CodexSessionConfigUpdateOutcome,
   DEFAULT_CODEX_MODEL,
   abortSession,
   checkHealth,
@@ -102,6 +105,45 @@ interface ReconcileSessionOptions {
   manual?: boolean;
 }
 type ReconcileSessionResult = "applied" | "missing" | "unavailable" | "stale";
+
+/**
+ * Bun component tests historically stubbed these clients with their old
+ * boolean/nullable return values. Normalize those shapes at the UI boundary so
+ * the production client can expose the ambiguity without making unrelated
+ * caller tests lie about success.
+ */
+function normalizePromptSendOutcome(value: unknown): CodexPromptSendOutcome {
+  if (value && typeof value === "object") {
+    const entry = value as Record<string, unknown>;
+    if (
+      entry.outcome === "accepted"
+      || entry.outcome === "rejected"
+      || entry.outcome === "unknown"
+    ) {
+      return value as CodexPromptSendOutcome;
+    }
+    if (entry.status === "processing" || entry.status === "already-processed") {
+      return {
+        outcome: "accepted",
+        ...(value as CodexPromptAcceptedResponse),
+      };
+    }
+  }
+  if (value === true) return { outcome: "accepted", status: "processing" };
+  return { outcome: "rejected", httpStatus: 0 };
+}
+
+function normalizeConfigUpdateOutcome(value: unknown): CodexSessionConfigUpdateOutcome {
+  if (value && typeof value === "object") {
+    const outcome = (value as { outcome?: unknown }).outcome;
+    if (outcome === "applied" || outcome === "rejected" || outcome === "unknown") {
+      return value as CodexSessionConfigUpdateOutcome;
+    }
+  }
+  return value === true
+    ? { outcome: "applied", durable: true }
+    : { outcome: "rejected", httpStatus: 0 };
+}
 
 export function CodexChatTab({
   tabId,
@@ -494,23 +536,83 @@ export function CodexChatTab({
         filename: attachment.name,
       }));
       dispatchInFlightRef.current += 1;
-      let sent: Awaited<ReturnType<typeof sendPrompt>>;
+      let rawSendOutcome: Awaited<ReturnType<typeof sendPrompt>>;
       try {
-        sent = await sendPrompt(client, session.sessionId, text, {
+        rawSendOutcome = await sendPrompt(client, session.sessionId, text, {
           attachments: promptAttachments.length > 0 ? promptAttachments : undefined,
           requestId,
         });
       } finally {
         dispatchInFlightRef.current -= 1;
       }
-      if (!sent) {
-        // `sendPrompt` cannot distinguish a rejected HTTP response from a lost
-        // response after the bridge accepted the request. Keep the idempotency
-        // key so an explicit retry of the same logical prompt is safe.
+      const sent = normalizePromptSendOutcome(rawSendOutcome);
+      if (sent.outcome === "rejected") {
+        // A concrete HTTP rejection proves no turn is starting, so it is safe to
+        // unlock and let the user correct or retry the prompt.
         retryablePromptRef.current = { fingerprint, requestId };
         removeMessage(sessionKey, userMessage.id);
         setSessionLoading(sessionKey, false);
-        setSessionError(sessionKey, "Failed to send prompt");
+        setSessionError(
+          sessionKey,
+          sent.httpStatus > 0
+            ? `Failed to send prompt (HTTP ${sent.httpStatus})`
+            : "Failed to send prompt",
+        );
+        return;
+      }
+
+      if (sent.outcome === "unknown") {
+        /**
+         * Do not unlock on a lost response.
+         *
+         * The bridge may already be running this request. Dropping `isLoading`
+         * here would tear down both SSE and the watchdog and let a second prompt
+         * overlap it. Keep the idempotency key for an explicit retry, mark the
+         * phase as recovering, and reconcile before deciding whether the composer
+         * can safely be released.
+         */
+        retryablePromptRef.current = { fingerprint, requestId };
+        setSessionPhase(sessionKey, "recovering");
+        const reconciliation = await reconcileSessionStateRef.current({
+          forceRefreshMessages: true,
+        });
+        const reconciledSession = useCodexStore.getState().sessions.get(sessionKey);
+
+        if (reconciliation === "missing") {
+          removeMessage(sessionKey, userMessage.id);
+          setSessionPhase(sessionKey, undefined);
+          setSessionLoading(sessionKey, false);
+          setSessionError(sessionKey, "The Codex session is no longer available");
+        } else if (reconciliation === "unavailable") {
+          // Keep the lock. The running turn remains authoritative until status or
+          // an SSE terminal event proves otherwise.
+          setSessionError(
+            sessionKey,
+            "Lost connection while sending the prompt. Reconnecting to Codex…",
+          );
+        } else if (
+          reconciliation === "applied"
+          && reconciledSession?.isLoading !== true
+        ) {
+          const optimisticStillPresent = reconciledSession?.messages.some(
+            (message) => message.id === userMessage.id,
+          ) === true;
+          if (optimisticStillPresent) {
+            // Authoritative idle state did not echo the prompt, so expose a
+            // retryable failure rather than leaving a local-only user message.
+            removeMessage(sessionKey, userMessage.id);
+            setSessionError(
+              sessionKey,
+              "Could not confirm whether Codex received the prompt. You can send it again safely.",
+            );
+          } else {
+            // The transcript proves the request completed despite the lost
+            // response; its idempotency key is now spent.
+            retryablePromptRef.current = null;
+            setSessionError(sessionKey, undefined);
+          }
+          setSessionPhase(sessionKey, undefined);
+        }
         return;
       }
       /**
@@ -1106,18 +1208,32 @@ export function CodexChatTab({
         return false;
       }
 
-      const updated = await updateCodexSessionConfig(client, session.sessionId, {
+      const rawOutcome = await updateCodexSessionConfig(client, session.sessionId, {
         model,
         modelReasoningEffort: nextReasoningEffort,
         mode,
         fastMode,
       });
+      const outcome = normalizeConfigUpdateOutcome(rawOutcome);
 
-      if (!updated) {
-        setSessionError(sessionKey, "Failed to update Codex session settings");
+      if (outcome.outcome === "applied") {
+        if (!outcome.durable) {
+          toast.warning("Codex settings were applied but not saved", {
+            description: "They may revert if the Codex bridge restarts.",
+          });
+        }
+        return true;
       }
 
-      return updated;
+      setSessionError(
+        sessionKey,
+        outcome.outcome === "unknown"
+          ? "Could not confirm whether Codex session settings were updated"
+          : outcome.httpStatus > 0
+            ? `Failed to update Codex session settings (HTTP ${outcome.httpStatus})`
+            : "Failed to update Codex session settings",
+      );
+      return false;
     },
     [client, session?.isLoading, session?.sessionId, sessionKey, setSessionError],
   );
@@ -1320,11 +1436,14 @@ export function CodexChatTab({
     const manualSequence = options?.manual
       ? ++manualReconcileSequenceRef.current
       : manualReconcileSequenceRef.current;
-    const shouldApply = options?.manual
-      ? () => manualSequence === manualReconcileSequenceRef.current
-      : () => reconcileSequence === reconcileSequenceRef.current;
+    const isLatestManual = () =>
+      manualSequence === manualReconcileSequenceRef.current;
+    const isLatestLiveState = () =>
+      reconcileSequence === reconcileSequenceRef.current;
+    const shouldApply = options?.manual ? isLatestManual : isLatestLiveState;
     const lookup = await lookupSessionStatus(client, session.sessionId);
     if (!shouldApply()) return "stale";
+
     if (lookup.kind === "missing") {
       if (options?.throwOnError) {
         throw new Error("The Codex session is no longer available on the server");
@@ -1337,6 +1456,27 @@ export function CodexChatTab({
       }
       return "unavailable";
     }
+
+    if (options?.manual && !isLatestLiveState()) {
+      /**
+       * A live SSE frame landed after the manual status request began, so its
+       * status/title/phase is newer than this HTTP snapshot and must win.
+       *
+       * Still honour the user's refresh by fetching the transcript *after* that
+       * event. This avoids the old silent no-op without letting a stale `running`
+       * response re-lock a session that just emitted `session.idle` (or a stale
+       * `idle` response unlock a newly running turn).
+       */
+      const messageRefreshSequence = reconcileSequenceRef.current;
+      await refreshMessages(client, session.sessionId, {
+        throwOnError: options.throwOnError,
+        shouldApply: () =>
+          isLatestManual()
+          && messageRefreshSequence === reconcileSequenceRef.current,
+      });
+      return "applied";
+    }
+
     const status = lookup.session;
     refreshControllerRef.current.markActivity();
 

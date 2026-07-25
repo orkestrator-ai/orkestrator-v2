@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, test, expect } from "bun:test";
 import { EventEmitter } from "node:events";
-import { chmodSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -14,6 +20,7 @@ import type { AppServerSupervisorOptions } from "./app-server/process-supervisor
 import { FakeReadable, FakeWritable } from "./app-server/testing/fake-app-server.js";
 import { MAX_LOCAL_MESSAGES, phaseToExternalStatus } from "./sessions/thread-registry.js";
 import { BridgeSessionStore, hashCwd } from "./sessions/persistence.js";
+import { DispatchJournal } from "./sessions/dispatch-journal.js";
 import type { EngineEvent } from "./engine/types.js";
 
 /**
@@ -293,6 +300,38 @@ describe("session lifecycle", () => {
   });
 
   test("resuming a thread whose rollout is gone falls back to the parser", async () => {
+    const sessionsDir = join(codexHome, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      join(sessionsDir, "thread-gone.jsonl"),
+      `${[
+        {
+          type: "session_meta",
+          payload: {
+            id: "thread-gone",
+            cwd: "/tmp/ws",
+            timestamp: "2026-07-25T12:00:00.000Z",
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Remember the parser constraint" }],
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "I will preserve it." }],
+          },
+        },
+      ].map((line) => JSON.stringify(line)).join("\n")}\n`,
+      "utf8",
+    );
     const h = await harness({
       "thread/resume": () => {
         const error = new Error("thread/resume: no rollout found for thread id thread-gone");
@@ -304,8 +343,76 @@ describe("session lifecycle", () => {
     // The user still sees the conversation; the next prompt starts a fresh thread
     // with reconstructed context.
     const resumed = await h.runtime.resumeSession({ threadId: "thread-gone", mode: "build" });
-    expect(resumed).toMatchObject({ threadId: "thread-gone", messages: [] });
+    expect(resumed).toMatchObject({ threadId: "thread-gone" });
+    expect(resumed!.messages.map((message) => message.content)).toEqual([
+      "Remember the parser constraint",
+      "I will preserve it.",
+    ]);
     expect(h.runtime.getRegistry().getSession(resumed!.sessionId)?.threadId).toBeNull();
+    expect((await h.runtime.getMessages(resumed!.sessionId))!.map((message) => message.content))
+      .toEqual(["Remember the parser constraint", "I will preserve it."]);
+
+    await h.runtime.prompt(resumed!.sessionId, {
+      prompt: "Continue now",
+      requestId: "req-recovered",
+      attachments: [],
+    });
+    const turnStart = h.child().requests.find((request) => request.method === "turn/start");
+    expect(JSON.stringify(turnStart?.params.input)).toContain("Remember the parser constraint");
+    expect(JSON.stringify(turnStart?.params.input)).toContain("Continue now");
+  });
+
+  test("restores unresolved accepted work as running before serving status", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-recovering",
+        threadId: "thread-recovering",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+        title: "Recovering",
+        titleSource: "prompt",
+        lastAcceptedRequestId: "req-live",
+      }),
+    );
+    const journal = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
+    await journal.load();
+    await journal.markPrepared({
+      requestId: "req-live",
+      bridgeSessionId: "session-recovering",
+      threadId: "thread-recovering",
+    });
+    await journal.markAccepted("req-live", {
+      threadId: "thread-recovering",
+      turnId: "turn-live",
+    });
+
+    const h = await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-recovering") }),
+      "thread/read": () => ({
+        thread: threadPayload("thread-recovering", {
+          turns: [
+            {
+              id: "turn-live",
+              status: "inProgress",
+              items: [{ type: "userMessage", clientId: "req-live" }],
+            },
+          ],
+        }),
+      }),
+    });
+
+    expect(h.runtime.getStatus("session-recovering")).toMatchObject({
+      status: "running",
+      phase: "running",
+      requestId: "req-live",
+      turnId: "turn-live",
+    });
+    expect(await h.runtime.prompt("session-recovering", {
+      prompt: "must wait",
+      requestId: "req-new",
+      attachments: [],
+    })).toMatchObject({ ok: false, status: 409 });
   });
 
   test("resuming rethrows an ambiguous failure instead of forking a thread", async () => {
@@ -453,6 +560,11 @@ describe("session lifecycle", () => {
     expect(order).toEqual(["configure:start", "configure:done", "returned"]);
     expect((await store.load())[0]?.config.mode).toBe("plan");
     expect(h.runtime.getRegistry().getSession(sessionId)?.config.mode).toBe("plan");
+    expect(await h.runtime.getConfig(sessionId)).toMatchObject({
+      mode: "plan",
+      fastMode: false,
+      durable: true,
+    });
 
     h.engine.configureThread = async () => {
       throw new Error("configure rejected");
@@ -732,6 +844,26 @@ describe("at-most-once dispatch", () => {
     expect(h.runtime.getStatus(sessionId)!.phase).toBe("failed");
   });
 
+  test("a failed prepared-journal write prevents turn dispatch", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const bridgeDir = join(codexHome, "orkestrator-bridge");
+    mkdirSync(bridgeDir, { recursive: true });
+    chmodSync(bridgeDir, 0o500);
+    try {
+      const outcome = await h.runtime.prompt(sessionId, {
+        prompt: "must not execute",
+        requestId: "req-unwritable",
+        attachments: [],
+      });
+      expect(outcome).toMatchObject({ ok: false, status: 503 });
+      expect(h.child().requests.some((request) => request.method === "turn/start"))
+        .toBe(false);
+    } finally {
+      chmodSync(bridgeDir, 0o700);
+    }
+  });
+
   /**
    * `recovering` after an ambiguous dispatch must be transient.
    *
@@ -878,19 +1010,14 @@ describe("at-most-once dispatch", () => {
     })).ok).toBe(true);
   });
 
-  test("an ambiguous dispatch with no request id fails rather than parking", async () => {
-    const h = await harness({
-      "turn/start": () => NO_RESPONSE,
-    });
+  test("a prompt without a request id is rejected before dispatch", async () => {
+    const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
 
-    const pending = h.runtime.prompt(sessionId, { prompt: "no id", attachments: [] });
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    h.child().exit(1);
-    expect(await pending).toMatchObject({ ok: false, status: 503 });
-
-    // Nothing identifies the dispatch, so there is nothing to reconcile against.
-    expect(h.runtime.getStatus(sessionId)!.phase).toBe("failed");
+    expect(await h.runtime.prompt(sessionId, { prompt: "no id", attachments: [] }))
+      .toMatchObject({ ok: false, status: 400 });
+    expect(h.child().requests.some((request) => request.method === "turn/start"))
+      .toBe(false);
   });
 
   test("an ambiguous request that did run is reconciled as already-processed", async () => {
@@ -1031,6 +1158,33 @@ describe("interrupt lifecycle", () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     expect(await h.runtime.abort(sessionId)).toMatchObject({ phase: "idle" });
+  });
+
+  test("a failed abort escalation settles the turn and surfaces the error", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "x",
+      requestId: "req-1",
+      attachments: [],
+    });
+    h.engine.waitForTurnTerminal = async () => {
+      throw new Error("replacement failed");
+    };
+
+    await h.runtime.abort(sessionId);
+    await h.drain();
+
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "idle",
+      phase: "idle",
+    });
+    expect(h.events.some(
+      (event) =>
+        event.type === "session.error"
+        && event.sessionId === sessionId
+        && event.data?.error === "replacement failed",
+    )).toBe(true);
   });
 });
 
@@ -1772,20 +1926,6 @@ describe("crash recovery", () => {
 
     // Still executing, so it must not be reported idle or accept a new prompt.
     expect(h.runtime.getStatus(sessionId)!.status).toBe("running");
-  });
-
-  test("a turn with no request id is reported interrupted, not left running", async () => {
-    const h = await harness();
-    const { sessionId } = h.runtime.createSession({ mode: "build" });
-    // No request id, so there is nothing to reconcile against after the crash.
-    await h.runtime.prompt(sessionId, { prompt: "x", attachments: [] });
-
-    h.child().exit(1);
-    await h.engine.getSupervisor().ensureReady();
-    await h.drain();
-
-    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
-    expect(h.events.some((event) => event.type === "session.idle")).toBe(true);
   });
 
   test("a turn that failed on the dead child is finalized as failed", async () => {
@@ -2534,6 +2674,42 @@ describe("titles", () => {
     ).toBe(true);
   });
 
+  test("a generated title is persisted for every tab sharing the thread", async () => {
+    let resolveTitle!: (title: string) => void;
+    const h = await harness(
+      {
+        "thread/resume": () => ({ thread: threadPayload("thread-1") }),
+      },
+      {
+        generateTitle: () =>
+          new Promise<string>((resolve) => {
+            resolveTitle = resolve;
+          }),
+      },
+    );
+    const first = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(first.sessionId, {
+      prompt: "shared title",
+      requestId: "req-title",
+      attachments: [],
+    });
+    const second = await h.runtime.resumeSession({
+      threadId: "thread-1",
+      mode: "build",
+    });
+    resolveTitle("Shared Generated Title");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const records = await new BridgeSessionStore({
+      codexHome,
+      cwd: "/tmp/ws",
+    }).load();
+    expect(records.find((record) => record.bridgeSessionId === first.sessionId))
+      .toMatchObject({ title: "Shared Generated Title", titleSource: "generated" });
+    expect(records.find((record) => record.bridgeSessionId === second!.sessionId))
+      .toMatchObject({ title: "Shared Generated Title", titleSource: "generated" });
+  });
+
   /**
    * Title generation is slow enough to outlive the prompt that started it. A
    * superseded result must not overwrite a newer title, or the tab silently
@@ -2569,11 +2745,13 @@ describe("titles", () => {
     session.titleSource = undefined;
 
     await h.runtime.prompt(sessionId, { prompt: "second", requestId: "req-2", attachments: [] });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    for (let attempt = 0; attempt < 100 && session.title !== "Second Title"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
     expect(session.title).toBe("Second Title");
 
     resolveFirst("First Title");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 5));
     expect(session.title).toBe("Second Title");
     expect(
       h.events.some(
@@ -2659,7 +2837,11 @@ describe("slash commands", () => {
 
     const rounds = MAX_LOCAL_MESSAGES; // two entries each, so comfortably over the cap
     for (let round = 0; round < rounds; round += 1) {
-      await h.runtime.prompt(sessionId, { prompt: "/help", attachments: [] });
+      await h.runtime.prompt(sessionId, {
+        prompt: "/help",
+        requestId: `req-help-${round}`,
+        attachments: [],
+      });
     }
 
     const session = h.runtime.getRegistry().getSession(sessionId)!;
@@ -2834,6 +3016,102 @@ describe("interactive approvals", () => {
     await h.drain();
     expect(h.child().stdin.lines.join("")).not.toContain('"decision":"decline"');
     expect(h.runtime.respondToApproval(second!.sessionId, approvalId, "deny")).toBe("applied");
+  });
+
+  test("a tab attached after presentation can take over a pending approval", async () => {
+    const { h, sessionId: firstSessionId } = await withPendingApproval();
+    const approvalId = h.runtime.listApprovals(firstSessionId)[0]!.approvalId;
+    const second = await h.runtime.resumeSession({
+      threadId: "thread-1",
+      mode: "build",
+    });
+
+    expect(h.runtime.listApprovals(second!.sessionId)).toHaveLength(1);
+    await h.runtime.deleteSession(firstSessionId);
+    expect(h.runtime.respondToApproval(second!.sessionId, approvalId, "deny"))
+      .toBe("applied");
+  });
+
+  test("cancel approval interrupts the owning turn", async () => {
+    const { h, sessionId } = await withPendingApproval();
+    const approvalId = h.runtime.listApprovals(sessionId)[0]!.approvalId;
+
+    expect(h.runtime.respondToApproval(sessionId, approvalId, "cancel")).toBe("applied");
+    await h.drain();
+
+    expect(h.child().requests.some((request) => request.method === "turn/interrupt"))
+      .toBe(true);
+  });
+
+  test("v2 file-change approvals are enriched from the active item", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "go",
+      requestId: "req-1",
+      attachments: [],
+    });
+    h.child().notify("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "item-file",
+        type: "fileChange",
+        status: "inProgress",
+        changes: [{ path: "src/index.ts", kind: { type: "update", move_path: null } }],
+      },
+    });
+    await h.drain();
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 9010,
+      method: "item/fileChange/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-file",
+        startedAtMs: 1,
+      },
+    });
+    await h.drain();
+
+    expect(h.runtime.listApprovals(sessionId)[0]).toMatchObject({
+      actionable: true,
+      changes: [{ path: "src/index.ts", kind: "update" }],
+    });
+  });
+
+  test("retryable errors fan out to every tab sharing the thread", async () => {
+    const h = await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-1") }),
+    });
+    const first = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(first.sessionId, {
+      prompt: "go",
+      requestId: "req-1",
+      attachments: [],
+    });
+    const second = await h.runtime.resumeSession({
+      threadId: "thread-1",
+      mode: "build",
+    });
+    h.child().notify("error", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      error: { message: "retry later", codexErrorInfo: null },
+      willRetry: true,
+    });
+    await h.drain();
+
+    const recipients = h.events
+      .filter(
+        (event) =>
+          event.type === "session.error"
+          && event.data?.error === "retry later",
+      )
+      .map((event) => event.sessionId)
+      .sort();
+    expect(recipients).toEqual([first.sessionId, second!.sessionId].sort());
   });
 
   test("a file-change approval is described as such", async () => {

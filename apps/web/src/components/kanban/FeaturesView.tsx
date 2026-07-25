@@ -74,6 +74,19 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function wasCodexPromptAccepted(result: unknown): boolean {
+  if (result === true) return true;
+  return Boolean(
+    result
+    && typeof result === "object"
+    && (
+      (result as { outcome?: unknown }).outcome === "accepted"
+      // Continue polling: a lost response does not prove the prompt was rejected.
+      || (result as { outcome?: unknown }).outcome === "unknown"
+    ),
+  );
+}
+
 function messageContent(message: CodexMessage): string {
   if (message.content?.trim()) return message.content;
   return message.parts
@@ -439,7 +452,9 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         });
 
         const sent = await sendPrompt(client, sessionId, prompt);
-        if (!sent) throw new Error("Failed to send feature planning prompt");
+        if (!wasCodexPromptAccepted(sent)) {
+          throw new Error("Failed to send feature planning prompt");
+        }
 
         const assistantContent = await waitForCodexReply(
           client,
@@ -550,7 +565,9 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         const baselineMessages = await getSessionMessages(client, sessionId);
         const prompt = createStoryRefinementPrompt(latestStory, trimmed);
         const sent = await sendPrompt(client, sessionId, prompt);
-        if (!sent) throw new Error("Failed to send story refinement prompt");
+        if (!wasCodexPromptAccepted(sent)) {
+          throw new Error("Failed to send story refinement prompt");
+        }
 
         const assistantContent = await waitForCodexReply(
           client,

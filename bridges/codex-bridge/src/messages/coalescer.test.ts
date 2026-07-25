@@ -22,7 +22,7 @@ describe("UpdateCoalescer", () => {
     coalescer.stop();
   });
 
-  test("a change during an in-flight publish schedules a second snapshot", async () => {
+  test("a terminal flush waits for the follow-up snapshot after an in-flight publish", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -38,10 +38,15 @@ describe("UpdateCoalescer", () => {
 
     const first = coalescer.flushNow();
     coalescer.schedule();
-    await coalescer.flushNow();
-    release();
-    await first;
+    let terminalFlushSettled = false;
+    const terminalFlush = coalescer.flushNow().finally(() => {
+      terminalFlushSettled = true;
+    });
     await tick();
+    expect(terminalFlushSettled).toBe(false);
+
+    release();
+    await Promise.all([first, terminalFlush]);
 
     expect(published).toBe(2);
     coalescer.stop();

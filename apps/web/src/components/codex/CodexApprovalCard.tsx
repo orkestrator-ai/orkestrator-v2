@@ -96,6 +96,7 @@ export function CodexApprovalCard({
   const [submitting, setSubmitting] = useState<CodexApprovalDecision | null>(null);
   const [error, setError] = useState<string | null>(null);
   const remaining = useCountdown(approval.expiresAt);
+  const canApprove = approval.actionable;
 
   const respond = useCallback(
     async (decision: CodexApprovalDecision) => {
@@ -196,6 +197,13 @@ export function CodexApprovalCard({
             </p>
           )}
 
+          {!canApprove && !expired && (
+            <p className="mt-2 flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
+              This request does not include enough detail to approve safely.
+            </p>
+          )}
+
           {expired ? (
             <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
               <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
@@ -224,7 +232,7 @@ export function CodexApprovalCard({
                 * grant ("yes, and stop asking"), so it must not read as an
                 * equal-weight alternative to approving this one request.
                 */}
-              {approval.supportsApproveForSession && (
+              {canApprove && approval.supportsApproveForSession && (
                 <Button
                   size="sm"
                   variant="ghost"
@@ -234,14 +242,16 @@ export function CodexApprovalCard({
                   {submitting === "approve-for-session" ? "Approving…" : "Approve for session"}
                 </Button>
               )}
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={submitting !== null}
-                onClick={() => void respond("approve")}
-              >
-                {submitting === "approve" ? "Approving…" : "Approve"}
-              </Button>
+              {canApprove && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={submitting !== null}
+                  onClick={() => void respond("approve")}
+                >
+                  {submitting === "approve" ? "Approving…" : "Approve"}
+                </Button>
+              )}
             </div>
           )}
 

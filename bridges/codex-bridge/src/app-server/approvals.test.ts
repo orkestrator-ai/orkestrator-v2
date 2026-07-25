@@ -67,10 +67,30 @@ describe("describeApproval", () => {
     expect(approval.reason).toBe("needs write access outside the sandbox");
     expect(approval.networkHost).toBe("registry.npmjs.org");
     expect(approval.supportsApproveForSession).toBe(true);
+    expect(approval.actionable).toBe(true);
     // Timestamps come from our clock, not app-server's `startedAtMs`, so the UI
     // countdown cannot be skewed by a clock difference in the child.
     expect(approval.requestedAt).toBe(1_000);
     expect(approval.expiresAt).toBe(301_000);
+  });
+
+  test("uses commandActions when the top-level command is absent", () => {
+    const approval = describeWith("item/commandExecution/requestApproval", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-1",
+      commandActions: [
+        {
+          type: "read",
+          command: "cat package.json",
+          name: "package.json",
+          path: "package.json",
+        },
+      ],
+    });
+
+    expect(approval.command).toBe("cat package.json");
+    expect(approval.actionable).toBe(true);
   });
 
   test("joins legacy argv into a displayable command", () => {
@@ -106,7 +126,7 @@ describe("describeApproval", () => {
     expect(approval.grantRoot).toBe("/workspace");
   });
 
-  test("the v2 file-change approval legitimately has no changes", () => {
+  test("the v2 file-change descriptor is non-actionable until runtime adds its item", () => {
     // Its params are ids plus a reason; the changes live on the fileChange item
     // the UI already holds. An empty `changes` is correct, not a parse failure.
     const approval = describeWith("item/fileChange/requestApproval", {
@@ -120,6 +140,7 @@ describe("describeApproval", () => {
     expect(approval.kind).toBe("file-change");
     expect(approval.changes).toBeUndefined();
     expect(approval.reason).toBe("write outside the workspace");
+    expect(approval.actionable).toBe(false);
   });
 
   test("reads a permission escalation request", () => {
@@ -136,6 +157,7 @@ describe("describeApproval", () => {
     // Only whether each class was requested — never the profile itself, which the
     // UI has no way to render meaningfully.
     expect(approval.permissions).toEqual({ network: true, fileSystem: false });
+    expect(approval.actionable).toBe(true);
   });
 
   test("survives entirely absent params", () => {
@@ -145,6 +167,7 @@ describe("describeApproval", () => {
     expect(approval.kind).toBe("command");
     expect(approval.threadId).toBeNull();
     expect(approval.command).toBeUndefined();
+    expect(approval.actionable).toBe(false);
   });
 
   test("ignores malformed change entries rather than emitting empty paths", () => {
@@ -238,6 +261,7 @@ describe("describeApprovalOutcome", () => {
     expiresAt: 1,
     command: "rm -rf /",
     supportsApproveForSession: true,
+    actionable: true,
   };
 
   test("says nothing when the user approved", () => {

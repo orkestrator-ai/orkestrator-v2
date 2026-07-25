@@ -24,6 +24,7 @@ import {
 import {
   AppServerCircuitOpenError,
   AppServerProcessExitError,
+  AppServerUnavailableError,
   classifyDispatchFailure,
 } from "./errors.js";
 import { FakeReadable, FakeWritable } from "./testing/fake-app-server.js";
@@ -860,6 +861,23 @@ describe("environment fingerprint", () => {
 });
 
 describe("shutdown", () => {
+  test("stop terminates a child whose initialize handshake is still pending", async () => {
+    const h = harness({ behaviours: [{ hangInitialize: true }] });
+    const startupResult = h.supervisor
+      .ensureReady()
+      .then(() => null, (error: unknown) => error);
+    await flushMicrotasks();
+    expect(h.children).toHaveLength(1);
+    expect(h.children[0]!.stdin.parsed()[0]?.method).toBe("initialize");
+
+    await h.supervisor.stop();
+
+    expect(await startupResult).toBeInstanceOf(AppServerUnavailableError);
+    expect(h.children[0]!.killed.length).toBeGreaterThan(0);
+    expect(h.supervisor.getState()).toBe("stopped");
+    expect(h.supervisor.isReady()).toBe(false);
+  });
+
   test("closes stdin then escalates to the process group", async () => {
     const h = harness();
     await h.supervisor.ensureReady();

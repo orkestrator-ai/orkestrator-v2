@@ -121,6 +121,18 @@ describe("app-server engine over HTTP", () => {
     const status = step(output, "status");
     expect(status.body).toMatchObject({ status: "idle", phase: "idle", engineGeneration: 1 });
 
+    expect(step(output, "config-update").body).toMatchObject({
+      status: "updated",
+      durable: true,
+    });
+    expect(step(output, "config-read").body).toMatchObject({
+      model: "fake-model",
+      modelReasoningEffort: "high",
+      mode: "plan",
+      fastMode: true,
+      durable: true,
+    });
+
     // Re-sending the same request id must not start a second turn.
     expect(step(output, "duplicate-prompt").body).toMatchObject({
       status: "already-processed",
@@ -141,5 +153,14 @@ describe("app-server engine over HTTP", () => {
     expect(step(output, "health").body).toMatchObject({
       appServer: { state: "ready", codexVersion: "0.99.0" },
     });
+  }, 60_000);
+
+  test("reports a bounded, actionable error when the handshake never completes", async () => {
+    const output = await run({ FAKE_CODEX_SCRIPT: "no-initialize" });
+
+    expect(output.results).toBeUndefined();
+    expect(output.error).toMatch(
+      /app-server did not become ready within 5 seconds \(last state: (starting|recovering)\)/,
+    );
   }, 60_000);
 });

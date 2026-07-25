@@ -248,6 +248,73 @@ describe("/event/subscribe", () => {
     expect(sessionIds.filter((id) => id === "before-connect")).toHaveLength(1);
   });
 
+  test("a fresh connection keeps its original anchor when an event lands before connected", async () => {
+    const anchor = __testing.eventRingForTesting().latestRevision;
+    __testing.setSseRouteTestHooksForTesting({
+      afterSubscriberRegistered: () => {
+        __testing.emitForTesting({
+          type: "session.updated",
+          sessionId: "fresh-anchor-race",
+        });
+      },
+    });
+
+    try {
+      const frames = await collect("", () => undefined);
+      const connected = frames.find((frame) => frame.event === "connected")!;
+      expect(Number(connected.id)).toBe(anchor);
+      expect(
+        frames.filter((frame) => frame.data.sessionId === "fresh-anchor-race"),
+      ).toHaveLength(1);
+    } finally {
+      __testing.setSseRouteTestHooksForTesting(null);
+    }
+  });
+
+  test("events arriving during the buffered drain stay in revision order", async () => {
+    const cursor = __testing.eventRingForTesting().latestRevision;
+    let injectedDuringWrite = false;
+    __testing.setSseRouteTestHooksForTesting({
+      beforeBufferedDrain: () => {
+        __testing.emitForTesting({
+          type: "session.updated",
+          sessionId: "buffered-drain-1",
+        });
+        __testing.emitForTesting({
+          type: "session.updated",
+          sessionId: "buffered-drain-2",
+        });
+      },
+      beforeBufferedWrite: () => {
+        if (injectedDuringWrite) return;
+        injectedDuringWrite = true;
+        __testing.emitForTesting({
+          type: "session.updated",
+          sessionId: "buffered-drain-3",
+        });
+      },
+    });
+
+    try {
+      const frames = await collect(`?since=${cursor}`, () => undefined, {
+        expected: 3,
+      });
+      const drained = frames.filter((frame) =>
+        String(frame.data.sessionId ?? "").startsWith("buffered-drain-"),
+      );
+      expect(drained.map((frame) => frame.data.sessionId)).toEqual([
+        "buffered-drain-1",
+        "buffered-drain-2",
+        "buffered-drain-3",
+      ]);
+      expect(drained.map((frame) => Number(frame.id))).toEqual(
+        [...drained.map((frame) => Number(frame.id))].sort((a, b) => a - b),
+      );
+    } finally {
+      __testing.setSseRouteTestHooksForTesting(null);
+    }
+  });
+
   test("the ring grows as events are emitted and reports its stats", () => {
     const stats = __testing.eventRingForTesting().getStats();
     expect(stats.latestRevision).toBeGreaterThan(baseline);
@@ -262,6 +329,22 @@ describe("/event/subscribe", () => {
     expect(body.events?.capacity).toBeGreaterThan(0);
     expect(body.events?.latestRevision).toBeGreaterThan(0);
     expect(typeof body.events?.subscribers).toBe("number");
+  });
+});
+
+describe("/session/:id/prompt", () => {
+  test("rejects a missing or blank requestId before dispatch", async () => {
+    for (const body of [{ prompt: "hello" }, { prompt: "hello", requestId: "   " }]) {
+      const response = await app.request("/session/session-does-not-exist/prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(400);
+      expect((await response.json()).error).toContain(
+        "requestId must be a non-empty string",
+      );
+    }
   });
 });
 

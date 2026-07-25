@@ -1,8 +1,15 @@
-import { describe, test, expect } from "bun:test";
+import { afterAll, describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
-import { join } from "node:path";
-import { __testing } from "../../scripts/generate-codex-app-server-protocol";
+import { join, resolve } from "node:path";
+import {
+  EXPECTED_PROTOCOL_OUTPUT_DIR,
+  __testing,
+  parseArguments,
+  resolveProtocolOutputDir,
+  validateVersionConfig,
+} from "../../scripts/generate-codex-app-server-protocol";
 
 const {
   normalizeGeneratedSource,
@@ -10,7 +17,10 @@ const {
   digestFiles,
   extractMethods,
   describeDifferences,
+  describeCommittedSelfConsistency,
   candidateBinaries,
+  generate,
+  write,
 } = __testing;
 
 const repoRoot = join(import.meta.dir, "..", "..");
@@ -27,7 +37,148 @@ function readGenerated(relativePath: string): string {
   return readFileSync(join(generatedDir, relativePath), "utf8");
 }
 
+const temporaryDirectories: string[] = [];
+
+afterAll(async () => {
+  await Promise.all(
+    temporaryDirectories.map((directory) =>
+      rm(directory, { recursive: true, force: true })
+    ),
+  );
+});
+
+async function temporaryDirectory(prefix: string): Promise<string> {
+  const directory = await mkdtemp(join(import.meta.dir, prefix));
+  temporaryDirectories.push(directory);
+  return directory;
+}
+
+async function fakeGeneratorBinary(mode: "empty-ts" | "empty-schema"): Promise<string> {
+  const directory = await temporaryDirectory(".protocol-generator-");
+  const binary = join(directory, "fake-codex");
+  await writeFile(
+    binary,
+    `#!/usr/bin/env bun
+import { mkdir, writeFile } from "node:fs/promises";
+const args = process.argv.slice(2);
+const command = args[1];
+const output = args[args.indexOf("--out") + 1];
+await mkdir(output, { recursive: true });
+if (command === "generate-ts" && ${JSON.stringify(mode)} !== "empty-ts") {
+  await writeFile(output + "/ClientRequest.ts", 'export type X = { "method": "initialize" };');
+  await writeFile(output + "/ServerNotification.ts", 'export type X = { "method": "error" };');
+  await writeFile(output + "/ServerRequest.ts", 'export type X = { "method": "approval" };');
+}
+if (command === "generate-json-schema" && ${JSON.stringify(mode)} !== "empty-schema") {
+  await writeFile(output + "/schema.json", '{"type":"object"}');
+}
+`,
+    "utf8",
+  );
+  await chmod(binary, 0o755);
+  return binary;
+}
+
 describe("codex app-server protocol generation", () => {
+  test("accepts only the documented CLI argument shape", () => {
+    expect(parseArguments([])).toEqual({ check: false });
+    expect(parseArguments(["--check"])).toEqual({ check: true });
+    expect(() => parseArguments(["--write"])).toThrow("usage:");
+    expect(() => parseArguments(["--check", "--extra"])).toThrow("usage:");
+  });
+
+  test("requires an exact version and matching protocol source version", () => {
+    expect(() =>
+      validateVersionConfig({
+        version: "0.145.0",
+        appServerProtocol: {
+          generatedFrom: "0.145.0",
+          outputDir: EXPECTED_PROTOCOL_OUTPUT_DIR,
+        },
+      })
+    ).not.toThrow();
+    expect(() =>
+      validateVersionConfig({
+        version: "^0.145.0",
+        appServerProtocol: {
+          generatedFrom: "^0.145.0",
+          outputDir: EXPECTED_PROTOCOL_OUTPUT_DIR,
+        },
+      })
+    ).toThrow("exact semver");
+    expect(() =>
+      validateVersionConfig({
+        version: "0.145.0",
+        appServerProtocol: {
+          generatedFrom: "0.146.0",
+          outputDir: EXPECTED_PROTOCOL_OUTPUT_DIR,
+        },
+      })
+    ).toThrow("must equal version");
+  });
+
+  test("allows the fixed output beneath the repository root", async () => {
+    const root = await temporaryDirectory(".protocol-root-");
+    await mkdir(join(root, "bridges", "codex-bridge", "src", "app-server"), {
+      recursive: true,
+    });
+
+    expect(await resolveProtocolOutputDir(EXPECTED_PROTOCOL_OUTPUT_DIR, root))
+      .toBe(resolve(root, EXPECTED_PROTOCOL_OUTPUT_DIR));
+  });
+
+  test("rejects configured output changes and symlink escapes before recursive removal", async () => {
+    const root = await temporaryDirectory(".protocol-root-");
+    const outside = await temporaryDirectory(".protocol-outside-");
+    const parent = join(root, "bridges", "codex-bridge", "src", "app-server");
+    await mkdir(parent, { recursive: true });
+    await symlink(outside, join(parent, "generated"));
+
+    await expect(
+      resolveProtocolOutputDir(EXPECTED_PROTOCOL_OUTPUT_DIR, root),
+    ).rejects.toThrow("resolves outside the repository");
+    await expect(
+      resolveProtocolOutputDir("../../outside", root),
+    ).rejects.toThrow("must be");
+  });
+
+  test("replaces generated leaf symlinks without writing through them", async () => {
+    const root = await temporaryDirectory(".protocol-write-root-");
+    const outside = await temporaryDirectory(".protocol-write-outside-");
+    const output = join(root, "generated");
+    await mkdir(output, { recursive: true });
+    const outsideManifest = join(outside, "manifest.json");
+    const outsideReadme = join(outside, "README.md");
+    await writeFile(outsideManifest, "do not overwrite");
+    await writeFile(outsideReadme, "do not overwrite");
+    await symlink(outsideManifest, join(output, "protocol-manifest.json"));
+    await symlink(outsideReadme, join(output, "README.md"));
+
+    const typescript = [
+      { path: "ClientRequest.ts", content: 'export type X = { "method": "initialize" };' },
+    ];
+    await write(output, {
+      typescript,
+      manifest: {
+        codexVersion: "0.145.0",
+        typescriptDigest: digestFiles(typescript),
+        schemaDigest: "sha256:schema",
+        typescriptFileCount: 1,
+        schemaFileCount: 1,
+        clientRequestMethods: ["initialize"],
+        serverNotificationMethods: [],
+        serverRequestMethods: [],
+      },
+    });
+
+    expect(readFileSync(outsideManifest, "utf8")).toBe("do not overwrite");
+    expect(readFileSync(outsideReadme, "utf8")).toBe("do not overwrite");
+    expect(JSON.parse(readFileSync(join(output, "protocol-manifest.json"), "utf8")))
+      .toMatchObject({ codexVersion: "0.145.0" });
+    expect(readFileSync(join(output, "README.md"), "utf8"))
+      .toContain("Generated Codex app-server protocol");
+  });
+
   test("rewrites extensionless relative specifiers so NodeNext can resolve them", () => {
     const source = [
       'import type { ClientInfo } from "./ClientInfo";',
@@ -137,6 +288,105 @@ describe("codex app-server protocol generation", () => {
     expect(problems).toContain("Missing committed binding: typescript/Added.ts");
     expect(problems).toContain("Committed binding no longer generated: typescript/Removed.ts");
     expect(problems).toContain("clientRequestMethods: new method not in manifest: turn/start");
+  });
+
+  test("reports every scalar manifest difference", () => {
+    const expected = {
+      typescript: [{ path: "A.ts", content: "same" }],
+      manifest: {
+        codexVersion: "0.146.0",
+        typescriptDigest: "sha256:new-ts",
+        schemaDigest: "sha256:new-schema",
+        typescriptFileCount: 2,
+        schemaFileCount: 3,
+        clientRequestMethods: [],
+        serverNotificationMethods: [],
+        serverRequestMethods: [],
+      },
+    };
+    const actual = {
+      typescript: [{ path: "A.ts", content: "same" }],
+      manifest: {
+        codexVersion: "0.145.0",
+        typescriptDigest: "sha256:old-ts",
+        schemaDigest: "sha256:old-schema",
+        typescriptFileCount: 1,
+        schemaFileCount: 1,
+        clientRequestMethods: [],
+        serverNotificationMethods: [],
+        serverRequestMethods: [],
+      },
+    };
+
+    const problems = describeDifferences(expected, actual);
+    for (const scalar of [
+      "codexVersion",
+      "typescriptFileCount",
+      "schemaFileCount",
+      "TypeScript binding digest",
+      "JSON Schema digest",
+    ]) {
+      expect(problems.some((problem) => problem.includes(scalar))).toBe(true);
+    }
+  });
+
+  test("offline consistency checks version, tree digest, count, and method surfaces", () => {
+    const typescript = [
+      {
+        path: "ClientRequest.ts",
+        content: 'export type X = { "method": "thread/start" };',
+      },
+      {
+        path: "ServerNotification.ts",
+        content: 'export type X = { "method": "turn/completed" };',
+      },
+      {
+        path: "ServerRequest.ts",
+        content: 'export type X = { "method": "approval" };',
+      },
+    ];
+    const committed = {
+      typescript,
+      manifest: {
+        codexVersion: "0.144.0",
+        typescriptDigest: "sha256:stale",
+        schemaDigest: "sha256:schema",
+        typescriptFileCount: 2,
+        schemaFileCount: 1,
+        clientRequestMethods: ["wrong"],
+        serverNotificationMethods: ["turn/completed"],
+        serverRequestMethods: ["approval"],
+      },
+    };
+
+    const problems = describeCommittedSelfConsistency(committed, "0.145.0");
+    expect(problems.some((problem) => problem.includes("codexVersion"))).toBe(true);
+    expect(problems.some((problem) => problem.includes("digest"))).toBe(true);
+    expect(problems.some((problem) => problem.includes("typescriptFileCount"))).toBe(true);
+    expect(problems.some((problem) => problem.includes("clientRequestMethods"))).toBe(true);
+
+    committed.manifest = {
+      ...committed.manifest,
+      codexVersion: "0.145.0",
+      typescriptDigest: digestFiles(typescript),
+      typescriptFileCount: typescript.length,
+      clientRequestMethods: ["thread/start"],
+    };
+    expect(describeCommittedSelfConsistency(committed, "0.145.0")).toEqual([]);
+  });
+
+  test("fails when TypeScript generation produces no files", async () => {
+    const binary = await fakeGeneratorBinary("empty-ts");
+    await expect(generate(binary, "0.145.0")).rejects.toThrow(
+      "generate-ts produced no files",
+    );
+  });
+
+  test("fails when schema generation produces no files", async () => {
+    const binary = await fakeGeneratorBinary("empty-schema");
+    await expect(generate(binary, "0.145.0")).rejects.toThrow(
+      "generate-json-schema produced no files",
+    );
   });
 
   test("identical input produces no differences", () => {

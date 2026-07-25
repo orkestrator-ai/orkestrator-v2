@@ -9,10 +9,12 @@ import type {
   CodexAbortOutcome,
   CodexApproval,
   CodexPromptAcceptedResponse,
+  CodexPromptSendOutcome,
+  CodexSessionConfigUpdateOutcome,
   CodexSessionPhase,
   CodexSessionStatusLookupResult,
 } from "@/lib/codex-client";
-import { mockToastError } from "../../../../../tests/mocks/sonner";
+import { mockToastError, mockToastWarning } from "../../../../../tests/mocks/sonner";
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 
@@ -67,11 +69,17 @@ const mockSendPrompt = mock<
     _sessionId: string,
     _prompt: string,
     _options?: { attachments?: unknown; requestId?: string },
-  ) => Promise<CodexPromptAcceptedResponse | null>
+  ) => Promise<CodexPromptSendOutcome | CodexPromptAcceptedResponse | null>
 >(async () => ({ status: "processing" }));
 const mockGetSessionMessages = mock(async (): Promise<TestCodexMessage[]> => []);
 const mockSubscribeToEvents = mock(() => (async function* () {})());
-const mockUpdateSessionConfig = mock(async () => true);
+const mockUpdateSessionConfig = mock<
+  (
+    _client: unknown,
+    _sessionId: string,
+    _config: unknown,
+  ) => Promise<CodexSessionConfigUpdateOutcome | boolean>
+>(async () => true);
 const mockAbortSession = mock<
   (_client: unknown, _sessionId: string) => Promise<CodexAbortOutcome>
 >(async () => ({ status: "accepted" }));
@@ -399,6 +407,7 @@ function createApproval(approvalId = "approval-1"): CodexApproval {
     requestedAt: Date.now(),
     expiresAt: Date.now() + 300_000,
     command: "bun test",
+    actionable: true,
     supportsApproveForSession: false,
   };
 }
@@ -565,6 +574,7 @@ describe("CodexChatTab", () => {
     mockScrollToBottom.mockClear();
     mockUpdateSessionConfig.mockClear();
     mockUpdateSessionConfig.mockImplementation(async () => true);
+    mockToastWarning.mockClear();
     mockAbortSession.mockClear();
     mockAbortSession.mockImplementation(async () => ({ status: "accepted" as const }));
     mockFetchPendingApprovals.mockClear();
@@ -2156,6 +2166,37 @@ describe("CodexChatTab", () => {
     });
   });
 
+  test("keeps the turn locked when prompt acceptance is ambiguous and status is unavailable", async () => {
+    composeText = "Do not overlap this turn";
+    mockSendPrompt.mockResolvedValue({
+      outcome: "unknown",
+      requestId: "ambiguous-request",
+    });
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+    await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
+    mockLookupSessionStatus.mockResolvedValue({
+      kind: "unavailable",
+      error: new Error("offline"),
+    });
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.isLoading).toBe(true);
+      expect(useCodexStore.getState().sessionPhase.get(SESSION_KEY)).toBe("recovering");
+    });
+    expect(screen.getByTestId("codex-stop")).toBeTruthy();
+    expect(screen.getByText("Reconnecting to Codex…")).toBeTruthy();
+  });
+
   test("reuses the idempotency key when the same failed prompt is retried", async () => {
     composeText = "Retry this exact prompt";
     mockSendPrompt
@@ -2657,6 +2698,24 @@ describe("CodexChatTab", () => {
     });
   });
 
+  test("keeps an applied model change and warns when it was not persisted durably", async () => {
+    mockUpdateSessionConfig.mockResolvedValue({
+      outcome: "applied",
+      durable: false,
+    });
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+
+    fireEvent.click(screen.getByTestId("codex-model-change"));
+
+    await waitFor(() => {
+      expect(useCodexStore.getState().selectedModel.get(SESSION_KEY)).toBe("gpt-5.4-codex");
+      expect(mockToastWarning).toHaveBeenCalledWith(
+        "Codex settings were applied but not saved",
+        { description: "They may revert if the Codex bridge restarts." },
+      );
+    });
+  });
+
   test("rolls back rejected model changes and keeps the previous persisted defaults", async () => {
     mockUpdateSessionConfig.mockResolvedValue(false);
     render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
@@ -2929,11 +2988,12 @@ describe("CodexChatTab", () => {
   });
 
   describe("manual refresh", () => {
-    test("applies even when a live SSE frame lands mid-flight", async () => {
+    test("refreshes messages without overwriting a newer live idle state", async () => {
       /**
        * Regression: the manual refresh shared one sequence counter with every
-       * background reconcile, so an overlapping watchdog tick or `message.updated`
-       * frame made it return "stale" — no refetch, and no error either.
+       * background reconcile, so an overlapping SSE frame made it return "stale"
+       * — no refetch, and no error either. We still honour the transcript refresh,
+       * but the live state must win over the older HTTP snapshot.
        */
       const refreshed = createMessage("manual-refresh", "Manual refresh landed");
       let markManualStarted!: () => void;
@@ -2953,9 +3013,9 @@ describe("CodexChatTab", () => {
       mockSubscribeToEvents.mockImplementation(() => (async function* () {
         await manualStarted;
         yield {
-          type: "message.updated",
+          type: "session.idle",
           sessionId: SESSION_ID,
-          data: { message: createMessage("live-message", "Streamed while refreshing") },
+          data: { title: "Live completion" },
         };
         markFrameSent();
         await new Promise(() => {});
@@ -2981,14 +3041,14 @@ describe("CodexChatTab", () => {
       await act(async () => {
         releaseManual({
           kind: "found",
-          session: { status: "idle", title: "Manually refreshed" },
+          session: { status: "running", title: "Stale manual snapshot" },
         });
         await manualLookup;
       });
 
       await waitFor(() => {
         expect(useCodexStore.getState().sessions.get(SESSION_KEY)).toMatchObject({
-          title: "Manually refreshed",
+          title: "Live completion",
           isLoading: false,
           messages: [refreshed],
         });

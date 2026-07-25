@@ -1,5 +1,5 @@
 import { afterEach, describe, test, expect } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DispatchJournal, reconcileFromThreadTurns } from "./dispatch-journal.js";
@@ -162,6 +162,22 @@ describe("persistence across a bridge restart", () => {
     // No file at all is the same path as a torn file.
     await store.load();
     expect(store.allRecords()).toEqual([]);
+  });
+
+  test("prepare fails closed when its safety record cannot be persisted", async () => {
+    const codexHome = mkdtempSync(join(tmpdir(), "ork-journal-unwritable-"));
+    temporaryDirs.push(codexHome);
+    writeFileSync(join(codexHome, "orkestrator-bridge"), "blocks journal directory creation");
+    const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
+    await store.load();
+
+    await expect(
+      store.markPrepared({
+        requestId: "req-1",
+        bridgeSessionId: "s1",
+        threadId: "t1",
+      }),
+    ).rejects.toThrow();
   });
 });
 

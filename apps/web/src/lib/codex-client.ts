@@ -220,6 +220,11 @@ export interface CodexApproval {
   reason?: string;
   grantRoot?: string;
   networkHost?: string;
+  /**
+   * Whether the bridge could resolve enough action details for informed
+   * approval. The UI must fail closed when this is false.
+   */
+  actionable: boolean;
   supportsApproveForSession: boolean;
 }
 
@@ -288,6 +293,9 @@ export function parseApproval(value: unknown): CodexApproval | null {
   if (typeof entry.expiresAt !== "number" || !Number.isFinite(entry.expiresAt)) {
     return rejectApproval(entry, "expiresAt");
   }
+  if (typeof entry.actionable !== "boolean") {
+    return rejectApproval(entry, "actionable");
+  }
   if (typeof entry.supportsApproveForSession !== "boolean") {
     return rejectApproval(entry, "supportsApproveForSession");
   }
@@ -326,6 +334,7 @@ export function parseApproval(value: unknown): CodexApproval | null {
     itemId: entry.itemId,
     requestedAt: entry.requestedAt,
     expiresAt: entry.expiresAt,
+    actionable: entry.actionable,
     supportsApproveForSession: entry.supportsApproveForSession,
     ...(optionalString("command") ? { command: optionalString("command") } : {}),
     ...(optionalString("cwd") ? { cwd: optionalString("cwd") } : {}),
@@ -521,7 +530,7 @@ export async function updateSessionConfig(
     mode?: CodexConversationMode;
     fastMode?: boolean;
   },
-): Promise<boolean> {
+): Promise<CodexSessionConfigUpdateOutcome> {
   try {
     const response = await fetchWithTimeout(
       `${client.baseUrl}/session/${sessionId}/config`,
@@ -531,12 +540,61 @@ export async function updateSessionConfig(
         body: JSON.stringify(options),
       },
     );
-    return response.ok;
+    if (!response.ok) {
+      return { outcome: "rejected", httpStatus: response.status };
+    }
+
+    const body = (await response.json().catch(() => ({}))) as {
+      durable?: unknown;
+    };
+    return {
+      outcome: "applied",
+      // Older bridges did not report durability. Preserve compatibility while
+      // surfacing an explicit memory-only update from the app-server bridge.
+      durable: body.durable !== false,
+    };
   } catch (error) {
     console.error("[codex-client] Failed to update session config:", error);
-    return false;
+    // A timeout or reset after the bridge handled the request is ambiguous.
+    // Re-read the authoritative bridge config before asking the UI to roll back.
+    try {
+      const reconciliation = await fetchWithTimeout(
+        `${client.baseUrl}/session/${sessionId}/config`,
+      );
+      if (reconciliation.ok) {
+        const current = (await reconciliation.json()) as {
+          model?: unknown;
+          modelReasoningEffort?: unknown;
+          mode?: unknown;
+          fastMode?: unknown;
+          durable?: unknown;
+        };
+        const matches =
+          (options.model === undefined || current.model === options.model)
+          && (
+            options.modelReasoningEffort === undefined
+            || current.modelReasoningEffort === options.modelReasoningEffort
+          )
+          && (options.mode === undefined || current.mode === options.mode)
+          && (options.fastMode === undefined || current.fastMode === options.fastMode);
+        if (matches) {
+          return {
+            outcome: "applied",
+            durable: current.durable === true,
+          };
+        }
+      }
+    } catch {
+      // Still ambiguous; the caller keeps the warning/recovery state.
+    }
+    return { outcome: "unknown" };
   }
 }
+
+export type CodexSessionConfigUpdateOutcome =
+  | { outcome: "applied"; durable: boolean }
+  | { outcome: "rejected"; httpStatus: number }
+  | { outcome: "unknown" };
 
 export async function getSessionMessages(
   client: CodexClient,
@@ -640,12 +698,18 @@ export interface CodexPromptAcceptedResponse {
   duplicate?: boolean;
 }
 
+export type CodexPromptSendOutcome =
+  | ({ outcome: "accepted" } & CodexPromptAcceptedResponse)
+  | { outcome: "rejected"; httpStatus: number }
+  | { outcome: "unknown"; requestId: string };
+
 /**
  * Sends a prompt.
  *
- * Returns the acceptance details, or `null` on failure. Callers that only need a
- * success check can keep treating the result as a boolean — an object is truthy
- * and `null` is falsy.
+ * A non-2xx response proves the bridge rejected the request. A transport failure
+ * is different: the bridge may have accepted the prompt before the response was
+ * lost, so callers must reconcile authoritative session state rather than
+ * unlocking the composer or blindly retrying.
  */
 export async function sendPrompt(
   client: CodexClient,
@@ -655,7 +719,8 @@ export async function sendPrompt(
     attachments?: CodexPromptAttachment[];
     requestId?: string;
   },
-): Promise<CodexPromptAcceptedResponse | null> {
+): Promise<CodexPromptSendOutcome> {
+  const requestId = options?.requestId ?? crypto.randomUUID();
   try {
     const response = await fetchWithTimeout(
       `${client.baseUrl}/session/${sessionId}/prompt`,
@@ -665,23 +730,26 @@ export async function sendPrompt(
         body: JSON.stringify({
           prompt,
           attachments: options?.attachments,
-          requestId: options?.requestId,
+          requestId,
         }),
       },
     );
-    if (!response.ok) return null;
+    if (!response.ok) {
+      return { outcome: "rejected", httpStatus: response.status };
+    }
 
     const data = (await response.json().catch(() => ({}))) as Partial<CodexPromptAcceptedResponse>;
     return {
+      outcome: "accepted",
       status: data.status === "already-processed" ? "already-processed" : "processing",
-      requestId: typeof data.requestId === "string" ? data.requestId : options?.requestId,
+      requestId: typeof data.requestId === "string" ? data.requestId : requestId,
       threadId: typeof data.threadId === "string" ? data.threadId : null,
       turnId: typeof data.turnId === "string" ? data.turnId : undefined,
       duplicate: data.duplicate === true,
     };
   } catch (error) {
     console.error("[codex-client] Failed to send prompt:", error);
-    return null;
+    return { outcome: "unknown", requestId };
   }
 }
 

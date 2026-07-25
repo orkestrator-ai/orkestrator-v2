@@ -49,13 +49,14 @@ describe("monorepo orchestration scripts", () => {
     expect(source).toContain('name.startsWith("claude-agent-sdk-")');
   });
 
-  test("full tests run the workspace, root, and bridge groups concurrently", () => {
-    // The three groups are independent, so they run at once rather than in
-    // sequence. Behaviour is asserted properly in tests/unit/test-all.test.ts;
-    // this only pins the shape of the orchestration.
+  test("full tests run workspace, root, bridge, and protocol checks concurrently", () => {
+    // The groups are independent, so they run at once rather than in sequence.
+    // Behaviour is asserted properly in tests/unit/test-all.test.ts; this only
+    // pins the shape of the orchestration.
     const source = read("scripts/test-all.ts");
     expect(source).toContain("Promise.all(");
     expect(source).toContain('"--filter=@orkestrator/web-public"');
+    expect(source).toContain('args: ["run", "codex:protocol:check"]');
     expect(source).toContain('args: ["scripts/test-ios.ts"]');
     expect(source).toContain('dependencies.platform === "darwin"');
     expect(source).toContain("process.exit(status)");

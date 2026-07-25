@@ -283,7 +283,7 @@ Files:
 ## Testing
 
 ```bash
-bun run test                  # Full suite: workspace + root + bridges concurrently, then iOS
+bun run test                  # Full suite: workspace + root + bridges + protocol concurrently, then iOS
 bun test tests --parallel     # Root integration/unit tests only
 bun test bridges --parallel   # Bridge suites only
 bun run --cwd apps/web typecheck       # Web TypeScript type checking
@@ -299,10 +299,10 @@ ports, drive happy-dom) rather than CPU, so it parallelizes well:
 - **Within a group** — `bun test --parallel` spreads test *files* across worker
   processes. This is where nearly all of the win is (the root suite alone goes
   from ~100s to ~30s).
-- **Across groups** — `scripts/test-all.ts` runs the workspace, root and bridge
-  groups concurrently, with bounded worker pools (`planWorkers`) so three groups
-  cannot oversubscribe a small CI runner. iOS runs last and alone: the simulator
-  is a single shared resource.
+- **Across groups** — `scripts/test-all.ts` runs the workspace, root, bridge and
+  protocol groups concurrently, with bounded worker pools (`planWorkers`) so
+  the three worker-consuming groups cannot oversubscribe a small CI runner. iOS
+  runs last and alone: the simulator is a single shared resource.
 
 Group output is buffered and printed as a labelled block, and **every** failing
 group is reported rather than stopping at the first — with concurrency the others

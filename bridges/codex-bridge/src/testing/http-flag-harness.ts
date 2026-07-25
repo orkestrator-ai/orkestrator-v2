@@ -33,13 +33,27 @@ async function main(): Promise<void> {
 
   // Wait for the engine to finish its handshake; index.ts starts it in the
   // background so the HTTP server is up even if the child is slow.
+  let ready = false;
+  let lastState = "unknown";
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const health = (await (await app.request("/global/health")).json()) as {
       appServer?: { state?: string };
       engine?: string;
     };
-    if (health.engine !== "app-server" || health.appServer?.state === "ready") break;
+    if (health.engine !== "app-server") {
+      throw new Error(`Expected app-server engine, received ${String(health.engine)}`);
+    }
+    lastState = health.appServer?.state ?? "missing";
+    if (lastState === "ready") {
+      ready = true;
+      break;
+    }
     await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  if (!ready) {
+    throw new Error(
+      `app-server did not become ready within 5 seconds (last state: ${lastState})`,
+    );
   }
 
   await record("health", await app.request("/global/health"));
@@ -54,6 +68,9 @@ async function main(): Promise<void> {
     }),
   );
   const sessionId = String(created.sessionId ?? "");
+  if (!sessionId) {
+    throw new Error("session creation returned no sessionId");
+  }
 
   await record(
     "prompt",
@@ -69,6 +86,20 @@ async function main(): Promise<void> {
 
   await record("messages", await app.request(`/session/${sessionId}/messages`));
   await record("status", await app.request(`/session/${sessionId}/status`));
+  await record(
+    "config-update",
+    await app.request(`/session/${sessionId}/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "fake-model",
+        modelReasoningEffort: "high",
+        mode: "plan",
+        fastMode: true,
+      }),
+    }),
+  );
+  await record("config-read", await app.request(`/session/${sessionId}/config`));
 
   // A duplicate request id must not run a second turn.
   await record(

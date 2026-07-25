@@ -28,6 +28,7 @@ export class UpdateCoalescer {
 
   private timer: ReturnType<typeof setTimeout> | null = null;
   private publishing = false;
+  private runPromise: Promise<void> | null = null;
   /** A change arrived while a publish was in flight. */
   private dirty = false;
   private stopped = false;
@@ -80,26 +81,53 @@ export class UpdateCoalescer {
     await this.run();
   }
 
-  private async run(): Promise<void> {
-    if (this.stopped || this.publishing) {
-      // A concurrent flush is already publishing; make sure it publishes again.
-      if (this.publishing) this.dirty = true;
-      return;
+  private run(): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    if (this.runPromise) {
+      // A concurrent flush is already publishing. Its caller must not resolve
+      // until the follow-up snapshot containing this change has been sent.
+      this.dirty = true;
+      return this.runPromise;
     }
-    this.publishing = true;
-    this.dirty = false;
-    try {
-      await this.publish();
-      this.publishedCount += 1;
-      this.lastPublishedAt = Date.now();
-    } catch (error) {
-      this.onError?.(error);
-    } finally {
-      this.publishing = false;
-      // Changes arrived mid-publish, so the snapshot we just sent is already
-      // stale; schedule one more rather than losing them.
-      if (this.dirty && !this.stopped) this.schedule();
-    }
+
+    // Install the shared promise before invoking publish. A synchronous publish
+    // callback can re-enter flushNow(), which must join this run.
+    let resolveRun!: () => void;
+    let rejectRun!: (error: unknown) => void;
+    const activeRun = new Promise<void>((resolve, reject) => {
+      resolveRun = resolve;
+      rejectRun = reject;
+    });
+    this.runPromise = activeRun;
+    void this.runLoop().then(
+      () => {
+        this.runPromise = null;
+        resolveRun();
+      },
+      (error) => {
+        this.runPromise = null;
+        rejectRun(error);
+      },
+    );
+    return activeRun;
+  }
+
+  private async runLoop(): Promise<void> {
+    do {
+      this.publishing = true;
+      this.dirty = false;
+      try {
+        await this.publish();
+        this.publishedCount += 1;
+        this.lastPublishedAt = Date.now();
+      } catch (error) {
+        this.onError?.(error);
+      } finally {
+        this.publishing = false;
+      }
+      // Changes received during the awaited publish are already absent from
+      // that snapshot. Publish their full replacement before resolving a flush.
+    } while (this.dirty && !this.stopped);
   }
 
   stop(): void {

@@ -414,15 +414,15 @@ describe("codex-client getSessionMessages", () => {
 describe("codex-client updateSessionConfig", () => {
   afterEach(restoreFetch);
 
-  test("posts session settings and returns true on ok response", async () => {
-    mockFetch(async () => new Response(null, { status: 200 }));
+  test("posts session settings and reports whether the update was durable", async () => {
+    mockFetch(async () => Response.json({ status: "updated", durable: true }));
 
     await expect(updateSessionConfig(client, "session-1", {
       model: "gpt-5.3-codex",
       modelReasoningEffort: "high",
       mode: "plan",
       fastMode: true,
-    })).resolves.toBe(true);
+    })).resolves.toEqual({ outcome: "applied", durable: true });
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "http://127.0.0.1:4000/session/session-1/config",
@@ -436,14 +436,46 @@ describe("codex-client updateSessionConfig", () => {
         }),
       }),
     );
+
+    mockFetch(async () => Response.json({ status: "updated", durable: false }));
+    await expect(
+      updateSessionConfig(client, "session-1", { mode: "build" }),
+    ).resolves.toEqual({ outcome: "applied", durable: false });
   });
 
-  test("returns false on non-ok or failed responses", async () => {
+  test("distinguishes a definite HTTP rejection from an ambiguous transport failure", async () => {
     mockFetch(async () => new Response(null, { status: 409 }));
-    await expect(updateSessionConfig(client, "session-1", { mode: "build" })).resolves.toBe(false);
+    await expect(
+      updateSessionConfig(client, "session-1", { mode: "build" }),
+    ).resolves.toEqual({ outcome: "rejected", httpStatus: 409 });
 
     mockFetchError(new Error("offline"));
-    await expect(updateSessionConfig(client, "session-1", { mode: "build" })).resolves.toBe(false);
+    await expect(
+      updateSessionConfig(client, "session-1", { mode: "build" }),
+    ).resolves.toEqual({ outcome: "unknown" });
+  });
+
+  test("reconciles an ambiguous update against the authoritative config", async () => {
+    let calls = 0;
+    mockFetch(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("response lost");
+      return Response.json({
+        model: "gpt-5.3-codex",
+        modelReasoningEffort: "high",
+        mode: "plan",
+        fastMode: true,
+        durable: false,
+      });
+    });
+
+    await expect(updateSessionConfig(client, "session-1", {
+      model: "gpt-5.3-codex",
+      modelReasoningEffort: "high",
+      mode: "plan",
+      fastMode: true,
+    })).resolves.toEqual({ outcome: "applied", durable: false });
+    expect(calls).toBe(2);
   });
 });
 
@@ -575,7 +607,7 @@ describe("codex-client getSessionStatus", () => {
 describe("codex-client sendPrompt", () => {
   afterEach(restoreFetch);
 
-  test("posts prompt attachments and an idempotency key and returns true on ok response", async () => {
+  test("posts prompt attachments and an idempotency key and reports acceptance", async () => {
     mockFetch(async () => new Response(null, { status: 202 }));
 
     await expect(sendPrompt(client, "session-1", "Review this", {
@@ -586,7 +618,11 @@ describe("codex-client sendPrompt", () => {
         filename: "screenshot.png",
       }],
       requestId: "request-1",
-    })).resolves.toMatchObject({ status: "processing", requestId: "request-1" });
+    })).resolves.toMatchObject({
+      outcome: "accepted",
+      status: "processing",
+      requestId: "request-1",
+    });
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "http://127.0.0.1:4000/session/session-1/prompt",
@@ -606,13 +642,18 @@ describe("codex-client sendPrompt", () => {
     );
   });
 
-  test("returns null on non-ok or failed responses", async () => {
-    // Callers treat the result as a boolean, so null must stay falsy.
+  test("distinguishes a definite HTTP rejection from an ambiguous transport failure", async () => {
     mockFetch(async () => new Response(null, { status: 409 }));
-    await expect(sendPrompt(client, "session-1", "Review this")).resolves.toBeNull();
+    await expect(sendPrompt(client, "session-1", "Review this")).resolves.toEqual({
+      outcome: "rejected",
+      httpStatus: 409,
+    });
 
     mockFetchError(new Error("offline"));
-    await expect(sendPrompt(client, "session-1", "Review this")).resolves.toBeNull();
+    await expect(sendPrompt(client, "session-1", "Review this")).resolves.toMatchObject({
+      outcome: "unknown",
+      requestId: expect.any(String),
+    });
   });
 
   test("surfaces the accepted turn identifiers for reconnect reconciliation", async () => {
@@ -631,6 +672,7 @@ describe("codex-client sendPrompt", () => {
     await expect(
       sendPrompt(client, "session-1", "Go", { requestId: "request-1" }),
     ).resolves.toEqual({
+      outcome: "accepted",
       status: "processing",
       requestId: "request-1",
       threadId: "thread-9",
@@ -648,7 +690,11 @@ describe("codex-client sendPrompt", () => {
 
     await expect(
       sendPrompt(client, "session-1", "Go", { requestId: "request-1" }),
-    ).resolves.toMatchObject({ status: "already-processed", duplicate: true });
+    ).resolves.toMatchObject({
+      outcome: "accepted",
+      status: "already-processed",
+      duplicate: true,
+    });
   });
 });
 
@@ -1024,6 +1070,7 @@ describe("codex-client approvals", () => {
       requestedAt: 1,
       expiresAt: 2,
       command: "ls",
+      actionable: true,
       supportsApproveForSession: true,
     };
     mockFetch(() =>
@@ -1053,6 +1100,7 @@ describe("codex-client approvals", () => {
             expiresAt: 2,
             permissions: { network: "yes", fileSystem: true },
             changes: [{ path: "/valid", kind: "update" }, { nope: true }],
+            actionable: false,
             supportsApproveForSession: false,
           },
         ],
@@ -1097,6 +1145,7 @@ describe("codex-client approvals", () => {
       expiresAt: 2,
       command: "rm -rf build",
       cwd: "/workspace",
+      actionable: true,
       supportsApproveForSession: true,
     };
 
@@ -1134,6 +1183,8 @@ describe("codex-client approvals", () => {
       ["a non-finite requestedAt", { ...VALID, requestedAt: Number.NaN }],
       ["a missing expiresAt", { ...VALID, expiresAt: undefined }],
       ["a non-finite expiresAt", { ...VALID, expiresAt: Number.POSITIVE_INFINITY }],
+      ["a missing actionable flag", { ...VALID, actionable: undefined }],
+      ["a non-boolean actionable flag", { ...VALID, actionable: "yes" }],
       ["a non-boolean supportsApproveForSession", { ...VALID, supportsApproveForSession: "yes" }],
     ])("rejects and warns about %s", (_label, payload) => {
       expect(parseApproval(payload)).toBeNull();

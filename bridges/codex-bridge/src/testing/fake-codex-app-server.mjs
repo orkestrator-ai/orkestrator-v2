@@ -74,6 +74,7 @@ let initialized = false;
 
 const handlers = {
   initialize: (id) => {
+    if (process.env.FAKE_CODEX_SCRIPT === "no-initialize") return;
     respond(id, {
       userAgent: `orkestrator/${version} (fake; test)`,
       codexHome: process.env.CODEX_HOME || "/tmp/codex-home",

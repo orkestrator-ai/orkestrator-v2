@@ -263,6 +263,8 @@ export class AppServerSupervisor {
    */
   private lastReadyGeneration: EngineGeneration = 0;
   private startPromise: Promise<Generation> | null = null;
+  /** Spawned child that has not yet completed its initialize handshake. */
+  private startingChild: ChildProcessWithoutNullStreams | null = null;
   private restartFailures: number[] = [];
   private restartCount = 0;
   private circuitOpen = false;
@@ -433,6 +435,7 @@ export class AppServerSupervisor {
         return generation;
       } catch (error) {
         this.lastError = error instanceof Error ? error.message : String(error);
+        if (this.stopping) throw new AppServerUnavailableError("stopped");
         if (isOwnershipContention(error)) {
           // Someone else owns the workspace. Retrying cannot help and counting
           // it as a failure would open a breaker that never closes, so report it
@@ -483,6 +486,7 @@ export class AppServerSupervisor {
     // Re-read PATH-ish variables *before* launch: the child snapshots them and
     // cannot see later changes.
     await (this.options.refreshEnvironment ?? refreshRuntimeEnvironment)();
+    if (this.stopping) throw new AppServerUnavailableError("stopped");
     const environmentFingerprint = this.fingerprintEnvironment();
     const instanceId = randomUUID();
     const instanceStartedAt = this.now();
@@ -532,6 +536,7 @@ export class AppServerSupervisor {
         generation: generationId,
       });
     }
+    this.startingChild = child;
 
     if (this.options.pidFileEnabled !== false) {
       try {
@@ -541,8 +546,14 @@ export class AppServerSupervisor {
         await this.updateOwnedPidFile(child.pid, instanceId, instanceStartedAt);
       } catch (error) {
         await this.terminateChild(child);
+        if (this.startingChild === child) this.startingChild = null;
         throw error;
       }
+    }
+    if (this.stopping) {
+      await this.terminateChild(child);
+      if (this.startingChild === child) this.startingChild = null;
+      throw new AppServerUnavailableError("stopped");
     }
 
     // app-server stderr can contain prompts, file contents and tool output, so
@@ -664,7 +675,16 @@ export class AppServerSupervisor {
       // app-server said before it gave up.
       await recorder?.close();
       await this.terminateChild(child);
+      if (this.startingChild === child) this.startingChild = null;
       throw error;
+    }
+
+    if (this.stopping) {
+      client.close(new AppServerUnavailableError("stopped"));
+      await recorder?.close();
+      await this.terminateChild(child);
+      if (this.startingChild === child) this.startingChild = null;
+      throw new AppServerUnavailableError("stopped");
     }
 
     const generation: Generation = {
@@ -678,6 +698,7 @@ export class AppServerSupervisor {
       instanceId,
     };
     const previous = this.lastReadyGeneration;
+    if (this.startingChild === child) this.startingChild = null;
     this.current = generation;
     this.lastReadyGeneration = generationId;
     this.setState("ready");
@@ -778,6 +799,11 @@ export class AppServerSupervisor {
   async stop(): Promise<void> {
     this.stopping = true;
     this.setState("draining", "bridge shutting down");
+    const pendingStart = this.startPromise;
+    const startingChild = this.startingChild;
+    if (startingChild) await this.terminateChild(startingChild);
+    if (pendingStart) await pendingStart.catch(() => undefined);
+
     const generation = this.current;
     this.current = null;
 

@@ -1,8 +1,18 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 import type { NativeStructuredAgent } from "@/lib/structured-review-agent";
-import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import {
+  StructuredOutputReadUnavailableError,
+  type StructuredOutputResult,
+} from "@orkestrator/protocol/structured-output";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import {
   dispatchMaterial,
@@ -97,6 +107,60 @@ function seedSentReconciliationWorkflow(): LoopedReviewWorkflow {
   });
   return workflow;
 }
+
+function seedSentWorkflow(
+  phase: "preparing" | "creating-pr",
+): LoopedReviewWorkflow {
+  const created = seedWorkflow({ phase });
+  const session = {
+    id: "workflow-session",
+    phase: phase === "preparing" ? "preparation" as const : "pr" as const,
+    round: 1,
+    providerSessionId: "provider-session",
+    requestIds: ["request-1"],
+    status: "running" as const,
+    startedAt: created.createdAt,
+  };
+  const workflow: LoopedReviewWorkflow = {
+    ...created,
+    phase,
+    sessions: [session],
+    activeSessionId: session.id,
+    pr: phase === "creating-pr"
+      ? { status: "running", sessionId: session.id }
+      : created.pr,
+    dispatch: {
+      id: "dispatch-1",
+      requestId: "request-1",
+      sessionId: session.id,
+      phase,
+      kind: phase === "preparing" ? "prepare" : "pr",
+      state: "sent",
+      createdAt: created.createdAt,
+    },
+  };
+  useLoopedReviewStore.setState({
+    workflows: new Map([[workflow.id, workflow]]),
+  });
+  return workflow;
+}
+
+const preparedPackage = {
+  id: "review-package-workflow-review-r1",
+  round: 1,
+  preparedAt: "2026-07-25T00:00:00.000Z",
+  targetBranch: "main",
+  baseRef: "a".repeat(40),
+  headRef: "b".repeat(40),
+  commit: null,
+  completeDiff: "",
+  changedFiles: [],
+  validation: [],
+  skippedFiles: [],
+  uncommittedFiles: [],
+  limitations: [],
+  context: null,
+};
 
 const successfulReconciliation = {
   ok: true as const,
@@ -258,6 +322,69 @@ describe("LoopedReviewTab states", () => {
     expect(screen.getByText("Record the result while paused.")).toBeTruthy();
     expect(screen.getByText(/applyResult/)).toBeTruthy();
   });
+
+  test("renders failed hydration and retries the authoritative restore", async () => {
+    const restored = seedWorkflow({ phase: "paused", pausedFromPhase: "preparing" });
+    useLoopedReviewStore.setState({ workflows: new Map() });
+    let attempts = 0;
+    const hydrateWorkflow = mock(async () => {
+      attempts += 1;
+      if (attempts === 1) return null;
+      useLoopedReviewStore.getState().replaceWorkflow(restored);
+      return restored;
+    });
+
+    render(
+      <LoopedReviewTab
+        data={data}
+        isActive={false}
+        hydrateWorkflow={hydrateWorkflow}
+      />,
+    );
+
+    expect(await screen.findByText("Looped review unavailable")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Retry restore/ }));
+    expect(await screen.findByText("Workflow paused")).toBeTruthy();
+    expect(hydrateWorkflow).toHaveBeenCalledTimes(2);
+  });
+
+  test("cancels locally even when aborting the provider fails", async () => {
+    const workflow = seedWorkflow({ phase: "preparing" });
+    const sessionId = useLoopedReviewStore.getState().addSession(workflow.id, {
+      phase: "preparation",
+      round: 1,
+      providerSessionId: "provider-session",
+    })!;
+    const abort = mock(async () => {
+      throw new Error("bridge offline");
+    });
+    const agent: NativeStructuredAgent = {
+      provider: "codex",
+      createSession: async () => "unused",
+      send: async () => ({ accepted: true, requestId: "unused" }),
+      getResult: async () => null,
+      getStatus: async () => "running",
+      abort,
+    };
+
+    render(
+      <LoopedReviewTab
+        data={data}
+        isActive
+        connectAgent={async () => agent}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => {
+      expect(useLoopedReviewStore.getState().workflows.get(workflow.id))
+        .toMatchObject({
+          phase: "cancelled",
+          sessions: [{ id: sessionId, status: "cancelled" }],
+        });
+    });
+    expect(abort).toHaveBeenCalledWith("provider-session");
+  });
 });
 
 describe("app-lifetime looped-review controller", () => {
@@ -401,7 +528,21 @@ describe("app-lifetime looped-review controller", () => {
 
   test("turns a missing restored provider session into a bounded retryable failure", async () => {
     const workflow = seedSentReconciliationWorkflow();
-    const agent = agentWith(async () => null, async () => null);
+    const send = mock(async (
+      _sessionId: string,
+      _prompt: string,
+      _schema: unknown,
+      requestId: string,
+    ) => ({ accepted: true as const, requestId }));
+    const agent: NativeStructuredAgent = {
+      provider: "codex",
+      createSession: async () => "replacement-provider-session",
+      send,
+      getResult: async () => null,
+      getStatus: async (sessionId) =>
+        sessionId === "provider-session" ? "missing" : "running",
+      abort: async () => true,
+    };
     render(
       <LoopedReviewTab
         data={data}
@@ -409,6 +550,8 @@ describe("app-lifetime looped-review controller", () => {
         driveWorkflow
         controllerOnly
         connectAgent={async () => agent}
+        persistWorkflow={async (workflowId) =>
+          useLoopedReviewStore.getState().workflows.get(workflowId)!}
         pollIntervalMs={1}
         missingSessionPollLimit={2}
       />,
@@ -423,8 +566,362 @@ describe("app-lifetime looped-review controller", () => {
       useLoopedReviewStore.getState().workflows.get(workflow.id)?.failure,
     ).toMatchObject({
       retryPhase: "reconciling",
-      preserveDispatch: true,
+      preserveDispatch: false,
     });
+
+    act(() => {
+      useLoopedReviewStore.getState().retryWorkflow(workflow.id);
+    });
+    await waitFor(() => {
+      expect(
+        useLoopedReviewStore.getState().workflows.get(workflow.id),
+      ).toMatchObject({
+        phase: "reconciling",
+        sessions: [{
+          id: "workflow-session",
+          providerSessionId: "replacement-provider-session",
+          status: "running",
+        }],
+        dispatch: {
+          kind: "reconcile",
+          state: "sent",
+        },
+      });
+    });
+    expect(send).toHaveBeenCalledWith(
+      "replacement-provider-session",
+      expect.any(String),
+      expect.any(Object),
+      expect.any(String),
+    );
+  });
+
+  test("preserves the dispatch lease when the structured-result channel is unavailable", async () => {
+    const workflow = seedSentReconciliationWorkflow();
+    const agent = agentWith(async (_sessionId, requestId) => {
+      throw new StructuredOutputReadUnavailableError(
+        "codex",
+        "result channel offline",
+        { requestId },
+      );
+    });
+    render(
+      <LoopedReviewTab
+        data={data}
+        isActive={false}
+        driveWorkflow
+        controllerOnly
+        connectAgent={async () => agent}
+        pollIntervalMs={1}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        useLoopedReviewStore.getState().workflows.get(workflow.id)?.phase,
+      ).toBe("failed");
+    });
+    expect(
+      useLoopedReviewStore.getState().workflows.get(workflow.id),
+    ).toMatchObject({
+      dispatch: {
+        id: "dispatch-1",
+        requestId: "request-1",
+      },
+      failure: {
+        message: "result channel offline",
+        retryPhase: "reconciling",
+        preserveDispatch: true,
+      },
+    });
+  });
+
+  test("records an authoritative provider failure as a non-preservable lease", async () => {
+    const workflow = seedSentReconciliationWorkflow();
+    const agent = agentWith(async () => ({
+      ok: false,
+      provider: "codex",
+      requestId: "request-1",
+      error: {
+        code: "malformed_output",
+        provider: "codex",
+        retryable: true,
+        message: "Structured output did not match the reconciliation schema",
+      },
+    }));
+
+    render(
+      <LoopedReviewTab
+        data={data}
+        isActive={false}
+        driveWorkflow
+        controllerOnly
+        connectAgent={async () => agent}
+        pollIntervalMs={1}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useLoopedReviewStore.getState().workflows.get(workflow.id))
+        .toMatchObject({
+          phase: "failed",
+          sessions: [{
+            id: "workflow-session",
+            status: "error",
+            error: "Structured output did not match the reconciliation schema",
+          }],
+          failure: {
+            code: "structured-output",
+            retryPhase: "reconciling",
+          },
+        });
+    });
+    expect(
+      useLoopedReviewStore.getState().workflows.get(workflow.id)?.failure
+        ?.preserveDispatch,
+    ).not.toBe(true);
+  });
+
+  test("reconnects to a restarted provider before retrying a preserved lease", async () => {
+    const workflow = seedSentReconciliationWorkflow();
+    const firstAgent = agentWith(async (_sessionId, requestId) => {
+      throw new StructuredOutputReadUnavailableError(
+        "codex",
+        "bridge restarted",
+        { requestId },
+      );
+    });
+    const secondAgent = agentWith(async () => successfulReconciliation);
+    let connections = 0;
+
+    render(
+      <LoopedReviewTab
+        data={data}
+        isActive={false}
+        driveWorkflow
+        controllerOnly
+        connectAgent={async () => {
+          connections += 1;
+          return connections === 1 ? firstAgent : secondAgent;
+        }}
+        pollIntervalMs={1}
+      />,
+    );
+    await waitFor(() => {
+      expect(useLoopedReviewStore.getState().workflows.get(workflow.id)?.phase)
+        .toBe("failed");
+    });
+
+    act(() => {
+      useLoopedReviewStore.getState().retryWorkflow(workflow.id);
+    });
+    await waitFor(() => {
+      expect(useLoopedReviewStore.getState().workflows.get(workflow.id)?.phase)
+        .toBe("fixing");
+    });
+    expect(connections).toBe(2);
+  });
+
+  test("creates, persists, and sends the first preparation lease", async () => {
+    const workflow = seedWorkflow({ phase: "preparing" });
+    const send = mock(async (
+      _sessionId: string,
+      _prompt: string,
+      _schema: unknown,
+      requestId: string,
+    ) => ({ accepted: true as const, requestId }));
+    const persistWorkflow = mock(async (workflowId: string) =>
+      useLoopedReviewStore.getState().workflows.get(workflowId)!);
+    const agent: NativeStructuredAgent = {
+      provider: "codex",
+      createSession: async () => "preparation-provider-session",
+      send,
+      getResult: async () => null,
+      getStatus: async () => "running",
+      abort: async () => true,
+    };
+
+    render(
+      <LoopedReviewTab
+        data={data}
+        isActive={false}
+        driveWorkflow
+        controllerOnly
+        connectAgent={async () => agent}
+        persistWorkflow={persistWorkflow}
+        pollIntervalMs={1}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useLoopedReviewStore.getState().workflows.get(workflow.id))
+        .toMatchObject({
+          sessions: [{
+            phase: "preparation",
+            providerSessionId: "preparation-provider-session",
+          }],
+          dispatch: {
+            kind: "prepare",
+            state: "sent",
+          },
+        });
+    });
+    expect(persistWorkflow).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  test("advances only after the backend verifies a prepared package", async () => {
+    const workflow = seedSentWorkflow("preparing");
+    const verifyPackage = mock(async () => true);
+    const agent = agentWith(async () => ({
+      ok: true,
+      provider: "codex",
+      requestId: "request-1",
+      value: preparedPackage,
+    }));
+
+    render(
+      <LoopedReviewTab
+        data={data}
+        isActive={false}
+        driveWorkflow
+        controllerOnly
+        connectAgent={async () => agent}
+        verifyPackage={verifyPackage}
+        pollIntervalMs={1}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useLoopedReviewStore.getState().workflows.get(workflow.id)?.phase)
+        .toBe("discovering");
+    });
+    expect(verifyPackage).toHaveBeenCalledWith(
+      data.environmentId,
+      expect.objectContaining({
+        baseRef: "a".repeat(40),
+        headRef: "b".repeat(40),
+      }),
+    );
+  });
+
+  test("fails closed when backend package verification rejects model evidence", async () => {
+    const workflow = seedSentWorkflow("preparing");
+    const agent = agentWith(async () => ({
+      ok: true,
+      provider: "codex",
+      requestId: "request-1",
+      value: preparedPackage,
+    }));
+
+    render(
+      <LoopedReviewTab
+        data={data}
+        isActive={false}
+        driveWorkflow
+        controllerOnly
+        connectAgent={async () => agent}
+        verifyPackage={async () => {
+          throw new Error("Review package diff does not match the environment diff");
+        }}
+        pollIntervalMs={1}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useLoopedReviewStore.getState().workflows.get(workflow.id))
+        .toMatchObject({
+          phase: "failed",
+          failure: {
+            code: "package",
+            preserveDispatch: false,
+          },
+        });
+    });
+    expect(
+      useLoopedReviewStore.getState().workflows.get(workflow.id)?.rounds[0]?.package,
+    ).toBeUndefined();
+  });
+
+  test("completes only with a backend-verified open PR", async () => {
+    const workflow = seedSentWorkflow("creating-pr");
+    const prUrl = "https://github.com/acme/repo/pull/42";
+    const verifyPr = mock(async () => ({
+      url: prUrl,
+      headRefName: "feature",
+      baseRefName: "main",
+      state: "OPEN" as const,
+    }));
+    const agent = agentWith(async () => ({
+      ok: true,
+      provider: "codex",
+      requestId: "request-1",
+      value: { status: "created", url: prUrl, summary: "Created PR" },
+    }));
+
+    render(
+      <LoopedReviewTab
+        data={data}
+        isActive={false}
+        driveWorkflow
+        controllerOnly
+        connectAgent={async () => agent}
+        verifyPr={verifyPr}
+        pollIntervalMs={1}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useLoopedReviewStore.getState().workflows.get(workflow.id))
+        .toMatchObject({
+          phase: "completed",
+          pr: { status: "created", url: prUrl },
+        });
+    });
+    expect(verifyPr).toHaveBeenCalledWith(data.environmentId, prUrl, "main");
+  });
+
+  test("does not complete when backend PR verification rejects model evidence", async () => {
+    const workflow = seedSentWorkflow("creating-pr");
+    const prUrl = "https://github.com/acme/repo/pull/42";
+    const agent = agentWith(async () => ({
+      ok: true,
+      provider: "codex",
+      requestId: "request-1",
+      value: { status: "created", url: prUrl, summary: "Created PR" },
+    }));
+
+    render(
+      <LoopedReviewTab
+        data={data}
+        isActive={false}
+        driveWorkflow
+        controllerOnly
+        connectAgent={async () => agent}
+        verifyPr={async () => {
+          throw new Error("Pull request head branch does not match the environment branch");
+        }}
+        pollIntervalMs={1}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useLoopedReviewStore.getState().workflows.get(workflow.id))
+        .toMatchObject({
+          phase: "failed",
+          pr: {
+            status: "failed",
+            error: "Pull request head branch does not match the environment branch",
+          },
+          failure: {
+            code: "pr",
+          },
+        });
+    });
+    expect(
+      useLoopedReviewStore.getState().workflows.get(workflow.id)?.failure
+        ?.preserveDispatch,
+    ).not.toBe(true);
   });
 });
 
@@ -455,15 +952,20 @@ describe("LoopedReviewTab result validation", () => {
     }).complete).toBe(true);
   });
 
-  test("accepts only HTTPS pull-request URLs", () => {
+  test("accepts only canonical-host HTTPS pull-request URLs", () => {
     expect(() => parsePrResult({
       status: "created",
       url: "https://example.com/not-a-pr",
       summary: "Created",
     })).toThrow("runtime validation");
-    expect(parsePrResult({
+    expect(() => parsePrResult({
       status: "created",
       url: "https://github.example/org/repo/pull/42",
+      summary: "Created",
+    })).toThrow("runtime validation");
+    expect(parsePrResult({
+      status: "created",
+      url: "https://github.com/org/repo/pull/42",
       summary: "Created",
     }).url).toEndWith("/pull/42");
   });

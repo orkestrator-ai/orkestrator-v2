@@ -6,8 +6,11 @@ import {
   createSession,
   listSessions,
   getSession,
+  lookupSession,
   getSessionMessages,
+  getStructuredOutput,
   sendPrompt,
+  sendStructuredPrompt,
   abortSession,
   deleteSession,
   getPendingQuestions,
@@ -23,6 +26,7 @@ import {
   SessionNotFoundError,
   type ClaudeClient,
 } from "./claude-client";
+import { StructuredOutputReadUnavailableError } from "@orkestrator/protocol/structured-output";
 
 const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
@@ -156,6 +160,10 @@ describe("claude-client", () => {
       mockFetchJson(session);
       const result = await getSession(client, "s-1");
       expect(result).toEqual(session);
+      await expect(lookupSession(client, "s-1")).resolves.toEqual({
+        kind: "found",
+        session,
+      });
     });
 
     test("returns null on 404", async () => {
@@ -166,6 +174,34 @@ describe("claude-client", () => {
     test("returns null on network error", async () => {
       mockFetchError();
       expect(await getSession(client, "s-1")).toBeNull();
+    });
+
+    test("distinguishes missing sessions from an unavailable bridge", async () => {
+      mockFetchStatus(404);
+      await expect(lookupSession(client, "s-missing")).resolves.toEqual({
+        kind: "missing",
+      });
+
+      mockFetchStatus(503);
+      const unavailableHttp = await lookupSession(client, "s-1");
+      expect(unavailableHttp.kind).toBe("unavailable");
+      if (unavailableHttp.kind === "unavailable") {
+        expect(unavailableHttp.error.message).toContain("HTTP 503");
+      }
+
+      mockFetchError();
+      const unavailableTransport = await lookupSession(client, "s-1");
+      expect(unavailableTransport.kind).toBe("unavailable");
+      if (unavailableTransport.kind === "unavailable") {
+        expect(unavailableTransport.error.message).toBe("network error");
+      }
+
+      mockFetchJson({ id: "s-1", status: "paused" });
+      const unavailableMalformed = await lookupSession(client, "s-1");
+      expect(unavailableMalformed.kind).toBe("unavailable");
+      if (unavailableMalformed.kind === "unavailable") {
+        expect(unavailableMalformed.error.message).toContain("malformed");
+      }
     });
   });
 
@@ -260,6 +296,108 @@ describe("claude-client", () => {
     test("returns false on network error", async () => {
       mockFetchError();
       expect(await sendPrompt(client, "s-1", "Hello")).toBe(false);
+    });
+  });
+
+  describe("structured output", () => {
+    const schema = {
+      type: "object",
+      properties: { summary: { type: "string" } },
+      required: ["summary"],
+    };
+
+    test("dispatches the schema and preserves the authoritative request id", async () => {
+      let capturedBody: string | undefined;
+      globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+        capturedBody = init?.body as string;
+        return Response.json({
+          status: "already-processed",
+          requestId: "bridge-request",
+          duplicate: true,
+        });
+      }) as unknown as typeof fetch;
+
+      await expect(
+        sendStructuredPrompt(client, "s-1", "Review", schema, {
+          requestId: "client-request",
+          effort: "high",
+        }),
+      ).resolves.toEqual({
+        status: "already-processed",
+        requestId: "bridge-request",
+        duplicate: true,
+      });
+      expect(JSON.parse(capturedBody!)).toEqual({
+        requestId: "client-request",
+        effort: "high",
+        prompt: "Review",
+        outputSchema: schema,
+      });
+    });
+
+    test("returns null when dispatch is rejected or its transport is unavailable", async () => {
+      mockFetchStatus(409);
+      await expect(
+        sendStructuredPrompt(client, "s-1", "Review", schema),
+      ).resolves.toBeNull();
+
+      mockFetchError();
+      await expect(
+        sendStructuredPrompt(client, "s-1", "Review", schema),
+      ).resolves.toBeNull();
+    });
+
+    test("reads success, pending, malformed envelopes, and malformed JSON", async () => {
+      const success = {
+        ok: true,
+        provider: "claude",
+        requestId: "request/1",
+        value: { summary: "done" },
+      } as const;
+      mockFetchJson({ structuredOutput: success });
+      await expect(
+        getStructuredOutput(client, "s-1", "request/1"),
+      ).resolves.toEqual(success);
+      expect(globalThis.fetch).toHaveBeenLastCalledWith(
+        "http://127.0.0.1:4001/session/s-1/structured-output?requestId=request%2F1",
+        expect.anything(),
+      );
+
+      mockFetchJson({ structuredOutput: null });
+      await expect(getStructuredOutput(client, "s-1", "request-1")).resolves.toBeNull();
+
+      mockFetchJson({ structuredOutput: { ok: true, provider: "claude" } });
+      await expect(getStructuredOutput(client, "s-1", "request-1")).resolves.toMatchObject({
+        ok: false,
+        requestId: "request-1",
+        error: { code: "malformed_output" },
+      });
+
+      mockFetchJson(null);
+      await expect(getStructuredOutput(client, "s-1", "request-1")).resolves.toMatchObject({
+        ok: false,
+        error: { code: "malformed_output" },
+      });
+
+      globalThis.fetch = mock(async () =>
+        new Response("{", { status: 200, headers: { "Content-Type": "application/json" } })
+      ) as unknown as typeof fetch;
+      await expect(getStructuredOutput(client, "s-1", "request-1")).resolves.toMatchObject({
+        ok: false,
+        error: { code: "malformed_output" },
+      });
+    });
+
+    test("throws a typed observation error when the result channel is unavailable", async () => {
+      mockFetchError();
+
+      const promise = getStructuredOutput(client, "s-1", "request-1");
+      await expect(promise).rejects.toBeInstanceOf(StructuredOutputReadUnavailableError);
+      await expect(promise).rejects.toMatchObject({
+        provider: "claude",
+        requestId: "request-1",
+        retryable: true,
+      });
     });
   });
 

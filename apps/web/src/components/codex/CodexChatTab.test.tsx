@@ -15,6 +15,7 @@ import type {
   CodexSessionStatusLookupResult,
 } from "@/lib/codex-client";
 import { mockToastError, mockToastWarning } from "../../../../../tests/mocks/sonner";
+import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 
@@ -72,6 +73,13 @@ const mockSendPrompt = mock<
   ) => Promise<CodexPromptSendOutcome | CodexPromptAcceptedResponse | null>
 >(async () => ({ status: "processing" }));
 const mockGetSessionMessages = mock(async (): Promise<TestCodexMessage[]> => []);
+const mockGetStructuredOutput = mock<
+  (
+    _client: unknown,
+    _sessionId: string,
+    _requestId?: string,
+  ) => Promise<any>
+>(async () => null);
 const mockSubscribeToEvents = mock(() => (async function* () {})());
 const mockUpdateSessionConfig = mock<
   (
@@ -149,6 +157,7 @@ mock.module("@/lib/codex-client", () => ({
   getModels: mock(async () => ({ models: MOCK_MODELS, source: "fallback" })),
   getSlashCommands: mock(async () => []),
   getSessionMessages: mockGetSessionMessages,
+  getStructuredOutput: mockGetStructuredOutput,
   getSessionStatus: mockGetSessionStatus,
   isCodexSessionPhase: (value: unknown) =>
     typeof value === "string"
@@ -569,6 +578,8 @@ describe("CodexChatTab", () => {
     mockSendPrompt.mockImplementation(async () => ({ status: "processing" }));
     mockGetSessionMessages.mockClear();
     mockGetSessionMessages.mockImplementation(async () => []);
+    mockGetStructuredOutput.mockReset();
+    mockGetStructuredOutput.mockResolvedValue(null);
     mockSubscribeToEvents.mockClear();
     mockSubscribeToEvents.mockImplementation(() => (async function* () {})());
     mockScrollToBottom.mockClear();
@@ -1538,6 +1549,78 @@ describe("CodexChatTab", () => {
     );
 
     expect(screen.getByTestId("codex-address-all-state").textContent).toBe("shown");
+  });
+
+  test("retries a malformed structured review with the cleared prompt and a fresh request id", async () => {
+    const originalPrompt = "Run the structured Codex review";
+    seedPaneLayout(originalPrompt);
+    const requestIds: string[] = [];
+    mockSendPrompt.mockImplementation(async (_client, _sessionId, _prompt, options) => {
+      requestIds.push(options?.requestId ?? "");
+      queueMicrotask(() => {
+        useCodexStore.getState().setSessionLoading(SESSION_KEY, false);
+      });
+      return { status: "processing", requestId: options?.requestId };
+    });
+    mockGetStructuredOutput.mockImplementation(
+      async (_client, _sessionId, requestId) => {
+        if (!requestId) return null;
+        if (requestId === requestIds[0]) {
+          return {
+            ok: false,
+            provider: "codex",
+            requestId,
+            error: {
+              provider: "codex",
+              code: "malformed_output",
+              message: "The first Codex structured result was malformed.",
+              retryable: true,
+              requestId,
+            },
+          };
+        }
+        if (requestId === requestIds[1]) {
+          return {
+            ok: true,
+            provider: "codex",
+            requestId,
+            value: TEST_STRUCTURED_REVIEW_REPORT,
+          };
+        }
+        return null;
+      },
+    );
+
+    render(
+      <CodexChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+        isReviewTab
+        initialPrompt={originalPrompt}
+      />,
+    );
+
+    expect(await screen.findByText("The first Codex structured result was malformed."))
+      .toBeTruthy();
+    expect(
+      usePaneLayoutStore.getState().getAllTabs(ENVIRONMENT_ID)[0]?.initialPrompt,
+    ).toBeUndefined();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByText("Review Scope")).toBeTruthy();
+    expect(mockSendPrompt.mock.calls.map((call) => call[2])).toEqual([
+      originalPrompt,
+      originalPrompt,
+    ]);
+    expect(requestIds).toHaveLength(2);
+    expect(requestIds[1]).not.toBe(requestIds[0]);
+    expect(requestIds[1]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(mockGetStructuredOutput.mock.calls).toContainEqual([
+      MOCK_CLIENT,
+      SESSION_ID,
+      requestIds[1],
+    ]);
   });
 
   test("does not show plan approval for a non-plan assistant message after entering plan mode", () => {

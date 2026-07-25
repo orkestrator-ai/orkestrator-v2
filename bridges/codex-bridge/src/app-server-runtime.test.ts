@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, test, expect } from "bun:test";
 import { EventEmitter } from "node:events";
 import {
-  chmodSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -20,7 +19,11 @@ import { AppServerEngine } from "./engine/app-server-engine.js";
 import type { AppServerSupervisorOptions } from "./app-server/process-supervisor.js";
 import { FakeReadable, FakeWritable } from "./app-server/testing/fake-app-server.js";
 import { MAX_LOCAL_MESSAGES, phaseToExternalStatus } from "./sessions/thread-registry.js";
-import { BridgeSessionStore, hashCwd } from "./sessions/persistence.js";
+import {
+  BRIDGE_SESSION_REGISTRY_VERSION,
+  BridgeSessionStore,
+  hashCwd,
+} from "./sessions/persistence.js";
 import { DispatchJournal } from "./sessions/dispatch-journal.js";
 import type { EngineEvent } from "./engine/types.js";
 
@@ -1182,18 +1185,30 @@ describe("session lifecycle", () => {
       "orkestrator-bridge",
       `bridge-sessions-${hashCwd("/tmp/ws")}`,
     );
-    chmodSync(recordsDir, 0o500);
-    try {
-      // The store warns and resolves on a write failure, so "updated" here would
-      // be a lie: after a restart the stale plan/build mode is re-hydrated into
-      // thread/resume, silently restoring the old sandbox.
-      expect(await h.runtime.updateConfig(sessionId, { mode: "plan" })).toBe("memory-only");
-      expect((await store.load())[0]?.config.mode).toBe("build");
-      // Memory still matches the engine, which did accept the change.
-      expect(h.runtime.getRegistry().getSession(sessionId)?.config.mode).toBe("plan");
-    } finally {
-      chmodSync(recordsDir, 0o700);
-    }
+    const legacyPath = join(
+      codexHome,
+      "orkestrator-bridge",
+      `bridge-sessions-${hashCwd("/tmp/ws")}.json`,
+    );
+    const durableBeforeFailure = await store.load();
+    writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        version: BRIDGE_SESSION_REGISTRY_VERSION,
+        sessions: durableBeforeFailure,
+      }),
+      "utf8",
+    );
+    rmSync(recordsDir, { recursive: true, force: true });
+    writeFileSync(recordsDir, "blocks the per-session registry directory", "utf8");
+
+    // The store warns and resolves on a write failure, so "updated" here would
+    // be a lie: after a restart the stale plan/build mode is re-hydrated into
+    // thread/resume, silently restoring the old sandbox.
+    expect(await h.runtime.updateConfig(sessionId, { mode: "plan" })).toBe("memory-only");
+    expect((await store.load())[0]?.config.mode).toBe("build");
+    // Memory still matches the engine, which did accept the change.
+    expect(h.runtime.getRegistry().getSession(sessionId)?.config.mode).toBe("plan");
   });
 
   test("a full turn streams deltas and finalizes the transcript", async () => {
@@ -1381,19 +1396,18 @@ describe("at-most-once dispatch", () => {
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const bridgeDir = join(codexHome, "orkestrator-bridge");
     mkdirSync(bridgeDir, { recursive: true });
-    chmodSync(bridgeDir, 0o500);
-    try {
-      const outcome = await h.runtime.prompt(sessionId, {
-        prompt: "must not execute",
-        requestId: "req-unwritable",
-        attachments: [],
-      });
-      expect(outcome).toMatchObject({ ok: false, status: 503 });
-      expect(h.child().requests.some((request) => request.method === "turn/start"))
-        .toBe(false);
-    } finally {
-      chmodSync(bridgeDir, 0o700);
-    }
+    mkdirSync(
+      join(bridgeDir, `dispatch-journal-${hashCwd("/tmp/ws")}.json`),
+    );
+
+    const outcome = await h.runtime.prompt(sessionId, {
+      prompt: "must not execute",
+      requestId: "req-unwritable",
+      attachments: [],
+    });
+    expect(outcome).toMatchObject({ ok: false, status: 503 });
+    expect(h.child().requests.some((request) => request.method === "turn/start"))
+      .toBe(false);
   });
 
   /**
@@ -1491,7 +1505,15 @@ describe("at-most-once dispatch", () => {
     });
     await h.child().waitForRequest("turn/start", 2);
     h.child().exit(1);
-    expect(await pending).toMatchObject({ ok: false, status: 503 });
+    expect(await pending).toMatchObject({
+      ok: true,
+      result: {
+        status: "processing",
+        requestId: "req-1",
+        turnId: "turn-9",
+        duplicate: true,
+      },
+    });
     await h.drain();
 
     // Reporting idle here would let the build pipeline advance on a live turn.
@@ -1508,6 +1530,106 @@ describe("at-most-once dispatch", () => {
     });
     await adoptedTurnIdle;
     expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
+  });
+
+  test("an attached structured turn stays pending after its start response is lost", async () => {
+    let hangNextTurn = false;
+    const h = await harness({
+      "turn/start": () => (hangNextTurn ? NO_RESPONSE : { turn: { id: "turn-1" } }),
+      "thread/read": () => ({
+        thread: threadPayload("thread-1", {
+          turns: [
+            {
+              id: "turn-structured",
+              status: "inProgress",
+              items: [{ type: "userMessage", clientId: "structured-lost-response" }],
+            },
+          ],
+        }),
+      }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "materialize",
+      requestId: "req-0",
+      attachments: [],
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    hangNextTurn = true;
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "return a structured review",
+      requestId: "structured-lost-response",
+      attachments: [],
+      outputSchema: {
+        type: "object",
+        properties: { summary: { type: "string" } },
+        required: ["summary"],
+        additionalProperties: false,
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    h.child().exit(1);
+
+    expect(await pending).toMatchObject({
+      ok: true,
+      result: {
+        status: "processing",
+        requestId: "structured-lost-response",
+        turnId: "turn-structured",
+        duplicate: true,
+      },
+    });
+    await h.drain();
+
+    expect(
+      h.events.filter((event) =>
+        event.type === "session.structured-output"
+        && event.sessionId === sessionId
+      ),
+    ).toEqual([]);
+    expect(
+      h.events.filter((event) =>
+        event.type === "session.error"
+        && event.sessionId === sessionId
+      ),
+    ).toEqual([]);
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "running",
+      phase: "running",
+      requestId: "structured-lost-response",
+    });
+    expect(h.runtime.getStructuredOutput(sessionId, "structured-lost-response")).toEqual({
+      requestId: "structured-lost-response",
+      structuredOutput: null,
+    });
+
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-structured",
+      item: {
+        id: "structured-answer",
+        type: "agentMessage",
+        text: JSON.stringify({ summary: "Recovered successfully" }),
+      },
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-structured", status: "completed" },
+    });
+    await h.drain();
+
+    expect(h.runtime.getStructuredOutput(sessionId, "structured-lost-response"))
+      .toMatchObject({
+        structuredOutput: {
+          ok: true,
+          value: { summary: "Recovered successfully" },
+        },
+      });
   });
 
   test("events emitted while an ambiguous dispatch reconciles are not lost", async () => {
@@ -1570,7 +1692,14 @@ describe("at-most-once dispatch", () => {
       },
     });
 
-    expect(await pending).toMatchObject({ ok: false, status: 503 });
+    expect(await pending).toMatchObject({
+      ok: true,
+      result: {
+        status: "processing",
+        requestId: "req-1",
+        duplicate: true,
+      },
+    });
     await h.drain();
 
     // Adopted, and the parked event was replayed into the transcript.
@@ -1620,7 +1749,14 @@ describe("at-most-once dispatch", () => {
     });
     await h.child().waitForRequest("turn/start", 2);
     h.child().exit(1);
-    expect(await pending).toMatchObject({ ok: false, status: 503 });
+    expect(await pending).toMatchObject({
+      ok: true,
+      result: {
+        status: "processing",
+        requestId: "req-1",
+        duplicate: true,
+      },
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 60));
     // Unresolvable, but bounded: `recovering` can never be permanent.

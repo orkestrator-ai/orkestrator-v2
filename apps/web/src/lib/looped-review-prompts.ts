@@ -15,6 +15,13 @@ const nullableString = {
   anyOf: [{ type: "string" }, { type: "null" }],
 } as const;
 
+const nullableStringArray = {
+  anyOf: [
+    { type: "array", items: { type: "string" } },
+    { type: "null" },
+  ],
+} as const;
+
 export const REVIEW_PACKAGE_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -32,14 +39,15 @@ export const REVIEW_PACKAGE_JSON_SCHEMA = {
     "skippedFiles",
     "uncommittedFiles",
     "limitations",
+    "context",
   ],
   properties: {
-    id: { type: "string", minLength: 1 },
+    id: { type: "string" },
     round: { type: "integer", minimum: 1 },
-    preparedAt: { type: "string", minLength: 1 },
-    targetBranch: { type: "string", minLength: 1 },
-    baseRef: { type: "string", minLength: 1 },
-    headRef: { type: "string", minLength: 1 },
+    preparedAt: { type: "string" },
+    targetBranch: { type: "string" },
+    baseRef: { type: "string" },
+    headRef: { type: "string" },
     commit: {
       anyOf: [
         { type: "null" },
@@ -92,6 +100,7 @@ export const REVIEW_PACKAGE_JSON_SCHEMA = {
           "stdout",
           "stderr",
           "durationMs",
+          "limitation",
         ],
         properties: {
           command: { type: "string" },
@@ -105,7 +114,7 @@ export const REVIEW_PACKAGE_JSON_SCHEMA = {
           stdout: { type: "string" },
           stderr: { type: "string" },
           durationMs: { type: "integer", minimum: 0 },
-          limitation: { type: "string" },
+          limitation: nullableString,
         },
       },
     },
@@ -138,16 +147,29 @@ export const REVIEW_PACKAGE_JSON_SCHEMA = {
       items: { type: "string" },
     },
     context: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        ticketTitle: { type: "string" },
-        ticketDescription: { type: "string" },
-        acceptanceCriteria: { type: "string" },
-        comments: { type: "array", items: { type: "string" } },
-        imageNames: { type: "array", items: { type: "string" } },
-        projectNotes: { type: "string" },
-      },
+      anyOf: [
+        { type: "null" },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "ticketTitle",
+            "ticketDescription",
+            "acceptanceCriteria",
+            "comments",
+            "imageNames",
+            "projectNotes",
+          ],
+          properties: {
+            ticketTitle: nullableString,
+            ticketDescription: nullableString,
+            acceptanceCriteria: nullableString,
+            comments: nullableStringArray,
+            imageNames: nullableStringArray,
+            projectNotes: nullableString,
+          },
+        },
+      ],
     },
   },
 } as const;
@@ -241,7 +263,7 @@ export const REVIEW_PR_RESULT_JSON_SCHEMA = {
   required: ["status", "url", "summary"],
   properties: {
     status: { type: "string", enum: ["created"] },
-    url: { type: "string", minLength: 1 },
+    url: { type: "string" },
     summary: { type: "string" },
   },
 } as const;
@@ -288,8 +310,11 @@ ${contextBlock(input.context)}## Preparation workflow
 	   - headRef to the prepared HEAD SHA
 	   - contentSha256 to the lowercase SHA-256 of every included file content
 	   - contentSha256=null only when content=null and omittedReason explains the omission
+	   - limitation=null when a validation command has no limitation
 	   - commit.sha equal to headRef when a preparation commit was created
-${input.context ? "   - context exactly to the available ticket and project context supplied above" : ""}
+${input.context
+  ? "   - context to the available ticket and project context supplied above, using null for unavailable context fields"
+  : "   - context=null because no ticket or project context was supplied"}
 
 Do not perform the review itself.`;
 }

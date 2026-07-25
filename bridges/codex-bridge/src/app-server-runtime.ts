@@ -204,6 +204,12 @@ const IDLE_WAIT_POLL_MS = 100;
 const AMBIGUOUS_DISPATCH_FAILURE_MESSAGE =
   "Codex never confirmed this turn. Check the conversation before sending it again.";
 
+type AmbiguousDispatchResolution =
+  | "attached"
+  | "recovering"
+  | "terminal"
+  | "absent";
+
 function codexStructuredOutputFailure(
   turn: TurnAccumulator,
 ): StructuredOutputResult<never> {
@@ -1988,6 +1994,7 @@ export class AppServerRuntime {
     } catch (error) {
       context.dispatchInFlight = false;
       const classified = this.options.engine.classifyFailure(error);
+      let ambiguousResolution: AmbiguousDispatchResolution | undefined;
 
       /**
        * A rejected dispatch definitely did not run, so the session is genuinely
@@ -1999,8 +2006,39 @@ export class AppServerRuntime {
         this.registry.setPhase(context, "failed", classified.engineError.message);
         await this.journal.forget(requestId);
       } else {
-        await this.settleAmbiguousDispatch(context, requestId, assistantMessage.id);
+        ambiguousResolution = await this.settleAmbiguousDispatch(
+          context,
+          requestId,
+          assistantMessage.id,
+        );
       }
+
+      if (
+        ambiguousResolution === "attached"
+        || ambiguousResolution === "recovering"
+      ) {
+        // A lost turn/start response is not a rejected prompt. The provider may
+        // still be executing it, so keep structured output pending and return
+        // the same accepted/processing contract as an ordinary dispatch.
+        if (ambiguousResolution === "attached") {
+          session.lastAcceptedRequestId = requestId;
+        }
+        await this.persistSession(session);
+        this.emitStatus(context);
+        return {
+          ok: true,
+          result: {
+            status: "processing",
+            requestId,
+            threadId: context.threadId,
+            ...(ambiguousResolution === "attached" && context.activeTurn
+              ? { turnId: context.activeTurn.turnId }
+              : {}),
+            duplicate: true,
+          },
+        };
+      }
+
       if (input.outputSchema) {
         const marker = `${classified.engineError.code ?? ""} ${classified.engineError.message}`
           .toLowerCase();
@@ -2051,7 +2089,7 @@ export class AppServerRuntime {
     requestId: string,
     assistantMessageId: string,
     options: { forgetIfAbsent?: boolean } = {},
-  ): Promise<void> {
+  ): Promise<AmbiguousDispatchResolution> {
     this.registry.setPhase(context, "recovering");
     let accumulator = context.activeTurn;
     if (!accumulator || accumulator.requestId !== requestId) {
@@ -2083,7 +2121,7 @@ export class AppServerRuntime {
         `[codex-bridge] Could not reconcile ${requestId} on thread ${context.threadId}:`,
         error instanceof Error ? error.message : error,
       );
-      return;
+      return "recovering";
     }
 
     if (outcome.result === "attach") {
@@ -2102,7 +2140,7 @@ export class AppServerRuntime {
       this.registry.setPhase(context, "running");
       // Anything that arrived for this turn while it had no owner.
       this.drainPendingEvents(context, outcome.turnId!);
-      return;
+      return "attached";
     }
 
     this.clearRecoveryBackstop(context.threadId);
@@ -2120,7 +2158,7 @@ export class AppServerRuntime {
         AMBIGUOUS_DISPATCH_FAILURE_MESSAGE,
       );
       this.notifyThreadActivity();
-      return;
+      return "terminal";
     }
 
     // Absent: provably never executed, so release the id for a clean retry.
@@ -2134,6 +2172,7 @@ export class AppServerRuntime {
     }
     this.registry.setPhase(context, "failed", AMBIGUOUS_DISPATCH_FAILURE_MESSAGE);
     this.notifyThreadActivity();
+    return "absent";
   }
 
   /**

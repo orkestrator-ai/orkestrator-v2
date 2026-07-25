@@ -474,6 +474,56 @@ describe("backend command wrapper coverage", () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
+  test("forwards PR and review-package verification evidence", async () => {
+    invokeMock.mockResolvedValueOnce({
+      url: "https://github.com/acme/repo/pull/42",
+      headRefName: "feature/review",
+      baseRefName: "main",
+      state: "OPEN",
+    });
+    await backendWrappers.verifyEnvironmentPr(
+      "env-1",
+      "https://github.com/acme/repo/pull/42",
+      "main",
+    );
+    expect(invokeMock).toHaveBeenLastCalledWith("verify_environment_pr", {
+      environmentId: "env-1",
+      prUrl: "https://github.com/acme/repo/pull/42",
+      targetBranch: "main",
+    });
+
+    invokeMock.mockResolvedValueOnce(true);
+    await backendWrappers.verifyLoopedReviewPackage("env-1", {
+      targetBranch: "main",
+      baseRef: "a".repeat(40),
+      headRef: "b".repeat(40),
+      completeDiff: "diff",
+      changedFiles: [{
+        path: "src/a.ts",
+        status: "M",
+        content: "updated",
+        contentSha256: "c".repeat(64),
+        omittedReason: null,
+      }],
+    });
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      "verify_looped_review_package",
+      {
+        environmentId: "env-1",
+        targetBranch: "main",
+        baseRef: "a".repeat(40),
+        headRef: "b".repeat(40),
+        completeDiff: "diff",
+        changedFiles: [{
+          path: "src/a.ts",
+          status: "M",
+          content: "updated",
+          contentSha256: "c".repeat(64),
+        }],
+      },
+    );
+  });
+
   test("every exported command wrapper reaches the native invoke boundary", async () => {
     const specialWrappers = new Set([
       "getWebClientStatus",

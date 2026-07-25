@@ -15,6 +15,10 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
+import {
+  useLoopedReviewStore,
+  type LoopedReviewWorkflow,
+} from "@/stores/loopedReviewStore";
 import type { AppConfig, Environment } from "@/types";
 import { mockToastError } from "../../../tests/mocks/sonner";
 
@@ -36,6 +40,7 @@ import * as realHooks from "@/hooks";
 import * as realBackend from "@/lib/backend";
 import * as realLucideReact from "lucide-react";
 import * as realProcess from "@/lib/native/process";
+import * as realLoopedReviewSupervisor from "@/components/review/LoopedReviewSupervisor";
 
 const realLayoutSnapshot = { ...realLayout };
 const realTooltipSnapshot = { ...realTooltip };
@@ -55,6 +60,7 @@ const realHooksSnapshot = { ...realHooks };
 const realBackendSnapshot = { ...realBackend };
 const realLucideReactSnapshot = { ...realLucideReact };
 const realProcessSnapshot = { ...realProcess };
+const realLoopedReviewSupervisorSnapshot = { ...realLoopedReviewSupervisor };
 
 const mockStartEnvironment = mock(async () => {});
 const mockCreateEnvironment = mock(async () => makeEnvironment("created", "project-1"));
@@ -236,6 +242,38 @@ const mockSavePaneLayout = mock(async (environmentId: string, layout: Record<str
   updatedAt: "2026-07-16T00:00:00.000Z",
   revision: 1,
 }));
+const mockListLoopedReviewWorkflows = mock(
+  async (_environmentId: string): Promise<Array<{
+    id: string;
+    environmentId: string;
+    version: number;
+    snapshot: LoopedReviewWorkflow;
+    updatedAt: string;
+    revision: number;
+  }>> => [],
+);
+const mockSaveLoopedReviewWorkflow = mock(async (
+  id: string,
+  environmentId: string,
+  version: number,
+  snapshot: unknown,
+  expectedRevision = 0,
+) => ({
+  id,
+  environmentId,
+  version,
+  snapshot,
+  updatedAt: "2026-07-26T00:00:00.000Z",
+  revision: expectedRevision + 1,
+}));
+const mockLoopedReviewSupervisorRender = mock(() => undefined);
+
+mock.module("@/components/review/LoopedReviewSupervisor", () => ({
+  LoopedReviewSupervisor: () => {
+    mockLoopedReviewSupervisorRender();
+    return <div data-testid="looped-review-supervisor" />;
+  },
+}));
 
 mock.module("@/lib/backend", () => ({
   checkDocker: mockCheckDocker,
@@ -246,7 +284,9 @@ mock.module("@/lib/backend", () => ({
   checkGithubCli: mockCheckGithubCli,
   getAvailableAiCli: mockGetAvailableAiCli,
   getConfig: mockGetConfig,
+  listLoopedReviewWorkflows: mockListLoopedReviewWorkflows,
   savePaneLayout: mockSavePaneLayout,
+  saveLoopedReviewWorkflow: mockSaveLoopedReviewWorkflow,
   syncAllEnvironmentsWithDocker: mockSyncAllEnvironmentsWithDocker,
 }));
 
@@ -363,6 +403,7 @@ function resetStores({
     sessions: new Map(),
     messageQueue: new Map(),
   });
+  useLoopedReviewStore.setState({ workflows: new Map() });
 }
 
 function resetAppMocks() {
@@ -392,6 +433,10 @@ function resetAppMocks() {
   mockGetConfig.mockClear();
   mockGetConfig.mockImplementation(async () => mockConfig);
   mockSavePaneLayout.mockClear();
+  mockListLoopedReviewWorkflows.mockReset();
+  mockListLoopedReviewWorkflows.mockResolvedValue([]);
+  mockSaveLoopedReviewWorkflow.mockClear();
+  mockLoopedReviewSupervisorRender.mockClear();
   mockToastError.mockClear();
   mockLinearMonitorRender.mockClear();
   mockGitHubMonitorRender.mockClear();
@@ -427,6 +472,10 @@ afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("lucide-react", () => realLucideReactSnapshot);
   mock.module("@/lib/native/process", () => realProcessSnapshot);
+  mock.module(
+    "@/components/review/LoopedReviewSupervisor",
+    () => realLoopedReviewSupervisorSnapshot,
+  );
 });
 
 describe("App background processing mounts", () => {
@@ -489,6 +538,61 @@ describe("App background processing mounts", () => {
 
     expect(await screen.findByTestId("github-completion-monitor")).toBeTruthy();
     expect(mockGitHubMonitorRender).toHaveBeenCalled();
+  });
+
+  test("mounts the looped-review supervisor globally", async () => {
+    resetStores({
+      environments: [],
+      selectedProjectId: null,
+      selectedEnvironmentId: null,
+    });
+
+    render(<App />);
+
+    expect(await screen.findByTestId("looped-review-supervisor")).toBeTruthy();
+    expect(mockLoopedReviewSupervisorRender).toHaveBeenCalled();
+  });
+
+  test("hydrates looped reviews for environments and retains their background host", async () => {
+    const background = makeEnvironment("env-looped", "project-2");
+    resetStores({
+      environments: [
+        makeEnvironment("env-visible", "project-1"),
+        background,
+      ],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+    const workflowId = useLoopedReviewStore.getState().createWorkflow({
+      environmentId: background.id,
+      projectId: background.projectId,
+      agent: "codex",
+      model: "gpt-5.4",
+      targetBranch: "main",
+    });
+    const workflow = useLoopedReviewStore.getState().workflows.get(workflowId)!;
+    useLoopedReviewStore.setState({ workflows: new Map() });
+    mockListLoopedReviewWorkflows.mockImplementation(async (environmentId: string) =>
+      environmentId === background.id
+        ? [{
+            id: workflow.id,
+            environmentId: workflow.environmentId,
+            version: workflow.version,
+            snapshot: workflow,
+            updatedAt: workflow.updatedAt,
+            revision: 2,
+          }]
+        : []
+    );
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(useLoopedReviewStore.getState().workflows.get(workflowId))
+        .toMatchObject({ backendRevision: 2, phase: "preparing" });
+      expect(screen.getByTestId("terminal-env-looped")).toBeTruthy();
+    });
+    expect(mockListLoopedReviewWorkflows).toHaveBeenCalledWith("env-looped");
   });
 
   test("routes the empty selection to the launcher and forwards environment operations", async () => {

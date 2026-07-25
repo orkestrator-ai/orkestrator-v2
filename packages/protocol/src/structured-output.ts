@@ -45,6 +45,41 @@ export type StructuredOutputResult<T = unknown> =
       requestId?: string;
     };
 
+/**
+ * The authoritative structured-output channel could not be read.
+ *
+ * This is deliberately not a `StructuredOutputResult`: a transport outage says
+ * nothing about whether the provider turn is still running or already completed.
+ * Callers can therefore retry/reconcile the same request ID without mistaking an
+ * observation failure for a provider-authored terminal result.
+ */
+export class StructuredOutputReadUnavailableError extends Error {
+  readonly code = "structured_output_read_unavailable";
+  readonly retryable = true;
+  readonly provider: StructuredOutputProvider;
+  readonly requestId?: string;
+
+  constructor(
+    provider: StructuredOutputProvider,
+    message: string,
+    options: {
+      requestId?: string;
+      cause?: unknown;
+    } = {},
+  ) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.name = "StructuredOutputReadUnavailableError";
+    this.provider = provider;
+    this.requestId = options.requestId;
+  }
+}
+
+export function isStructuredOutputReadUnavailableError(
+  value: unknown,
+): value is StructuredOutputReadUnavailableError {
+  return value instanceof StructuredOutputReadUnavailableError;
+}
+
 export function isJsonSchema(value: unknown): value is JsonSchema {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }

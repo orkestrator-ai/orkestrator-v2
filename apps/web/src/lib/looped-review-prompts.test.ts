@@ -5,12 +5,16 @@ import {
   createLoopedReviewPrPrompt,
   createReconciliationPrompt,
   createReviewPackagePrompt,
+  LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA,
+  REVIEW_FIX_RESULT_JSON_SCHEMA,
   REVIEW_PACKAGE_JSON_SCHEMA,
+  REVIEW_PR_RESULT_JSON_SCHEMA,
 } from "./looped-review-prompts";
 import type { ReviewPackage } from "@/stores/loopedReviewStore";
-import type {
-  ReviewFindingPool,
-  StructuredReviewReport,
+import {
+  STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+  type ReviewFindingPool,
+  type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 
 const reviewPackage: ReviewPackage = {
@@ -65,7 +69,45 @@ const emptyReport: StructuredReviewReport = {
 
 const emptyPool: ReviewFindingPool = { issues: [], coverageGaps: [] };
 
+function assertOpenAiStrictCompatible(schema: unknown): void {
+  if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
+    return;
+  }
+  const record = schema as Record<string, unknown>;
+  expect(record).not.toHaveProperty("minLength");
+  expect(record).not.toHaveProperty("uniqueItems");
+
+  if (record.type === "object") {
+    const properties = record.properties as Record<string, unknown> | undefined;
+    expect(record.additionalProperties).toBe(false);
+    expect(new Set(record.required as string[] | undefined)).toEqual(
+      new Set(Object.keys(properties ?? {})),
+    );
+  }
+
+  for (const [key, child] of Object.entries(record)) {
+    if (key === "enum") continue;
+    if (Array.isArray(child)) {
+      child.forEach((entry) => assertOpenAiStrictCompatible(entry));
+    } else {
+      assertOpenAiStrictCompatible(child);
+    }
+  }
+}
+
 describe("looped-review prompts", () => {
+  test("uses the OpenAI strict subset recursively for every workflow output", () => {
+    for (const schema of [
+      REVIEW_PACKAGE_JSON_SCHEMA,
+      STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+      LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA,
+      REVIEW_FIX_RESULT_JSON_SCHEMA,
+      REVIEW_PR_RESULT_JSON_SCHEMA,
+    ]) {
+      assertOpenAiStrictCompatible(schema);
+    }
+  });
+
   test("prepares one complete immutable package with safety and ticket context", () => {
     const prompt = createReviewPackagePrompt({
       round: 2,

@@ -427,6 +427,52 @@ describe("TerminalContainer", () => {
     });
   });
 
+  test("restores ordinary tabs when looped-review hydration rejects", async () => {
+    listLoopedReviewWorkflowsMock.mockRejectedValue(new Error("workflow store unavailable"));
+    getPaneLayoutMock.mockResolvedValue({
+      version: 1,
+      environmentId: "env-hidden",
+      containerId: "container-hidden",
+      activePaneId: "restored-pane",
+      root: {
+        kind: "leaf",
+        id: "restored-pane",
+        tabs: [{
+          id: "restored-file",
+          type: "file",
+          displayTitle: "README",
+          fileData: {
+            filePath: "README.md",
+            containerId: "container-hidden",
+          },
+        }],
+        activeTabId: "restored-file",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 1,
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([{
+        id: "restored-file",
+        type: "file",
+        displayTitle: "README",
+      }]);
+    });
+  });
+
   test("completes hydration with a default layout when restore rejects", async () => {
     getPaneLayoutMock.mockRejectedValue(new Error("backend unavailable"));
 

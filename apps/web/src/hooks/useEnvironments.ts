@@ -4,6 +4,7 @@ import { listen, type UnlistenFn } from "@/lib/native/events";
 import { toast } from "sonner";
 import { createSessionKey, useBuildPipelineStore, useConfigStore, useEnvironmentStore, useErrorDialogStore, useTerminalSessionStore, useUIStore } from "@/stores";
 import { useSessionStore } from "@/stores/sessionStore";
+import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import * as backend from "@/lib/backend";
 import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, PrState } from "@/types";
 
@@ -372,6 +373,12 @@ export function useEnvironments(
 
         await backend.deleteEnvironment(environmentId);
         useBuildPipelineStore.getState().removePipelinesForEnvironment(environmentId);
+        const loopedReviewState = useLoopedReviewStore.getState();
+        for (const [workflowId, workflow] of loopedReviewState.workflows) {
+          if (workflow.environmentId === environmentId) {
+            loopedReviewState.removeWorkflow(workflowId);
+          }
+        }
         removeEnvironmentFromStore(environmentId);
         // Prune any persisted unread-activity marker so it does not leak for a
         // deleted environment (unreadEnvironmentIds is persisted to localStorage).

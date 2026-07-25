@@ -14,6 +14,7 @@ import {
   structuredOutputFailure,
   type JsonSchema,
   type StructuredOutputResult,
+  StructuredOutputReadUnavailableError,
 } from "@orkestrator/protocol/structured-output";
 
 export { type OpencodeClient };
@@ -1442,47 +1443,73 @@ async function hydrateOpenCodeSubagentTranscripts(
 
 export type OpenCodeSessionStatus = "idle" | "busy" | "retry";
 
+export type OpenCodeSessionStatusLookupResult =
+  | { kind: "found"; status: OpenCodeSessionStatus }
+  | { kind: "missing" }
+  | { kind: "unavailable"; error: Error };
+
 /**
  * Read the current server-side status for one session. The v2 SDK returns a
- * map for every session, so callers select the session they own by ID.
+ * map for every session, so callers can distinguish a missing session from an
+ * unavailable status channel.
+ */
+export async function lookupSessionStatus(
+  client: OpencodeClient,
+  sessionId: string,
+): Promise<OpenCodeSessionStatusLookupResult> {
+  try {
+    const response = await client.session.status();
+    if (!response.data) {
+      return {
+        kind: "unavailable",
+        error: openCodeResponseError(
+          "Failed to get OpenCode session status",
+          response.error,
+        ),
+      };
+    }
+
+    const status = response.data[sessionId];
+    if (status === undefined) {
+      return { kind: "missing" };
+    }
+    if (
+      status?.type !== "idle" &&
+      status?.type !== "busy" &&
+      status?.type !== "retry"
+    ) {
+      return {
+        kind: "unavailable",
+        error: new Error("OpenCode session status response was malformed"),
+      };
+    }
+    return { kind: "found", status: status.type };
+  } catch (error) {
+    return {
+      kind: "unavailable",
+      error: error instanceof Error
+        ? error
+        : new Error("Failed to get OpenCode session status"),
+    };
+  }
+}
+
+/**
+ * Retains the legacy null-on-missing-or-unavailable behavior. Reconciliation
+ * callers should use lookupSessionStatus so outages do not look like deletion.
  */
 export async function getSessionStatus(
   client: OpencodeClient,
   sessionId: string,
   options: { throwOnError?: boolean } = {},
 ): Promise<OpenCodeSessionStatus | null> {
-  try {
-    const response = await client.session.status(undefined, {
-      throwOnError: options.throwOnError,
-    });
-    if (!response.data) {
-      if (options.throwOnError) {
-        throw openCodeResponseError(
-          "Failed to get OpenCode session status",
-          response.error,
-        );
-      }
-      return null;
-    }
-
-    const status = response.data[sessionId];
-    if (
-      status?.type !== "idle" &&
-      status?.type !== "busy" &&
-      status?.type !== "retry"
-    ) {
-      return null;
-    }
-    return status.type;
-  } catch (error) {
-    console.error("[opencode-client] Failed to get session status:", error);
-    if (options.throwOnError) {
-      throw error instanceof Error
-        ? error
-        : new Error("Failed to get OpenCode session status");
-    }
-    return null;
+  const result = await lookupSessionStatus(client, sessionId);
+  if (result.kind === "found") return result.status;
+  if (result.kind === "unavailable") {
+    console.error("[opencode-client] Failed to get session status:", result.error);
+    if (options.throwOnError) throw result.error;
   }
+  return null;
 }
 
 /** Attachment input for sendPrompt */
@@ -1665,57 +1692,86 @@ export async function getStructuredOutput<T = unknown>(
   sessionId: string,
   requestId?: string,
 ): Promise<StructuredOutputResult<T> | null> {
+  let response: { data?: unknown; error?: unknown };
   try {
-    const response = await client.session.messages(
+    response = await client.session.messages(
       { sessionID: sessionId },
       { throwOnError: false },
     );
-    if (!response.data) {
-      return response.error
-        ? openCodeStructuredFailure(response.error, requestId)
-        : null;
-    }
-
-    const latestStructuredUserId = response.data
-      .filter((entry) =>
-        entry.info.role === "user"
-        && entry.info.format?.type === "json_schema"
-      )
-      .at(-1)?.info.id;
-    const expectedParentId = requestId ?? latestStructuredUserId;
-    if (!expectedParentId) return null;
-
-    const assistant = response.data
-      .filter((entry) =>
-        entry.info.role === "assistant"
-        && entry.info.parentID === expectedParentId
-      )
-      .at(-1);
-    if (!assistant || assistant.info.role !== "assistant") return null;
-    if (assistant.info.error) {
-      return openCodeStructuredFailure(
-        assistant.info.error,
-        expectedParentId,
-      );
-    }
-    if (!assistant.info.time.completed) return null;
-    if (assistant.info.structured === undefined) {
-      return structuredOutputFailure(
-        "opencode",
-        "malformed_output",
-        "OpenCode completed the turn without a structured result.",
-        { requestId: expectedParentId },
-      );
-    }
-    return {
-      ok: true,
-      provider: "opencode",
-      requestId: expectedParentId,
-      value: assistant.info.structured as T,
-    };
   } catch (error) {
-    return openCodeStructuredFailure(error, requestId);
+    throw new StructuredOutputReadUnavailableError(
+      "opencode",
+      error instanceof Error
+        ? error.message
+        : "Failed to read OpenCode structured output.",
+      { requestId, cause: error },
+    );
   }
+
+  if (!response.data) {
+    return response.error
+      ? openCodeStructuredFailure(response.error, requestId)
+      : null;
+  }
+  if (
+    !Array.isArray(response.data)
+    || response.data.some((entry) => !isRecord(entry) || !isRecord(entry.info))
+  ) {
+    return structuredOutputFailure(
+      "opencode",
+      "malformed_output",
+      "OpenCode returned malformed message history for structured output.",
+      { requestId },
+    );
+  }
+
+  const entries = response.data as Array<{ info: Record<string, unknown> }>;
+  const latestStructuredUserId = entries
+    .filter((entry) => {
+      const format = isRecord(entry.info.format) ? entry.info.format : {};
+      return entry.info.role === "user" && format.type === "json_schema";
+    })
+    .at(-1)?.info.id;
+  const expectedParentId = requestId
+    ?? (typeof latestStructuredUserId === "string" ? latestStructuredUserId : undefined);
+  if (!expectedParentId) return null;
+
+  const assistant = entries
+    .filter((entry) =>
+      entry.info.role === "assistant"
+      && entry.info.parentID === expectedParentId
+    )
+    .at(-1);
+  if (!assistant) return null;
+  if (assistant.info.error) {
+    return openCodeStructuredFailure(
+      assistant.info.error,
+      expectedParentId,
+    );
+  }
+  if (!isRecord(assistant.info.time)) {
+    return structuredOutputFailure(
+      "opencode",
+      "malformed_output",
+      "OpenCode returned malformed assistant timing data.",
+      { requestId: expectedParentId },
+    );
+  }
+  if (!assistant.info.time.completed) return null;
+  if (assistant.info.structured === undefined) {
+    return structuredOutputFailure(
+      "opencode",
+      "malformed_output",
+      "OpenCode completed the turn without a structured result.",
+      { requestId: expectedParentId },
+    );
+  }
+  return {
+    ok: true,
+    provider: "opencode",
+    requestId: expectedParentId,
+    value: assistant.info.structured as T,
+  };
 }
 
 /** Event types from OpenCode SSE stream */

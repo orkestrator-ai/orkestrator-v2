@@ -13,8 +13,8 @@ import {
   checkHealth as checkClaudeHealth,
   createClient as createClaudeClient,
   createSession as createClaudeSession,
-  getSession as getClaudeSession,
   getStructuredOutput as getClaudeStructuredOutput,
+  lookupSession as lookupClaudeSession,
   sendStructuredPrompt as sendClaudeStructuredPrompt,
   type ClaudeClient,
   type ClaudeEffortLevel,
@@ -24,8 +24,8 @@ import {
   checkHealth as checkCodexHealth,
   createClient as createCodexClient,
   createSession as createCodexSession,
-  getSessionStatus as getCodexSessionStatus,
   getStructuredOutput as getCodexStructuredOutput,
+  lookupSessionStatus as lookupCodexSessionStatus,
   sendPrompt as sendCodexPrompt,
   type CodexClient,
   type CodexReasoningEffort,
@@ -34,8 +34,8 @@ import {
   abortSession as abortOpenCodeSession,
   createClient as createOpenCodeClient,
   createSession as createOpenCodeSession,
-  getSessionStatus as getOpenCodeSessionStatus,
   getStructuredOutput as getOpenCodeStructuredOutput,
+  lookupSessionStatus as lookupOpenCodeSessionStatus,
   sendStructuredPrompt as sendOpenCodeStructuredPrompt,
   type OpencodeClient,
 } from "@/lib/opencode-client";
@@ -56,8 +56,51 @@ export interface NativeStructuredAgent {
     sessionId: string,
     requestId: string,
   ): Promise<StructuredOutputResult<T> | null>;
-  getStatus(sessionId: string): Promise<"running" | "idle" | "error" | null>;
+  getStatus(
+    sessionId: string,
+  ): Promise<"running" | "idle" | "error" | "missing">;
   abort(sessionId: string): Promise<boolean>;
+}
+
+export interface StructuredReviewPhasePolicy {
+  readOnly: boolean;
+  claudePermissionMode: "plan" | "bypassPermissions";
+  codexMode: "plan" | "build";
+  openCodeMode: "plan" | "build";
+}
+
+export function getStructuredReviewPhasePolicy(
+  phase: LoopedReviewSessionPhase,
+): StructuredReviewPhasePolicy {
+  const readOnly = phase === "discovery";
+  return {
+    readOnly,
+    claudePermissionMode: readOnly ? "plan" : "bypassPermissions",
+    codexMode: readOnly ? "plan" : "build",
+    openCodeMode: readOnly ? "plan" : "build",
+  };
+}
+
+function sessionPhases(
+  workflow: LoopedReviewWorkflow,
+): Map<string, LoopedReviewSessionPhase> {
+  return new Map(
+    workflow.sessions.map((session) => [
+      session.providerSessionId,
+      session.phase,
+    ]),
+  );
+}
+
+function requireSessionPhase(
+  phases: Map<string, LoopedReviewSessionPhase>,
+  sessionId: string,
+): LoopedReviewSessionPhase {
+  const phase = phases.get(sessionId);
+  if (!phase) {
+    throw new Error(`Unknown structured review session: ${sessionId}`);
+  }
+  return phase;
 }
 
 async function resolveProviderPort(
@@ -98,19 +141,31 @@ async function resolveProviderPort(
   return (await backend.startOpenCodeServer(environment.containerId)).hostPort;
 }
 
-function claudeAdapter(
+export function claudeAdapter(
   client: ClaudeClient,
   workflow: LoopedReviewWorkflow,
+  dependencies = {
+    createSession: createClaudeSession,
+    sendStructuredPrompt: sendClaudeStructuredPrompt,
+    getStructuredOutput: getClaudeStructuredOutput,
+    lookupSession: lookupClaudeSession,
+    abortSession: abortClaudeSession,
+  },
 ): NativeStructuredAgent {
+  const phases = sessionPhases(workflow);
   return {
     provider: "claude",
-    async createSession(_phase, label) {
-      const result = await createClaudeSession(client, label);
+    async createSession(phase, label) {
+      const result = await dependencies.createSession(client, label);
       if (!result) throw new Error("Claude failed to create a native session");
+      phases.set(result.sessionId, phase);
       return result.sessionId;
     },
     async send(sessionId, prompt, schema, requestId) {
-      const result = await sendClaudeStructuredPrompt(
+      const policy = getStructuredReviewPhasePolicy(
+        requireSessionPhase(phases, sessionId),
+      );
+      const result = await dependencies.sendStructuredPrompt(
         client,
         sessionId,
         prompt,
@@ -118,7 +173,7 @@ function claudeAdapter(
         {
           model: workflow.model === "default" ? undefined : workflow.model,
           effort: workflow.reasoningEffort as ClaudeEffortLevel | undefined,
-          permissionMode: "bypassPermissions",
+          permissionMode: policy.claudePermissionMode,
           requestId,
         },
       );
@@ -131,33 +186,45 @@ function claudeAdapter(
           };
     },
     getResult: (sessionId, requestId) =>
-      getClaudeStructuredOutput(client, sessionId, requestId),
+      dependencies.getStructuredOutput(client, sessionId, requestId),
     async getStatus(sessionId) {
-      const session = await getClaudeSession(client, sessionId);
-      return session?.status ?? null;
+      const result = await dependencies.lookupSession(client, sessionId);
+      if (result.kind === "missing") return "missing";
+      if (result.kind === "unavailable") throw result.error;
+      return result.session.status;
     },
-    abort: (sessionId) => abortClaudeSession(client, sessionId),
+    abort: (sessionId) => dependencies.abortSession(client, sessionId),
   };
 }
 
-function codexAdapter(
+export function codexAdapter(
   client: CodexClient,
   workflow: LoopedReviewWorkflow,
+  dependencies = {
+    createSession: createCodexSession,
+    sendPrompt: sendCodexPrompt,
+    getStructuredOutput: getCodexStructuredOutput,
+    lookupSessionStatus: lookupCodexSessionStatus,
+    abortSession: abortCodexSession,
+  },
 ): NativeStructuredAgent {
+  const phases = sessionPhases(workflow);
   return {
     provider: "codex",
-    async createSession(_phase, label) {
-      const result = await createCodexSession(client, {
+    async createSession(phase, label) {
+      const policy = getStructuredReviewPhasePolicy(phase);
+      const result = await dependencies.createSession(client, {
         title: label,
         model: workflow.model,
         modelReasoningEffort:
           workflow.reasoningEffort as CodexReasoningEffort | undefined,
-        mode: "build",
+        mode: policy.codexMode,
       });
+      phases.set(result.sessionId, phase);
       return result.sessionId;
     },
     async send(sessionId, prompt, schema, requestId) {
-      const result = await sendCodexPrompt(client, sessionId, prompt, {
+      const result = await dependencies.sendPrompt(client, sessionId, prompt, {
         requestId,
         outputSchema: schema,
       });
@@ -174,29 +241,42 @@ function codexAdapter(
       return { accepted: true, requestId };
     },
     getResult: (sessionId, requestId) =>
-      getCodexStructuredOutput(client, sessionId, requestId),
+      dependencies.getStructuredOutput(client, sessionId, requestId),
     async getStatus(sessionId) {
-      const status = await getCodexSessionStatus(client, sessionId, {
-        throwOnError: true,
-      });
-      return status?.status ?? null;
+      const result = await dependencies.lookupSessionStatus(client, sessionId);
+      if (result.kind === "missing") return "missing";
+      if (result.kind === "unavailable") throw result.error;
+      return result.session.status;
     },
     abort: async (sessionId) =>
-      (await abortCodexSession(client, sessionId)).status === "accepted",
+      (await dependencies.abortSession(client, sessionId)).status === "accepted",
   };
 }
 
-function openCodeAdapter(
+export function openCodeAdapter(
   client: OpencodeClient,
   workflow: LoopedReviewWorkflow,
+  dependencies = {
+    createSession: createOpenCodeSession,
+    sendStructuredPrompt: sendOpenCodeStructuredPrompt,
+    getStructuredOutput: getOpenCodeStructuredOutput,
+    lookupSessionStatus: lookupOpenCodeSessionStatus,
+    abortSession: abortOpenCodeSession,
+  },
 ): NativeStructuredAgent {
+  const phases = sessionPhases(workflow);
   return {
     provider: "opencode",
-    async createSession(_phase, label) {
-      return (await createOpenCodeSession(client, label)).id;
+    async createSession(phase, label) {
+      const sessionId = (await dependencies.createSession(client, label)).id;
+      phases.set(sessionId, phase);
+      return sessionId;
     },
     async send(sessionId, prompt, schema, requestId) {
-      const result = await sendOpenCodeStructuredPrompt(
+      const policy = getStructuredReviewPhasePolicy(
+        requireSessionPhase(phases, sessionId),
+      );
+      const result = await dependencies.sendStructuredPrompt(
         client,
         sessionId,
         prompt,
@@ -204,7 +284,7 @@ function openCodeAdapter(
         {
           model: workflow.model === "default" ? undefined : workflow.model,
           variant: workflow.reasoningEffort,
-          mode: "build",
+          mode: policy.openCodeMode,
           requestId,
         },
       );
@@ -215,18 +295,16 @@ function openCodeAdapter(
       };
     },
     getResult: (sessionId, requestId) =>
-      getOpenCodeStructuredOutput(client, sessionId, requestId),
+      dependencies.getStructuredOutput(client, sessionId, requestId),
     async getStatus(sessionId) {
-      const status = await getOpenCodeSessionStatus(client, sessionId, {
-        throwOnError: true,
-      });
-      return status === "busy" || status === "retry"
+      const result = await dependencies.lookupSessionStatus(client, sessionId);
+      if (result.kind === "missing") return "missing";
+      if (result.kind === "unavailable") throw result.error;
+      return result.status === "busy" || result.status === "retry"
         ? "running"
-        : status === "idle"
-          ? "idle"
-          : null;
+        : "idle";
     },
-    abort: (sessionId) => abortOpenCodeSession(client, sessionId),
+    abort: (sessionId) => dependencies.abortSession(client, sessionId),
   };
 }
 

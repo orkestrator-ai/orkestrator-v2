@@ -1,7 +1,7 @@
 import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { parseStoredDesktopConnections } from "@orkestrator/protocol/connections";
 import {
@@ -714,6 +714,287 @@ function createLocalGhRunner(cwd: string): GhCliRunner {
 function createContainerGhRunner(containerId: string): GhCliRunner {
   return (args, timeoutMs = 60_000) =>
     dockerExec(containerId, ["gh", ...args].map(quoteShell).join(" "), timeoutMs);
+}
+
+type EnvironmentCommandRunner = (
+  command: string,
+  args: string[],
+  timeoutMs?: number,
+) => Promise<string>;
+
+type SubmittedReviewPackageFile = {
+  path: string;
+  status: string;
+  content: string | null;
+  contentSha256: string | null;
+};
+
+function createEnvironmentCommandRunner(
+  environment: Environment,
+): EnvironmentCommandRunner {
+  if (environment.environmentType === "local") {
+    if (!environment.worktreePath) {
+      throw new Error("Local environment worktree is not available");
+    }
+    return async (command, args, timeoutMs = 60_000) =>
+      (await runCommand(command, args, {
+        cwd: environment.worktreePath,
+        timeoutMs,
+      })).stdout;
+  }
+  if (!environment.containerId) {
+    throw new Error("Container environment is not available");
+  }
+  return async (command, args, timeoutMs = 60_000) =>
+    (await runCommand(
+      "docker",
+      ["exec", environment.containerId!, command, ...args],
+      { timeoutMs },
+    )).stdout;
+}
+
+function parseSubmittedReviewPackageFiles(
+  value: unknown,
+): SubmittedReviewPackageFile[] {
+  if (!Array.isArray(value)) {
+    throw new Error("Expected changedFiles to be an array");
+  }
+  const files = value.map((candidate, index) => {
+    const file = asRecord(candidate, `changedFiles[${index}]`);
+    const filePath = validateWorkspaceMutationPath(
+      asString(file.path, `changedFiles[${index}].path`),
+      `changedFiles[${index}].path`,
+    );
+    const status = asString(
+      file.status,
+      `changedFiles[${index}].status`,
+    );
+    if (!/^(?:[ACDMRTUXB]|[RC][0-9]{1,3})$/.test(status)) {
+      throw new Error(`Invalid changed file status: ${status}`);
+    }
+    const content = file.content;
+    const contentSha256 = file.contentSha256;
+    if (content !== null && typeof content !== "string") {
+      throw new Error(`Expected changedFiles[${index}].content to be a string or null`);
+    }
+    if (
+      contentSha256 !== null
+      && (
+        typeof contentSha256 !== "string"
+        || !/^[a-f0-9]{64}$/i.test(contentSha256)
+      )
+    ) {
+      throw new Error(`Invalid changedFiles[${index}].contentSha256`);
+    }
+    if ((content === null) !== (contentSha256 === null)) {
+      throw new Error(
+        `Changed file content and contentSha256 must either both be present or both be null: ${filePath}`,
+      );
+    }
+    return { path: filePath, status, content, contentSha256 };
+  });
+  const paths = files.map((file) => file.path);
+  if (new Set(paths).size !== paths.length) {
+    throw new Error("Changed file paths must be unique");
+  }
+  return files;
+}
+
+function parseGitNameStatus(output: string): Array<{ path: string; status: string }> {
+  const fields = output.split("\0");
+  if (fields.at(-1) === "") fields.pop();
+  const changes: Array<{ path: string; status: string }> = [];
+  for (let index = 0; index < fields.length;) {
+    const status = fields[index++];
+    if (!status) throw new Error("Git returned malformed changed-file status");
+    if (status.startsWith("R") || status.startsWith("C")) {
+      const source = fields[index++];
+      const destination = fields[index++];
+      if (!source || !destination) {
+        throw new Error("Git returned malformed rename/copy status");
+      }
+      changes.push({
+        status,
+        path: validateWorkspaceMutationPath(destination, "changed file path"),
+      });
+      continue;
+    }
+    const changedPath = fields[index++];
+    if (!changedPath) throw new Error("Git returned malformed changed-file path");
+    changes.push({
+      status,
+      path: validateWorkspaceMutationPath(changedPath, "changed file path"),
+    });
+  }
+  return changes;
+}
+
+function withoutTrailingNewlines(value: string): string {
+  return value.replace(/(?:\r?\n)+$/, "");
+}
+
+async function readEnvironmentWorkspaceFile(
+  environment: Environment,
+  runner: EnvironmentCommandRunner,
+  relativePath: string,
+): Promise<Buffer> {
+  if (environment.environmentType === "local") {
+    const worktreePath = environment.worktreePath!;
+    const [root, resolved] = await Promise.all([
+      fs.realpath(worktreePath),
+      fs.realpath(path.join(worktreePath, relativePath)),
+    ]);
+    const relative = path.relative(root, resolved);
+    if (
+      relative.startsWith("..")
+      || path.isAbsolute(relative)
+      || relative === ""
+    ) {
+      throw new Error(`Changed file escapes the environment worktree: ${relativePath}`);
+    }
+    const info = await fs.stat(resolved);
+    if (!info.isFile()) {
+      throw new Error(`Changed file is not a regular file: ${relativePath}`);
+    }
+    return fs.readFile(resolved);
+  }
+
+  const workspacePath = workspaceFilePath(relativePath);
+  const resolved = (await runner("realpath", ["--", workspacePath], 10_000)).trim();
+  if (resolved !== "/workspace" && !resolved.startsWith("/workspace/")) {
+    throw new Error(`Changed file escapes the container workspace: ${relativePath}`);
+  }
+  const base64 = (await runner("base64", ["-w", "0", "--", resolved], 30_000)).trim();
+  return Buffer.from(base64, "base64");
+}
+
+async function verifyEnvironmentPullRequest(
+  environmentId: string,
+  prUrl: string,
+  targetBranch: string,
+  context: CommandContext,
+): Promise<{
+  url: string;
+  headRefName: string;
+  baseRefName: string;
+  state: "OPEN";
+}> {
+  const environment = await context.storage.getEnvironment(environmentId);
+  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  const project = await context.storage.getProject(environment.projectId);
+  if (!project) throw new Error(`Project not found: ${environment.projectId}`);
+  const repository = resolveGitHubRepository(project.gitUrl);
+  const branch = validateGitRefName(targetBranch, "target branch");
+  const submittedUrl = prUrl.trim();
+  const submitted = parseGitHubPullRequestUrl(submittedUrl);
+  const canonical = `https://github.com/${submitted.owner}/${submitted.repo}/pull/${submitted.number}`;
+  if (submittedUrl !== canonical) {
+    throw new Error("Pull request URL must be a canonical github.com URL");
+  }
+  if (
+    submitted.owner.toLowerCase() !== repository.owner.toLowerCase()
+    || submitted.repo.toLowerCase() !== repository.name.toLowerCase()
+  ) {
+    throw new Error("Pull request belongs to a different repository");
+  }
+
+  const runner = createEnvironmentCommandRunner(environment);
+  const raw = await runner(
+    "gh",
+    ["pr", "view", submittedUrl, "--json", "url,headRefName,baseRefName,state"],
+    30_000,
+  );
+  let result: Record<string, unknown>;
+  try {
+    result = asRecord(JSON.parse(raw), "gh pr view response");
+  } catch {
+    throw new Error("GitHub returned malformed pull request metadata");
+  }
+  const verifiedUrl = asString(result.url, "pull request URL");
+  const headRefName = asString(result.headRefName, "pull request head branch");
+  const baseRefName = asString(result.baseRefName, "pull request base branch");
+  const state = asString(result.state, "pull request state").toUpperCase();
+  if (verifiedUrl !== canonical) {
+    throw new Error("GitHub did not return the canonical pull request URL");
+  }
+  if (headRefName !== environment.branch) {
+    throw new Error("Pull request head branch does not match the environment branch");
+  }
+  if (baseRefName !== branch) {
+    throw new Error("Pull request base branch does not match the requested target branch");
+  }
+  if (state !== "OPEN") {
+    throw new Error("Pull request is not open");
+  }
+  return { url: verifiedUrl, headRefName, baseRefName, state: "OPEN" };
+}
+
+async function verifyLoopedReviewPackage(
+  environmentId: string,
+  targetBranch: string,
+  baseRef: string,
+  headRef: string,
+  completeDiff: string,
+  changedFiles: SubmittedReviewPackageFile[],
+  context: CommandContext,
+): Promise<boolean> {
+  const environment = await context.storage.getEnvironment(environmentId);
+  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  const branch = validateGitRefName(targetBranch, "target branch");
+  if (!/^[a-f0-9]{40}$/i.test(baseRef) || !/^[a-f0-9]{40}$/i.test(headRef)) {
+    throw new Error("Review package refs must be full commit SHAs");
+  }
+  const runner = createEnvironmentCommandRunner(environment);
+  const baseName = `origin/${branch}`;
+  const [actualHead, actualBase, actualDiff, actualNameStatus] = await Promise.all([
+    runner("git", ["rev-parse", "--verify", "HEAD^{commit}"], 30_000),
+    runner("git", ["rev-parse", "--verify", `${baseName}^{commit}`], 30_000),
+    runner("git", ["diff", `${baseName}...HEAD`], 60_000),
+    runner("git", ["diff", "--name-status", "-z", `${baseName}...HEAD`], 60_000),
+  ]);
+  if (actualHead.trim().toLowerCase() !== headRef.toLowerCase()) {
+    throw new Error("Review package HEAD does not match the environment HEAD");
+  }
+  if (actualBase.trim().toLowerCase() !== baseRef.toLowerCase()) {
+    throw new Error("Review package base does not match the target branch");
+  }
+  if (withoutTrailingNewlines(actualDiff) !== withoutTrailingNewlines(completeDiff)) {
+    throw new Error("Review package diff does not match the environment diff");
+  }
+
+  const actualChanges = parseGitNameStatus(actualNameStatus);
+  const expectedSet = new Set(
+    changedFiles.map((file) => `${file.status}\0${file.path}`),
+  );
+  const actualSet = new Set(
+    actualChanges.map((file) => `${file.status}\0${file.path}`),
+  );
+  if (
+    expectedSet.size !== changedFiles.length
+    || actualSet.size !== actualChanges.length
+    || expectedSet.size !== actualSet.size
+    || [...expectedSet].some((entry) => !actualSet.has(entry))
+  ) {
+    throw new Error("Review package changed-file set does not match the environment diff");
+  }
+
+  for (const file of changedFiles) {
+    if (file.content === null || file.contentSha256 === null) continue;
+    const bytes = await readEnvironmentWorkspaceFile(
+      environment,
+      runner,
+      file.path,
+    );
+    const submittedBytes = Buffer.from(file.content, "utf8");
+    if (!bytes.equals(submittedBytes)) {
+      throw new Error(`Review package content does not match workspace bytes: ${file.path}`);
+    }
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (digest.toLowerCase() !== file.contentSha256.toLowerCase()) {
+      throw new Error(`Review package content hash does not match workspace bytes: ${file.path}`);
+    }
+  }
+  return true;
 }
 
 async function markPullRequestReadyIfDraft(prUrl: string, runGh: GhCliRunner): Promise<void> {
@@ -3111,6 +3392,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     if (environment?.containerId) await runCommand("docker", ["rm", "-f", environment.containerId], { timeoutMs: 60_000 }).catch(() => undefined);
     if (environment?.worktreePath) await removeLocalWorktree(environment.worktreePath).catch(() => undefined);
     await storage.removeSessionsByEnvironment(envId).catch(() => undefined);
+    await storage.deleteLoopedReviewWorkflowsByEnvironment(envId);
     await storage.removeEnvironment(envId);
     await storage.deletePaneLayout(envId).catch(() => undefined);
     cleanupEnvironmentSetupState(envId);
@@ -3868,6 +4150,31 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     await dockerExec(id, containerDeleteFileCommand(target));
     return target;
   });
+
+  register("verify_environment_pr", async ({ environmentId, prUrl, targetBranch }, context) =>
+    verifyEnvironmentPullRequest(
+      asString(environmentId, "environmentId"),
+      asString(prUrl, "prUrl"),
+      asString(targetBranch, "targetBranch"),
+      context,
+    ));
+  register("verify_looped_review_package", async ({
+    environmentId,
+    targetBranch,
+    baseRef,
+    headRef,
+    completeDiff,
+    changedFiles,
+  }, context) =>
+    verifyLoopedReviewPackage(
+      asString(environmentId, "environmentId"),
+      asString(targetBranch, "targetBranch"),
+      asString(baseRef, "baseRef"),
+      asString(headRef, "headRef"),
+      asString(completeDiff, "completeDiff"),
+      parseSubmittedReviewPackageFiles(changedFiles),
+      context,
+    ));
 
   register("detect_pr_local", async ({ environmentId, branch }, { storage }) => {
     const env = await storage.getEnvironment(asString(environmentId, "environmentId"));

@@ -5,6 +5,7 @@ import {
   useLoopedReviewStore,
   type LoopedReviewWorkflow,
 } from "@/stores/loopedReviewStore";
+import type { PersistedLoopedReviewWorkflow } from "@/types";
 
 export { isLoopedReviewWorkflow } from "@/stores/loopedReviewStore";
 
@@ -13,9 +14,41 @@ interface PendingWrite {
   fingerprint: string;
 }
 
+type WorkflowLoader = (
+  workflowId: string,
+) => Promise<PersistedLoopedReviewWorkflow<LoopedReviewWorkflow> | null>;
+type WorkflowListLoader = (
+  environmentId: string,
+) => Promise<Array<PersistedLoopedReviewWorkflow<LoopedReviewWorkflow>>>;
+type WorkflowSaver = (
+  workflowId: string,
+  environmentId: string,
+  version: number,
+  snapshot: LoopedReviewWorkflow,
+  expectedRevision?: number,
+) => Promise<PersistedLoopedReviewWorkflow<LoopedReviewWorkflow>>;
+
+/**
+ * Process-local dirty markers prevent an equal-revision backend hydration from
+ * replacing a transition which has happened since the renderer started. They
+ * deliberately do not mark snapshots restored from localStorage: on startup
+ * the backend remains authoritative for equal revisions.
+ */
+const dirtyWorkflowFingerprints = new Map<string, string>();
+
 function workflowFingerprint(workflow: LoopedReviewWorkflow): string {
   const { backendRevision: _backendRevision, ...durable } = workflow;
   return JSON.stringify(durable);
+}
+
+function isUnsavedLocalWorkflow(workflow: LoopedReviewWorkflow): boolean {
+  return dirtyWorkflowFingerprints.get(workflow.id) === workflowFingerprint(workflow);
+}
+
+function markWorkflowClean(workflowId: string, fingerprint: string): void {
+  if (dirtyWorkflowFingerprints.get(workflowId) === fingerprint) {
+    dirtyWorkflowFingerprints.delete(workflowId);
+  }
 }
 
 /**
@@ -24,8 +57,9 @@ function workflowFingerprint(workflow: LoopedReviewWorkflow): string {
  */
 export async function hydrateLoopedReviewWorkflow(
   workflowId: string,
+  load: WorkflowLoader = backend.getLoopedReviewWorkflow,
 ): Promise<LoopedReviewWorkflow | null> {
-  const persisted = await backend.getLoopedReviewWorkflow(workflowId);
+  const persisted = await load(workflowId);
   if (
     !persisted
     || persisted.id !== workflowId
@@ -41,16 +75,25 @@ export async function hydrateLoopedReviewWorkflow(
   };
   const local = useLoopedReviewStore.getState().workflows.get(workflowId);
   if (local && local.backendRevision > persisted.revision) return local;
+  if (
+    local
+    && local.backendRevision === persisted.revision
+    && isUnsavedLocalWorkflow(local)
+  ) {
+    return local;
+  }
   useLoopedReviewStore.getState().replaceWorkflow(snapshot);
+  dirtyWorkflowFingerprints.delete(workflowId);
   return snapshot;
 }
 
 /** Restores every authoritative workflow for an environment after app restart. */
 export async function hydrateLoopedReviewWorkflowsForEnvironment(
   environmentId: string,
+  list: WorkflowListLoader = backend.listLoopedReviewWorkflows,
 ): Promise<LoopedReviewWorkflow[]> {
-  if (typeof backend.listLoopedReviewWorkflows !== "function") return [];
-  const persisted = await backend.listLoopedReviewWorkflows(environmentId);
+  if (typeof list !== "function") return [];
+  const persisted = await list(environmentId);
   if (!Array.isArray(persisted)) return [];
   const restored: LoopedReviewWorkflow[] = [];
   for (const entry of persisted) {
@@ -67,8 +110,19 @@ export async function hydrateLoopedReviewWorkflowsForEnvironment(
       backendRevision: entry.revision,
     };
     const local = useLoopedReviewStore.getState().workflows.get(entry.id);
-    if (!local || local.backendRevision <= entry.revision) {
+    const keepDirtyEqualRevision =
+      local
+      && local.backendRevision === entry.revision
+      && isUnsavedLocalWorkflow(local);
+    if (
+      !local
+      || (
+        local.backendRevision <= entry.revision
+        && !keepDirtyEqualRevision
+      )
+    ) {
       useLoopedReviewStore.getState().replaceWorkflow(snapshot);
+      dirtyWorkflowFingerprints.delete(entry.id);
       restored.push(snapshot);
     } else {
       restored.push(local);
@@ -80,12 +134,16 @@ export async function hydrateLoopedReviewWorkflowsForEnvironment(
 /** Durably records a dispatch lease before any provider request is written. */
 export async function persistLoopedReviewWorkflowNow(
   workflowId: string,
+  options: Pick<LoopedReviewPersistenceOptions, "save" | "load"> = {},
 ): Promise<LoopedReviewWorkflow> {
+  const save = options.save ?? backend.saveLoopedReviewWorkflow;
+  const load = options.load ?? backend.getLoopedReviewWorkflow;
   const workflow = useLoopedReviewStore.getState().workflows.get(workflowId);
   if (!workflow) throw new Error(`Looped review workflow not found: ${workflowId}`);
+  const fingerprint = workflowFingerprint(workflow);
   let saved;
   try {
-    saved = await backend.saveLoopedReviewWorkflow(
+    saved = await save(
       workflow.id,
       workflow.environmentId,
       LOOPED_REVIEW_WORKFLOW_VERSION,
@@ -95,19 +153,20 @@ export async function persistLoopedReviewWorkflowNow(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes("revision conflict")) {
-      const winner = await hydrateLoopedReviewWorkflow(workflowId);
+      const winner = await hydrateLoopedReviewWorkflow(workflowId, load);
       if (winner) return winner;
     }
     throw error;
   }
+  markWorkflowClean(workflowId, fingerprint);
   useLoopedReviewStore.getState().setBackendRevision(workflowId, saved.revision);
   return useLoopedReviewStore.getState().workflows.get(workflowId)!;
 }
 
 export interface LoopedReviewPersistenceOptions {
   debounceMs?: number;
-  save?: typeof backend.saveLoopedReviewWorkflow;
-  load?: typeof backend.getLoopedReviewWorkflow;
+  save?: WorkflowSaver;
+  load?: WorkflowLoader;
 }
 
 /**
@@ -147,7 +206,9 @@ export function startLoopedReviewPersistence(
           current,
           current.backendRevision,
         );
-        lastSavedFingerprint.set(workflowId, workflowFingerprint(current));
+        const savedFingerprint = workflowFingerprint(current);
+        lastSavedFingerprint.set(workflowId, savedFingerprint);
+        markWorkflowClean(workflowId, savedFingerprint);
         useLoopedReviewStore.getState().setBackendRevision(
           workflowId,
           saved.revision,
@@ -155,7 +216,7 @@ export function startLoopedReviewPersistence(
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (message.includes("revision conflict")) {
-          const winner = await load(workflowId);
+          const winner = await load(workflowId).catch(() => null);
           if (winner && isLoopedReviewWorkflow(winner.snapshot)) {
             useLoopedReviewStore.getState().replaceWorkflow({
               ...winner.snapshot,
@@ -165,14 +226,25 @@ export function startLoopedReviewPersistence(
               workflowId,
               workflowFingerprint(winner.snapshot),
             );
+            dirtyWorkflowFingerprints.delete(workflowId);
             return;
           }
         }
         const latest = useLoopedReviewStore.getState().workflows.get(workflowId);
-        if (latest && latest.phase !== "completed" && latest.phase !== "cancelled") {
+        const failureMessage = `Failed to persist looped review state: ${message}`;
+        const alreadyReported =
+          latest?.phase === "failed"
+          && latest.failure?.code === "persistence"
+          && latest.failure.message === failureMessage;
+        if (
+          latest
+          && latest.phase !== "completed"
+          && latest.phase !== "cancelled"
+          && !alreadyReported
+        ) {
           useLoopedReviewStore.getState().failWorkflow(workflowId, {
             code: "persistence",
-            message: `Failed to persist looped review state: ${message}`,
+            message: failureMessage,
             retryPhase:
               latest.phase === "failed"
                 ? latest.failure?.retryPhase ?? "preparing"
@@ -210,6 +282,7 @@ export function startLoopedReviewPersistence(
         cancelTimer(id);
         pending.delete(id);
         lastSavedFingerprint.delete(id);
+        dirtyWorkflowFingerprints.delete(id);
         continue;
       }
       if (workflow === previous.workflows.get(id)) continue;
@@ -220,6 +293,7 @@ export function startLoopedReviewPersistence(
       ) {
         continue;
       }
+      dirtyWorkflowFingerprints.set(id, fingerprint);
       pending.set(id, { workflow, fingerprint });
       cancelTimer(id);
       timers.set(id, setTimeout(() => {

@@ -43,6 +43,10 @@ import {
   type NativeStructuredAgent,
 } from "@/lib/structured-review-agent";
 import {
+  verifyEnvironmentPr,
+  verifyLoopedReviewPackage,
+} from "@/lib/backend";
+import {
   createDiscoveryPrompt,
   createFixPoolPrompt,
   createLoopedReviewPrPrompt,
@@ -69,6 +73,10 @@ interface LoopedReviewTabProps {
   driveWorkflow?: boolean;
   controllerOnly?: boolean;
   connectAgent?: typeof connectStructuredReviewAgent;
+  hydrateWorkflow?: typeof hydrateLoopedReviewWorkflow;
+  persistWorkflow?: typeof persistLoopedReviewWorkflowNow;
+  verifyPackage?: typeof verifyLoopedReviewPackage;
+  verifyPr?: typeof verifyEnvironmentPr;
   pollIntervalMs?: number;
   missingSessionPollLimit?: number;
 }
@@ -81,6 +89,13 @@ class DefiniteWorkflowResultError extends Error {
   constructor(error: unknown) {
     super(error instanceof Error ? error.message : String(error));
     this.name = "DefiniteWorkflowResultError";
+  }
+}
+
+class MissingProviderSessionError extends Error {
+  constructor() {
+    super("The native provider session no longer exists. Retry will create a replacement.");
+    this.name = "MissingProviderSessionError";
   }
 }
 
@@ -143,6 +158,7 @@ export function parsePrResult(value: unknown): ReviewPrResult {
     || value.status !== "created"
     || typeof value.url !== "string"
     || url.protocol !== "https:"
+    || url.hostname !== "github.com"
     || url.username !== ""
     || url.password !== ""
     || !/\/pull\/\d+\/?$/i.test(url.pathname)
@@ -344,6 +360,10 @@ export function LoopedReviewTab({
   driveWorkflow = false,
   controllerOnly = false,
   connectAgent = connectStructuredReviewAgent,
+  hydrateWorkflow = hydrateLoopedReviewWorkflow,
+  persistWorkflow = persistLoopedReviewWorkflowNow,
+  verifyPackage = verifyLoopedReviewPackage,
+  verifyPr = verifyEnvironmentPr,
   pollIntervalMs = 1_000,
   missingSessionPollLimit = 5,
 }: LoopedReviewTabProps) {
@@ -367,7 +387,7 @@ export function LoopedReviewTab({
       return;
     }
     setHydrating(true);
-    void hydrateLoopedReviewWorkflow(data.workflowId)
+    void hydrateWorkflow(data.workflowId)
       .then((restored) => {
         if (cancelled) return;
         setHydrating(false);
@@ -385,7 +405,7 @@ export function LoopedReviewTab({
     return () => {
       cancelled = true;
     };
-  }, [data.workflowId, workflow]);
+  }, [data.workflowId, hydrateWorkflow, workflow]);
 
   useEffect(() => {
     if (
@@ -457,8 +477,8 @@ export function LoopedReviewTab({
     if (!claimed) return;
     // The prepared lease is durable before the provider sees a byte. Recovery
     // can therefore query/resend the same request ID without duplicating a turn.
-    await persistLoopedReviewWorkflowNow(current.id);
-  }, []);
+    await persistWorkflow(current.id);
+  }, [persistWorkflow]);
 
   const startCurrentPhase = useCallback(async (
     current: LoopedReviewWorkflow,
@@ -480,7 +500,32 @@ export function LoopedReviewTab({
       if (!current.activeSessionId) {
         throw new Error("Reconciliation lost its discovery session");
       }
-      await beginDispatch(current, "reconcile", current.activeSessionId);
+      const activeSessionId = current.activeSessionId;
+      const activeSession = current.sessions.find(
+        (session) => session.id === activeSessionId,
+      );
+      if (!activeSession) {
+        throw new Error("Reconciliation lost its discovery session");
+      }
+      if (activeSession.status === "error" && !current.dispatch) {
+        const agent = await connect(current);
+        const providerSessionId = await agent.createSession(
+          "discovery",
+          sessionLabel("discovery", current.currentRound, current.currentPass),
+        );
+        useLoopedReviewStore.getState().updateSession(
+          current.id,
+          activeSession.id,
+          {
+            providerSessionId,
+            status: "running",
+            error: undefined,
+            completedAt: undefined,
+          },
+        );
+        current = useLoopedReviewStore.getState().workflows.get(current.id)!;
+      }
+      await beginDispatch(current, "reconcile", activeSessionId);
       return;
     }
     if (current.phase === "fixing") {
@@ -500,13 +545,13 @@ export function LoopedReviewTab({
       const latest = useLoopedReviewStore.getState().workflows.get(current.id)!;
       await beginDispatch(latest, "pr", sessionId);
     }
-  }, [beginDispatch, createPhaseSession]);
+  }, [beginDispatch, connect, createPhaseSession]);
 
-  const applyResult = useCallback((
+  const applyResult = useCallback(async (
     current: LoopedReviewWorkflow,
     dispatch: LoopedReviewDispatch,
     result: StructuredOutputResult,
-  ) => {
+  ): Promise<void> => {
     const store = useLoopedReviewStore.getState();
     const live = store.workflows.get(current.id);
     if (
@@ -555,6 +600,9 @@ export function LoopedReviewTab({
         targetBranch: current.targetBranch,
         context: current.context,
       });
+      if (!await verifyPackage(current.environmentId, reviewPackage)) {
+        throw new Error("The backend could not verify the review package");
+      }
       store.setPreparedPackage(current.id, reviewPackage);
       return;
     }
@@ -580,8 +628,13 @@ export function LoopedReviewTab({
       return;
     }
     const prResult = parsePrResult(result.value);
-    store.completePr(current.id, prResult.url);
-  }, []);
+    const verified = await verifyPr(
+      current.environmentId,
+      prResult.url,
+      current.targetBranch,
+    );
+    store.completePr(current.id, verified.url);
+  }, [verifyPackage, verifyPr]);
 
   const advance = useCallback(async () => {
     const current = useLoopedReviewStore.getState().workflows.get(data.workflowId);
@@ -620,7 +673,7 @@ export function LoopedReviewTab({
           throw new Error(accepted.error ?? "Native provider rejected the prompt");
         }
         useLoopedReviewStore.getState().markDispatchSent(current.id, dispatch.id);
-        await persistLoopedReviewWorkflowNow(current.id);
+        await persistWorkflow(current.id);
         return;
       }
 
@@ -631,7 +684,7 @@ export function LoopedReviewTab({
       if (result) {
         nullResultPollsRef.current.delete(dispatch.id);
         try {
-          applyResult(current, dispatch, result);
+          await applyResult(current, dispatch, result);
         } catch (error) {
           throw new DefiniteWorkflowResultError(error);
         }
@@ -650,10 +703,8 @@ export function LoopedReviewTab({
       if (status === "idle" && polls >= missingSessionPollLimit) {
         throw new Error("Native provider completed without a structured result");
       }
-      if (status === null && polls >= missingSessionPollLimit) {
-        throw new Error(
-          "Native provider session is unavailable; retry will reconcile the preserved request",
-        );
+      if (status === "missing") {
+        throw new MissingProviderSessionError();
       }
     } catch (error) {
       const latest = useLoopedReviewStore.getState().workflows.get(data.workflowId);
@@ -668,6 +719,12 @@ export function LoopedReviewTab({
         });
       }
       const kind = latest.dispatch?.kind;
+      if (!(error instanceof DefiniteWorkflowResultError)) {
+        // Native bridge/server processes can restart on a different port. The
+        // next Retry must resolve the current endpoint instead of reusing this
+        // failed client forever.
+        agentRef.current = null;
+      }
       useLoopedReviewStore.getState().failWorkflow(latest.id, {
         code:
           kind === "prepare" ? "package"
@@ -677,7 +734,9 @@ export function LoopedReviewTab({
           : "provider",
         message,
         retryPhase: latest.phase,
-        preserveDispatch: !(error instanceof DefiniteWorkflowResultError),
+        preserveDispatch:
+          !(error instanceof DefiniteWorkflowResultError)
+          && !(error instanceof MissingProviderSessionError),
       });
     } finally {
       advanceInFlightRef.current = false;
@@ -688,6 +747,7 @@ export function LoopedReviewTab({
     data.workflowId,
     environment,
     missingSessionPollLimit,
+    persistWorkflow,
     startCurrentPhase,
   ]);
 
@@ -754,7 +814,7 @@ export function LoopedReviewTab({
             onClick={() => {
               setHydrating(true);
               setConnectionError(null);
-              void hydrateLoopedReviewWorkflow(data.workflowId)
+              void hydrateWorkflow(data.workflowId)
                 .finally(() => setHydrating(false));
             }}
           >

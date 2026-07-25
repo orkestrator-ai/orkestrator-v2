@@ -110,15 +110,23 @@ export function ClaudeChatTab({
   const [serverLog, setServerLog] = useState<string | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
+  const [structuredReviewRequestId, setStructuredReviewRequestId] =
+    useState<string>();
 
   const tabSessionIdRef = useRef<string | null>(null);
   const isInitializedRef = useRef(false);
   const initialPromptSentRef = useRef(false);
+  const structuredReviewPromptRef = useRef<string | null>(
+    isReviewTab && initialPrompt ? initialPrompt : null,
+  );
+  if (isReviewTab && initialPrompt && !structuredReviewPromptRef.current) {
+    structuredReviewPromptRef.current = initialPrompt;
+  }
   const isProcessingQueueRef = useRef(false);
   const slashCmdCleanupRef = useRef<(() => void) | null>(null);
   const lastHandledRefreshRequestIdRef = useRef(0);
   const manualRefreshSequenceRef = useRef(0);
-  const handleSendRef = useRef<((text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => Promise<void>) | null>(null);
+  const handleSendRef = useRef<((text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean, logicalRequestId?: string, throwOnFailure?: boolean) => Promise<void>) | null>(null);
 
   const {
     setClient,
@@ -883,6 +891,8 @@ export function ClaudeChatTab({
             startSharedEventSubscription(bridgeClient);
 
             // Now send the prompt
+            const reviewRequestId = isReviewTab ? `normal-review-${tabId}` : undefined;
+            if (reviewRequestId) setStructuredReviewRequestId(reviewRequestId);
             const success = await sendPrompt(bridgeClient, newSession.sessionId, initialPrompt, {
               model: selectedModel,
               effort: effortLevel,
@@ -891,7 +901,7 @@ export function ClaudeChatTab({
               outputSchema: isReviewTab
                 ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
                 : undefined,
-              requestId: isReviewTab ? `normal-review-${tabId}` : undefined,
+              requestId: reviewRequestId,
             });
 
             if (!success) {
@@ -1275,10 +1285,17 @@ export function ClaudeChatTab({
   startSharedEventSubscriptionRef.current = startSharedEventSubscription;
 
   const handleSend = useCallback(
-    async (text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean) => {
-      if (!client || !session) return;
+    async (text: string, attachments: ClaudeAttachment[], effort: import("@/lib/claude-client").ClaudeEffortLevel, planModeEnabled: boolean, fastModeEnabled: boolean, logicalRequestId?: string, throwOnFailure = false) => {
+      if (!client || !session) {
+        if (throwOnFailure) throw new Error("Claude session is unavailable.");
+        return;
+      }
 
       const selectedModel = getSelectedModel(sessionKey);
+      const requestId = isReviewTab
+        ? logicalRequestId ?? createUuid()
+        : undefined;
+      if (requestId) setStructuredReviewRequestId(requestId);
 
       const userMessage = {
         id: createUuid(),
@@ -1340,11 +1357,13 @@ export function ClaudeChatTab({
         outputSchema: isReviewTab
           ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
           : undefined,
+        requestId,
       });
 
       if (!success) {
         console.error("[ClaudeChatTab] Failed to send prompt");
         setSessionLoading(sessionKey, false);
+        if (throwOnFailure) throw new Error("Failed to retry structured review.");
       }
     },
     [client, session, sessionKey, environmentId, getSelectedModel, addMessage, removeMessage, setSessionLoading, isReviewTab]
@@ -1445,14 +1464,26 @@ export function ClaudeChatTab({
   const fastModeEnabledValue = isFastMode(sessionKey);
   const loadStructuredReview = useCallback(
     () => client && session
-      ? getStructuredOutput(client, session.sessionId)
+      ? getStructuredOutput(client, session.sessionId, structuredReviewRequestId)
       : Promise.resolve(null),
-    [client, session],
+    [client, session, structuredReviewRequestId],
   );
   const retryStructuredReview = useCallback(async () => {
-    if (!initialPrompt) throw new Error("The original review prompt is unavailable.");
-    await handleSend(initialPrompt, [], effortValue, false, fastModeEnabledValue);
-  }, [effortValue, fastModeEnabledValue, handleSend, initialPrompt]);
+    const reviewPrompt =
+      structuredReviewPromptRef.current
+      ?? session?.messages.find((message) => message.role === "user")?.content;
+    if (!reviewPrompt) throw new Error("The original review prompt is unavailable.");
+    structuredReviewPromptRef.current = reviewPrompt;
+    await handleSend(
+      reviewPrompt,
+      [],
+      effortValue,
+      false,
+      fastModeEnabledValue,
+      createUuid(),
+      true,
+    );
+  }, [effortValue, fastModeEnabledValue, handleSend, session?.messages]);
 
   // Send initial prompt on RECONNECTION to existing session only.
   // New sessions handle initial prompt directly in initialize() to avoid race conditions.
@@ -1731,6 +1762,7 @@ export function ClaudeChatTab({
             <NativeStructuredReviewResult
               enabled={isReviewTab}
               sessionId={session?.sessionId}
+              resultKey={structuredReviewRequestId}
               isLoading={session?.isLoading ?? false}
               loadResult={loadStructuredReview}
               onRetry={retryStructuredReview}

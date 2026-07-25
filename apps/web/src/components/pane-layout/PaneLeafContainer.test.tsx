@@ -8,12 +8,14 @@ import * as realClaudeTmuxChatTab from "@/components/claude/ClaudeTmuxChatTab";
 import * as realCodexChatTab from "@/components/codex/CodexChatTab";
 import * as realOpenCodeChatTab from "@/components/opencode/OpenCodeChatTab";
 import * as realBrowserTab from "@/components/browser/BrowserTab";
+import * as realLoopedReviewTab from "@/components/review/LoopedReviewTab";
 
 const realClaudeChatTabSnapshot = { ...realClaudeChatTab };
 const realClaudeTmuxChatTabSnapshot = { ...realClaudeTmuxChatTab };
 const realCodexChatTabSnapshot = { ...realCodexChatTab };
 const realOpenCodeChatTabSnapshot = { ...realOpenCodeChatTab };
 const realBrowserTabSnapshot = { ...realBrowserTab };
+const realLoopedReviewTabSnapshot = { ...realLoopedReviewTab };
 
 mock.module("@dnd-kit/core", () => ({
   DndContext: ({ children }: { children: React.ReactNode }) => children,
@@ -204,6 +206,23 @@ mock.module("@/components/browser/BrowserTab", () => ({
   ),
 }));
 
+mock.module("@/components/review/LoopedReviewTab", () => ({
+  LoopedReviewTab: ({
+    data,
+    isActive,
+  }: {
+    data: { environmentId: string; workflowId: string };
+    isActive: boolean;
+  }) => (
+    <div
+      data-testid="looped-review-tab"
+      data-environment-id={data.environmentId}
+      data-workflow-id={data.workflowId}
+      data-active={String(isActive)}
+    />
+  ),
+}));
+
 mock.module("@/stores/terminalPortalStore", () => ({
   createTerminalKey: (environmentId: string, tabId: string) => `${environmentId}::${tabId}`,
   useTerminalPortalStore: <T,>(selector: (state: {
@@ -241,6 +260,10 @@ describe("PaneLeafContainer", () => {
     mock.module(
       "@/components/browser/BrowserTab",
       () => realBrowserTabSnapshot,
+    );
+    mock.module(
+      "@/components/review/LoopedReviewTab",
+      () => realLoopedReviewTabSnapshot,
     );
   });
 
@@ -456,6 +479,39 @@ describe("PaneLeafContainer", () => {
     expect(screen.getByTestId("opencode-tab").dataset).toMatchObject({
       agentModel: "provider/opencode-review",
       reasoningEffort: "deep",
+    });
+  });
+
+  test("renders a looped-review tab with authoritative workflow identity", () => {
+    const pane = {
+      kind: "leaf" as const,
+      id: "pane-looped",
+      tabs: [{
+        id: "tab-looped",
+        type: "looped-review" as const,
+        loopedReviewTabData: {
+          environmentId: "env-hidden",
+          workflowId: "workflow-1",
+        },
+      }],
+      activeTabId: "tab-looped",
+    };
+
+    render(
+      <PaneLeafContainer
+        pane={pane}
+        environmentId="env-hidden"
+        containerId="container-hidden"
+        isActive
+      />,
+    );
+
+    expect(screen.getByTestId("looped-review-tab")).toMatchObject({
+      dataset: {
+        environmentId: "env-hidden",
+        workflowId: "workflow-1",
+        active: "true",
+      },
     });
   });
 

@@ -15,6 +15,8 @@ interface NativeStructuredReviewResultProps {
   isLoading: boolean;
   loadResult: () => Promise<StructuredOutputResult<unknown> | null>;
   onRetry: () => Promise<void> | void;
+  pollIntervalMs?: number;
+  maxResultPolls?: number;
 }
 
 /**
@@ -29,6 +31,8 @@ export function NativeStructuredReviewResult({
   isLoading,
   loadResult,
   onRetry,
+  pollIntervalMs = 1_000,
+  maxResultPolls = 60,
 }: NativeStructuredReviewResultProps) {
   const [report, setReport] = useState<StructuredReviewReport | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -50,10 +54,13 @@ export function NativeStructuredReviewResult({
     void loadResult().then((result) => {
       if (cancelled) return;
       if (!result) {
-        if (pollCount >= 60) {
+        if (pollCount >= maxResultPolls) {
           setFailure("The native agent completed without an inspectable structured result.");
         } else {
-          timer = window.setTimeout(() => setPollCount((value) => value + 1), 1_000);
+          timer = window.setTimeout(
+            () => setPollCount((value) => value + 1),
+            pollIntervalMs,
+          );
         }
         return;
       }
@@ -85,6 +92,8 @@ export function NativeStructuredReviewResult({
     failure,
     isLoading,
     loadResult,
+    maxResultPolls,
+    pollIntervalMs,
     pollCount,
     report,
     resultKey,

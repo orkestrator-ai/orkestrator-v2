@@ -1389,4 +1389,59 @@ describe("Electron StorageService", () => {
     expect(primaryMode).toBe(0o600);
     expect(backupMode).toBe(0o600);
   });
+
+  test("deletes every workflow and retained backup for one environment", async () => {
+    const dataDir = await createTempDir("ork-storage-looped-review-cascade-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const deletedEnvironment = createEnvironment("project-1", {
+      name: "looped-review-deleted",
+      environmentType: "local",
+    });
+    const retainedEnvironment = createEnvironment("project-1", {
+      name: "looped-review-retained",
+      environmentType: "local",
+    });
+    await storage.addEnvironment(deletedEnvironment);
+    await storage.addEnvironment(retainedEnvironment);
+    const privateMarker = "deleted-environment-private-review-material";
+
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-deleted",
+      deletedEnvironment.id,
+      1,
+      { completeDiff: privateMarker },
+      0,
+    );
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-retained",
+      retainedEnvironment.id,
+      1,
+      { completeDiff: "retained material" },
+      0,
+    );
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-deleted",
+      deletedEnvironment.id,
+      1,
+      { completeDiff: `${privateMarker}-updated` },
+      1,
+    );
+
+    await storage.deleteLoopedReviewWorkflowsByEnvironment(
+      deletedEnvironment.id,
+    );
+
+    await expect(storage.listLoopedReviewWorkflows(deletedEnvironment.id))
+      .resolves.toEqual([]);
+    await expect(storage.getLoopedReviewWorkflow("workflow-deleted"))
+      .resolves.toBeNull();
+    await expect(storage.listLoopedReviewWorkflows(retainedEnvironment.id))
+      .resolves.toMatchObject([{ id: "workflow-retained" }]);
+    for (const name of await fs.readdir(dataDir)) {
+      if (!name.startsWith("looped-reviews.json")) continue;
+      const contents = await fs.readFile(path.join(dataDir, name), "utf8");
+      expect(contents).not.toContain(privateMarker);
+    }
+  });
 });

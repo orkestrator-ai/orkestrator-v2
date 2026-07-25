@@ -250,7 +250,7 @@ function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[])
   return Object.keys(value).every((key) => keys.has(key));
 }
 
-function isReviewPackageCommandResult(value: unknown): value is ReviewPackageCommandResult {
+function isReviewPackageCommandResult(value: unknown): boolean {
   return isRecord(value)
     && hasOnlyKeys(value, [
       "command",
@@ -267,7 +267,11 @@ function isReviewPackageCommandResult(value: unknown): value is ReviewPackageCom
     && isString(value.stdout)
     && isString(value.stderr)
     && isIntegerAtLeast(value.durationMs, 0)
-    && (value.limitation === undefined || isString(value.limitation));
+    && (
+      value.limitation === undefined
+      || value.limitation === null
+      || isString(value.limitation)
+    );
 }
 
 function isReviewPackageFile(value: unknown): value is ReviewPackageFile {
@@ -299,7 +303,7 @@ function isReviewPackageFile(value: unknown): value is ReviewPackageFile {
     && /^[a-f0-9]{64}$/i.test(value.contentSha256);
 }
 
-function isReviewPackageContext(value: unknown): value is ReviewPackageContext {
+function isReviewPackageContext(value: unknown): boolean {
   if (!isRecord(value)) return false;
   if (!hasOnlyKeys(value, [
     "ticketTitle",
@@ -312,14 +316,35 @@ function isReviewPackageContext(value: unknown): value is ReviewPackageContext {
     return false;
   }
   return ["ticketTitle", "ticketDescription", "acceptanceCriteria", "projectNotes"]
-    .every((key) => value[key] === undefined || isString(value[key]))
+    .every((key) =>
+      value[key] === undefined
+      || value[key] === null
+      || isString(value[key])
+    )
     && ["comments", "imageNames"].every((key) =>
       value[key] === undefined
+      || value[key] === null
       || (
         Array.isArray(value[key])
         && value[key].every(isString)
       )
     );
+}
+
+function normalizeReviewPackageContext(value: unknown): ReviewPackageContext | undefined {
+  if (!isRecord(value)) return undefined;
+  const context: ReviewPackageContext = {};
+  if (typeof value.ticketTitle === "string") context.ticketTitle = value.ticketTitle;
+  if (typeof value.ticketDescription === "string") {
+    context.ticketDescription = value.ticketDescription;
+  }
+  if (typeof value.acceptanceCriteria === "string") {
+    context.acceptanceCriteria = value.acceptanceCriteria;
+  }
+  if (Array.isArray(value.comments)) context.comments = value.comments as string[];
+  if (Array.isArray(value.imageNames)) context.imageNames = value.imageNames as string[];
+  if (typeof value.projectNotes === "string") context.projectNotes = value.projectNotes;
+  return Object.keys(context).length > 0 ? context : undefined;
 }
 
 export function parseReviewPackage(
@@ -385,7 +410,11 @@ export function parseReviewPackage(
     )
     || !Array.isArray(value.limitations)
     || !value.limitations.every(isString)
-    || (value.context !== undefined && !isReviewPackageContext(value.context))
+    || (
+      value.context !== undefined
+      && value.context !== null
+      && !isReviewPackageContext(value.context)
+    )
   ) {
     throw new Error("Review package failed runtime validation");
   }
@@ -418,12 +447,23 @@ export function parseReviewPackage(
     )
     || (
       expected?.context !== undefined
-      && JSON.stringify(value.context) !== JSON.stringify(expected.context)
+      && JSON.stringify(normalizeReviewPackageContext(value.context))
+        !== JSON.stringify(normalizeReviewPackageContext(expected.context))
     )
   ) {
     throw new Error("Prepared package does not match the active review round");
   }
-  return value as unknown as ReviewPackage;
+  const normalizedContext = normalizeReviewPackageContext(value.context);
+  const { context: _context, ...packageWithoutContext } = value;
+  return {
+    ...packageWithoutContext,
+    validation: value.validation.map((command) => {
+      if (!isRecord(command) || command.limitation !== null) return command;
+      const { limitation: _limitation, ...normalized } = command;
+      return normalized;
+    }),
+    ...(normalizedContext === undefined ? {} : { context: normalizedContext }),
+  } as unknown as ReviewPackage;
 }
 
 function isReviewPackage(value: unknown, round: number): value is ReviewPackage {
@@ -553,6 +593,18 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
       || workflow.agent === "opencode")
     && typeof workflow.targetBranch === "string"
     && typeof workflow.model === "string"
+    && (
+      workflow.reasoningEffort === undefined
+      || typeof workflow.reasoningEffort === "string"
+    )
+    && (
+      workflow.reviewInstruction === undefined
+      || typeof workflow.reviewInstruction === "string"
+    )
+    && (
+      workflow.context === undefined
+      || isReviewPackageContext(workflow.context)
+    )
     && validAllowance(workflow.startingAllowance)
     && validAllowance(workflow.currentAllowance)
     && typeof workflow.currentRound === "number"
@@ -628,7 +680,8 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
     && (
       workflow.dispatch === undefined
       || (
-        typeof workflow.dispatch.id === "string"
+        isRecord(workflow.dispatch)
+        && typeof workflow.dispatch.id === "string"
         && typeof workflow.dispatch.requestId === "string"
         && typeof workflow.dispatch.sessionId === "string"
         && isOneOf(workflow.dispatch.phase, [
@@ -686,7 +739,8 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
     && (
       workflow.failure === undefined
       || (
-        isOneOf(workflow.failure.code, [
+        isRecord(workflow.failure)
+        && isOneOf(workflow.failure.code, [
           "connection",
           "dispatch",
           "provider",
@@ -1048,7 +1102,13 @@ export const useLoopedReviewStore = create<LoopedReviewState>()(
     setBackendRevision: (workflowId, revision) =>
       set((state) => {
         const workflow = state.workflows.get(workflowId);
-        if (!workflow || workflow.backendRevision === revision) return state;
+        if (
+          !workflow
+          || !isIntegerAtLeast(revision, 0)
+          || workflow.backendRevision === revision
+        ) {
+          return state;
+        }
         const workflows = new Map(state.workflows);
         // A backend acknowledgement is not a workflow transition. Preserve the
         // durable updatedAt value so acknowledging a save cannot enqueue
@@ -1069,6 +1129,7 @@ export const useLoopedReviewStore = create<LoopedReviewState>()(
       const workflow = get().workflows.get(workflowId);
       if (!workflow || !isLoopedReviewActivePhase(workflow.phase)) return undefined;
       const id = input.id ?? createUuid();
+      if (workflow.sessions.some((session) => session.id === id)) return undefined;
       set((state) => updateWorkflow(state, workflowId, (current) => ({
         ...current,
         sessions: [...current.sessions, {
@@ -1084,12 +1145,27 @@ export const useLoopedReviewStore = create<LoopedReviewState>()(
     },
 
     updateSession: (workflowId, sessionId, updates) =>
-      set((state) => updateWorkflow(state, workflowId, (workflow) => ({
-        ...workflow,
-        sessions: workflow.sessions.map((session) =>
-          session.id === sessionId ? { ...session, ...updates } : session
-        ),
-      }))),
+      set((state) => updateWorkflow(state, workflowId, (workflow) => {
+        const {
+          id: _immutableId,
+          phase: _immutablePhase,
+          round: _immutableRound,
+          pass: _immutablePass,
+          startedAt: _immutableStartedAt,
+          ...mutableUpdates
+        } = updates;
+        if (!workflow.sessions.some((session) => session.id === sessionId)) {
+          return workflow;
+        }
+        return {
+          ...workflow,
+          sessions: workflow.sessions.map((session) =>
+            session.id === sessionId
+              ? { ...session, ...mutableUpdates }
+              : session
+          ),
+        };
+      })),
 
     setPreparedPackage: (workflowId, reviewPackage) =>
       set((state) => updateWorkflow(state, workflowId, (workflow) => {
@@ -1117,6 +1193,17 @@ export const useLoopedReviewStore = create<LoopedReviewState>()(
         if (workflow.phase !== "discovering") return workflow;
         const nextPass = workflow.currentPass + 1;
         if (nextPass > workflow.currentAllowance) return workflow;
+        const session = workflow.sessions.find((candidate) =>
+          candidate.id === sessionId
+        );
+        if (
+          !session
+          || session.phase !== "discovery"
+          || session.round !== workflow.currentRound
+          || session.pass !== nextPass
+        ) {
+          return workflow;
+        }
         const pass: LoopedReviewPass = {
           pass: nextPass,
           sessionId,
@@ -1137,7 +1224,17 @@ export const useLoopedReviewStore = create<LoopedReviewState>()(
 
     recordReport: (workflowId, sessionId, report) =>
       set((state) => updateWorkflow(state, workflowId, (workflow) => {
-        if (workflow.phase !== "discovering" || workflow.activeSessionId !== sessionId) {
+        const activePass = workflow.rounds
+          .find((round) => round.round === workflow.currentRound)
+          ?.passes.some((pass) =>
+            pass.pass === workflow.currentPass
+            && pass.sessionId === sessionId
+          );
+        if (
+          workflow.phase !== "discovering"
+          || workflow.activeSessionId !== sessionId
+          || !activePass
+        ) {
           return workflow;
         }
         return {
@@ -1275,10 +1372,37 @@ export const useLoopedReviewStore = create<LoopedReviewState>()(
 
     claimDispatch: (workflowId, input) => {
       const workflow = get().workflows.get(workflowId);
+      const expectedKind: Record<
+        ActiveLoopedReviewPhase,
+        LoopedReviewDispatch["kind"]
+      > = {
+        preparing: "prepare",
+        discovering: "discover",
+        reconciling: "reconcile",
+        fixing: "fix",
+        "creating-pr": "pr",
+      };
+      const expectedSessionPhase: Record<
+        ActiveLoopedReviewPhase,
+        LoopedReviewSessionPhase
+      > = {
+        preparing: "preparation",
+        discovering: "discovery",
+        reconciling: "discovery",
+        fixing: "fix",
+        "creating-pr": "pr",
+      };
+      const session = workflow?.sessions.find((candidate) =>
+        candidate.id === input.sessionId
+      );
       if (
         !workflow
         || !isLoopedReviewActivePhase(workflow.phase)
         || workflow.phase !== input.phase
+        || input.kind !== expectedKind[input.phase]
+        || !session
+        || session.phase !== expectedSessionPhase[input.phase]
+        || session.round !== workflow.currentRound
         || workflow.dispatch
       ) {
         return false;
@@ -1407,6 +1531,8 @@ export const useLoopedReviewStore = create<LoopedReviewState>()(
                       ? "preparing"
                       : failure.retryPhase === "fixing"
                         ? "fixing"
+                        : failure.retryPhase === "creating-pr"
+                          ? "completed"
                         : "reviewing",
                   passes: round.passes.map((pass) =>
                     pass.pass === workflow.currentPass
@@ -1430,6 +1556,8 @@ export const useLoopedReviewStore = create<LoopedReviewState>()(
         return {
           ...workflow,
           phase: "cancelled",
+          pausedFromPhase: undefined,
+          failure: undefined,
           dispatch: undefined,
           sessions: workflow.sessions.map((session) =>
             session.status === "running"
@@ -1441,7 +1569,17 @@ export const useLoopedReviewStore = create<LoopedReviewState>()(
 
     startPr: (workflowId, sessionId) =>
       set((state) => updateWorkflow(state, workflowId, (workflow) => {
-        if (workflow.phase !== "creating-pr") return workflow;
+        const session = workflow.sessions.find((candidate) =>
+          candidate.id === sessionId
+        );
+        if (
+          workflow.phase !== "creating-pr"
+          || !session
+          || session.phase !== "pr"
+          || session.round !== workflow.currentRound
+        ) {
+          return workflow;
+        }
         return {
           ...workflow,
           activeSessionId: sessionId,

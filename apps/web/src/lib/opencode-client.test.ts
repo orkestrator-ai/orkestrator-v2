@@ -17,6 +17,7 @@ import {
   getStructuredOutput,
   hasOpenCodeSubagentSession,
   listSessions,
+  lookupSessionStatus,
   mergeOpenCodeSubagentTranscript,
   normalizeOpenCodeMessage,
   normalizeOpenCodePart,
@@ -29,6 +30,7 @@ import {
   type OpencodeClient,
   type OpenCodeMessage,
 } from "./opencode-client";
+import { StructuredOutputReadUnavailableError } from "@orkestrator/protocol/structured-output";
 
 const originalFetch = globalThis.fetch;
 
@@ -799,6 +801,55 @@ describe("opencode-client getSessionStatus", () => {
     expect(await getSessionStatus(client, "missing")).toBeNull();
   });
 
+  test("distinguishes a missing session from unavailable status transport", async () => {
+    const missing = {
+      session: {
+        status: async () => ({ data: { "another-session": { type: "idle" } } }),
+      },
+    } as unknown as OpencodeClient;
+    await expect(lookupSessionStatus(missing, "session-1")).resolves.toEqual({
+      kind: "missing",
+    });
+
+    const resolvedFailure = {
+      session: {
+        status: async () => ({
+          data: undefined,
+          error: { message: "status unavailable" },
+        }),
+      },
+    } as unknown as OpencodeClient;
+    const unavailableResponse = await lookupSessionStatus(resolvedFailure, "session-1");
+    expect(unavailableResponse.kind).toBe("unavailable");
+    if (unavailableResponse.kind === "unavailable") {
+      expect(unavailableResponse.error.message).toContain("status unavailable");
+    }
+
+    const thrownFailure = {
+      session: {
+        status: async () => {
+          throw new Error("connection lost");
+        },
+      },
+    } as unknown as OpencodeClient;
+    const unavailableTransport = await lookupSessionStatus(thrownFailure, "session-1");
+    expect(unavailableTransport.kind).toBe("unavailable");
+    if (unavailableTransport.kind === "unavailable") {
+      expect(unavailableTransport.error.message).toBe("connection lost");
+    }
+
+    const malformed = {
+      session: {
+        status: async () => ({ data: { "session-1": { type: "paused" } } }),
+      },
+    } as unknown as OpencodeClient;
+    const unavailableMalformed = await lookupSessionStatus(malformed, "session-1");
+    expect(unavailableMalformed.kind).toBe("unavailable");
+    if (unavailableMalformed.kind === "unavailable") {
+      expect(unavailableMalformed.error.message).toContain("malformed");
+    }
+  });
+
   test("surfaces resolved and thrown status failures only in strict mode", async () => {
     const resolvedFailure = {
       session: {
@@ -1051,6 +1102,59 @@ describe("opencode-client sendPrompt", () => {
           details: { retries: 3 },
         },
       });
+  });
+
+  test("keeps provider errors authoritative but throws for result-channel outages", async () => {
+    const providerFailure = {
+      session: {
+        messages: async () => ({
+          data: undefined,
+          error: {
+            name: "MessageAbortedError",
+            data: { message: "Turn was cancelled" },
+          },
+        }),
+      },
+    } as unknown as OpencodeClient;
+    await expect(
+      getStructuredOutput(providerFailure, "session-1", "structured-4"),
+    ).resolves.toMatchObject({
+      ok: false,
+      provider: "opencode",
+      requestId: "structured-4",
+      error: {
+        code: "interrupted",
+        message: "Turn was cancelled",
+      },
+    });
+
+    const unavailable = {
+      session: {
+        messages: async () => {
+          throw new Error("message history offline");
+        },
+      },
+    } as unknown as OpencodeClient;
+    const promise = getStructuredOutput(unavailable, "session-1", "structured-5");
+    await expect(promise).rejects.toBeInstanceOf(StructuredOutputReadUnavailableError);
+    await expect(promise).rejects.toMatchObject({
+      provider: "opencode",
+      requestId: "structured-5",
+      retryable: true,
+    });
+
+    const malformed = {
+      session: {
+        messages: async () => ({ data: { messages: [] } }),
+      },
+    } as unknown as OpencodeClient;
+    await expect(
+      getStructuredOutput(malformed, "session-1", "structured-6"),
+    ).resolves.toMatchObject({
+      ok: false,
+      requestId: "structured-6",
+      error: { code: "malformed_output" },
+    });
   });
 });
 

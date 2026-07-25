@@ -5,6 +5,7 @@ import {
   structuredOutputFailure,
   type JsonSchema,
   type StructuredOutputResult,
+  StructuredOutputReadUnavailableError,
 } from "@orkestrator/protocol/structured-output";
 
 export interface CodexReasoningOption {
@@ -807,33 +808,55 @@ export async function getStructuredOutput<T = unknown>(
   sessionId: string,
   requestId?: string,
 ): Promise<StructuredOutputResult<T> | null> {
+  let response: Response;
   try {
     const query = requestId ? `?requestId=${encodeURIComponent(requestId)}` : "";
-    const response = await fetchWithTimeout(
+    response = await fetchWithTimeout(
       `${client.baseUrl}/session/${sessionId}/structured-output${query}`,
     );
-    if (!response.ok) return null;
-    const body = (await response.json()) as { structuredOutput?: unknown };
-    if (body.structuredOutput === null || body.structuredOutput === undefined) {
-      return null;
-    }
-    if (isStructuredOutputResult(body.structuredOutput)) {
-      return body.structuredOutput as StructuredOutputResult<T>;
-    }
+  } catch (error) {
+    throw new StructuredOutputReadUnavailableError(
+      "codex",
+      error instanceof Error
+        ? error.message
+        : "Failed to read Codex structured output.",
+      { requestId, cause: error },
+    );
+  }
+  if (!response.ok) return null;
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return structuredOutputFailure(
+      "codex",
+      "malformed_output",
+      "Codex bridge returned malformed JSON for structured output.",
+      { requestId },
+    );
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
     return structuredOutputFailure(
       "codex",
       "malformed_output",
       "Codex bridge returned a malformed structured-output envelope.",
       { requestId },
     );
-  } catch (error) {
-    return structuredOutputFailure(
-      "codex",
-      "provider_error",
-      error instanceof Error ? error.message : "Failed to read Codex structured output.",
-      { requestId },
-    );
   }
+  const structuredOutput = (body as Record<string, unknown>).structuredOutput;
+  if (structuredOutput === null || structuredOutput === undefined) {
+    return null;
+  }
+  if (isStructuredOutputResult(structuredOutput)) {
+    return structuredOutput as StructuredOutputResult<T>;
+  }
+  return structuredOutputFailure(
+    "codex",
+    "malformed_output",
+    "Codex bridge returned a malformed structured-output envelope.",
+    { requestId },
+  );
 }
 
 export type CodexAbortOutcome =

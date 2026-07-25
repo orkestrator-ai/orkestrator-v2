@@ -806,13 +806,28 @@ export function TerminalContainer({
         return;
       } else if (hydrationStatus === undefined) {
         beginHydration(environmentId);
-        void Promise.all([
+        void Promise.allSettled([
           backend.getPaneLayout(environmentId),
           hydrateLoopedReviewWorkflowsForEnvironment(environmentId),
         ])
-          .then(([saved]) => {
+          .then(([layoutResult, workflowResult]) => {
             const paneStore = usePaneLayoutStore.getState();
             if (paneStore.hydration.get(environmentId) !== "pending") return;
+
+            if (workflowResult.status === "rejected") {
+              console.warn(
+                "[TerminalContainer] Failed to restore looped reviews:",
+                workflowResult.reason,
+              );
+            }
+            if (layoutResult.status === "rejected") {
+              console.warn(
+                "[TerminalContainer] Failed to restore pane layout:",
+                layoutResult.reason,
+              );
+              paneStore.finishHydration(environmentId);
+              return;
+            }
 
             const latestEnvironment = useEnvironmentStore
               .getState()
@@ -824,7 +839,7 @@ export function TerminalContainer({
 
             const latestIsLocal = latestEnvironment.environmentType === "local";
             const latestContainerId = latestIsLocal ? null : latestEnvironment.containerId;
-            const restored = reconcilePersistedLayout(saved, {
+            const restored = reconcilePersistedLayout(layoutResult.value, {
               environmentId,
               containerId: latestContainerId,
               isLocal: latestIsLocal,
@@ -835,13 +850,6 @@ export function TerminalContainer({
                 useLoopedReviewStore.getState().workflows.has(workflowId),
             });
             paneStore.finishHydration(environmentId, restored ?? undefined);
-          })
-          .catch((error) => {
-            console.warn("[TerminalContainer] Failed to restore pane layout:", error);
-            const paneStore = usePaneLayoutStore.getState();
-            if (paneStore.hydration.get(environmentId) === "pending") {
-              paneStore.finishHydration(environmentId);
-            }
           });
         return;
       }

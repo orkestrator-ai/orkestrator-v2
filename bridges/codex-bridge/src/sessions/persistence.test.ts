@@ -5,6 +5,7 @@ import {
   mkdtemp,
   readdir,
   rm,
+  stat,
   writeFile,
   mkdir,
 } from "node:fs/promises";
@@ -98,6 +99,45 @@ afterEach(async () => {
 });
 
 describe("BridgeSessionStore", () => {
+  test("creates registry directories and records with private permissions", async () => {
+    const { codexHome, store } = await makeStore();
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "private",
+        threadId: "thread-private",
+        cwd: "/workspace",
+        config: { mode: "build" },
+      }),
+    );
+
+    expect((await stat(join(codexHome, "orkestrator-bridge"))).mode & 0o777)
+      .toBe(0o700);
+    expect((await stat(recordsDirFor(codexHome))).mode & 0o777).toBe(0o700);
+    expect((await stat(recordPathFor(codexHome, "private"))).mode & 0o777)
+      .toBe(0o600);
+  });
+
+  test("tightens permissions on existing directories and records during load", async () => {
+    const now = Date.parse("2026-07-25T12:00:00.000Z");
+    const { codexHome, store } = await makeStore({ now: () => now });
+    const recordPath = await writeRecordFile(
+      codexHome,
+      "existing",
+      validRecordFields("existing", now),
+    );
+    await chmod(join(codexHome, "orkestrator-bridge"), 0o755);
+    await chmod(recordsDirFor(codexHome), 0o755);
+    await chmod(recordPath, 0o644);
+
+    expect((await store.load()).map((entry) => entry.bridgeSessionId)).toEqual([
+      "existing",
+    ]);
+    expect((await stat(join(codexHome, "orkestrator-bridge"))).mode & 0o777)
+      .toBe(0o700);
+    expect((await stat(recordsDirFor(codexHome))).mode & 0o777).toBe(0o700);
+    expect((await stat(recordPath)).mode & 0o777).toBe(0o600);
+  });
+
   test("round-trips a valid record and removes it", async () => {
     const now = Date.parse("2026-07-25T12:00:00.000Z");
     const { store } = await makeStore({ now: () => now });
@@ -211,6 +251,41 @@ describe("BridgeSessionStore", () => {
 
     expect(await store.load()).toEqual([newer]);
     expect(await Bun.file(legacyPath).exists()).toBe(false);
+  });
+
+  test("tightens permissions while migrating an aggregate registry", async () => {
+    const { codexHome, store } = await makeStore();
+    const legacyPath = join(
+      codexHome,
+      "orkestrator-bridge",
+      `bridge-sessions-${hashCwd("/workspace")}.json`,
+    );
+    await mkdir(dirname(legacyPath), { recursive: true, mode: 0o755 });
+    await writeFile(
+      legacyPath,
+      JSON.stringify({
+        version: BRIDGE_SESSION_REGISTRY_VERSION,
+        sessions: [
+          store.toRecord({
+            bridgeSessionId: "legacy-private",
+            threadId: "thread-legacy-private",
+            cwd: "/workspace",
+            config: { mode: "plan" },
+          }),
+        ],
+      }),
+      { encoding: "utf8", mode: 0o644 },
+    );
+
+    expect((await store.load()).map((entry) => entry.bridgeSessionId)).toEqual([
+      "legacy-private",
+    ]);
+    expect((await stat(join(codexHome, "orkestrator-bridge"))).mode & 0o777)
+      .toBe(0o700);
+    expect((await stat(recordsDirFor(codexHome))).mode & 0o777).toBe(0o700);
+    expect(
+      (await stat(recordPathFor(codexHome, "legacy-private"))).mode & 0o777,
+    ).toBe(0o600);
   });
 
   test("same-id upsert/remove contention cannot revive a legacy record", async () => {
@@ -528,7 +603,7 @@ describe("BridgeSessionStore", () => {
     expect(result.map((entry) => entry.bridgeSessionId)).toEqual(["legacy"]);
   });
 
-  test("a read-only records directory degrades to an empty load", async () => {
+  test("a read-only records directory is tightened before migration", async () => {
     if (process.getuid?.() === 0) return; // root ignores the mode bits
     const { codexHome, store } = await makeStore();
     const recordsDir = recordsDirFor(codexHome);
@@ -557,8 +632,9 @@ describe("BridgeSessionStore", () => {
 
     try {
       const { result, warnings } = await captureWarnings(() => store.load());
-      expect(warnings).toBe(1);
-      expect(result).toEqual([]);
+      expect(warnings).toBe(0);
+      expect(result.map((entry) => entry.bridgeSessionId)).toEqual(["legacy"]);
+      expect((await stat(recordsDir)).mode & 0o777).toBe(0o700);
     } finally {
       await chmod(recordsDir, 0o755);
     }
@@ -606,7 +682,8 @@ describe("BridgeSessionStore", () => {
       }),
     );
     await store.remove("fresh");
-    await writeFile(join(recordsDir, "inflight.json.123.abc.tmp"), "{}", "utf8");
+    const temporary = join(recordsDir, "inflight.json.123.abc.tmp");
+    await writeFile(temporary, "{}", { encoding: "utf8", mode: 0o644 });
 
     expect(await store.load()).toEqual([]);
     // A live tombstone still shields against legacy resurrection, and a temp file
@@ -617,6 +694,7 @@ describe("BridgeSessionStore", () => {
         `${createHash("sha256").update("fresh").digest("hex")}.json`,
       ].sort(),
     );
+    expect((await stat(temporary)).mode & 0o777).toBe(0o600);
   });
 });
 

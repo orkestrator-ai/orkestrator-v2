@@ -93,4 +93,68 @@ describe("StructuredReviewReportView", () => {
     fireEvent.click(screen.getByRole("button", { name: /Hide raw JSON/ }));
     expect(screen.queryByLabelText("Raw structured review JSON")).toBeNull();
   });
+
+  test("renders commit, failed validation, skipped files, and limitations", () => {
+    render(
+      <StructuredReviewReportView
+        report={{
+          ...report,
+          reviewScope: {
+            ...report.reviewScope,
+            commit: {
+              sha: "abc123",
+              subject: "fix: preserve recovery",
+            },
+            filesSkipped: [{ file: "dist/output.js", reason: "generated" }],
+            filesLeftUncommitted: [{ file: ".env.local", reason: "sensitive" }],
+            commandsRun: [{
+              command: "bun test",
+              result: "failed",
+              summary: "one failure",
+            }],
+            commandsNotRun: [{ command: "docker build", reason: "not affected" }],
+            limitations: ["Provider integration unavailable"],
+          },
+          testResults: {
+            total: 2,
+            passed: 1,
+            failed: 1,
+            failures: [{
+              testName: "restores state",
+              file: "src/recovery.test.ts",
+              errorMessage: "expected paused",
+            }],
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/fix: preserve recovery/)).toBeTruthy();
+    expect(screen.getByText("failed")).toBeTruthy();
+    expect(screen.getByText(/dist\/output\.js/)).toBeTruthy();
+    expect(screen.getByText(/\.env\.local/)).toBeTruthy();
+    expect(screen.getByText(/Provider integration unavailable/)).toBeTruthy();
+    expect(screen.getByText(/expected paused/)).toBeTruthy();
+  });
+
+  test("renders explicit empty states for findings, strengths, and coverage gaps", () => {
+    render(
+      <StructuredReviewReportView
+        report={{
+          ...report,
+          reviewScope: {
+            ...report.reviewScope,
+            commandsRun: [],
+          },
+          strengths: [],
+          issues: [],
+          testCoverageGaps: [],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("No high-confidence issues were found in the reviewed scope."))
+      .toBeTruthy();
+    expect(screen.getAllByText("None.").length).toBeGreaterThanOrEqual(2);
+  });
 });

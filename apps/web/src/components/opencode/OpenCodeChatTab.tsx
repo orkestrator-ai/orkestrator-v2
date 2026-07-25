@@ -204,6 +204,12 @@ export function OpenCodeChatTab({
   const isInitializedRef = useRef(false);
   // Track if initial prompt has been sent (to prevent duplicate sends)
   const initialPromptSentRef = useRef(false);
+  const structuredReviewPromptRef = useRef<string | null>(
+    isReviewTab && initialPrompt ? initialPrompt : null,
+  );
+  if (isReviewTab && initialPrompt && !structuredReviewPromptRef.current) {
+    structuredReviewPromptRef.current = initialPrompt;
+  }
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,
     reasoningEffort: initialReasoningEffort,
@@ -1807,8 +1813,12 @@ export function OpenCodeChatTab({
     [client, session, structuredReviewRequestId],
   );
   const retryStructuredReview = useCallback(async () => {
-    if (!initialPrompt) throw new Error("The original review prompt is unavailable.");
-    const result = await handleSend(initialPrompt, [], {
+    const reviewPrompt =
+      structuredReviewPromptRef.current
+      ?? session?.messages.find((message) => message.role === "user")?.content;
+    if (!reviewPrompt) throw new Error("The original review prompt is unavailable.");
+    structuredReviewPromptRef.current = reviewPrompt;
+    const result = await handleSend(reviewPrompt, [], {
       model: getSelectedModel(environmentId),
       variant: getSelectedVariant(environmentId),
     });
@@ -1820,7 +1830,7 @@ export function OpenCodeChatTab({
     getSelectedModel,
     getSelectedVariant,
     handleSend,
-    initialPrompt,
+    session?.messages,
   ]);
 
   // Handle retry connection

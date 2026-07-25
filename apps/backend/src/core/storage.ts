@@ -1405,6 +1405,62 @@ export class StorageService {
     });
   }
 
+  async deleteLoopedReviewWorkflowsByEnvironment(
+    environmentId: string,
+  ): Promise<void> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Looped review environment ID must not be blank");
+    }
+    await this.enqueueLoopedReviewMutation(async () => {
+      const storedWorkflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
+        this.loopedReviewsFile(),
+        () => ({}),
+      );
+      const workflows = Object.fromEntries(
+        Object.entries(storedWorkflows).filter(([storedId, workflow]) =>
+          isPersistedLoopedReviewWorkflow(workflow, storedId)
+          && workflow.environmentId !== environmentId
+        ),
+      ) as Record<string, PersistedLoopedReviewWorkflow>;
+      const removed = Object.entries(storedWorkflows).some(
+        ([storedId, workflow]) =>
+          isPersistedLoopedReviewWorkflow(workflow, storedId)
+          && workflow.environmentId === environmentId,
+      );
+      if (!removed) return;
+
+      await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
+
+      // Rotating the primary file creates a backup containing the deleted
+      // workflow. Scrub every retained backup before releasing the mutation
+      // lock so environment deletion removes all persisted review evidence.
+      for (let index = 1; index <= MAX_JSON_BACKUPS; index += 1) {
+        const backup = this.backupPath(this.loopedReviewsFile(), index);
+        if (!await exists(backup)) continue;
+        try {
+          const parsed = JSON.parse(
+            await fs.readFile(backup, "utf8"),
+          ) as Record<string, PersistedLoopedReviewWorkflow>;
+          const sanitized = Object.fromEntries(
+            Object.entries(parsed).filter(([storedId, workflow]) =>
+              isPersistedLoopedReviewWorkflow(workflow, storedId)
+              && workflow.environmentId !== environmentId
+            ),
+          );
+          await this.writeAtomic(
+            backup,
+            `${JSON.stringify(sanitized, null, 2)}\n`,
+            false,
+            0o600,
+          );
+        } catch {
+          // A corrupt backup cannot be proven free of the deleted workflow.
+          await fs.rm(backup, { force: true });
+        }
+      }
+    });
+  }
+
   async deletePaneLayout(environmentId: string): Promise<void> {
     const run = this.paneLayoutMutation.then(async () => {
       const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(

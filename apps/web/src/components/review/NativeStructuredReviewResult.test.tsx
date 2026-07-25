@@ -161,4 +161,70 @@ describe("NativeStructuredReviewResult", () => {
     });
     expect(screen.queryByText("stale malformed result")).toBeNull();
   });
+
+  test("surfaces a rejected authoritative result read", async () => {
+    render(
+      <NativeStructuredReviewResult
+        enabled
+        sessionId="session-1"
+        isLoading={false}
+        loadResult={async () => {
+          throw new Error("result channel unavailable");
+        }}
+        onRetry={() => {}}
+      />,
+    );
+
+    expect((await screen.findByRole("alert")).textContent)
+      .toContain("result channel unavailable");
+  });
+
+  test("fails visibly after the bounded missing-result polling window", async () => {
+    const loadResult = mock(async () => null);
+    render(
+      <NativeStructuredReviewResult
+        enabled
+        sessionId="session-1"
+        isLoading={false}
+        loadResult={loadResult}
+        onRetry={() => {}}
+        pollIntervalMs={0}
+        maxResultPolls={2}
+      />,
+    );
+
+    expect((await screen.findByRole("alert")).textContent)
+      .toContain("completed without an inspectable structured result");
+    expect(loadResult.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  test("keeps the failure visible when retry dispatch rejects", async () => {
+    const loadResult = mock(async (): Promise<StructuredOutputResult<unknown>> => ({
+      ok: false,
+      provider: "claude",
+      error: {
+        code: "provider_error",
+        message: "initial failure",
+        provider: "claude",
+        retryable: true,
+      },
+    }));
+    render(
+      <NativeStructuredReviewResult
+        enabled
+        sessionId="session-1"
+        isLoading={false}
+        loadResult={loadResult}
+        onRetry={async () => {
+          throw new Error("retry rejected");
+        }}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toContain("retry rejected");
+    });
+    expect(loadResult).toHaveBeenCalledTimes(1);
+  });
 });

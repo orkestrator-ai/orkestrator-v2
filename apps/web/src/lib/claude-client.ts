@@ -11,6 +11,7 @@ import {
   structuredOutputFailure,
   type JsonSchema,
   type StructuredOutputResult,
+  StructuredOutputReadUnavailableError,
 } from "@orkestrator/protocol/structured-output";
 
 export type { ClaudeModelCatalogSnapshot };
@@ -119,6 +120,19 @@ export interface ClaudeMessage {
   timestamp: string;
 }
 
+export interface ClaudeSession {
+  id: string;
+  title?: string;
+  status: "idle" | "running" | "error";
+  createdAt: string;
+  lastActivity: string;
+  error?: string;
+}
+
+export type ClaudeSessionLookupResult =
+  | { kind: "found"; session: ClaudeSession }
+  | { kind: "missing" }
+  | { kind: "unavailable"; error: Error };
 
 /** Effort level for controlling Claude's thinking depth */
 export type ClaudeEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
@@ -324,27 +338,68 @@ export async function listSessions(
 }
 
 /**
- * Get session details
+ * Look up session details without conflating an absent session with an
+ * unavailable bridge.
+ */
+export async function lookupSession(
+  client: ClaudeClient,
+  sessionId: string,
+): Promise<ClaudeSessionLookupResult> {
+  try {
+    const response = await fetchWithTimeout(
+      `${client.baseUrl}/session/${sessionId}`,
+    );
+    if (response.status === 404) return { kind: "missing" };
+    if (!response.ok) {
+      return {
+        kind: "unavailable",
+        error: new Error(`Failed to get Claude session: HTTP ${response.status}`),
+      };
+    }
+    const session = (await response.json()) as Partial<ClaudeSession>;
+    if (
+      typeof session.id !== "string"
+      || (
+        session.status !== "idle"
+        && session.status !== "running"
+        && session.status !== "error"
+      )
+      || typeof session.createdAt !== "string"
+      || typeof session.lastActivity !== "string"
+    ) {
+      return {
+        kind: "unavailable",
+        error: new Error("Claude session response was malformed"),
+      };
+    }
+    return {
+      kind: "found",
+      session: session as ClaudeSession,
+    };
+  } catch (error) {
+    return {
+      kind: "unavailable",
+      error: error instanceof Error
+        ? error
+        : new Error("Failed to get Claude session"),
+    };
+  }
+}
+
+/**
+ * Get session details. Retains the legacy null-on-missing-or-unavailable
+ * contract; reconciliation callers should use lookupSession.
  */
 export async function getSession(
   client: ClaudeClient,
-  sessionId: string
-): Promise<{
-  id: string;
-  title?: string;
-  status: "idle" | "running" | "error";
-  createdAt: string;
-  lastActivity: string;
-  error?: string;
-} | null> {
-  try {
-    const response = await fetch(`${client.baseUrl}/session/${sessionId}`);
-    if (!response.ok) return null;
-    return await response.json();
-  } catch (error) {
-    console.error("[claude-client] Failed to get session:", error);
-    return null;
+  sessionId: string,
+): Promise<ClaudeSession | null> {
+  const result = await lookupSession(client, sessionId);
+  if (result.kind === "found") return result.session;
+  if (result.kind === "unavailable") {
+    console.error("[claude-client] Failed to get session:", result.error);
   }
+  return null;
 }
 
 /** Error thrown when a session is not found on the server */
@@ -500,33 +555,55 @@ export async function getStructuredOutput<T = unknown>(
   sessionId: string,
   requestId?: string,
 ): Promise<StructuredOutputResult<T> | null> {
+  let response: Response;
   try {
     const query = requestId ? `?requestId=${encodeURIComponent(requestId)}` : "";
-    const response = await fetchWithTimeout(
+    response = await fetchWithTimeout(
       `${client.baseUrl}/session/${sessionId}/structured-output${query}`,
     );
-    if (!response.ok) return null;
-    const body = (await response.json()) as { structuredOutput?: unknown };
-    if (body.structuredOutput === null || body.structuredOutput === undefined) {
-      return null;
-    }
-    if (isStructuredOutputResult(body.structuredOutput)) {
-      return body.structuredOutput as StructuredOutputResult<T>;
-    }
+  } catch (error) {
+    throw new StructuredOutputReadUnavailableError(
+      "claude",
+      error instanceof Error
+        ? error.message
+        : "Failed to read Claude structured output.",
+      { requestId, cause: error },
+    );
+  }
+  if (!response.ok) return null;
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return structuredOutputFailure(
+      "claude",
+      "malformed_output",
+      "Claude bridge returned malformed JSON for structured output.",
+      { requestId },
+    );
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
     return structuredOutputFailure(
       "claude",
       "malformed_output",
       "Claude bridge returned a malformed structured-output envelope.",
       { requestId },
     );
-  } catch (error) {
-    return structuredOutputFailure(
-      "claude",
-      "provider_error",
-      error instanceof Error ? error.message : "Failed to read Claude structured output.",
-      { requestId },
-    );
   }
+  const structuredOutput = (body as Record<string, unknown>).structuredOutput;
+  if (structuredOutput === null || structuredOutput === undefined) {
+    return null;
+  }
+  if (isStructuredOutputResult(structuredOutput)) {
+    return structuredOutput as StructuredOutputResult<T>;
+  }
+  return structuredOutputFailure(
+    "claude",
+    "malformed_output",
+    "Claude bridge returned a malformed structured-output envelope.",
+    { requestId },
+  );
 }
 
 /**

@@ -1527,6 +1527,51 @@ describe("ClaudeChatTab", () => {
     });
   });
 
+  test("falls back to direct bridge discovery when the authoritative catalog is unavailable", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: { ...state.config.global, claudeModel: "sonnet" },
+      },
+    }));
+    useClaudeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+      selectedModel: new Map(),
+      models: [],
+      modelCatalogs: new Map(),
+    }));
+    // The backend-owned catalog is unreachable, so the tab must recover through
+    // the direct bridge discovery path.
+    mockGetClaudeModelCatalog.mockRejectedValue(new Error("catalog unavailable"));
+    mockGetModels.mockImplementation(async () => [
+      { id: "opus", name: "Opus" },
+      { id: "sonnet", name: "Sonnet" },
+    ] as any);
+
+    render(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive={false} />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetClaudeModelCatalog).toHaveBeenCalled();
+      expect(mockGetModels).toHaveBeenCalled();
+      // Direct discovery results are cached in the environment-scoped catalog,
+      // not the legacy global list, and still drive selection.
+      expect(
+        useClaudeStore.getState().getModels(ENVIRONMENT_ID).map((m) => m.id),
+      ).toEqual(["opus", "sonnet"]);
+      expect(useClaudeStore.getState().getSelectedModel(SESSION_KEY)).toBe("sonnet");
+    });
+    expect(
+      useClaudeStore.getState().getModelCatalog(ENVIRONMENT_ID)?.models.map((m) => m.id),
+    ).toEqual(["opus", "sonnet"]);
+    // The global fallback list stays empty; scoping is per environment.
+    expect(useClaudeStore.getState().models).toEqual([]);
+  });
+
   test("drains queued prompts when the session is idle", async () => {
     mockSendPrompt.mockImplementation(async () => true as any);
     useClaudeStore.getState().addToQueue(SESSION_KEY, {

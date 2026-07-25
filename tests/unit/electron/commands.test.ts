@@ -4408,6 +4408,110 @@ exit 0
     expect(updates).toContainEqual({ claudeModelCatalog: snapshot });
   });
 
+  test("discovers and persists the Claude model catalog from a containerized bridge", async () => {
+    const hostPort = await reserveFreePort();
+    const pidFile = path.join(
+      await createTempDir("ork-claude-models-container-pid-"),
+      "pid",
+    );
+    const modelsJson = JSON.stringify({
+      models: [
+        {
+          id: "claude-opus-5",
+          resolvedModel: "claude-opus-5-20260701",
+          name: "Claude Opus 5",
+          description: "Latest Opus model",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high", "max"],
+          supportsAdaptiveThinking: true,
+        },
+      ],
+      source: "sdk",
+      fetchedAt: "2026-07-25T12:00:00.000Z",
+      sdkVersion: "0.2.1",
+      cliVersion: "5.0.0",
+    });
+
+    const environment = createEnvironment({
+      id: "env-container",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    const { context, updates, emitted } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+    const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
+    const previousModelsJson = process.env.FAKE_CLAUDE_MODELS_JSON;
+    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+    process.env.FAKE_BRIDGE_PID_FILE = pidFile;
+    process.env.FAKE_CLAUDE_MODELS_JSON = modelsJson;
+
+    // Fake docker: report the container running, map the bridge port to our host
+    // port, and on `exec -d` spin up a real server that answers both the health
+    // probe and the /config/models discovery request.
+    const dockerScript = `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    bun -e 'const m=process.env.FAKE_CLAUDE_MODELS_JSON;require("node:http").createServer((q,s)=>{if(q.url==="/global/health"){s.writeHead(200,{"content-type":"application/json"});return s.end("{}")}if(q.url==="/config/models"){s.writeHead(200,{"content-type":"application/json","access-control-allow-origin":"*"});return s.end(m)}s.writeHead(404);s.end()}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
+    printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
+    exit 0 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async () => {
+        const snapshot = await commands.get("get_claude_model_catalog")?.(
+          { environmentId: environment.id, forceRefresh: true },
+          context,
+        );
+
+        expect(snapshot).toMatchObject({
+          environmentId: environment.id,
+          source: "sdk",
+          sdkVersion: "0.2.1",
+          cliVersion: "5.0.0",
+          stale: false,
+          models: [
+            {
+              id: "claude-opus-5",
+              resolvedModel: "claude-opus-5-20260701",
+              name: "Claude Opus 5",
+              supportsAdaptiveThinking: true,
+              supportedEffortLevels: ["low", "medium", "high", "max"],
+            },
+          ],
+        });
+        expect(updates).toContainEqual({ claudeModelCatalog: snapshot });
+        expect(emitted).toContainEqual({
+          event: "claude-model-catalog-updated",
+          payload: snapshot,
+        });
+      });
+    } finally {
+      const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
+      if (pid) {
+        try {
+          process.kill(Number(pid));
+        } catch {
+          // already gone
+        }
+      }
+      if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
+      else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
+      if (previousPidFile === undefined) delete process.env.FAKE_BRIDGE_PID_FILE;
+      else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
+      if (previousModelsJson === undefined) delete process.env.FAKE_CLAUDE_MODELS_JSON;
+      else process.env.FAKE_CLAUDE_MODELS_JSON = previousModelsJson;
+    }
+  });
+
   test("launches the local opencode server through the managed toolchain cache", async () => {
     const appRoot = await createTempDir("ork-electron-app-opencode-");
     const toolchainBinDir = await createTempDir("ork-electron-tools-opencode-");

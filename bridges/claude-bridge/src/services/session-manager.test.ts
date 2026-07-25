@@ -209,6 +209,7 @@ const {
   getSessionInitData,
   getAvailableModelCatalog,
   getAvailableModels,
+  getClaudeRuntimeVersions,
 } = sessionManager;
 
 // ---------------------------------------------------------------------------
@@ -2020,5 +2021,109 @@ describe("getAvailableModels", () => {
     );
     mockQuery.mockImplementationOnce(() => cleanupFailure as never);
     expect(await getAvailableModels()).toEqual([]);
+  });
+});
+
+describe("getClaudeRuntimeVersions", () => {
+  async function readBundledManifest(): Promise<{
+    version?: string;
+    claudeCodeVersion?: string;
+  }> {
+    const sdkEntryUrl = import.meta.resolve("@anthropic-ai/claude-agent-sdk");
+    return JSON.parse(
+      await realFs.promises.readFile(
+        new URL("./package.json", sdkEntryUrl),
+        "utf8",
+      ),
+    );
+  }
+
+  async function withClaudeCliPath<T>(
+    value: string | undefined,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const previous = process.env.CLAUDE_CLI_PATH;
+    if (value === undefined) delete process.env.CLAUDE_CLI_PATH;
+    else process.env.CLAUDE_CLI_PATH = value;
+    try {
+      return await fn();
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CLI_PATH;
+      else process.env.CLAUDE_CLI_PATH = previous;
+    }
+  }
+
+  function stubClaudeVersionOutput(
+    executable: string,
+    output: string | (() => never),
+  ): void {
+    mockExecFileSync.mockImplementation(((file: string, args?: string[]) => {
+      if (file === executable && args?.[0] === "--version") {
+        return typeof output === "function" ? output() : output;
+      }
+      return originalExecFileSync(
+        file as never,
+        args as never,
+      ) as never;
+    }) as never);
+  }
+
+  test("reports the bundled SDK/CLI version when no managed executable is set", async () => {
+    await withClaudeCliPath(undefined, async () => {
+      const manifest = await readBundledManifest();
+      const versions = await getClaudeRuntimeVersions();
+
+      expect(versions.sdkVersion).toBe(manifest.version);
+      expect(versions.cliVersion).toBe(manifest.claudeCodeVersion);
+      // The managed CLI is not probed when CLAUDE_CLI_PATH is unset.
+      expect(
+        mockExecFileSync.mock.calls.some((call) =>
+          (call[1] as string[] | undefined)?.includes("--version"),
+        ),
+      ).toBe(false);
+    });
+  });
+
+  test("parses the managed CLI --version output when configured", async () => {
+    await withClaudeCliPath("/managed/toolchain/claude", async () => {
+      stubClaudeVersionOutput(
+        "/managed/toolchain/claude",
+        "5.4.2 (Claude Code)\n",
+      );
+
+      const versions = await getClaudeRuntimeVersions();
+
+      expect(versions.cliVersion).toBe("5.4.2");
+      expect(versions.sdkVersion).toBe((await readBundledManifest()).version);
+      const call = mockExecFileSync.mock.calls.find(
+        (c) => c[0] === "/managed/toolchain/claude",
+      );
+      expect(call?.[1]).toEqual(["--version"]);
+    });
+  });
+
+  test("falls back to the bundled version when the managed CLI probe throws", async () => {
+    await withClaudeCliPath("/managed/toolchain/claude", async () => {
+      stubClaudeVersionOutput("/managed/toolchain/claude", () => {
+        throw new Error("spawn ENOENT");
+      });
+
+      const manifest = await readBundledManifest();
+      const versions = await getClaudeRuntimeVersions();
+
+      expect(versions.cliVersion).toBe(manifest.claudeCodeVersion);
+      expect(versions.sdkVersion).toBe(manifest.version);
+    });
+  });
+
+  test("falls back to the bundled version when --version has no semver token", async () => {
+    await withClaudeCliPath("/managed/toolchain/claude", async () => {
+      stubClaudeVersionOutput("/managed/toolchain/claude", "nightly-build\n");
+
+      const manifest = await readBundledManifest();
+      const versions = await getClaudeRuntimeVersions();
+
+      expect(versions.cliVersion).toBe(manifest.claudeCodeVersion);
+    });
   });
 });

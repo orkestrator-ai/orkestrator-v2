@@ -95,6 +95,20 @@ describe("container runtime environment wiring", () => {
 
   test("container native launch paths source the captured runtime environment", () => {
     const backend = read("apps/backend/src/core/commands.ts");
+
+    // Some launch paths inline the start script, others delegate to a shared
+    // `*_START_COMMAND` constant. Resolve the constant body so the invariant is
+    // enforced regardless of which form a given command uses.
+    function startCommandConstant(name: string): string {
+      const marker = `const ${name} = \``;
+      const start = backend.indexOf(marker);
+      expect(start).toBeGreaterThan(0);
+      const bodyStart = start + marker.length;
+      const end = backend.indexOf("`", bodyStart);
+      expect(end).toBeGreaterThan(bodyStart);
+      return backend.slice(bodyStart, end);
+    }
+
     const commands = [
       "start_opencode_server",
       "start_claude_server",
@@ -108,10 +122,16 @@ describe("container runtime environment wiring", () => {
       // indentation, so these assertions can only be satisfied by THIS
       // command's block and never leak into a neighbouring one.
       const nextRegister = backend.slice(start + 1).search(/\n\s*register\(/);
-      const block =
+      const registerBlock =
         nextRegister === -1
           ? backend.slice(start)
           : backend.slice(start, start + 1 + nextRegister);
+      // If the block references a shared start-command constant, fold that
+      // constant's body into the searchable text.
+      const referencedConstant = registerBlock.match(/[A-Z0-9_]+_START_COMMAND/);
+      const block = referencedConstant
+        ? `${registerBlock}\n${startCommandConstant(referencedConstant[0])}`
+        : registerBlock;
       expect(block).toContain("source /usr/local/bin/orkestrator-runtime-env.sh");
       expect(block).toContain("orkestrator_source_runtime_env");
     }

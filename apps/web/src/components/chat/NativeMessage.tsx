@@ -58,6 +58,7 @@ import {
 } from "@/lib/chat/native-message-types";
 import { normalizeNativeMessage } from "@/lib/chat/native-message-adapters";
 import { writeText } from "@/lib/native/clipboard";
+import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 
 /** Custom link component that opens URLs in the system browser */
 function ExternalLink({
@@ -146,18 +147,59 @@ function useAgentExpansion(part: NativeAgentActivityPart) {
   ] as const;
 }
 
+/**
+ * Expansion state for a thinking part.
+ *
+ * Backed by the shared store when the caller supplies a stable key, so an
+ * expanded block survives the virtualized list unmounting it while off-screen.
+ * Falls back to component state when no key is available.
+ */
+function useThinkingExpansion(expansionKey?: string) {
+  const [localIsOpen, setLocalIsOpen] = useState(false);
+  const storedIsOpen = useMessagePartExpansionStore((state) =>
+    expansionKey ? state.expandedKeys.has(expansionKey) : false,
+  );
+  const setStoredExpanded = useMessagePartExpansionStore(
+    (state) => state.setExpanded,
+  );
+  const setExpanded = useCallback(
+    (open: boolean) => {
+      if (expansionKey) setStoredExpanded(expansionKey, open);
+    },
+    [expansionKey, setStoredExpanded],
+  );
+
+  if (!expansionKey) {
+    return [localIsOpen, setLocalIsOpen] as const;
+  }
+
+  return [storedIsOpen, setExpanded] as const;
+}
+
 /** Render a thinking/reasoning part inline - expandable to show the full text */
-function ThinkingPart({ content }: { content: string }) {
+function ThinkingPart({
+  content,
+  expansionKey,
+}: {
+  content: string;
+  expansionKey?: string;
+}) {
   const hasTaskList = useMemo(
     () => TASK_LIST_SYNTAX_PATTERN.test(content),
     [content],
   );
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useThinkingExpansion(expansionKey);
   // The collapsed row is a single line, so flatten whitespace for the preview.
   const preview = useMemo(
     () => (hasTaskList ? "task list" : content.trim().replace(/\s+/g, " ")),
     [content, hasTaskList],
   );
+
+  // Reasoning with no text has nothing to preview and nothing to expand into,
+  // so it must not render a control that promises hidden content.
+  if (!preview) {
+    return null;
+  }
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
@@ -1054,9 +1096,11 @@ function shouldShowTokenOnlyAgentUsage(part: NativeMessagePart): boolean {
 function SubagentPart({
   part,
   containerId,
+  partKey,
 }: {
   part: Extract<NativeMessagePart, { type: "subagent" }>;
   containerId?: string;
+  partKey?: string;
 }) {
   const [isOpen, setIsOpen] = useAgentExpansion(part);
   const subagentActions = part.subagentActions ?? [];
@@ -1143,6 +1187,7 @@ function SubagentPart({
                 key={`${part.subagentId || part.content}-subagent-part-${index}-${childPart.type}`}
                 part={childPart}
                 containerId={containerId}
+                partKey={partKey ? `${partKey}/subagent-${index}` : undefined}
               />
             ))}
             {subagentActions.length === 0 ? (
@@ -1160,9 +1205,11 @@ function SubagentPart({
 function AgentGroupPart({
   part,
   containerId,
+  partKey,
 }: {
   part: NativeAgentGroupPart;
   containerId?: string;
+  partKey?: string;
 }) {
   const runningCount = part.parts.filter((child) => {
     const state = child.type === "task-group" ? child.task.toolState : child.toolState;
@@ -1192,6 +1239,7 @@ function AgentGroupPart({
             key={`agent-group-part-${index}-${child.type}`}
             part={child}
             containerId={containerId}
+            partKey={partKey ? `${partKey}/agent-${index}` : undefined}
           />
         ))}
       </div>
@@ -1202,10 +1250,17 @@ function AgentGroupPart({
 function ToolGroupPart({
   part,
   containerId,
+  partKey,
 }: {
   part: NativeToolGroupPart;
   containerId?: string;
+  partKey?: string;
 }) {
+  // An empty group would still paint its border and padding.
+  if (part.parts.length === 0) {
+    return null;
+  }
+
   return (
     <div className="my-0 rounded-lg border border-zinc-700/70 bg-zinc-800/35 p-2">
       {part.parts.map((child, index) => (
@@ -1213,6 +1268,7 @@ function ToolGroupPart({
           key={`tool-group-part-${index}-${child.type}`}
           part={child}
           containerId={containerId}
+          partKey={partKey ? `${partKey}/tool-${index}` : undefined}
         />
       ))}
     </div>
@@ -1222,9 +1278,11 @@ function ToolGroupPart({
 function TaskGroupPart({
   part,
   containerId,
+  partKey,
 }: {
   part: NativeTaskGroupPart;
   containerId?: string;
+  partKey?: string;
 }) {
   const [isOpen, setIsOpen] = useAgentExpansion(part);
   const toolLabel =
@@ -1359,6 +1417,7 @@ function TaskGroupPart({
                 key={`task-child-${index}-${child.toolUseId ?? child.toolName ?? child.type}`}
                 part={child}
                 containerId={containerId}
+                partKey={partKey ? `${partKey}/task-child-${index}` : undefined}
               />
             ))}
             {part.childTools.length === 0 ? (
@@ -1379,17 +1438,20 @@ function MessagePart({
   showTextCopy = true,
   truncateUserPrompt = false,
   containerId,
+  partKey,
 }: {
   part: NativeMessagePart;
   showTextCopy?: boolean;
   truncateUserPrompt?: boolean;
   containerId?: string;
+  /** Stable identity for this part's position, used to persist expansion state. */
+  partKey?: string;
 }) {
   switch (part.type) {
     case "thinking":
       // Thinking parts are typically rendered directly in NativeMessage with isComplete
       // If rendered through MessagePart, assume complete (collapsed by default)
-      return <ThinkingPart content={part.content} />;
+      return <ThinkingPart content={part.content} expansionKey={partKey} />;
     case "text":
       return (
         <TextPart
@@ -1441,13 +1503,25 @@ function MessagePart({
     case "file":
       return <FilePart path={part.content} fileUrl={part.fileUrl} containerId={containerId} />;
     case "subagent":
-      return <SubagentPart part={part} containerId={containerId} />;
+      return (
+        <SubagentPart part={part} containerId={containerId} partKey={partKey} />
+      );
     case "agent-group":
-      return <AgentGroupPart part={part} containerId={containerId} />;
+      return (
+        <AgentGroupPart
+          part={part}
+          containerId={containerId}
+          partKey={partKey}
+        />
+      );
     case "tool-group":
-      return <ToolGroupPart part={part} containerId={containerId} />;
+      return (
+        <ToolGroupPart part={part} containerId={containerId} partKey={partKey} />
+      );
     case "task-group":
-      return <TaskGroupPart part={part} containerId={containerId} />;
+      return (
+        <TaskGroupPart part={part} containerId={containerId} partKey={partKey} />
+      );
     default:
       return null;
   }
@@ -1602,6 +1676,7 @@ function renderMessageParts(
         showTextCopy={options.showTextCopy ?? true}
         truncateUserPrompt={message.role === "user"}
         containerId={options.containerId}
+        partKey={`${message.id}-part-${index}`}
       />
   ));
 }

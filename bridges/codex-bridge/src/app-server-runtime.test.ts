@@ -53,6 +53,20 @@ class ScriptedChild extends EventEmitter {
     };
   }
 
+  waitForRequest(method: string, occurrence = 1): Promise<void> {
+    const countRequests = () =>
+      this.requests.filter((request) => request.method === method).length;
+    if (countRequests() >= occurrence) return Promise.resolve();
+    return new Promise((resolve) => {
+      const onRequest = () => {
+        if (countRequests() < occurrence) return;
+        this.off("request", onRequest);
+        resolve();
+      };
+      this.on("request", onRequest);
+    });
+  }
+
   private answer(chunk: string): void {
     let message: { id?: unknown; method?: unknown; params?: unknown };
     try {
@@ -63,6 +77,7 @@ class ScriptedChild extends EventEmitter {
     const method = String(message.method ?? "");
     if (!method) return;
     this.requests.push({ method, params: (message.params ?? {}) as Record<string, unknown> });
+    this.emit("request");
     if (message.id === undefined) return;
 
     const handler = this.handlers[method];
@@ -168,6 +183,7 @@ interface Harness {
   children: ScriptedChild[];
   child: () => ScriptedChild;
   drain: () => Promise<void>;
+  waitForEvent: (predicate: (event: RuntimeSseEvent) => boolean) => Promise<RuntimeSseEvent>;
 }
 
 let codexHome = "";
@@ -236,11 +252,22 @@ async function harness(
   });
 
   const events: RuntimeSseEvent[] = [];
+  const eventWaiters = new Set<{
+    predicate: (event: RuntimeSseEvent) => boolean;
+    resolve: (event: RuntimeSseEvent) => void;
+  }>();
   const runtime = new AppServerRuntime({
     engine,
     codexHome,
     cwd: "/tmp/ws",
-    emit: (event) => events.push(event),
+    emit: (event) => {
+      events.push(event);
+      for (const waiter of eventWaiters) {
+        if (!waiter.predicate(event)) continue;
+        eventWaiters.delete(waiter);
+        waiter.resolve(event);
+      }
+    },
     loadCachedModels: async () => ({
       models: [{ id: "cached-model", name: "Cached", reasoningEfforts: [], reasoningOptions: [] } as never],
       source: "cache",
@@ -278,7 +305,20 @@ async function harness(
     }
   };
 
-  return { runtime, engine, events, children, child: () => children.at(-1)!, drain };
+  const waitForEvent = (predicate: (event: RuntimeSseEvent) => boolean) =>
+    new Promise<RuntimeSseEvent>((resolve) => {
+      eventWaiters.add({ predicate, resolve });
+    });
+
+  return {
+    runtime,
+    engine,
+    events,
+    children,
+    child: () => children.at(-1)!,
+    drain,
+    waitForEvent,
+  };
 }
 
 describe("session lifecycle", () => {
@@ -1257,11 +1297,14 @@ describe("at-most-once dispatch", () => {
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     // Materialize the thread with a first successful turn.
     await h.runtime.prompt(sessionId, { prompt: "first", requestId: "req-0", attachments: [] });
+    const firstTurnIdle = h.waitForEvent(
+      (event) => event.type === "session.idle" && event.sessionId === sessionId,
+    );
     h.child().notify("turn/completed", {
       threadId: "thread-1",
       turn: { id: "turn-1", status: "completed" },
     });
-    await h.drain();
+    await firstTurnIdle;
 
     // Dispatch a turn app-server never answers, then kill the child. The write
     // may have landed, so the outcome is genuinely unknowable.
@@ -1271,7 +1314,7 @@ describe("at-most-once dispatch", () => {
       requestId: "req-1",
       attachments: [],
     });
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await h.child().waitForRequest("turn/start", 2);
     h.child().exit(1);
     const outcome = await pending;
     await h.drain();
@@ -1311,11 +1354,14 @@ describe("at-most-once dispatch", () => {
     });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "first", requestId: "req-0", attachments: [] });
+    const firstTurnIdle = h.waitForEvent(
+      (event) => event.type === "session.idle" && event.sessionId === sessionId,
+    );
     h.child().notify("turn/completed", {
       threadId: "thread-1",
       turn: { id: "turn-1", status: "completed" },
     });
-    await h.drain();
+    await firstTurnIdle;
 
     hangNextTurn = true;
     const pending = h.runtime.prompt(sessionId, {
@@ -1323,7 +1369,7 @@ describe("at-most-once dispatch", () => {
       requestId: "req-1",
       attachments: [],
     });
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await h.child().waitForRequest("turn/start", 2);
     h.child().exit(1);
     expect(await pending).toMatchObject({ ok: false, status: 503 });
     await h.drain();
@@ -1333,11 +1379,14 @@ describe("at-most-once dispatch", () => {
     expect(h.runtime.getJournal().get("req-1")).toMatchObject({ state: "accepted" });
 
     // The adopted turn is tracked, so its terminal event finalizes normally.
+    const adoptedTurnIdle = h.waitForEvent(
+      (event) => event.type === "session.idle" && event.sessionId === sessionId,
+    );
     h.child().notify("turn/completed", {
       threadId: "thread-1",
       turn: { id: "turn-9", status: "completed" },
     });
-    await h.drain();
+    await adoptedTurnIdle;
     expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
   });
 
@@ -1371,11 +1420,14 @@ describe("at-most-once dispatch", () => {
     });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "first", requestId: "req-0", attachments: [] });
+    const firstTurnIdle = h.waitForEvent(
+      (event) => event.type === "session.idle" && event.sessionId === sessionId,
+    );
     h.child().notify("turn/completed", {
       threadId: "thread-1",
       turn: { id: "turn-1", status: "completed" },
     });
-    await h.drain();
+    await firstTurnIdle;
 
     hangNextTurn = true;
     const pending = h.runtime.prompt(sessionId, {
@@ -1383,7 +1435,7 @@ describe("at-most-once dispatch", () => {
       requestId: "req-1",
       attachments: [],
     });
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await h.child().waitForRequest("turn/start", 2);
     h.child().exit(1);
 
     // The real turn reports itself while reconciliation is still in flight.
@@ -1406,11 +1458,14 @@ describe("at-most-once dispatch", () => {
     const messages = await h.runtime.getMessages(sessionId);
     expect(JSON.stringify(messages)).toContain("Work done during the ambiguous window");
 
+    const adoptedTurnIdle = h.waitForEvent(
+      (event) => event.type === "session.idle" && event.sessionId === sessionId,
+    );
     h.child().notify("turn/completed", {
       threadId: "thread-1",
       turn: { id: "turn-live", status: "completed" },
     });
-    await h.drain();
+    await adoptedTurnIdle;
     expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
   });
 
@@ -1428,11 +1483,14 @@ describe("at-most-once dispatch", () => {
     );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "first", requestId: "req-0", attachments: [] });
+    const firstTurnIdle = h.waitForEvent(
+      (event) => event.type === "session.idle" && event.sessionId === sessionId,
+    );
     h.child().notify("turn/completed", {
       threadId: "thread-1",
       turn: { id: "turn-1", status: "completed" },
     });
-    await h.drain();
+    await firstTurnIdle;
 
     hangNextTurn = true;
     const pending = h.runtime.prompt(sessionId, {
@@ -1440,7 +1498,7 @@ describe("at-most-once dispatch", () => {
       requestId: "req-1",
       attachments: [],
     });
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await h.child().waitForRequest("turn/start", 2);
     h.child().exit(1);
     expect(await pending).toMatchObject({ ok: false, status: 503 });
 

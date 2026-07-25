@@ -140,11 +140,19 @@ export interface RenderTurnOptions {
   cwd: string;
   state: TurnRenderState;
   /** Injected in tests to avoid touching the filesystem. */
-  loadSubagentParts?: (options: {
-    threadId: string | null;
-    turnStartedAt?: string;
-    items: EngineItem[];
-  }) => Promise<NormalizedPart[]>;
+  loadSubagentParts?: (options: SubagentPartsLoadOptions) => Promise<NormalizedPart[]>;
+}
+
+export interface SubagentPartsLoadOptions {
+  threadId: string | null;
+  turnStartedAt?: string;
+  items: EngineItem[];
+}
+
+export interface SubagentPartsLoaderDependencies {
+  createTranscriptMetaLoader: typeof createSharedTranscriptMetaLoader;
+  deriveTranscriptParts: typeof deriveTranscriptSubagentPartsForTurn;
+  readTranscript: typeof readCachedTranscript;
 }
 
 /**
@@ -155,18 +163,21 @@ export interface RenderTurnOptions {
  * documented reconciliation fallback while native `collabAgentToolCall` items are
  * validated against it.
  */
-async function loadSubagentPartsFromTranscripts(options: {
-  threadId: string | null;
-  turnStartedAt?: string;
-  items: EngineItem[];
-}): Promise<NormalizedPart[]> {
-  const loadSessionMeta = createSharedTranscriptMetaLoader();
-  const transcriptParts = await deriveTranscriptSubagentPartsForTurn({
+export async function loadSubagentPartsFromTranscripts(
+  options: SubagentPartsLoadOptions,
+  dependencies: SubagentPartsLoaderDependencies = {
+    createTranscriptMetaLoader: createSharedTranscriptMetaLoader,
+    deriveTranscriptParts: deriveTranscriptSubagentPartsForTurn,
+    readTranscript: readCachedTranscript,
+  },
+): Promise<NormalizedPart[]> {
+  const loadSessionMeta = dependencies.createTranscriptMetaLoader();
+  const transcriptParts = await dependencies.deriveTranscriptParts({
     threadId: options.threadId,
     currentTurnStartedAt: options.turnStartedAt,
     fallbackAgentIdsInSpawnOrder: getCodexSpawnedAgentIdsInOrder(options.items),
     loadSessionMeta,
-    loadTranscript: (path) => readCachedTranscript(path),
+    loadTranscript: (path) => dependencies.readTranscript(path),
   });
   // Native collab items carry live agent status; fold it onto the transcript parts.
   const reconciled = applyCodexCollabStateToSubagentParts(transcriptParts, options.items);
@@ -189,26 +200,57 @@ export interface RenderedTurn {
   content: string;
 }
 
-export async function renderTurn(
-  turn: TurnAccumulator,
-  options: RenderTurnOptions,
-): Promise<RenderedTurn> {
+function collectTurnItems(turn: TurnAccumulator): {
+  items: EngineItem[];
+  itemsByKey: Map<string, EngineItem>;
+  itemKeys: string[];
+} {
   const items: EngineItem[] = [];
   const itemsByKey = new Map<string, EngineItem>();
+  const itemKeys: string[] = [];
 
   for (const accumulator of turn.ordered()) {
+    // Reserve every accumulator's position, even when it currently contains only
+    // an unrenderable delta. If item/started arrives later, the row materializes
+    // at its original position rather than being appended after newer activity.
+    itemKeys.push(`${CODEX_TIMELINE_ITEM_PREFIX}${accumulator.id}`);
     const item = effectiveItem(turn, accumulator);
     if (!item) continue;
     items.push(item);
     itemsByKey.set(accumulator.id, item);
   }
 
+  return { items, itemsByKey, itemKeys };
+}
+
+export async function renderTurn(
+  turn: TurnAccumulator,
+  options: RenderTurnOptions,
+): Promise<RenderedTurn> {
+  const loadSnapshot = collectTurnItems(turn);
+  const load = options.loadSubagentParts ?? loadSubagentPartsFromTranscripts;
+  let subagentParts: NormalizedPart[] | undefined;
+  try {
+    subagentParts = await load({
+      threadId: options.threadId,
+      turnStartedAt: turn.startedAt,
+      items: loadSnapshot.items,
+    });
+  } catch (error) {
+    // Sub-agent detail is additive; losing it must not blank the transcript.
+    console.error("[codex-bridge] Failed to load sub-agent activity:", error);
+  }
+
+  // The loader performs filesystem I/O. Parent events can arrive while it is
+  // awaited, so take the render snapshot only after it settles. This prevents a
+  // newer sub-agent fingerprint from being committed against stale parent keys.
+  const { items, itemsByKey, itemKeys } = collectTurnItems(turn);
+
   // Reconcile the authoritative item set without rebuilding its order around
   // the sub-agent entries. New parent items belong at the end of the timeline;
   // a later sub-agent snapshot can then move its own row after them. Starting
   // from `[...itemKeys, ...existingSubagentKeys]` on every render would instead
   // pin even completed agents below every parent message that followed them.
-  const itemKeys = [...itemsByKey.keys()].map((key) => `${CODEX_TIMELINE_ITEM_PREFIX}${key}`);
   const currentItemKeys = new Set(itemKeys);
   const timelineOrder = options.state.timelineOrder.filter((key) =>
     key.startsWith(CODEX_TIMELINE_SUBAGENT_PREFIX) || currentItemKeys.has(key),
@@ -220,25 +262,17 @@ export async function renderTurn(
     timelineKeys.add(key);
   }
 
-  const load = options.loadSubagentParts ?? loadSubagentPartsFromTranscripts;
-  let subagentParts: NormalizedPart[] = [];
-  try {
-    subagentParts = await load({
-      threadId: options.threadId,
-      turnStartedAt: turn.startedAt,
-      items,
-    });
-  } catch (error) {
-    // Sub-agent detail is additive; losing it must not blank the transcript.
-    console.error("[codex-bridge] Failed to load sub-agent activity:", error);
+  // An empty successful snapshot is authoritative and removes stale rows. A
+  // failed load is not authoritative, so retain the last successful snapshot
+  // until a later render can reconcile it.
+  if (subagentParts) {
+    reconcileCodexSubagentTimeline(
+      subagentParts,
+      timelineOrder,
+      options.state.subagentParts,
+      options.state.subagentFingerprints,
+    );
   }
-
-  reconcileCodexSubagentTimeline(
-    subagentParts,
-    timelineOrder,
-    options.state.subagentParts,
-    options.state.subagentFingerprints,
-  );
   options.state.timelineOrder = timelineOrder;
 
   const parts: NormalizedPart[] = [];

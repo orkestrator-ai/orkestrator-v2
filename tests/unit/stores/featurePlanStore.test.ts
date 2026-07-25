@@ -4,8 +4,18 @@ import type { FeaturePlan, FeaturePlanMessage } from "@/lib/backend";
 // In-memory backing store the mocked backend wrappers operate on.
 let backing: FeaturePlan[] = [];
 
-function makeMessage(role: FeaturePlanMessage["role"], content: string): FeaturePlanMessage {
-  return { id: `m-${content}`, role, content, createdAt: "2026-01-01T00:00:00.000Z" };
+function makeMessage(
+  role: FeaturePlanMessage["role"],
+  content: string,
+  stateApplication?: FeaturePlanMessage["stateApplication"],
+): FeaturePlanMessage {
+  return {
+    id: `m-${content}`,
+    role,
+    content,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    ...(stateApplication ? { stateApplication } : {}),
+  };
 }
 
 function makeFeature(overrides: Partial<FeaturePlan> = {}): FeaturePlan {
@@ -48,19 +58,30 @@ const mockUpdateFeaturePlan = mock(async (featureId: string, updates: Partial<Fe
   Object.assign(feature, updates);
   return { ...feature };
 });
-const mockAppendFeaturePlanMessage = mock(async (featureId: string, role: FeaturePlanMessage["role"], content: string) => {
+const mockAppendFeaturePlanMessage = mock(async (
+  featureId: string,
+  role: FeaturePlanMessage["role"],
+  content: string,
+  stateApplication?: FeaturePlanMessage["stateApplication"],
+) => {
   const feature = backing.find((candidate) => candidate.id === featureId);
   if (!feature) throw new Error(`Feature plan not found: ${featureId}`);
-  feature.messages = [...feature.messages, makeMessage(role, content)];
+  feature.messages = [...feature.messages, makeMessage(role, content, stateApplication)];
   return { ...feature };
 });
 const mockAppendFeatureStoryMessage = mock(
-  async (featureId: string, storyId: string, role: FeaturePlanMessage["role"], content: string) => {
+  async (
+    featureId: string,
+    storyId: string,
+    role: FeaturePlanMessage["role"],
+    content: string,
+    stateApplication?: FeaturePlanMessage["stateApplication"],
+  ) => {
     const feature = backing.find((candidate) => candidate.id === featureId);
     if (!feature) throw new Error(`Feature plan not found: ${featureId}`);
     const story = feature.stories.find((candidate) => candidate.id === storyId);
     if (!story) throw new Error(`Feature story not found: ${storyId}`);
-    story.messages = [...story.messages, makeMessage(role, content)];
+    story.messages = [...story.messages, makeMessage(role, content, stateApplication)];
     return { ...feature };
   },
 );
@@ -134,32 +155,201 @@ describe("featurePlanStore", () => {
 
   test("keeps active feature conversations outside the mounted view until they settle", () => {
     const store = useFeaturePlanStore.getState();
-    store.setConversationActive({
+    const dispatchingConversation = {
+      operationId: "operation-1",
       featureId: "feature-1",
       storyId: "story-1",
       startedAt: "2026-01-01T00:00:00.000Z",
-      phase: "dispatching",
-    });
+      phase: "dispatching" as const,
+    };
+    expect(store.startConversation(dispatchingConversation)).toBe(true);
 
-    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toEqual({
-      featureId: "feature-1",
-      storyId: "story-1",
-      startedAt: "2026-01-01T00:00:00.000Z",
-      phase: "dispatching",
-    });
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toEqual(
+      dispatchingConversation,
+    );
 
-    store.setConversationActive({
-      featureId: "feature-1",
-      storyId: "story-1",
-      startedAt: "2026-01-01T00:00:00.000Z",
-      phase: "running",
-    });
+    expect(store.updateConversation(dispatchingConversation, { phase: "running" })).toBe(true);
     expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")?.phase).toBe("running");
 
-    useFeaturePlanStore.getState().setConversationSettled("feature-1");
-    useFeaturePlanStore.getState().setConversationSettled("feature-1");
+    expect(useFeaturePlanStore.getState().settleConversation(dispatchingConversation)).toBe(true);
+    expect(useFeaturePlanStore.getState().settleConversation(dispatchingConversation)).toBe(false);
 
     expect(useFeaturePlanStore.getState().activeConversations.has("feature-1")).toBe(false);
+  });
+
+  test("keeps state and map identity for duplicate conversation mutations", () => {
+    const conversation = {
+      operationId: "operation-1",
+      featureId: "feature-1",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      phase: "dispatching" as const,
+    };
+    useFeaturePlanStore.getState().startConversation(conversation);
+
+    const beforeDuplicateStart = useFeaturePlanStore.getState();
+    const mapBeforeDuplicateStart = beforeDuplicateStart.activeConversations;
+    expect(useFeaturePlanStore.getState().startConversation({ ...conversation })).toBe(false);
+
+    expect(useFeaturePlanStore.getState()).toBe(beforeDuplicateStart);
+    expect(useFeaturePlanStore.getState().activeConversations).toBe(mapBeforeDuplicateStart);
+
+    const beforeDuplicateUpdate = useFeaturePlanStore.getState();
+    const mapBeforeDuplicateUpdate = beforeDuplicateUpdate.activeConversations;
+    expect(
+      useFeaturePlanStore.getState().updateConversation(conversation, { phase: "dispatching" }),
+    ).toBe(true);
+
+    expect(useFeaturePlanStore.getState()).toBe(beforeDuplicateUpdate);
+    expect(useFeaturePlanStore.getState().activeConversations).toBe(mapBeforeDuplicateUpdate);
+  });
+
+  test("prevents stale activation, updates, and settlement from affecting another turn", () => {
+    const staleConversation = {
+      operationId: "operation-1",
+      featureId: "feature-1",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      phase: "dispatching" as const,
+    };
+    const replacementConversation = {
+      operationId: "operation-2",
+      featureId: "feature-1",
+      storyId: "story-2",
+      startedAt: "2026-01-01T00:01:00.000Z",
+      phase: "dispatching" as const,
+    };
+    const store = useFeaturePlanStore.getState();
+    expect(store.startConversation(staleConversation)).toBe(true);
+    expect(store.startConversation(replacementConversation)).toBe(false);
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toEqual(
+      staleConversation,
+    );
+
+    expect(store.settleConversation(staleConversation)).toBe(true);
+    expect(store.startConversation(replacementConversation)).toBe(true);
+
+    const replacementState = useFeaturePlanStore.getState();
+    const replacementMap = replacementState.activeConversations;
+    expect(store.updateConversation(staleConversation, { phase: "running" })).toBe(false);
+
+    expect(useFeaturePlanStore.getState()).toBe(replacementState);
+    expect(useFeaturePlanStore.getState().activeConversations).toBe(replacementMap);
+
+    expect(store.settleConversation(staleConversation)).toBe(false);
+
+    expect(useFeaturePlanStore.getState()).toBe(replacementState);
+    expect(useFeaturePlanStore.getState().activeConversations).toBe(replacementMap);
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toEqual(
+      replacementConversation,
+    );
+  });
+
+  test("updates and settles conversations independently across features", () => {
+    const firstConversation = {
+      operationId: "operation-1",
+      featureId: "feature-1",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      phase: "dispatching" as const,
+    };
+    const secondConversation = {
+      operationId: "operation-2",
+      featureId: "feature-2",
+      storyId: "story-1",
+      startedAt: "2026-01-01T00:01:00.000Z",
+      phase: "dispatching" as const,
+    };
+    const store = useFeaturePlanStore.getState();
+    store.startConversation(firstConversation);
+    store.startConversation(secondConversation);
+    store.updateConversation(firstConversation, { phase: "running" });
+
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")?.phase).toBe("running");
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-2")).toEqual(
+      secondConversation,
+    );
+
+    store.settleConversation(firstConversation);
+
+    expect(useFeaturePlanStore.getState().activeConversations.has("feature-1")).toBe(false);
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-2")).toEqual(
+      secondConversation,
+    );
+  });
+
+  test("retains a recoverable unavailable state until the matching operation settles", () => {
+    const conversation = {
+      operationId: "operation-recovery",
+      featureId: "feature-1",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      phase: "running" as const,
+    };
+    const store = useFeaturePlanStore.getState();
+    store.startConversation(conversation);
+
+    expect(store.updateConversation(conversation, {
+      phase: "unavailable",
+      error: "Bridge unavailable",
+    })).toBe(true);
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toEqual({
+      ...conversation,
+      phase: "unavailable",
+      error: "Bridge unavailable",
+    });
+
+    expect(store.settleConversation({
+      featureId: "feature-1",
+      operationId: "another-operation",
+    })).toBe(false);
+    expect(store.settleConversation(conversation)).toBe(true);
+  });
+
+  test("allows exactly one response persister and preserves its recovery payload", () => {
+    const conversation = {
+      operationId: "operation-persistence",
+      featureId: "feature-1",
+      userMessageId: "user-1",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      phase: "dispatching" as const,
+    };
+    const store = useFeaturePlanStore.getState();
+    expect(store.startConversation(conversation)).toBe(true);
+    expect(store.markConversationRunning(conversation)).toBe(true);
+
+    const runningState = useFeaturePlanStore.getState();
+    expect(runningState.activeConversations.get("feature-1")).toMatchObject({
+      phase: "running",
+      userMessageId: "user-1",
+    });
+    expect(store.markConversationRunning(conversation)).toBe(true);
+    expect(useFeaturePlanStore.getState()).toBe(runningState);
+
+    expect(store.claimConversationPersistence(conversation, "response")).toBe(true);
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toMatchObject({
+      phase: "persisting",
+      responseContent: "response",
+    });
+    expect(store.claimConversationPersistence(conversation, "duplicate")).toBe(false);
+    expect(store.markConversationRunning(conversation)).toBe(false);
+    expect(store.claimConversationPersistence({
+      featureId: "feature-1",
+      operationId: "stale-operation",
+    }, "stale")).toBe(false);
+
+    expect(store.updateConversation(conversation, {
+      phase: "unavailable",
+      error: "Persistence failed",
+    })).toBe(true);
+    expect(store.markConversationRunning(conversation)).toBe(false);
+    expect(store.resumeConversation({
+      featureId: "feature-1",
+      operationId: "stale-operation",
+    })).toBe(false);
+    expect(store.resumeConversation(conversation)).toBe(true);
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toMatchObject({
+      phase: "running",
+      responseContent: "response",
+      error: undefined,
+    });
+    expect(store.claimConversationPersistence(conversation, "response")).toBe(true);
   });
 
   test("loadFeatures populates features and tracks the current project", async () => {
@@ -174,6 +364,25 @@ describe("featurePlanStore", () => {
     expect(state.currentProjectId).toBe("project-1");
     expect(state.isLoading).toBe(false);
     expect(state.features.map((feature) => feature.id)).toEqual(["b", "a"]);
+  });
+
+  test("loadFeatures preserves active conversations", async () => {
+    backing = [makeFeature({ id: "feature-1", projectId: "project-1" })];
+    const conversation = {
+      operationId: "operation-1",
+      featureId: "feature-1",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      phase: "running" as const,
+    };
+    useFeaturePlanStore.getState().startConversation(conversation);
+    const activeConversations = useFeaturePlanStore.getState().activeConversations;
+
+    await useFeaturePlanStore.getState().loadFeatures("project-1");
+
+    expect(useFeaturePlanStore.getState().activeConversations).toBe(activeConversations);
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toEqual(
+      conversation,
+    );
   });
 
   test("loadFeatures preserves existing features and clears loading when the backend rejects", async () => {
@@ -297,10 +506,25 @@ describe("featurePlanStore", () => {
   test("appendMessage adds the message to the stored feature", async () => {
     const created = await useFeaturePlanStore.getState().createFeature("project-1");
 
-    await useFeaturePlanStore.getState().appendMessage(created!, "user", "Add saved filters");
+    await useFeaturePlanStore.getState().appendMessage(
+      created!,
+      "assistant",
+      "Add saved filters",
+      "pending",
+    );
 
     const stored = useFeaturePlanStore.getState().features.find((feature) => feature.id === created);
-    expect(stored?.messages.at(-1)).toMatchObject({ role: "user", content: "Add saved filters" });
+    expect(stored?.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: "Add saved filters",
+      stateApplication: "pending",
+    });
+    expect(mockAppendFeaturePlanMessage).toHaveBeenLastCalledWith(
+      created,
+      "assistant",
+      "Add saved filters",
+      "pending",
+    );
   });
 
   test("appendMessage returns undefined and leaves state unchanged when the backend rejects", async () => {
@@ -330,10 +554,27 @@ describe("featurePlanStore", () => {
       }],
     });
 
-    await useFeaturePlanStore.getState().appendStoryMessage(created!, "story-1", "assistant", "What to refine?");
+    await useFeaturePlanStore.getState().appendStoryMessage(
+      created!,
+      "story-1",
+      "assistant",
+      "What to refine?",
+      "applied",
+    );
 
     const stored = useFeaturePlanStore.getState().features.find((feature) => feature.id === created);
-    expect(stored?.stories[0]?.messages.at(-1)).toMatchObject({ role: "assistant", content: "What to refine?" });
+    expect(stored?.stories[0]?.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: "What to refine?",
+      stateApplication: "applied",
+    });
+    expect(mockAppendFeatureStoryMessage).toHaveBeenLastCalledWith(
+      created,
+      "story-1",
+      "assistant",
+      "What to refine?",
+      "applied",
+    );
   });
 
   test("returns undefined and leaves state intact when the backend rejects", async () => {

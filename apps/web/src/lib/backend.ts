@@ -1457,6 +1457,8 @@ export interface FeaturePlanMessage {
   role: "user" | "assistant" | "system";
   content: string;
   createdAt: string;
+  /** Durable recovery marker for assistant responses that carry plan/story state. */
+  stateApplication?: "pending" | "applied" | "superseded";
 }
 
 export interface FeatureStoryCard {
@@ -1561,6 +1563,7 @@ export async function updateFeaturePlan(
     | "title"
     | "status"
     | "summary"
+    | "messages"
     | "stories"
     | "codexEnvironmentId"
     | "codexSessionId"
@@ -1575,8 +1578,14 @@ export async function appendFeaturePlanMessage(
   featureId: string,
   role: FeaturePlanMessage["role"],
   content: string,
+  stateApplication?: FeaturePlanMessage["stateApplication"],
 ): Promise<FeaturePlan> {
-  return invoke<FeaturePlan>("append_feature_plan_message", { featureId, role, content });
+  return invoke<FeaturePlan>("append_feature_plan_message", {
+    featureId,
+    role,
+    content,
+    stateApplication,
+  });
 }
 
 export async function appendFeatureStoryMessage(
@@ -1584,6 +1593,13 @@ export async function appendFeatureStoryMessage(
   storyId: string,
   role: FeaturePlanMessage["role"],
   content: string,
+  stateApplication?: FeaturePlanMessage["stateApplication"],
 ): Promise<FeaturePlan> {
-  return invoke<FeaturePlan>("append_feature_story_message", { featureId, storyId, role, content });
+  return invoke<FeaturePlan>("append_feature_story_message", {
+    featureId,
+    storyId,
+    role,
+    content,
+    stateApplication,
+  });
 }

@@ -76,6 +76,7 @@ const reviewIssueSchema = {
     "evidence",
     "suggestion",
     "verification",
+    "alternativeFixes",
   ],
   properties: {
     severity: { type: "string", enum: REVIEW_SEVERITIES },
@@ -90,8 +91,13 @@ const reviewIssueSchema = {
     suggestion: { type: "string" },
     verification: { type: "string" },
     alternativeFixes: {
-      type: "array",
-      items: { type: "string" },
+      anyOf: [
+        {
+          type: "array",
+          items: { type: "string" },
+        },
+        { type: "null" },
+      ],
     },
   },
 } as const;
@@ -110,7 +116,7 @@ const pooledReviewIssueSchema = {
   ...reviewIssueSchema,
   required: [...reviewIssueSchema.required, "poolId"],
   properties: {
-    poolId: { type: "string", minLength: 1 },
+    poolId: { type: "string" },
     ...reviewIssueSchema.properties,
   },
 } as const;
@@ -119,7 +125,7 @@ const pooledCoverageGapSchema = {
   ...coverageGapSchema,
   required: [...coverageGapSchema.required, "poolId"],
   properties: {
-    poolId: { type: "string", minLength: 1 },
+    poolId: { type: "string" },
     ...coverageGapSchema.properties,
   },
 } as const;
@@ -222,12 +228,10 @@ export const STRUCTURED_REVIEW_REPORT_JSON_SCHEMA = {
         changeTypes: {
           type: "array",
           items: { type: "string", enum: REVIEW_CHANGE_TYPES },
-          uniqueItems: true,
         },
         riskAreas: {
           type: "array",
           items: { type: "string" },
-          uniqueItems: true,
         },
         overallRisk: { type: "string", enum: REVIEW_OVERALL_RISKS },
         reasoning: { type: "string" },
@@ -328,7 +332,7 @@ export const REVIEW_RECONCILIATION_JSON_SCHEMA = {
         additionalProperties: false,
         required: ["poolId", "finding"],
         properties: {
-          poolId: { type: "string", minLength: 1 },
+          poolId: { type: "string" },
           finding: reviewIssueSchema,
         },
       },
@@ -344,7 +348,7 @@ export const REVIEW_RECONCILIATION_JSON_SCHEMA = {
         additionalProperties: false,
         required: ["poolId", "finding"],
         properties: {
-          poolId: { type: "string", minLength: 1 },
+          poolId: { type: "string" },
           finding: coverageGapSchema,
         },
       },

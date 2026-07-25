@@ -896,6 +896,77 @@ describe("BuildChatTab", () => {
       );
     });
 
+    test("resuming a paused Claude review starts a fresh constrained review request", async () => {
+      seedClaudeReviewPipeline();
+      useBuildPipelineStore.setState((state) => {
+        const pipeline = state.pipelines.get(PIPELINE_ID)!;
+        return {
+          pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+            ...pipeline,
+            phase: "paused",
+            pausedFromPhase: "reviewing",
+            structuredReviewRequestId: "stale-review-request",
+            sessions: pipeline.sessions.map((session) => ({
+              ...session,
+              status: "idle" as const,
+            })),
+          }),
+        };
+      });
+      mockCreateSession.mockResolvedValueOnce({ sessionId: "fresh-review-session" });
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+      fireEvent.click(await screen.findByText("Resume"));
+
+      await waitFor(() => {
+        expect(mockSendPrompt).toHaveBeenCalledWith(
+          expect.anything(),
+          "fresh-review-session",
+          expect.stringContaining("provider-enforced output schema"),
+          expect.objectContaining({
+            outputSchema: expect.objectContaining({ type: "object" }),
+            requestId: expect.any(String),
+          }),
+        );
+      });
+      const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+      expect(pipeline?.structuredReviewRequestId).not.toBe("stale-review-request");
+      expect(pipeline?.sessions.at(-1)?.sdkSessionId).toBe("fresh-review-session");
+    });
+
+    test("hides a raw structured review carrier from the Claude build transcript", async () => {
+      seedClaudeReviewPipeline();
+      const rawReport = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
+      useBuildPipelineStore.setState((state) => {
+        const pipeline = state.pipelines.get(PIPELINE_ID)!;
+        return {
+          pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+            ...pipeline,
+            phase: "paused",
+            pausedFromPhase: "reviewing",
+            sessions: pipeline.sessions.map((session) => ({
+              ...session,
+              status: "idle" as const,
+            })),
+          }),
+        };
+      });
+      useClaudeStore.getState().setMessages(SESSION_KEY, [{
+        id: "raw-structured-review",
+        role: "assistant",
+        content: rawReport,
+        parts: [{ type: "text", content: rawReport }],
+        timestamp: "2026-07-25T00:00:00.000Z",
+      }]);
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      expect(await screen.findByText("Resume")).toBeTruthy();
+      expect(document.body.textContent).not.toContain('"reviewScope"');
+    });
+
     test("failed Claude resume returns the pipeline to paused", async () => {
       seedPipelineWithBuildSession("paused", "idle");
       seedEnvironment({ isLocal: false, workspaceReady: true });
@@ -1420,6 +1491,24 @@ describe("BuildChatTab", () => {
       });
       expect(mockSendPrompt).not.toHaveBeenCalled();
       expect(mockCreateSession).not.toHaveBeenCalled();
+
+      mockCreateSession.mockResolvedValueOnce({ sessionId: "retry-review-session" });
+      fireEvent.click(screen.getByRole("button", { name: "Retry Review" }));
+      await waitFor(() => {
+        expect(mockSendPrompt).toHaveBeenCalledWith(
+          expect.anything(),
+          "retry-review-session",
+          expect.any(String),
+          expect.objectContaining({
+            outputSchema: expect.objectContaining({ type: "object" }),
+            requestId: expect.any(String),
+          }),
+        );
+      });
+      expect(
+        useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID)
+          ?.structuredReviewRequestId,
+      ).toBeTruthy();
     });
 
     test("keeps the successful address-issues follow-up in the review session until it idles", async () => {

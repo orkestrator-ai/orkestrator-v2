@@ -33,6 +33,7 @@ import {
   startLoopedReviewPersistence,
 } from "@/lib/looped-review-persistence";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
+import { LoopedReviewSupervisor } from "@/components/review/LoopedReviewSupervisor";
 import { getEnvironmentIdFromSessionKey } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
@@ -529,6 +530,7 @@ function App() {
     <TooltipProvider>
       <TerminalProvider>
         <AppShell>
+          <LoopedReviewSupervisor />
           <LinearPipelineCompletionMonitor />
           <GitHubPipelineCompletionMonitor />
           {selectedEnvironment ? (

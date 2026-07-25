@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  parseReviewReconciliation,
   parseStructuredReviewReport,
-  REVIEW_RECONCILIATION_JSON_SCHEMA,
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   type ReviewFindingPool,
 } from "@orkestrator/protocol/structured-review";
@@ -28,11 +26,12 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import {
   hasReviewFindings,
   isLoopedReviewActivePhase,
+  parseLoopedReviewReconciliation,
+  parseReviewPackage,
   useLoopedReviewStore,
   type LoopedReviewDispatch,
   type LoopedReviewSessionPhase,
   type LoopedReviewWorkflow,
-  type ReviewPackage,
 } from "@/stores/loopedReviewStore";
 import type { LoopedReviewTabData } from "@/types/paneLayout";
 import {
@@ -49,6 +48,7 @@ import {
   createLoopedReviewPrPrompt,
   createReconciliationPrompt,
   createReviewPackagePrompt,
+  LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA,
   REVIEW_FIX_RESULT_JSON_SCHEMA,
   REVIEW_PACKAGE_JSON_SCHEMA,
   REVIEW_PR_RESULT_JSON_SCHEMA,
@@ -62,54 +62,92 @@ import { createUuid } from "@/lib/uuid";
 interface LoopedReviewTabProps {
   data: LoopedReviewTabData;
   isActive: boolean;
+  /**
+   * Workflow execution is owned by the app-level supervisor. Ordinary tabs are
+   * read-only projections of the authoritative store.
+   */
+  driveWorkflow?: boolean;
+  controllerOnly?: boolean;
+  connectAgent?: typeof connectStructuredReviewAgent;
+  pollIntervalMs?: number;
+  missingSessionPollLimit?: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function parseReviewPackage(value: unknown): ReviewPackage {
-  if (
-    !isRecord(value)
-    || typeof value.id !== "string"
-    || typeof value.round !== "number"
-    || typeof value.preparedAt !== "string"
-    || typeof value.targetBranch !== "string"
-    || typeof value.baseRef !== "string"
-    || typeof value.headRef !== "string"
-    || typeof value.completeDiff !== "string"
-    || !Array.isArray(value.changedFiles)
-    || !Array.isArray(value.validation)
-    || !Array.isArray(value.skippedFiles)
-    || !Array.isArray(value.uncommittedFiles)
-    || !Array.isArray(value.limitations)
-  ) {
-    throw new Error("Review package failed runtime validation");
+class DefiniteWorkflowResultError extends Error {
+  constructor(error: unknown) {
+    super(error instanceof Error ? error.message : String(error));
+    this.name = "DefiniteWorkflowResultError";
   }
-  return value as unknown as ReviewPackage;
 }
 
-function parseFixResult(value: unknown): ReviewFixResult {
+export function parseFixResult(value: unknown): ReviewFixResult {
   if (
     !isRecord(value)
+    || Object.keys(value).some((key) =>
+      !["complete", "summary", "filesChanged", "commandsRun", "limitations"].includes(key)
+    )
     || typeof value.complete !== "boolean"
     || typeof value.summary !== "string"
+    || value.summary.trim().length === 0
     || !Array.isArray(value.filesChanged)
+    || !value.filesChanged.every((file) =>
+      typeof file === "string" && file.trim().length > 0
+    )
+    || new Set(value.filesChanged).size !== value.filesChanged.length
     || !Array.isArray(value.commandsRun)
+    || !value.commandsRun.every((command) =>
+      isRecord(command)
+      && Object.keys(command).every((key) =>
+        ["command", "result", "summary"].includes(key)
+      )
+      && typeof command.command === "string"
+      && command.command.trim().length > 0
+      && (command.result === "passed" || command.result === "failed")
+      && typeof command.summary === "string"
+    )
     || !Array.isArray(value.limitations)
+    || !value.limitations.every((limitation) => typeof limitation === "string")
   ) {
     throw new Error("Fix result failed runtime validation");
+  }
+  if (
+    value.complete
+    && (
+      value.limitations.length > 0
+      || value.commandsRun.some((command) =>
+        isRecord(command) && command.result === "failed"
+      )
+    )
+  ) {
+    throw new Error(
+      "Fix result cannot be complete while validation failed or limitations remain",
+    );
   }
   return value as unknown as ReviewFixResult;
 }
 
-function parsePrResult(value: unknown): ReviewPrResult {
+export function parsePrResult(value: unknown): ReviewPrResult {
+  let url: URL;
+  try {
+    url = new URL(isRecord(value) && typeof value.url === "string" ? value.url : "");
+  } catch {
+    throw new Error("PR result failed runtime validation");
+  }
   if (
     !isRecord(value)
+    || Object.keys(value).some((key) => !["status", "url", "summary"].includes(key))
     || value.status !== "created"
     || typeof value.url !== "string"
-    || !/^https:\/\/[^/\s]+\/.+/i.test(value.url)
+    || url.protocol !== "https:"
+    || url.username !== ""
+    || url.password !== ""
+    || !/\/pull\/\d+\/?$/i.test(url.pathname)
     || typeof value.summary !== "string"
+    || value.summary.trim().length === 0
   ) {
     throw new Error("PR result failed runtime validation");
   }
@@ -141,10 +179,26 @@ function sessionLabel(
   return "Final · PR creation";
 }
 
-function dispatchMaterial(
+export function dispatchMaterial(
   workflow: LoopedReviewWorkflow,
   dispatch: LoopedReviewDispatch,
 ): { prompt: string; schema: JsonSchema } {
+  const expectedKind: Record<
+    LoopedReviewDispatch["phase"],
+    LoopedReviewDispatch["kind"]
+  > = {
+    preparing: "prepare",
+    discovering: "discover",
+    reconciling: "reconcile",
+    fixing: "fix",
+    "creating-pr": "pr",
+  };
+  if (
+    dispatch.phase !== workflow.phase
+    || expectedKind[dispatch.phase] !== dispatch.kind
+  ) {
+    throw new Error("Persisted looped-review dispatch is incompatible with its phase");
+  }
   const round = workflow.rounds.find(
     (candidate) => candidate.round === workflow.currentRound,
   );
@@ -181,7 +235,7 @@ function dispatchMaterial(
         report: pass.report,
         pool: workflow.activePool,
       }),
-      schema: REVIEW_RECONCILIATION_JSON_SCHEMA as unknown as JsonSchema,
+      schema: LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA as unknown as JsonSchema,
     };
   }
   if (dispatch.kind === "fix") {
@@ -193,10 +247,13 @@ function dispatchMaterial(
       schema: REVIEW_FIX_RESULT_JSON_SCHEMA as unknown as JsonSchema,
     };
   }
-  return {
-    prompt: createLoopedReviewPrPrompt(workflow.targetBranch),
-    schema: REVIEW_PR_RESULT_JSON_SCHEMA as unknown as JsonSchema,
-  };
+  if (dispatch.kind === "pr") {
+    return {
+      prompt: createLoopedReviewPrPrompt(workflow.targetBranch),
+      schema: REVIEW_PR_RESULT_JSON_SCHEMA as unknown as JsonSchema,
+    };
+  }
+  throw new Error(`Unsupported looped-review dispatch kind: ${String(dispatch.kind)}`);
 }
 
 function activePoolCount(pool: ReviewFindingPool): number {
@@ -235,8 +292,31 @@ function PoolView({
           <p className="mt-1 font-medium text-foreground">{issue.title}</p>
           <p className="mt-1 font-mono text-xs text-muted-foreground">
             {issue.file}{issue.line ? `:${issue.line}` : ""}
+            {issue.symbol ? ` · ${issue.symbol}` : ""}
           </p>
           <p className="mt-2 text-foreground/80">{issue.description}</p>
+          <dl className="mt-3 space-y-2 border-t border-border/60 pt-3 text-xs text-foreground/80">
+            <div>
+              <dt className="inline font-medium text-foreground">Evidence: </dt>
+              <dd className="inline">{issue.evidence}</dd>
+            </div>
+            <div>
+              <dt className="inline font-medium text-foreground">Suggestion: </dt>
+              <dd className="inline">{issue.suggestion}</dd>
+            </div>
+            <div>
+              <dt className="inline font-medium text-foreground">Verification: </dt>
+              <dd className="inline">{issue.verification}</dd>
+            </div>
+          </dl>
+          {!!issue.alternativeFixes?.length && (
+            <div className="mt-2 text-xs text-foreground/75">
+              <p className="font-medium text-foreground">Alternative fixes</p>
+              <ul className="mt-1 list-disc space-y-1 pl-5">
+                {issue.alternativeFixes.map((fix) => <li key={fix}>{fix}</li>)}
+              </ul>
+            </div>
+          )}
         </div>
       ))}
       {pool.coverageGaps.map((gap) => (
@@ -258,7 +338,15 @@ function PoolView({
   );
 }
 
-export function LoopedReviewTab({ data, isActive: _isActive }: LoopedReviewTabProps) {
+export function LoopedReviewTab({
+  data,
+  isActive: _isActive,
+  driveWorkflow = false,
+  controllerOnly = false,
+  connectAgent = connectStructuredReviewAgent,
+  pollIntervalMs = 1_000,
+  missingSessionPollLimit = 5,
+}: LoopedReviewTabProps) {
   const workflow = useLoopedReviewStore(
     (state) => state.workflows.get(data.workflowId),
   );
@@ -300,20 +388,37 @@ export function LoopedReviewTab({ data, isActive: _isActive }: LoopedReviewTabPr
   }, [data.workflowId, workflow]);
 
   useEffect(() => {
-    if (!workflow || !isLoopedReviewActivePhase(workflow.phase)) return;
-    const timer = setTimeout(() => setPollTick((value) => value + 1), 1_000);
+    if (
+      !driveWorkflow
+      || !workflow
+      || !isLoopedReviewActivePhase(workflow.phase)
+    ) {
+      return;
+    }
+    const timer = setTimeout(
+      () => setPollTick((value) => value + 1),
+      pollIntervalMs,
+    );
     return () => clearTimeout(timer);
-  }, [workflow, workflow?.dispatch, workflow?.phase, workflow?.updatedAt]);
+  }, [
+    driveWorkflow,
+    workflow,
+    workflow?.dispatch,
+    workflow?.phase,
+    workflow?.updatedAt,
+    pollTick,
+    pollIntervalMs,
+  ]);
 
   const connect = useCallback(async (
     current: LoopedReviewWorkflow,
   ): Promise<NativeStructuredAgent> => {
     if (agentRef.current?.provider === current.agent) return agentRef.current;
     if (!environment) throw new Error("Review environment is unavailable");
-    const agent = await connectStructuredReviewAgent(current, environment);
+    const agent = await connectAgent(current, environment);
     agentRef.current = agent;
     return agent;
-  }, [environment]);
+  }, [connectAgent, environment]);
 
   const createPhaseSession = useCallback(async (
     current: LoopedReviewWorkflow,
@@ -403,6 +508,21 @@ export function LoopedReviewTab({ data, isActive: _isActive }: LoopedReviewTabPr
     result: StructuredOutputResult,
   ) => {
     const store = useLoopedReviewStore.getState();
+    const live = store.workflows.get(current.id);
+    if (
+      !live
+      || live.dispatch?.id !== dispatch.id
+      || live.dispatch.requestId !== dispatch.requestId
+    ) {
+      return;
+    }
+    // Pausing never consumes a result lease. Resume will read the same
+    // request-scoped provider result and apply it exactly once.
+    if (live.phase === "paused") return;
+    if (live.phase !== dispatch.phase || !isLoopedReviewActivePhase(live.phase)) {
+      return;
+    }
+    current = live;
     const session = current.sessions.find(
       (candidate) => candidate.id === dispatch.sessionId,
     );
@@ -429,26 +549,22 @@ export function LoopedReviewTab({ data, isActive: _isActive }: LoopedReviewTabPr
           : new Date().toISOString(),
     });
     if (dispatch.kind === "prepare") {
-      const reviewPackage = parseReviewPackage(result.value);
-      if (
-        reviewPackage.round !== current.currentRound
-        || reviewPackage.targetBranch !== current.targetBranch
-      ) {
-        throw new Error("Prepared package does not match the active review round");
-      }
-      store.clearDispatch(current.id, dispatch.id);
+      const reviewPackage = parseReviewPackage(result.value, {
+        id: `review-package-${current.id}-r${current.currentRound}`,
+        round: current.currentRound,
+        targetBranch: current.targetBranch,
+        context: current.context,
+      });
       store.setPreparedPackage(current.id, reviewPackage);
       return;
     }
     if (dispatch.kind === "discover") {
       const report = parseStructuredReviewReport(result.value);
-      store.clearDispatch(current.id, dispatch.id);
       store.recordReport(current.id, session.id, report);
       return;
     }
     if (dispatch.kind === "reconcile") {
-      const reconciliation = parseReviewReconciliation(result.value);
-      store.clearDispatch(current.id, dispatch.id);
+      const reconciliation = parseLoopedReviewReconciliation(result.value);
       store.recordReconciliation(current.id, session.id, reconciliation);
       return;
     }
@@ -460,12 +576,10 @@ export function LoopedReviewTab({ data, isActive: _isActive }: LoopedReviewTabPr
           ?? "The fix session did not resolve the complete active pool",
         );
       }
-      store.clearDispatch(current.id, dispatch.id);
       store.completeFix(current.id, session.id);
       return;
     }
     const prResult = parsePrResult(result.value);
-    store.clearDispatch(current.id, dispatch.id);
     store.completePr(current.id, prResult.url);
   }, []);
 
@@ -516,7 +630,11 @@ export function LoopedReviewTab({ data, isActive: _isActive }: LoopedReviewTabPr
       );
       if (result) {
         nullResultPollsRef.current.delete(dispatch.id);
-        applyResult(current, dispatch, result);
+        try {
+          applyResult(current, dispatch, result);
+        } catch (error) {
+          throw new DefiniteWorkflowResultError(error);
+        }
         return;
       }
 
@@ -529,8 +647,13 @@ export function LoopedReviewTab({ data, isActive: _isActive }: LoopedReviewTabPr
       // An idle snapshot can race the bridge recording its result. Give it a
       // short reconciliation window, then fail visibly instead of treating
       // transcript text as structured success.
-      if (status === "idle" && polls >= 5) {
+      if (status === "idle" && polls >= missingSessionPollLimit) {
         throw new Error("Native provider completed without a structured result");
+      }
+      if (status === null && polls >= missingSessionPollLimit) {
+        throw new Error(
+          "Native provider session is unavailable; retry will reconcile the preserved request",
+        );
       }
     } catch (error) {
       const latest = useLoopedReviewStore.getState().workflows.get(data.workflowId);
@@ -554,6 +677,7 @@ export function LoopedReviewTab({ data, isActive: _isActive }: LoopedReviewTabPr
           : "provider",
         message,
         retryPhase: latest.phase,
+        preserveDispatch: !(error instanceof DefiniteWorkflowResultError),
       });
     } finally {
       advanceInFlightRef.current = false;
@@ -563,12 +687,21 @@ export function LoopedReviewTab({ data, isActive: _isActive }: LoopedReviewTabPr
     connect,
     data.workflowId,
     environment,
+    missingSessionPollLimit,
     startCurrentPhase,
   ]);
 
   useEffect(() => {
+    if (!driveWorkflow) return;
     void advance();
-  }, [advance, pollTick, workflow?.phase, workflow?.dispatch, workflow?.updatedAt]);
+  }, [
+    advance,
+    driveWorkflow,
+    pollTick,
+    workflow?.phase,
+    workflow?.dispatch,
+    workflow?.updatedAt,
+  ]);
 
   const handleCancel = useCallback(async () => {
     const current = useLoopedReviewStore.getState().workflows.get(data.workflowId);
@@ -592,6 +725,8 @@ export function LoopedReviewTab({ data, isActive: _isActive }: LoopedReviewTabPr
     () => new Map(workflow?.sessions.map((session) => [session.id, session]) ?? []),
     [workflow?.sessions],
   );
+
+  if (controllerOnly) return null;
 
   if (hydrating) {
     return (

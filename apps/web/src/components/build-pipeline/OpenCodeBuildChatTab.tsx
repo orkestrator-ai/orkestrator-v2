@@ -57,6 +57,7 @@ import {
   readValidatedBuildReview,
   structuredReviewHasFindings,
 } from "@/lib/build-pipeline-structured-review";
+import { hideRawStructuredReviewMessages } from "@/lib/structured-review-messages";
 
 interface OpenCodeBuildChatTabProps {
   data: BuildTabData;
@@ -110,7 +111,7 @@ function getDisplayOpenCodeBuildMessages(
   messages: OpenCodeMessage[],
   phase: string,
 ) {
-  return pinActiveNativeAgentParts(
+  const displayMessages = pinActiveNativeAgentParts(
     messages
       .filter((message, index) => {
         if ((phase === "review" || phase === "pr") && index === 0 && message.role === "user") {
@@ -120,6 +121,9 @@ function getDisplayOpenCodeBuildMessages(
       })
       .map(normalizeOpenCodeNativeMessage),
   );
+  return phase === "review"
+    ? hideRawStructuredReviewMessages(displayMessages)
+    : displayMessages;
 }
 
 function SessionDivider({ session, index }: { session: PipelineSession; index: number }) {
@@ -198,6 +202,7 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
   const [advanceTick, setAdvanceTick] = useState(0);
   const [connectAttempt, setConnectAttempt] = useState(0);
   const [jumpInText, setJumpInText] = useState("");
+  const [isRetryingReview, setIsRetryingReview] = useState(false);
   const jumpInTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const pipeline = useBuildPipelineStore((state) => state.pipelines.get(pipelineId));
@@ -1157,6 +1162,11 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     const resumedPhase = resumePipeline(pipelineId, resumePhase);
     if (!resumedPhase) return;
 
+    if (resumedPhase === "reviewing") {
+      await startReviewSession(pipeline);
+      return;
+    }
+
     const prompt = createPipelineResumePrompt(resumedPhase);
     if (!prompt) {
       setAdvanceTick((value) => value + 1);
@@ -1175,7 +1185,6 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
           }
           break;
         }
-        case "reviewing":
         case "addressing":
           await startReviewSession(pipeline);
           break;
@@ -1242,6 +1251,25 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
     startVerifySession,
     setSessionLoading,
   ]);
+
+  const handleRetryReview = useCallback(async () => {
+    const currentPipeline =
+      useBuildPipelineStore.getState().pipelines.get(pipelineId);
+    if (
+      !currentPipeline
+      || currentPipeline.phase !== "failed"
+      || currentPipeline.failureContext?.phase !== "reviewing"
+    ) {
+      return;
+    }
+
+    setIsRetryingReview(true);
+    try {
+      await startReviewSession(currentPipeline);
+    } finally {
+      setIsRetryingReview(false);
+    }
+  }, [pipelineId, startReviewSession]);
 
   const setupPending = isSetupPending({ isLocal: !!isLocal, setupCommandsResolved, hasPendingSetupCommands, setupScriptsRunning, workspaceReady });
 
@@ -1387,7 +1415,23 @@ export function OpenCodeBuildChatTab({ data, isActive }: OpenCodeBuildChatTabPro
               <span className="text-xs font-medium text-green-400">All acceptance criteria satisfied</span>
             )}
             {pipeline.phase === "failed" && (
-              <span className="max-w-[300px] truncate text-xs font-medium text-red-400">{pipeline.error}</span>
+              <>
+                <span className="max-w-[300px] truncate text-xs font-medium text-red-400">{pipeline.error}</span>
+                {pipeline.failureContext?.phase === "reviewing" && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      void handleRetryReview();
+                    }}
+                    disabled={isRetryingReview}
+                    className="h-6 gap-1.5 px-2.5 text-xs"
+                  >
+                    <RefreshCw className={cn("h-3 w-3", isRetryingReview && "animate-spin")} />
+                    {isRetryingReview ? "Retrying..." : "Retry Review"}
+                  </Button>
+                )}
+              </>
             )}
           </div>
         </div>

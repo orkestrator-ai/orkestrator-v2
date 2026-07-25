@@ -4,7 +4,10 @@ import {
   classifyCodexPromptOutcome as realClassifyCodexPromptOutcome,
   type CodexPromptSendOutcome,
 } from "@/lib/codex-client";
-import { TEST_STRUCTURED_REVIEW_OUTPUT } from "./structured-review-test-fixture";
+import {
+  TEST_STRUCTURED_REVIEW_OUTPUT,
+  TEST_STRUCTURED_REVIEW_REPORT,
+} from "./structured-review-test-fixture";
 
 const mockCheckHealth = mock(async () => true);
 const mockCreateClient = mock(() => ({ baseUrl: "http://127.0.0.1:9999" }));
@@ -1282,6 +1285,84 @@ describe("CodexBuildChatTab", () => {
     expect(pipeline?.phase).toBe("building");
     expect(pipeline?.sessions[0]?.status).toBe("running");
     expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+  });
+
+  test("resuming a paused Codex review starts a fresh constrained review request", async () => {
+    seedPipeline("paused", "idle");
+    seedCodexStore(false);
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          pausedFromPhase: "reviewing",
+          structuredReviewRequestId: "stale-review-request",
+          sessions: pipeline.sessions.map((session) => ({
+            ...session,
+            phase: "review" as const,
+            label: "Review Session",
+          })),
+        }),
+      };
+    });
+    mockCreateSession.mockResolvedValueOnce({
+      sessionId: "fresh-review-session",
+      title: "Review Session",
+    });
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+    fireEvent.click(await screen.findByText("Resume"));
+
+    await waitFor(() => {
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        expect.anything(),
+        "fresh-review-session",
+        expect.stringContaining("provider-enforced output schema"),
+        expect.objectContaining({
+          outputSchema: expect.objectContaining({ type: "object" }),
+          requestId: expect.any(String),
+        }),
+      );
+    });
+    const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+    expect(pipeline?.structuredReviewRequestId).not.toBe("stale-review-request");
+    expect(pipeline?.sessions.at(-1)?.sdkSessionId).toBe("fresh-review-session");
+  });
+
+  test("hides a raw structured review carrier from the Codex build transcript", async () => {
+    seedPipeline("paused", "idle");
+    seedCodexStore(false);
+    const rawReport = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
+    useBuildPipelineStore.setState((state) => {
+      const pipeline = state.pipelines.get(PIPELINE_ID)!;
+      return {
+        pipelines: new Map(state.pipelines).set(PIPELINE_ID, {
+          ...pipeline,
+          pausedFromPhase: "reviewing",
+          sessions: pipeline.sessions.map((session) => ({
+            ...session,
+            phase: "review" as const,
+            label: "Review Session",
+          })),
+        }),
+      };
+    });
+    useCodexStore.getState().setMessages(SESSION_KEY, [{
+      id: "raw-structured-review",
+      role: "assistant",
+      content: rawReport,
+      parts: [{ type: "text", content: rawReport }],
+      createdAt: "2026-07-25T00:00:00.000Z",
+    }]);
+
+    render(<CodexBuildChatTab data={createData()} isActive />);
+
+    await waitFor(() => {
+      expect(lastVirtualizedRows.some((row) =>
+        row.kind === "message" && row.message.content === rawReport
+      )).toBe(false);
+    });
+    expect(lastVirtualizedRows.some((row) => row.kind === "divider")).toBe(true);
   });
 
   test("a rejected resume prompt returns the pipeline to paused and records the failure", async () => {

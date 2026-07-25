@@ -951,6 +951,45 @@ describe("opencode-client sendPrompt", () => {
       value: { summary: "Looks good" },
     });
 
+    const retryPending = {
+      session: {
+        messages: async () => ({
+          data: [
+            {
+              info: {
+                id: "structured-old",
+                role: "user",
+                format: { type: "json_schema", schema: { type: "object" } },
+              },
+              parts: [],
+            },
+            {
+              info: {
+                id: "assistant-old",
+                role: "assistant",
+                parentID: "structured-old",
+                time: { created: 1, completed: 2 },
+                structured: { summary: "Stale result" },
+              },
+              parts: [],
+            },
+            {
+              info: {
+                id: "structured-retry",
+                role: "user",
+                format: { type: "json_schema", schema: { type: "object" } },
+              },
+              parts: [],
+            },
+          ],
+        }),
+      },
+    } as unknown as OpencodeClient;
+    expect(await getStructuredOutput(retryPending, "session-1")).toBeNull();
+    expect(
+      await getStructuredOutput(retryPending, "session-1", "structured-retry"),
+    ).toBeNull();
+
     const plaintextOnly = {
       session: {
         messages: async () => ({

@@ -11,6 +11,7 @@ import { StructuredReviewReportView } from "./StructuredReviewReportView";
 interface NativeStructuredReviewResultProps {
   enabled: boolean;
   sessionId?: string;
+  resultKey?: string;
   isLoading: boolean;
   loadResult: () => Promise<StructuredOutputResult<unknown> | null>;
   onRetry: () => Promise<void> | void;
@@ -24,6 +25,7 @@ interface NativeStructuredReviewResultProps {
 export function NativeStructuredReviewResult({
   enabled,
   sessionId,
+  resultKey,
   isLoading,
   loadResult,
   onRetry,
@@ -38,10 +40,10 @@ export function NativeStructuredReviewResult({
     setReport(null);
     setFailure(null);
     setPollCount(0);
-  }, [sessionId, attempt]);
+  }, [sessionId, resultKey, attempt]);
 
   useEffect(() => {
-    if (!enabled || !sessionId || isLoading || report || failure) return;
+    if (!enabled || !sessionId || isLoading || retrying || report || failure) return;
     let cancelled = false;
     let timer: number | undefined;
 
@@ -85,15 +87,17 @@ export function NativeStructuredReviewResult({
     loadResult,
     pollCount,
     report,
+    resultKey,
+    retrying,
     sessionId,
   ]);
 
   const retry = useCallback(async () => {
     setRetrying(true);
-    setFailure(null);
     setReport(null);
     try {
       await onRetry();
+      setFailure(null);
       setAttempt((value) => value + 1);
     } catch (error) {
       setFailure(error instanceof Error ? error.message : "Failed to retry structured review.");

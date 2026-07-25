@@ -330,7 +330,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
 
   // Get the default agent - per-environment override takes precedence over global config
   const defaultAgent = selectedEnvironment?.defaultAgent || config.global.defaultAgent || "claude";
-  const createLoopedReviewWorkflow = useLoopedReviewStore((state) => state.createWorkflow);
+  const { createLoopedReviewWorkflow, removeLoopedReviewWorkflow } =
+    useLoopedReviewStore(useShallow((state) => ({
+      createLoopedReviewWorkflow: state.createWorkflow,
+      removeLoopedReviewWorkflow: state.removeWorkflow,
+    })));
 
   // Handler for code review
   const handleReview = useCallback((
@@ -420,6 +424,9 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       || !selectedProjectId
       || !selectedEnvironment
       || !canCreateTab
+      || !isRunning
+      || !workspaceReady
+      || setupRunning
     ) {
       return;
     }
@@ -449,10 +456,25 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
       context,
       allowance: selection.passAllowance,
     });
-    createTab("looped-review", {
-      loopedReviewId: workflowId,
-      displayTitle: "Looped Review",
-    });
+    try {
+      const created = createTab("looped-review", {
+        loopedReviewId: workflowId,
+        displayTitle: "Looped Review",
+      });
+      if (!created) {
+        removeLoopedReviewWorkflow(workflowId);
+        toast.error("Could not open looped review", {
+          description: "The environment is not ready or the maximum tab count was reached.",
+        });
+        return;
+      }
+    } catch (error) {
+      removeLoopedReviewWorkflow(workflowId);
+      toast.error("Could not open looped review", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
     setLoopedReviewDialogOpen(false);
   }, [
     canCreateTab,
@@ -460,9 +482,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     config.repositories,
     createLoopedReviewWorkflow,
     createTab,
+    isRunning,
+    removeLoopedReviewWorkflow,
     selectedEnvironment,
     selectedEnvironmentId,
     selectedProjectId,
+    setupRunning,
+    workspaceReady,
   ]);
 
   // Load run commands from orkestrator-ai.json when workspace is ready
@@ -1215,7 +1241,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   size="icon"
                   className="h-8 w-8"
                   onClick={() => setLoopedReviewDialogOpen(true)}
-                  disabled={!selectedEnvironment || !canCreateTab}
+                  disabled={
+                    !selectedEnvironment
+                    || !canCreateTab
+                    || !isRunning
+                    || !workspaceReady
+                    || setupRunning
+                  }
                   aria-label="Looped code review"
                 >
                   <Repeat2 className="h-4 w-4" />

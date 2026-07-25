@@ -1676,29 +1676,26 @@ export async function getStructuredOutput<T = unknown>(
         : null;
     }
 
-    const structuredUserIds = new Set(
-      response.data
-        .filter((entry) =>
-          entry.info.role === "user"
-          && entry.info.format?.type === "json_schema"
-        )
-        .map((entry) => entry.info.id),
-    );
+    const latestStructuredUserId = response.data
+      .filter((entry) =>
+        entry.info.role === "user"
+        && entry.info.format?.type === "json_schema"
+      )
+      .at(-1)?.info.id;
+    const expectedParentId = requestId ?? latestStructuredUserId;
+    if (!expectedParentId) return null;
+
     const assistant = response.data
       .filter((entry) =>
         entry.info.role === "assistant"
-        && (
-          requestId
-            ? entry.info.parentID === requestId
-            : structuredUserIds.has(entry.info.parentID)
-        )
+        && entry.info.parentID === expectedParentId
       )
       .at(-1);
     if (!assistant || assistant.info.role !== "assistant") return null;
     if (assistant.info.error) {
       return openCodeStructuredFailure(
         assistant.info.error,
-        requestId ?? assistant.info.parentID,
+        expectedParentId,
       );
     }
     if (!assistant.info.time.completed) return null;
@@ -1707,13 +1704,13 @@ export async function getStructuredOutput<T = unknown>(
         "opencode",
         "malformed_output",
         "OpenCode completed the turn without a structured result.",
-        { requestId: requestId ?? assistant.info.parentID },
+        { requestId: expectedParentId },
       );
     }
     return {
       ok: true,
       provider: "opencode",
-      requestId: requestId ?? assistant.info.parentID,
+      requestId: expectedParentId,
       value: assistant.info.structured as T,
     };
   } catch (error) {

@@ -1139,6 +1139,196 @@ describe("Electron StorageService", () => {
     await expect(reloaded.getLoopedReviewWorkflow("workflow-1")).resolves.toBeNull();
   });
 
+  test("filters looped-review lists by environment and rejects invalid hydrate inputs", async () => {
+    const dataDir = await createTempDir("ork-storage-looped-review-list-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const firstEnvironment = createEnvironment("project-1", {
+      name: "first-looped-review",
+      environmentType: "local",
+    });
+    const secondEnvironment = createEnvironment("project-1", {
+      name: "second-looped-review",
+      environmentType: "local",
+    });
+    await storage.addEnvironment(firstEnvironment);
+    await storage.addEnvironment(secondEnvironment);
+
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-first",
+      firstEnvironment.id,
+      1,
+      { id: "workflow-first", phase: "preparing" },
+      0,
+    );
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-second",
+      secondEnvironment.id,
+      1,
+      { id: "workflow-second", phase: "preparing" },
+      0,
+    );
+
+    await expect(storage.listLoopedReviewWorkflows(firstEnvironment.id))
+      .resolves.toMatchObject([{ id: "workflow-first" }]);
+    await expect(storage.listLoopedReviewWorkflows(secondEnvironment.id))
+      .resolves.toMatchObject([{ id: "workflow-second" }]);
+    await expect(storage.saveLoopedReviewWorkflow(
+      "workflow-first",
+      secondEnvironment.id,
+      1,
+      { id: "workflow-first", phase: "preparing" },
+      1,
+    )).rejects.toThrow("belongs to another environment");
+    await expect(storage.getLoopedReviewWorkflow("missing")).resolves.toBeNull();
+    await expect(storage.getLoopedReviewWorkflow(" ")).rejects.toThrow(
+      "workflow ID must not be blank",
+    );
+    await expect(storage.listLoopedReviewWorkflows("")).rejects.toThrow(
+      "environment ID must not be blank",
+    );
+    await expect(storage.saveLoopedReviewWorkflow(
+      "workflow-invalid-version",
+      firstEnvironment.id,
+      0,
+      {},
+      0,
+    )).rejects.toThrow("version must be a positive integer");
+    await expect(storage.saveLoopedReviewWorkflow(
+      "workflow-invalid-revision",
+      firstEnvironment.id,
+      1,
+      {},
+      -1,
+    )).rejects.toThrow("expected revision must be a non-negative integer");
+    await expect(storage.saveLoopedReviewWorkflow(
+      "workflow-invalid-snapshot",
+      firstEnvironment.id,
+      1,
+      [],
+      0,
+    )).rejects.toThrow("snapshot must be a JSON object");
+  });
+
+  test("serializes compare-and-swap across storage instances", async () => {
+    const dataDir = await createTempDir("ork-storage-looped-review-cas-");
+    const firstStorage = new StorageService(dataDir);
+    const secondStorage = new StorageService(dataDir);
+    await Promise.all([firstStorage.init(), secondStorage.init()]);
+    const environment = createEnvironment("project-1", {
+      name: "looped-review-cas",
+      environmentType: "local",
+    });
+    await firstStorage.addEnvironment(environment);
+
+    const attempts = await Promise.allSettled([
+      firstStorage.saveLoopedReviewWorkflow(
+        "workflow-cas",
+        environment.id,
+        1,
+        { writer: "first" },
+        0,
+      ),
+      secondStorage.saveLoopedReviewWorkflow(
+        "workflow-cas",
+        environment.id,
+        1,
+        { writer: "second" },
+        0,
+      ),
+    ]);
+
+    expect(attempts.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = attempts.find((result) => result.status === "rejected");
+    expect(rejected).toMatchObject({
+      status: "rejected",
+      reason: expect.objectContaining({ message: expect.stringContaining("revision conflict") }),
+    });
+    await expect(firstStorage.getLoopedReviewWorkflow("workflow-cas")).resolves
+      .toMatchObject({ revision: 1 });
+  });
+
+  test("recovers a looped-review snapshot from backup after file corruption", async () => {
+    const dataDir = await createTempDir("ork-storage-looped-review-corrupt-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = createEnvironment("project-1", {
+      name: "looped-review-corrupt",
+      environmentType: "local",
+    });
+    await storage.addEnvironment(environment);
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-corrupt",
+      environment.id,
+      1,
+      { phase: "preparing" },
+      0,
+    );
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-corrupt",
+      environment.id,
+      1,
+      { phase: "discovering" },
+      1,
+    );
+    await fs.writeFile(path.join(dataDir, "looped-reviews.json"), "{broken", "utf8");
+
+    const restarted = new StorageService(dataDir);
+    await restarted.init();
+    await expect(restarted.getLoopedReviewWorkflow("workflow-corrupt")).resolves
+      .toMatchObject({
+        revision: 1,
+        snapshot: { phase: "preparing" },
+      });
+  });
+
+  test("ignores structurally corrupt looped-review envelopes during hydration", async () => {
+    const dataDir = await createTempDir("ork-storage-looped-review-envelope-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = createEnvironment("project-1", {
+      name: "looped-review-envelope",
+      environmentType: "local",
+    });
+    await storage.addEnvironment(environment);
+    await fs.writeFile(
+      path.join(dataDir, "looped-reviews.json"),
+      JSON.stringify({
+        "wrong-key": {
+          version: 1,
+          id: "another-id",
+          environmentId: environment.id,
+          snapshot: { phase: "preparing" },
+          updatedAt: "2026-07-25T00:00:00.000Z",
+          revision: 1,
+        },
+        "primitive-snapshot": {
+          version: 1,
+          id: "primitive-snapshot",
+          environmentId: environment.id,
+          snapshot: "not-an-object",
+          updatedAt: "2026-07-25T00:00:00.000Z",
+          revision: 1,
+        },
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    await expect(storage.getLoopedReviewWorkflow("wrong-key")).resolves.toBeNull();
+    await expect(storage.getLoopedReviewWorkflow("primitive-snapshot")).resolves.toBeNull();
+    await expect(storage.listLoopedReviewWorkflows(environment.id)).resolves.toEqual([]);
+
+    await expect(storage.saveLoopedReviewWorkflow(
+      "wrong-key",
+      environment.id,
+      1,
+      { phase: "preparing" },
+      0,
+    )).resolves.toMatchObject({ id: "wrong-key", revision: 1 });
+    await expect(storage.listLoopedReviewWorkflows(environment.id)).resolves
+      .toMatchObject([{ id: "wrong-key" }]);
+  });
+
   test("rejects unsafe looped-review persistence instead of truncating it", async () => {
     const dataDir = await createTempDir("ork-storage-looped-review-invalid-");
     const storage = new StorageService(dataDir);
@@ -1159,5 +1349,44 @@ describe("Electron StorageService", () => {
       0,
     )).rejects.toThrow("JSON serializable");
     await expect(storage.getLoopedReviewWorkflow("workflow-invalid")).resolves.toBeNull();
+
+    await expect(storage.saveLoopedReviewWorkflow(
+      "workflow-oversized",
+      environment.id,
+      1,
+      { completeDiff: "x".repeat(32 * 1024 * 1024) },
+      0,
+    )).rejects.toThrow("exceeds the 32 MB limit");
+    await expect(storage.getLoopedReviewWorkflow("workflow-oversized")).resolves.toBeNull();
+  });
+
+  test("restricts looped-review snapshots and their backups to the current user", async () => {
+    const dataDir = await createTempDir("ork-storage-looped-review-sensitive-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = createEnvironment("project-1", {
+      name: "looped-review-sensitive",
+      environmentType: "local",
+    });
+    await storage.addEnvironment(environment);
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-sensitive",
+      environment.id,
+      1,
+      { package: { completeDiff: "private review material" } },
+      0,
+    );
+    await storage.saveLoopedReviewWorkflow(
+      "workflow-sensitive",
+      environment.id,
+      1,
+      { package: { completeDiff: "updated private review material" } },
+      1,
+    );
+
+    const primaryMode = (await fs.stat(path.join(dataDir, "looped-reviews.json"))).mode & 0o777;
+    const backupMode = (await fs.stat(path.join(dataDir, "looped-reviews.json.bak.1"))).mode & 0o777;
+    expect(primaryMode).toBe(0o600);
+    expect(backupMode).toBe(0o600);
   });
 });

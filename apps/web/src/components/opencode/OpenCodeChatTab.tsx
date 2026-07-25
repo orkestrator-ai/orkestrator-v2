@@ -56,6 +56,7 @@ import {
   type OpenCodeSlashCommand,
   type OpenCodeModel,
   type OpenCodeModelDefaults,
+  type SendPromptResult,
 } from "@/lib/opencode-client";
 import { extractContextUsage } from "@/lib/context-usage";
 import {
@@ -194,6 +195,8 @@ export function OpenCodeChatTab({
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
   const [modelPreferences, setModelPreferences] =
     useState<OpenCodeModelPreferences>(EMPTY_MODEL_PREFERENCES);
+  const [structuredReviewRequestId, setStructuredReviewRequestId] =
+    useState<string>();
 
   // Track this tab's session ID locally to prevent interference between tabs
   const tabSessionIdRef = useRef<string | null>(null);
@@ -222,7 +225,7 @@ export function OpenCodeChatTab({
         variant?: string;
         mode?: OpenCodeConversationMode;
       },
-    ) => Promise<void>) | null
+    ) => Promise<SendPromptResult | undefined>) | null
   >(null);
 
   const {
@@ -289,6 +292,10 @@ export function OpenCodeChatTab({
     () => sessionsMap.get(sessionKey),
     [sessionsMap, sessionKey],
   );
+
+  useEffect(() => {
+    setStructuredReviewRequestId(undefined);
+  }, [session?.sessionId]);
 
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
   const displayMessages = useMemo(
@@ -1613,8 +1620,24 @@ export function OpenCodeChatTab({
           createdAt: new Date().toISOString(),
         });
         setSessionLoading(sessionKey, false);
+      } else if (isReviewTab) {
+        if (!sendResult.requestId) {
+          const errorText =
+            "OpenCode accepted the structured review without a request ID.";
+          addMessage(sessionKey, {
+            id: `${ERROR_MESSAGE_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            role: "assistant" as const,
+            content: errorText,
+            parts: [{ type: "text" as const, content: errorText }],
+            createdAt: new Date().toISOString(),
+          });
+          setSessionLoading(sessionKey, false);
+          return { success: false, error: errorText };
+        }
+        setStructuredReviewRequestId(sendResult.requestId);
       }
       // Response will come via SSE events
+      return sendResult;
     },
     [
       client,
@@ -1775,16 +1798,23 @@ export function OpenCodeChatTab({
 
   const loadStructuredReview = useCallback(
     () => client && session
-      ? getStructuredOutput(client, session.sessionId)
+      ? getStructuredOutput(
+          client,
+          session.sessionId,
+          structuredReviewRequestId,
+        )
       : Promise.resolve(null),
-    [client, session],
+    [client, session, structuredReviewRequestId],
   );
   const retryStructuredReview = useCallback(async () => {
     if (!initialPrompt) throw new Error("The original review prompt is unavailable.");
-    await handleSend(initialPrompt, [], {
+    const result = await handleSend(initialPrompt, [], {
       model: getSelectedModel(environmentId),
       variant: getSelectedVariant(environmentId),
     });
+    if (!result?.success) {
+      throw new Error(result?.error ?? "Failed to retry structured review.");
+    }
   }, [
     environmentId,
     getSelectedModel,
@@ -2105,6 +2135,7 @@ export function OpenCodeChatTab({
             <NativeStructuredReviewResult
               enabled={isReviewTab}
               sessionId={session?.sessionId}
+              resultKey={structuredReviewRequestId}
               isLoading={session?.isLoading ?? false}
               loadResult={loadStructuredReview}
               onRetry={retryStructuredReview}
@@ -2156,7 +2187,9 @@ export function OpenCodeChatTab({
           models={models}
           slashCommands={slashCommands}
           favoriteModelIds={favoriteModelIds}
-          onSend={handleSend}
+          onSend={async (text, attachments) => {
+            await handleSend(text, attachments);
+          }}
           disabled={!client || !session}
           isLoading={session?.isLoading ?? false}
           queueLength={queueLength}

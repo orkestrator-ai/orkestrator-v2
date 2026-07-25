@@ -109,9 +109,25 @@ export interface LoopedReviewPass {
   sessionId: string;
   status: "discovering" | "reconciling" | "completed" | "failed";
   report?: StructuredReviewReport;
-  reconciliation?: ReviewReconciliation;
+  reconciliation?: LoopedReviewReconciliation;
   startedAt: string;
   completedAt?: string;
+}
+
+export interface LoopedReviewFindingOutcome {
+  reportIndex: number;
+  outcome: "new" | "updated" | "existing";
+  poolId: string | null;
+}
+
+/**
+ * A looped pass must account for every report finding. The shared operations
+ * remain provider-neutral, while these dispositions make unchanged semantic
+ * matches explicit and prevent a finding from silently disappearing.
+ */
+export interface LoopedReviewReconciliation extends ReviewReconciliation {
+  issueOutcomes: LoopedReviewFindingOutcome[];
+  coverageGapOutcomes: LoopedReviewFindingOutcome[];
 }
 
 export interface LoopedReviewRound {
@@ -154,6 +170,12 @@ export interface LoopedReviewFailure {
     | "persistence";
   message: string;
   retryPhase: ActiveLoopedReviewPhase;
+  /**
+   * The provider may have accepted the request even though its response could
+   * not be observed. Retry must reconcile this lease instead of dispatching a
+   * second side-effecting turn.
+   */
+  preserveDispatch?: boolean;
   occurredAt: string;
 }
 
@@ -196,6 +218,275 @@ export interface ReconciliationApplyResult {
   pool: ReviewFindingPool;
   added: number;
   updated: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+function isStringOrNull(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isIntegerAtLeast(value: unknown, minimum: number): value is number {
+  return typeof value === "number"
+    && Number.isInteger(value)
+    && value >= minimum;
+}
+
+function isOneOf<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+): value is T {
+  return typeof value === "string" && allowed.includes(value as T);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  const keys = new Set(allowed);
+  return Object.keys(value).every((key) => keys.has(key));
+}
+
+function isReviewPackageCommandResult(value: unknown): value is ReviewPackageCommandResult {
+  return isRecord(value)
+    && hasOnlyKeys(value, [
+      "command",
+      "status",
+      "exitCode",
+      "stdout",
+      "stderr",
+      "durationMs",
+      "limitation",
+    ])
+    && isString(value.command)
+    && isOneOf(value.status, ["passed", "failed", "skipped"])
+    && (value.exitCode === null || Number.isInteger(value.exitCode))
+    && isString(value.stdout)
+    && isString(value.stderr)
+    && isIntegerAtLeast(value.durationMs, 0)
+    && (value.limitation === undefined || isString(value.limitation));
+}
+
+function isReviewPackageFile(value: unknown): value is ReviewPackageFile {
+  if (
+    !isRecord(value)
+    || !hasOnlyKeys(value, [
+      "path",
+      "status",
+      "content",
+      "contentSha256",
+      "omittedReason",
+    ])
+    || !isString(value.path)
+    || value.path.length === 0
+    || !isString(value.status)
+    || !isStringOrNull(value.content)
+    || !isStringOrNull(value.contentSha256)
+    || !isStringOrNull(value.omittedReason)
+  ) {
+    return false;
+  }
+  if (value.content === null) {
+    return value.contentSha256 === null
+      && typeof value.omittedReason === "string"
+      && value.omittedReason.trim().length > 0;
+  }
+  return value.omittedReason === null
+    && typeof value.contentSha256 === "string"
+    && /^[a-f0-9]{64}$/i.test(value.contentSha256);
+}
+
+function isReviewPackageContext(value: unknown): value is ReviewPackageContext {
+  if (!isRecord(value)) return false;
+  if (!hasOnlyKeys(value, [
+    "ticketTitle",
+    "ticketDescription",
+    "acceptanceCriteria",
+    "comments",
+    "imageNames",
+    "projectNotes",
+  ])) {
+    return false;
+  }
+  return ["ticketTitle", "ticketDescription", "acceptanceCriteria", "projectNotes"]
+    .every((key) => value[key] === undefined || isString(value[key]))
+    && ["comments", "imageNames"].every((key) =>
+      value[key] === undefined
+      || (
+        Array.isArray(value[key])
+        && value[key].every(isString)
+      )
+    );
+}
+
+export function parseReviewPackage(
+  value: unknown,
+  expected?: {
+    id?: string;
+    round?: number;
+    targetBranch?: string;
+    context?: ReviewPackageContext;
+  },
+): ReviewPackage {
+  if (
+    !isRecord(value)
+    || !hasOnlyKeys(value, [
+      "id",
+      "round",
+      "preparedAt",
+      "targetBranch",
+      "baseRef",
+      "headRef",
+      "commit",
+      "completeDiff",
+      "changedFiles",
+      "validation",
+      "skippedFiles",
+      "uncommittedFiles",
+      "limitations",
+      "context",
+    ])
+    || !isString(value.id)
+    || value.id.length === 0
+    || !isIntegerAtLeast(value.round, 1)
+    || !isString(value.preparedAt)
+    || !Number.isFinite(Date.parse(value.preparedAt))
+    || !isString(value.targetBranch)
+    || value.targetBranch.length === 0
+    || !isString(value.baseRef)
+    || !/^[a-f0-9]{7,64}$/i.test(value.baseRef)
+    || !isString(value.headRef)
+    || !/^[a-f0-9]{7,64}$/i.test(value.headRef)
+    || !isString(value.completeDiff)
+    || !Array.isArray(value.changedFiles)
+    || !value.changedFiles.every(isReviewPackageFile)
+    || !Array.isArray(value.validation)
+    || !value.validation.every(isReviewPackageCommandResult)
+    || !Array.isArray(value.skippedFiles)
+    || !value.skippedFiles.every((file) =>
+      isRecord(file)
+      && hasOnlyKeys(file, ["path", "reason"])
+      && isString(file.path)
+      && file.path.length > 0
+      && isString(file.reason)
+      && file.reason.length > 0
+    )
+    || !Array.isArray(value.uncommittedFiles)
+    || !value.uncommittedFiles.every((file) =>
+      isRecord(file)
+      && hasOnlyKeys(file, ["path", "reason"])
+      && isString(file.path)
+      && file.path.length > 0
+      && isString(file.reason)
+      && file.reason.length > 0
+    )
+    || !Array.isArray(value.limitations)
+    || !value.limitations.every(isString)
+    || (value.context !== undefined && !isReviewPackageContext(value.context))
+  ) {
+    throw new Error("Review package failed runtime validation");
+  }
+  if (value.commit !== null) {
+    if (
+      !isRecord(value.commit)
+      || !hasOnlyKeys(value.commit, ["sha", "subject", "committedFiles"])
+      || !isString(value.commit.sha)
+      || value.commit.sha !== value.headRef
+      || !isString(value.commit.subject)
+      || !Array.isArray(value.commit.committedFiles)
+      || !value.commit.committedFiles.every(isString)
+    ) {
+      throw new Error("Review package commit metadata is incompatible with its HEAD");
+    }
+  }
+  const paths = value.changedFiles.map((file) => file.path);
+  if (new Set(paths).size !== paths.length) {
+    throw new Error("Review package contains duplicate changed-file paths");
+  }
+  if (value.changedFiles.length > 0 && value.completeDiff.length === 0) {
+    throw new Error("Review package omitted the complete diff");
+  }
+  if (
+    (expected?.id !== undefined && value.id !== expected.id)
+    || (expected?.round !== undefined && value.round !== expected.round)
+    || (
+      expected?.targetBranch !== undefined
+      && value.targetBranch !== expected.targetBranch
+    )
+    || (
+      expected?.context !== undefined
+      && JSON.stringify(value.context) !== JSON.stringify(expected.context)
+    )
+  ) {
+    throw new Error("Prepared package does not match the active review round");
+  }
+  return value as unknown as ReviewPackage;
+}
+
+function isReviewPackage(value: unknown, round: number): value is ReviewPackage {
+  try {
+    parseReviewPackage(value, { round });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isFindingOutcome(value: unknown): value is LoopedReviewFindingOutcome {
+  return isRecord(value)
+    && Number.isInteger(value.reportIndex)
+    && (value.reportIndex as number) >= 0
+    && (
+      value.outcome === "new"
+      || value.outcome === "updated"
+      || value.outcome === "existing"
+    )
+    && (
+      value.poolId === null
+      || (typeof value.poolId === "string" && value.poolId.length > 0)
+    )
+    && (value.outcome === "new" ? value.poolId === null : typeof value.poolId === "string");
+}
+
+export function parseLoopedReviewReconciliation(
+  value: unknown,
+): LoopedReviewReconciliation {
+  if (!isRecord(value)) {
+    throw new Error("Looped review reconciliation must be an object");
+  }
+  const {
+    issueOutcomes,
+    coverageGapOutcomes,
+    ...shared
+  } = value;
+  if (
+    !isReviewReconciliation(shared)
+    || !Array.isArray(issueOutcomes)
+    || !issueOutcomes.every(isFindingOutcome)
+    || !Array.isArray(coverageGapOutcomes)
+    || !coverageGapOutcomes.every(isFindingOutcome)
+  ) {
+    throw new Error("Looped review reconciliation failed runtime validation");
+  }
+  return {
+    ...shared,
+    issueOutcomes,
+    coverageGapOutcomes,
+  };
+}
+
+function isLoopedReviewReconciliation(
+  value: unknown,
+): value is LoopedReviewReconciliation {
+  try {
+    parseLoopedReviewReconciliation(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function emptyPool(): ReviewFindingPool {
@@ -277,15 +568,39 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
       !!round
       && Number.isInteger(round.round)
       && validAllowance(round.allowance)
+      && isOneOf(round.status, [
+        "preparing",
+        "reviewing",
+        "fixing",
+        "completed",
+        "failed",
+      ])
+      && typeof round.startedAt === "string"
+      && (
+        round.completedAt === undefined
+        || typeof round.completedAt === "string"
+      )
+      && (round.package === undefined || isReviewPackage(round.package, round.round))
       && Array.isArray(round.passes)
       && round.passes.every((pass) =>
         !!pass
-        && Number.isInteger(pass.pass)
+        && isIntegerAtLeast(pass.pass, 1)
         && typeof pass.sessionId === "string"
+        && isOneOf(pass.status, [
+          "discovering",
+          "reconciling",
+          "completed",
+          "failed",
+        ])
+        && typeof pass.startedAt === "string"
+        && (
+          pass.completedAt === undefined
+          || typeof pass.completedAt === "string"
+        )
         && (pass.report === undefined || isStructuredReviewReport(pass.report))
         && (
           pass.reconciliation === undefined
-          || isReviewReconciliation(pass.reconciliation)
+          || isLoopedReviewReconciliation(pass.reconciliation)
         )
       )
     )
@@ -294,6 +609,19 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
       !!session
       && typeof session.id === "string"
       && typeof session.providerSessionId === "string"
+      && isOneOf(session.phase, ["preparation", "discovery", "fix", "pr"])
+      && isIntegerAtLeast(session.round, 1)
+      && (
+        session.pass === undefined
+        || isIntegerAtLeast(session.pass, 1)
+      )
+      && isOneOf(session.status, ["running", "idle", "error", "cancelled"])
+      && typeof session.startedAt === "string"
+      && (
+        session.completedAt === undefined
+        || typeof session.completedAt === "string"
+      )
+      && (session.error === undefined || typeof session.error === "string")
       && Array.isArray(session.requestIds)
       && session.requestIds.every((requestId) => typeof requestId === "string")
     )
@@ -303,6 +631,33 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
         typeof workflow.dispatch.id === "string"
         && typeof workflow.dispatch.requestId === "string"
         && typeof workflow.dispatch.sessionId === "string"
+        && isOneOf(workflow.dispatch.phase, [
+          "preparing",
+          "discovering",
+          "reconciling",
+          "fixing",
+          "creating-pr",
+        ])
+        && isOneOf(workflow.dispatch.kind, [
+          "prepare",
+          "discover",
+          "reconcile",
+          "fix",
+          "pr",
+        ])
+        && (
+          (workflow.dispatch.phase === "preparing"
+            && workflow.dispatch.kind === "prepare")
+          || (workflow.dispatch.phase === "discovering"
+            && workflow.dispatch.kind === "discover")
+          || (workflow.dispatch.phase === "reconciling"
+            && workflow.dispatch.kind === "reconcile")
+          || (workflow.dispatch.phase === "fixing"
+            && workflow.dispatch.kind === "fix")
+          || (workflow.dispatch.phase === "creating-pr"
+            && workflow.dispatch.kind === "pr")
+        )
+        && typeof workflow.dispatch.createdAt === "string"
         && (
           workflow.dispatch.state === "prepared"
           || workflow.dispatch.state === "sent"
@@ -315,7 +670,47 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
       !!archive
       && Number.isInteger(archive.round)
       && typeof archive.fixSessionId === "string"
+      && typeof archive.fixedAt === "string"
       && isReviewFindingPool(archive.pool)
+    )
+    && (
+      workflow.pausedFromPhase === undefined
+      || isOneOf(workflow.pausedFromPhase, [
+        "preparing",
+        "discovering",
+        "reconciling",
+        "fixing",
+        "creating-pr",
+      ])
+    )
+    && (
+      workflow.failure === undefined
+      || (
+        isOneOf(workflow.failure.code, [
+          "connection",
+          "dispatch",
+          "provider",
+          "structured-output",
+          "package",
+          "reconciliation",
+          "fix",
+          "pr",
+          "persistence",
+        ])
+        && typeof workflow.failure.message === "string"
+        && isOneOf(workflow.failure.retryPhase, [
+          "preparing",
+          "discovering",
+          "reconciling",
+          "fixing",
+          "creating-pr",
+        ])
+        && (
+          workflow.failure.preserveDispatch === undefined
+          || typeof workflow.failure.preserveDispatch === "boolean"
+        )
+        && typeof workflow.failure.occurredAt === "string"
+      )
     )
     && !!workflow.pr
     && (
@@ -324,8 +719,29 @@ export function isLoopedReviewWorkflow(value: unknown): value is LoopedReviewWor
       || workflow.pr.status === "failed"
       || workflow.pr.status === "created"
     )
+    && (
+      workflow.pr.sessionId === undefined
+      || typeof workflow.pr.sessionId === "string"
+    )
+    && (workflow.pr.url === undefined || typeof workflow.pr.url === "string")
+    && (workflow.pr.error === undefined || typeof workflow.pr.error === "string")
     && typeof workflow.createdAt === "string"
-    && typeof workflow.updatedAt === "string";
+    && typeof workflow.updatedAt === "string"
+    && isIntegerAtLeast(workflow.backendRevision, 0)
+    && workflow.rounds.some((round) => round.round === workflow.currentRound)
+    && (
+      workflow.activeSessionId === undefined
+      || workflow.sessions.some((session) => session.id === workflow.activeSessionId)
+    )
+    && (
+      workflow.dispatch === undefined
+      || workflow.sessions.some((session) => session.id === workflow.dispatch!.sessionId)
+    )
+    && (
+      workflow.phase === "paused"
+        ? workflow.pausedFromPhase !== undefined
+        : workflow.pausedFromPhase === undefined
+    );
 }
 
 /**
@@ -403,6 +819,93 @@ export function applyReviewReconciliation(
   };
 }
 
+function sameFinding(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+export function assertReconciliationAccountsForReport(
+  report: StructuredReviewReport,
+  current: ReviewFindingPool,
+  reconciliation: LoopedReviewReconciliation,
+): void {
+  const validate = <T,>(
+    label: "issue" | "coverage gap",
+    findings: T[],
+    outcomes: LoopedReviewFindingOutcome[],
+    newFindings: T[],
+    updates: Array<{ poolId: string; finding: T }>,
+    existingIds: Set<string>,
+  ) => {
+    if (outcomes.length !== findings.length) {
+      throw new Error(
+        `Reconciliation accounted for ${outcomes.length} ${label}s but the report contains ${findings.length}`,
+      );
+    }
+    const byIndex = new Map<number, LoopedReviewFindingOutcome>();
+    for (const outcome of outcomes) {
+      if (
+        outcome.reportIndex >= findings.length
+        || byIndex.has(outcome.reportIndex)
+      ) {
+        throw new Error(`Reconciliation contains an invalid duplicate ${label} report index`);
+      }
+      byIndex.set(outcome.reportIndex, outcome);
+    }
+
+    let newIndex = 0;
+    const usedUpdateIds = new Set<string>();
+    for (let reportIndex = 0; reportIndex < findings.length; reportIndex += 1) {
+      const finding = findings[reportIndex]!;
+      const outcome = byIndex.get(reportIndex);
+      if (!outcome) {
+        throw new Error(`Reconciliation omitted ${label} report index ${reportIndex}`);
+      }
+      if (outcome.outcome === "new") {
+        const proposed = newFindings[newIndex++];
+        if (proposed === undefined || !sameFinding(proposed, finding)) {
+          throw new Error(`Reconciliation new ${label} does not match report index ${reportIndex}`);
+        }
+        continue;
+      }
+      const poolId = outcome.poolId!;
+      if (!existingIds.has(poolId)) {
+        throw new Error(`Reconciliation matched ${label} to unknown pool ID: ${poolId}`);
+      }
+      if (outcome.outcome === "updated") {
+        const update = updates.find((candidate) => candidate.poolId === poolId);
+        if (
+          !update
+          || usedUpdateIds.has(poolId)
+          || !sameFinding(update.finding, finding)
+        ) {
+          throw new Error(`Reconciliation update for ${label} ${poolId} does not match the report`);
+        }
+        usedUpdateIds.add(poolId);
+      }
+    }
+    if (newIndex !== newFindings.length || usedUpdateIds.size !== updates.length) {
+      throw new Error(`Reconciliation contains unaccounted ${label} operations`);
+    }
+  };
+
+  validate(
+    "issue",
+    report.issues,
+    reconciliation.issueOutcomes,
+    reconciliation.newIssues,
+    reconciliation.issueUpdates,
+    new Set(current.issues.map((finding) => finding.poolId)),
+  );
+  validate(
+    "coverage gap",
+    report.testCoverageGaps,
+    reconciliation.coverageGapOutcomes,
+    reconciliation.newCoverageGaps,
+    reconciliation.coverageGapUpdates,
+    new Set(current.coverageGaps.map((finding) => finding.poolId)),
+  );
+}
+
 interface LoopedReviewState {
   workflows: Map<string, LoopedReviewWorkflow>;
   createWorkflow: (input: {
@@ -441,7 +944,7 @@ interface LoopedReviewState {
   recordReconciliation: (
     workflowId: string,
     sessionId: string,
-    reconciliation: ReviewReconciliation,
+    reconciliation: LoopedReviewReconciliation,
   ) => ReconciliationApplyResult | undefined;
   completeFix: (workflowId: string, fixSessionId: string) => void;
   claimDispatch: (
@@ -666,6 +1169,20 @@ export const useLoopedReviewStore = create<LoopedReviewState>()(
       ) {
         return undefined;
       }
+      const report = workflow.rounds
+        .find((round) => round.round === workflow.currentRound)
+        ?.passes.find((pass) =>
+          pass.pass === workflow.currentPass
+          && pass.sessionId === sessionId
+        )?.report;
+      if (!report) {
+        throw new Error("Cannot reconcile a pass without its validated report");
+      }
+      assertReconciliationAccountsForReport(
+        report,
+        workflow.activePool,
+        reconciliation,
+      );
       const applied = applyReviewReconciliation(workflow.activePool, reconciliation);
       const shouldStop =
         applied.added + applied.updated === 0
@@ -859,7 +1376,12 @@ export const useLoopedReviewStore = create<LoopedReviewState>()(
       set((state) => updateWorkflow(state, workflowId, (workflow) => {
         if (workflow.phase !== "failed" || !workflow.failure) return workflow;
         const failure = workflow.failure;
+        const preserveDispatch =
+          failure.preserveDispatch === true
+          && workflow.dispatch !== undefined;
         const retryingDiscovery =
+          !preserveDispatch
+          &&
           failure.retryPhase === "discovering"
           && workflow.rounds
             .find((round) => round.round === workflow.currentRound)
@@ -874,7 +1396,7 @@ export const useLoopedReviewStore = create<LoopedReviewState>()(
             ? Math.max(0, workflow.currentPass - 1)
             : workflow.currentPass,
           failure: undefined,
-          dispatch: undefined,
+          dispatch: preserveDispatch ? workflow.dispatch : undefined,
           rounds: workflow.rounds.map((round) =>
             round.round !== workflow.currentRound
               ? round

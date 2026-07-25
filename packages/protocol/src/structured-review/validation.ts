@@ -643,7 +643,7 @@ function validateReviewIssue(
     `${path}.line`,
     issues,
   );
-  if (hasOwn(object, "alternativeFixes")) {
+  if (hasOwn(object, "alternativeFixes") && object.alternativeFixes !== null) {
     validateStringArray(
       object.alternativeFixes,
       `${path}.alternativeFixes`,
@@ -939,7 +939,41 @@ function parseContract<T>(
   if (issues.length > 0) {
     throw new ReviewContractValidationError(contract, issues);
   }
-  return value as T;
+  return normalizeOptionalAlternativeFixes(value) as T;
+}
+
+/**
+ * Strict provider schemas must require every object property, so the wire
+ * representation uses `null` for an omitted optional alternative-fixes list.
+ * Keep the provider-independent domain contract ergonomic by removing only
+ * those null sentinels after validation.
+ */
+function normalizeOptionalAlternativeFixes(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    let changed = false;
+    const normalized = value.map((entry) => {
+      const next = normalizeOptionalAlternativeFixes(entry);
+      changed ||= next !== entry;
+      return next;
+    });
+    return changed ? normalized : value;
+  }
+  if (typeof value !== "object" || value === null) {
+    return value;
+  }
+
+  let changed = false;
+  const normalized: JsonObject = {};
+  for (const [key, entry] of Object.entries(value as JsonObject)) {
+    if (key === "alternativeFixes" && entry === null) {
+      changed = true;
+      continue;
+    }
+    const next = normalizeOptionalAlternativeFixes(entry);
+    changed ||= next !== entry;
+    normalized[key] = next;
+  }
+  return changed ? normalized : value;
 }
 
 function safeParseContract<T>(

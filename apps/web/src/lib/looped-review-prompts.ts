@@ -2,6 +2,9 @@ import type {
   ReviewFindingPool,
   StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
+import {
+  REVIEW_RECONCILIATION_JSON_SCHEMA,
+} from "@orkestrator/protocol/structured-review";
 import { buildReviewInstructionBlock, createPRPrompt } from "@/prompts";
 import type {
   ReviewPackage,
@@ -149,6 +152,40 @@ export const REVIEW_PACKAGE_JSON_SCHEMA = {
   },
 } as const;
 
+const findingOutcomeSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["reportIndex", "outcome", "poolId"],
+  properties: {
+    reportIndex: { type: "integer", minimum: 0 },
+    outcome: {
+      type: "string",
+      enum: ["new", "updated", "existing"],
+    },
+    poolId: nullableString,
+  },
+} as const;
+
+export const LOOPED_REVIEW_RECONCILIATION_JSON_SCHEMA = {
+  ...REVIEW_RECONCILIATION_JSON_SCHEMA,
+  required: [
+    ...REVIEW_RECONCILIATION_JSON_SCHEMA.required,
+    "issueOutcomes",
+    "coverageGapOutcomes",
+  ],
+  properties: {
+    ...REVIEW_RECONCILIATION_JSON_SCHEMA.properties,
+    issueOutcomes: {
+      type: "array",
+      items: findingOutcomeSchema,
+    },
+    coverageGapOutcomes: {
+      type: "array",
+      items: findingOutcomeSchema,
+    },
+  },
+} as const;
+
 export interface ReviewFixResult {
   complete: boolean;
   summary: string;
@@ -247,8 +284,12 @@ ${contextBlock(input.context)}## Preparation workflow
    - id = ${JSON.stringify(input.packageId)}
    - round = ${input.round}
    - targetBranch = ${JSON.stringify(input.targetBranch)}
-   - baseRef to the resolved base SHA
-   - headRef to the prepared HEAD SHA
+	   - baseRef to the resolved base SHA
+	   - headRef to the prepared HEAD SHA
+	   - contentSha256 to the lowercase SHA-256 of every included file content
+	   - contentSha256=null only when content=null and omittedReason explains the omission
+	   - commit.sha equal to headRef when a preparation commit was created
+${input.context ? "   - context exactly to the available ticket and project context supplied above" : ""}
 
 Do not perform the review itself.`;
 }
@@ -290,9 +331,13 @@ export function createReconciliationPrompt(input: {
 - Classify differently worded but semantically equivalent findings as updates to an existing stable pool ID, not new entries.
 - New findings have no pool ID; Orkestrator assigns IDs after accepting them.
 - Updates must name an existing pool ID and include the complete replacement finding.
+- Account for every report issue in issueOutcomes and every report coverage gap in coverageGapOutcomes, exactly once, using its zero-based reportIndex.
+- outcome=new requires poolId=null and a byte-for-byte equivalent entry in the corresponding new-findings array, in report order.
+- outcome=updated requires the referenced existing poolId and a byte-for-byte equivalent update finding.
+- outcome=existing requires the stable poolId of a semantically equivalent finding and no update operation.
 - Do not remove findings. Do not invent IDs. Do not update an entry merely to rephrase it; an update must add or materially improve information.
 - Do not ask questions or wait for interactive input.
-- If the report adds or materially updates nothing, return four empty operation arrays.
+- If the report adds or materially updates nothing, operation arrays are empty but every repeated report finding still has an explicit existing outcome.
 
 ## This pass's validated report
 

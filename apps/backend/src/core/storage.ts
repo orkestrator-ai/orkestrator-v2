@@ -196,6 +196,10 @@ function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
 function isPortNumber(value: unknown): value is number {
   return isPositiveInteger(value) && value <= 65_535;
 }
@@ -205,6 +209,21 @@ function isPortMapping(value: unknown): value is PortMapping {
     && isPortNumber(value.containerPort)
     && isPortNumber(value.hostPort)
     && (value.protocol === "tcp" || value.protocol === "udp");
+}
+
+function isPersistedLoopedReviewWorkflow(
+  value: unknown,
+  expectedId?: string,
+): value is PersistedLoopedReviewWorkflow {
+  return isRecord(value)
+    && isPositiveInteger(value.version)
+    && isNonBlankString(value.id)
+    && (expectedId === undefined || value.id === expectedId)
+    && isNonBlankString(value.environmentId)
+    && isRecord(value.snapshot)
+    && typeof value.updatedAt === "string"
+    && Number.isFinite(Date.parse(value.updatedAt))
+    && isPositiveInteger(value.revision);
 }
 
 function isClaudeModelCatalogSnapshot(
@@ -649,6 +668,10 @@ export class StorageService {
       if (mode !== undefined) {
         await fs.chmod(tempPath, mode);
       }
+      if (mode !== undefined && await exists(filePath)) {
+        // Backups of sensitive files must inherit the restricted mode too.
+        await fs.chmod(filePath, mode);
+      }
       if (makeBackup && await exists(filePath)) {
         await this.rotateBackups(filePath);
       }
@@ -712,6 +735,23 @@ export class StorageService {
     };
     const next = this.githubCompletionCommentMutationQueue.then(run, run);
     this.githubCompletionCommentMutationQueue = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private enqueueLoopedReviewMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      const release = await this.acquireMutationLock(
+        this.loopedReviewsFile(),
+        "looped review workflow storage",
+      );
+      try {
+        return await operation();
+      } finally {
+        await release();
+      }
+    };
+    const next = this.loopedReviewMutation.then(run, run);
+    this.loopedReviewMutation = next.then(() => undefined, () => undefined);
     return next;
   }
 
@@ -844,6 +884,15 @@ export class StorageService {
 
   private async saveJson(filePath: string, value: unknown): Promise<void> {
     await this.writeAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
+  }
+
+  private async saveSensitiveJson(filePath: string, value: unknown): Promise<void> {
+    await this.writeAtomic(
+      filePath,
+      `${JSON.stringify(value, null, 2)}\n`,
+      true,
+      0o600,
+    );
   }
 
   async loadProjects(): Promise<Project[]> {
@@ -1230,22 +1279,35 @@ export class StorageService {
   async getLoopedReviewWorkflow(
     workflowId: string,
   ): Promise<PersistedLoopedReviewWorkflow | null> {
+    if (!isNonBlankString(workflowId)) {
+      throw new Error("Looped review workflow ID must not be blank");
+    }
     const workflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
       this.loopedReviewsFile(),
       () => ({}),
     );
-    return workflows[workflowId] ?? null;
+    const workflow = workflows[workflowId];
+    return isPersistedLoopedReviewWorkflow(workflow, workflowId)
+      ? workflow
+      : null;
   }
 
   async listLoopedReviewWorkflows(
     environmentId: string,
   ): Promise<PersistedLoopedReviewWorkflow[]> {
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Looped review environment ID must not be blank");
+    }
     const workflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
       this.loopedReviewsFile(),
       () => ({}),
     );
-    return Object.values(workflows)
-      .filter((workflow) => workflow.environmentId === environmentId)
+    return Object.entries(workflows)
+      .filter(([workflowId, workflow]) =>
+        isPersistedLoopedReviewWorkflow(workflow, workflowId)
+        && workflow.environmentId === environmentId
+      )
+      .map(([, workflow]) => workflow)
       .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
   }
 
@@ -1256,6 +1318,21 @@ export class StorageService {
     snapshot: unknown,
     expectedRevision?: number,
   ): Promise<PersistedLoopedReviewWorkflow> {
+    if (!isNonBlankString(workflowId)) {
+      throw new Error("Looped review workflow ID must not be blank");
+    }
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Looped review environment ID must not be blank");
+    }
+    if (!isPositiveInteger(version)) {
+      throw new Error("Looped review workflow version must be a positive integer");
+    }
+    if (!isRecord(snapshot)) {
+      throw new Error("Looped review snapshot must be a JSON object");
+    }
+    if (expectedRevision !== undefined && !isNonNegativeInteger(expectedRevision)) {
+      throw new Error("Looped review expected revision must be a non-negative integer");
+    }
     let serializedSnapshot: string | undefined;
     try {
       serializedSnapshot = JSON.stringify(snapshot);
@@ -1271,14 +1348,19 @@ export class StorageService {
       throw new Error("Looped review snapshot exceeds the 32 MB limit");
     }
 
-    const run = this.loopedReviewMutation.then(async () => {
+    return this.enqueueLoopedReviewMutation(async () => {
       if (!await this.getEnvironment(environmentId)) {
         throw new Error(`Environment not found: ${environmentId}`);
       }
-      const workflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
+      const storedWorkflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
         this.loopedReviewsFile(),
         () => ({}),
       );
+      const workflows = Object.fromEntries(
+        Object.entries(storedWorkflows).filter(([storedId, workflow]) =>
+          isPersistedLoopedReviewWorkflow(workflow, storedId)
+        ),
+      ) as Record<string, PersistedLoopedReviewWorkflow>;
       const previous = workflows[workflowId];
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Looped review workflow belongs to another environment");
@@ -1298,25 +1380,29 @@ export class StorageService {
         revision: (previous?.revision ?? 0) + 1,
       };
       workflows[workflowId] = saved;
-      await this.saveJson(this.loopedReviewsFile(), workflows);
+      await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
       return saved;
     });
-    this.loopedReviewMutation = run.then(() => undefined, () => undefined);
-    return run;
   }
 
   async deleteLoopedReviewWorkflow(workflowId: string): Promise<void> {
-    const run = this.loopedReviewMutation.then(async () => {
-      const workflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
+    if (!isNonBlankString(workflowId)) {
+      throw new Error("Looped review workflow ID must not be blank");
+    }
+    await this.enqueueLoopedReviewMutation(async () => {
+      const storedWorkflows = await this.loadJson<Record<string, PersistedLoopedReviewWorkflow>>(
         this.loopedReviewsFile(),
         () => ({}),
       );
+      const workflows = Object.fromEntries(
+        Object.entries(storedWorkflows).filter(([storedId, workflow]) =>
+          isPersistedLoopedReviewWorkflow(workflow, storedId)
+        ),
+      ) as Record<string, PersistedLoopedReviewWorkflow>;
       if (!(workflowId in workflows)) return;
       delete workflows[workflowId];
-      await this.saveJson(this.loopedReviewsFile(), workflows);
+      await this.saveSensitiveJson(this.loopedReviewsFile(), workflows);
     });
-    this.loopedReviewMutation = run.then(() => undefined, () => undefined);
-    await run;
   }
 
   async deletePaneLayout(environmentId: string): Promise<void> {

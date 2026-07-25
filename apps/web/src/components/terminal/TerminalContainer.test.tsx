@@ -6,6 +6,10 @@ import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import {
+  useLoopedReviewStore,
+  type LoopedReviewWorkflow,
+} from "@/stores/loopedReviewStore";
 import { createSessionKey, useTerminalSessionStore } from "@/stores/terminalSessionStore";
 import type { PaneLeaf, PersistedPaneLayout } from "@/types/paneLayout";
 import type { EnsureEnvironmentSetupResult, EnvironmentSetupSession } from "@/types";
@@ -64,6 +68,14 @@ const runEnvironmentSetupMock = mock(async (environmentId: string) => ({
 }));
 const getEnvironmentSetupSessionMock = mock(async (_environmentId: string): Promise<EnvironmentSetupSession | null> => null);
 const getPaneLayoutMock = mock(async (_environmentId: string): Promise<PersistedPaneLayout | null> => null);
+const listLoopedReviewWorkflowsMock = mock(async (_environmentId: string) => [] as Array<{
+  version: number;
+  id: string;
+  environmentId: string;
+  snapshot: LoopedReviewWorkflow;
+  updatedAt: string;
+  revision: number;
+}>);
 const writeContainerFileMock = mock(async (_containerId: string, filePath: string) => `/workspace/${filePath}`);
 const writeLocalFileMock = mock(async (worktreePath: string, filePath: string) => `${worktreePath}/${filePath}`);
 const TEST_CONTAINER_SETUP_COMMAND = "/backend-provided/workspace-setup.sh";
@@ -102,6 +114,7 @@ mock.module("@/lib/backend", () => ({
   runEnvironmentSetup: runEnvironmentSetupMock,
   getEnvironmentSetupSession: getEnvironmentSetupSessionMock,
   getPaneLayout: getPaneLayoutMock,
+  listLoopedReviewWorkflows: listLoopedReviewWorkflowsMock,
   writeContainerFile: writeContainerFileMock,
   writeLocalFile: writeLocalFileMock,
 }));
@@ -226,6 +239,7 @@ describe("TerminalContainer", () => {
       composeDraftText: new Map(),
       composeDraftImages: new Map(),
     });
+    useLoopedReviewStore.setState({ workflows: new Map() });
 
     markSetupScriptsCompleteMock.mockClear();
     getSetupCommandsMock.mockReset();
@@ -252,6 +266,8 @@ describe("TerminalContainer", () => {
     getEnvironmentSetupSessionMock.mockResolvedValue(null);
     getPaneLayoutMock.mockReset();
     getPaneLayoutMock.mockResolvedValue(null);
+    listLoopedReviewWorkflowsMock.mockReset();
+    listLoopedReviewWorkflowsMock.mockResolvedValue([]);
     writeContainerFileMock.mockReset();
     writeLocalFileMock.mockReset();
     writeContainerFileMock.mockImplementation(async (_containerId: string, filePath: string) => `/workspace/${filePath}`);
@@ -341,6 +357,74 @@ describe("TerminalContainer", () => {
       });
     });
     expect(getPaneLayoutMock).toHaveBeenCalledWith("env-hidden");
+  });
+
+  test("reconstructs a looped-review tab only after its authoritative workflow hydrates", async () => {
+    const workflowId = useLoopedReviewStore.getState().createWorkflow({
+      environmentId: "env-hidden",
+      projectId: "project-1",
+      agent: "codex",
+      model: "gpt-5.4",
+      targetBranch: "main",
+      allowance: 6,
+    });
+    const workflow = useLoopedReviewStore.getState().workflows.get(workflowId)!;
+    useLoopedReviewStore.setState({ workflows: new Map() });
+    listLoopedReviewWorkflowsMock.mockResolvedValue([{
+      version: workflow.version,
+      id: workflow.id,
+      environmentId: workflow.environmentId,
+      snapshot: workflow,
+      updatedAt: workflow.updatedAt,
+      revision: 3,
+    }]);
+    getPaneLayoutMock.mockResolvedValue({
+      version: 1,
+      environmentId: "env-hidden",
+      containerId: "container-hidden",
+      activePaneId: "restored-pane",
+      root: {
+        kind: "leaf",
+        id: "restored-pane",
+        tabs: [{
+          id: "restored-looped-review",
+          type: "looped-review",
+          loopedReviewTabData: {
+            environmentId: "env-hidden",
+            workflowId,
+            isLocal: false,
+          },
+        }],
+        activeTabId: "restored-looped-review",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 1,
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(useLoopedReviewStore.getState().workflows.get(workflowId))
+        .toMatchObject({ backendRevision: 3, phase: "preparing" });
+      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden"))
+        .toMatchObject([{
+          id: "restored-looped-review",
+          type: "looped-review",
+          loopedReviewTabData: {
+            environmentId: "env-hidden",
+            workflowId,
+          },
+        }]);
+    });
   });
 
   test("completes hydration with a default layout when restore rejects", async () => {
@@ -3022,18 +3106,88 @@ describe("TerminalContainer", () => {
 
   describe("createTab forwards displayTitle", () => {
     function CreateTabHarness({
+      onResult,
       type,
       options,
     }: {
+      onResult?: (created: boolean) => void;
       type: CreatableTabType;
       options: CreateTabOptions;
     }) {
       const { createTab } = useTerminalContext();
       useEffect(() => {
-        if (createTab) createTab(type, options);
-      }, [createTab, type, options]);
+        if (createTab) {
+          const created = createTab(type, options);
+          onResult?.(created);
+        }
+      }, [createTab, onResult, type, options]);
       return null;
     }
+
+    test("reports whether a looped-review tab was actually created", async () => {
+      const accepted = mock((_created: boolean) => {});
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="looped-review"
+            options={{ loopedReviewId: "workflow-1" }}
+            onResult={accepted}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => expect(accepted).toHaveBeenCalledWith(true));
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible"))
+        .toContainEqual(expect.objectContaining({
+          type: "looped-review",
+          loopedReviewTabData: expect.objectContaining({
+            workflowId: "workflow-1",
+          }),
+        }));
+    });
+
+    test("reports refusal instead of claiming a looped-review tab was created", async () => {
+      usePaneLayoutStore.setState((state) => ({
+        environments: new Map(state.environments).set("env-visible", {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: Array.from(
+              { length: MAX_TABS },
+              (_, index) => ({ id: `tab-${index}`, type: "plain" as const }),
+            ),
+            activeTabId: "tab-0",
+          },
+          activePaneId: "default",
+          containerId: "container-visible",
+        }),
+      }));
+      const refused = mock((_created: boolean) => {});
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="looped-review"
+            options={{ loopedReviewId: "workflow-1" }}
+            onResult={refused}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => expect(refused).toHaveBeenCalledWith(false));
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(MAX_TABS);
+    });
 
     test("plain terminal tabs receive displayTitle", async () => {
       render(

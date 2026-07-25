@@ -187,12 +187,23 @@ describe("createReviewPrompt", () => {
 // --- createPRPrompt ---
 
 describe("createPRPrompt", () => {
-  test("includes stage, commit, push, and PR steps", () => {
+  test("includes safe staging, commit, push, and PR steps", () => {
     const result = createPRPrompt("main");
-    expect(result).toContain("## Step 1: Stage All Changes");
+    expect(result).toContain("## Step 1: Stage Relevant Changes Safely");
     expect(result).toContain("## Step 2: Create Commit");
     expect(result).toContain("## Step 3: Push to Remote");
     expect(result).toContain("## Step 4: Create Pull Request");
+  });
+
+  test("stages explicit relevant paths and preserves excluded files", () => {
+    const result = createPRPrompt("main");
+    expect(result).toContain("git diff HEAD");
+    expect(result).toContain("git add -- <path>...");
+    expect(result).toContain(".env*");
+    expect(result).toContain("leave it uncommitted");
+    expect(result).toContain("untrusted data");
+    expect(result).toContain("do not use `git add -A`");
+    expect(result).toContain("`git add .`");
   });
 
   test("uses the provided target branch for PR creation", () => {

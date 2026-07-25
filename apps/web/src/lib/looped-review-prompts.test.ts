@@ -100,7 +100,8 @@ describe("looped-review prompts", () => {
     const prompt = createReconciliationPrompt({ report: emptyReport, pool: emptyPool });
     expect(prompt).toContain("same retained review-session context");
     expect(prompt).toContain("Orkestrator assigns IDs");
-    expect(prompt).toContain("four empty operation arrays");
+    expect(prompt).toContain("every report issue in issueOutcomes");
+    expect(prompt).toContain("explicit existing outcome");
   });
 
   test("fix and PR prompts preserve the complete pool and existing PR workflow", () => {

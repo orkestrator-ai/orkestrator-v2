@@ -1,15 +1,17 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import type {
   ReviewIssue,
-  ReviewReconciliation,
   StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import {
   applyReviewReconciliation,
+  isLoopedReviewWorkflow,
   LOOPED_REVIEW_DEFAULT_ALLOWANCE,
   nextReviewAllowance,
   normalizeReviewAllowance,
+  parseReviewPackage,
   useLoopedReviewStore,
+  type LoopedReviewReconciliation,
   type ReviewPackage,
 } from "./loopedReviewStore";
 
@@ -27,25 +29,31 @@ const issue: ReviewIssue = {
   verification: "Reconnect during dispatch.",
 };
 
-const emptyReconciliation: ReviewReconciliation = {
+const emptyReconciliation: LoopedReviewReconciliation = {
   newIssues: [],
   issueUpdates: [],
   newCoverageGaps: [],
   coverageGapUpdates: [],
+  issueOutcomes: [],
+  coverageGapOutcomes: [],
 };
 
 const report = {
   issues: [issue],
   testCoverageGaps: [],
 } as unknown as StructuredReviewReport;
+const cleanReport = {
+  ...report,
+  issues: [],
+} as StructuredReviewReport;
 
 const reviewPackage: ReviewPackage = {
   id: "package-1",
   round: 1,
   preparedAt: "2026-07-25T00:00:00.000Z",
   targetBranch: "main",
-  baseRef: "origin/main",
-  headRef: "abc123",
+  baseRef: "a".repeat(40),
+  headRef: "b".repeat(40),
   commit: null,
   completeDiff: "diff --git a/a b/a",
   changedFiles: [],
@@ -145,14 +153,14 @@ describe("looped review workflow transitions", () => {
       providerSessionId: "provider-1",
     })!;
     store.startPass(id, sessionId);
-    store.recordReport(id, sessionId, report);
+    store.recordReport(id, sessionId, cleanReport);
     store.recordReconciliation(id, sessionId, emptyReconciliation);
 
     const workflow = useLoopedReviewStore.getState().workflows.get(id)!;
     expect(workflow.phase).toBe("creating-pr");
     expect(workflow.currentPass).toBe(1);
     expect(workflow.rounds[0]?.passes[0]).toMatchObject({
-      report,
+      report: cleanReport,
       reconciliation: emptyReconciliation,
       status: "completed",
     });
@@ -180,6 +188,11 @@ describe("looped review workflow transitions", () => {
     store.recordReconciliation(id, sessionId, {
       ...emptyReconciliation,
       newIssues: [issue],
+      issueOutcomes: [{
+        reportIndex: 0,
+        outcome: "new",
+        poolId: null,
+      }],
     });
 
     // Force round exhaustion to exercise the fix transition without five more
@@ -234,5 +247,181 @@ describe("looped review workflow transitions", () => {
     const workflow = useLoopedReviewStore.getState().workflows.get(id)!;
     expect(workflow.phase).toBe("creating-pr");
     expect(workflow.rounds).toHaveLength(1);
+  });
+
+  test("rejects reconciliation that omits a report finding", () => {
+    const store = useLoopedReviewStore.getState();
+    const id = store.createWorkflow({
+      environmentId: "env-1",
+      projectId: "project-1",
+      agent: "codex",
+      model: "gpt-5.4",
+      targetBranch: "main",
+    });
+    store.setPreparedPackage(id, reviewPackage);
+    const sessionId = store.addSession(id, {
+      phase: "discovery",
+      round: 1,
+      pass: 1,
+      providerSessionId: "provider-1",
+    })!;
+    store.startPass(id, sessionId);
+    store.recordReport(id, sessionId, report);
+
+    expect(() =>
+      store.recordReconciliation(id, sessionId, emptyReconciliation)
+    ).toThrow("report contains 1");
+    const workflow = useLoopedReviewStore.getState().workflows.get(id)!;
+    expect(workflow.phase).toBe("reconciling");
+    expect(workflow.activePool.issues).toHaveLength(0);
+  });
+
+  test("accepts an explicit unchanged semantic match and stops the round", () => {
+    const store = useLoopedReviewStore.getState();
+    const id = store.createWorkflow({
+      environmentId: "env-1",
+      projectId: "project-1",
+      agent: "claude",
+      model: "default",
+      targetBranch: "main",
+    });
+    store.setPreparedPackage(id, reviewPackage);
+    useLoopedReviewStore.setState((state) => {
+      const workflows = new Map(state.workflows);
+      workflows.set(id, {
+        ...workflows.get(id)!,
+        activePool: {
+          issues: [{ poolId: "issue-existing", ...issue }],
+          coverageGaps: [],
+        },
+      });
+      return { workflows };
+    });
+    const sessionId = store.addSession(id, {
+      phase: "discovery",
+      round: 1,
+      pass: 1,
+      providerSessionId: "provider-1",
+    })!;
+    store.startPass(id, sessionId);
+    store.recordReport(id, sessionId, report);
+    store.recordReconciliation(id, sessionId, {
+      ...emptyReconciliation,
+      issueOutcomes: [{
+        reportIndex: 0,
+        outcome: "existing",
+        poolId: "issue-existing",
+      }],
+    });
+
+    expect(useLoopedReviewStore.getState().workflows.get(id)?.phase).toBe("fixing");
+  });
+
+  test("preserves ambiguous dispatch leases on retry but clears definite failures", () => {
+    const store = useLoopedReviewStore.getState();
+    const id = store.createWorkflow({
+      environmentId: "env-1",
+      projectId: "project-1",
+      agent: "codex",
+      model: "gpt-5.4",
+      targetBranch: "main",
+    });
+    const sessionId = store.addSession(id, {
+      phase: "preparation",
+      round: 1,
+      providerSessionId: "provider-1",
+    })!;
+    expect(store.claimDispatch(id, {
+      id: "dispatch-1",
+      requestId: "request-1",
+      sessionId,
+      phase: "preparing",
+      kind: "prepare",
+    })).toBe(true);
+    store.markDispatchSent(id, "dispatch-1");
+    store.failWorkflow(id, {
+      code: "connection",
+      message: "response lost",
+      retryPhase: "preparing",
+      preserveDispatch: true,
+    });
+    store.retryWorkflow(id);
+    expect(useLoopedReviewStore.getState().workflows.get(id)?.dispatch).toMatchObject({
+      id: "dispatch-1",
+      requestId: "request-1",
+      state: "sent",
+    });
+
+    store.failWorkflow(id, {
+      code: "structured-output",
+      message: "schema rejected",
+      retryPhase: "preparing",
+    });
+    store.retryWorkflow(id);
+    expect(useLoopedReviewStore.getState().workflows.get(id)?.dispatch).toBeUndefined();
+  });
+});
+
+describe("looped review recovery validation", () => {
+  test("rejects malformed discriminants instead of treating them as PR work", () => {
+    const id = useLoopedReviewStore.getState().createWorkflow({
+      environmentId: "env-1",
+      projectId: "project-1",
+      agent: "codex",
+      model: "gpt-5.4",
+      targetBranch: "main",
+    });
+    const workflow = useLoopedReviewStore.getState().workflows.get(id)!;
+    const session = {
+      id: "session-1",
+      phase: "preparation" as const,
+      round: 1,
+      providerSessionId: "provider-1",
+      requestIds: ["request-1"],
+      status: "running" as const,
+      startedAt: workflow.createdAt,
+    };
+    const malformed = {
+      ...workflow,
+      sessions: [session],
+      activeSessionId: session.id,
+      dispatch: {
+        id: "dispatch-1",
+        requestId: "request-1",
+        sessionId: session.id,
+        phase: "preparing",
+        kind: "pr",
+        state: "sent",
+        createdAt: workflow.createdAt,
+      },
+    };
+    expect(isLoopedReviewWorkflow(malformed)).toBe(false);
+    expect(isLoopedReviewWorkflow({
+      ...malformed,
+      dispatch: { ...malformed.dispatch, kind: "prepare" },
+    })).toBe(true);
+  });
+
+  test("rejects incomplete package files and incompatible commit metadata", () => {
+    expect(() => parseReviewPackage({
+      ...reviewPackage,
+      changedFiles: [{
+        path: "src/a.ts",
+        status: "M",
+        content: null,
+        contentSha256: null,
+        omittedReason: null,
+      }],
+      completeDiff: "diff",
+    })).toThrow("runtime validation");
+
+    expect(() => parseReviewPackage({
+      ...reviewPackage,
+      commit: {
+        sha: "c".repeat(40),
+        subject: "fix: mismatch",
+        committedFiles: [],
+      },
+    })).toThrow("incompatible");
   });
 });

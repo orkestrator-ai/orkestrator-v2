@@ -63,6 +63,7 @@ import {
   readValidatedBuildReview,
   structuredReviewHasFindings,
 } from "@/lib/build-pipeline-structured-review";
+import { hideRawStructuredReviewMessages } from "@/lib/structured-review-messages";
 
 interface CodexBuildChatTabProps {
   data: BuildTabData;
@@ -493,7 +494,10 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
         return true;
       });
 
-      const displayMessages = filtered.map(normalizeCodexNativeMessage);
+      const normalizedMessages = filtered.map(normalizeCodexNativeMessage);
+      const displayMessages = phase === "review"
+        ? hideRawStructuredReviewMessages(normalizedMessages)
+        : normalizedMessages;
 
       displayMessages.forEach((message, index) => {
         rows.push({
@@ -1619,6 +1623,11 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
     const resumedPhase = resumePipeline(pipelineId, resumePhase);
     if (!resumedPhase) return;
 
+    if (resumedPhase === "reviewing") {
+      await startReviewSession(pipeline);
+      return;
+    }
+
     const prompt = createPipelineResumePrompt(resumedPhase);
     if (!prompt) {
       setAdvanceTick((value) => value + 1);
@@ -1637,7 +1646,6 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
           }
           break;
         }
-        case "reviewing":
         case "addressing":
           await startReviewSession(pipeline);
           break;

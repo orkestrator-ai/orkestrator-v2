@@ -340,9 +340,81 @@ describe("structured review report contract", () => {
     ).toEqual({ type: "integer", minimum: 0, maximum: 100 });
     expect(
       STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues.items.required,
-    ).not.toContain("alternativeFixes");
+    ).toContain("alternativeFixes");
+    expect(
+      STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues.items.properties
+        .alternativeFixes,
+    ).toEqual({
+      anyOf: [
+        { type: "array", items: { type: "string" } },
+        { type: "null" },
+      ],
+    });
     expect(() => JSON.stringify(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA)).not.toThrow();
   });
+
+  test("keeps optional alternative fixes ergonomic after strict wire validation", () => {
+    const parsed = parseStructuredReviewReport({
+      ...emptyReport,
+      issues: [{
+        severity: "P2",
+        confidence: 80,
+        category: "maintainability",
+        title: "Consider an alternative",
+        file: "src/review.ts",
+        line: null,
+        symbol: "",
+        description: "The provider used the strict-schema null sentinel.",
+        evidence: "The wire value is null.",
+        suggestion: "Keep the domain field optional.",
+        verification: "Parse the report.",
+        alternativeFixes: null,
+      }],
+    });
+
+    expect(parsed.issues[0]).not.toHaveProperty("alternativeFixes");
+  });
+});
+
+function assertOpenAiStrictCompatible(
+  schema: unknown,
+  path = "$",
+): void {
+  if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
+    return;
+  }
+  const record = schema as Record<string, unknown>;
+  expect(record).not.toHaveProperty("uniqueItems");
+  expect(record).not.toHaveProperty("minLength");
+
+  if (record.type === "object") {
+    const properties = record.properties as Record<string, unknown> | undefined;
+    expect(record.additionalProperties).toBe(false);
+    expect(new Set(record.required as string[] | undefined)).toEqual(
+      new Set(Object.keys(properties ?? {})),
+    );
+  }
+
+  for (const [key, child] of Object.entries(record)) {
+    if (key === "enum") continue;
+    if (Array.isArray(child)) {
+      child.forEach((entry, index) =>
+        assertOpenAiStrictCompatible(entry, `${path}.${key}[${index}]`),
+      );
+    } else {
+      assertOpenAiStrictCompatible(child, `${path}.${key}`);
+    }
+  }
+}
+
+test("all provider-facing review schemas use the OpenAI strict subset recursively", () => {
+  for (const schema of [
+    STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+    REVIEW_FINDING_POOL_JSON_SCHEMA,
+    REVIEW_RECONCILIATION_JSON_SCHEMA,
+  ]) {
+    assertOpenAiStrictCompatible(schema);
+  }
 });
 
 describe("structured review readable formatting", () => {

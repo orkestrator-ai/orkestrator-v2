@@ -61,8 +61,13 @@ interface TerminalContextValue {
   setLastPrUrl: (url: string | null) => void;
 
   // Tab management
-  createTab: ((type: CreatableTabType, options?: CreateTabOptions) => void) | null;
-  setCreateTab: (fn: ((type: CreatableTabType, options?: CreateTabOptions) => void) | null) => void;
+  /**
+   * Attempts to create a tab and reports whether it was added. Callers that
+   * create durable state for a tab use the result to roll that state back when
+   * the environment or tab limit changes between rendering and dispatch.
+   */
+  createTab: ((type: CreatableTabType, options?: CreateTabOptions) => boolean) | null;
+  setCreateTab: (fn: ((type: CreatableTabType, options?: CreateTabOptions) => boolean) | null) => void;
   selectTab: ((index: number) => void) | null;
   setSelectTab: (fn: ((index: number) => void) | null) => void;
   closeActiveTab: (() => void) | null;
@@ -86,7 +91,7 @@ interface TerminalProviderProps {
 export function TerminalProvider({ children }: TerminalProviderProps) {
   const [terminalWrite, setTerminalWriteState] = useState<((data: string) => Promise<void>) | null>(null);
   const [lastPrUrl, setLastPrUrl] = useState<string | null>(null);
-  const [createTabFn, setCreateTabFn] = useState<((type: CreatableTabType, options?: CreateTabOptions) => void) | null>(null);
+  const [createTabFn, setCreateTabFn] = useState<((type: CreatableTabType, options?: CreateTabOptions) => boolean) | null>(null);
   const [selectTabFn, setSelectTabFn] = useState<((index: number) => void) | null>(null);
   const [closeActiveTabFn, setCloseActiveTabFn] = useState<(() => void) | null>(null);
   const [tabCount, setTabCount] = useState(0);
@@ -101,7 +106,7 @@ export function TerminalProvider({ children }: TerminalProviderProps) {
     setTerminalWriteState(() => write);
   }, []);
 
-  const setCreateTab = useCallback((fn: ((type: CreatableTabType, options?: CreateTabOptions) => void) | null) => {
+  const setCreateTab = useCallback((fn: ((type: CreatableTabType, options?: CreateTabOptions) => boolean) | null) => {
     setCreateTabFn(() => fn);
   }, []);
 

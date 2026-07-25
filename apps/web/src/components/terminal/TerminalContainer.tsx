@@ -1368,29 +1368,28 @@ export function TerminalContainer({
 
   // Handler for creating new terminal tabs
   const handleCreateTab = useCallback(
-    (type: CreatableTabType, options?: CreateTabOptions) => {
+    (type: CreatableTabType, options?: CreateTabOptions): boolean => {
       // For local environments, we don't need a containerId but do need worktreePath to be set
-      if (!isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) return;
+      if (!isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) return false;
 
       const allTabs = getAllTabs(environmentId);
       if (allTabs.length >= MAX_TABS) {
         console.debug("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
-        return;
+        return false;
       }
 
       if (type === "browser") {
-        createBrowserTab(
+        return createBrowserTab(
           options?.initialUrl,
           activePaneId,
           options?.displayTitle,
         );
-        return;
       }
 
       if (type === "looped-review") {
         if (!options?.loopedReviewId) {
           console.warn("[TerminalContainer] Refusing looped-review tab without workflow ID");
-          return;
+          return false;
         }
         const newTab: TabInfo = {
           id: createUniqueTabId("looped-review"),
@@ -1403,7 +1402,7 @@ export function TerminalContainer({
           },
         };
         addTab(activePaneId, newTab, environmentId);
-        return;
+        return true;
       }
 
       const newTabId = createUniqueTabId("tab");
@@ -1438,7 +1437,7 @@ export function TerminalContainer({
         };
         console.debug("[TerminalContainer] Creating opencode-native tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
         addTab(activePaneId, newTab, environmentId);
-        return;
+        return true;
       }
 
       // Native Claude mode → pick the backend (SDK or tmux) by 3-tier resolution.
@@ -1463,7 +1462,7 @@ export function TerminalContainer({
         });
         console.debug("[TerminalContainer] Creating", newTab.type, "tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
         addTab(activePaneId, newTab, environmentId);
-        return;
+        return true;
       }
 
       if (shouldUseCodexNative) {
@@ -1483,7 +1482,7 @@ export function TerminalContainer({
         };
         console.debug("[TerminalContainer] Creating codex-native tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
         addTab(activePaneId, newTab, environmentId);
-        return;
+        return true;
       }
 
       const newTab: TabInfo = {
@@ -1499,6 +1498,7 @@ export function TerminalContainer({
 
       console.debug("[TerminalContainer] Creating new tab:", newTabId, "type:", type, "for environment:", environmentId);
       addTab(activePaneId, newTab, environmentId);
+      return true;
     },
     [containerId, isEnvironmentRunning, activePaneId, addTab, getAllTabs, environmentId, opencodeMode, claudeMode, claudeNativeBackend, codexMode, isLocalEnvironmentReady, createBrowserTab]
   );

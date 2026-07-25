@@ -325,7 +325,8 @@ function DiffHeader({
   statusText,
 }: DiffHeaderProps) {
   const separatorIndex = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
-  const directory = separatorIndex >= 0 ? filePath.slice(0, separatorIndex + 1) : "";
+  const directory = separatorIndex >= 0 ? filePath.slice(0, separatorIndex) : "";
+  const separator = separatorIndex >= 0 ? filePath[separatorIndex] : "";
   const filename = separatorIndex >= 0 ? filePath.slice(separatorIndex + 1) : filePath;
 
   return (
@@ -333,20 +334,20 @@ function DiffHeader({
       <div className="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
         <span className="shrink-0">{statusIcon}</span>
         <span
-          className="flex min-w-0 flex-1 overflow-hidden font-mono"
+          className="relative min-w-0 flex-1 overflow-hidden font-mono"
           title={filePath}
-          aria-label={filePath}
         >
-          {directory && (
-            <span
-              aria-hidden="true"
-              className="min-w-0 flex-1 truncate text-left [direction:rtl]"
-            >
-              {directory}
+          <span className="sr-only">{filePath}</span>
+          <span aria-hidden="true" className="flex min-w-0 overflow-hidden">
+            {directory && (
+              <span className="min-w-0 shrink truncate text-left [direction:rtl]">
+                {directory}
+              </span>
+            )}
+            <span className="max-w-full min-w-0 shrink-0 truncate">
+              {separator}
+              {filename}
             </span>
-          )}
-          <span aria-hidden="true" className="min-w-0 shrink truncate">
-            {filename}
           </span>
         </span>
         <span className="shrink-0 text-xs opacity-60">vs {baseBranch}</span>

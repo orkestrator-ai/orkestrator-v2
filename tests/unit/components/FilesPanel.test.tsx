@@ -183,11 +183,12 @@ describe("Files panel components", () => {
     const onClick = mock(() => {});
     render(<ChangedFileItem change={change} onClick={onClick} />);
 
-    const directory = screen.getByText("src/components/");
-    const filename = screen.getByText("Button.tsx");
+    const directory = screen.getByText("src/components");
+    const filename = screen.getByText("/Button.tsx");
     expect(directory.className).toContain("[direction:rtl]");
-    expect(directory.className).toContain("flex-1");
-    expect(filename.className).toContain("shrink");
+    expect(directory.className).toContain("shrink");
+    expect(filename.className).toContain("shrink-0");
+    expect(filename.className).toContain("max-w-full");
     expect(filename.className).toContain("truncate");
     expect(screen.getByText("+12").className).toContain("text-green-500");
     expect(screen.getByText("-3").className).toContain("text-red-400");
@@ -213,6 +214,57 @@ describe("Files panel components", () => {
 
     expect(onRevert).toHaveBeenCalledWith("src/components/Button.tsx");
     expect(onDelete).toHaveBeenCalledWith("src/components/Button.tsx");
+  });
+
+  test("ChangedFileItem renders a root-level file without a directory segment", () => {
+    const rootChange: GitFileChange = {
+      ...change,
+      path: "README.md",
+      filename: "README.md",
+      directory: "",
+    };
+    render(<ChangedFileItem change={rootChange} />);
+
+    const filename = screen.getByText("README.md");
+    expect(filename.parentElement?.childElementCount).toBe(1);
+    expect(screen.queryByText("/")).toBeNull();
+    expect(screen.getByTitle("README.md")).toBeTruthy();
+  });
+
+  test("ChangedFileItem suppresses zero and negative change counts", () => {
+    const { rerender } = render(
+      <ChangedFileItem change={{ ...change, additions: 0, deletions: 0 }} />,
+    );
+
+    expect(screen.queryByText("+0")).toBeNull();
+    expect(screen.queryByText("-0")).toBeNull();
+
+    rerender(<ChangedFileItem change={{ ...change, additions: -2, deletions: -3 }} />);
+
+    expect(screen.queryByText("+-2")).toBeNull();
+    expect(screen.queryByText("--3")).toBeNull();
+  });
+
+  test("ChangedFileItem exposes only the supplied context action", () => {
+    const onRevert = mock(() => {});
+    const onDelete = mock(() => {});
+    const { rerender } = render(<ChangedFileItem change={change} onRevert={onRevert} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Revert" }));
+    expect(onRevert).toHaveBeenCalledWith(change.path);
+    expect(screen.queryByRole("button", { name: "Delete file" })).toBeNull();
+
+    rerender(<ChangedFileItem change={change} onDelete={onDelete} />);
+
+    expect(screen.queryByRole("button", { name: "Revert" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Delete file" }));
+    expect(onDelete).toHaveBeenCalledWith(change.path);
+  });
+
+  test("ChangedFileItem remains clickable when onClick is omitted", () => {
+    render(<ChangedFileItem change={change} />);
+
+    expect(() => fireEvent.click(screen.getByTitle(change.path))).not.toThrow();
   });
 
   test("all-files rows always expose delete and only changed files expose revert", () => {
@@ -421,7 +473,8 @@ describe("Files panel components", () => {
         <FilesPanel />
       </TerminalProvider>,
     );
-    expect(screen.getByText("src/components/")).toBeTruthy();
+    expect(screen.getByText("src/components")).toBeTruthy();
+    expect(screen.getByText("/Button.tsx")).toBeTruthy();
   });
 
   test("All files folders are collapsed by default and expand on click", () => {

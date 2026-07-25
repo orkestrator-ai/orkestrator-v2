@@ -4317,7 +4317,7 @@ exit 0
         },
       ],
       source: "sdk",
-      fetchedAt: "2026-07-25T12:00:00.000Z",
+      fetchedAt: new Date().toISOString(),
       sdkVersion: "0.2.1",
       cliVersion: "5.0.0",
     });

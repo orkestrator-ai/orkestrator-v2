@@ -48,16 +48,25 @@ import {
 } from "@/lib/feature-planner";
 import * as backend from "@/lib/backend";
 import { cn } from "@/lib/utils";
+import { createUuid } from "@/lib/uuid";
 import { useConfigStore, useEnvironmentStore, useFeaturePlanStore, useKanbanStore, useProjectStore } from "@/stores";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import type { Environment, EnvironmentType } from "@/types";
-import type { FeaturePlan, FeaturePlanMessage, FeatureStoryCard } from "@/stores/featurePlanStore";
+import type {
+  ActiveFeatureConversation,
+  FeatureConversationIdentity,
+  FeaturePlan,
+  FeaturePlanMessage,
+  FeatureStoryCard,
+} from "@/stores/featurePlanStore";
 import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-message-types";
 
 type RightPaneTab = "chat" | "stories" | `story:${string}`;
 
 const POLL_INTERVAL_MS = 1_500;
 const POLL_TIMEOUT_MS = 10 * 60 * 1000;
+const RECONCILE_MAX_STATUS_FAILURES = 4;
+const RECONCILE_MAX_BACKOFF_MS = 12_000;
 /**
  * How long an idle session with no new reply is tolerated before giving up.
  *
@@ -70,6 +79,19 @@ const RIGHT_PANE_CONTENT_CLASS =
 const COMPACT_TAB_LIST_CLASS = "h-8 bg-zinc-900/80";
 const COMPACT_TAB_TRIGGER_CLASS = "px-2 text-xs data-[state=active]:!bg-zinc-800";
 
+function createConversationOperationId(): string {
+  return createUuid();
+}
+
+function conversationIdentity(
+  conversation: ActiveFeatureConversation,
+): FeatureConversationIdentity {
+  return {
+    featureId: conversation.featureId,
+    operationId: conversation.operationId,
+  };
+}
+
 function featureChatDraftId(featureId: string): string {
   return `feature:${featureId}`;
 }
@@ -80,6 +102,19 @@ function storyChatDraftId(featureId: string, storyId: string): string {
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function waitForReconcilePoll(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal.addEventListener("abort", finish, { once: true });
+  });
 }
 
 function wasCodexPromptAccepted(result: unknown): boolean {
@@ -103,12 +138,21 @@ function latestAssistantMessage(
   options: {
     excludeIds?: ReadonlySet<string>;
     accept?: (content: string) => boolean;
+    createdAtOrAfter?: string;
   } = {},
 ): { id: string; content: string } | null {
+  const minimumCreatedAt = options.createdAtOrAfter
+    ? Date.parse(options.createdAtOrAfter)
+    : Number.NEGATIVE_INFINITY;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role !== "assistant") continue;
     if (options.excludeIds?.has(message.id)) continue;
+    const createdAt = Date.parse(message.createdAt);
+    if (options.createdAtOrAfter && (
+      Number.isNaN(createdAt)
+      || (!Number.isNaN(minimumCreatedAt) && createdAt < minimumCreatedAt)
+    )) continue;
     const content = messageContent(message);
     if (content.trim() && (!options.accept || options.accept(content))) {
       return { id: message.id, content };
@@ -240,6 +284,213 @@ function latestUserMessageTime(feature: FeaturePlan): number {
   return latest;
 }
 
+type PendingFeatureConversation = Omit<
+  ActiveFeatureConversation,
+  "operationId" | "error" | "responseContent"
+>;
+
+interface LocalConversationTarget {
+  messages: FeaturePlanMessage[];
+  userMessageIndex: number;
+  story?: FeatureStoryCard;
+}
+
+function latestUnansweredConversation(feature: FeaturePlan): PendingFeatureConversation | null {
+  const candidates: PendingFeatureConversation[] = [];
+  const featureMessage = feature.messages.at(-1);
+  if (
+    featureMessage?.role === "user"
+    && !Number.isNaN(Date.parse(featureMessage.createdAt))
+  ) {
+    candidates.push({
+      featureId: feature.id,
+      userMessageId: featureMessage.id,
+      startedAt: featureMessage.createdAt,
+      phase: "running",
+    });
+  }
+
+  for (const story of feature.stories) {
+    const storyMessage = story.messages.at(-1);
+    if (
+      storyMessage?.role !== "user"
+      || Number.isNaN(Date.parse(storyMessage.createdAt))
+    ) continue;
+    candidates.push({
+      featureId: feature.id,
+      storyId: story.id,
+      userMessageId: storyMessage.id,
+      startedAt: storyMessage.createdAt,
+      phase: "running",
+    });
+  }
+
+  return candidates.sort((a, b) => {
+    const aTime = Date.parse(a.startedAt);
+    const bTime = Date.parse(b.startedAt);
+    return bTime - aTime;
+  })[0] ?? null;
+}
+
+type RecoverablePersistedConversation = Omit<
+  ActiveFeatureConversation,
+  "operationId" | "error"
+>;
+
+function latestUnappliedPersistedConversation(
+  feature: FeaturePlan,
+): RecoverablePersistedConversation | null {
+  const candidates: RecoverablePersistedConversation[] = [];
+  const featureAssistantIndex = feature.messages.findLastIndex((message) => (
+    message.role === "assistant"
+    && message.stateApplication === "pending"
+    && parseFeaturePlannerState(message.content) !== null
+  ));
+  if (featureAssistantIndex >= 0) {
+    const featureAssistant = feature.messages[featureAssistantIndex]!;
+    const userMessage = feature.messages
+      .slice(0, featureAssistantIndex)
+      .findLast((message) => message.role === "user");
+    if (userMessage && !Number.isNaN(Date.parse(userMessage.createdAt))) {
+      candidates.push({
+        featureId: feature.id,
+        userMessageId: userMessage.id,
+        startedAt: userMessage.createdAt,
+        phase: "running",
+        responseContent: featureAssistant.content,
+      });
+    }
+  }
+
+  for (const story of feature.stories) {
+    const storyAssistantIndex = story.messages.findLastIndex((message) => {
+      if (message.role !== "assistant" || message.stateApplication !== "pending") {
+        return false;
+      }
+      const parsed = parseStoryRefinement(message.content);
+      return parsed !== null && (!parsed.storyId || parsed.storyId === story.id);
+    });
+    if (storyAssistantIndex < 0) continue;
+    const storyAssistant = story.messages[storyAssistantIndex]!;
+    const userMessage = story.messages
+      .slice(0, storyAssistantIndex)
+      .findLast((message) => message.role === "user");
+    if (!userMessage || Number.isNaN(Date.parse(userMessage.createdAt))) continue;
+    candidates.push({
+      featureId: feature.id,
+      storyId: story.id,
+      userMessageId: userMessage.id,
+      startedAt: userMessage.createdAt,
+      phase: "running",
+      responseContent: storyAssistant.content,
+    });
+  }
+
+  return candidates.sort(
+    (left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt),
+  )[0] ?? null;
+}
+
+function findLocalConversationTarget(
+  feature: FeaturePlan,
+  conversation: ActiveFeatureConversation,
+): LocalConversationTarget | null {
+  const story = conversation.storyId
+    ? feature.stories.find((candidate) => candidate.id === conversation.storyId)
+    : undefined;
+  if (conversation.storyId && !story) return null;
+  const messages = story?.messages ?? feature.messages;
+  const userMessageIndex = messages.findLastIndex((message) => (
+    message.role === "user"
+    && (
+      conversation.userMessageId
+        ? message.id === conversation.userMessageId
+        : message.createdAt === conversation.startedAt
+    )
+  ));
+  if (userMessageIndex < 0) return null;
+  return { messages, userMessageIndex, story };
+}
+
+function persistedResponseAfterTarget(
+  target: LocalConversationTarget,
+  responseContent: string,
+): FeaturePlanMessage | undefined {
+  return target.messages
+    .slice(target.userMessageIndex + 1)
+    .find((message) => (
+      message.role === "assistant"
+      && message.content === responseContent
+    ));
+}
+
+function latestPersistedResponseAfterTarget(
+  target: LocalConversationTarget,
+  conversation: ActiveFeatureConversation,
+): string | undefined {
+  for (let index = target.messages.length - 1; index > target.userMessageIndex; index -= 1) {
+    const message = target.messages[index];
+    if (message?.role !== "assistant") continue;
+    if (conversation.storyId) {
+      const parsed = parseStoryRefinement(message.content);
+      if (parsed && (!parsed.storyId || parsed.storyId === conversation.storyId)) {
+        return message.content;
+      }
+    } else if (parseFeaturePlannerState(message.content)) {
+      return message.content;
+    }
+  }
+  return undefined;
+}
+
+function hasAssistantAfterTarget(target: LocalConversationTarget): boolean {
+  return target.messages
+    .slice(target.userMessageIndex + 1)
+    .some((message) => message.role === "assistant");
+}
+
+function resolveStateApplications(
+  feature: FeaturePlan,
+  targetMessageId: string,
+  targetState: "applied" | "superseded",
+  stories: FeatureStoryCard[] = feature.stories,
+): {
+  messages: FeaturePlanMessage[];
+  stories: FeatureStoryCard[];
+  messagesChanged: boolean;
+  storiesChanged: boolean;
+} {
+  let messagesChanged = false;
+  const resolveMessages = (messages: FeaturePlanMessage[]) => messages.map((message) => {
+    const stateApplication = message.id === targetMessageId
+      ? targetState
+      : message.stateApplication === "pending"
+        ? "superseded"
+        : message.stateApplication;
+    if (stateApplication === message.stateApplication) return message;
+    messagesChanged = true;
+    return { ...message, stateApplication };
+  });
+
+  const messages = resolveMessages(feature.messages);
+  const featureMessagesChanged = messagesChanged;
+  let storiesChanged = false;
+  const resolvedStories = stories.map((story) => {
+    messagesChanged = false;
+    const resolvedMessages = resolveMessages(story.messages);
+    if (!messagesChanged) return story;
+    storiesChanged = true;
+    return { ...story, messages: resolvedMessages };
+  });
+
+  return {
+    messages,
+    stories: resolvedStories,
+    messagesChanged: featureMessagesChanged,
+    storiesChanged,
+  };
+}
+
 interface FeaturesViewProps {
   projectId: string;
 }
@@ -254,18 +505,28 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   const appendStoryMessage = useFeaturePlanStore((state) => state.appendStoryMessage);
   const chatDrafts = useFeaturePlanStore((state) => state.chatDrafts);
   const setChatDraft = useFeaturePlanStore((state) => state.setChatDraft);
+  const currentProjectId = useFeaturePlanStore((state) => state.currentProjectId);
+  const activeConversations = useFeaturePlanStore((state) => state.activeConversations);
+  const startConversation = useFeaturePlanStore((state) => state.startConversation);
+  const updateConversation = useFeaturePlanStore((state) => state.updateConversation);
+  const markConversationRunning = useFeaturePlanStore(
+    (state) => state.markConversationRunning,
+  );
+  const resumeConversation = useFeaturePlanStore((state) => state.resumeConversation);
+  const claimConversationPersistence = useFeaturePlanStore(
+    (state) => state.claimConversationPersistence,
+  );
+  const settleConversation = useFeaturePlanStore((state) => state.settleConversation);
   const addTask = useKanbanStore((state) => state.addTask);
   const { startBuild } = useBuildPipeline();
   const { createEnvironment, startEnvironment } = useEnvironments(null, { listenForRenameEvents: false });
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [rightTab, setRightTab] = useState<RightPaneTab>("chat");
   const [openStoryTabs, setOpenStoryTabs] = useState<string[]>([]);
-  const [runningConversation, setRunningConversation] = useState<{
-    featureId: string;
-    storyId?: string;
-  } | null>(null);
   const [buildingFeatureId, setBuildingFeatureId] = useState<string | null>(null);
   const clientsRef = useRef<Map<string, CodexClient>>(new Map());
+  const reconciledProjectRef = useRef<string | null>(null);
+  const reconciliationControllersRef = useRef<Map<string, AbortController>>(new Map());
 
   useEffect(() => {
     void loadFeatures(projectId);
@@ -287,6 +548,30 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
     () => projectFeatures.find((feature) => feature.id === selectedFeatureId) ?? projectFeatures[0] ?? null,
     [projectFeatures, selectedFeatureId],
   );
+  const projectActiveConversations = useMemo(
+    () => projectFeatures
+      .map((feature) => activeConversations.get(feature.id))
+      .filter((conversation): conversation is ActiveFeatureConversation => conversation !== undefined),
+    [activeConversations, projectFeatures],
+  );
+  const hasBlockingConversation = projectActiveConversations.length > 0;
+  const hasRunningConversation = projectActiveConversations.some(
+    (conversation) => conversation.phase !== "unavailable",
+  );
+  const unavailableConversation = projectActiveConversations.find(
+    (conversation) => conversation.phase === "unavailable",
+  ) ?? null;
+  const unavailableFeature = unavailableConversation
+    ? projectFeatures.find((feature) => feature.id === unavailableConversation.featureId)
+    : undefined;
+  const unavailableStory = unavailableConversation?.storyId
+    ? unavailableFeature?.stories.find((story) => story.id === unavailableConversation.storyId)
+    : undefined;
+  const recoveryMessage = unavailableConversation
+    ? `${unavailableStory?.title || unavailableFeature?.title || "Feature conversation"}: ${
+      unavailableConversation.error || "Codex recovery requires attention."
+    }`
+    : undefined;
   const featureDraft = selectedFeature
     ? chatDrafts.get(featureChatDraftId(selectedFeature.id)) ?? ""
     : "";
@@ -328,6 +613,38 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
     const storyId = rightTab.slice("story:".length);
     return selectedFeature.stories.find((story) => story.id === storyId) ?? null;
   }, [rightTab, selectedFeature]);
+
+  const getExistingCodexSession = useCallback(
+    async (feature: FeaturePlan): Promise<{ client: CodexClient; sessionId: string } | null> => {
+      if (!feature.codexEnvironmentId || !feature.codexSessionId) return null;
+
+      const environment = useEnvironmentStore.getState().getEnvironmentById(feature.codexEnvironmentId)
+        ?? await backend.getEnvironment(feature.codexEnvironmentId);
+      if (!environment || environment.status !== "running") return null;
+
+      let client = clientsRef.current.get(environment.id);
+      if (!client) {
+        let port: number | null = null;
+        if (environment.environmentType === "local") {
+          const status = await backend.getLocalCodexServerStatus(environment.id);
+          if (!status.running) return null;
+          port = status.port ?? null;
+        } else {
+          if (!environment.containerId) return null;
+          const status = await backend.getCodexServerStatus(environment.containerId);
+          if (!status.running) return null;
+          port = status.hostPort ?? null;
+        }
+
+        if (!port) return null;
+        client = createClient(`http://127.0.0.1:${port}`);
+        clientsRef.current.set(environment.id, client);
+      }
+
+      return { client, sessionId: feature.codexSessionId };
+    },
+    [],
+  );
 
   const ensureCodexSession = useCallback(
     async (feature: FeaturePlan): Promise<{ client: CodexClient; sessionId: string; feature: FeaturePlan }> => {
@@ -427,19 +744,40 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   );
 
   const applyFeaturePlannerState = useCallback(
-    async (feature: FeaturePlan, assistantContent: string) => {
+    async (
+      feature: FeaturePlan,
+      assistantContent: string,
+      responseMessageId?: string,
+    ) => {
       const parsed = parseFeaturePlannerState(assistantContent);
-      if (!parsed) return;
-
       const updates: Parameters<typeof updateFeature>[1] = {};
-      if (parsed.title?.trim()) updates.title = parsed.title.trim();
-      if (parsed.summary !== undefined) updates.summary = parsed.summary;
-      if (parsed.phase === "collecting") updates.status = "collecting";
-      if (parsed.phase === "confirming") updates.status = "confirming";
-      if (parsed.phase === "stories") {
-        updates.status = "stories";
-        updates.stories = createStoryCardsFromParsedState(parsed, feature.stories);
-        setRightTab("stories");
+      const preserveLaterBuildState = feature.status === "building" || feature.status === "built";
+      let nextStories = feature.stories;
+
+      if (parsed && !preserveLaterBuildState) {
+        if (parsed.title?.trim()) updates.title = parsed.title.trim();
+        if (parsed.summary !== undefined) updates.summary = parsed.summary;
+        if (parsed.phase === "collecting") updates.status = "collecting";
+        if (parsed.phase === "confirming") updates.status = "confirming";
+        if (parsed.phase === "stories") {
+          updates.status = "stories";
+          nextStories = createStoryCardsFromParsedState(parsed, feature.stories);
+          updates.stories = nextStories;
+          setRightTab("stories");
+        }
+      }
+
+      if (responseMessageId) {
+        const resolved = resolveStateApplications(
+          feature,
+          responseMessageId,
+          preserveLaterBuildState ? "superseded" : "applied",
+          nextStories,
+        );
+        if (resolved.messagesChanged) updates.messages = resolved.messages;
+        if (resolved.storiesChanged || nextStories !== feature.stories) {
+          updates.stories = resolved.stories;
+        }
       }
 
       if (Object.keys(updates).length > 0) {
@@ -450,19 +788,75 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
     [updateFeature],
   );
 
+  const persistFeatureConversationResponse = useCallback(
+    async (
+      feature: FeaturePlan,
+      conversation: ActiveFeatureConversation,
+      assistantContent: string,
+    ) => {
+      const currentFeature = useFeaturePlanStore.getState().features.find(
+        (candidate) => candidate.id === feature.id,
+      ) ?? feature;
+      const target = findLocalConversationTarget(currentFeature, conversation);
+      if (!target) throw new Error("The feature planning request is no longer available.");
+
+      let updatedFeature = currentFeature;
+      let responseMessage = persistedResponseAfterTarget(target, assistantContent);
+      if (!responseMessage) {
+        const updated = await appendMessage(
+          currentFeature.id,
+          "assistant",
+          assistantContent,
+          "pending",
+        );
+        if (!updated) throw new Error("Failed to persist the feature planning response");
+        updatedFeature = updated;
+        responseMessage = updated.messages.at(-1);
+      }
+      if (!responseMessage) {
+        throw new Error("Failed to identify the persisted feature planning response");
+      }
+      await applyFeaturePlannerState(
+        updatedFeature,
+        assistantContent,
+        responseMessage.id,
+      );
+    },
+    [appendMessage, applyFeaturePlannerState],
+  );
+
   const sendFeatureMessage = useCallback(
     async (text: string) => {
       const feature = selectedFeature;
       const trimmed = text.trim();
-      if (!feature || !trimmed || runningConversation) return;
+      if (!feature || !trimmed || hasBlockingConversation) return;
 
+      let conversationStartedAt = new Date().toISOString();
+      let conversation: ActiveFeatureConversation = {
+        operationId: createConversationOperationId(),
+        featureId: feature.id,
+        startedAt: conversationStartedAt,
+        phase: "dispatching",
+      };
+      if (!startConversation(conversation)) return;
       setChatDraft(featureChatDraftId(feature.id), "");
-      setRunningConversation({ featureId: feature.id });
       let userMessagePersisted = false;
+      let preserveConversation = false;
       try {
         const withUserMessage = await appendMessage(feature.id, "user", trimmed);
         if (!withUserMessage) throw new Error("Failed to persist the feature message");
         userMessagePersisted = true;
+        const persistedUserMessage = withUserMessage.messages.at(-1);
+        conversationStartedAt = persistedUserMessage?.createdAt ?? conversationStartedAt;
+        if (!updateConversation(conversationIdentity(conversation), {
+          userMessageId: persistedUserMessage?.id,
+          startedAt: conversationStartedAt,
+        })) return;
+        conversation = {
+          ...conversation,
+          userMessageId: persistedUserMessage?.id,
+          startedAt: conversationStartedAt,
+        };
         const latestFeature = withUserMessage;
         const previousSessionId = latestFeature.codexSessionId;
         const { client, sessionId } = await ensureCodexSession(latestFeature);
@@ -478,6 +872,10 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         if (!wasCodexPromptAccepted(sent)) {
           throw new Error("Failed to send feature planning prompt");
         }
+        if (!markConversationRunning(conversationIdentity(conversation))) {
+          preserveConversation = true;
+          return;
+        }
 
         const assistantContent = await waitForCodexReply(
           client,
@@ -485,26 +883,66 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
           assistantMessageIds(baselineMessages),
         );
         if (!assistantContent) {
+          preserveConversation = updateConversation(conversationIdentity(conversation), {
+            phase: "unavailable",
+            error: "Codex is still working. Check again to resume monitoring or stop waiting.",
+          });
           toast.warning("Codex is still working", {
-            description: "The feature chat was persisted. Use refresh when you return.",
+            description: "The feature chat was persisted. Use Check again when you return.",
           });
           return;
         }
 
-        const updated = await appendMessage(feature.id, "assistant", assistantContent);
-        if (!updated) throw new Error("Failed to persist the feature planning response");
-        await applyFeaturePlannerState(updated, assistantContent);
+        if (!claimConversationPersistence(
+          conversationIdentity(conversation),
+          assistantContent,
+        )) {
+          preserveConversation = true;
+          return;
+        }
+        await persistFeatureConversationResponse(
+          latestFeature,
+          conversation,
+          assistantContent,
+        );
       } catch (error) {
         if (!userMessagePersisted) setChatDraft(featureChatDraftId(feature.id), text);
+        const activeConversation = useFeaturePlanStore.getState()
+          .activeConversations.get(feature.id);
+        if (
+          activeConversation?.operationId === conversation.operationId
+          && activeConversation.phase === "persisting"
+        ) {
+          preserveConversation = updateConversation(conversationIdentity(conversation), {
+            phase: "unavailable",
+            error: error instanceof Error
+              ? error.message
+              : "Failed to persist the Codex response.",
+          });
+        }
         console.error("[FeaturesView] Failed to send feature message:", error);
         toast.error("Feature planning failed", {
           description: error instanceof Error ? error.message : "Unknown error",
         });
       } finally {
-        setRunningConversation(null);
+        if (!preserveConversation) {
+          settleConversation(conversationIdentity(conversation));
+        }
       }
     },
-    [appendMessage, applyFeaturePlannerState, ensureCodexSession, runningConversation, selectedFeature, setChatDraft],
+    [
+      appendMessage,
+      claimConversationPersistence,
+      ensureCodexSession,
+      hasBlockingConversation,
+      markConversationRunning,
+      persistFeatureConversationResponse,
+      selectedFeature,
+      setChatDraft,
+      settleConversation,
+      startConversation,
+      updateConversation,
+    ],
   );
 
   const refreshFeatureChat = useCallback(
@@ -512,76 +950,630 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       if (
         !feature.codexEnvironmentId
         || !feature.codexSessionId
-        || runningConversation
+        || hasBlockingConversation
       ) return;
-      setRunningConversation({ featureId: feature.id });
+      const pendingConversation = latestUnansweredConversation(feature);
+      const pendingFeatureConversation = pendingConversation?.storyId
+        ? null
+        : pendingConversation;
+      const conversation: ActiveFeatureConversation = {
+        operationId: createConversationOperationId(),
+        ...(pendingFeatureConversation ?? {
+          featureId: feature.id,
+          startedAt: new Date().toISOString(),
+          phase: "running" as const,
+        }),
+      };
+      if (!startConversation(conversation)) return;
+      let preserveConversation = false;
       try {
         const { client, sessionId } = await ensureCodexSession(feature);
         const messages = await getSessionMessages(client, sessionId);
         const assistantContent = latestAssistantMessage(messages, {
+          createdAtOrAfter: pendingFeatureConversation?.startedAt,
           accept: (content) => parseFeaturePlannerState(content) !== null,
         })?.content;
-        const persistedAssistantContents = new Set(
-          feature.messages
-            .filter((message) => message.role === "assistant")
-            .map((message) => message.content),
-        );
-        if (assistantContent && !persistedAssistantContents.has(assistantContent)) {
-          const updated = await appendMessage(feature.id, "assistant", assistantContent);
-          if (!updated) throw new Error("Failed to persist the refreshed feature response");
-          await applyFeaturePlannerState(updated, assistantContent);
+        if (assistantContent && pendingFeatureConversation) {
+          if (!claimConversationPersistence(
+            conversationIdentity(conversation),
+            assistantContent,
+          )) {
+            preserveConversation = true;
+            return;
+          }
+          await persistFeatureConversationResponse(
+            feature,
+            conversation,
+            assistantContent,
+          );
+        } else if (assistantContent) {
+          const persistedAssistantContents = new Set(
+            feature.messages
+              .filter((message) => message.role === "assistant")
+              .map((message) => message.content),
+          );
+          if (
+            !persistedAssistantContents.has(assistantContent)
+            && updateConversation(conversationIdentity(conversation), {})
+          ) {
+            const updated = await appendMessage(
+              feature.id,
+              "assistant",
+              assistantContent,
+              "pending",
+            );
+            if (!updated) throw new Error("Failed to persist the refreshed feature response");
+            if (!updateConversation(conversationIdentity(conversation), {})) return;
+            const responseMessage = updated.messages.at(-1);
+            if (!responseMessage) {
+              throw new Error("Failed to identify the refreshed feature response");
+            }
+            await applyFeaturePlannerState(
+              updated,
+              assistantContent,
+              responseMessage.id,
+            );
+          }
         }
       } catch (error) {
+        const activeConversation = useFeaturePlanStore.getState()
+          .activeConversations.get(feature.id);
+        if (
+          activeConversation?.operationId === conversation.operationId
+          && activeConversation.phase === "persisting"
+        ) {
+          preserveConversation = updateConversation(conversationIdentity(conversation), {
+            phase: "unavailable",
+            error: error instanceof Error
+              ? error.message
+              : "Failed to persist the refreshed Codex response.",
+          });
+        }
         console.error("[FeaturesView] Failed to refresh feature chat:", error);
         toast.error("Failed to refresh feature chat", {
           description: error instanceof Error ? error.message : "Unknown error",
         });
       } finally {
-        setRunningConversation(null);
+        if (!preserveConversation) {
+          settleConversation(conversationIdentity(conversation));
+        }
       }
     },
-    [appendMessage, applyFeaturePlannerState, ensureCodexSession, runningConversation],
+    [
+      appendMessage,
+      applyFeaturePlannerState,
+      claimConversationPersistence,
+      ensureCodexSession,
+      hasBlockingConversation,
+      persistFeatureConversationResponse,
+      settleConversation,
+      startConversation,
+      updateConversation,
+    ],
   );
 
   const applyStoryRefinement = useCallback(
-    async (feature: FeaturePlan, story: FeatureStoryCard, assistantContent: string) => {
+    async (
+      feature: FeaturePlan,
+      story: FeatureStoryCard,
+      assistantContent: string,
+      responseMessageId?: string,
+    ) => {
       const parsed = parseStoryRefinement(assistantContent);
-      if (!parsed) return;
-      if (parsed.storyId && parsed.storyId !== story.id) {
+      if (parsed?.storyId && parsed.storyId !== story.id) {
         throw new Error("Story refinement response targeted a different story");
       }
 
-      const stories = feature.stories.map((candidate) => {
-        if (candidate.id !== story.id) return candidate;
-        return {
-          ...candidate,
-          title: parsed.title?.trim() || candidate.title,
-          description: parsed.description?.trim() || candidate.description,
-          acceptanceCriteria: parsed.acceptanceCriteria?.length
-            ? parsed.acceptanceCriteria
-            : candidate.acceptanceCriteria,
-          updatedAt: new Date().toISOString(),
-        };
-      });
-      const updated = await updateFeature(feature.id, { stories });
+      let stories = feature.stories;
+      if (parsed) {
+        stories = stories.map((candidate) => {
+          if (candidate.id !== story.id) return candidate;
+          return {
+            ...candidate,
+            title: parsed.title?.trim() || candidate.title,
+            description: parsed.description?.trim() || candidate.description,
+            acceptanceCriteria: parsed.acceptanceCriteria?.length
+              ? parsed.acceptanceCriteria
+              : candidate.acceptanceCriteria,
+            updatedAt: new Date().toISOString(),
+          };
+        });
+      }
+      const resolved = responseMessageId
+        ? resolveStateApplications(feature, responseMessageId, "applied", stories)
+        : null;
+      const updates: Parameters<typeof updateFeature>[1] = {
+        stories: resolved?.stories ?? stories,
+        ...(resolved?.messagesChanged ? { messages: resolved.messages } : {}),
+      };
+      const updated = await updateFeature(feature.id, updates);
       if (!updated) throw new Error("Failed to persist the refined story");
     },
     [updateFeature],
+  );
+
+  const persistStoryConversationResponse = useCallback(
+    async (
+      feature: FeaturePlan,
+      conversation: ActiveFeatureConversation,
+      assistantContent: string,
+    ) => {
+      const currentFeature = useFeaturePlanStore.getState().features.find(
+        (candidate) => candidate.id === feature.id,
+      ) ?? feature;
+      const target = findLocalConversationTarget(currentFeature, conversation);
+      if (!target?.story) throw new Error("The story refinement request is no longer available.");
+
+      let updatedFeature = currentFeature;
+      let updatedStory = target.story;
+      let responseMessage = persistedResponseAfterTarget(target, assistantContent);
+      if (!responseMessage) {
+        const updated = await appendStoryMessage(
+          currentFeature.id,
+          target.story.id,
+          "assistant",
+          assistantContent,
+          "pending",
+        );
+        if (!updated) throw new Error("Failed to persist the story refinement response");
+        updatedFeature = updated;
+        updatedStory = updated.stories.find(
+          (candidate) => candidate.id === target.story?.id,
+        ) ?? target.story;
+        responseMessage = updatedStory.messages.at(-1);
+      }
+      if (!responseMessage) {
+        throw new Error("Failed to identify the persisted story refinement response");
+      }
+      await applyStoryRefinement(
+        updatedFeature,
+        updatedStory,
+        assistantContent,
+        responseMessage.id,
+      );
+    },
+    [appendStoryMessage, applyStoryRefinement],
+  );
+
+  const hydrateRestoredConversation = useCallback(
+    async (
+      feature: FeaturePlan,
+      conversation: ActiveFeatureConversation,
+      client: CodexClient | null,
+      sessionId: string | null,
+    ): Promise<"hydrated" | "missing" | "claimed-elsewhere"> => {
+      const currentConversation = useFeaturePlanStore.getState()
+        .activeConversations.get(conversation.featureId);
+      if (currentConversation?.operationId !== conversation.operationId) {
+        return "claimed-elsewhere";
+      }
+
+      const localTarget = findLocalConversationTarget(feature, conversation);
+      let assistantContent = currentConversation.responseContent
+        ?? (localTarget
+          ? latestPersistedResponseAfterTarget(localTarget, conversation)
+          : undefined);
+      if (!assistantContent) {
+        if (!client || !sessionId) return "missing";
+        const messages = await getSessionMessages(client, sessionId, { throwOnError: true });
+        if (conversation.storyId) {
+          const story = feature.stories.find(
+            (candidate) => candidate.id === conversation.storyId,
+          );
+          if (!story) throw new Error("The story being refined no longer exists.");
+          assistantContent = latestAssistantMessage(messages, {
+            createdAtOrAfter: conversation.startedAt,
+            accept: (content) => {
+              const parsed = parseStoryRefinement(content);
+              return parsed !== null && (!parsed.storyId || parsed.storyId === story.id);
+            },
+          })?.content;
+        } else {
+          assistantContent = latestAssistantMessage(messages, {
+            createdAtOrAfter: conversation.startedAt,
+            accept: (content) => parseFeaturePlannerState(content) !== null,
+          })?.content;
+        }
+      }
+      if (!assistantContent) return "missing";
+      if (!claimConversationPersistence(
+        conversationIdentity(conversation),
+        assistantContent,
+      )) {
+        return "claimed-elsewhere";
+      }
+
+      if (conversation.storyId) {
+        await persistStoryConversationResponse(feature, conversation, assistantContent);
+      } else {
+        await persistFeatureConversationResponse(feature, conversation, assistantContent);
+      }
+      return "hydrated";
+    },
+    [
+      claimConversationPersistence,
+      persistFeatureConversationResponse,
+      persistStoryConversationResponse,
+    ],
+  );
+
+  const runRestoredConversationMonitor = useCallback(
+    async (
+      conversation: ActiveFeatureConversation,
+      deferHydrationToLiveWorker: boolean,
+      signal: AbortSignal,
+    ): Promise<void> => {
+      const identity = conversationIdentity(conversation);
+      let consecutiveFailures = 0;
+      let idleWithoutReplySince: number | null = null;
+      let missingTargetSince: number | null = null;
+
+      while (!signal.aborted) {
+        const currentConversation = useFeaturePlanStore.getState()
+          .activeConversations.get(conversation.featureId);
+        if (currentConversation?.operationId !== conversation.operationId) return;
+        if (currentConversation.phase === "unavailable") return;
+        if (currentConversation.phase === "persisting") {
+          await waitForReconcilePoll(POLL_INTERVAL_MS, signal);
+          continue;
+        }
+
+        const feature = useFeaturePlanStore.getState().features.find(
+          (candidate) => candidate.id === conversation.featureId,
+        );
+        if (!feature) {
+          settleConversation(identity);
+          return;
+        }
+        const target = findLocalConversationTarget(feature, currentConversation);
+        if (!target) {
+          if (deferHydrationToLiveWorker) {
+            missingTargetSince ??= Date.now();
+            if (Date.now() - missingTargetSince < IDLE_WITHOUT_REPLY_TIMEOUT_MS) {
+              await waitForReconcilePoll(POLL_INTERVAL_MS, signal);
+              continue;
+            }
+            updateConversation(identity, {
+              phase: "unavailable",
+              error: "The persisted user message is not available yet. Check again or stop waiting.",
+            });
+          } else {
+            settleConversation(identity);
+          }
+          return;
+        }
+        missingTargetSince = null;
+
+        const localResponse = currentConversation.responseContent
+          ?? latestPersistedResponseAfterTarget(target, currentConversation);
+        if (localResponse) {
+          if (!markConversationRunning(identity)) return;
+          try {
+            const hydrated = await hydrateRestoredConversation(
+              feature,
+              currentConversation,
+              null,
+              null,
+            );
+            if (hydrated === "hydrated") settleConversation(identity);
+          } catch (error) {
+            const activeConversation = useFeaturePlanStore.getState()
+              .activeConversations.get(conversation.featureId);
+            if (activeConversation?.operationId !== conversation.operationId) return;
+            console.error("[FeaturesView] Failed to restore Codex conversation:", error);
+            updateConversation(identity, {
+              phase: "unavailable",
+              error: error instanceof Error
+                ? error.message
+                : "Failed to restore the Codex response.",
+            });
+          }
+          return;
+        }
+        if (hasAssistantAfterTarget(target)) {
+          settleConversation(identity);
+          return;
+        }
+
+        let existingSession: { client: CodexClient; sessionId: string } | null = null;
+        let status = null;
+        try {
+          existingSession = await getExistingCodexSession(feature);
+          if (!existingSession) {
+            throw new Error("The existing Codex session is not currently reachable.");
+          }
+          if (signal.aborted) return;
+          status = await getSessionStatus(
+            existingSession.client,
+            existingSession.sessionId,
+            { throwOnError: true },
+          );
+          if (!status) throw new Error("Codex returned no session status.");
+          consecutiveFailures = 0;
+        } catch (error) {
+          const activeConversation = useFeaturePlanStore.getState()
+            .activeConversations.get(conversation.featureId);
+          if (
+            signal.aborted
+            || activeConversation?.operationId !== conversation.operationId
+            || activeConversation.phase === "persisting"
+          ) return;
+          if (feature.codexEnvironmentId) {
+            clientsRef.current.delete(feature.codexEnvironmentId);
+          }
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= RECONCILE_MAX_STATUS_FAILURES) {
+            updateConversation(identity, {
+              phase: "unavailable",
+              error: "Codex status is unavailable. Check again or stop waiting before sending another prompt.",
+            });
+            return;
+          }
+          const retryDelay = Math.min(
+            POLL_INTERVAL_MS * (2 ** (consecutiveFailures - 1)),
+            RECONCILE_MAX_BACKOFF_MS,
+          );
+          await waitForReconcilePoll(retryDelay, signal);
+          continue;
+        }
+        if (signal.aborted) return;
+        const activeConversation = useFeaturePlanStore.getState()
+          .activeConversations.get(conversation.featureId);
+        if (activeConversation?.operationId !== conversation.operationId) return;
+        if (activeConversation.phase === "unavailable") return;
+        if (activeConversation.phase === "persisting") {
+          await waitForReconcilePoll(POLL_INTERVAL_MS, signal);
+          continue;
+        }
+        const latestFeature = useFeaturePlanStore.getState().features.find(
+          (candidate) => candidate.id === conversation.featureId,
+        );
+        if (!latestFeature) {
+          settleConversation(identity);
+          return;
+        }
+        const latestTarget = findLocalConversationTarget(
+          latestFeature,
+          activeConversation,
+        );
+        if (!latestTarget) {
+          settleConversation(identity);
+          return;
+        }
+        if (
+          !activeConversation.responseContent
+          && !latestPersistedResponseAfterTarget(latestTarget, activeConversation)
+          && hasAssistantAfterTarget(latestTarget)
+        ) {
+          settleConversation(identity);
+          return;
+        }
+
+        if (status.status === "running") {
+          idleWithoutReplySince = null;
+          markConversationRunning(identity);
+          await waitForReconcilePoll(POLL_INTERVAL_MS, signal);
+          continue;
+        }
+
+        if (status.status === "error") {
+          updateConversation(identity, {
+            phase: "unavailable",
+            error: status.error?.trim()
+              || "The Codex session ended with an error. Check again or stop waiting.",
+          });
+          return;
+        }
+
+        if (deferHydrationToLiveWorker) {
+          idleWithoutReplySince ??= Date.now();
+          if (Date.now() - idleWithoutReplySince < IDLE_WITHOUT_REPLY_TIMEOUT_MS) {
+            await waitForReconcilePoll(POLL_INTERVAL_MS, signal);
+            continue;
+          }
+        }
+
+        if (!markConversationRunning(identity)) return;
+        const conversationForHydration = useFeaturePlanStore.getState()
+          .activeConversations.get(conversation.featureId);
+        if (conversationForHydration?.operationId !== conversation.operationId) return;
+        try {
+          const hydrated = await hydrateRestoredConversation(
+            latestFeature,
+            conversationForHydration,
+            existingSession.client,
+            existingSession.sessionId,
+          );
+          if (hydrated === "hydrated") {
+            settleConversation(identity);
+          } else if (hydrated === "missing") {
+            updateConversation(identity, {
+              phase: "unavailable",
+              error: "Codex is idle, but no matching response was found. Check again or stop waiting.",
+            });
+          }
+        } catch (error) {
+          const latestConversation = useFeaturePlanStore.getState()
+            .activeConversations.get(conversation.featureId);
+          if (latestConversation?.operationId !== conversation.operationId) return;
+          if (signal.aborted && latestConversation.phase !== "persisting") return;
+          console.error("[FeaturesView] Failed to restore Codex conversation:", error);
+          updateConversation(identity, {
+            phase: "unavailable",
+            error: error instanceof Error
+              ? error.message
+              : "Failed to restore the Codex response.",
+          });
+        }
+        return;
+      }
+    },
+    [
+      getExistingCodexSession,
+      hydrateRestoredConversation,
+      markConversationRunning,
+      settleConversation,
+      updateConversation,
+    ],
+  );
+
+  const startReconciliationMonitor = useCallback(
+    (
+      conversation: ActiveFeatureConversation,
+      deferHydrationToLiveWorker: boolean,
+    ) => {
+      if (reconciliationControllersRef.current.has(conversation.operationId)) return;
+      const controller = new AbortController();
+      reconciliationControllersRef.current.set(conversation.operationId, controller);
+      void runRestoredConversationMonitor(
+        conversation,
+        deferHydrationToLiveWorker,
+        controller.signal,
+      ).finally(() => {
+        if (reconciliationControllersRef.current.get(conversation.operationId) === controller) {
+          reconciliationControllersRef.current.delete(conversation.operationId);
+        }
+      });
+    },
+    [runRestoredConversationMonitor],
+  );
+
+  useEffect(() => {
+    if (isLoading || currentProjectId !== projectId) return;
+    if (reconciledProjectRef.current === projectId) return;
+
+    let cancelled = false;
+    const startTimer = setTimeout(() => {
+      if (cancelled) return;
+      const state = useFeaturePlanStore.getState();
+      if (state.isLoading || state.currentProjectId !== projectId) return;
+      if (reconciledProjectRef.current === projectId) return;
+      reconciledProjectRef.current = projectId;
+
+      for (const feature of state.features) {
+        if (feature.projectId !== projectId) continue;
+        const pendingConversation = latestUnansweredConversation(feature);
+        const persistedRecovery = pendingConversation
+          ? null
+          : latestUnappliedPersistedConversation(feature);
+        const desiredConversation = pendingConversation ?? persistedRecovery;
+        let cachedConversation = state.activeConversations.get(feature.id);
+        if (
+          cachedConversation
+          && desiredConversation
+          && (
+            cachedConversation.storyId !== desiredConversation.storyId
+            || (
+              cachedConversation.userMessageId
+                ? cachedConversation.userMessageId !== desiredConversation.userMessageId
+                : cachedConversation.startedAt !== desiredConversation.startedAt
+            )
+          )
+        ) {
+          reconciliationControllersRef.current
+            .get(cachedConversation.operationId)
+            ?.abort();
+          settleConversation(conversationIdentity(cachedConversation));
+          cachedConversation = undefined;
+        }
+        if (!cachedConversation && !desiredConversation) continue;
+
+        const conversation = cachedConversation ?? {
+          ...desiredConversation!,
+          operationId: createConversationOperationId(),
+        };
+        if (!cachedConversation && !startConversation(conversation)) continue;
+        if (conversation.phase === "unavailable") continue;
+        if (
+          !conversation.responseContent
+          && (!feature.codexEnvironmentId || !feature.codexSessionId)
+        ) {
+          updateConversation(conversationIdentity(conversation), {
+            phase: "unavailable",
+            error: "The persisted request has no Codex session to resume. Stop waiting before sending it again.",
+          });
+          continue;
+        }
+        startReconciliationMonitor(conversation, cachedConversation !== undefined);
+      }
+    }, 0);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(startTimer);
+      for (const controller of reconciliationControllersRef.current.values()) {
+        controller.abort();
+      }
+      reconciliationControllersRef.current.clear();
+    };
+  }, [
+    currentProjectId,
+    isLoading,
+    projectId,
+    settleConversation,
+    startConversation,
+    startReconciliationMonitor,
+    updateConversation,
+  ]);
+
+  const retryUnavailableConversation = useCallback(
+    (conversation: ActiveFeatureConversation) => {
+      if (
+        conversation.phase !== "unavailable"
+        || !resumeConversation(conversationIdentity(conversation))
+      ) return;
+      reconciliationControllersRef.current.get(conversation.operationId)?.abort();
+      reconciliationControllersRef.current.delete(conversation.operationId);
+      startReconciliationMonitor(
+        { ...conversation, phase: "running", error: undefined },
+        false,
+      );
+    },
+    [resumeConversation, startReconciliationMonitor],
+  );
+
+  const stopWaitingForConversation = useCallback(
+    (conversation: ActiveFeatureConversation) => {
+      reconciliationControllersRef.current.get(conversation.operationId)?.abort();
+      settleConversation(conversationIdentity(conversation));
+    },
+    [settleConversation],
   );
 
   const sendStoryMessage = useCallback(
     async (story: FeatureStoryCard, text: string) => {
       const feature = selectedFeature;
       const trimmed = text.trim();
-      if (!feature || !trimmed || runningConversation) return;
+      if (!feature || !trimmed || hasBlockingConversation) return;
 
+      let conversationStartedAt = new Date().toISOString();
+      let conversation: ActiveFeatureConversation = {
+        operationId: createConversationOperationId(),
+        featureId: feature.id,
+        storyId: story.id,
+        startedAt: conversationStartedAt,
+        phase: "dispatching",
+      };
+      if (!startConversation(conversation)) return;
       setChatDraft(storyChatDraftId(feature.id, story.id), "");
-      setRunningConversation({ featureId: feature.id, storyId: story.id });
       let userMessagePersisted = false;
+      let preserveConversation = false;
       try {
         const withUserMessage = await appendStoryMessage(feature.id, story.id, "user", trimmed);
         if (!withUserMessage) throw new Error("Failed to persist the story message");
         userMessagePersisted = true;
+        const persistedStory = withUserMessage.stories.find((candidate) => candidate.id === story.id);
+        const persistedUserMessage = persistedStory?.messages.at(-1);
+        conversationStartedAt = persistedUserMessage?.createdAt ?? conversationStartedAt;
+        if (!updateConversation(conversationIdentity(conversation), {
+          userMessageId: persistedUserMessage?.id,
+          startedAt: conversationStartedAt,
+        })) return;
+        conversation = {
+          ...conversation,
+          userMessageId: persistedUserMessage?.id,
+          startedAt: conversationStartedAt,
+        };
         const latestFeature = withUserMessage;
         const latestStory = latestFeature.stories.find((candidate) => candidate.id === story.id) ?? story;
         const { client, sessionId } = await ensureCodexSession(latestFeature);
@@ -591,6 +1583,10 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         if (!wasCodexPromptAccepted(sent)) {
           throw new Error("Failed to send story refinement prompt");
         }
+        if (!markConversationRunning(conversationIdentity(conversation))) {
+          preserveConversation = true;
+          return;
+        }
 
         const assistantContent = await waitForCodexReply(
           client,
@@ -598,29 +1594,68 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
           assistantMessageIds(baselineMessages),
         );
         if (!assistantContent) {
+          preserveConversation = updateConversation(conversationIdentity(conversation), {
+            phase: "unavailable",
+            error: "Codex is still refining this story. Check again to resume monitoring or stop waiting.",
+          });
           toast.warning("Codex is still refining the story", {
-            description: "The refinement request was persisted. Use refresh when you return.",
+            description: "The refinement request was persisted. Use Check again when you return.",
           });
           return;
         }
 
-        const withAssistantMessage = await appendStoryMessage(feature.id, story.id, "assistant", assistantContent);
-        if (!withAssistantMessage) throw new Error("Failed to persist the story refinement response");
-        const updatedStory = withAssistantMessage.stories.find((candidate) => candidate.id === story.id) ?? latestStory;
-        await applyStoryRefinement(withAssistantMessage, updatedStory, assistantContent);
+        if (!claimConversationPersistence(
+          conversationIdentity(conversation),
+          assistantContent,
+        )) {
+          preserveConversation = true;
+          return;
+        }
+        await persistStoryConversationResponse(
+          latestFeature,
+          conversation,
+          assistantContent,
+        );
       } catch (error) {
         if (!userMessagePersisted) {
           setChatDraft(storyChatDraftId(feature.id, story.id), text);
+        }
+        const activeConversation = useFeaturePlanStore.getState()
+          .activeConversations.get(feature.id);
+        if (
+          activeConversation?.operationId === conversation.operationId
+          && activeConversation.phase === "persisting"
+        ) {
+          preserveConversation = updateConversation(conversationIdentity(conversation), {
+            phase: "unavailable",
+            error: error instanceof Error
+              ? error.message
+              : "Failed to persist the Codex response.",
+          });
         }
         console.error("[FeaturesView] Failed to send story message:", error);
         toast.error("Story refinement failed", {
           description: error instanceof Error ? error.message : "Unknown error",
         });
       } finally {
-        setRunningConversation(null);
+        if (!preserveConversation) {
+          settleConversation(conversationIdentity(conversation));
+        }
       }
     },
-    [appendStoryMessage, applyStoryRefinement, ensureCodexSession, runningConversation, selectedFeature, setChatDraft],
+    [
+      appendStoryMessage,
+      claimConversationPersistence,
+      ensureCodexSession,
+      hasBlockingConversation,
+      markConversationRunning,
+      persistStoryConversationResponse,
+      selectedFeature,
+      setChatDraft,
+      settleConversation,
+      startConversation,
+      updateConversation,
+    ],
   );
 
   const refreshStoryChat = useCallback(
@@ -628,39 +1663,124 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       if (
         !feature.codexEnvironmentId
         || !feature.codexSessionId
-        || runningConversation
+        || hasBlockingConversation
       ) return;
-      setRunningConversation({ featureId: feature.id, storyId: story.id });
+      const latestStoryMessage = story.messages.at(-1);
+      const pendingStoryConversation = (
+        latestStoryMessage?.role === "user"
+        && !Number.isNaN(Date.parse(latestStoryMessage.createdAt))
+      )
+        ? {
+            featureId: feature.id,
+            storyId: story.id,
+            userMessageId: latestStoryMessage.id,
+            startedAt: latestStoryMessage.createdAt,
+            phase: "running" as const,
+          }
+        : null;
+      const conversation: ActiveFeatureConversation = {
+        operationId: createConversationOperationId(),
+        ...(pendingStoryConversation ?? {
+          featureId: feature.id,
+          storyId: story.id,
+          startedAt: new Date().toISOString(),
+          phase: "running" as const,
+        }),
+      };
+      if (!startConversation(conversation)) return;
+      let preserveConversation = false;
       try {
         const { client, sessionId } = await ensureCodexSession(feature);
         const messages = await getSessionMessages(client, sessionId);
         const assistantContent = latestAssistantMessage(messages, {
+          createdAtOrAfter: pendingStoryConversation?.startedAt,
           accept: (content) => {
             const parsed = parseStoryRefinement(content);
             return parsed !== null && (!parsed.storyId || parsed.storyId === story.id);
           },
         })?.content;
-        const persistedAssistantContents = new Set(
-          story.messages
-            .filter((message) => message.role === "assistant")
-            .map((message) => message.content),
-        );
-        if (assistantContent && !persistedAssistantContents.has(assistantContent)) {
-          const updated = await appendStoryMessage(feature.id, story.id, "assistant", assistantContent);
-          if (!updated) throw new Error("Failed to persist the refreshed story response");
-          const updatedStory = updated.stories.find((candidate) => candidate.id === story.id) ?? story;
-          await applyStoryRefinement(updated, updatedStory, assistantContent);
+        if (assistantContent && pendingStoryConversation) {
+          if (!claimConversationPersistence(
+            conversationIdentity(conversation),
+            assistantContent,
+          )) {
+            preserveConversation = true;
+            return;
+          }
+          await persistStoryConversationResponse(
+            feature,
+            conversation,
+            assistantContent,
+          );
+        } else if (assistantContent) {
+          const persistedAssistantContents = new Set(
+            story.messages
+              .filter((message) => message.role === "assistant")
+              .map((message) => message.content),
+          );
+          if (
+            !persistedAssistantContents.has(assistantContent)
+            && updateConversation(conversationIdentity(conversation), {})
+          ) {
+            const updated = await appendStoryMessage(
+              feature.id,
+              story.id,
+              "assistant",
+              assistantContent,
+              "pending",
+            );
+            if (!updated) throw new Error("Failed to persist the refreshed story response");
+            if (!updateConversation(conversationIdentity(conversation), {})) return;
+            const updatedStory = updated.stories.find(
+              (candidate) => candidate.id === story.id,
+            ) ?? story;
+            const responseMessage = updatedStory.messages.at(-1);
+            if (!responseMessage) {
+              throw new Error("Failed to identify the refreshed story response");
+            }
+            await applyStoryRefinement(
+              updated,
+              updatedStory,
+              assistantContent,
+              responseMessage.id,
+            );
+          }
         }
       } catch (error) {
+        const activeConversation = useFeaturePlanStore.getState()
+          .activeConversations.get(feature.id);
+        if (
+          activeConversation?.operationId === conversation.operationId
+          && activeConversation.phase === "persisting"
+        ) {
+          preserveConversation = updateConversation(conversationIdentity(conversation), {
+            phase: "unavailable",
+            error: error instanceof Error
+              ? error.message
+              : "Failed to persist the refreshed Codex response.",
+          });
+        }
         console.error("[FeaturesView] Failed to refresh story chat:", error);
         toast.error("Failed to refresh story chat", {
           description: error instanceof Error ? error.message : "Unknown error",
         });
       } finally {
-        setRunningConversation(null);
+        if (!preserveConversation) {
+          settleConversation(conversationIdentity(conversation));
+        }
       }
     },
-    [appendStoryMessage, applyStoryRefinement, ensureCodexSession, runningConversation],
+    [
+      appendStoryMessage,
+      applyStoryRefinement,
+      claimConversationPersistence,
+      ensureCodexSession,
+      hasBlockingConversation,
+      persistStoryConversationResponse,
+      settleConversation,
+      startConversation,
+      updateConversation,
+    ],
   );
 
   const openStory = useCallback((storyId: string) => {
@@ -686,7 +1806,11 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
 
   const handleBuildFeature = useCallback(
     async (feature: FeaturePlan) => {
-      if (buildingFeatureId || feature.stories.length === 0) return;
+      if (
+        buildingFeatureId
+        || hasBlockingConversation
+        || feature.stories.length === 0
+      ) return;
       setBuildingFeatureId(feature.id);
       try {
         const taskDetails = formatFeatureStoriesForBuild(feature);
@@ -722,7 +1846,14 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         setBuildingFeatureId(null);
       }
     },
-    [addTask, buildingFeatureId, projectId, startBuild, updateFeature],
+    [
+      addTask,
+      buildingFeatureId,
+      hasBlockingConversation,
+      projectId,
+      startBuild,
+      updateFeature,
+    ],
   );
 
   return (
@@ -826,7 +1957,10 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                 <Button
                   size="sm"
                   className="ml-auto gap-1.5"
-                  disabled={buildingFeatureId === selectedFeature.id}
+                  disabled={
+                    buildingFeatureId === selectedFeature.id
+                    || hasBlockingConversation
+                  }
                   onClick={() => void handleBuildFeature(selectedFeature)}
                 >
                   {buildingFeatureId === selectedFeature.id ? (
@@ -840,11 +1974,19 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
             </div>
 
             <TabsContent value="chat" className={RIGHT_PANE_CONTENT_CLASS}>
-                <FeatureChatPanel
-                  feature={selectedFeature}
-                  draft={featureDraft}
-                  setDraft={(value) => setChatDraft(featureChatDraftId(selectedFeature.id), value)}
-                  isRunning={runningConversation !== null}
+              <FeatureChatPanel
+                feature={selectedFeature}
+                draft={featureDraft}
+                setDraft={(value) => setChatDraft(featureChatDraftId(selectedFeature.id), value)}
+                isRunning={hasRunningConversation}
+                isBlocked={hasBlockingConversation}
+                recoveryMessage={recoveryMessage}
+                onRetryRecovery={unavailableConversation
+                  ? () => retryUnavailableConversation(unavailableConversation)
+                  : undefined}
+                onStopWaiting={unavailableConversation
+                  ? () => stopWaitingForConversation(unavailableConversation)
+                  : undefined}
                 onSend={sendFeatureMessage}
                 onRefresh={() => void refreshFeatureChat(selectedFeature)}
               />
@@ -866,7 +2008,15 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                     storyChatDraftId(selectedFeature.id, selectedStory.id),
                     value,
                   )}
-                  isRunning={runningConversation !== null}
+                  isRunning={hasRunningConversation}
+                  isBlocked={hasBlockingConversation}
+                  recoveryMessage={recoveryMessage}
+                  onRetryRecovery={unavailableConversation
+                    ? () => retryUnavailableConversation(unavailableConversation)
+                    : undefined}
+                  onStopWaiting={unavailableConversation
+                    ? () => stopWaitingForConversation(unavailableConversation)
+                    : undefined}
                   onSend={(text) => void sendStoryMessage(selectedStory, text)}
                   onRefresh={() => void refreshStoryChat(selectedFeature, selectedStory)}
                 />
@@ -884,6 +2034,10 @@ function FeatureChatPanel({
   draft,
   setDraft,
   isRunning,
+  isBlocked,
+  recoveryMessage,
+  onRetryRecovery,
+  onStopWaiting,
   onSend,
   onRefresh,
 }: {
@@ -891,6 +2045,10 @@ function FeatureChatPanel({
   draft: string;
   setDraft: (value: string) => void;
   isRunning: boolean;
+  isBlocked: boolean;
+  recoveryMessage?: string;
+  onRetryRecovery?: () => void;
+  onStopWaiting?: () => void;
   onSend: (text: string) => void;
   onRefresh: () => void;
 }) {
@@ -902,6 +2060,10 @@ function FeatureChatPanel({
       draft={draft}
       setDraft={setDraft}
       isRunning={isRunning}
+      isBlocked={isBlocked}
+      recoveryMessage={recoveryMessage}
+      onRetryRecovery={onRetryRecovery}
+      onStopWaiting={onStopWaiting}
       loadingText="Codex is working..."
       placeholder="Describe the feature or answer Codex..."
       onSend={onSend}
@@ -917,6 +2079,10 @@ export function NativeStyleChatPanel({
   draft,
   setDraft,
   isRunning,
+  isBlocked = isRunning,
+  recoveryMessage,
+  onRetryRecovery,
+  onStopWaiting,
   loadingText,
   placeholder,
   onSend,
@@ -928,6 +2094,10 @@ export function NativeStyleChatPanel({
   draft: string;
   setDraft: (value: string) => void;
   isRunning: boolean;
+  isBlocked?: boolean;
+  recoveryMessage?: string;
+  onRetryRecovery?: () => void;
+  onStopWaiting?: () => void;
   loadingText: string;
   placeholder: string;
   onSend: (text: string) => void;
@@ -947,9 +2117,9 @@ export function NativeStyleChatPanel({
 
   const handleSend = useCallback(() => {
     const trimmed = draft.trim();
-    if (!trimmed || isRunning) return;
+    if (!trimmed || isBlocked) return;
     onSend(draft);
-  }, [draft, isRunning, onSend]);
+  }, [draft, isBlocked, onSend]);
 
   return (
     <div className="@container relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background">
@@ -972,6 +2142,38 @@ export function NativeStyleChatPanel({
                     <div className="flex items-center gap-2 text-muted-foreground">
                       <Loader2 className="h-4 w-4 animate-spin" />
                       <span className="text-xs">{loadingText}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {recoveryMessage && (
+                <div className="px-2 @sm:px-4 py-3">
+                  <div
+                    role="alert"
+                    className="mx-auto max-w-3xl rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100"
+                  >
+                    <p>{recoveryMessage}</p>
+                    <div className="mt-2 flex gap-2">
+                      {onRetryRecovery && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={onRetryRecovery}
+                        >
+                          Check again
+                        </Button>
+                      )}
+                      {onStopWaiting && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={onStopWaiting}
+                        >
+                          Stop waiting
+                        </Button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1018,7 +2220,7 @@ export function NativeStyleChatPanel({
             {onRefresh ? (
               <button
                 type="button"
-                disabled={isRunning}
+                disabled={isBlocked}
                 onClick={onRefresh}
                 className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                 title="Refresh Codex status"
@@ -1031,7 +2233,7 @@ export function NativeStyleChatPanel({
               type="button"
               size="icon"
               className="h-8 w-8 rounded-full bg-muted text-foreground transition-colors hover:bg-muted/80"
-              disabled={!draft.trim() || isRunning}
+              disabled={!draft.trim() || isBlocked}
               onClick={handleSend}
               title="Send message"
             >
@@ -1083,6 +2285,10 @@ function StoryDetailPanel({
   draft,
   setDraft,
   isRunning,
+  isBlocked,
+  recoveryMessage,
+  onRetryRecovery,
+  onStopWaiting,
   onSend,
   onRefresh,
 }: {
@@ -1090,6 +2296,10 @@ function StoryDetailPanel({
   draft: string;
   setDraft: (value: string) => void;
   isRunning: boolean;
+  isBlocked: boolean;
+  recoveryMessage?: string;
+  onRetryRecovery?: () => void;
+  onStopWaiting?: () => void;
   onSend: (text: string) => void;
   onRefresh: () => void;
 }) {
@@ -1121,6 +2331,10 @@ function StoryDetailPanel({
           draft={draft}
           setDraft={setDraft}
           isRunning={isRunning}
+          isBlocked={isBlocked}
+          recoveryMessage={recoveryMessage}
+          onRetryRecovery={onRetryRecovery}
+          onStopWaiting={onStopWaiting}
           loadingText="Codex is refining..."
           placeholder="Refine the story, description, or acceptance criteria..."
           onSend={onSend}

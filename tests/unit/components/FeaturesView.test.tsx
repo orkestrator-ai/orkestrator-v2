@@ -16,7 +16,10 @@ import {
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
-import { useFeaturePlanStore } from "@/stores/featurePlanStore";
+import {
+  useFeaturePlanStore,
+  type ActiveFeatureConversation,
+} from "@/stores/featurePlanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useProjectStore } from "@/stores/projectStore";
 import type { FeaturePlan, FeaturePlanMessage, FeatureStoryCard } from "@/lib/backend";
@@ -43,12 +46,14 @@ const appendMessageMock = mock(async (
   _featureId: string,
   _role: FeaturePlanMessage["role"],
   _content: string,
+  _stateApplication?: FeaturePlanMessage["stateApplication"],
 ) => undefined as FeaturePlan | undefined);
 const appendStoryMessageMock = mock(async (
   _featureId: string,
   _storyId: string,
   _role: FeaturePlanMessage["role"],
   _content: string,
+  _stateApplication?: FeaturePlanMessage["stateApplication"],
 ) => undefined as FeaturePlan | undefined);
 const updateFeatureMock = mock(async (
   _id: string,
@@ -174,6 +179,46 @@ afterAll(() => {
 
 const NOW = "2026-01-01T00:00:00.000Z";
 
+function pendingUser(createdAt = NOW, id = "pending-user"): FeaturePlanMessage {
+  return {
+    id,
+    role: "user",
+    content: id,
+    createdAt,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function flushReconcileStart(): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+  });
+}
+
+async function waitForConversationToSettle(featureId = "feature-1"): Promise<void> {
+  await waitFor(() => expect(
+    useFeaturePlanStore.getState().activeConversations.has(featureId),
+  ).toBe(false));
+}
+
+async function waitForConversationPhase(
+  phase: ActiveFeatureConversation["phase"],
+  featureId = "feature-1",
+): Promise<void> {
+  await waitFor(() => expect(
+    useFeaturePlanStore.getState().activeConversations.get(featureId)?.phase,
+  ).toBe(phase));
+}
+
 function makeStory(overrides: Partial<FeatureStoryCard> = {}): FeatureStoryCard {
   return {
     id: "story-1",
@@ -288,6 +333,7 @@ function appendFeatureMessageInStore(
   featureId: string,
   role: FeaturePlanMessage["role"],
   content: string,
+  stateApplication?: FeaturePlanMessage["stateApplication"],
 ): FeaturePlan | undefined {
   const feature = useFeaturePlanStore.getState().features.find((candidate) => candidate.id === featureId);
   if (!feature) return undefined;
@@ -297,6 +343,7 @@ function appendFeatureMessageInStore(
       role,
       content,
       createdAt: NOW,
+      ...(stateApplication ? { stateApplication } : {}),
     }],
   });
 }
@@ -306,6 +353,7 @@ function appendStoryMessageInStore(
   storyId: string,
   role: FeaturePlanMessage["role"],
   content: string,
+  stateApplication?: FeaturePlanMessage["stateApplication"],
 ): FeaturePlan | undefined {
   const feature = useFeaturePlanStore.getState().features.find((candidate) => candidate.id === featureId);
   if (!feature) return undefined;
@@ -318,6 +366,7 @@ function appendStoryMessageInStore(
             role,
             content,
             createdAt: NOW,
+            ...(stateApplication ? { stateApplication } : {}),
           }],
         }
       : story),
@@ -342,6 +391,7 @@ function seedStores(featureOrFeatures: FeaturePlan | FeaturePlan[]) {
     features,
     isLoading: false,
     currentProjectId: "project-1",
+    activeConversations: new Map(),
     loadFeatures: loadFeaturesMock as unknown as ReturnType<typeof useFeaturePlanStore.getState>["loadFeatures"],
     createFeature: createFeatureMock as unknown as ReturnType<typeof useFeaturePlanStore.getState>["createFeature"],
     updateFeature: updateFeatureMock as unknown as ReturnType<typeof useFeaturePlanStore.getState>["updateFeature"],
@@ -396,12 +446,24 @@ beforeEach(() => {
     return created.id;
   });
   appendMessageMock.mockClear();
-  appendMessageMock.mockImplementation(async (featureId, role, content) =>
-    appendFeatureMessageInStore(featureId, role, content)
+  appendMessageMock.mockImplementation(async (featureId, role, content, stateApplication) =>
+    appendFeatureMessageInStore(featureId, role, content, stateApplication)
   );
   appendStoryMessageMock.mockClear();
-  appendStoryMessageMock.mockImplementation(async (featureId, storyId, role, content) =>
-    appendStoryMessageInStore(featureId, storyId, role, content)
+  appendStoryMessageMock.mockImplementation(async (
+    featureId,
+    storyId,
+    role,
+    content,
+    stateApplication,
+  ) =>
+    appendStoryMessageInStore(
+      featureId,
+      storyId,
+      role,
+      content,
+      stateApplication,
+    )
   );
   updateFeatureMock.mockClear();
   updateFeatureMock.mockImplementation(async (featureId, updates) =>
@@ -461,7 +523,10 @@ beforeEach(() => {
     setupScriptsRunning: new Set(),
     sessionActivated: new Set(),
   });
-  useFeaturePlanStore.setState({ chatDrafts: new Map() });
+  useFeaturePlanStore.setState({
+    chatDrafts: new Map(),
+    activeConversations: new Map(),
+  });
   useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
 });
 
@@ -784,6 +849,1603 @@ describe("FeaturesView conversation ordering", () => {
 });
 
 describe("FeaturesView lifecycle and navigation", () => {
+  test("keeps the working state when the view is unmounted and mounted again", async () => {
+    sendPromptMock.mockImplementationOnce(() => new Promise(() => undefined));
+    seedStores(chatFeature());
+    seedExistingCodexEnvironment();
+    const view = render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
+
+    fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
+      target: { value: "Keep working in the background" },
+    });
+    fireEvent.click(screen.getByTitle("Send message"));
+    await screen.findByText("Codex is working...");
+
+    view.unmount();
+    getSessionStatusMock.mockImplementation(async () => ({ status: "running" }));
+    render(<FeaturesView projectId="project-1" />);
+
+    expect(screen.getByText("Codex is working...")).toBeTruthy();
+    expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
+    await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalledWith(
+      { baseUrl: "http://127.0.0.1:4200" },
+      "session-existing",
+      { throwOnError: true },
+    ));
+    await waitForConversationPhase("running");
+  });
+
+  test("does not cancel dispatch when remounting before the user message append resolves", async () => {
+    const pendingAppend = deferred<FeaturePlan | undefined>();
+    appendMessageMock.mockImplementationOnce(async () => pendingAppend.promise);
+    sendPromptMock.mockImplementationOnce(() => new Promise(() => undefined));
+    seedStores(chatFeature());
+    seedExistingCodexEnvironment();
+    const view = render(<FeaturesView projectId="project-1" />);
+
+    fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
+      target: { value: "Persist before dispatch" },
+    });
+    fireEvent.click(screen.getByTitle("Send message"));
+    await waitFor(() => expect(appendMessageMock).toHaveBeenCalledWith(
+      "feature-1",
+      "user",
+      "Persist before dispatch",
+    ));
+    const operationId = useFeaturePlanStore.getState()
+      .activeConversations.get("feature-1")?.operationId;
+    expect(operationId).toBeTruthy();
+
+    view.unmount();
+    render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
+
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toMatchObject({
+      operationId,
+      phase: "dispatching",
+    });
+    expect(sendPromptMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pendingAppend.resolve(
+        appendFeatureMessageInStore("feature-1", "user", "Persist before dispatch"),
+      );
+    });
+
+    await waitFor(() => expect(sendPromptMock).toHaveBeenCalledTimes(1));
+    expect(sendPromptMock).toHaveBeenCalledWith(
+      { baseUrl: "http://127.0.0.1:4200" },
+      "session-existing",
+      "Persist before dispatch",
+    );
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toMatchObject({
+      operationId,
+      userMessageId: "user-1",
+      phase: "dispatching",
+    });
+  });
+
+  test("rehydrates working state from the Codex session after renderer state is lost", async () => {
+    seedStores(chatFeature({
+      messages: [{
+        id: "pending-user",
+        role: "user",
+        content: "Continue even while this view is inactive",
+        createdAt: NOW,
+      }],
+    }));
+    seedExistingCodexEnvironment();
+    useFeaturePlanStore.setState({ activeConversations: new Map() });
+    getSessionStatusMock.mockImplementation(async () => ({ status: "running" }));
+
+    render(<FeaturesView projectId="project-1" />);
+
+    await screen.findByText("Codex is working...");
+    await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalledWith(
+      { baseUrl: "http://127.0.0.1:4200" },
+      "session-existing",
+      { throwOnError: true },
+    ));
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toMatchObject({
+      operationId: expect.any(String),
+      featureId: "feature-1",
+      userMessageId: "pending-user",
+      startedAt: NOW,
+      phase: "running",
+    });
+    expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
+  });
+
+  test("hydrates and applies a restored feature response before settling an idle session", async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: TimerHandler,
+      delay?: number,
+      ...args: unknown[]
+    ) => {
+      if (typeof callback === "function" && delay === 1_500) {
+        return realSetTimeout(callback, 0, ...args);
+      }
+      return realSetTimeout(callback, delay, ...args);
+    }) as typeof setTimeout);
+    const response = makeCodexMessage({
+      content: `Recovered response
+<feature_planner_state>{"phase":"confirming","title":"Recovered Feature","summary":"restored"}</feature_planner_state>`,
+    });
+    seedStores(chatFeature({
+      messages: [{
+        id: "pending-user",
+        role: "user",
+        content: "This turn finished while the view was inactive",
+        createdAt: NOW,
+      }],
+    }));
+    seedExistingCodexEnvironment();
+    getSessionStatusMock
+      .mockImplementationOnce(async () => ({ status: "running" }))
+      .mockImplementationOnce(async () => ({ status: "idle" }));
+    getSessionMessagesMock.mockImplementation(async () => [response]);
+
+    try {
+      render(<FeaturesView projectId="project-1" />);
+      await act(async () => {
+        await new Promise<void>((resolve) => realSetTimeout(resolve, 10));
+      });
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+    await waitFor(() => {
+      expect(useFeaturePlanStore.getState().activeConversations.has("feature-1")).toBe(false);
+      expect(appendMessageMock).toHaveBeenCalledWith(
+        "feature-1",
+        "assistant",
+        response.content,
+        "pending",
+      );
+    });
+    expect(updateFeatureMock).toHaveBeenCalledWith("feature-1", expect.objectContaining({
+      title: "Recovered Feature",
+      summary: "restored",
+      status: "confirming",
+    }));
+    expect(getSessionStatusMock).toHaveBeenCalledTimes(2);
+    expect(createClientMock).toHaveBeenCalledTimes(1);
+    expect(getCodexServerStatusMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Recovered response")).toBeTruthy();
+  });
+
+  test("selects the newest valid unanswered feature or story conversation", async () => {
+    const stories = [
+      makeStory({ id: "invalid", messages: [pendingUser("not-a-date", "invalid")] }),
+      makeStory({ id: "old", messages: [pendingUser("2026-01-02T00:00:00.000Z", "old")] }),
+      makeStory({ id: "latest", messages: [pendingUser("2026-01-03T00:00:00.000Z", "latest")] }),
+    ];
+    seedStores(chatFeature({
+      messages: [pendingUser("2026-01-01T00:00:00.000Z", "feature-old")],
+      stories,
+    }));
+    seedExistingCodexEnvironment();
+    getSessionStatusMock.mockImplementation(async () => ({ status: "running" }));
+
+    render(<FeaturesView projectId="project-1" />);
+    await waitFor(() => expect(
+      useFeaturePlanStore.getState().activeConversations.get("feature-1"),
+    ).toMatchObject({
+      storyId: "latest",
+      startedAt: "2026-01-03T00:00:00.000Z",
+    }));
+
+    cleanup();
+    useFeaturePlanStore.setState({ activeConversations: new Map() });
+    seedStores(chatFeature({
+      messages: [pendingUser("2026-01-04T00:00:00.000Z", "feature-latest")],
+      stories,
+    }));
+    render(<FeaturesView projectId="project-1" />);
+    await waitFor(() => expect(
+      useFeaturePlanStore.getState().activeConversations.get("feature-1")?.startedAt,
+    ).toBe("2026-01-04T00:00:00.000Z"));
+    expect(
+      useFeaturePlanStore.getState().activeConversations.get("feature-1")?.storyId,
+    ).toBeUndefined();
+  });
+
+  test("replaces a stale cached actor and monitors the newest pending message", async () => {
+    seedStores(chatFeature({
+      messages: [pendingUser("2026-01-03T00:00:00.000Z", "newest-user")],
+    }));
+    seedExistingCodexEnvironment();
+    useFeaturePlanStore.getState().startConversation({
+      operationId: "stale-operation",
+      featureId: "feature-1",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      phase: "running",
+    });
+    getSessionStatusMock.mockImplementation(async () => ({ status: "running" }));
+
+    render(<FeaturesView projectId="project-1" />);
+
+    await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalledWith(
+      { baseUrl: "http://127.0.0.1:4200" },
+      "session-existing",
+      { throwOnError: true },
+    ));
+    const activeConversation = useFeaturePlanStore.getState().activeConversations.get("feature-1");
+    expect(activeConversation).toMatchObject({
+      featureId: "feature-1",
+      startedAt: "2026-01-03T00:00:00.000Z",
+      phase: "running",
+    });
+    expect(activeConversation?.operationId).not.toBe("stale-operation");
+    expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
+  });
+
+  test("does not reconcile answered conversations or malformed timestamps", async () => {
+    seedStores(chatFeature({
+      messages: [{
+        id: "answered",
+        role: "assistant",
+        content: "Done",
+        createdAt: NOW,
+      }],
+      stories: [makeStory({ messages: [pendingUser("not-a-date")] })],
+    }));
+    seedExistingCodexEnvironment();
+
+    render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
+
+    expect(getSessionStatusMock).not.toHaveBeenCalled();
+    expect(useFeaturePlanStore.getState().activeConversations.size).toBe(0);
+  });
+
+  test("keeps stale and invalid-timestamp restored feature replies blocked", async () => {
+    const staleReply = makeCodexMessage({
+      id: "stale-reply",
+      content: featurePlannerReply("Do not restore this stale reply"),
+      createdAt: "2025-12-31T23:59:59.000Z",
+    });
+    const invalidTimestampReply = makeCodexMessage({
+      id: "invalid-timestamp-reply",
+      content: featurePlannerReply("Do not restore this invalid reply"),
+      createdAt: "not-a-date",
+    });
+    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedExistingCodexEnvironment();
+    getSessionStatusMock.mockImplementation(async () => ({ status: "idle" }));
+    getSessionMessagesMock.mockImplementation(async () => [
+      staleReply,
+      invalidTimestampReply,
+    ]);
+
+    render(<FeaturesView projectId="project-1" />);
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "no matching response was found",
+    );
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toMatchObject({
+      featureId: "feature-1",
+      phase: "unavailable",
+    });
+    expect(appendMessageMock).not.toHaveBeenCalled();
+    expect(updateFeatureMock).not.toHaveBeenCalled();
+    expect(useFeaturePlanStore.getState().features[0]?.title).toBe("My Feature");
+    expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
+  });
+
+  test("hydrates a restored story refinement before settling", async () => {
+    const refinement = `Recovered story.
+<story_refinement>{"storyId":"story-1","title":"Recovered Story","description":"Recovered description","acceptanceCriteria":["Recovered criterion"]}</story_refinement>`;
+    seedStores(featureWithStories({
+      codexEnvironmentId: "env-feature",
+      codexSessionId: "session-existing",
+      stories: [makeStory({ messages: [pendingUser()] })],
+    }));
+    seedExistingCodexEnvironment();
+    getSessionStatusMock.mockImplementation(async () => ({ status: "idle" }));
+    getSessionMessagesMock.mockImplementation(async () => [
+      makeCodexMessage({ id: "story-reply", content: refinement }),
+    ]);
+
+    render(<FeaturesView projectId="project-1" />);
+
+    await waitFor(() => expect(appendStoryMessageMock).toHaveBeenCalledWith(
+      "feature-1",
+      "story-1",
+      "assistant",
+      refinement,
+      "pending",
+    ));
+    expect(updateFeatureMock).toHaveBeenCalledWith("feature-1", expect.objectContaining({
+      stories: [expect.objectContaining({
+        id: "story-1",
+        title: "Recovered Story",
+        description: "Recovered description",
+        acceptanceCriteria: ["Recovered criterion"],
+      })],
+    }));
+    expect(useFeaturePlanStore.getState().activeConversations.has("feature-1")).toBe(false);
+  });
+
+  test("keeps restored feature append failures unavailable without applying state", async () => {
+    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
+    const response = makeCodexMessage({
+      content: `Recovered response
+<feature_planner_state>{"phase":"confirming","title":"Must Not Apply","summary":"must not apply"}</feature_planner_state>`,
+    });
+    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedExistingCodexEnvironment();
+    appendMessageMock.mockImplementationOnce(async () => undefined);
+    getSessionStatusMock.mockImplementation(async () => ({ status: "idle" }));
+    getSessionMessagesMock.mockImplementation(async () => [response]);
+
+    try {
+      render(<FeaturesView projectId="project-1" />);
+
+      expect((await screen.findByRole("alert")).textContent).toContain(
+        "Failed to persist the feature planning response",
+      );
+      expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toMatchObject({
+        featureId: "feature-1",
+        phase: "unavailable",
+        error: "Failed to persist the feature planning response",
+      });
+      expect(updateFeatureMock).not.toHaveBeenCalled();
+      expect(useFeaturePlanStore.getState().features[0]?.title).toBe("My Feature");
+      expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  test("keeps restored story append failures unavailable without applying state", async () => {
+    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
+    const refinement = `Recovered story.
+<story_refinement>{"storyId":"story-1","title":"Must Not Apply","description":"must not apply"}</story_refinement>`;
+    seedStores(featureWithStories({
+      codexEnvironmentId: "env-feature",
+      codexSessionId: "session-existing",
+      stories: [makeStory({ messages: [pendingUser()] })],
+    }));
+    seedExistingCodexEnvironment();
+    appendStoryMessageMock.mockImplementationOnce(async () => undefined);
+    getSessionStatusMock.mockImplementation(async () => ({ status: "idle" }));
+    getSessionMessagesMock.mockImplementation(async () => [
+      makeCodexMessage({ id: "story-reply", content: refinement }),
+    ]);
+
+    try {
+      render(<FeaturesView projectId="project-1" />);
+
+      await waitFor(() => expect(
+        useFeaturePlanStore.getState().activeConversations.get("feature-1"),
+      ).toMatchObject({
+        featureId: "feature-1",
+        storyId: "story-1",
+        phase: "unavailable",
+        error: "Failed to persist the story refinement response",
+      }));
+      openStory();
+      expect((await screen.findByRole("alert")).textContent).toContain(
+        "Failed to persist the story refinement response",
+      );
+      expect(updateFeatureMock).not.toHaveBeenCalled();
+      expect(useFeaturePlanStore.getState().features[0]?.stories[0]?.title).toBe("Story 1");
+      expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  test("surfaces terminal status errors and retries recovery without redispatching", async () => {
+    const recovered = makeCodexMessage({
+      content: `Recovered after retry.
+<feature_planner_state>{"phase":"collecting","title":"Retry Recovered","summary":""}</feature_planner_state>`,
+    });
+    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedExistingCodexEnvironment();
+    getSessionStatusMock.mockImplementationOnce(async () => ({
+      status: "error",
+      error: "model failed",
+    }));
+
+    render(<FeaturesView projectId="project-1" />);
+
+    expect((await screen.findByRole("alert")).textContent).toContain("model failed");
+    expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
+
+    getSessionStatusMock.mockImplementation(async () => ({ status: "idle" }));
+    getSessionMessagesMock.mockImplementation(async () => [recovered]);
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+
+    await waitFor(() => expect(appendMessageMock).toHaveBeenCalledWith(
+      "feature-1",
+      "assistant",
+      recovered.content,
+      "pending",
+    ));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(sendPromptMock).not.toHaveBeenCalled();
+  });
+
+  test("bounds status retries and requires an explicit stop before unlocking", async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: TimerHandler,
+      delay?: number,
+      ...args: unknown[]
+    ) => {
+      if (
+        typeof callback === "function"
+        && (delay === 1_500 || delay === 3_000 || delay === 6_000)
+      ) {
+        return realSetTimeout(callback, 0, ...args);
+      }
+      return realSetTimeout(callback, delay, ...args);
+    }) as typeof setTimeout);
+    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedExistingCodexEnvironment();
+    getSessionStatusMock.mockImplementation(async () => {
+      throw new Error("bridge unavailable");
+    });
+
+    try {
+      render(<FeaturesView projectId="project-1" />);
+      await act(async () => {
+        await new Promise<void>((resolve) => realSetTimeout(resolve, 10));
+      });
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+    expect((await screen.findByRole("alert")).textContent).toContain("Codex status is unavailable");
+    expect(getSessionStatusMock).toHaveBeenCalledTimes(4);
+    expect(createClientMock).toHaveBeenCalledTimes(4);
+    expect(getCodexServerStatusMock).toHaveBeenCalledTimes(4);
+    expect(sendPromptMock).not.toHaveBeenCalled();
+    expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
+
+    fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
+      target: { value: "A new prompt" },
+    });
+    expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+
+    await waitFor(() => {
+      expect(useFeaturePlanStore.getState().activeConversations.has("feature-1")).toBe(false);
+      expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(false);
+    });
+  });
+
+  test("honors dispatch grace before recovering an idle cached turn", async () => {
+    let now = 0;
+    const dateNowSpy = spyOn(Date, "now").mockImplementation(() => now);
+    const realSetTimeout = globalThis.setTimeout;
+    const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: TimerHandler,
+      delay?: number,
+      ...args: unknown[]
+    ) => {
+      if (typeof callback === "function" && delay === 1_500) {
+        now += 1_500;
+        return realSetTimeout(callback, 0, ...args);
+      }
+      return realSetTimeout(callback, delay, ...args);
+    }) as typeof setTimeout);
+    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedExistingCodexEnvironment();
+    useFeaturePlanStore.getState().startConversation({
+      operationId: "cached-dispatch",
+      featureId: "feature-1",
+      startedAt: NOW,
+      phase: "dispatching",
+    });
+    getSessionStatusMock.mockImplementation(async () => ({ status: "idle" }));
+
+    try {
+      render(<FeaturesView projectId="project-1" />);
+      await act(async () => {
+        await new Promise<void>((resolve) => realSetTimeout(resolve, 10));
+      });
+    } finally {
+      timeoutSpy.mockRestore();
+      dateNowSpy.mockRestore();
+    }
+    expect((await screen.findByRole("alert")).textContent).toContain("no matching response");
+    expect(getSessionStatusMock.mock.calls.length).toBeGreaterThanOrEqual(6);
+    expect(getSessionMessagesMock).toHaveBeenCalledTimes(1);
+    expect(sendPromptMock).not.toHaveBeenCalled();
+  });
+
+  test("reconciles multiple features independently", async () => {
+    const recovered = makeCodexMessage({
+      content: `Recovered A.
+<feature_planner_state>{"phase":"collecting","title":"Recovered A","summary":""}</feature_planner_state>`,
+    });
+    seedStores([
+      chatFeature({
+        id: "feature-a",
+        codexEnvironmentId: "env-a",
+        codexSessionId: "session-a",
+        messages: [pendingUser(NOW, "user-a")],
+        order: 0,
+      }),
+      chatFeature({
+        id: "feature-b",
+        codexEnvironmentId: "env-b",
+        codexSessionId: "session-b",
+        messages: [pendingUser(NOW, "user-b")],
+        order: 1,
+      }),
+    ]);
+    useEnvironmentStore.setState({
+      environments: [
+        makeEnvironment({ id: "env-a", containerId: "container-a" }),
+        makeEnvironment({ id: "env-b", containerId: "container-b" }),
+      ],
+    });
+    getSessionStatusMock.mockImplementation(async (_client, sessionId) => (
+      sessionId === "session-a"
+        ? { status: "idle" as const }
+        : { status: "running" as const }
+    ));
+    getSessionMessagesMock.mockImplementation(async (_client, sessionId) => (
+      sessionId === "session-a" ? [recovered] : []
+    ));
+
+    render(<FeaturesView projectId="project-1" />);
+
+    await waitFor(() => expect(appendMessageMock).toHaveBeenCalledWith(
+      "feature-a",
+      "assistant",
+      recovered.content,
+      "pending",
+    ));
+    expect(useFeaturePlanStore.getState().activeConversations.has("feature-a")).toBe(false);
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-b")).toMatchObject({
+      featureId: "feature-b",
+      phase: "running",
+    });
+    expect(getSessionStatusMock.mock.calls.map((call) => call[1])).toEqual(
+      expect.arrayContaining(["session-a", "session-b"]),
+    );
+  });
+
+  test("resolves local and backend-only environments during reconciliation", async () => {
+    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedExistingCodexEnvironment(makeEnvironment({
+      environmentType: "local",
+      containerId: null,
+    }));
+    getSessionStatusMock.mockImplementation(async () => ({ status: "running" }));
+
+    render(<FeaturesView projectId="project-1" />);
+    await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalled());
+    expect(getLocalCodexServerStatusMock).toHaveBeenCalledWith("env-feature");
+    expect(createClientMock).toHaveBeenCalledWith("http://127.0.0.1:4100");
+    expect(getCodexServerStatusMock).not.toHaveBeenCalled();
+
+    cleanup();
+    getSessionStatusMock.mockClear();
+    createClientMock.mockClear();
+    getLocalCodexServerStatusMock.mockClear();
+    getCodexServerStatusMock.mockClear();
+    useEnvironmentStore.setState({ environments: [] });
+    seedStores(chatFeature({ messages: [pendingUser()] }));
+    getEnvironmentMock.mockImplementation(async () => makeEnvironment());
+    render(<FeaturesView projectId="project-1" />);
+
+    await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalled());
+    expect(getEnvironmentMock).toHaveBeenCalledWith("env-feature");
+    expect(getCodexServerStatusMock).toHaveBeenCalledWith("container-feature");
+    expect(createClientMock).toHaveBeenCalledWith("http://127.0.0.1:4200");
+  });
+
+  test("moves every unreachable existing-session shape to bounded recovery", async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: TimerHandler,
+      delay?: number,
+      ...args: unknown[]
+    ) => {
+      if (
+        typeof callback === "function"
+        && (delay === 1_500 || delay === 3_000 || delay === 6_000)
+      ) {
+        return realSetTimeout(callback, 0, ...args);
+      }
+      return realSetTimeout(callback, delay, ...args);
+    }) as typeof setTimeout);
+    const cases: Array<{
+      name: string;
+      environment?: Environment;
+      backendEnvironment?: Environment | null;
+      bridge?: { running: boolean; hostPort?: number };
+    }> = [
+      { name: "missing environment", backendEnvironment: null },
+      { name: "stopped environment", environment: makeEnvironment({ status: "stopped" }) },
+      { name: "missing container", environment: makeEnvironment({ containerId: null }) },
+      { name: "stopped bridge", environment: makeEnvironment(), bridge: { running: false } },
+      { name: "missing port", environment: makeEnvironment(), bridge: { running: true } },
+    ];
+
+    try {
+      for (const scenario of cases) {
+        cleanup();
+        useEnvironmentStore.setState({ environments: scenario.environment ? [scenario.environment] : [] });
+        seedStores(chatFeature({ messages: [pendingUser()] }));
+        getEnvironmentMock.mockClear();
+        getEnvironmentMock.mockImplementation(async () => scenario.backendEnvironment ?? null);
+        getCodexServerStatusMock.mockClear();
+        getCodexServerStatusMock.mockImplementation(async () => (
+          scenario.bridge ?? { running: true, hostPort: 4200 }
+        ));
+        getSessionStatusMock.mockClear();
+        createClientMock.mockClear();
+
+        render(<FeaturesView projectId="project-1" />);
+        await act(async () => {
+          await new Promise<void>((resolve) => realSetTimeout(resolve, 50));
+        });
+        expect(
+          useFeaturePlanStore.getState().activeConversations.get("feature-1"),
+        ).toMatchObject({
+          featureId: "feature-1",
+          phase: "unavailable",
+        });
+        expect(getSessionStatusMock).not.toHaveBeenCalled();
+        expect(createClientMock).not.toHaveBeenCalled();
+      }
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  test("cancels stale reconciliation on project switch and unmount", async () => {
+    const firstStatus = deferred<{ status: "idle" }>();
+    seedStores(chatFeature({
+      id: "feature-a",
+      codexEnvironmentId: "env-a",
+      codexSessionId: "session-a",
+      messages: [pendingUser(NOW, "user-a")],
+    }));
+    seedExistingCodexEnvironment(makeEnvironment({
+      id: "env-a",
+      containerId: "container-a",
+    }));
+    getSessionStatusMock.mockImplementation(async (_client, sessionId) => (
+      sessionId === "session-a"
+        ? firstStatus.promise
+        : { status: "running" as const }
+    ));
+    const view = render(<FeaturesView projectId="project-1" />);
+    await waitFor(() => expect(
+      getSessionStatusMock.mock.calls.some((call) => call[1] === "session-a"),
+    ).toBe(true));
+
+    act(() => {
+      useProjectStore.setState({
+        projects: [{
+          id: "project-2",
+          name: "Project 2",
+          gitUrl: "https://github.com/acme/repo-2.git",
+          localPath: null,
+          addedAt: NOW,
+          order: 0,
+        }],
+      });
+      useEnvironmentStore.setState({
+        environments: [makeEnvironment({
+          id: "env-b",
+          projectId: "project-2",
+          containerId: "container-b",
+        })],
+      });
+      useFeaturePlanStore.setState({
+        currentProjectId: "project-2",
+        features: [chatFeature({
+          id: "feature-b",
+          projectId: "project-2",
+          codexEnvironmentId: "env-b",
+          codexSessionId: "session-b",
+          messages: [pendingUser(NOW, "user-b")],
+        })],
+      });
+    });
+    view.rerender(<FeaturesView projectId="project-2" />);
+    await waitFor(() => expect(
+      getSessionStatusMock.mock.calls.some((call) => call[1] === "session-b"),
+    ).toBe(true));
+
+    await act(async () => firstStatus.resolve({ status: "idle" }));
+    expect(getSessionMessagesMock.mock.calls.some((call) => call[1] === "session-a")).toBe(false);
+    expect(appendMessageMock).not.toHaveBeenCalledWith(
+      "feature-a",
+      "assistant",
+      expect.anything(),
+      "pending",
+    );
+
+    const secondStatus = deferred<{ status: "idle" }>();
+    cleanup();
+    getSessionStatusMock.mockClear();
+    getSessionStatusMock.mockImplementation(async () => secondStatus.promise);
+    getSessionMessagesMock.mockClear();
+    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedExistingCodexEnvironment();
+    const unmounted = render(<FeaturesView projectId="project-1" />);
+    await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalled());
+    unmounted.unmount();
+    await act(async () => secondStatus.resolve({ status: "idle" }));
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  test("settles without hydrating when the pending turn is answered during a status read", async () => {
+    const status = deferred<{ status: "idle" }>();
+    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedExistingCodexEnvironment();
+    getSessionStatusMock.mockImplementation(async () => status.promise);
+
+    render(<FeaturesView projectId="project-1" />);
+    await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalled());
+
+    act(() => {
+      updateFeatureInStore("feature-1", {
+        messages: [
+          pendingUser(),
+          {
+            id: "already-persisted-reply",
+            role: "assistant",
+            content: "The live worker already saved this reply.",
+            createdAt: "2026-01-01T00:00:01.000Z",
+          },
+        ],
+      });
+    });
+    await act(async () => status.resolve({ status: "idle" }));
+
+    await waitFor(() => expect(
+      useFeaturePlanStore.getState().activeConversations.has("feature-1"),
+    ).toBe(false));
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+    expect(appendMessageMock).not.toHaveBeenCalled();
+  });
+
+  test("keeps recovery blocked when restored transcript hydration throws", async () => {
+    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
+    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedExistingCodexEnvironment();
+    getSessionStatusMock.mockImplementation(async () => ({ status: "idle" }));
+    getSessionMessagesMock.mockImplementation(async () => {
+      throw "malformed transcript response";
+    });
+
+    try {
+      render(<FeaturesView projectId="project-1" />);
+
+      expect((await screen.findByRole("alert")).textContent).toContain(
+        "Failed to restore the Codex response.",
+      );
+      expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toMatchObject({
+        featureId: "feature-1",
+        phase: "unavailable",
+        error: "Failed to restore the Codex response.",
+      });
+      expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
+      expect(appendMessageMock).not.toHaveBeenCalled();
+      expect(updateFeatureMock).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  test("settles a recovery retry when the pending turn was already answered", async () => {
+    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedExistingCodexEnvironment();
+    useFeaturePlanStore.getState().startConversation({
+      operationId: "unavailable-turn",
+      featureId: "feature-1",
+      startedAt: NOW,
+      phase: "unavailable",
+      error: "Codex status is unavailable.",
+    });
+
+    render(<FeaturesView projectId="project-1" />);
+    expect(await screen.findByRole("alert")).toBeTruthy();
+
+    act(() => {
+      updateFeatureInStore("feature-1", {
+        messages: [
+          pendingUser(),
+          {
+            id: "already-answered",
+            role: "assistant",
+            content: "The response was persisted elsewhere.",
+            createdAt: "2026-01-01T00:00:01.000Z",
+          },
+        ],
+      });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+
+    await waitFor(() => expect(
+      useFeaturePlanStore.getState().activeConversations.has("feature-1"),
+    ).toBe(false));
+    expect(getSessionStatusMock).not.toHaveBeenCalled();
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  test("reapplies valid feature and story state from already-persisted local replies", async () => {
+    const featureResponse = `Local feature reply.
+<feature_planner_state>{"phase":"confirming","title":"Local recovery","summary":"saved"}</feature_planner_state>`;
+    seedStores(chatFeature({
+      messages: [
+        pendingUser(NOW, "feature-user"),
+        {
+          id: "feature-local-reply",
+          role: "assistant",
+          content: featureResponse,
+          createdAt: "2026-01-01T00:00:01.000Z",
+          stateApplication: "pending",
+        },
+      ],
+    }));
+    seedExistingCodexEnvironment();
+
+    render(<FeaturesView projectId="project-1" />);
+    await waitFor(() => expect(updateFeatureMock).toHaveBeenCalledWith(
+      "feature-1",
+      expect.objectContaining({
+        title: "Local recovery",
+        summary: "saved",
+        status: "confirming",
+      }),
+    ));
+    expect(appendMessageMock).not.toHaveBeenCalled();
+    await waitForConversationToSettle();
+
+    cleanup();
+    updateFeatureMock.mockClear();
+    const storyResponse = `Local story reply.
+<story_refinement>{"storyId":"story-1","title":"Local story recovery"}</story_refinement>`;
+    seedStores(featureWithStories({
+      codexEnvironmentId: "env-feature",
+      codexSessionId: "session-existing",
+      stories: [makeStory({
+        messages: [
+          pendingUser(NOW, "story-user"),
+          {
+            id: "story-local-reply",
+            role: "assistant",
+            content: storyResponse,
+            createdAt: "2026-01-01T00:00:01.000Z",
+            stateApplication: "pending",
+          },
+        ],
+      })],
+    }));
+    seedExistingCodexEnvironment();
+
+    render(<FeaturesView projectId="project-1" />);
+    await waitFor(() => expect(updateFeatureMock).toHaveBeenCalledWith(
+      "feature-1",
+      expect.objectContaining({
+        stories: [expect.objectContaining({ title: "Local story recovery" })],
+      }),
+    ));
+    expect(appendStoryMessageMock).not.toHaveBeenCalled();
+    await waitForConversationToSettle();
+  });
+
+  test("does not replay an old planner response over a later build state", async () => {
+    const oldPlannerResponse = `Old planner response.
+<feature_planner_state>{"phase":"stories","title":"Old title","summary":"old","stories":[]}</feature_planner_state>`;
+    seedStores(chatFeature({
+      status: "building",
+      messages: [
+        pendingUser(NOW, "old-feature-user"),
+        {
+          id: "old-planner-reply",
+          role: "assistant",
+          content: oldPlannerResponse,
+          createdAt: "2026-01-01T00:00:01.000Z",
+          stateApplication: "pending",
+        },
+      ],
+    }));
+    seedExistingCodexEnvironment();
+
+    render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
+
+    expect(updateFeatureMock).toHaveBeenCalledWith("feature-1", {
+      messages: [
+        pendingUser(NOW, "old-feature-user"),
+        expect.objectContaining({
+          id: "old-planner-reply",
+          stateApplication: "superseded",
+        }),
+      ],
+    });
+    expect(useFeaturePlanStore.getState().activeConversations.size).toBe(0);
+    expect(useFeaturePlanStore.getState().features[0]?.status).toBe("building");
+  });
+
+  test("does not replay applied planner state over a newer story refinement", async () => {
+    const plannerResponse = `Initial planner state.
+<feature_planner_state>{"phase":"stories","title":"Planned title","summary":"planned","stories":[{"id":"story-1","title":"Planner story","description":"planner description","acceptanceCriteria":["planner criterion"]}]}</feature_planner_state>`;
+    const refinementResponse = `Later refinement.
+<story_refinement>{"storyId":"story-1","title":"Refined story","description":"refined description","acceptanceCriteria":["refined criterion"]}</story_refinement>`;
+    seedStores(featureWithStories({
+      title: "Planned title",
+      summary: "planned",
+      messages: [
+        pendingUser(NOW, "planner-user"),
+        {
+          id: "applied-planner-reply",
+          role: "assistant",
+          content: plannerResponse,
+          createdAt: "2026-01-01T00:00:01.000Z",
+          stateApplication: "applied",
+        },
+      ],
+      stories: [makeStory({
+        title: "Refined story",
+        description: "refined description",
+        acceptanceCriteria: ["refined criterion"],
+        messages: [
+          pendingUser("2026-01-01T00:00:02.000Z", "refinement-user"),
+          {
+            id: "applied-refinement-reply",
+            role: "assistant",
+            content: refinementResponse,
+            createdAt: "2026-01-01T00:00:03.000Z",
+            stateApplication: "applied",
+          },
+        ],
+      })],
+    }));
+
+    render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
+
+    expect(updateFeatureMock).not.toHaveBeenCalled();
+    expect(useFeaturePlanStore.getState().features[0]?.stories[0]).toMatchObject({
+      title: "Refined story",
+      description: "refined description",
+      acceptanceCriteria: ["refined criterion"],
+    });
+  });
+
+  test("does not replay applied story refinement over newer planner state", async () => {
+    const oldRefinement = `Old refinement.
+<story_refinement>{"storyId":"story-1","title":"Old refined story","description":"old description"}</story_refinement>`;
+    const newPlannerResponse = `New planner state.
+<feature_planner_state>{"phase":"stories","title":"New plan","summary":"new","stories":[{"id":"story-1","title":"Planner replaced story","description":"planner replacement","acceptanceCriteria":["new criterion"]}]}</feature_planner_state>`;
+    seedStores(featureWithStories({
+      title: "New plan",
+      summary: "new",
+      messages: [
+        pendingUser("2026-01-01T00:00:02.000Z", "new-planner-user"),
+        {
+          id: "new-applied-planner-reply",
+          role: "assistant",
+          content: newPlannerResponse,
+          createdAt: "2026-01-01T00:00:03.000Z",
+          stateApplication: "applied",
+        },
+      ],
+      stories: [makeStory({
+        title: "Planner replaced story",
+        description: "planner replacement",
+        acceptanceCriteria: ["new criterion"],
+        messages: [
+          pendingUser(NOW, "old-refinement-user"),
+          {
+            id: "old-applied-refinement-reply",
+            role: "assistant",
+            content: oldRefinement,
+            createdAt: "2026-01-01T00:00:01.000Z",
+            stateApplication: "applied",
+          },
+        ],
+      })],
+    }));
+
+    render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
+
+    expect(updateFeatureMock).not.toHaveBeenCalled();
+    expect(useFeaturePlanStore.getState().features[0]?.stories[0]).toMatchObject({
+      title: "Planner replaced story",
+      description: "planner replacement",
+      acceptanceCriteria: ["new criterion"],
+    });
+  });
+
+  test("atomically applies the newest response and supersedes older pending state", async () => {
+    const olderRefinement = `Older pending refinement.
+<story_refinement>{"storyId":"story-1","title":"Do not restore this"}</story_refinement>`;
+    const newestPlanner = `Newest planner state.
+<feature_planner_state>{"phase":"confirming","title":"Newest state","summary":"current"}</feature_planner_state>`;
+    seedStores(chatFeature({
+      messages: [
+        pendingUser("2026-01-01T00:00:02.000Z", "newest-planner-user"),
+        {
+          id: "newest-pending-planner",
+          role: "assistant",
+          content: newestPlanner,
+          createdAt: "2026-01-01T00:00:03.000Z",
+          stateApplication: "pending",
+        },
+      ],
+      stories: [makeStory({
+        messages: [
+          pendingUser(NOW, "older-story-user"),
+          {
+            id: "older-pending-refinement",
+            role: "assistant",
+            content: olderRefinement,
+            createdAt: "2026-01-01T00:00:01.000Z",
+            stateApplication: "pending",
+          },
+        ],
+      })],
+    }));
+
+    render(<FeaturesView projectId="project-1" />);
+    await waitForConversationToSettle();
+
+    const feature = useFeaturePlanStore.getState().features[0]!;
+    expect(feature).toMatchObject({
+      title: "Newest state",
+      summary: "current",
+      status: "confirming",
+    });
+    expect(feature.messages.at(-1)).toMatchObject({
+      id: "newest-pending-planner",
+      stateApplication: "applied",
+    });
+    expect(feature.stories[0]?.messages.at(-1)).toMatchObject({
+      id: "older-pending-refinement",
+      stateApplication: "superseded",
+    });
+
+    cleanup();
+    updateFeatureMock.mockClear();
+    seedStores(feature);
+    render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
+    expect(updateFeatureMock).not.toHaveBeenCalled();
+  });
+
+  test("a newer story response supersedes older pending feature state", async () => {
+    const olderPlanner = `Older pending planner.
+<feature_planner_state>{"phase":"stories","title":"Do not restore this plan","summary":"old","stories":[]}</feature_planner_state>`;
+    const newestRefinement = `Newest story refinement.
+<story_refinement>{"storyId":"story-1","title":"Newest story state","description":"current"}</story_refinement>`;
+    seedStores(featureWithStories({
+      messages: [
+        pendingUser(NOW, "older-planner-user"),
+        {
+          id: "older-pending-planner",
+          role: "assistant",
+          content: olderPlanner,
+          createdAt: "2026-01-01T00:00:01.000Z",
+          stateApplication: "pending",
+        },
+      ],
+      stories: [makeStory({
+        messages: [
+          pendingUser("2026-01-01T00:00:02.000Z", "newest-story-user"),
+          {
+            id: "newest-pending-refinement",
+            role: "assistant",
+            content: newestRefinement,
+            createdAt: "2026-01-01T00:00:03.000Z",
+            stateApplication: "pending",
+          },
+        ],
+      })],
+    }));
+
+    render(<FeaturesView projectId="project-1" />);
+    await waitForConversationToSettle();
+
+    const feature = useFeaturePlanStore.getState().features[0]!;
+    expect(feature.messages.at(-1)).toMatchObject({
+      id: "older-pending-planner",
+      stateApplication: "superseded",
+    });
+    expect(feature.stories[0]).toMatchObject({
+      title: "Newest story state",
+      description: "current",
+    });
+    expect(feature.stories[0]?.messages.at(-1)).toMatchObject({
+      id: "newest-pending-refinement",
+      stateApplication: "applied",
+    });
+
+    cleanup();
+    updateFeatureMock.mockClear();
+    seedStores(feature);
+    render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
+    expect(updateFeatureMock).not.toHaveBeenCalled();
+  });
+
+  test("settles an explicit retry whose persisted target no longer exists", async () => {
+    seedStores(chatFeature({ messages: [] }));
+    seedExistingCodexEnvironment();
+    useFeaturePlanStore.getState().startConversation({
+      operationId: "missing-target",
+      featureId: "feature-1",
+      userMessageId: "deleted-user",
+      startedAt: NOW,
+      phase: "unavailable",
+      error: "The message may have been removed.",
+    });
+
+    render(<FeaturesView projectId="project-1" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
+
+    await waitForConversationToSettle();
+    expect(getSessionStatusMock).not.toHaveBeenCalled();
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  test("settles safely when the feature or target disappears during a status read", async () => {
+    const removedFeatureStatus = deferred<{ status: "idle" }>();
+    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedExistingCodexEnvironment();
+    getSessionStatusMock.mockImplementation(async () => removedFeatureStatus.promise);
+    render(<FeaturesView projectId="project-1" />);
+    await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalled());
+
+    act(() => useFeaturePlanStore.setState({ features: [] }));
+    await act(async () => removedFeatureStatus.resolve({ status: "idle" }));
+    await waitForConversationToSettle();
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+
+    cleanup();
+    getSessionStatusMock.mockClear();
+    const removedTargetStatus = deferred<{ status: "idle" }>();
+    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedExistingCodexEnvironment();
+    getSessionStatusMock.mockImplementation(async () => removedTargetStatus.promise);
+    render(<FeaturesView projectId="project-1" />);
+    await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalled());
+
+    act(() => updateFeatureInStore("feature-1", { messages: [] }));
+    await act(async () => removedTargetStatus.resolve({ status: "idle" }));
+    await waitForConversationToSettle();
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  test("does not clear an unavailable recovery state when stale status returns running", async () => {
+    const status = deferred<{ status: "running" }>();
+    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedExistingCodexEnvironment();
+    getSessionStatusMock.mockImplementation(async () => status.promise);
+    render(<FeaturesView projectId="project-1" />);
+    await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalled());
+
+    const conversation = useFeaturePlanStore.getState()
+      .activeConversations.get("feature-1")!;
+    act(() => {
+      useFeaturePlanStore.getState().updateConversation(
+        {
+          featureId: conversation.featureId,
+          operationId: conversation.operationId,
+        },
+        {
+          phase: "unavailable",
+          error: "Keep this recovery visible.",
+        },
+      );
+    });
+    await act(async () => status.resolve({ status: "running" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Keep this recovery visible.",
+    );
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toMatchObject({
+      operationId: conversation.operationId,
+      phase: "unavailable",
+      error: "Keep this recovery visible.",
+    });
+    expect(getSessionMessagesMock).not.toHaveBeenCalled();
+  });
+
+  test("settles successful reconciliation persistence even after the view unmounts", async () => {
+    const response = featurePlannerReply("Persist after unmount");
+    const assistantAppend = deferred<FeaturePlan | undefined>();
+    appendMessageMock.mockImplementation(async (
+      featureId,
+      role,
+      content,
+      stateApplication,
+    ) => (
+      role === "assistant"
+        ? assistantAppend.promise
+        : appendFeatureMessageInStore(featureId, role, content, stateApplication)
+    ));
+    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedExistingCodexEnvironment();
+    getSessionStatusMock.mockImplementation(async () => ({ status: "idle" }));
+    getSessionMessagesMock.mockImplementation(async () => [
+      makeCodexMessage({ id: "unmounted-reply", content: response }),
+    ]);
+
+    const view = render(<FeaturesView projectId="project-1" />);
+    await waitFor(() => expect(appendMessageMock).toHaveBeenCalledWith(
+      "feature-1",
+      "assistant",
+      response,
+      "pending",
+    ));
+    await waitForConversationPhase("persisting");
+    view.unmount();
+
+    await act(async () => assistantAppend.resolve(
+      appendFeatureMessageInStore(
+        "feature-1",
+        "assistant",
+        response,
+        "pending",
+      ),
+    ));
+
+    await waitForConversationToSettle();
+    expect(updateFeatureMock).toHaveBeenCalledWith(
+      "feature-1",
+      expect.objectContaining({ status: "collecting" }),
+    );
+    expect(useFeaturePlanStore.getState().features[0]?.messages.at(-1))
+      .toMatchObject({
+        content: response,
+        stateApplication: "applied",
+      });
+  });
+
+  test("exposes recovery when reconciliation persistence fails after unmount", async () => {
+    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
+    const response = featurePlannerReply("Fail after unmount");
+    const assistantAppend = deferred<FeaturePlan | undefined>();
+    appendMessageMock.mockImplementation(async (
+      featureId,
+      role,
+      content,
+      stateApplication,
+    ) => (
+      role === "assistant"
+        ? assistantAppend.promise
+        : appendFeatureMessageInStore(
+            featureId,
+            role,
+            content,
+            stateApplication,
+          )
+    ));
+    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedExistingCodexEnvironment();
+    getSessionStatusMock.mockImplementation(async () => ({ status: "idle" }));
+    getSessionMessagesMock.mockImplementation(async () => [
+      makeCodexMessage({ id: "failed-unmounted-reply", content: response }),
+    ]);
+
+    try {
+      const view = render(<FeaturesView projectId="project-1" />);
+      await waitForConversationPhase("persisting");
+      view.unmount();
+
+      await act(async () => assistantAppend.reject(
+        new Error("Assistant append failed after unmount"),
+      ));
+      await waitForConversationPhase("unavailable");
+
+      render(<FeaturesView projectId="project-1" />);
+      expect((await screen.findByRole("alert")).textContent).toContain(
+        "Assistant append failed after unmount",
+      );
+      expect(useFeaturePlanStore.getState().activeConversations.get("feature-1"))
+        .toMatchObject({
+          phase: "unavailable",
+          error: "Assistant append failed after unmount",
+        });
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  test("keeps a live feature send recoverable when persistence fails after unmount", async () => {
+    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
+    const response = featurePlannerReply("Live failure after unmount");
+    const assistantAppend = deferred<FeaturePlan | undefined>();
+    appendMessageMock.mockImplementation(async (
+      featureId,
+      role,
+      content,
+      stateApplication,
+    ) => (
+      role === "assistant"
+        ? assistantAppend.promise
+        : appendFeatureMessageInStore(
+            featureId,
+            role,
+            content,
+            stateApplication,
+          )
+    ));
+    seedStores(chatFeature());
+    seedExistingCodexEnvironment();
+    getSessionMessagesMock
+      .mockImplementationOnce(async () => [])
+      .mockImplementationOnce(async () => [
+        makeCodexMessage({ id: "live-unmounted-reply", content: response }),
+      ]);
+
+    try {
+      const view = render(<FeaturesView projectId="project-1" />);
+      fireEvent.change(
+        screen.getByPlaceholderText("Describe the feature or answer Codex..."),
+        { target: { value: "Fail after this view closes" } },
+      );
+      fireEvent.click(screen.getByTitle("Send message"));
+      await waitForConversationPhase("persisting");
+      view.unmount();
+
+      await act(async () => assistantAppend.reject(
+        new Error("Live assistant append failed after unmount"),
+      ));
+      await waitForConversationPhase("unavailable");
+
+      render(<FeaturesView projectId="project-1" />);
+      expect((await screen.findByRole("alert")).textContent).toContain(
+        "Live assistant append failed after unmount",
+      );
+      expect(useFeaturePlanStore.getState().activeConversations.get("feature-1"))
+        .toMatchObject({
+          phase: "unavailable",
+          responseContent: response,
+        });
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  test("retries a pending feature state write that fails after unmount", async () => {
+    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
+    const response = `Pending feature state.
+<feature_planner_state>{"phase":"confirming","title":"Applied after remount","summary":"recovered"}</feature_planner_state>`;
+    const stateUpdate = deferred<FeaturePlan | undefined>();
+    updateFeatureMock.mockImplementationOnce(async () => stateUpdate.promise);
+    seedStores(chatFeature());
+    seedExistingCodexEnvironment();
+    getSessionMessagesMock
+      .mockImplementationOnce(async () => [])
+      .mockImplementationOnce(async () => [
+        makeCodexMessage({ id: "pending-feature-state", content: response }),
+      ]);
+
+    try {
+      const view = render(<FeaturesView projectId="project-1" />);
+      fireEvent.change(
+        screen.getByPlaceholderText("Describe the feature or answer Codex..."),
+        { target: { value: "Persist state after remount" } },
+      );
+      fireEvent.click(screen.getByTitle("Send message"));
+      await waitFor(() => expect(
+        useFeaturePlanStore.getState().features[0]?.messages.at(-1),
+      ).toMatchObject({
+        role: "assistant",
+        content: response,
+        stateApplication: "pending",
+      }));
+      await waitForConversationPhase("persisting");
+      view.unmount();
+
+      await act(async () => stateUpdate.resolve(undefined));
+      await waitForConversationPhase("unavailable");
+
+      render(<FeaturesView projectId="project-1" />);
+      fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
+      await waitForConversationToSettle();
+
+      expect(appendMessageMock.mock.calls.filter((call) => (
+        call[1] === "assistant" && call[2] === response
+      ))).toHaveLength(1);
+      expect(useFeaturePlanStore.getState().features[0]).toMatchObject({
+        title: "Applied after remount",
+        summary: "recovered",
+        status: "confirming",
+      });
+      expect(useFeaturePlanStore.getState().features[0]?.messages.at(-1))
+        .toMatchObject({
+          content: response,
+          stateApplication: "applied",
+        });
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  test("retries feature state application after the assistant append already succeeded", async () => {
+    const response = `Persisted before state failure.
+<feature_planner_state>{"phase":"confirming","title":"Recovered after partial write","summary":"complete"}</feature_planner_state>`;
+    updateFeatureMock.mockImplementationOnce(async () => undefined);
+    getSessionMessagesMock
+      .mockImplementationOnce(async () => [])
+      .mockImplementationOnce(async () => [
+        makeCodexMessage({ id: "partial-feature-reply", content: response }),
+      ]);
+    seedStores(chatFeature());
+    seedExistingCodexEnvironment();
+    render(<FeaturesView projectId="project-1" />);
+
+    fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
+      target: { value: "Write transcript then state" },
+    });
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Failed to persist the feature planning state",
+    );
+    expect(appendMessageMock.mock.calls.filter((call) => (
+      call[1] === "assistant" && call[2] === response
+    ))).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+
+    await waitFor(() => expect(
+      useFeaturePlanStore.getState().features[0],
+    ).toMatchObject({
+      title: "Recovered after partial write",
+      summary: "complete",
+      status: "confirming",
+    }));
+    expect(appendMessageMock.mock.calls.filter((call) => (
+      call[1] === "assistant" && call[2] === response
+    ))).toHaveLength(1);
+    expect(useFeaturePlanStore.getState().activeConversations.has("feature-1")).toBe(false);
+  });
+
+  test("does not treat identical historical feature content as the current reply", async () => {
+    const repeated = `Same answer again.
+<feature_planner_state>{"phase":"confirming","title":"Repeated answer","summary":""}</feature_planner_state>`;
+    seedStores(chatFeature({
+      messages: [
+        {
+          id: "historical-assistant",
+          role: "assistant",
+          content: repeated,
+          createdAt: "2025-12-31T23:59:59.000Z",
+        },
+        pendingUser(NOW, "target-user"),
+      ],
+    }));
+    seedExistingCodexEnvironment();
+    getSessionStatusMock.mockImplementation(async () => ({ status: "idle" }));
+    getSessionMessagesMock.mockImplementation(async () => [
+      makeCodexMessage({ id: "new-identical-reply", content: repeated }),
+    ]);
+
+    render(<FeaturesView projectId="project-1" />);
+
+    await waitFor(() => expect(appendMessageMock).toHaveBeenCalledWith(
+      "feature-1",
+      "assistant",
+      repeated,
+      "pending",
+    ));
+    expect(useFeaturePlanStore.getState().features[0]?.messages.map(
+      (message) => message.role,
+    )).toEqual(["assistant", "user", "assistant"]);
+    expect(useFeaturePlanStore.getState().activeConversations.has("feature-1")).toBe(false);
+  });
+
+  test("lets only one worker persist when live polling races explicit recovery", async () => {
+    const liveStatus = deferred<{ status: "idle" }>();
+    const transcript = deferred<CodexMessage[]>();
+    const response = featurePlannerReply("Claimed once");
+    let messageCalls = 0;
+    let liveWorkerWaiting = false;
+    getSessionStatusMock.mockImplementation(async () => {
+      const active = useFeaturePlanStore.getState()
+        .activeConversations.get("feature-1");
+      if (!liveWorkerWaiting && active?.phase === "running") {
+        liveWorkerWaiting = true;
+        return liveStatus.promise;
+      }
+      return { status: "idle" as const };
+    });
+    getSessionMessagesMock.mockImplementation(async () => {
+      messageCalls += 1;
+      return messageCalls === 1 ? [] : transcript.promise;
+    });
+    seedStores(chatFeature());
+    seedExistingCodexEnvironment();
+    render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
+
+    fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
+      target: { value: "Race recovery" },
+    });
+    fireEvent.click(screen.getByTitle("Send message"));
+    await waitFor(() => expect(liveWorkerWaiting).toBe(true));
+    const conversation = useFeaturePlanStore.getState().activeConversations.get("feature-1");
+    expect(conversation).toBeTruthy();
+
+    act(() => {
+      useFeaturePlanStore.getState().updateConversation(
+        {
+          featureId: "feature-1",
+          operationId: conversation!.operationId,
+        },
+        {
+          phase: "unavailable",
+          error: "Check the same live turn.",
+        },
+      );
+    });
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => expect(messageCalls).toBeGreaterThanOrEqual(2));
+
+    await act(async () => {
+      liveStatus.resolve({ status: "idle" });
+    });
+    await waitFor(() => expect(messageCalls).toBeGreaterThanOrEqual(3));
+    await act(async () => {
+      transcript.resolve([
+        makeCodexMessage({ id: "racing-reply", content: response }),
+      ]);
+    });
+
+    await waitFor(() => expect(
+      useFeaturePlanStore.getState().activeConversations.has("feature-1"),
+    ).toBe(false));
+    expect(appendMessageMock.mock.calls.filter((call) => (
+      call[1] === "assistant" && call[2] === response
+    ))).toHaveLength(1);
+    expect(updateFeatureMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("identifies an unavailable feature while another feature is selected", async () => {
+    seedStores([
+      chatFeature({
+        id: "feature-a",
+        title: "Feature A",
+        codexEnvironmentId: undefined,
+        codexSessionId: undefined,
+        order: 0,
+      }),
+      chatFeature({
+        id: "feature-b",
+        title: "Feature B",
+        messages: [pendingUser()],
+        order: 1,
+      }),
+    ]);
+    useFeaturePlanStore.getState().startConversation({
+      operationId: "feature-b-recovery",
+      featureId: "feature-b",
+      startedAt: NOW,
+      phase: "unavailable",
+      error: "Codex status is unavailable.",
+    });
+
+    render(<FeaturesView projectId="project-1" />);
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    fireEvent.click(screen.getByText("Feature A").closest("button")!);
+
+    await waitFor(() => expect(
+      screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected"),
+    ).toBe("true"));
+    expect(screen.getByRole("alert").textContent).toContain("Feature B");
+    expect(screen.getByRole("alert").textContent).toContain("Codex status is unavailable.");
+  });
+
   test("shows loading state instead of a false empty state while feature loading is pending", async () => {
     seedStores([]);
     useFeaturePlanStore.setState({ isLoading: true });
@@ -1056,6 +2718,14 @@ describe("NativeStyleChatPanel", () => {
     expect(scrollToBottomMock).toHaveBeenCalledTimes(1);
   });
 
+  test("omits the scroll accessory while already at the bottom", () => {
+    renderPanel();
+
+    expect(screen.queryByRole("button", {
+      name: "Scroll to bottom of conversation",
+    })).toBeNull();
+  });
+
   test("wires optional refresh and disables it while running", () => {
     const onRefresh = mock(() => undefined);
     const view = renderPanel({ onRefresh });
@@ -1125,6 +2795,11 @@ describe("FeaturesView feature planning chat", () => {
     getSessionMessagesMock
       .mockImplementationOnce(async () => [oldReply])
       .mockImplementationOnce(async () => [oldReply, newReply]);
+    const phases: ActiveFeatureConversation[] = [];
+    const unsubscribe = useFeaturePlanStore.subscribe((state) => {
+      const conversation = state.activeConversations.get("feature-1");
+      if (conversation) phases.push({ ...conversation });
+    });
     render(<FeaturesView projectId="project-1" />);
 
     const textarea = screen.getByPlaceholderText("Describe the feature or answer Codex...");
@@ -1135,6 +2810,7 @@ describe("FeaturesView feature planning chat", () => {
       "feature-1",
       "assistant",
       plannerReply,
+      "pending",
     ));
     expect(sendPromptMock).toHaveBeenCalledWith(
       { baseUrl: "http://127.0.0.1:4200" },
@@ -1149,6 +2825,16 @@ describe("FeaturesView feature planning chat", () => {
       expect(updated.stories[0]?.title).toBe("First story");
     });
     expect(screen.getByRole("tab", { name: "Stories" }).getAttribute("aria-selected")).toBe("true");
+    unsubscribe();
+    expect(phases).toContainEqual(expect.objectContaining({
+      startedAt: NOW,
+      phase: "dispatching",
+    }));
+    expect(phases).toContainEqual(expect.objectContaining({
+      startedAt: NOW,
+      phase: "running",
+    }));
+    expect(useFeaturePlanStore.getState().activeConversations.has("feature-1")).toBe(false);
   });
 
   test("restores an unsaved draft and never contacts Codex when user-message persistence fails", async () => {
@@ -1156,6 +2842,7 @@ describe("FeaturesView feature planning chat", () => {
     seedStores(chatFeature());
     seedExistingCodexEnvironment();
     render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
 
     const textarea = screen.getByPlaceholderText("Describe the feature or answer Codex...");
     fireEvent.change(textarea, { target: { value: "Keep this draft" } });
@@ -1176,6 +2863,7 @@ describe("FeaturesView feature planning chat", () => {
     seedStores(chatFeature());
     seedExistingCodexEnvironment();
     render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
 
     fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
       target: { value: "Send me" },
@@ -1186,6 +2874,7 @@ describe("FeaturesView feature planning chat", () => {
       "Feature planning failed",
       expect.objectContaining({ description: "Failed to send feature planning prompt" }),
     ));
+    await waitForConversationToSettle();
     expect(appendMessageMock).toHaveBeenCalledTimes(1);
     expect(appendMessageMock).toHaveBeenCalledWith("feature-1", "user", "Send me");
   });
@@ -1253,12 +2942,13 @@ describe("FeaturesView feature planning chat", () => {
     ));
   });
 
-  test("times out without reusing a stale assistant response and directs the user to refresh", async () => {
+  test("keeps a timed-out live turn blocked without reusing a stale assistant response", async () => {
     const staleReply = makeCodexMessage({ id: "stale", content: "Stale response" });
     getSessionMessagesMock.mockImplementation(async () => [staleReply]);
     seedStores(chatFeature());
     seedExistingCodexEnvironment();
     render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
     const dateNow = spyOn(Date, "now")
       .mockReturnValueOnce(0)
       .mockReturnValue(10 * 60 * 1000 + 1);
@@ -1271,9 +2961,19 @@ describe("FeaturesView feature planning chat", () => {
 
       await waitFor(() => expect(mockToastWarning).toHaveBeenCalledWith(
         "Codex is still working",
-        expect.objectContaining({ description: expect.stringContaining("Use refresh") }),
+        expect.objectContaining({ description: expect.stringContaining("Use Check again") }),
       ));
-      expect(appendMessageMock).not.toHaveBeenCalledWith("feature-1", "assistant", "Stale response");
+      expect(appendMessageMock).not.toHaveBeenCalledWith(
+        "feature-1",
+        "assistant",
+        "Stale response",
+        "pending",
+      );
+      expect((await screen.findByRole("alert")).textContent).toContain("Codex is still working");
+      expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toMatchObject({
+        phase: "unavailable",
+      });
+      expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
     } finally {
       dateNow.mockRestore();
     }
@@ -1314,6 +3014,7 @@ describe("FeaturesView feature planning chat", () => {
       "feature-1",
       "assistant",
       eventualContent,
+      "pending",
     );
   });
 
@@ -1327,6 +3028,7 @@ describe("FeaturesView feature planning chat", () => {
       .mockImplementationOnce(async () => [])
       .mockImplementationOnce(async () => []);
     render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
 
     fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
       target: { value: "Trigger failure" },
@@ -1337,6 +3039,7 @@ describe("FeaturesView feature planning chat", () => {
       "Feature planning failed",
       expect.objectContaining({ description: "model failed" }),
     ));
+    await waitForConversationToSettle();
     expect(appendMessageMock).toHaveBeenCalledTimes(1);
   });
 
@@ -1355,6 +3058,7 @@ describe("FeaturesView feature planning chat", () => {
       .mockImplementationOnce(async () => [])
       .mockImplementationOnce(async () => [makeCodexMessage({ id: "response", content: response })]);
     render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
 
     fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
       target: { value: "Persist carefully" },
@@ -1365,6 +3069,7 @@ describe("FeaturesView feature planning chat", () => {
       "Feature planning failed",
       expect.objectContaining({ description: "Failed to persist the feature planning response" }),
     ));
+    await waitForConversationPhase("unavailable");
     expect(updateFeatureMock).not.toHaveBeenCalled();
   });
 
@@ -1388,7 +3093,12 @@ describe("FeaturesView feature planning chat", () => {
       expect.objectContaining({ description: "Failed to persist the feature planning state" }),
     ));
     expect(appendMessageMock).toHaveBeenCalledWith("feature-1", "user", "Apply state");
-    expect(appendMessageMock).toHaveBeenCalledWith("feature-1", "assistant", response);
+    expect(appendMessageMock).toHaveBeenCalledWith(
+      "feature-1",
+      "assistant",
+      response,
+      "pending",
+    );
   });
 
   test("refresh selects the newest valid feature state and ignores story refinements", async () => {
@@ -1410,8 +3120,14 @@ describe("FeaturesView feature planning chat", () => {
       "feature-1",
       "assistant",
       featureReply,
+      "pending",
     ));
-    expect(appendMessageMock).not.toHaveBeenCalledWith("feature-1", "assistant", storyReply);
+    expect(appendMessageMock).not.toHaveBeenCalledWith(
+      "feature-1",
+      "assistant",
+      storyReply,
+      "pending",
+    );
     await waitFor(() => expect(useFeaturePlanStore.getState().features[0]?.title).toBe("Refreshed title"));
   });
 
@@ -1469,6 +3185,80 @@ describe("FeaturesView feature planning chat", () => {
       "Failed to refresh feature chat",
       expect.objectContaining({ description: "Failed to persist the refreshed feature response" }),
     ));
+    expect(updateFeatureMock).not.toHaveBeenCalled();
+  });
+
+  test("feature refresh and remount recovery claim a pending response exactly once", async () => {
+    const response = featurePlannerReply("Refresh race");
+    const transcript = deferred<CodexMessage[]>();
+    let transcriptReads = 0;
+    seedStores(chatFeature({ messages: [pendingUser()] }));
+    seedExistingCodexEnvironment();
+    getSessionMessagesMock.mockImplementation(async () => {
+      transcriptReads += 1;
+      return transcript.promise;
+    });
+    const view = render(<FeaturesView projectId="project-1" />);
+
+    fireEvent.click(screen.getByTitle("Refresh Codex status"));
+    await waitFor(() => expect(transcriptReads).toBeGreaterThanOrEqual(1));
+    const conversation = useFeaturePlanStore.getState()
+      .activeConversations.get("feature-1")!;
+    act(() => {
+      useFeaturePlanStore.getState().updateConversation(
+        {
+          featureId: conversation.featureId,
+          operationId: conversation.operationId,
+        },
+        {
+          phase: "unavailable",
+          error: "Recover the refresh.",
+        },
+      );
+    });
+
+    view.unmount();
+    render(<FeaturesView projectId="project-1" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
+    await waitFor(() => expect(transcriptReads).toBeGreaterThanOrEqual(2));
+
+    await act(async () => transcript.resolve([
+      makeCodexMessage({ id: "refresh-race-response", content: response }),
+    ]));
+
+    await waitForConversationToSettle();
+    expect(appendMessageMock.mock.calls.filter((call) => (
+      call[1] === "assistant" && call[2] === response
+    ))).toHaveLength(1);
+    expect(updateFeatureMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("feature refresh rejects a valid response older than the pending user", async () => {
+    const stale = featurePlannerReply("Remote stale response");
+    seedStores(chatFeature({ messages: [] }));
+    seedExistingCodexEnvironment();
+    getSessionMessagesMock.mockImplementationOnce(async () => [
+      makeCodexMessage({
+        id: "remote-stale-feature",
+        content: stale,
+        createdAt: "2025-12-31T23:59:59.000Z",
+      }),
+    ]);
+    render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
+    act(() => {
+      updateFeatureInStore("feature-1", { messages: [pendingUser()] });
+    });
+
+    fireEvent.click(screen.getByTitle("Refresh Codex status"));
+
+    await waitFor(() => expect(getSessionMessagesMock).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1"))
+      .toBeUndefined();
+    expect(appendMessageMock).not.toHaveBeenCalled();
     expect(updateFeatureMock).not.toHaveBeenCalled();
   });
 
@@ -1593,6 +3383,7 @@ describe("FeaturesView Codex session bootstrap", () => {
       "feature-1",
       "assistant",
       assistantContent,
+      "pending",
     ));
     expect(createEnvironmentMock).toHaveBeenCalledWith(
       "project-1",
@@ -1649,13 +3440,23 @@ describe("FeaturesView Codex session bootstrap", () => {
     const textarea = screen.getByPlaceholderText("Describe the feature or answer Codex...");
     fireEvent.change(textarea, { target: { value: "First request" } });
     fireEvent.click(screen.getByTitle("Send message"));
-    await waitFor(() => expect(appendMessageMock).toHaveBeenCalledWith("feature-1", "assistant", firstContent));
+    await waitFor(() => expect(appendMessageMock).toHaveBeenCalledWith(
+      "feature-1",
+      "assistant",
+      firstContent,
+      "pending",
+    ));
 
     fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
       target: { value: "Second request" },
     });
     fireEvent.click(screen.getByTitle("Send message"));
-    await waitFor(() => expect(appendMessageMock).toHaveBeenCalledWith("feature-1", "assistant", secondContent));
+    await waitFor(() => expect(appendMessageMock).toHaveBeenCalledWith(
+      "feature-1",
+      "assistant",
+      secondContent,
+      "pending",
+    ));
 
     expect(startEnvironmentMock).toHaveBeenCalledTimes(1);
     expect(startCodexServerMock).toHaveBeenCalledWith("container-feature");
@@ -1708,6 +3509,7 @@ describe("FeaturesView Codex session bootstrap", () => {
       "feature-1",
       "assistant",
       replacementContent,
+      "pending",
     ));
     expect(createSessionMock).toHaveBeenCalledTimes(1);
     expect(createSessionMock).toHaveBeenCalledWith(
@@ -1724,10 +3526,62 @@ describe("FeaturesView Codex session bootstrap", () => {
     expect(sendPromptMock.mock.calls[0]?.[2]).toContain("This is a resumed planning session");
   });
 
+  test("uses an existing environment found only in the backend", async () => {
+    const replyContent = featurePlannerReply("Backend environment reply");
+    seedStores(chatFeature());
+    getEnvironmentMock.mockImplementation(async () => makeEnvironment());
+    getSessionMessagesMock
+      .mockImplementationOnce(async () => [])
+      .mockImplementationOnce(async () => [makeCodexMessage({ content: replyContent })]);
+    render(<FeaturesView projectId="project-1" />);
+
+    fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
+      target: { value: "Use the backend environment" },
+    });
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => expect(appendMessageMock).toHaveBeenCalledWith(
+      "feature-1",
+      "assistant",
+      replyContent,
+      "pending",
+    ));
+    expect(getEnvironmentMock).toHaveBeenCalledWith("env-feature");
+    expect(createEnvironmentMock).not.toHaveBeenCalled();
+    expect(createClientMock).toHaveBeenCalledWith("http://127.0.0.1:4200");
+  });
+
+  test("reports a running local bridge that omits its port", async () => {
+    seedStores(chatFeature());
+    getEnvironmentMock.mockImplementation(async () => makeEnvironment({
+      environmentType: "local",
+      containerId: null,
+    }));
+    getLocalCodexServerStatusMock.mockImplementationOnce(async () => ({
+      running: true,
+      pid: 10,
+    }));
+    render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
+
+    fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
+      target: { value: "Cannot resolve local bridge" },
+    });
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
+      "Feature planning failed",
+      expect.objectContaining({ description: "Failed to resolve Codex bridge port" }),
+    ));
+    await waitForConversationToSettle();
+    expect(sendPromptMock).not.toHaveBeenCalled();
+  });
+
   test("reports missing container identity and missing bridge ports before sending", async () => {
     seedStores(chatFeature());
     seedExistingCodexEnvironment(makeEnvironment({ containerId: null }));
     render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
 
     fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
       target: { value: "Cannot send" },
@@ -1737,6 +3591,7 @@ describe("FeaturesView Codex session bootstrap", () => {
       "Feature planning failed",
       expect.objectContaining({ description: "Container ID is required for feature planning in a container" }),
     ));
+    await waitForConversationToSettle();
     expect(sendPromptMock).not.toHaveBeenCalled();
 
     cleanup();
@@ -1745,6 +3600,7 @@ describe("FeaturesView Codex session bootstrap", () => {
     seedExistingCodexEnvironment();
     getCodexServerStatusMock.mockImplementationOnce(async () => ({ running: true }));
     render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
     fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
       target: { value: "Still cannot send" },
     });
@@ -1753,11 +3609,49 @@ describe("FeaturesView Codex session bootstrap", () => {
       "Feature planning failed",
       expect.objectContaining({ description: "Failed to resolve Codex bridge port" }),
     ));
+    await waitForConversationToSettle();
     expect(sendPromptMock).not.toHaveBeenCalled();
   });
 });
 
 describe("FeaturesView story refinement chat", () => {
+  test("keeps a story refinement blocked across unmount and remount", async () => {
+    sendPromptMock.mockImplementationOnce(() => new Promise(() => undefined));
+    seedStores(featureWithStories({
+      codexEnvironmentId: "env-feature",
+      codexSessionId: "session-existing",
+    }));
+    seedExistingCodexEnvironment();
+    const view = render(<FeaturesView projectId="project-1" />);
+    openStory();
+
+    fireEvent.change(screen.getByPlaceholderText("Refine the story, description, or acceptance criteria..."), {
+      target: { value: "Keep refining in the background" },
+    });
+    fireEvent.click(screen.getByTitle("Send message"));
+    await screen.findByText("Codex is refining...");
+
+    view.unmount();
+    getSessionStatusMock.mockClear();
+    getSessionStatusMock.mockImplementation(async () => ({ status: "running" }));
+    render(<FeaturesView projectId="project-1" />);
+    openStory();
+
+    await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalledWith(
+      { baseUrl: "http://127.0.0.1:4200" },
+      "session-existing",
+      { throwOnError: true },
+    ));
+    await waitFor(() => expect(
+      useFeaturePlanStore.getState().activeConversations.get("feature-1"),
+    ).toMatchObject({
+      storyId: "story-1",
+      phase: "running",
+    }));
+    expect(screen.getByText("Codex is refining...")).toBeTruthy();
+    expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
+  });
+
   test("persists and applies a matching refinement while preserving siblings and blank-field fallbacks", async () => {
     const sibling = makeStory({ id: "sibling", title: "Sibling" });
     const refinement = `Refined.
@@ -1771,6 +3665,11 @@ describe("FeaturesView story refinement chat", () => {
     getSessionMessagesMock
       .mockImplementationOnce(async () => [])
       .mockImplementationOnce(async () => [makeCodexMessage({ id: "refinement", content: refinement })]);
+    const phases: ActiveFeatureConversation[] = [];
+    const unsubscribe = useFeaturePlanStore.subscribe((state) => {
+      const conversation = state.activeConversations.get("feature-1");
+      if (conversation) phases.push({ ...conversation });
+    });
     render(<FeaturesView projectId="project-1" />);
     openStory();
 
@@ -1784,6 +3683,7 @@ describe("FeaturesView story refinement chat", () => {
       "story-1",
       "assistant",
       refinement,
+      "pending",
     ));
     await waitFor(() => expect(
       useFeaturePlanStore.getState().features[0]?.stories[0]?.title
@@ -1794,6 +3694,18 @@ describe("FeaturesView story refinement chat", () => {
     expect(updated.stories[1]).toEqual(sibling);
     expect(sendPromptMock.mock.calls[0]?.[2]).toContain("Make it clearer");
     expect(sendPromptMock.mock.calls[0]?.[2]).toContain('"storyId":"story-1"');
+    unsubscribe();
+    expect(phases).toContainEqual(expect.objectContaining({
+      storyId: "story-1",
+      startedAt: NOW,
+      phase: "dispatching",
+    }));
+    expect(phases).toContainEqual(expect.objectContaining({
+      storyId: "story-1",
+      startedAt: NOW,
+      phase: "running",
+    }));
+    expect(useFeaturePlanStore.getState().activeConversations.has("feature-1")).toBe(false);
   });
 
   test("restores an unsaved story draft and does not send when persistence fails", async () => {
@@ -1820,6 +3732,38 @@ describe("FeaturesView story refinement chat", () => {
     expect(sendPromptMock).not.toHaveBeenCalled();
   });
 
+  test("reports a rejected story prompt without fabricating a refinement", async () => {
+    sendPromptMock.mockImplementationOnce(async () => false);
+    seedStores(featureWithStories({
+      codexEnvironmentId: "env-feature",
+      codexSessionId: "session-existing",
+    }));
+    seedExistingCodexEnvironment();
+    render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
+    openStory();
+
+    fireEvent.change(screen.getByPlaceholderText(
+      "Refine the story, description, or acceptance criteria...",
+    ), {
+      target: { value: "Reject this refinement" },
+    });
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
+      "Story refinement failed",
+      expect.objectContaining({ description: "Failed to send story refinement prompt" }),
+    ));
+    await waitForConversationToSettle();
+    expect(appendStoryMessageMock).toHaveBeenCalledTimes(1);
+    expect(appendStoryMessageMock).toHaveBeenCalledWith(
+      "feature-1",
+      "story-1",
+      "user",
+      "Reject this refinement",
+    );
+  });
+
   test("reports story assistant-transcript persistence failure before changing the card", async () => {
     const refinement = `Refined.
 <story_refinement>{"storyId":"story-1","title":"Do not apply"}</story_refinement>`;
@@ -1839,6 +3783,7 @@ describe("FeaturesView story refinement chat", () => {
       .mockImplementationOnce(async () => [])
       .mockImplementationOnce(async () => [makeCodexMessage({ id: "refinement", content: refinement })]);
     render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
     openStory();
 
     fireEvent.change(screen.getByPlaceholderText("Refine the story, description, or acceptance criteria..."), {
@@ -1850,6 +3795,7 @@ describe("FeaturesView story refinement chat", () => {
       "Story refinement failed",
       expect.objectContaining({ description: "Failed to persist the story refinement response" }),
     ));
+    await waitForConversationPhase("unavailable");
     expect(updateFeatureMock).not.toHaveBeenCalled();
     expect(useFeaturePlanStore.getState().features[0]?.stories[0]?.title).toBe("Story 1");
   });
@@ -1883,7 +3829,183 @@ describe("FeaturesView story refinement chat", () => {
       "story-1",
       "assistant",
       refinement,
+      "pending",
     );
+  });
+
+  test("keeps a live story send recoverable when persistence fails after unmount", async () => {
+    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
+    const refinement = `Live story failure.
+<story_refinement>{"storyId":"story-1","title":"Do not lose this"}</story_refinement>`;
+    const assistantAppend = deferred<FeaturePlan | undefined>();
+    appendStoryMessageMock.mockImplementation(async (
+      featureId,
+      storyId,
+      role,
+      content,
+      stateApplication,
+    ) => (
+      role === "assistant"
+        ? assistantAppend.promise
+        : appendStoryMessageInStore(
+            featureId,
+            storyId,
+            role,
+            content,
+            stateApplication,
+          )
+    ));
+    seedStores(featureWithStories({
+      codexEnvironmentId: "env-feature",
+      codexSessionId: "session-existing",
+    }));
+    seedExistingCodexEnvironment();
+    getSessionMessagesMock
+      .mockImplementationOnce(async () => [])
+      .mockImplementationOnce(async () => [
+        makeCodexMessage({ id: "live-story-unmounted", content: refinement }),
+      ]);
+
+    try {
+      const view = render(<FeaturesView projectId="project-1" />);
+      openStory();
+      fireEvent.change(
+        screen.getByPlaceholderText(
+          "Refine the story, description, or acceptance criteria...",
+        ),
+        { target: { value: "Fail story persistence after close" } },
+      );
+      fireEvent.click(screen.getByTitle("Send message"));
+      await waitForConversationPhase("persisting");
+      view.unmount();
+
+      await act(async () => assistantAppend.reject(
+        new Error("Live story append failed after unmount"),
+      ));
+      await waitForConversationPhase("unavailable");
+
+      render(<FeaturesView projectId="project-1" />);
+      openStory();
+      expect((await screen.findByRole("alert")).textContent).toContain(
+        "Live story append failed after unmount",
+      );
+      expect(useFeaturePlanStore.getState().activeConversations.get("feature-1"))
+        .toMatchObject({
+          storyId: "story-1",
+          phase: "unavailable",
+          responseContent: refinement,
+        });
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  test("retries a pending story state write that fails after unmount", async () => {
+    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
+    const refinement = `Pending story state.
+<story_refinement>{"storyId":"story-1","title":"Applied story after remount","description":"recovered","acceptanceCriteria":["done"]}</story_refinement>`;
+    const stateUpdate = deferred<FeaturePlan | undefined>();
+    updateFeatureMock.mockImplementationOnce(async () => stateUpdate.promise);
+    seedStores(featureWithStories({
+      codexEnvironmentId: "env-feature",
+      codexSessionId: "session-existing",
+    }));
+    seedExistingCodexEnvironment();
+    getSessionMessagesMock
+      .mockImplementationOnce(async () => [])
+      .mockImplementationOnce(async () => [
+        makeCodexMessage({ id: "pending-story-state", content: refinement }),
+      ]);
+
+    try {
+      const view = render(<FeaturesView projectId="project-1" />);
+      openStory();
+      fireEvent.change(
+        screen.getByPlaceholderText(
+          "Refine the story, description, or acceptance criteria...",
+        ),
+        { target: { value: "Persist story state after remount" } },
+      );
+      fireEvent.click(screen.getByTitle("Send message"));
+      await waitFor(() => expect(
+        useFeaturePlanStore.getState().features[0]?.stories[0]?.messages.at(-1),
+      ).toMatchObject({
+        role: "assistant",
+        content: refinement,
+        stateApplication: "pending",
+      }));
+      await waitForConversationPhase("persisting");
+      view.unmount();
+
+      await act(async () => stateUpdate.resolve(undefined));
+      await waitForConversationPhase("unavailable");
+
+      render(<FeaturesView projectId="project-1" />);
+      openStory();
+      fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
+      await waitForConversationToSettle();
+
+      expect(appendStoryMessageMock.mock.calls.filter((call) => (
+        call[2] === "assistant" && call[3] === refinement
+      ))).toHaveLength(1);
+      expect(useFeaturePlanStore.getState().features[0]?.stories[0])
+        .toMatchObject({
+          title: "Applied story after remount",
+          description: "recovered",
+          acceptanceCriteria: ["done"],
+        });
+      expect(useFeaturePlanStore.getState().features[0]?.stories[0]?.messages.at(-1))
+        .toMatchObject({
+          content: refinement,
+          stateApplication: "applied",
+        });
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  test("retries story state application after the assistant append already succeeded", async () => {
+    const refinement = `Persisted story response.
+<story_refinement>{"storyId":"story-1","title":"Recovered story state","description":"Recovered","acceptanceCriteria":["Done"]}</story_refinement>`;
+    updateFeatureMock.mockImplementationOnce(async () => undefined);
+    getSessionMessagesMock
+      .mockImplementationOnce(async () => [])
+      .mockImplementationOnce(async () => [
+        makeCodexMessage({ id: "partial-story-reply", content: refinement }),
+      ]);
+    seedStores(featureWithStories({
+      codexEnvironmentId: "env-feature",
+      codexSessionId: "session-existing",
+    }));
+    seedExistingCodexEnvironment();
+    render(<FeaturesView projectId="project-1" />);
+    openStory();
+
+    fireEvent.change(screen.getByPlaceholderText("Refine the story, description, or acceptance criteria..."), {
+      target: { value: "Write story transcript then state" },
+    });
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Failed to persist the refined story",
+    );
+    expect(appendStoryMessageMock.mock.calls.filter((call) => (
+      call[2] === "assistant" && call[3] === refinement
+    ))).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+
+    await waitFor(() => expect(
+      useFeaturePlanStore.getState().features[0]?.stories[0],
+    ).toMatchObject({
+      title: "Recovered story state",
+      description: "Recovered",
+      acceptanceCriteria: ["Done"],
+    }));
+    expect(appendStoryMessageMock.mock.calls.filter((call) => (
+      call[2] === "assistant" && call[3] === refinement
+    ))).toHaveLength(1);
+    expect(useFeaturePlanStore.getState().activeConversations.has("feature-1")).toBe(false);
   });
 
   test("rejects a refinement for another story after preserving the assistant transcript", async () => {
@@ -1909,11 +4031,17 @@ describe("FeaturesView story refinement chat", () => {
       "Story refinement failed",
       expect.objectContaining({ description: "Story refinement response targeted a different story" }),
     ));
-    expect(appendStoryMessageMock).toHaveBeenCalledWith("feature-1", "story-1", "assistant", mismatch);
+    expect(appendStoryMessageMock).toHaveBeenCalledWith(
+      "feature-1",
+      "story-1",
+      "assistant",
+      mismatch,
+      "pending",
+    );
     expect(useFeaturePlanStore.getState().features[0]?.stories[0]?.title).toBe("Story 1");
   });
 
-  test("story timeout preserves the request and exposes the now-wired refresh recovery", async () => {
+  test("story timeout preserves and blocks the request for explicit recovery", async () => {
     const staleReply = makeCodexMessage({ id: "story-stale", content: "Old story response" });
     seedStores(featureWithStories({
       codexEnvironmentId: "env-feature",
@@ -1922,6 +4050,7 @@ describe("FeaturesView story refinement chat", () => {
     seedExistingCodexEnvironment();
     getSessionMessagesMock.mockImplementation(async () => [staleReply]);
     render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
     openStory();
     const dateNow = spyOn(Date, "now")
       .mockReturnValueOnce(0)
@@ -1934,14 +4063,18 @@ describe("FeaturesView story refinement chat", () => {
       fireEvent.click(screen.getByTitle("Send message"));
       await waitFor(() => expect(mockToastWarning).toHaveBeenCalledWith(
         "Codex is still refining the story",
-        expect.objectContaining({ description: expect.stringContaining("Use refresh") }),
+        expect.objectContaining({ description: expect.stringContaining("Use Check again") }),
       ));
-      expect(screen.getByTitle("Refresh Codex status")).toBeTruthy();
+      expect((await screen.findByRole("alert")).textContent).toContain(
+        "Codex is still refining this story",
+      );
+      expect(screen.getByTitle("Refresh Codex status").hasAttribute("disabled")).toBe(true);
       expect(appendStoryMessageMock).not.toHaveBeenCalledWith(
         "feature-1",
         "story-1",
         "assistant",
         "Old story response",
+        "pending",
       );
     } finally {
       dateNow.mockRestore();
@@ -1972,6 +4105,96 @@ describe("FeaturesView story refinement chat", () => {
     expect(updateFeatureMock).not.toHaveBeenCalled();
   });
 
+  test("story refresh and remount recovery claim a pending response exactly once", async () => {
+    const response = `Story refresh race.
+<story_refinement>{"storyId":"story-1","description":"Recovered once"}</story_refinement>`;
+    const transcript = deferred<CodexMessage[]>();
+    let transcriptReads = 0;
+    seedStores(featureWithStories({
+      codexEnvironmentId: "env-feature",
+      codexSessionId: "session-existing",
+      stories: [makeStory({ messages: [pendingUser()] })],
+    }));
+    seedExistingCodexEnvironment();
+    getSessionMessagesMock.mockImplementation(async () => {
+      transcriptReads += 1;
+      return transcript.promise;
+    });
+    const view = render(<FeaturesView projectId="project-1" />);
+    openStory();
+
+    fireEvent.click(screen.getByTitle("Refresh Codex status"));
+    await waitFor(() => expect(transcriptReads).toBeGreaterThanOrEqual(1));
+    const conversation = useFeaturePlanStore.getState()
+      .activeConversations.get("feature-1")!;
+    act(() => {
+      useFeaturePlanStore.getState().updateConversation(
+        {
+          featureId: conversation.featureId,
+          operationId: conversation.operationId,
+        },
+        {
+          phase: "unavailable",
+          error: "Recover the story refresh.",
+        },
+      );
+    });
+
+    view.unmount();
+    render(<FeaturesView projectId="project-1" />);
+    openStory();
+    fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
+    await waitFor(() => expect(transcriptReads).toBeGreaterThanOrEqual(2));
+
+    await act(async () => transcript.resolve([
+      makeCodexMessage({ id: "story-refresh-race-response", content: response }),
+    ]));
+
+    await waitForConversationToSettle();
+    expect(appendStoryMessageMock.mock.calls.filter((call) => (
+      call[2] === "assistant" && call[3] === response
+    ))).toHaveLength(1);
+    expect(updateFeatureMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("story refresh rejects a valid response older than the pending user", async () => {
+    const stale = `Remote stale story response.
+<story_refinement>{"storyId":"story-1","description":"Do not apply"}</story_refinement>`;
+    seedStores(featureWithStories({
+      codexEnvironmentId: "env-feature",
+      codexSessionId: "session-existing",
+      stories: [makeStory({ messages: [] })],
+    }));
+    seedExistingCodexEnvironment();
+    getSessionMessagesMock.mockImplementationOnce(async () => [
+      makeCodexMessage({
+        id: "remote-stale-story",
+        content: stale,
+        createdAt: "2025-12-31T23:59:59.000Z",
+      }),
+    ]);
+    render(<FeaturesView projectId="project-1" />);
+    await flushReconcileStart();
+    act(() => {
+      const current = useFeaturePlanStore.getState().features[0]!;
+      updateFeatureInStore(current.id, {
+        stories: current.stories.map((story) => (
+          story.id === "story-1"
+            ? { ...story, messages: [pendingUser()] }
+            : story
+        )),
+      });
+    });
+    openStory();
+
+    fireEvent.click(screen.getByTitle("Refresh Codex status"));
+
+    await waitFor(() => expect(getSessionMessagesMock).toHaveBeenCalled());
+    await waitForConversationToSettle();
+    expect(appendStoryMessageMock).not.toHaveBeenCalled();
+    expect(updateFeatureMock).not.toHaveBeenCalled();
+  });
+
   test("story refresh selects only a matching story response, deduplicates it, and reports errors", async () => {
     const matching = `Matching.
 <story_refinement>{"storyId":"story-1","description":"Refreshed description"}</story_refinement>`;
@@ -1998,8 +4221,15 @@ describe("FeaturesView story refinement chat", () => {
       "story-1",
       "assistant",
       matching,
+      "pending",
     ));
-    expect(appendStoryMessageMock).not.toHaveBeenCalledWith("feature-1", "story-1", "assistant", other);
+    expect(appendStoryMessageMock).not.toHaveBeenCalledWith(
+      "feature-1",
+      "story-1",
+      "assistant",
+      other,
+      "pending",
+    );
     await waitFor(() => expect(
       useFeaturePlanStore.getState().features[0]?.stories[0]?.description
     ).toBe("Refreshed description"));
@@ -2042,6 +4272,44 @@ describe("FeaturesView build action", () => {
     render(<FeaturesView projectId="project-1" />);
 
     expect(screen.getByRole("button", { name: "Build" })).toBeTruthy();
+  });
+
+  test("blocks Build while any project conversation is active", async () => {
+    seedStores([
+      featureWithStories({
+        id: "feature-a",
+        title: "Feature A",
+        order: 0,
+      }),
+      chatFeature({
+        id: "feature-b",
+        title: "Feature B",
+        messages: [pendingUser()],
+        order: 1,
+      }),
+    ]);
+    seedExistingCodexEnvironment();
+    useFeaturePlanStore.getState().startConversation({
+      operationId: "feature-b-running",
+      featureId: "feature-b",
+      startedAt: NOW,
+      phase: "running",
+    });
+    getSessionStatusMock.mockImplementation(async () => ({ status: "running" }));
+
+    render(<FeaturesView projectId="project-1" />);
+
+    fireEvent.click(screen.getByText("Feature A").closest("button")!);
+    const build = await screen.findByRole("button", { name: "Build" });
+    expect(build.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(build);
+    await waitFor(() => expect(getSessionStatusMock).toHaveBeenCalledWith(
+      { baseUrl: "http://127.0.0.1:4200" },
+      "session-existing",
+      { throwOnError: true },
+    ));
+    expect(addTaskMock).not.toHaveBeenCalled();
+    expect(startBuildMock).not.toHaveBeenCalled();
   });
 
   test("hides the Build button when the feature has no stories", () => {
@@ -2253,6 +4521,39 @@ describe("FeaturesView build action", () => {
     await waitFor(() => expect(startBuildMock).toHaveBeenCalledWith(
       expect.objectContaining({ id: "task-1" }),
       "local",
+      "codex",
+      { existingEnvironmentId: undefined },
+    ));
+  });
+
+  test("uses the configured environment type before the project-path fallback", async () => {
+    seedStores(featureWithStories({ codexEnvironmentId: undefined }));
+    useProjectStore.setState((state) => ({
+      projects: state.projects.map((project) => ({ ...project, localPath: "/repo" })),
+    }));
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        repositories: {
+          ...state.config.repositories,
+          "project-1": {
+            ...(state.config.repositories["project-1"] ?? {
+              defaultBranch: "main",
+              prBaseBranch: "main",
+            }),
+            lastEnvironmentType: "containerized",
+          },
+        },
+      },
+    }));
+    seedPipeline();
+    render(<FeaturesView projectId="project-1" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Build" }));
+
+    await waitFor(() => expect(startBuildMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "task-1" }),
+      "containerized",
       "codex",
       { existingEnvironmentId: undefined },
     ));

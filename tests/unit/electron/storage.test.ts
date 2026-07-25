@@ -660,10 +660,16 @@ describe("Electron StorageService", () => {
       content: "Tell me about the new feature",
     });
 
-    const withUserMessage = await storage.appendFeaturePlanMessage(feature.id, "user", "Users can save filters.");
+    const withUserMessage = await storage.appendFeaturePlanMessage(
+      feature.id,
+      "user",
+      "Users can save filters.",
+      "pending",
+    );
     expect(withUserMessage.messages.at(-1)).toMatchObject({
       role: "user",
       content: "Users can save filters.",
+      stateApplication: "pending",
     });
 
     const storyId = "story-1";
@@ -681,11 +687,18 @@ describe("Electron StorageService", () => {
       }],
     });
 
-    const withStoryChat = await storage.appendFeatureStoryMessage(feature.id, storyId, "assistant", "What should change?");
+    const withStoryChat = await storage.appendFeatureStoryMessage(
+      feature.id,
+      storyId,
+      "assistant",
+      "What should change?",
+      "applied",
+    );
     expect(withStoryChat.stories[0]?.messages).toEqual([
       expect.objectContaining({
         role: "assistant",
         content: "What should change?",
+        stateApplication: "applied",
       }),
     ]);
 
@@ -697,7 +710,11 @@ describe("Electron StorageService", () => {
         status: "stories",
         summary: "Users can save and reuse filtered views.",
         messages: expect.arrayContaining([
-          expect.objectContaining({ role: "user", content: "Users can save filters." }),
+          expect.objectContaining({
+            role: "user",
+            content: "Users can save filters.",
+            stateApplication: "pending",
+          }),
         ]),
         stories: [
           expect.objectContaining({
@@ -705,7 +722,11 @@ describe("Electron StorageService", () => {
             title: "Save a filtered view",
             acceptanceCriteria: ["Saved filters can be named", "Saved filters can be reopened"],
             messages: [
-              expect.objectContaining({ role: "assistant", content: "What should change?" }),
+              expect.objectContaining({
+                role: "assistant",
+                content: "What should change?",
+                stateApplication: "applied",
+              }),
             ],
           }),
         ],

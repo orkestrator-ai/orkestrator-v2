@@ -77,6 +77,7 @@ type FeaturePlanMessage = {
   role: "user" | "assistant" | "system";
   content: string;
   createdAt: string;
+  stateApplication?: "pending" | "applied" | "superseded";
 };
 
 type FeatureStoryCard = {
@@ -1462,7 +1463,12 @@ export class StorageService {
     });
   }
 
-  async appendFeaturePlanMessage(featureId: string, role: FeaturePlanMessage["role"], content: string): Promise<FeaturePlan> {
+  async appendFeaturePlanMessage(
+    featureId: string,
+    role: FeaturePlanMessage["role"],
+    content: string,
+    stateApplication?: FeaturePlanMessage["stateApplication"],
+  ): Promise<FeaturePlan> {
     return this.mutateFeaturePlans((plans) => {
       const plan = plans.find((candidate) => candidate.id === featureId);
       if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
@@ -1472,13 +1478,20 @@ export class StorageService {
         role,
         content,
         createdAt: nowIso(),
+        ...(stateApplication ? { stateApplication } : {}),
       });
       plan.updatedAt = nowIso();
       return plan;
     });
   }
 
-  async appendFeatureStoryMessage(featureId: string, storyId: string, role: FeaturePlanMessage["role"], content: string): Promise<FeaturePlan> {
+  async appendFeatureStoryMessage(
+    featureId: string,
+    storyId: string,
+    role: FeaturePlanMessage["role"],
+    content: string,
+    stateApplication?: FeaturePlanMessage["stateApplication"],
+  ): Promise<FeaturePlan> {
     return this.mutateFeaturePlans((plans) => {
       const plan = plans.find((candidate) => candidate.id === featureId);
       if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
@@ -1490,6 +1503,7 @@ export class StorageService {
         role,
         content,
         createdAt: nowIso(),
+        ...(stateApplication ? { stateApplication } : {}),
       });
       story.updatedAt = nowIso();
       plan.updatedAt = nowIso();

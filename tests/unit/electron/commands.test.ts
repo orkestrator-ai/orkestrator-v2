@@ -6493,7 +6493,47 @@ describe("feature plan commands", () => {
       context,
     );
 
-    expect(storage.appendFeaturePlanMessage).toHaveBeenCalledWith("feature-1", "assistant", "hello");
+    expect(storage.appendFeaturePlanMessage).toHaveBeenCalledWith(
+      "feature-1",
+      "assistant",
+      "hello",
+      undefined,
+    );
+  });
+
+  test("validates and forwards feature-plan state application metadata", async () => {
+    const commands = createCommandRegistry();
+    const { context, storage } = featureContext();
+
+    await commands.get("append_feature_plan_message")?.(
+      {
+        featureId: "feature-1",
+        role: "assistant",
+        content: "hello",
+        stateApplication: "pending",
+      },
+      context,
+    );
+    expect(storage.appendFeaturePlanMessage).toHaveBeenCalledWith(
+      "feature-1",
+      "assistant",
+      "hello",
+      "pending",
+    );
+
+    expect(() =>
+      commands.get("append_feature_story_message")!(
+        {
+          featureId: "feature-1",
+          storyId: "story-1",
+          role: "assistant",
+          content: "hello",
+          stateApplication: "ignored",
+        },
+        context,
+      ),
+    ).toThrow(/stateApplication/i);
+    expect(storage.appendFeatureStoryMessage).not.toHaveBeenCalled();
   });
 
   test("rejects an invalid feature plan message role before touching storage", async () => {

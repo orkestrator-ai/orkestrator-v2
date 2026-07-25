@@ -20,6 +20,7 @@ mock.module("@/lib/backend", () => ({
 }));
 
 import { NativeMessage } from "../../../apps/web/src/components/chat/NativeMessage";
+import { useMessagePartExpansionStore } from "../../../apps/web/src/stores/messagePartExpansionStore";
 
 function TerminalContextHarness({
   children,
@@ -54,6 +55,8 @@ function ConfigureTerminalContext({
 describe("NativeMessage", () => {
   afterEach(() => {
     cleanup();
+    // Thinking expansion outlives unmount by design, so clear it between tests.
+    useMessagePartExpansionStore.getState().reset();
     mockOpenInBrowser.mockReset();
     mockOpenInBrowser.mockImplementation(async () => {});
     mockReadFileBase64.mockReset();
@@ -1649,5 +1652,615 @@ describe("NativeMessage", () => {
 
     expect(screen.getByRole("button", { name: /Run Command/i })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /\bbash\b/i })).toBeNull();
+  });
+
+  test("reveals tool errors for non-edit tools when the row is expanded", () => {
+    const message: NativeMessageType = {
+      id: "msg-generic-tool-error",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolArgs: { command: "rg --files" },
+          toolState: "failure",
+          toolError: "rg: command not found",
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    const trigger = screen.getByRole("button", {
+      name: /Run Command rg --files failure/i,
+    });
+    expect(screen.queryByText("rg: command not found")).toBeNull();
+
+    fireEvent.click(trigger);
+
+    expect(screen.getByText("rg: command not found")).toBeTruthy();
+  });
+
+  test("formats non-command tool arguments as pretty-printed JSON", () => {
+    const message: NativeMessageType = {
+      id: "msg-generic-tool-json-input",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Glob",
+          toolName: "Glob",
+          toolArgs: { pattern: "*.ts", path: "/workspace/src" },
+          toolState: "success",
+        },
+      ],
+    };
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /glob \*\.ts success/i }));
+
+    const input = container.querySelector("pre");
+    expect(input?.textContent).toBe(
+      '{\n  "pattern": "*.ts",\n  "path": "/workspace/src"\n}',
+    );
+  });
+
+  test("labels pending tools as running and colours terminal tool states", () => {
+    const message: NativeMessageType = {
+      id: "msg-generic-tool-states",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolArgs: { command: "sleep 1" },
+          toolState: "pending",
+        },
+        {
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolArgs: { command: "echo ok" },
+          toolState: "success",
+        },
+        {
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolArgs: { command: "echo bad" },
+          toolState: "failure",
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    const running = screen.getByText("running...");
+    expect(running.className).toContain("animate-pulse");
+    expect(running.className).toContain("text-yellow-600");
+    expect(screen.queryByText("pending")).toBeNull();
+
+    expect(screen.getByText("success").className).toContain("text-green-600");
+    expect(screen.getByText("failure").className).toContain("text-red-400");
+  });
+
+  test("disables generic tool rows with nothing to expand and hides the chevron", () => {
+    const message: NativeMessageType = {
+      id: "msg-generic-tool-no-details",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Bash",
+          toolState: "success",
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    const trigger = screen.getByRole("button", { name: /Run Command success/i });
+    expect((trigger as HTMLButtonElement).disabled).toBe(true);
+    expect(trigger.className).toContain("cursor-default");
+
+    const chevron = trigger.querySelector("svg");
+    expect(chevron?.getAttribute("class")).toContain("opacity-0");
+  });
+
+  test("shows a label for file paths without a directory separator", () => {
+    const message: NativeMessageType = {
+      id: "msg-generic-tool-bare-file-path",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Read",
+          toolName: "Read",
+          toolArgs: { file_path: "README.md" },
+          toolState: "success",
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    expect(
+      screen.getByRole("button", { name: /read README\.md success/i }),
+    ).toBeTruthy();
+  });
+
+  test("prefers the command over other argument keys in collapsed tool rows", () => {
+    const message: NativeMessageType = {
+      id: "msg-generic-tool-arg-precedence",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolArgs: {
+            command: "ls -la",
+            file_path: "/workspace/src/other.ts",
+            pattern: "*.ts",
+            query: "unused query",
+          },
+          toolState: "success",
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    const trigger = screen.getByRole("button", {
+      name: /Run Command ls -la success/i,
+    });
+    expect(trigger.textContent).not.toContain("other.ts");
+    expect(trigger.textContent).not.toContain("unused query");
+  });
+
+  test("counts additions and deletions from raw diff output without diff metadata", () => {
+    const rawDiff = [
+      "--- a/src/raw.ts",
+      "+++ b/src/raw.ts",
+      "@@ -1,2 +1,3 @@",
+      " const value = 1;",
+      "-const removed = true;",
+      "+const added = true;",
+      "+const alsoAdded = true;",
+    ].join("\n");
+    const message: NativeMessageType = {
+      id: "msg-edit-raw-diff-stats",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "success",
+          toolOutput: rawDiff,
+        },
+      ],
+    };
+
+    render(
+      <TerminalContextHarness>
+        <NativeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+
+    // +++/--- headers must not be counted: otherwise this would read +3 -2.
+    const trigger = screen.getByRole("button", {
+      name: /edit \+2 -1 success/i,
+    });
+    expect(trigger.textContent).not.toContain("+3");
+    expect(trigger.textContent).not.toContain("-2");
+  });
+
+  test("renders unchanged diff context lines with muted styling", () => {
+    const message: NativeMessageType = {
+      id: "msg-edit-diff-context-lines",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "success",
+          toolDiff: {
+            filePath: "/workspace/src/context.ts",
+            diff: "@@ -1,3 +1,3 @@\n unchanged line\n-old line\n+new line",
+          },
+        },
+      ],
+    };
+
+    render(
+      <TerminalContextHarness>
+        <NativeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /edit context\.ts/i }));
+
+    const contextLine = screen.getByText("unchanged line");
+    expect(contextLine.className).toContain("text-foreground/60");
+    expect(contextLine.className).not.toContain("bg-green-500/20");
+    expect(contextLine.className).not.toContain("bg-red-500/20");
+
+    expect(screen.getByText("+new line").className).toContain("bg-green-500/20");
+    expect(screen.getByText("-old line").className).toContain("bg-red-500/20");
+    expect(screen.getByText("@@ -1,3 +1,3 @@").className).toContain(
+      "text-blue-400",
+    );
+  });
+
+  test("omits the unused stat when an edit only adds or only removes lines", () => {
+    const message: NativeMessageType = {
+      id: "msg-edit-single-sided-stats",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Write",
+          toolState: "success",
+          toolDiff: {
+            filePath: "/workspace/src/added.ts",
+            additions: 3,
+            deletions: 0,
+          },
+        },
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "success",
+          toolDiff: {
+            filePath: "/workspace/src/removed.ts",
+            additions: 0,
+            deletions: 4,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TerminalContextHarness>
+        <NativeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+
+    const additionsOnly = screen.getByRole("button", {
+      name: /write added\.ts \+3 success/i,
+    });
+    expect(additionsOnly.querySelector(".text-green-500")?.textContent).toBe("+3");
+    expect(additionsOnly.querySelector(".text-red-400")).toBeNull();
+    expect(additionsOnly.textContent).not.toContain("-0");
+
+    const deletionsOnly = screen.getByRole("button", {
+      name: /edit removed\.ts -4 success/i,
+    });
+    expect(deletionsOnly.querySelector(".text-red-400")?.textContent).toBe("-4");
+    expect(deletionsOnly.querySelector(".text-green-500")).toBeNull();
+    expect(deletionsOnly.textContent).not.toContain("+0");
+  });
+
+  test("renders both the diff and the error for a partially failed edit", () => {
+    const message: NativeMessageType = {
+      id: "msg-edit-diff-with-error",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "failure",
+          toolError: "Failed to write remaining hunks",
+          toolDiff: {
+            filePath: "/workspace/src/partial.ts",
+            diff: "@@ -1 +1 @@\n-before\n+after",
+          },
+        },
+      ],
+    };
+
+    render(
+      <TerminalContextHarness>
+        <NativeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /edit partial\.ts failure/i }),
+    );
+
+    expect(screen.getByText("-before")).toBeTruthy();
+    expect(screen.getByText("+after")).toBeTruthy();
+    expect(screen.getByText("Failed to write remaining hunks")).toBeTruthy();
+  });
+
+  test("labels pending edit tools as running", () => {
+    const message: NativeMessageType = {
+      id: "msg-edit-pending-state",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "pending",
+          toolDiff: {
+            filePath: "/workspace/src/pending.ts",
+            after: "const pending = true;",
+          },
+        },
+      ],
+    };
+
+    render(
+      <TerminalContextHarness>
+        <NativeMessage message={message} />
+      </TerminalContextHarness>,
+    );
+
+    const running = screen.getByText("running...");
+    expect(running.className).toContain("animate-pulse");
+    expect(
+      screen.getByRole("button", { name: /edit pending\.ts \+1 running/i }),
+    ).toBeTruthy();
+  });
+
+  test("derives image mime types from the container attachment extension", async () => {
+    const message: NativeMessageType = {
+      id: "msg-container-mime-types",
+      role: "user",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        { type: "file", content: "/workspace/shots/screenshot.jpg" },
+        { type: "file", content: "/workspace/icons/logo.svg" },
+      ],
+    };
+
+    render(<NativeMessage message={message} containerId="container-1" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /screenshot\.jpg/i }));
+    const jpeg = await screen.findByAltText("screenshot.jpg");
+    expect(jpeg.getAttribute("src")).toBe(
+      "data:image/jpeg;base64,container-image-base64",
+    );
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByAltText("screenshot.jpg")).toBeNull(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /logo\.svg/i }));
+    const svg = await screen.findByAltText("logo.svg");
+    expect(svg.getAttribute("src")).toBe(
+      "data:image/svg+xml;base64,container-image-base64",
+    );
+  });
+
+  test("strips query strings from image paths and defaults unknown extensions to png", async () => {
+    const message: NativeMessageType = {
+      id: "msg-mime-query-and-fallback",
+      role: "user",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        { type: "file", content: "/workspace/shots/photo.webp?v=2#top" },
+        { type: "file", content: "/workspace/shots/archive.png.bak" },
+      ],
+    };
+
+    render(<NativeMessage message={message} containerId="container-1" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /photo\.webp/i }));
+    const webp = await screen.findByAltText("photo.webp?v=2#top");
+    expect(webp.getAttribute("src")).toBe(
+      "data:image/webp;base64,container-image-base64",
+    );
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByAltText("photo.webp?v=2#top")).toBeNull(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /archive\.png\.bak/i }));
+    const fallback = await screen.findByAltText("archive.png.bak");
+    expect(fallback.getAttribute("src")).toBe(
+      "data:image/png;base64,container-image-base64",
+    );
+  });
+
+  test("shows an in-flight loading state while an image attachment is read", async () => {
+    let resolveRead: ((value: string) => void) | undefined;
+    const pendingRead = new Promise<string>((resolve) => {
+      resolveRead = resolve;
+    });
+    mockReadFileBase64.mockImplementationOnce(() => pendingRead);
+    const message: NativeMessageType = {
+      id: "msg-file-preview-loading",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "/tmp/slow.png" }],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /slow\.png/i }));
+
+    const attachment = screen.getByRole("button", { name: /slow\.png/i });
+    expect(screen.getByText("(loading...)")).toBeTruthy();
+    expect(attachment.className).toContain("opacity-50");
+    expect((attachment as HTMLButtonElement).disabled).toBe(true);
+
+    resolveRead?.("slow-base64");
+
+    const image = await screen.findByAltText("slow.png");
+    expect(image.getAttribute("src")).toBe("data:image/png;base64,slow-base64");
+    await waitFor(() => expect(screen.queryByText("(loading...)")).toBeNull());
+  });
+
+  test("shows the error state when an image read rejects with a non-Error value", async () => {
+    const consoleError = console.error;
+    console.error = mock(() => {}) as typeof console.error;
+    mockReadFileBase64.mockImplementationOnce(async () => {
+      throw "boom";
+    });
+    const message: NativeMessageType = {
+      id: "msg-file-preview-non-error-rejection",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "/tmp/broken.png" }],
+    };
+
+    try {
+      render(<NativeMessage message={message} />);
+
+      fireEvent.click(screen.getByRole("button", { name: /broken\.png/i }));
+
+      await waitFor(() => expect(screen.getByText("(error)")).toBeTruthy());
+      expect(screen.queryByAltText("broken.png")).toBeNull();
+      expect(screen.queryByText("(loading...)")).toBeNull();
+    } finally {
+      console.error = consoleError;
+    }
+  });
+
+  test("falls back to the raw path and a generic label for attachment display names", () => {
+    const message: NativeMessageType = {
+      id: "msg-file-display-name-fallbacks",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        { type: "file", content: "notes-only.txt" },
+        { type: "file", content: "" },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.getByRole("button", { name: "notes-only.txt" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "file" })).toBeTruthy();
+  });
+
+  test("ignores non-Escape keys and detaches the overlay listener on unmount", async () => {
+    const message: NativeMessageType = {
+      id: "msg-overlay-key-handling",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "/tmp/overlay-keys.png" }],
+    };
+
+    const { unmount } = render(<NativeMessage message={message} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /overlay-keys\.png/i }));
+    await screen.findByAltText("overlay-keys.png");
+
+    fireEvent.keyDown(window, { key: "a" });
+    fireEvent.keyDown(window, { key: "Enter" });
+    expect(screen.getByAltText("overlay-keys.png")).toBeTruthy();
+
+    const consoleError = console.error;
+    const mockConsoleError = mock(() => {});
+    console.error = mockConsoleError as typeof console.error;
+    try {
+      unmount();
+      fireEvent.keyDown(window, { key: "Escape" });
+
+      expect(screen.queryByAltText("overlay-keys.png")).toBeNull();
+      expect(mockConsoleError).not.toHaveBeenCalled();
+    } finally {
+      console.error = consoleError;
+    }
+  });
+
+  test("keeps the copy control on subagent child text updates", () => {
+    const message: NativeMessageType = {
+      id: "msg-subagent-child-copy",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "subagent",
+          content: "Noether",
+          subagentId: "agent-child-copy",
+          subagentName: "Noether",
+          subagentActionCount: 1,
+          toolState: "success",
+          subagentActions: [
+            { type: "text", content: "Child summary worth copying." },
+          ],
+        },
+      ],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    expect(screen.queryAllByRole("button", { name: "Copy text" })).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /noether/i }));
+
+    expect(screen.getAllByRole("button", { name: "Copy text" })).toHaveLength(1);
+  });
+
+  test("truncates user prompts strictly above the collapsed line count", () => {
+    const buildContent = (lines: number) =>
+      Array.from({ length: lines }, (_, index) => `Line ${index + 1}`).join("\n");
+    const boundaryMessage: NativeMessageType = {
+      id: "msg-user-prompt-boundary-12",
+      role: "user",
+      content: buildContent(12),
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "text", content: buildContent(12) }],
+    };
+    const overBoundaryMessage: NativeMessageType = {
+      id: "msg-user-prompt-boundary-13",
+      role: "user",
+      content: buildContent(13),
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "text", content: buildContent(13) }],
+    };
+
+    const { rerender } = render(<NativeMessage message={boundaryMessage} />);
+
+    expect(screen.queryByRole("button", { name: "show more" })).toBeNull();
+
+    rerender(<NativeMessage message={overBoundaryMessage} />);
+
+    expect(screen.getByRole("button", { name: "show more" })).toBeTruthy();
   });
 });

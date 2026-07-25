@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
+import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { mockWriteText } from "../../../../../tests/mocks/clipboard";
 import {
   mockToastError as toastErrorMock,
@@ -30,6 +31,8 @@ function makeMessage(
 describe("NativeMessage task list rendering", () => {
   afterEach(() => {
     cleanup();
+    // Thinking expansion outlives unmount by design, so clear it between tests.
+    useMessagePartExpansionStore.getState().reset();
     toastErrorMock.mockClear();
     toastSuccessMock.mockClear();
   });
@@ -81,8 +84,33 @@ describe("NativeMessage task list rendering", () => {
     expect(container.textContent).toContain(
       "Let me analyze the code structure here",
     );
-    // Should NOT have a collapsible trigger (no chevron button)
-    expect(container.querySelector("button")).toBeNull();
+    // Collapsed preview is a single truncated line, not the expanded body
+    expect(screen.getByRole("button", { name: /thinking/i })).toBeTruthy();
+    expect(
+      screen.getByText("Let me analyze the code structure here").className,
+    ).toContain("truncate");
+  });
+
+  test("expands a long thinking part to show the full text", () => {
+    const content =
+      "First I inspect the reducer.\n\nThen I trace the dispatch path all the way through the bridge before deciding on a fix.";
+    const message = makeMessage([{ type: "thinking", content }]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    // Collapsed: whitespace is flattened into a single truncated preview line
+    expect(container.textContent).toContain(
+      "First I inspect the reducer. Then I trace the dispatch path",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /thinking/i }));
+
+    // Expanded: the full text renders as markdown paragraphs
+    expect(container.textContent).toContain("First I inspect the reducer.");
+    expect(container.textContent).toContain(
+      "Then I trace the dispatch path all the way through the bridge before deciding on a fix.",
+    );
+    expect(container.querySelectorAll("p").length).toBeGreaterThan(1);
   });
 
   test("text parts with task lists render checkboxes directly (no collapsible)", () => {
@@ -527,7 +555,8 @@ describe("NativeMessage task list rendering", () => {
       screen.getByRole("button", { name: /task list/i }).parentElement?.className,
     ).toContain("my-0");
     expect(
-      screen.getByText("Regular thinking wrapper").parentElement?.className,
+      screen.getByRole("button", { name: /regular thinking wrapper/i })
+        .parentElement?.className,
     ).toContain("my-0");
     expect(screen.getByRole("button", { name: /screenshot\.png/i }).className)
       .toContain("my-0");
@@ -1247,5 +1276,586 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     expect(container.textContent).not.toContain("complete");
     // Should render generic tool part with tool name
     expect(container.textContent).toContain("Read");
+  });
+});
+
+describe("NativeMessage thinking parts", () => {
+  afterEach(() => {
+    cleanup();
+    useMessagePartExpansionStore.getState().reset();
+  });
+
+  test("renders nothing for a thinking part with no content", () => {
+    const { container } = render(
+      <NativeMessage message={makeMessage([{ type: "thinking", content: "" }])} />,
+    );
+
+    expect(screen.queryByRole("button", { name: /thinking/i })).toBeNull();
+    expect(container.textContent).not.toContain("Thinking");
+    // Not even the grouped activity block, which would paint an empty border.
+    expect(container.querySelector(".rounded-lg.border")).toBeNull();
+  });
+
+  test("renders nothing for a thinking part that is only whitespace", () => {
+    const { container } = render(
+      <NativeMessage
+        message={makeMessage([{ type: "thinking", content: "   \n\n\t  " }])}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /thinking/i })).toBeNull();
+    expect(container.textContent).not.toContain("Thinking");
+    expect(container.querySelector(".rounded-lg.border")).toBeNull();
+  });
+
+  test("keeps the activity block for real reasoning alongside an empty part", () => {
+    const { container } = render(
+      <NativeMessage
+        message={makeMessage([
+          { type: "thinking", content: "" },
+          { type: "thinking", content: "Real reasoning" },
+        ])}
+      />,
+    );
+
+    expect(container.querySelector(".rounded-lg.border")).toBeTruthy();
+    expect(
+      screen.getAllByRole("button", { name: /thinking/i }),
+    ).toHaveLength(1);
+  });
+
+  test("keeps single newlines as visible line breaks in expanded reasoning", () => {
+    const { container } = render(
+      <NativeMessage
+        message={makeMessage([
+          { type: "thinking", content: "first line\nsecond line" },
+        ])}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /thinking/i }));
+
+    // remark-breaks is enabled for prose reasoning, so the newline survives as
+    // a <br> inside a single paragraph rather than being collapsed away.
+    expect(container.querySelectorAll("br")).toHaveLength(1);
+    expect(container.querySelectorAll("p")).toHaveLength(1);
+    expect(container.textContent).toContain("second line");
+  });
+
+  test("disables line breaks for task-list reasoning so list syntax still parses", () => {
+    const { container } = render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "thinking",
+            content: "Plan:\n- [x] Read the file\n- [ ] Write the fix",
+          },
+        ])}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /thinking/i }));
+
+    // With remark-breaks on, the newlines would turn the list into one
+    // paragraph of text instead of checkbox rows.
+    expect(
+      container.querySelectorAll('[data-task-list-icon="true"]'),
+    ).toHaveLength(2);
+    expect(container.querySelectorAll("br")).toHaveLength(0);
+    expect(screen.getByText("Read the file").className).toContain(
+      "line-through",
+    );
+  });
+
+  test("detects numbered task list syntax for the collapsed preview", () => {
+    const { container } = render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "thinking",
+            content: "1. [x] Inspect reducer\n2. [ ] Patch dispatch",
+          },
+        ])}
+      />,
+    );
+
+    expect(container.textContent).toContain("task list");
+    expect(container.textContent).not.toContain("Inspect reducer");
+
+    fireEvent.click(screen.getByRole("button", { name: /thinking/i }));
+
+    expect(
+      container.querySelectorAll('[data-task-list-icon="true"]'),
+    ).toHaveLength(2);
+  });
+
+  test("keeps a thinking part expanded when the list unmounts and remounts it", () => {
+    const message = makeMessage([
+      { type: "thinking", content: "Long reasoning that the user opened" },
+    ]);
+
+    const first = render(<NativeMessage message={message} />);
+    fireEvent.click(screen.getByRole("button", { name: /thinking/i }));
+    expect(
+      screen.getByRole("button", { name: /thinking/i }).getAttribute("aria-expanded"),
+    ).toBe("true");
+
+    // The virtualized transcript unmounts a message once it scrolls out of the
+    // viewport window; scrolling back must not collapse what the user opened.
+    first.unmount();
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(
+      screen.getByRole("button", { name: /thinking/i }).getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(container.querySelectorAll("p")).toHaveLength(1);
+  });
+
+  test("tracks each thinking part separately within one message", () => {
+    const message = makeMessage([
+      { type: "thinking", content: "First reasoning block" },
+      { type: "tool-invocation", content: "ls", toolName: "Bash", toolState: "success" },
+      { type: "thinking", content: "Second reasoning block" },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    const triggers = screen.getAllByRole("button", { name: /reasoning block/i });
+    expect(triggers).toHaveLength(2);
+
+    fireEvent.click(triggers[0]!);
+
+    expect(triggers[0]!.getAttribute("aria-expanded")).toBe("true");
+    expect(triggers[1]!.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("tracks thinking parts of different messages independently", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "thinking", content: "Message one reasoning" }], {
+          id: "assistant-a",
+        })}
+      />,
+    );
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "thinking", content: "Message two reasoning" }], {
+          id: "assistant-b",
+        })}
+      />,
+    );
+
+    // Capture both triggers first: expanding hides the preview text that
+    // distinguishes them in the accessible name.
+    const firstTrigger = screen.getByRole("button", {
+      name: /message one reasoning/i,
+    });
+    const secondTrigger = screen.getByRole("button", {
+      name: /message two reasoning/i,
+    });
+
+    fireEvent.click(firstTrigger);
+
+    expect(firstTrigger.getAttribute("aria-expanded")).toBe("true");
+    expect(secondTrigger.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("renders thinking rows inside their grouped tool block", () => {
+    const message = makeMessage([
+      { type: "thinking", content: "Deciding what to run" },
+      {
+        type: "tool-invocation",
+        content: "ls",
+        toolName: "Bash",
+        toolState: "success",
+        toolArgs: { command: "ls -la" },
+      },
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    const group = container.querySelector(".rounded-lg.border.border-zinc-700\\/70");
+    expect(group).toBeTruthy();
+    // Both activity parts render as children of the one grouped block.
+    expect(group?.textContent).toContain("Deciding what to run");
+    expect(group?.textContent).toContain("ls -la");
+    expect(
+      group?.querySelectorAll(":scope > * > button, :scope > button").length,
+    ).toBeGreaterThan(1);
+  });
+
+  test("renders a thinking part supplied as a subagent child action", () => {
+    const message = makeMessage([
+      {
+        type: "subagent",
+        content: "Reviewer",
+        subagentId: "agent-thinking",
+        subagentName: "Reviewer",
+        toolState: "pending",
+        subagentActions: [
+          { type: "thinking", content: "Child agent reasoning" },
+          {
+            type: "tool-invocation",
+            content: "ls",
+            toolName: "Bash",
+            toolState: "success",
+            toolArgs: { command: "ls -la" },
+          },
+        ],
+      },
+    ]);
+
+    render(<NativeMessage message={message} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
+
+    const childTrigger = screen.getByRole("button", {
+      name: /child agent reasoning/i,
+    });
+    fireEvent.click(childTrigger);
+
+    expect(childTrigger.getAttribute("aria-expanded")).toBe("true");
+    expect(childTrigger.textContent).toContain("Thinking");
+  });
+});
+
+describe("NativeMessage part routing and message-level fallbacks", () => {
+  afterEach(() => {
+    cleanup();
+    useMessagePartExpansionStore.getState().reset();
+  });
+
+  test("renders nothing for tool-result parts", () => {
+    const { container } = render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "tool-result",
+            content: "raw tool result payload",
+            toolName: "Bash",
+            toolState: "success",
+            toolOutput: "raw tool result payload",
+          },
+        ])}
+      />,
+    );
+
+    expect(container.textContent).not.toContain("raw tool result payload");
+  });
+
+  test("renders nothing for an unrecognised part type", () => {
+    const message = makeMessage([
+      { type: "mystery-part", content: "unknown payload" } as unknown as NativeMessagePart,
+    ]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    expect(container.textContent).not.toContain("unknown payload");
+  });
+
+  test("renders no body and no copy control for an empty assistant message", () => {
+    const { container } = render(
+      <NativeMessage message={makeMessage([], { id: "assistant-empty", content: "" })} />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Copy text" })).toBeNull();
+    expect(container.textContent).toContain("Assistant");
+  });
+
+  test("copies assistant message content when the message has no text parts", async () => {
+    mockWriteText.mockClear();
+    mockWriteText.mockImplementation(async () => {});
+    const message = makeMessage(
+      [{ type: "thinking", content: "internal reasoning" }],
+      { id: "assistant-fallback", content: "Assistant fallback content" },
+    );
+
+    render(<NativeMessage message={message} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
+
+    await waitFor(() => {
+      expect(mockWriteText).toHaveBeenCalledWith("Assistant fallback content");
+    });
+  });
+});
+
+describe("NativeMessage agent status and grouping details", () => {
+  afterEach(() => {
+    cleanup();
+    useMessagePartExpansionStore.getState().reset();
+  });
+
+  test("colours the agent status pill by state", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "subagent",
+            content: "Runner",
+            subagentId: "agent-running",
+            subagentName: "Runner",
+            toolState: "pending",
+          },
+          {
+            type: "subagent",
+            content: "Winner",
+            subagentId: "agent-success",
+            subagentName: "Winner",
+            toolState: "success",
+          },
+          {
+            type: "subagent",
+            content: "Loser",
+            subagentId: "agent-failure",
+            subagentName: "Loser",
+            toolState: "failure",
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.getByText("Running").className).toContain("border-amber-500/30");
+    expect(screen.getByText("Success").className).toContain("border-emerald-500/30");
+    expect(screen.getByText("Failed").className).toContain("border-red-500/30");
+  });
+
+  test("omits the running badge when every grouped agent has finished", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "subagent",
+            content: "Winner",
+            subagentId: "agent-success",
+            subagentName: "Winner",
+            toolState: "success",
+          },
+          {
+            type: "subagent",
+            content: "Loser",
+            subagentId: "agent-failure",
+            subagentName: "Loser",
+            toolState: "failure",
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
+    expect(screen.queryByText(/running$/i)).toBeNull();
+  });
+
+  test("counts running agents across mixed subagent and task-group children", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "task-group",
+            content: "Task reviewer",
+            task: {
+              type: "tool-invocation",
+              content: "Task reviewer",
+              toolUseId: "task-mixed",
+              toolState: "pending",
+            },
+            childTools: [],
+          },
+          {
+            type: "subagent",
+            content: "Tester",
+            subagentId: "agent-mixed",
+            subagentName: "Tester",
+            toolState: "success",
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
+    expect(screen.getByText("1 running")).toBeTruthy();
+  });
+
+  test("falls back to the generic subagent label with no name, role or content", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "subagent",
+            content: "",
+            subagentId: "agent-nameless",
+            toolState: "pending",
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.getByText("subagent")).toBeTruthy();
+  });
+
+  test("uses singular tool-use wording for a standalone subagent with one external use", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "subagent",
+            content: "Reviewer",
+            subagentId: "agent-single-use",
+            subagentName: "Reviewer",
+            toolState: "pending",
+            toolUseCount: 1,
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.getByText("1 tool use")).toBeTruthy();
+  });
+
+  test("ignores a blank subagent prompt instead of rendering an empty task block", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "subagent",
+            content: "Reviewer",
+            subagentId: "agent-blank-prompt",
+            subagentName: "Reviewer",
+            subagentPrompt: "",
+            toolState: "pending",
+            subagentActions: [],
+          },
+        ])}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
+
+    expect(screen.queryByText("Task")).toBeNull();
+    expect(screen.getByText("No child actions yet.")).toBeTruthy();
+  });
+
+  test("reads an agent role from the subagentType and role argument aliases", () => {
+    const makeTaskGroup = (
+      id: string,
+      toolArgs: Record<string, unknown>,
+    ): NativeMessagePart => ({
+      type: "task-group",
+      content: "Agent",
+      task: {
+        type: "tool-invocation",
+        content: "Agent",
+        toolName: "Agent",
+        toolTitle: "Agent",
+        toolUseId: id,
+        toolState: "pending",
+        toolArgs,
+      },
+      childTools: [],
+    });
+
+    render(
+      <NativeMessage
+        message={makeMessage([
+          makeTaskGroup("task-camel", {
+            description: "Camel case role",
+            subagentType: "explorer",
+          }),
+          makeTaskGroup("task-role", {
+            description: "Plain role key",
+            role: "planner",
+          }),
+        ])}
+      />,
+    );
+
+    expect(screen.getByText("Camel case role (explorer)")).toBeTruthy();
+    expect(screen.getByText("Plain role key (planner)")).toBeTruthy();
+  });
+
+  test("omits the secondary header label when a named agent has no description", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "task-group",
+            content: "Agent",
+            task: {
+              type: "tool-invocation",
+              content: "Agent",
+              toolName: "Agent",
+              toolTitle: "Agent",
+              toolState: "success",
+              toolArgs: { agent_name: "Presentation Reviewer" },
+            },
+            childTools: [],
+          },
+        ])}
+      />,
+    );
+
+    const label = screen.getByText("Presentation Reviewer");
+    expect(label.parentElement?.textContent).toBe(
+      "AgentPresentation ReviewerSuccess",
+    );
+  });
+
+  test("treats every casing of the generic Task tool label as a subagent", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "task-group",
+            content: "Task",
+            task: {
+              type: "tool-invocation",
+              content: "Task",
+              toolName: "Task",
+              toolTitle: "Task",
+              toolUseId: "task-upper",
+              toolState: "pending",
+            },
+            childTools: [],
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.getByText("Subagent")).toBeTruthy();
+    expect(screen.queryByText("Task")).toBeNull();
+  });
+
+  test("falls back to an update count when an external agent reports no token text", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "task-group",
+            content: "Agent",
+            task: {
+              type: "tool-invocation",
+              content: "Agent",
+              toolName: "Agent",
+              toolTitle: "Agent",
+              toolState: "pending",
+              toolUseCount: 4,
+              toolArgs: { description: "Counting agent" },
+            },
+            childTools: [
+              {
+                type: "tool-invocation",
+                content: "Read",
+                toolName: "Read",
+                toolState: "success",
+                toolArgs: { file_path: "/workspace/a.ts" },
+              },
+            ],
+          },
+        ])}
+      />,
+    );
+
+    expect(screen.getByText("4 tool uses")).toBeTruthy();
+    expect(screen.getByText("1 update")).toBeTruthy();
   });
 });

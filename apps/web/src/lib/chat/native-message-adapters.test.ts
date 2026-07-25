@@ -3,6 +3,7 @@ import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
 import type { NativeMessage } from "./native-message-types";
 import {
   dedupeStreamedNativeParts,
+  dropEmptyThinkingParts,
   groupNativeAgentActivity,
   groupNativeToolActivity,
   normalizeClaudeMessage,
@@ -70,6 +71,54 @@ describe("native message adapters", () => {
         "tool-invocation",
       ]);
     }
+  });
+
+  test("drops thinking parts that carry no text", () => {
+    expect(
+      dropEmptyThinkingParts([
+        { type: "thinking", content: "" },
+        { type: "thinking", content: "   \n\t " },
+        { type: "thinking", content: "Real reasoning" },
+        { type: "text", content: "" },
+      ]),
+    ).toEqual([
+      { type: "thinking", content: "Real reasoning" },
+      { type: "text", content: "" },
+    ]);
+  });
+
+  test("does not build an activity group for empty reasoning alone", () => {
+    const message: NativeMessage = {
+      id: "native-empty-thinking",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-06-18T12:00:00.000Z",
+      parts: [
+        { type: "thinking", content: "" },
+        { type: "text", content: "Done" },
+      ],
+    };
+
+    expect(
+      normalizeOpenCodeNativeMessage(message).parts.map((part) => part.type),
+    ).toEqual(["text"]);
+  });
+
+  test("drops empty Claude reasoning parts during normalization", () => {
+    const message: ClaudeMessage = {
+      id: "claude-empty-thinking",
+      role: "assistant",
+      content: "",
+      timestamp: "2026-06-18T12:00:00.000Z",
+      parts: [
+        { type: "thinking", content: "  " },
+        { type: "text", content: "Done" },
+      ],
+    } as ClaudeMessage;
+
+    expect(
+      normalizeClaudeMessage(message).parts.map((part) => part.type),
+    ).toEqual(["text"]);
   });
 
   test("collapses adjacent streamed text and thinking prefixes", () => {

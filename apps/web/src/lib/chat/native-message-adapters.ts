@@ -306,8 +306,23 @@ export function groupNativeAgentActivity(parts: NativeMessagePart[]): NativeMess
   return rendered;
 }
 
+/**
+ * Reasoning with no text renders nothing, so it must be dropped before
+ * grouping — otherwise it still forms a tool group and the transcript shows an
+ * empty bordered block.
+ */
+export function dropEmptyThinkingParts(
+  parts: NativeMessagePart[],
+): NativeMessagePart[] {
+  return parts.filter(
+    (part) => part.type !== "thinking" || part.content.trim().length > 0,
+  );
+}
+
 export function normalizeNativeMessage(message: NativeMessage): NativeMessage {
-  const dedupedParts = dedupeStreamedNativeParts(message.parts);
+  const dedupedParts = dropEmptyThinkingParts(
+    dedupeStreamedNativeParts(message.parts),
+  );
   return {
     ...message,
     parts: groupNativeAgentActivity(groupNativeToolActivity(dedupedParts)),
@@ -345,7 +360,9 @@ export function normalizeClaudeMessage(message: ClaudeMessage): NativeMessage {
     role: message.role,
     content: cleanContent,
     parts: groupNativeAgentActivity(
-      groupNativeToolActivity(dedupeStreamedNativeParts(taskGroupedParts)),
+      groupNativeToolActivity(
+        dropEmptyThinkingParts(dedupeStreamedNativeParts(taskGroupedParts)),
+      ),
     ),
     createdAt: message.timestamp,
   };

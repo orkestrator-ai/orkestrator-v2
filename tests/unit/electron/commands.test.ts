@@ -70,7 +70,11 @@ const ptySpawn = mock((command: string, args: string[], options: Record<string, 
 
 mock.module("../../../apps/backend/src/core/pty", () => ({ spawnPty: ptySpawn }));
 
-const { createCommandRegistry, resolveBrowserOpenCommand } = await import("../../../apps/backend/src/core/commands");
+const {
+  createCommandRegistry,
+  resolveBrowserOpenCommand,
+  shutdownLocalServers,
+} = await import("../../../apps/backend/src/core/commands");
 
 const tempDirs: string[] = [];
 const SETUP_DONE_OSC = "\u001b]9999;setup_done\u0007";
@@ -602,6 +606,15 @@ async function waitForCondition(condition: () => boolean, description: string): 
   throw new Error(`Timed out waiting for ${description}`);
 }
 
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
 // Fake `docker` that reports the container as running and succeeds on exec,
 // returning a deterministic HEAD commit for `git rev-parse`.
 const RUNNING_CONTAINER_DOCKER_SCRIPT = `#!/bin/sh
@@ -623,6 +636,7 @@ exit 0
 `;
 
 afterEach(async () => {
+  await shutdownLocalServers();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
   showOpenDialog.mockClear();
   ptySpawn.mockClear();
@@ -4318,6 +4332,86 @@ exit 0
         fallbackContext,
       );
     }
+  });
+
+  test("drains a local Codex bridge and its descendants before deleting the environment", async () => {
+    const appRoot = await createTempDir("ork-electron-app-delete-codex-");
+    const worktreePath = await createTempDir("ork-electron-worktree-delete-codex-");
+    const pidMarkerPath = path.join(appRoot, "codex-processes.json");
+    const shutdownMarkerPath = path.join(appRoot, "codex-shutdown.txt");
+    await writeBridgeEntrypoint(
+      appRoot,
+      "codex-bridge",
+      `
+        const fs = require("node:fs");
+        const http = require("node:http");
+        const { spawn } = require("node:child_process");
+        const descendant = spawn(
+          process.execPath,
+          ["-e", "setInterval(() => {}, 1_000)"],
+          { stdio: "ignore" },
+        );
+        fs.writeFileSync(
+          ${JSON.stringify(pidMarkerPath)},
+          JSON.stringify({ bridgePid: process.pid, descendantPid: descendant.pid }),
+        );
+        const server = http.createServer((req, res) => {
+          if (req.url === "/global/health") {
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify({ ok: true }));
+            return;
+          }
+          res.writeHead(404);
+          res.end();
+        });
+        server.listen(Number(process.env.PORT), "127.0.0.1");
+        process.on("SIGTERM", () => {
+          fs.writeFileSync(
+            ${JSON.stringify(shutdownMarkerPath)},
+            String(fs.existsSync(process.env.CWD)),
+          );
+          descendant.kill("SIGTERM");
+          server.close(() => process.exit(0));
+        });
+      `,
+    );
+
+    const environment = createEnvironment({ worktreePath });
+    const { context } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+    const started = await commands.get("start_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as { port: number; pid: number };
+    await waitForCondition(() => existsSync(pidMarkerPath), "Codex process marker");
+    const processes = JSON.parse(await fs.readFile(pidMarkerPath, "utf8")) as {
+      bridgePid: number;
+      descendantPid: number;
+    };
+
+    expect(processes.bridgePid).toBe(started.pid);
+    expect(isProcessRunning(processes.bridgePid)).toBe(true);
+    expect(isProcessRunning(processes.descendantPid)).toBe(true);
+
+    await commands.get("delete_environment")?.(
+      { environmentId: environment.id },
+      context,
+    );
+
+    expect(await fs.readFile(shutdownMarkerPath, "utf8")).toBe("true");
+    expect(isProcessRunning(processes.bridgePid)).toBe(false);
+    await waitForCondition(
+      () => !isProcessRunning(processes.descendantPid),
+      "Codex descendant to exit",
+    );
+    await expect(
+      commands.get("get_environment")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+    ).resolves.toBeNull();
   });
 
   test("launches the local claude bridge through the bundled bun binary in resources", async () => {

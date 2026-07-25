@@ -122,6 +122,7 @@ async function stop(signal: NodeJS.Signals): Promise<void> {
     });
   }
   await gateway.stop();
+  await backend.shutdown();
   process.exit(signal === "SIGINT" ? 130 : 0);
 }
 process.on("SIGINT", () => void stop("SIGINT"));

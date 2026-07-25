@@ -1,4 +1,9 @@
-import { createCommandRegistry, type BackendEmit, type CommandContext } from "./commands.js";
+import {
+  createCommandRegistry,
+  shutdownLocalServers,
+  type BackendEmit,
+  type CommandContext,
+} from "./commands.js";
 import { StorageService } from "./storage.js";
 
 export class OrkestratorBackend {
@@ -29,5 +34,9 @@ export class OrkestratorBackend {
     const handler = this.commands.get(command);
     if (!handler) throw new Error(`Unknown backend command: ${command}`);
     return await handler(args, this.context) as T;
+  }
+
+  async shutdown(): Promise<void> {
+    await shutdownLocalServers();
   }
 }

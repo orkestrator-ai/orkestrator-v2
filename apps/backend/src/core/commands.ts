@@ -122,6 +122,13 @@ const terminalOutputBuffers = new Map<string, string>();
 const terminalActivityTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const terminalActivityArmed = new Set<string>();
 const localServerProcesses = new Map<string, ChildProcessWithoutNullStreams>();
+type LocalServerKind = "opencode" | "claude" | "codex";
+const LOCAL_SERVER_KINDS: readonly LocalServerKind[] = ["opencode", "claude", "codex"];
+// Codex bridge shutdown can spend five seconds draining app-server before its
+// one-second hard-kill fallback. Give that path time to reap the MCP process
+// group before escalating the bridge itself.
+const LOCAL_SERVER_SHUTDOWN_GRACE_MS = 8_000;
+const LOCAL_SERVER_KILL_WAIT_MS = 1_000;
 const CLAUDE_MODEL_CATALOG_TTL_MS = 5 * 60_000;
 const CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS = 30_000;
 const CONTAINER_WORKSPACE_SETUP_COMMAND = "if command -v flock >/dev/null 2>&1; then flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh'; else /usr/local/bin/workspace-setup.sh; fi";
@@ -1856,7 +1863,7 @@ function getBridgePath(context: CommandContext, bridgeName: "claude-bridge" | "c
 async function startLocalServer(
   environmentId: string,
   context: CommandContext,
-  kind: "opencode" | "claude" | "codex",
+  kind: LocalServerKind,
 ): Promise<{ port: number; pid: number; wasRunning: boolean }> {
   const key = `${kind}:${environmentId}`;
   const existing = localServerProcesses.get(key);
@@ -1866,8 +1873,7 @@ async function startLocalServer(
     if (port && await checkHttpHealth(port)) {
       return { port, pid: existing.pid, wasRunning: true };
     }
-    existing.kill();
-    localServerProcesses.delete(key);
+    await terminateLocalServerChild(key, existing);
   }
 
   const environment = await context.storage.getEnvironment(environmentId);
@@ -1916,15 +1922,18 @@ async function startLocalServer(
   localServerProcesses.set(key, child);
   child.stdout.on("data", (data) => console.debug(`[${kind}:${environmentId}] ${data.toString()}`));
   child.stderr.on("data", (data) => console.error(`[${kind}:${environmentId}] ${data.toString()}`));
-  child.once("exit", () => localServerProcesses.delete(key));
+  child.once("exit", () => {
+    // An unhealthy child may exit after its replacement has already claimed the
+    // key. Only the process that still owns the entry may remove it.
+    if (localServerProcesses.get(key) === child) localServerProcesses.delete(key);
+  });
 
   const field = kind === "opencode" ? "localOpencodePort" : kind === "claude" ? "localClaudePort" : "localCodexPort";
   const pidField = kind === "opencode" ? "opencodePid" : kind === "claude" ? "claudeBridgePid" : "codexBridgePid";
   try {
     await waitForLocalServerStartup(child, port, kind);
   } catch (error) {
-    child.kill();
-    localServerProcesses.delete(key);
+    await terminateLocalServerChild(key, child);
     await context.storage.updateEnvironment(environmentId, { [field]: null, [pidField]: null }).catch(() => undefined);
     throw error;
   }
@@ -1932,13 +1941,54 @@ async function startLocalServer(
   return { port, pid: child.pid ?? 0, wasRunning: false };
 }
 
-async function stopLocalServer(environmentId: string, context: CommandContext, kind: "opencode" | "claude" | "codex"): Promise<void> {
+function hasChildExited(child: ChildProcessWithoutNullStreams): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function waitForChildExit(
+  child: ChildProcessWithoutNullStreams,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (hasChildExited(child)) return true;
+  return new Promise((resolve) => {
+    let settled = false;
+    const complete = (exited: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off("exit", onExit);
+      resolve(exited);
+    };
+    const onExit = () => complete(true);
+    const timer = setTimeout(() => complete(false), timeoutMs);
+    child.once("exit", onExit);
+  });
+}
+
+async function terminateLocalServerChild(
+  key: string,
+  child: ChildProcessWithoutNullStreams,
+): Promise<void> {
+  if (!hasChildExited(child)) {
+    child.kill("SIGTERM");
+    const exited = await waitForChildExit(child, LOCAL_SERVER_SHUTDOWN_GRACE_MS);
+    if (!exited) {
+      child.kill("SIGKILL");
+      const killed = await waitForChildExit(child, LOCAL_SERVER_KILL_WAIT_MS);
+      if (!killed) {
+        // Keep the ownership entry so shutdown or a retry can target it again.
+        // Forgetting a process that is still alive recreates the orphan leak.
+        throw new Error(`Local server process did not exit: ${key}`);
+      }
+    }
+  }
+  if (localServerProcesses.get(key) === child) localServerProcesses.delete(key);
+}
+
+async function stopLocalServer(environmentId: string, context: CommandContext, kind: LocalServerKind): Promise<void> {
   const key = `${kind}:${environmentId}`;
   const child = localServerProcesses.get(key);
-  if (child) {
-    child.kill();
-    localServerProcesses.delete(key);
-  }
+  if (child) await terminateLocalServerChild(key, child);
   const fields = kind === "opencode"
     ? { opencodePid: null, localOpencodePort: null }
     : kind === "claude"
@@ -1947,7 +1997,24 @@ async function stopLocalServer(environmentId: string, context: CommandContext, k
   await context.storage.updateEnvironment(environmentId, fields);
 }
 
-async function getLocalServerStatus(environmentId: string, context: CommandContext, kind: "opencode" | "claude" | "codex"): Promise<{ running: boolean; port: number | null; pid: number | null }> {
+async function stopLocalServersForEnvironment(
+  environmentId: string,
+  context: CommandContext,
+): Promise<void> {
+  await Promise.all(
+    LOCAL_SERVER_KINDS.map((kind) => stopLocalServer(environmentId, context, kind)),
+  );
+}
+
+/** Drains every local agent server still owned by this backend process. */
+export async function shutdownLocalServers(): Promise<void> {
+  const owned = [...localServerProcesses.entries()];
+  await Promise.allSettled(
+    owned.map(([key, child]) => terminateLocalServerChild(key, child)),
+  );
+}
+
+async function getLocalServerStatus(environmentId: string, context: CommandContext, kind: LocalServerKind): Promise<{ running: boolean; port: number | null; pid: number | null }> {
   const key = `${kind}:${environmentId}`;
   const child = localServerProcesses.get(key);
   const env = await context.storage.getEnvironment(environmentId);
@@ -3094,11 +3161,16 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     await storage.updateRepositoryConfig(project.id, { ...repoConfig, lastEnvironmentType: env.environmentType });
     return storage.addEnvironment(env);
   });
-  register("delete_environment", async ({ environmentId }, { storage }) => {
+  register("delete_environment", async ({ environmentId }, context) => {
+    const { storage } = context;
     const envId = asString(environmentId, "environmentId");
     const environment = await storage.getEnvironment(envId);
     if (environment) await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
     if (environment?.containerId) await runCommand("docker", ["rm", "-f", environment.containerId], { timeoutMs: 60_000 }).catch(() => undefined);
+    // Stop backend-owned processes while the environment record and worktree
+    // still exist. Codex bridge SIGTERM drains app-server, which in turn drops
+    // every per-thread MCP process before the worktree and PID metadata vanish.
+    await stopLocalServersForEnvironment(envId, context);
     if (environment?.worktreePath) await removeLocalWorktree(environment.worktreePath).catch(() => undefined);
     await storage.removeSessionsByEnvironment(envId).catch(() => undefined);
     await storage.removeEnvironment(envId);

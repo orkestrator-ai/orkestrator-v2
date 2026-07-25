@@ -1,5 +1,9 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { TurnAccumulator } from "../sessions/turn-accumulator.js";
+import { clearTranscriptCache } from "../transcript-cache.js";
 import {
   TRUNCATION_NOTICE,
   beginTurnRenderState,
@@ -80,6 +84,47 @@ describe("effectiveItem", () => {
     });
     accumulator.onCommandOutputDelta("unknown-command", "out");
     expect(effectiveItem(accumulator, accumulator.items.get("unknown-command")!)).toBeNull();
+  });
+
+  test("uses content-channel reasoning when no visible summary is available", () => {
+    const accumulator = turn();
+    accumulator.onReasoningDelta("reason", "second content", "content", 1);
+    accumulator.onReasoningDelta("reason", "first content", "content", 0);
+
+    expect(effectiveItem(accumulator, accumulator.items.get("reason")!)).toMatchObject({
+      type: "reasoning",
+      text: "first content\n\nsecond content",
+    });
+
+    accumulator.onReasoningDelta("invisible-summary", "\u0085\u200B", "summary", 0);
+    accumulator.onReasoningDelta("invisible-summary", "visible content", "content", 0);
+    expect(
+      effectiveItem(accumulator, accumulator.items.get("invisible-summary")!),
+    ).toMatchObject({
+      type: "reasoning",
+      text: "visible content",
+    });
+  });
+
+  test("falls back from empty authoritative reasoning but keeps nonempty authoritative text", () => {
+    const accumulator = turn();
+    accumulator.onReasoningDelta("empty-final", "streamed summary", "summary", 0);
+    accumulator.onItemStarted({ id: "empty-final", type: "reasoning", text: "" });
+    expect(effectiveItem(accumulator, accumulator.items.get("empty-final")!)).toMatchObject({
+      type: "reasoning",
+      text: "streamed summary",
+    });
+
+    accumulator.onReasoningDelta("nonempty-final", "stale delta", "summary", 0);
+    accumulator.onItemStarted({
+      id: "nonempty-final",
+      type: "reasoning",
+      text: "authoritative reasoning",
+    });
+    expect(effectiveItem(accumulator, accumulator.items.get("nonempty-final")!)).toMatchObject({
+      type: "reasoning",
+      text: "authoritative reasoning",
+    });
   });
 
   test("combines command deltas, truncation, and empty authoritative text", () => {
@@ -178,6 +223,73 @@ describe("effectiveItem", () => {
 });
 
 describe("renderTurn", () => {
+  test("omits reasoning items with no visible content", async () => {
+    const accumulator = turn();
+    accumulator.onItemCompleted({ id: "reasoning", type: "reasoning", text: "" });
+    const rendered = await renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state: createTurnRenderState(),
+      loadSubagentParts: async () => [],
+    });
+
+    expect(rendered.parts).toEqual([]);
+    expect(rendered.content).toBe("");
+  });
+
+  test("omits Unicode-only invisible reasoning and preserves meaningful emoji with joiners", async () => {
+    const accumulator = turn();
+    accumulator.onItemCompleted({
+      id: "unicode-invisible",
+      type: "reasoning",
+      text: "\u0085\u200B\u2060",
+    });
+    const meaningful = "  👩‍💻 investigated the stream  ";
+    accumulator.onItemCompleted({
+      id: "emoji-reasoning",
+      type: "reasoning",
+      text: meaningful,
+    });
+
+    const rendered = await renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state: createTurnRenderState(),
+      loadSubagentParts: async () => [],
+    });
+
+    expect(rendered.parts).toEqual([{ type: "thinking", content: meaningful }]);
+  });
+
+  test("passes the effective turn snapshot to the subagent loader", async () => {
+    const accumulator = turn();
+    accumulator.onTextDelta("streamed", "hello");
+    accumulator.onCommandOutputDelta("unknown", "cannot render without command metadata");
+    let received:
+      | {
+          threadId: string | null;
+          turnStartedAt?: string;
+          items: Array<{ id: string; type: string }>;
+        }
+      | undefined;
+
+    await renderTurn(accumulator, {
+      threadId: null,
+      cwd: "/tmp",
+      state: createTurnRenderState(),
+      loadSubagentParts: async (options) => {
+        received = options;
+        return [];
+      },
+    });
+
+    expect(received).toEqual({
+      threadId: null,
+      turnStartedAt: "2026-07-25T12:00:00.000Z",
+      items: [{ id: "streamed", type: "agent_message", text: "hello" }],
+    });
+  });
+
   test("maps transcript fields and folds live collaboration state with injected dependencies", async () => {
     const items = [{
       id: "spawn",
@@ -258,6 +370,124 @@ describe("renderTurn", () => {
       ],
       subagentActionCount: 1,
     }]);
+  });
+
+  test("loads subagent activity through the real on-disk transcript path", async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), "orkestrator-render-transcripts-"));
+    const sessions = join(codexHome, "sessions");
+    const previousCodexHome = process.env.CODEX_HOME;
+    await mkdir(sessions, { recursive: true });
+
+    const parentRecords = [
+      {
+        timestamp: "2026-07-25T12:00:00.000Z",
+        type: "session_meta",
+        payload: {
+          id: "thread-parent",
+          cwd: "/workspace",
+          timestamp: "2026-07-25T12:00:00.000Z",
+        },
+      },
+      {
+        timestamp: "2026-07-25T12:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          arguments: JSON.stringify({
+            agent_type: "worker",
+            message: "Inspect the real transcript loader",
+          }),
+          call_id: "call-spawn",
+        },
+      },
+      {
+        timestamp: "2026-07-25T12:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-spawn",
+          output: JSON.stringify({ agent_id: "thread-child" }),
+        },
+      },
+    ];
+    const childRecords = [
+      {
+        timestamp: "2026-07-25T12:00:02.000Z",
+        type: "session_meta",
+        payload: {
+          id: "thread-child",
+          cwd: "/workspace",
+          timestamp: "2026-07-25T12:00:02.000Z",
+          agent_nickname: "Verifier",
+          agent_role: "worker",
+        },
+      },
+      {
+        timestamp: "2026-07-25T12:00:03.000Z",
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          phase: "commentary",
+          message: "Checked the persisted transcript.",
+        },
+      },
+      {
+        timestamp: "2026-07-25T12:00:04.000Z",
+        type: "event_msg",
+        payload: { type: "task_complete" },
+      },
+    ];
+
+    await Promise.all([
+      writeFile(
+        join(sessions, "thread-parent.jsonl"),
+        `${parentRecords.map((record) => JSON.stringify(record)).join("\n")}\n`,
+        "utf8",
+      ),
+      writeFile(
+        join(sessions, "thread-child.jsonl"),
+        `${childRecords.map((record) => JSON.stringify(record)).join("\n")}\n`,
+        "utf8",
+      ),
+    ]);
+
+    process.env.CODEX_HOME = codexHome;
+    clearTranscriptCache();
+    try {
+      const accumulator = turn();
+      accumulator.onItemCompleted({
+        id: "answer",
+        type: "agent_message",
+        text: "Parent complete",
+      });
+      const rendered = await renderTurn(accumulator, {
+        threadId: "thread-parent",
+        cwd: "/workspace",
+        state: createTurnRenderState(),
+      });
+
+      expect(rendered.parts).toContainEqual(expect.objectContaining({
+        type: "subagent",
+        subagentId: "thread-child",
+        subagentName: "Verifier",
+        subagentRole: "worker",
+        subagentPrompt: "Inspect the real transcript loader",
+        toolState: "success",
+        subagentActions: [{
+          type: "text",
+          content: "Checked the persisted transcript.",
+        }],
+      }));
+    } finally {
+      clearTranscriptCache();
+      if (previousCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = previousCodexHome;
+      }
+      await rm(codexHome, { recursive: true, force: true });
+    }
   });
 
   test("uses the production subagent loader safely when no thread exists yet", async () => {
@@ -494,6 +724,69 @@ describe("renderTurn", () => {
       "child",
       "parent during load",
     ]);
+  });
+
+  test("carries file baselines across turns and renders tool-only turns without message content", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "orkestrator-render-turn-"));
+    try {
+      const path = join(cwd, "example.txt");
+      await writeFile(path, "one\n", "utf8");
+      const firstTurn = turn();
+      firstTurn.onItemCompleted({
+        id: "add",
+        type: "file_change",
+        changes: [{ path: "example.txt", kind: "add" }],
+        status: "completed",
+      });
+      const firstState = createTurnRenderState();
+      const added = await renderTurn(firstTurn, {
+        threadId: "thread-1",
+        cwd,
+        state: firstState,
+        loadSubagentParts: async () => [],
+      });
+      expect(added.content).toBe("");
+      expect(added.parts[0]).toMatchObject({
+        type: "tool-invocation",
+        toolName: "apply_patch",
+        toolDiff: {
+          before: undefined,
+          after: "one\n",
+          additions: 1,
+          deletions: 0,
+        },
+      });
+
+      await writeFile(path, "one\ntwo\n", "utf8");
+      const secondTurn = turn();
+      secondTurn.onItemCompleted({
+        id: "update",
+        type: "file_change",
+        changes: [{ path: "example.txt", kind: "update" }],
+        status: "completed",
+      });
+      const secondState = beginTurnRenderState(firstState);
+      const updated = await renderTurn(secondTurn, {
+        threadId: "thread-1",
+        cwd,
+        state: secondState,
+        loadSubagentParts: async () => [],
+      });
+      expect(updated.content).toBe("");
+      expect(updated.parts[0]).toMatchObject({
+        type: "tool-invocation",
+        toolName: "apply_patch",
+        toolDiff: {
+          before: "one\n",
+          after: "one\ntwo\n",
+          additions: 1,
+          deletions: 0,
+        },
+      });
+      expect(updated.parts[0]?.toolDiff?.diff).toContain("+two");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 
   test("selects the last assistant message as content", async () => {

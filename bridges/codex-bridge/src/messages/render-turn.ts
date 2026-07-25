@@ -23,7 +23,7 @@ import { deriveTranscriptSubagentPartsForTurn } from "../subagent-transcript-par
 import { readCachedTranscript } from "../transcript-cache.js";
 import { createSharedTranscriptMetaLoader } from "../history/rollout.js";
 import { beginTurn } from "./diff-budget.js";
-import { itemToParts } from "./normalization.js";
+import { hasVisibleText, itemToParts } from "./normalization.js";
 import type { FileChangeDiffContext, NormalizedPart } from "./types.js";
 import type { EngineItem } from "../engine/types.js";
 import type { ItemAccumulator, TurnAccumulator } from "../sessions/turn-accumulator.js";
@@ -74,8 +74,8 @@ export function releaseTurnRenderState(state: TurnRenderState): void {
 }
 
 function joinReasoning(summary: string[], content: string[]): string {
-  const source = summary.some((entry) => entry.length > 0) ? summary : content;
-  return source.filter((entry) => entry.length > 0).join("\n\n");
+  const source = summary.some(hasVisibleText) ? summary : content;
+  return source.filter(hasVisibleText).join("\n\n");
 }
 
 /**
@@ -289,7 +289,7 @@ export async function renderTurn(
   // The message body is the last agent message; tool output stays in parts.
   const finalText = items
     .filter((item): item is Extract<EngineItem, { type: "agent_message" }> =>
-      item.type === "agent_message",
+      item.type === "agent_message" && item.text.length > 0,
     )
     .at(-1)?.text;
 

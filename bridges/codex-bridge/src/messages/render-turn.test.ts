@@ -93,6 +93,20 @@ describe("effectiveItem", () => {
 });
 
 describe("renderTurn", () => {
+  test("omits reasoning items with no visible content", async () => {
+    const accumulator = turn();
+    accumulator.onItemCompleted({ id: "reasoning", type: "reasoning", text: "" });
+    const rendered = await renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state: createTurnRenderState(),
+      loadSubagentParts: async () => [],
+    });
+
+    expect(rendered.parts).toEqual([]);
+    expect(rendered.content).toBe("");
+  });
+
   test("renders item parts and interleaves injected subagent activity", async () => {
     const accumulator = turn();
     accumulator.onItemCompleted({ id: "text", type: "agent_message", text: "done" });

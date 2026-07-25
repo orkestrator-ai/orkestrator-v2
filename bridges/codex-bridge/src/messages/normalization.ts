@@ -209,7 +209,9 @@ export async function itemToParts(
     case "agent_message":
       return [{ type: "text", content: item.text }];
     case "reasoning":
-      return [{ type: "thinking", content: item.text }];
+      return item.text.trim().length > 0
+        ? [{ type: "thinking", content: item.text }]
+        : [];
     case "command_execution": {
       const output = capCommandOutput(item.aggregated_output);
       return [{

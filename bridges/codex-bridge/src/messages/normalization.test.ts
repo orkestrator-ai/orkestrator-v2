@@ -2,6 +2,27 @@ import { describe, expect, test } from "bun:test";
 import { DEFAULT_MAX_COMMAND_OUTPUT_CHARS } from "../sessions/turn-accumulator.js";
 import { capCommandOutput, itemToParts } from "./normalization.js";
 
+describe("reasoning normalization", () => {
+  test("drops empty and whitespace-only thinking parts", async () => {
+    for (const text of ["", " \n\t"]) {
+      expect(await itemToParts({
+        id: "reasoning",
+        type: "reasoning",
+        text,
+      }, "/tmp")).toEqual([]);
+    }
+  });
+
+  test("preserves non-empty thinking content byte-for-byte", async () => {
+    const content = "  Inspecting the workspace.\n";
+    expect(await itemToParts({
+      id: "reasoning",
+      type: "reasoning",
+      text: content,
+    }, "/tmp")).toEqual([{ type: "thinking", content }]);
+  });
+});
+
 describe("command normalization bounds", () => {
   test("caps oversized authoritative command output for both output and error", async () => {
     const oversized = "x".repeat(DEFAULT_MAX_COMMAND_OUTPUT_CHARS + 10);

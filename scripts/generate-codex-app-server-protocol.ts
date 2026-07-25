@@ -569,6 +569,12 @@ async function write(outputDir: string, generated: GeneratedProtocol): Promise<v
       "`--check`: it always verifies the committed TypeScript digest, file count",
       "and method surface, and regenerates from the pinned binary when available.",
       "",
+      "That fallback proves only *internal* consistency — the manifest is recomputed",
+      "from the same committed files, so bindings edited together with their manifest",
+      "would still pass. `bun run verify:codex:protocol` refuses the fallback and",
+      "requires the pinned binary; run it on a machine with the Codex toolchain",
+      "before releasing, and after any change under this directory.",
+      "",
       "`protocol-manifest.json` additionally records a digest of the JSON Schema",
       "bundle. The schema is not committed (nothing reads it at runtime) but the",
       "digest still fails the check if any schema shape moves.",
@@ -620,9 +626,20 @@ async function main(): Promise<void> {
       && !process.env.CODEX_PROTOCOL_BINARY?.trim()
       && process.env[ALLOW_MISSING_PROTOCOL_BINARY_ENV] === "1";
     if (!allowMissing) throw error;
-    console.log(
-      "[codex-protocol] Committed TypeScript lockfile is internally consistent; "
-      + "the pinned binary is unavailable, so binary/schema regeneration was skipped.",
+    /**
+     * Say plainly what was *not* checked.
+     *
+     * Self-consistency only proves the manifest describes the committed tree —
+     * it is recomputed from those same files, so bindings edited together with
+     * their manifest would pass. Only a regeneration from the pinned binary
+     * proves the tree matches the protocol, and `verify:codex:protocol` is the
+     * gate that requires it.
+     */
+    console.warn(
+      "[codex-protocol] WARNING: the pinned binary is unavailable, so the "
+      + "committed bindings were NOT verified against the protocol. Only "
+      + "internal self-consistency was checked. Run `bun run verify:codex:protocol` "
+      + "on a machine with the pinned Codex toolchain before releasing.",
     );
     return;
   }

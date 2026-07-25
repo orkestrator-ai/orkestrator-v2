@@ -348,6 +348,14 @@ describe("/session/:id/prompt", () => {
   });
 });
 
+describe("/session/:id/config", () => {
+  test("reports 404 for a session the bridge does not know", async () => {
+    const response = await app.request("/session/session-does-not-exist/config");
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "Session not found" });
+  });
+});
+
 describe("/session/:id/approvals", () => {
   test("returns an empty list for an unknown session rather than 404", async () => {
     // A stale tab polling a closed session should see "nothing pending", not an

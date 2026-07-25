@@ -34,7 +34,7 @@ import {
   type SessionTitleSource,
   type ThreadContext,
 } from "./sessions/thread-registry.js";
-import { TurnAccumulator } from "./sessions/turn-accumulator.js";
+import { TurnAccumulator, unconfirmedTurnId } from "./sessions/turn-accumulator.js";
 import { DispatchJournal } from "./sessions/dispatch-journal.js";
 import { BridgeSessionStore } from "./sessions/persistence.js";
 import {
@@ -262,6 +262,22 @@ export class AppServerRuntime {
   /** Serializes and exposes generation recovery to request paths. */
   private generationRecovery: Promise<void> = Promise.resolve();
   /**
+   * Exposes startup dispatch recovery to request paths.
+   *
+   * The HTTP server is listening before `start()` resolves, so a prompt can
+   * arrive while unresolved journal records are still being settled. Dispatching
+   * in that window would race recovery for the same thread.
+   */
+  private dispatchRecovery: Promise<void> = Promise.resolve();
+  /**
+   * Threads with an unresolved dispatch that recovery has not reached yet.
+   *
+   * Populated synchronously at startup so `getStatus` can never report `idle`
+   * for a session whose last turn may still have been executing — the build
+   * pipeline would advance on it.
+   */
+  private readonly threadsAwaitingDispatchRecovery = new Set<string>();
+  /**
    * Wake-ups for the pre-restart drain.
    *
    * Turn transitions are the only thing that can end the wait, so the drain
@@ -389,13 +405,27 @@ export class AppServerRuntime {
     sessionId: string,
     approvalId: string,
     decision: ApprovalDecision,
-  ): "applied" | "unknown" | "wrong-session" {
+  ): "applied" | "unknown" | "wrong-session" | "not-actionable" {
     const entry = this.pendingApprovals.get(approvalId);
     if (!entry) return "unknown";
     // Scoped to the current canonical thread so unrelated tabs cannot answer,
     // while a tab attached after presentation can still take ownership.
     if (!this.sessionIdsForApproval(entry.request).includes(sessionId)) {
       return "wrong-session";
+    }
+    /**
+     * Fail closed on the server too.
+     *
+     * The renderer hides Approve for a request the bridge could not describe,
+     * but that is presentation. Anything that can reach this route — a stale
+     * tab, another client, a cross-origin page — must not be able to approve an
+     * action no human was ever shown.
+     */
+    if (
+      !entry.request.actionable
+      && (decision === "approve" || decision === "approve-for-session")
+    ) {
+      return "not-actionable";
     }
 
     if (this.options.engine.resolveApproval(approvalId, decision)) {
@@ -444,9 +474,19 @@ export class AppServerRuntime {
         Date.parse(persisted.lastAccessed),
       );
     }
+    // Claim the affected threads *before* the first await below, so a request
+    // racing startup sees `recovering` rather than a misleading `idle`.
+    for (const record of this.journal.unresolved()) {
+      if (record.threadId) this.threadsAwaitingDispatchRecovery.add(record.threadId);
+    }
+
     await this.options.engine.start();
     await this.generationRecovery;
-    await this.recoverUnresolvedDispatches();
+    const recovery = this.recoverUnresolvedDispatches().finally(() => {
+      this.threadsAwaitingDispatchRecovery.clear();
+    });
+    this.dispatchRecovery = recovery.catch(() => undefined);
+    await recovery;
 
     const interval = this.options.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS;
     if (interval > 0) {
@@ -516,61 +556,82 @@ export class AppServerRuntime {
         ?? this.registry
           .listSessions()
           .find((candidate) => candidate.threadId === threadId);
-      if (!session) continue;
+      if (!session) {
+        this.threadsAwaitingDispatchRecovery.delete(threadId);
+        continue;
+      }
 
-      let context: ThreadContext | undefined;
-      try {
-        context = await this.ensureAttached(session.id);
-      } catch (error) {
-        // Keep the record unresolved and the session non-idle. A later request or
-        // process restart can retry without risking a duplicate execution.
-        const existing =
-          this.registry.getThread(threadId)
-          ?? this.registry.attach(session.id, threadId, {
-            engineHandle: threadId,
-            engineGeneration: this.options.engine.info().generation,
+      /**
+       * Held for the whole settle.
+       *
+       * Routes are already serving, so a prompt for this thread can arrive
+       * mid-recovery. Without the lock it would dispatch a live turn that this
+       * loop then overwrites with the unconfirmed placeholder for the *old*
+       * record, orphaning it.
+       */
+      await this.registry.withDispatchLock(session, async () => {
+        let context: ThreadContext | undefined;
+        try {
+          context = await this.ensureAttached(session.id);
+        } catch (error) {
+          // Keep the record unresolved and the session non-idle. A later request or
+          // process restart can retry without risking a duplicate execution.
+          const existing =
+            this.registry.getThread(threadId)
+            ?? this.registry.attach(session.id, threadId, {
+              engineHandle: threadId,
+              engineGeneration: this.options.engine.info().generation,
+            });
+          existing.materialized = true;
+          existing.unsubscribed = true;
+          this.registry.setPhase(existing, "recovering");
+          this.emitStatus(existing);
+          // Arm the escalation path. Without it this thread stays `recovering`
+          // — reported as `running` — with nothing scheduled to resolve it, and
+          // every later prompt 409s until an unrelated generation change.
+          this.scheduleRecoveryBackstop(existing);
+          console.warn(
+            `[codex-bridge] Could not restore dispatch ${record.requestId}:`,
+            error instanceof Error ? error.message : error,
+          );
+          return;
+        }
+
+        if (!context) {
+          await this.journal.markTerminal(record.requestId, "failed", {
+            threadId,
+            turnId: record.turnId,
           });
-        existing.materialized = true;
-        existing.unsubscribed = true;
-        this.registry.setPhase(existing, "recovering");
-        this.emitStatus(existing);
-        console.warn(
-          `[codex-bridge] Could not restore dispatch ${record.requestId}:`,
-          error instanceof Error ? error.message : error,
+          return;
+        }
+
+        const lastMessage = context.messages.at(-1);
+        const assistantMessage =
+          lastMessage?.role === "assistant"
+            ? lastMessage
+            : {
+                id: createMessageId(),
+                role: "assistant" as const,
+                content: "",
+                parts: [],
+                createdAt: new Date(this.now()).toISOString(),
+              };
+        if (lastMessage !== assistantMessage) context.messages.push(assistantMessage);
+
+        this.registry.setPhase(context, "recovering");
+        this.emitStatus(context);
+        await this.settleAmbiguousDispatch(
+          context,
+          record.requestId,
+          assistantMessage.id,
+          { forgetIfAbsent: record.state === "prepared" },
         );
-        continue;
-      }
-
-      if (!context) {
-        await this.journal.markTerminal(record.requestId, "failed", {
-          threadId,
-          turnId: record.turnId,
-        });
-        continue;
-      }
-
-      const lastMessage = context.messages.at(-1);
-      const assistantMessage =
-        lastMessage?.role === "assistant"
-          ? lastMessage
-          : {
-              id: createMessageId(),
-              role: "assistant" as const,
-              content: "",
-              parts: [],
-              createdAt: new Date(this.now()).toISOString(),
-            };
-      if (lastMessage !== assistantMessage) context.messages.push(assistantMessage);
-
-      this.registry.setPhase(context, "recovering");
-      this.emitStatus(context);
-      await this.settleAmbiguousDispatch(
-        context,
-        record.requestId,
-        assistantMessage.id,
-        { forgetIfAbsent: record.state === "prepared" },
-      );
-      this.emitStatus(context);
+        this.emitStatus(context);
+      }).finally(() => {
+        // The thread now has a real phase, so the startup override must stop
+        // applying whether the settle succeeded or threw.
+        this.threadsAwaitingDispatchRecovery.delete(threadId);
+      });
     }
   }
 
@@ -847,7 +908,18 @@ export class AppServerRuntime {
       const turn = context.activeTurn;
       // Only buffer for a turn we have not seen; a mismatch against a *newer*
       // registered turn is a genuinely stale event and must stay dropped.
-      const isStale = turn !== null && turn.turnId !== event.turnId && turn.requestId !== undefined;
+      //
+      // An *unconfirmed* placeholder is not such a turn. It holds the overlap
+      // guard for a dispatch whose id app-server has not reported yet, so the
+      // events arriving here belong to the very turn it is standing in for and
+      // must be parked for `drainPendingEvents` — dropping them loses the
+      // transcript and, if `turn.completed` is among them, wedges the thread in
+      // `running` forever.
+      const isStale =
+        turn !== null
+        && turn.turnId !== event.turnId
+        && turn.requestId !== undefined
+        && !turn.isUnconfirmed();
       if (!isStale) {
         this.bufferEvent(threadId, event.turnId, event);
         return;
@@ -1373,7 +1445,13 @@ export class AppServerRuntime {
     if (!session) return null;
     void this.touchSession(sessionId);
     const context = this.registry.getThreadForSession(sessionId);
-    const phase = context?.phase ?? "idle";
+    // A restored thread whose journal record has not been settled yet may still
+    // be executing its last turn. `idle` here would let the build pipeline
+    // advance on a turn whose fate is unknown.
+    const awaitingRecovery =
+      session.threadId !== null
+      && this.threadsAwaitingDispatchRecovery.has(session.threadId);
+    const phase = context?.phase ?? (awaitingRecovery ? "recovering" : "idle");
 
     return {
       // Keeps the pre-migration contract; `phase` carries the new detail.
@@ -1535,6 +1613,9 @@ export class AppServerRuntime {
       return { ok: false, status: 400, error: "requestId is required" };
     }
     await this.touchSession(sessionId);
+    // Startup recovery may still be deciding whether this thread's last turn is
+    // running. Dispatching underneath it would race that decision.
+    await this.dispatchRecovery;
 
     try {
       return await this.registry.withDispatchLock(session, () =>
@@ -1805,7 +1886,7 @@ export class AppServerRuntime {
     if (!accumulator || accumulator.requestId !== requestId) {
       accumulator = new TurnAccumulator({
         threadId: context.threadId,
-        turnId: `unconfirmed:${requestId}`,
+        turnId: unconfirmedTurnId(requestId),
         requestId,
         engineGeneration: this.options.engine.info().generation,
         assistantMessageId,
@@ -1838,6 +1919,9 @@ export class AppServerRuntime {
         threadId: context.threadId,
         turnId: outcome.turnId!,
       });
+      // The turn that carried the recovered transcript did run, so the next
+      // prompt must not prepend it a second time.
+      this.clearRecoveredContextPending(context);
       accumulator.turnId = outcome.turnId!;
       accumulator.engineGeneration = this.options.engine.info().generation;
       this.clearRecoveryBackstop(context.threadId);
@@ -1854,6 +1938,8 @@ export class AppServerRuntime {
         threadId: context.threadId,
         turnId: outcome.turnId,
       });
+      // It ran to completion carrying the recovered transcript; do not resend it.
+      this.clearRecoveredContextPending(context);
       this.registry.setPhase(
         context,
         outcome.status === "failed" ? "failed" : "idle",
@@ -1914,6 +2000,31 @@ export class AppServerRuntime {
           data: { error: message },
         });
       }
+      /**
+       * Re-arm rather than give up.
+       *
+       * A restart can fail for reasons that clear on their own — an open circuit
+       * breaker, transient pidfile ownership contention. The backstop timer
+       * already removed itself before calling us, so without this the thread
+       * stays `recovering` (reported as `running`) with nothing left to move it,
+       * and every later prompt 409s until an unrelated generation change.
+       */
+      const current = this.registry.getThread(threadId);
+      if (current && current.phase === "recovering") {
+        this.scheduleRecoveryBackstop(current);
+      }
+    }
+  }
+
+  /**
+   * Marks the recovered-rollout transcript as delivered for every session on the
+   * thread. Only the clean `markAccepted` path clears this inline; reconciliation
+   * has to do the same whenever it proves the carrying turn actually ran.
+   */
+  private clearRecoveredContextPending(context: ThreadContext): void {
+    for (const sessionId of context.bridgeSessionIds) {
+      const session = this.registry.getSession(sessionId);
+      if (session) session.recoveredContextPending = false;
     }
   }
 

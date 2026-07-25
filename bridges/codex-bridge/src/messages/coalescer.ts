@@ -99,21 +99,27 @@ export class UpdateCoalescer {
       rejectRun = reject;
     });
     this.runPromise = activeRun;
-    void this.runLoop().then(
+    void this.runLoop(activeRun).then(
       () => {
-        this.runPromise = null;
+        this.clearRunPromise(activeRun);
         resolveRun();
       },
       (error) => {
-        this.runPromise = null;
+        this.clearRunPromise(activeRun);
         rejectRun(error);
       },
     );
     return activeRun;
   }
 
-  private async runLoop(): Promise<void> {
-    do {
+  private clearRunPromise(activeRun: Promise<void>): void {
+    // Never clear a *newer* run's promise: one may have started in the microtask
+    // between the loop exiting and this settlement callback.
+    if (this.runPromise === activeRun) this.runPromise = null;
+  }
+
+  private async runLoop(activeRun: Promise<void>): Promise<void> {
+    for (;;) {
       this.publishing = true;
       this.dirty = false;
       try {
@@ -127,7 +133,19 @@ export class UpdateCoalescer {
       }
       // Changes received during the awaited publish are already absent from
       // that snapshot. Publish their full replacement before resolving a flush.
-    } while (this.dirty && !this.stopped);
+      if (!this.dirty || this.stopped) {
+        /**
+         * Released in the same microtask as the final `dirty` check.
+         *
+         * Clearing this from the settlement callback instead would leave a
+         * window in which `run()` joins a loop that has already stopped
+         * consuming `dirty` — the caller's flush would resolve without its
+         * change ever being published.
+         */
+        this.clearRunPromise(activeRun);
+        return;
+      }
+    }
   }
 
   stop(): void {

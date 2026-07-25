@@ -13,6 +13,7 @@ import {
   AppServerRuntime,
   MAX_PENDING_EVENTS_PER_TURN,
   MAX_PENDING_TURNS,
+  MAX_RECOVERED_CONTEXT_CHARS,
   type RuntimeSseEvent,
 } from "./app-server-runtime.js";
 import { AppServerEngine } from "./engine/app-server-engine.js";
@@ -73,11 +74,7 @@ class ScriptedChild extends EventEmitter {
       });
       return;
     }
-    try {
-      const result = handler((message.params ?? {}) as Record<string, unknown>);
-      if (result === NO_RESPONSE) return;
-      this.stdout.pushMessage({ jsonrpc: "2.0", id: message.id, result });
-    } catch (error) {
+    const respondWithError = (error: unknown) => {
       this.stdout.pushMessage({
         jsonrpc: "2.0",
         id: message.id,
@@ -86,6 +83,26 @@ class ScriptedChild extends EventEmitter {
           message: error instanceof Error ? error.message : String(error),
         },
       });
+    };
+
+    try {
+      const result = handler((message.params ?? {}) as Record<string, unknown>);
+      if (result === NO_RESPONSE) return;
+      // A handler may answer late, which is how a test models a slow app-server
+      // without stalling the whole read loop.
+      if (result instanceof Promise) {
+        void result.then(
+          (resolved) => {
+            if (resolved === NO_RESPONSE) return;
+            this.stdout.pushMessage({ jsonrpc: "2.0", id: message.id, result: resolved });
+          },
+          respondWithError,
+        );
+        return;
+      }
+      this.stdout.pushMessage({ jsonrpc: "2.0", id: message.id, result });
+    } catch (error) {
+      respondWithError(error);
     }
   }
 
@@ -187,6 +204,8 @@ async function harness(
     environmentDrainTimeoutMs?: number;
     ambiguousRecoveryTimeoutMs?: number;
     fingerprintEnvironment?: () => string;
+    /** Leaves `runtime.start()` to the caller, so startup itself can be observed. */
+    deferStart?: boolean;
   } = {},
 ): Promise<Harness> {
   const merged = { ...BASE_HANDLERS, ...handlers };
@@ -243,7 +262,7 @@ async function harness(
       ? { ambiguousRecoveryTimeoutMs: options.ambiguousRecoveryTimeoutMs }
       : {}),
   });
-  await runtime.start();
+  if (options.deferStart !== true) await runtime.start();
 
   /**
    * Settles the notification queue *and* the async work it kicks off.
@@ -362,6 +381,142 @@ describe("session lifecycle", () => {
     expect(JSON.stringify(turnStart?.params.input)).toContain("Continue now");
   });
 
+  test("recovered rollout context is sent once, even when its dispatch was ambiguous", async () => {
+    const sessionsDir = join(codexHome, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      join(sessionsDir, "thread-ambiguous.jsonl"),
+      `${[
+        {
+          type: "session_meta",
+          payload: {
+            id: "thread-ambiguous",
+            cwd: "/tmp/ws",
+            timestamp: "2026-07-25T12:00:00.000Z",
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Earlier recovered turn" }],
+          },
+        },
+      ].map((line) => JSON.stringify(line)).join("\n")}\n`,
+      "utf8",
+    );
+
+    let hangNextTurn = false;
+    const h = await harness({
+      "thread/resume": () => {
+        const error = new Error("thread/resume: no rollout found for thread id thread-ambiguous");
+        (error as { rpcCode?: number }).rpcCode = -32600;
+        throw error;
+      },
+      "turn/start": () => (hangNextTurn ? NO_RESPONSE : { turn: { id: "turn-1" } }),
+      // The ambiguous dispatch really did run, carrying the recovered context.
+      "thread/read": () => ({
+        thread: threadPayload("thread-1", {
+          turns: [
+            {
+              id: "turn-live",
+              status: "inProgress",
+              items: [{ type: "userMessage", clientId: "req-ambiguous" }],
+            },
+          ],
+        }),
+      }),
+    });
+
+    const resumed = await h.runtime.resumeSession({
+      threadId: "thread-ambiguous",
+      mode: "build",
+    });
+    hangNextTurn = true;
+    const pending = h.runtime.prompt(resumed!.sessionId, {
+      prompt: "first after recovery",
+      requestId: "req-ambiguous",
+      attachments: [],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    h.child().exit(1);
+    await pending;
+    await h.drain();
+
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-live", status: "completed" },
+    });
+    await h.drain();
+
+    hangNextTurn = false;
+    await h.runtime.prompt(resumed!.sessionId, {
+      prompt: "second after recovery",
+      requestId: "req-next",
+      attachments: [],
+    });
+
+    // Across children: the ambiguous dispatch went to the child that then died.
+    const starts = h.children
+      .flatMap((child) => child.requests)
+      .filter((request) => request.method === "turn/start");
+    const carrying = starts.filter((request) =>
+      JSON.stringify(request.params.input).includes("recovered_conversation"),
+    );
+    // Exactly one turn carries the transcript: the one that already ran.
+    expect(carrying).toHaveLength(1);
+    expect(JSON.stringify(starts.at(-1)?.params.input)).not.toContain("recovered_conversation");
+  });
+
+  test("recovered context is bounded before it is sent", async () => {
+    const sessionsDir = join(codexHome, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const huge = "y".repeat(MAX_RECOVERED_CONTEXT_CHARS * 2);
+    writeFileSync(
+      join(sessionsDir, "thread-huge.jsonl"),
+      `${[
+        {
+          type: "session_meta",
+          payload: {
+            id: "thread-huge",
+            cwd: "/tmp/ws",
+            timestamp: "2026-07-25T12:00:00.000Z",
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: huge }],
+          },
+        },
+      ].map((line) => JSON.stringify(line)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const h = await harness({
+      "thread/resume": () => {
+        const error = new Error("thread/resume: no rollout found for thread id thread-huge");
+        (error as { rpcCode?: number }).rpcCode = -32600;
+        throw error;
+      },
+    });
+    const resumed = await h.runtime.resumeSession({ threadId: "thread-huge", mode: "build" });
+    await h.runtime.prompt(resumed!.sessionId, {
+      prompt: "continue",
+      requestId: "req-huge",
+      attachments: [],
+    });
+
+    const start = h.child().requests.find((request) => request.method === "turn/start");
+    const input = JSON.stringify(start?.params.input);
+    expect(input).toContain("earlier recovered context omitted");
+    // A runaway rollout must not be able to dominate the turn.
+    expect(input.length).toBeLessThan(MAX_RECOVERED_CONTEXT_CHARS * 2);
+  });
+
   test("restores unresolved accepted work as running before serving status", async () => {
     const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
     await store.upsert(
@@ -413,6 +568,223 @@ describe("session lifecycle", () => {
       requestId: "req-new",
       attachments: [],
     })).toMatchObject({ ok: false, status: 409 });
+  });
+
+  test("an unresolved record with no thread is spent, not replayed", async () => {
+    const journal = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
+    await journal.load();
+    // `markPrepared` with no thread: the write may have had side effects, but
+    // there is no address at which anything could still be executing.
+    await journal.markPrepared({
+      requestId: "req-orphan",
+      bridgeSessionId: "session-gone",
+    });
+
+    const h = await harness();
+    const recovered = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
+    await recovered.load();
+
+    expect(recovered.unresolved().some((record) => record.requestId === "req-orphan"))
+      .toBe(false);
+    expect(recovered.classify("req-orphan").action).toBe("already-done");
+    expect(h.child().requests.some((request) => request.method === "turn/start"))
+      .toBe(false);
+  });
+
+  test("only the newest record per thread is recovered; older ones are failed", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-multi",
+        threadId: "thread-multi",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+        title: "Multi",
+        titleSource: "prompt",
+      }),
+    );
+    const journal = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
+    await journal.load();
+    for (const requestId of ["req-old", "req-new"]) {
+      await journal.markPrepared({
+        requestId,
+        bridgeSessionId: "session-multi",
+        threadId: "thread-multi",
+      });
+      await journal.markAccepted(requestId, {
+        threadId: "thread-multi",
+        turnId: `turn-${requestId}`,
+      });
+      // Distinct `updatedAt` values, which is what orders the records.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-multi") }),
+      "thread/read": () => ({
+        thread: threadPayload("thread-multi", {
+          turns: [
+            {
+              id: "turn-req-new",
+              status: "inProgress",
+              items: [{ type: "userMessage", clientId: "req-new" }],
+            },
+          ],
+        }),
+      }),
+    });
+
+    const recovered = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
+    await recovered.load();
+    expect(recovered.unresolved().map((record) => record.requestId)).not.toContain("req-old");
+    expect(recovered.classify("req-old").action).toBe("already-done");
+  });
+
+  test("a thread that cannot be re-attached during recovery stays guarded and escalates", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-stuck",
+        threadId: "thread-stuck",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+        title: "Stuck",
+        titleSource: "prompt",
+      }),
+    );
+    const journal = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
+    await journal.load();
+    await journal.markPrepared({
+      requestId: "req-stuck",
+      bridgeSessionId: "session-stuck",
+      threadId: "thread-stuck",
+    });
+    await journal.markAccepted("req-stuck", {
+      threadId: "thread-stuck",
+      turnId: "turn-stuck",
+    });
+
+    let resumeFailures = 0;
+    const h = await harness(
+      {
+        "thread/resume": () => {
+          resumeFailures += 1;
+          throw new Error("temporary transport failure");
+        },
+      },
+      { ambiguousRecoveryTimeoutMs: 10 },
+    );
+
+    expect(resumeFailures).toBeGreaterThan(0);
+    // Never idle: the turn may still be executing on the old child.
+    expect(h.runtime.getStatus("session-stuck")).toMatchObject({
+      status: "running",
+      phase: "recovering",
+    });
+    // The backstop is armed, so this cannot be a permanent state.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(h.children.length).toBeGreaterThan(1);
+  });
+
+  test("a failed escalation restart keeps the guard and re-arms the backstop", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-norestart",
+        threadId: "thread-norestart",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+        title: "No restart",
+        titleSource: "prompt",
+      }),
+    );
+    const journal = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
+    await journal.load();
+    await journal.markPrepared({
+      requestId: "req-norestart",
+      bridgeSessionId: "session-norestart",
+      threadId: "thread-norestart",
+    });
+    await journal.markAccepted("req-norestart", {
+      threadId: "thread-norestart",
+      turnId: "turn-norestart",
+    });
+
+    const h = await harness(
+      {
+        "thread/resume": () => {
+          throw new Error("temporary transport failure");
+        },
+      },
+      { ambiguousRecoveryTimeoutMs: 10, deferStart: true },
+    );
+    let restartAttempts = 0;
+    const supervisor = h.engine.getSupervisor();
+    const realRestart = supervisor.restartNow.bind(supervisor);
+    supervisor.restartNow = async () => {
+      restartAttempts += 1;
+      throw new Error("circuit breaker open");
+    };
+    await h.runtime.start();
+
+    // Escalation keeps failing, so the thread must stay guarded and keep trying
+    // rather than sit in `recovering` with no timer left to move it.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(restartAttempts).toBeGreaterThan(1);
+    expect(h.runtime.getStatus("session-norestart")).toMatchObject({
+      status: "running",
+      phase: "recovering",
+    });
+    expect(h.events.some(
+      (event) =>
+        event.type === "session.error"
+        && event.data?.error === "circuit breaker open",
+    )).toBe(true);
+
+    supervisor.restartNow = realRestart;
+  });
+
+  test("status reports recovering, not idle, while startup recovery is still running", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "session-slow",
+        threadId: "thread-slow",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+        title: "Slow",
+        titleSource: "prompt",
+      }),
+    );
+    const journal = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
+    await journal.load();
+    await journal.markPrepared({
+      requestId: "req-slow",
+      bridgeSessionId: "session-slow",
+      threadId: "thread-slow",
+    });
+    await journal.markAccepted("req-slow", {
+      threadId: "thread-slow",
+      turnId: "turn-slow",
+    });
+
+    const h = await harness(
+      // Never answers, so recovery is still in flight while we observe status.
+      { "thread/resume": () => NO_RESPONSE },
+      { deferStart: true },
+    );
+    const started = h.runtime.start();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // `idle` here would let the build pipeline advance on a turn that may still
+    // be executing.
+    expect(h.runtime.getStatus("session-slow")).toMatchObject({
+      status: "running",
+      phase: "recovering",
+    });
+
+    h.children.at(-1)?.exit(1);
+    await started.catch(() => undefined);
   });
 
   test("resuming rethrows an ambiguous failure instead of forking a thread", async () => {
@@ -969,6 +1341,79 @@ describe("at-most-once dispatch", () => {
     expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
   });
 
+  test("events emitted while an ambiguous dispatch reconciles are not lost", async () => {
+    /**
+     * Regression: the placeholder accumulator installed during reconciliation
+     * carries a requestId, which made every event for the *real* turn look like
+     * a stale event from an older turn. They were dropped instead of parked, so
+     * the transcript lost items and a `turn/completed` landing in this window
+     * left the thread reporting `running` forever.
+     */
+    let hangNextTurn = false;
+    const h = await harness({
+      "turn/start": () => (hangNextTurn ? NO_RESPONSE : { turn: { id: "turn-1" } }),
+      "thread/read": () => {
+        const thread = hangNextTurn
+          ? threadPayload("thread-1", {
+              turns: [
+                {
+                  id: "turn-live",
+                  status: "inProgress",
+                  items: [{ type: "userMessage", clientId: "req-1" }],
+                },
+              ],
+            })
+          : threadPayload("thread-1");
+        // Answer late, so the turn's own events reach the runtime while the
+        // reconcile is still open and the placeholder owns the thread.
+        return new Promise((resolve) => setTimeout(() => resolve({ thread }), 25));
+      },
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "first", requestId: "req-0", attachments: [] });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    hangNextTurn = true;
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "second",
+      requestId: "req-1",
+      attachments: [],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    h.child().exit(1);
+
+    // The real turn reports itself while reconciliation is still in flight.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-live",
+      item: {
+        id: "item-1",
+        type: "agentMessage",
+        text: "Work done during the ambiguous window",
+      },
+    });
+
+    expect(await pending).toMatchObject({ ok: false, status: 503 });
+    await h.drain();
+
+    // Adopted, and the parked event was replayed into the transcript.
+    expect(phaseToExternalStatus(h.runtime.getStatus(sessionId)!.phase)).toBe("running");
+    const messages = await h.runtime.getMessages(sessionId);
+    expect(JSON.stringify(messages)).toContain("Work done during the ambiguous window");
+
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-live", status: "completed" },
+    });
+    await h.drain();
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
+  });
+
   test("a recovering thread is failed by the backstop when reconciliation cannot answer", async () => {
     let hangNextTurn = false;
     const h = await harness(
@@ -1008,6 +1453,20 @@ describe("at-most-once dispatch", () => {
       requestId: "req-2",
       attachments: [],
     })).ok).toBe(true);
+  });
+
+  test("config for a session with no thread yet is reported durable", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "plan" });
+
+    // Nothing to persist until the thread materializes, so there is no pending
+    // write that could be lost — reporting "not durable" would warn about a
+    // problem that does not exist.
+    expect(await h.runtime.getConfig(sessionId)).toMatchObject({
+      mode: "plan",
+      durable: true,
+    });
+    expect(await h.runtime.getConfig("session-does-not-exist")).toBeNull();
   });
 
   test("a prompt without a request id is rejected before dispatch", async () => {
@@ -2917,6 +3376,31 @@ describe("interactive approvals", () => {
     const listed = h.runtime.listApprovals(sessionId);
     expect(listed).toHaveLength(1);
     expect(listed[0]!.kind).toBe("command");
+  });
+
+  test("a non-actionable approval cannot be approved, only denied or cancelled", async () => {
+    /**
+     * The renderer hides Approve for a request the bridge could not describe,
+     * but that is presentation only. Anything that can reach the route — a stale
+     * tab, another client — must not be able to approve an action no human was
+     * ever shown.
+     */
+    const { h, sessionId } = await withPendingApproval({
+      approvalParams: { command: undefined, cwd: undefined },
+    });
+    const approval = h.runtime.listApprovals(sessionId)[0]!;
+    expect(approval.actionable).toBe(false);
+
+    expect(h.runtime.respondToApproval(sessionId, approval.approvalId, "approve"))
+      .toBe("not-actionable");
+    expect(
+      h.runtime.respondToApproval(sessionId, approval.approvalId, "approve-for-session"),
+    ).toBe("not-actionable");
+    // Still pending: refusing to approve must not silently drop the request.
+    expect(h.runtime.listApprovals(sessionId)).toHaveLength(1);
+
+    expect(h.runtime.respondToApproval(sessionId, approval.approvalId, "deny"))
+      .toBe("applied");
   });
 
   test("approving sends accept to app-server and clears the card", async () => {

@@ -18,6 +18,7 @@ import type {
 import {
   abortSession,
   checkHealth,
+  classifyCodexPromptOutcome,
   createClient,
   createSession,
   getSessionMessages,
@@ -26,6 +27,7 @@ import {
   type CodexClient,
   type CodexMessage,
   type CodexPromptAttachment,
+  type CodexPromptSendOutcome,
   type CodexReasoningEffort,
 } from "@/lib/codex-client";
 import { createCodexSessionKey } from "@/stores/codexStore";
@@ -101,17 +103,7 @@ const SESSION_PHASE_LABELS: Record<string, string> = {
 };
 
 function wasCodexPromptAccepted(result: unknown): boolean {
-  if (result === true) return true;
-  return Boolean(
-    result
-    && typeof result === "object"
-    && (
-      (result as { outcome?: unknown }).outcome === "accepted"
-      // Unknown means the bridge may already be executing. Keep the pipeline
-      // waiting for authoritative status rather than unlocking or duplicating it.
-      || (result as { outcome?: unknown }).outcome === "unknown"
-    ),
-  );
+  return classifyCodexPromptOutcome(result) === "accepted";
 }
 
 function SessionDivider({ session, index }: { session: PipelineSession; index: number }) {
@@ -186,6 +178,38 @@ function hasCompletedPrompt(messages: CodexMessage[], prompt: string): boolean {
   return messages
     .slice(promptIndex + 1)
     .some((message) => message.role === "assistant" && message.content.trim().length > 0);
+}
+
+/**
+ * Turns a lost prompt response into a definite answer.
+ *
+ * Returns an accepted outcome only when the bridge itself shows the turn running
+ * or the transcript already contains a reply to this prompt. Anything else —
+ * including a bridge we cannot reach — is reported as rejected so the pipeline
+ * stops and surfaces the failure rather than advancing past a phase that may
+ * never have run.
+ */
+async function verifyAmbiguousDispatch(
+  activeClient: CodexClient,
+  sdkSessionId: string,
+  prompt: string,
+): Promise<CodexPromptSendOutcome> {
+  try {
+    const [status, messages] = await Promise.all([
+      getSessionStatus(activeClient, sdkSessionId, { throwOnError: true }),
+      getSessionMessages(activeClient, sdkSessionId, { throwOnError: true }),
+    ]);
+    if (
+      status?.status === "running"
+      || (status?.status === "idle" && hasCompletedPrompt(messages, prompt))
+    ) {
+      return { outcome: "accepted", status: "processing" };
+    }
+  } catch {
+    // Unreachable bridge: still ambiguous, and an ambiguous turn must not
+    // advance the pipeline.
+  }
+  return { outcome: "rejected", httpStatus: 0 };
 }
 
 function appendCodexMessage(sessionKey: string, message: CodexMessage) {
@@ -672,10 +696,22 @@ export function CodexBuildChatTab({ data, isActive }: CodexBuildChatTabProps) {
       if (!ownsAttempt) return false;
 
       try {
-        return await sendPrompt(activeClient, sdkSessionId, prompt, {
+        const sent = await sendPrompt(activeClient, sdkSessionId, prompt, {
           attachments: options.attachments,
           requestId,
         });
+        if (classifyCodexPromptOutcome(sent) !== "unknown") return sent;
+
+        /**
+         * Resolve the ambiguity before returning.
+         *
+         * A lost response does not say whether the turn is running. Reporting it
+         * as accepted would let the poll unlock and the pipeline advance a phase
+         * whose prompt may never have been dispatched; reporting it as rejected
+         * could duplicate a turn that is already executing. The bridge's own
+         * status and transcript are the only authority, so ask them.
+         */
+        return await verifyAmbiguousDispatch(activeClient, sdkSessionId, prompt);
       } finally {
         completePromptAttempt(pipelineId, attemptId);
       }

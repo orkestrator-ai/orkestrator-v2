@@ -284,7 +284,10 @@ describe("CodexApprovalCard", () => {
         expect(screen.queryByRole("button", { name: "Decline" })).toBeNull();
         expect(screen.getByText("This request expired and was declined.")).toBeTruthy();
       },
-      { timeout: 1_500 },
+      // The countdown ticks on a real one-second interval, so this needs room for
+      // more than one tick: under a loaded parallel run a 1.5s budget can expire
+      // between ticks and fail a card that does expire correctly.
+      { timeout: 5_000 },
     );
   });
 

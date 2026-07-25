@@ -4,6 +4,7 @@ import {
   DEFAULT_CODEX_MODEL,
   abortSession,
   checkHealth,
+  classifyCodexPromptOutcome,
   createClient,
   createSession,
   deleteSession,
@@ -476,6 +477,64 @@ describe("codex-client updateSessionConfig", () => {
       fastMode: true,
     })).resolves.toEqual({ outcome: "applied", durable: false });
     expect(calls).toBe(2);
+  });
+
+  test("stays unknown when the authoritative config does not match the request", async () => {
+    let calls = 0;
+    mockFetch(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("response lost");
+      // The bridge is still on the old model, so this update did *not* land.
+      return Response.json({
+        model: "gpt-5.2-codex",
+        mode: "plan",
+        fastMode: true,
+        durable: true,
+      });
+    });
+
+    await expect(
+      updateSessionConfig(client, "session-1", { model: "gpt-5.3-codex", mode: "plan" }),
+    ).resolves.toEqual({ outcome: "unknown" });
+    expect(calls).toBe(2);
+  });
+
+  test("stays unknown when the reconciliation read is itself rejected", async () => {
+    let calls = 0;
+    mockFetch(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("response lost");
+      return new Response(null, { status: 404 });
+    });
+
+    await expect(
+      updateSessionConfig(client, "session-1", { mode: "build" }),
+    ).resolves.toEqual({ outcome: "unknown" });
+  });
+});
+
+describe("codex-client classifyCodexPromptOutcome", () => {
+  test("maps every send result shape to a definite classification", () => {
+    expect(classifyCodexPromptOutcome({ outcome: "accepted", status: "processing" }))
+      .toBe("accepted");
+    expect(classifyCodexPromptOutcome({ outcome: "rejected", httpStatus: 409 }))
+      .toBe("rejected");
+    expect(classifyCodexPromptOutcome({ outcome: "unknown", requestId: "r" }))
+      .toBe("unknown");
+
+    // Legacy shapes that component stubs still return.
+    expect(classifyCodexPromptOutcome(true)).toBe("accepted");
+    expect(classifyCodexPromptOutcome({ status: "processing" })).toBe("accepted");
+    expect(classifyCodexPromptOutcome({ status: "already-processed" })).toBe("accepted");
+
+    // Anything that does not positively indicate acceptance is a rejection —
+    // never an accidental "unknown", which callers treat as possibly-running.
+    expect(classifyCodexPromptOutcome(false)).toBe("rejected");
+    expect(classifyCodexPromptOutcome(null)).toBe("rejected");
+    expect(classifyCodexPromptOutcome(undefined)).toBe("rejected");
+    expect(classifyCodexPromptOutcome({})).toBe("rejected");
+    expect(classifyCodexPromptOutcome({ outcome: "weird" })).toBe("rejected");
+    expect(classifyCodexPromptOutcome("accepted")).toBe("rejected");
   });
 });
 

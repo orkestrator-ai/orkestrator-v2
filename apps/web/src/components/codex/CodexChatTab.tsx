@@ -193,6 +193,17 @@ export function CodexChatTab({
     fingerprint: string;
     requestId: string;
   } | null>(null);
+  /**
+   * An optimistic user message whose dispatch was never confirmed.
+   *
+   * The send path can only resolve a lost response when its own reconcile
+   * returns an authoritative state. When it cannot — the reconcile was
+   * superseded, or the bridge was unreachable and recovery happens later — the
+   * message would otherwise sit in the transcript forever as something Codex
+   * appears to have been told but never received. Whichever path next observes
+   * an authoritative idle session settles it.
+   */
+  const unconfirmedDispatchRef = useRef<{ userMessageId: string } | null>(null);
   const refreshControllerRef = useRef(createCodexSessionRefreshController());
   /**
    * Last bridge event revision this tab processed.
@@ -477,7 +488,39 @@ export function CodexChatTab({
     approvalSnapshotSequenceRef.current += 1;
     approvalActivitySequenceRef.current += 1;
     retryablePromptRef.current = null;
+    unconfirmedDispatchRef.current = null;
   }, [sessionKey, session?.sessionId]);
+
+  /**
+   * Settles an unconfirmed dispatch against an authoritative idle session.
+   *
+   * Call only once the transcript has been refreshed from the bridge: if the
+   * optimistic message survived that refresh, the server never recorded the
+   * prompt, so it must be withdrawn and offered for retry instead of sitting in
+   * the transcript as if Codex had seen it.
+   */
+  const resolveUnconfirmedDispatch = useCallback(() => {
+    const pending = unconfirmedDispatchRef.current;
+    if (!pending) return;
+    unconfirmedDispatchRef.current = null;
+
+    const current = useCodexStore.getState().sessions.get(sessionKey);
+    const stillPresent = current?.messages.some(
+      (message) => message.id === pending.userMessageId,
+    ) === true;
+    if (!stillPresent) {
+      // The bridge echoed the prompt, so the dispatch did land and its key is
+      // spent.
+      retryablePromptRef.current = null;
+      return;
+    }
+
+    removeMessage(sessionKey, pending.userMessageId);
+    setSessionError(
+      sessionKey,
+      "Could not confirm whether Codex received the prompt. You can send it again safely.",
+    );
+  }, [removeMessage, sessionKey, setSessionError]);
 
   const handleSend = useCallback(
     async (
@@ -572,6 +615,10 @@ export function CodexChatTab({
          * can safely be released.
          */
         retryablePromptRef.current = { fingerprint, requestId };
+        // Claimed before reconciling: if this reconcile cannot conclude, a later
+        // authoritative idle state has to finish the job rather than silently
+        // unlocking and stranding the message.
+        unconfirmedDispatchRef.current = { userMessageId: userMessage.id };
         setSessionPhase(sessionKey, "recovering");
         const reconciliation = await reconcileSessionStateRef.current({
           forceRefreshMessages: true,
@@ -579,6 +626,7 @@ export function CodexChatTab({
         const reconciledSession = useCodexStore.getState().sessions.get(sessionKey);
 
         if (reconciliation === "missing") {
+          unconfirmedDispatchRef.current = null;
           removeMessage(sessionKey, userMessage.id);
           setSessionPhase(sessionKey, undefined);
           setSessionLoading(sessionKey, false);
@@ -597,6 +645,7 @@ export function CodexChatTab({
           const optimisticStillPresent = reconciledSession?.messages.some(
             (message) => message.id === userMessage.id,
           ) === true;
+          unconfirmedDispatchRef.current = null;
           if (optimisticStillPresent) {
             // Authoritative idle state did not echo the prompt, so expose a
             // retryable failure rather than leaving a local-only user message.
@@ -1536,6 +1585,9 @@ export function CodexChatTab({
         throwOnError: options?.throwOnError,
         shouldApply,
       });
+      // Authoritative idle plus a fresh transcript is exactly what an earlier
+      // unresolved dispatch was waiting for.
+      if (shouldApply()) resolveUnconfirmedDispatch();
       return "applied";
     }
 
@@ -1563,6 +1615,7 @@ export function CodexChatTab({
     client,
     connectionState,
     refreshMessages,
+    resolveUnconfirmedDispatch,
     session?.sessionId,
     sessionKey,
     setPendingApprovals,
@@ -1777,6 +1830,9 @@ export function CodexChatTab({
                 setSessionTitle(sessionKey, title);
               }
               await refreshMessages(client, session.sessionId);
+              // The transcript is now authoritative for this idle turn, so an
+              // earlier unconfirmed dispatch can finally be settled.
+              resolveUnconfirmedDispatch();
               continue;
             }
 
@@ -1841,6 +1897,7 @@ export function CodexChatTab({
     refreshMessages,
     reconcileSessionState,
     removePendingApproval,
+    resolveUnconfirmedDispatch,
     session?.isLoading,
     session?.sessionId,
     sessionKey,

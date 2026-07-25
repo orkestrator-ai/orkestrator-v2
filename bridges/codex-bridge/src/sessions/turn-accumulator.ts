@@ -60,6 +60,18 @@ export interface TurnAccumulatorOptions {
 /** A single runaway command must not be able to exhaust bridge memory. */
 export const DEFAULT_MAX_COMMAND_OUTPUT_CHARS = 256 * 1024;
 
+/**
+ * Marks a turn we know was dispatched but whose real id app-server has not told
+ * us yet. Such a placeholder owns the thread's overlap guard, but it must never
+ * be mistaken for a *newer* registered turn — events for the real turn are still
+ * arriving and have to be parked, not discarded.
+ */
+export const UNCONFIRMED_TURN_ID_PREFIX = "unconfirmed:";
+
+export function unconfirmedTurnId(requestId: string): string {
+  return `${UNCONFIRMED_TURN_ID_PREFIX}${requestId}`;
+}
+
 export class TurnAccumulator {
   readonly threadId: string;
   readonly requestId?: string;
@@ -99,6 +111,11 @@ export class TurnAccumulator {
 
   isTerminal(): boolean {
     return this.phase === "completed" || this.phase === "interrupted" || this.phase === "failed";
+  }
+
+  /** True while this turn holds the overlap guard without a confirmed turn id. */
+  isUnconfirmed(): boolean {
+    return this.turnId.startsWith(UNCONFIRMED_TURN_ID_PREFIX);
   }
 
   /**

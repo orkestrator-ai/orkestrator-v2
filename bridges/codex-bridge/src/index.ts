@@ -837,6 +837,14 @@ app.post("/session/:id/approvals/:approvalId", async (c) => {
   if (outcome === "wrong-session") {
     return c.json({ error: "Approval does not belong to this session" }, 403);
   }
+  if (outcome === "not-actionable") {
+    // The bridge could not recover what would be approved, so there is nothing a
+    // user could have consented to. Deny and cancel remain available.
+    return c.json(
+      { error: "Approval lacks the detail required to approve it" },
+      422,
+    );
+  }
   if (outcome === "unknown") {
     // 409, not 404: the approval existed but the window closed (answered,
     // expired, or the child restarted). The UI should drop the card, not retry.

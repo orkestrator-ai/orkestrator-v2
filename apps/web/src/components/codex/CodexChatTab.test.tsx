@@ -2197,6 +2197,125 @@ describe("CodexChatTab", () => {
     expect(screen.getByText("Reconnecting to Codex…")).toBeTruthy();
   });
 
+  test("withdraws the prompt when an ambiguous send is proven not to have landed", async () => {
+    composeText = "This prompt never reached Codex";
+    mockSendPrompt.mockResolvedValue({
+      outcome: "unknown",
+      requestId: "ambiguous-request",
+    });
+    // Authoritative idle with a transcript that does not contain the prompt.
+    mockLookupSessionStatus.mockResolvedValue({
+      kind: "found",
+      session: { status: "idle", title: "Idle" },
+    });
+    mockGetSessionMessages.mockResolvedValue([]);
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+    await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.error).toBe(
+        "Could not confirm whether Codex received the prompt. You can send it again safely.",
+      );
+      expect(session?.isLoading).toBe(false);
+      // The local-only user message must not survive as something Codex saw.
+      expect(session?.messages.some((message) => message.role === "user")).toBe(false);
+    });
+    expect(useCodexStore.getState().sessionPhase.get(SESSION_KEY)).toBeUndefined();
+  });
+
+  test("keeps an ambiguous prompt locked when its reconcile is superseded", async () => {
+    /**
+     * A concurrent reconcile can win the sequence race, leaving the send path
+     * with a "stale" result it cannot act on. The turn must stay locked — the
+     * bridge may be running it — and the unconfirmed prompt is settled later by
+     * whichever path next sees an authoritative idle session.
+     */
+    composeText = "Superseded reconcile";
+    mockSendPrompt.mockResolvedValue({
+      outcome: "unknown",
+      requestId: "ambiguous-request",
+    });
+    mockLookupSessionStatus.mockResolvedValue({
+      kind: "found",
+      session: { status: "running", title: "Still running" },
+    });
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+    await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      // Never unlocked on an unproven dispatch.
+      expect(session?.isLoading).toBe(true);
+    });
+    expect(screen.getByTestId("codex-stop")).toBeTruthy();
+  });
+
+  test("settles an unresolved ambiguous prompt when recovery reports idle later", async () => {
+    /**
+     * Regression: when the send path's own reconcile could not conclude, nothing
+     * resolved the optimistic message. A later watchdog reconcile unlocked the
+     * session and cleared the error, leaving a user message in the transcript
+     * that Codex had never received.
+     */
+    composeText = "Lost during a bridge restart";
+    mockSendPrompt.mockResolvedValue({
+      outcome: "unknown",
+      requestId: "ambiguous-request",
+    });
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+    await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
+    mockLookupSessionStatus.mockResolvedValue({
+      kind: "unavailable",
+      error: new Error("offline"),
+    });
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+    await waitFor(() => {
+      expect(useCodexStore.getState().sessions.get(SESSION_KEY)?.isLoading).toBe(true);
+    });
+
+    // The bridge comes back and is authoritatively idle without the prompt.
+    mockGetSessionMessages.mockResolvedValue([]);
+    mockLookupSessionStatus.mockResolvedValue({
+      kind: "found",
+      session: { status: "idle", title: "Recovered" },
+    });
+
+    await waitFor(() => {
+      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.isLoading).toBe(false);
+      expect(session?.error).toBe(
+        "Could not confirm whether Codex received the prompt. You can send it again safely.",
+      );
+      expect(session?.messages.some((message) => message.role === "user")).toBe(false);
+    }, { timeout: 5_000 });
+  });
+
+  test("surfaces the HTTP status when the bridge definitively rejects a prompt", async () => {
+    composeText = "Rejected outright";
+    mockSendPrompt.mockResolvedValue({ outcome: "rejected", httpStatus: 409 });
+
+    render(<CodexChatTab tabId={TAB_ID} data={createData()} isActive={false} />);
+    await waitFor(() => expect(mockLookupSessionStatus).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTestId("codex-send"));
+
+    await waitFor(() => {
+      const session = useCodexStore.getState().sessions.get(SESSION_KEY);
+      expect(session?.error).toBe("Failed to send prompt (HTTP 409)");
+      // A definite rejection proves no turn started, so the composer unlocks.
+      expect(session?.isLoading).toBe(false);
+    });
+  });
+
   test("reuses the idempotency key when the same failed prompt is retried", async () => {
     composeText = "Retry this exact prompt";
     mockSendPrompt

@@ -1190,6 +1190,37 @@ describe("FeaturesView feature planning chat", () => {
     expect(appendMessageMock).toHaveBeenCalledWith("feature-1", "user", "Send me");
   });
 
+  test("reports an ambiguous prompt that the session never received", async () => {
+    /**
+     * An `unknown` outcome is not a rejection — the bridge may be running the
+     * turn — so the prompt is not resent. But an idle session with no new reply
+     * means it never landed, and that must surface quickly instead of holding
+     * the chat for the full ten-minute poll and then claiming Codex is busy.
+     */
+    sendPromptMock.mockImplementationOnce(
+      async () => ({ outcome: "unknown", requestId: "lost-1" }) as never,
+    );
+    getSessionStatusMock.mockResolvedValue({ status: "idle" } as never);
+    getSessionMessagesMock.mockResolvedValue([] as never);
+    seedStores(chatFeature());
+    seedExistingCodexEnvironment();
+    render(<FeaturesView projectId="project-1" />);
+
+    fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
+      target: { value: "Lost prompt" },
+    });
+    fireEvent.click(screen.getByTitle("Send message"));
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
+      "Feature planning failed",
+      expect.objectContaining({
+        description: "Codex did not receive the prompt. Please try sending it again.",
+      }),
+    ), { timeout: 20_000 });
+    // Never resent: a lost response does not prove the turn did not start.
+    expect(sendPromptMock).toHaveBeenCalledTimes(1);
+  }, 30_000);
+
   test("keeps all feature conversations disabled while another feature request is pending", async () => {
     let resolvePrompt!: (sent: boolean) => void;
     sendPromptMock.mockImplementationOnce(() => new Promise((resolve) => {

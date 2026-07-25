@@ -704,6 +704,32 @@ export type CodexPromptSendOutcome =
   | { outcome: "unknown"; requestId: string };
 
 /**
+ * Classifies whatever a caller received from `sendPrompt`.
+ *
+ * Component tests still stub this client with its historical boolean/nullable
+ * contract, so the shapes are normalized in one shared place rather than in each
+ * caller. `unknown` is deliberately *not* folded into either definite answer:
+ * the bridge may already be executing the turn, so a caller must reconcile
+ * against authoritative state before unlocking, advancing or resending.
+ */
+export function classifyCodexPromptOutcome(
+  result: unknown,
+): "accepted" | "rejected" | "unknown" {
+  if (result === true) return "accepted";
+  if (result === false || result === null || result === undefined) return "rejected";
+  if (typeof result === "object") {
+    const outcome = (result as { outcome?: unknown }).outcome;
+    if (outcome === "accepted" || outcome === "rejected" || outcome === "unknown") {
+      return outcome;
+    }
+    // A bare acceptance payload from an older client stub.
+    const status = (result as { status?: unknown }).status;
+    if (status === "processing" || status === "already-processed") return "accepted";
+  }
+  return "rejected";
+}
+
+/**
  * Sends a prompt.
  *
  * A non-2xx response proves the bridge rejected the request. A transport failure

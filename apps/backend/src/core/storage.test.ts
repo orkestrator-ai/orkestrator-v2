@@ -18,6 +18,10 @@ describe("defaultConfig", () => {
     expect(defaultConfig().global.webClientEnabled).toBe(true);
   });
 
+  test("allows five concurrent Codex subagent threads by default", () => {
+    expect(defaultConfig().global.codexMaxConcurrentThreads).toBe(5);
+  });
+
   test("uses the built-in action-bar review prompt until one is saved", () => {
     expect(defaultConfig().global.reviewPrompt).toBeUndefined();
     expectTypeOf<AppConfig["global"]["reviewPrompt"]>().toEqualTypeOf<string | undefined>();

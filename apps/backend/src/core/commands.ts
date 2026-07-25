@@ -24,6 +24,7 @@ import {
   APP_VERSION,
   CLAUDE_BRIDGE_PORT,
   CODEX_BRIDGE_PORT,
+  CODEX_MAX_CONCURRENT_THREADS_ENV,
   DOCKER_IMAGE,
   DOCKER_LABEL_APP,
   DOCKER_LABEL_APP_VALUE,
@@ -31,6 +32,7 @@ import {
   DOCKER_LABEL_PROJECT_ID,
   OPENCODE_SERVER_PORT,
   ORKESTRATOR_PROJECT_CONFIG,
+  resolveCodexMaxConcurrentThreads,
 } from "./constants.js";
 import {
   createEnvironment,
@@ -1890,9 +1892,13 @@ async function startLocalServer(
   } else {
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "codex-bridge");
+    const config = await context.storage.loadConfig();
     // Point app-server supervision at our shipped Codex binary so it does not
     // depend on a system install / PATH lookup in the packaged app.
     env.CODEX_PATH = resolveCodexBinary(context);
+    env[CODEX_MAX_CONCURRENT_THREADS_ENV] = String(
+      resolveCodexMaxConcurrentThreads(config.global.codexMaxConcurrentThreads),
+    );
     // Forwarded to app-server as clientInfo.version.
     env.ORKESTRATOR_VERSION = APP_VERSION;
   }
@@ -3450,8 +3456,12 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     claudeModelCatalogRefreshes.set(id, refresh);
     return refresh;
   });
-  register("start_codex_server", ({ containerId }) =>
-    startContainerServer(asString(containerId, "containerId"), CODEX_BRIDGE_PORT, "codex", `
+  register("start_codex_server", async ({ containerId }, context) => {
+    const config = await context.storage.loadConfig();
+    const maxConcurrentThreads = resolveCodexMaxConcurrentThreads(
+      config.global.codexMaxConcurrentThreads,
+    );
+    return startContainerServer(asString(containerId, "containerId"), CODEX_BRIDGE_PORT, "codex", `
       cd /workspace
       rm -f /tmp/codex-bridge.log
       mkdir -p /tmp/${APP_SLUG}
@@ -3461,10 +3471,11 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       export HOSTNAME=0.0.0.0
       export CWD=/workspace
       export CODEX_PATH="$(command -v codex 2>/dev/null || echo codex)"
+      export ${CODEX_MAX_CONCURRENT_THREADS_ENV}=${maxConcurrentThreads}
       export ORKESTRATOR_VERSION="${APP_VERSION}"
       setsid bun /opt/codex-bridge/dist/index.js > /tmp/codex-bridge.log 2>&1 &
-    `),
-  );
+    `);
+  });
   register("stop_codex_server", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "pkill -f 'codex-bridge' || true").then(() => undefined));
   register("get_codex_server_status", async ({ containerId }) => {
     const id = asString(containerId, "containerId");

@@ -28,6 +28,7 @@ import {
 } from "./session-titles.js";
 import { AppServerRuntime } from "./app-server-runtime.js";
 import { AppServerEngine } from "./engine/app-server-engine.js";
+import { codexAppServerConfigOverrides } from "./codex-config.js";
 import { APPROVAL_DECISIONS, isApprovalDecision } from "./app-server/approvals.js";
 import { EventRing, parseEventCursor } from "./event-ring.js";
 import {
@@ -480,7 +481,7 @@ const codexEngine = new AppServerEngine({
   cwd: getWorkingDirectory(),
   codexHome: getCodexHomeDir(),
   clientInfo: { name: "orkestrator", title: "Orkestrator", version: APP_VERSION },
-  configOverrides: { "features.goals": "true" },
+  configOverrides: codexAppServerConfigOverrides(),
 });
 
 const appServerRuntime = new AppServerRuntime({

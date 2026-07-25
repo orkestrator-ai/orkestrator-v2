@@ -180,6 +180,7 @@ function createContext(
   options: {
     project?: { id: string; name: string; gitUrl: string; localPath: string | null; addedAt: string; order: number };
     repositoryConfig?: RepositoryConfig;
+    globalConfig?: Record<string, unknown>;
   } = {},
 ): {
   context: CommandContext;
@@ -201,7 +202,7 @@ function createContext(
   };
   const config = {
     version: "1.0.0",
-    global: {},
+    global: options.globalConfig ?? {},
     repositories: {
       "project-1": repositoryConfig,
     },
@@ -307,6 +308,7 @@ async function writeBridgeServer(
   environmentMarkerPath?: string,
   modelCatalog?: Record<string, unknown>,
   versionMarkerPath?: string,
+  maxConcurrentThreadsMarkerPath?: string,
 ): Promise<void> {
   const bridgeDist = path.join(appRoot, "bridges", bridgeName, "dist");
   await fs.mkdir(bridgeDist, { recursive: true });
@@ -320,6 +322,9 @@ async function writeBridgeServer(
         : ""}
       ${versionMarkerPath
         ? `require("node:fs").writeFileSync(${JSON.stringify(versionMarkerPath)}, process.env.ORKESTRATOR_VERSION ?? "");`
+        : ""}
+      ${maxConcurrentThreadsMarkerPath
+        ? `require("node:fs").writeFileSync(${JSON.stringify(maxConcurrentThreadsMarkerPath)}, process.env.CODEX_MAX_CONCURRENT_THREADS_PER_SESSION ?? "");`
         : ""}
       http.createServer((req, res) => {
         if (req.url === "/global/health") {
@@ -4242,6 +4247,7 @@ exit 0
     const worktreePath = await createTempDir("ork-electron-worktree-");
     const markerPath = path.join(appRoot, "codex-path.log");
     const versionMarkerPath = path.join(appRoot, "codex-version.log");
+    const maxConcurrentThreadsMarkerPath = path.join(appRoot, "codex-max-threads.log");
     const managedCodexPath = path.join(toolchainBinDir, "codex");
     await fs.writeFile(managedCodexPath, "managed codex");
     await writeBridgeServer(
@@ -4250,10 +4256,13 @@ exit 0
       markerPath,
       undefined,
       versionMarkerPath,
+      maxConcurrentThreadsMarkerPath,
     );
 
     const environment = createEnvironment({ worktreePath });
-    const { context, updates } = createContext(environment);
+    const { context, updates } = createContext(environment, {
+      globalConfig: { codexMaxConcurrentThreads: 8 },
+    });
     context.appRoot = appRoot;
     context.resourceRoot = appRoot;
     context.toolchainBinDir = toolchainBinDir;
@@ -4272,6 +4281,7 @@ exit 0
     await expect(requestOk(result.port, "/global/health")).resolves.toBe(true);
     expect(await fs.readFile(markerPath, "utf8")).toBe(managedCodexPath);
     expect(await fs.readFile(versionMarkerPath, "utf8")).toBe(APP_VERSION);
+    expect(await fs.readFile(maxConcurrentThreadsMarkerPath, "utf8")).toBe("8");
 
     await commands.get("stop_local_codex_server_cmd")?.({ environmentId: environment.id }, context);
   });
@@ -4625,7 +4635,7 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
     }
   });
 
-  test("starts in-container bridges with bun, not node", async () => {
+  test("starts the in-container Codex bridge with bun and its configured thread limit", async () => {
     const hostPort = await reserveFreePort();
     const pidFile = path.join(await createTempDir("ork-bridge-pid-"), "pid");
     const environment = createEnvironment({
@@ -4634,7 +4644,9 @@ exec env PORT_ARG="$PORT" HOST_ARG="$HOST" node -e 'const http = require("node:h
       containerId: "container-1",
       status: "running",
     });
-    const { context } = createContext(environment);
+    const { context } = createContext(environment, {
+      globalConfig: { codexMaxConcurrentThreads: 9 },
+    });
     const commands = createCommandRegistry();
 
     const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
@@ -4662,11 +4674,12 @@ exit 0
 
     try {
       await withFakeDocker(dockerScript, async (logs) => {
-        const result = await commands.get("start_claude_server")?.({ containerId: "container-1" }, context);
+        const result = await commands.get("start_codex_server")?.({ containerId: "container-1" }, context);
         expect(result).toEqual({ hostPort, wasRunning: false });
 
         const execLog = await fs.readFile(logs.exec, "utf8");
-        expect(execLog).toContain("setsid bun /opt/claude-bridge/dist/index.js");
+        expect(execLog).toContain("export CODEX_MAX_CONCURRENT_THREADS_PER_SESSION=9");
+        expect(execLog).toContain("setsid bun /opt/codex-bridge/dist/index.js");
         expect(execLog).not.toContain("setsid node");
       });
     } finally {

@@ -10,6 +10,14 @@ export const DOCKER_LABEL_PROJECT_ID = "project-id";
 export const OPENCODE_SERVER_PORT = 4096;
 export const CLAUDE_BRIDGE_PORT = 4097;
 export const CODEX_BRIDGE_PORT = 4098;
+export const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
+export const CODEX_MAX_CONCURRENT_THREADS_ENV = "CODEX_MAX_CONCURRENT_THREADS_PER_SESSION";
+
+export function resolveCodexMaxConcurrentThreads(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1
+    ? value
+    : DEFAULT_CODEX_MAX_CONCURRENT_THREADS;
+}
 
 export const ORKESTRATOR_PROJECT_CONFIG = "orkestrator-ai.json";
 

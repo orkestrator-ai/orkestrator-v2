@@ -9,6 +9,7 @@ import {
   getReviewPromptValidationError,
   parseReviewPrompt,
 } from "@orkestrator/protocol/review-prompt";
+import { DEFAULT_CODEX_MAX_CONCURRENT_THREADS } from "./constants.js";
 import type {
   AppConfig,
   ClaudeModelCatalogSnapshot,
@@ -333,6 +334,7 @@ export function defaultConfig(): AppConfig {
       claudeNativeFastModeDefault: false,
       codexMode: "native",
       codexNativeFastModeDefault: false,
+      codexMaxConcurrentThreads: DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
       terminalAppearance: {
         fontFamily: "FiraCode Nerd Font",
         fontSize: 14,

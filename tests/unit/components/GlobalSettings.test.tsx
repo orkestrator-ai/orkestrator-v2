@@ -187,6 +187,24 @@ describe("GlobalSettings", () => {
     });
   });
 
+  test("shows the default Codex subagent limit and saves changes", async () => {
+    render(<GlobalSettings activeSection="codex" />);
+
+    const input = screen.getByLabelText("Concurrent subagent limit") as HTMLInputElement;
+    expect(input.value).toBe("5");
+
+    fireEvent.change(input, { target: { value: "8" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          codexMaxConcurrentThreads: 8,
+        }),
+      );
+    });
+  });
+
   test("shows the shared backend status and credentials in Electron", async () => {
     window.orkestratorGateway = undefined;
     render(<GlobalSettings activeSection="web-client" />);

@@ -291,6 +291,8 @@ export interface GlobalConfig {
   codexMode: CodexMode;
   /** Enable fast mode by default for new Codex Native tabs */
   codexNativeFastModeDefault?: boolean;
+  /** Maximum concurrently open spawned-agent threads per native Codex session */
+  codexMaxConcurrentThreads?: number;
   /** Terminal appearance settings (font, size, colors) */
   terminalAppearance: TerminalAppearance;
   /** Terminal scrollback buffer size (lines) */

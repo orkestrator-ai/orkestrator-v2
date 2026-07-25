@@ -222,6 +222,247 @@ describe("codex bridge private boundary coverage", () => {
     ]);
   });
 
+  test("passes environment-derived overrides into the AppServerEngine composition root", () => {
+    let capturedOptions: Record<string, unknown> | undefined;
+    const marker = { kind: "engine-marker" };
+
+    const created = __testing.createCodexEngineForTesting(
+      {
+        CODEX_PATH: "/opt/codex",
+        ORKESTRATOR_VERSION: "9.8.7",
+        CODEX_MAX_CONCURRENT_THREADS_PER_SESSION: "11",
+      },
+      (options: Record<string, unknown>) => {
+        capturedOptions = options;
+        return marker as never;
+      },
+    );
+
+    expect(created).toBe(marker as never);
+    expect(capturedOptions).toMatchObject({
+      codexPath: "/opt/codex",
+      clientInfo: {
+        name: "orkestrator",
+        title: "Orkestrator",
+        version: "9.8.7",
+      },
+      configOverrides: {
+        "features.goals": "true",
+        "agents.max_concurrent_threads_per_session": "11",
+        "features.multi_agent_v2.max_concurrent_threads_per_session": "12",
+      },
+    });
+  });
+
+  test("contains engine start failures and honors the no-engine guard", async () => {
+    let starts = 0;
+    const errors: unknown[][] = [];
+    const originalConsoleError = console.error;
+    console.error = (...args: unknown[]) => errors.push(args);
+
+    try {
+      const runtime = {
+        start: async () => {
+          starts += 1;
+          throw new Error("cannot initialize");
+        },
+        getHealth: () => ({ codexVersion: undefined }),
+      };
+
+      await __testing.startSelectedEngineForTesting(
+        { CODEX_BRIDGE_NO_ENGINE: "1" },
+        runtime as never,
+      );
+      await __testing.startSelectedEngineForTesting({}, runtime as never);
+    } finally {
+      console.error = originalConsoleError;
+    }
+
+    expect(starts).toBe(1);
+    expect(errors).toEqual([
+      ["[codex-bridge] Failed to start the app-server engine:", "cannot initialize"],
+    ]);
+  });
+
+  test("reports successful engine startup with the detected version", async () => {
+    const errors: unknown[][] = [];
+    const originalConsoleError = console.error;
+    console.error = (...args: unknown[]) => errors.push(args);
+
+    try {
+      await __testing.startSelectedEngineForTesting(
+        {},
+        {
+          start: async () => undefined,
+          getHealth: () => ({ codexVersion: "0.145.0" }),
+        } as never,
+      );
+    } finally {
+      console.error = originalConsoleError;
+    }
+
+    expect(errors).toEqual([
+      ["[codex-bridge] app-server engine ready (codex 0.145.0)"],
+    ]);
+  });
+
+  test("contains idle cleanup failures", async () => {
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args);
+
+    try {
+      await __testing.sweepIdleThreadsForTesting({
+        sweepIdle: async () => {
+          throw new Error("cleanup unavailable");
+        },
+      } as never);
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    expect(warnings).toEqual([
+      ["[codex-bridge] Idle sweep failed:", expect.any(Error)],
+    ]);
+  });
+
+  test("contains rejected SSE keepalive writes", async () => {
+    const errors: unknown[][] = [];
+    const originalConsoleError = console.error;
+    console.error = (...args: unknown[]) => errors.push(args);
+    const timer = __testing.startSseKeepaliveForTesting(
+      async () => {
+        throw new Error("closed stream");
+      },
+      1,
+    );
+
+    try {
+      for (let attempt = 0; attempt < 20 && errors.length === 0; attempt += 1) {
+        await Bun.sleep(2);
+      }
+    } finally {
+      clearInterval(timer);
+      console.error = originalConsoleError;
+    }
+
+    expect(errors).toContainEqual([
+      "[codex-bridge] Failed to write SSE keepalive:",
+      expect.any(Error),
+    ]);
+  });
+
+  test("round-trips the bridge model cache and rejects stale or malformed caches", async () => {
+    const root = temporaryRoot();
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = root;
+    const cacheDir = join(root, "orkestrator-bridge");
+    const cachePath = join(cacheDir, "models-cache.json");
+    mkdirSync(cacheDir, { recursive: true });
+
+    try {
+      await __testing.writePersistedBridgeCache(__testing.FALLBACK_MODELS);
+      await expect(__testing.readPersistedBridgeCache()).resolves.toEqual(
+        __testing.FALLBACK_MODELS,
+      );
+
+      writeFileSync(cachePath, JSON.stringify({
+        version: __testing.BRIDGE_MODEL_CACHE_VERSION - 1,
+        models: __testing.FALLBACK_MODELS,
+      }));
+      await expect(__testing.readPersistedBridgeCache()).resolves.toBeNull();
+
+      writeFileSync(cachePath, "{malformed");
+      await expect(__testing.readPersistedBridgeCache()).resolves.toBeNull();
+
+      writeFileSync(cachePath, JSON.stringify({
+        version: __testing.BRIDGE_MODEL_CACHE_VERSION,
+        models: [],
+      }));
+      await expect(__testing.readPersistedBridgeCache()).resolves.toBeNull();
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    }
+  });
+
+  test("contains bridge model-cache persistence failures", async () => {
+    const root = temporaryRoot();
+    const blockingFile = join(root, "not-a-directory");
+    writeFileSync(blockingFile, "blocked", "utf8");
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = blockingFile;
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args);
+
+    try {
+      await __testing.writePersistedBridgeCache(__testing.FALLBACK_MODELS);
+    } finally {
+      console.warn = originalWarn;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    }
+
+    expect(warnings).toEqual([
+      ["[codex-bridge] Failed to persist model cache:", expect.any(String)],
+    ]);
+  });
+
+  test("reads valid Codex CLI caches and contains malformed cache files", async () => {
+    const root = temporaryRoot();
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = root;
+    const path = join(root, "models_cache.json");
+
+    try {
+      writeFileSync(path, JSON.stringify({
+        models: [{
+          slug: "from-cli-cache",
+          display_name: "From CLI cache",
+          supported_reasoning_levels: [{ effort: "medium" }],
+        }],
+      }));
+      await expect(__testing.readCodexCliModelCache()).resolves.toEqual([
+        expect.objectContaining({ id: "from-cli-cache", name: "From CLI cache" }),
+      ]);
+
+      writeFileSync(path, "{malformed");
+      await expect(__testing.readCodexCliModelCache()).resolves.toBeNull();
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    }
+  });
+
+  test("contains live model lookup failures and ignores empty catalogs", async () => {
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args);
+
+    try {
+      const failure = async () => {
+        throw new Error("debug models unavailable");
+      };
+      await expect(__testing.fetchLiveModelsFromCliForTesting(
+        failure as never,
+        { CODEX_PATH: "/opt/test-codex" },
+      )).resolves.toBeNull();
+
+      const empty = async () => ({ stdout: JSON.stringify({ models: [] }), stderr: "" });
+      await expect(__testing.fetchLiveModelsFromCliForTesting(
+        empty as never,
+        { CODEX_PATH: "/opt/test-codex" },
+      )).resolves.toBeNull();
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    expect(warnings).toEqual([
+      ["[codex-bridge] `codex debug models` failed:", "debug models unavailable"],
+    ]);
+  });
+
   test("normalizes raw log payloads and writes sanitized JSONL filenames", async () => {
     const root = temporaryRoot();
     const circular: Record<string, unknown> = {};

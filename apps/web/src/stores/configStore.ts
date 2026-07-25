@@ -71,6 +71,7 @@ const DEFAULT_CONFIG: AppConfig = {
     claudeNativeFastModeDefault: false,
     codexMode: "native",
     codexNativeFastModeDefault: false,
+    codexMaxConcurrentThreads: 5,
     terminalAppearance: {
       fontFamily: "FiraCode Nerd Font",
       fontSize: 14,

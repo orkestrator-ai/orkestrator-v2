@@ -169,6 +169,8 @@ export interface AppConfig {
     claudeNativeFastModeDefault?: boolean;
     codexMode: CodexMode;
     codexNativeFastModeDefault?: boolean;
+    /** Maximum concurrently open spawned-agent threads per native Codex session. */
+    codexMaxConcurrentThreads: number;
     terminalAppearance: {
       fontFamily: string;
       fontSize: number;

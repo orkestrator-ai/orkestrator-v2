@@ -445,11 +445,13 @@ describe("Electron StorageService", () => {
     const config = defaultConfig();
     config.global.codexModel = "gpt-5.6-sol";
     config.global.codexReasoningEffort = "ultra";
+    config.global.codexMaxConcurrentThreads = 8;
     await storage.saveConfig(config);
     await expect(storage.loadConfig()).resolves.toMatchObject({
       global: {
         codexModel: "gpt-5.6-sol",
         codexReasoningEffort: "ultra",
+        codexMaxConcurrentThreads: 8,
       },
     });
 
@@ -457,11 +459,13 @@ describe("Electron StorageService", () => {
       ...config.global,
       codexModel: "gpt-5.6-luna",
       codexReasoningEffort: "max",
+      codexMaxConcurrentThreads: 6,
     });
     await expect(storage.loadConfig()).resolves.toMatchObject({
       global: {
         codexModel: "gpt-5.6-luna",
         codexReasoningEffort: "max",
+        codexMaxConcurrentThreads: 6,
       },
     });
   });

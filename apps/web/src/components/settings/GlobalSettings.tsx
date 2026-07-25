@@ -61,6 +61,9 @@ import {
 
 // Domain validation regex
 const DOMAIN_REGEX = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
+const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
+// Codex V2 adds the root conversation to this child-only limit.
+const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;
 
 function getSavedReviewPrompt(value: unknown): string {
   return typeof value === "string" && getReviewPromptValidationError(value) === null
@@ -112,6 +115,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   );
   const [codexNativeFastModeDefault, setCodexNativeFastModeDefault] = useState(
     global.codexNativeFastModeDefault ?? false
+  );
+  const [codexMaxConcurrentThreads, setCodexMaxConcurrentThreads] = useState(
+    global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS
   );
   const [terminalFontFamily, setTerminalFontFamily] = useState(
     global.terminalAppearance?.fontFamily || DEFAULT_TERMINAL_APPEARANCE.fontFamily
@@ -177,6 +183,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setClaudeNativeFastModeDefault(global.claudeNativeFastModeDefault ?? false);
     setCodexMode(global.codexMode || "native");
     setCodexNativeFastModeDefault(global.codexNativeFastModeDefault ?? false);
+    setCodexMaxConcurrentThreads(
+      global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS
+    );
     setTerminalFontFamily(global.terminalAppearance?.fontFamily || DEFAULT_TERMINAL_APPEARANCE.fontFamily);
     setTerminalFontSize(global.terminalAppearance?.fontSize || DEFAULT_TERMINAL_APPEARANCE.fontSize);
     setTerminalBackgroundColor(global.terminalAppearance?.backgroundColor || DEFAULT_TERMINAL_APPEARANCE.backgroundColor);
@@ -270,6 +279,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       claudeNativeFastModeDefault !== (global.claudeNativeFastModeDefault ?? false) ||
       codexMode !== (global.codexMode || "native") ||
       codexNativeFastModeDefault !== (global.codexNativeFastModeDefault ?? false) ||
+      codexMaxConcurrentThreads !==
+        (global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS) ||
       terminalFontFamily !== terminalAppearance.fontFamily ||
       terminalFontSize !== terminalAppearance.fontSize ||
       terminalBackgroundColor !== terminalAppearance.backgroundColor ||
@@ -284,7 +295,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, clearGithubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewPrompt, webClientApplyError, gatewayToken, savedGatewayToken, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, clearGithubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewPrompt, webClientApplyError, gatewayToken, savedGatewayToken, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -376,6 +387,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         claudeNativeFastModeDefault: boolean;
         codexMode: CodexMode;
         codexNativeFastModeDefault: boolean;
+        codexMaxConcurrentThreads: number;
         terminalAppearance: TerminalAppearance;
         terminalScrollback: number;
         experimentalCodexRawEventLogging: boolean;
@@ -398,6 +410,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         claudeNativeFastModeDefault,
         codexMode,
         codexNativeFastModeDefault,
+        codexMaxConcurrentThreads,
         terminalAppearance: {
           fontFamily: terminalFontFamily,
           fontSize: terminalFontSize,
@@ -496,6 +509,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setClaudeNativeFastModeDefault(global.claudeNativeFastModeDefault ?? false);
     setCodexMode(global.codexMode || "native");
     setCodexNativeFastModeDefault(global.codexNativeFastModeDefault ?? false);
+    setCodexMaxConcurrentThreads(
+      global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS
+    );
     setTerminalFontFamily(global.terminalAppearance?.fontFamily || DEFAULT_TERMINAL_APPEARANCE.fontFamily);
     setTerminalFontSize(global.terminalAppearance?.fontSize || DEFAULT_TERMINAL_APPEARANCE.fontSize);
     setTerminalBackgroundColor(global.terminalAppearance?.backgroundColor || DEFAULT_TERMINAL_APPEARANCE.backgroundColor);
@@ -972,6 +988,47 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         setCodexNativeFastModeDefault,
         "Codex",
       )}
+      <div className="space-y-3">
+        <div>
+          <Label htmlFor="codex-max-concurrent-threads">
+            Concurrent subagent limit
+          </Label>
+          <p
+            id="codex-max-concurrent-threads-description"
+            className="mt-1 text-xs text-muted-foreground"
+          >
+            Maximum subagents Codex can keep open at once in a native session. The
+            main conversation does not count toward the limit.
+          </p>
+        </div>
+        <Input
+          id="codex-max-concurrent-threads"
+          type="number"
+          min={1}
+          max={MAX_CODEX_CONCURRENT_THREADS}
+          step={1}
+          value={codexMaxConcurrentThreads}
+          onChange={(event) => {
+            const value = Number(event.target.value);
+            if (
+              Number.isSafeInteger(value)
+              && value >= 1
+              && value <= MAX_CODEX_CONCURRENT_THREADS
+            ) {
+              setCodexMaxConcurrentThreads(value);
+            }
+          }}
+          aria-describedby="codex-max-concurrent-threads-description codex-max-concurrent-threads-restart"
+          disabled={isSaving}
+          className="max-w-32"
+        />
+        <p
+          id="codex-max-concurrent-threads-restart"
+          className="text-xs text-muted-foreground/60"
+        >
+          Applies when a native Codex bridge next starts.
+        </p>
+      </div>
     </div>
   );
 

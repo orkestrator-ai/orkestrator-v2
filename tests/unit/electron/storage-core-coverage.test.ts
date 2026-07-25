@@ -244,6 +244,84 @@ describe("StorageService core coverage", () => {
     );
   });
 
+  test("accepts only well-formed Claude model catalog snapshots", async () => {
+    const dataDir = await createTempDir("ork-storage-claude-catalog-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const environment = await storage.addEnvironment(
+      createEnvironment("project-1", { name: "catalog" }),
+    );
+    const validCatalog = {
+      environmentId: environment.id,
+      models: [{
+        id: "claude-sonnet",
+        name: "Claude Sonnet",
+        resolvedModel: "claude-sonnet-5",
+        description: "Balanced",
+        supportsFastMode: true,
+        supportsEffort: true,
+        supportsAdaptiveThinking: false,
+        supportsAutoMode: true,
+        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+      }],
+      source: "sdk",
+      fetchedAt: new Date().toISOString(),
+      stale: false,
+      sdkVersion: "1.2.3",
+      cliVersion: "4.5.6",
+      error: null,
+    };
+
+    await storage.updateEnvironment(environment.id, {
+      claudeModelCatalog: validCatalog,
+    });
+    expect((await storage.getEnvironment(environment.id))?.claudeModelCatalog)
+      .toEqual(validCatalog);
+
+    const invalidCatalogs: unknown[] = [
+      [],
+      { ...validCatalog, environmentId: "other-environment" },
+      { ...validCatalog, models: null },
+      { ...validCatalog, source: "remote" },
+      { ...validCatalog, fetchedAt: "not-a-date" },
+      { ...validCatalog, stale: "false" },
+      { ...validCatalog, models: [{ ...validCatalog.models[0], id: " " }] },
+      { ...validCatalog, models: [{ ...validCatalog.models[0], name: "" }] },
+      { ...validCatalog, models: [{ ...validCatalog.models[0], resolvedModel: 1 }] },
+      { ...validCatalog, models: [{ ...validCatalog.models[0], description: false }] },
+      { ...validCatalog, models: [{ ...validCatalog.models[0], supportsFastMode: "yes" }] },
+      { ...validCatalog, models: [{ ...validCatalog.models[0], supportedEffortLevels: ["ultra"] }] },
+      { ...validCatalog, sdkVersion: 1 },
+      { ...validCatalog, cliVersion: false },
+      { ...validCatalog, error: {} },
+    ];
+    for (const invalidCatalog of invalidCatalogs) {
+      await storage.updateEnvironment(environment.id, {
+        claudeModelCatalog: invalidCatalog,
+      });
+      expect((await storage.getEnvironment(environment.id))?.claudeModelCatalog)
+        .toEqual(validCatalog);
+    }
+
+    await storage.updateEnvironment(environment.id, { claudeModelCatalog: null });
+    expect((await storage.getEnvironment(environment.id))?.claudeModelCatalog)
+      .toBeUndefined();
+  });
+
+  test("sets and clears the persisted GitHub token", async () => {
+    const dataDir = await createTempDir("ork-storage-github-token-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+
+    await storage.setGitHubToken("test-token");
+    expect((await storage.loadConfig()).global.githubToken).toBe("test-token");
+
+    await storage.setGitHubToken(null);
+    const global = (await storage.loadConfig()).global;
+    expect(global.githubToken).toBeUndefined();
+    expect(Object.hasOwn(global, "githubToken")).toBe(false);
+  });
+
   test("updates every environment for a container and skips writes when none match", async () => {
     const dataDir = await createTempDir("ork-storage-container-statuses-");
     const storage = new StorageService(dataDir);

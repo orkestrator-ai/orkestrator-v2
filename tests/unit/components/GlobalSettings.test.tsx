@@ -75,6 +75,19 @@ mock.module("@/lib/backend", () => ({
 const { GlobalSettings } = await import("../../../apps/web/src/components/settings/GlobalSettings");
 
 describe("GlobalSettings", () => {
+  const setSavedCodexMaxConcurrentThreads = (value: number) => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          codexMaxConcurrentThreads: value,
+        },
+      },
+    }));
+  };
+
   beforeEach(() => {
     cleanup();
     mockUpdateGlobalConfig.mockClear();
@@ -185,6 +198,130 @@ describe("GlobalSettings", () => {
         })
       );
     });
+  });
+
+  test("shows the default Codex subagent limit and saves changes", async () => {
+    render(<GlobalSettings activeSection="codex" />);
+
+    const input = screen.getByLabelText("Concurrent subagent limit") as HTMLInputElement;
+    expect(input.value).toBe("5");
+
+    fireEvent.change(input, { target: { value: "8" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          codexMaxConcurrentThreads: 8,
+        }),
+      );
+    });
+  });
+
+  test("initializes the Codex subagent limit from a persisted non-default value", async () => {
+    setSavedCodexMaxConcurrentThreads(9);
+    render(<GlobalSettings activeSection="codex" />);
+
+    expect(
+      (screen.getByLabelText("Concurrent subagent limit") as HTMLInputElement).value,
+    ).toBe("9");
+    await waitFor(() => {
+      expect(
+        (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+    });
+  });
+
+  for (const [description, invalidValue] of [
+    ["an empty value", ""],
+    ["zero", "0"],
+    ["a negative value", "-1"],
+    ["a fractional value", "1.5"],
+    ["a non-numeric value", "not-a-number"],
+    ["a value that leaves no safe root slot", String(Number.MAX_SAFE_INTEGER)],
+  ] as const) {
+    test(`rejects ${description} without corrupting the saved Codex subagent limit`, async () => {
+      setSavedCodexMaxConcurrentThreads(7);
+      render(<GlobalSettings activeSection="codex" />);
+
+      const input = screen.getByLabelText("Concurrent subagent limit") as HTMLInputElement;
+      const saveButton = screen.getByRole("button", {
+        name: "Save Changes",
+      }) as HTMLButtonElement;
+
+      fireEvent.change(input, { target: { value: invalidValue } });
+
+      expect(input.value).toBe("7");
+      await waitFor(() => expect(saveButton.disabled).toBe(true));
+      expect(useConfigStore.getState().config.global.codexMaxConcurrentThreads).toBe(7);
+      expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+    });
+  }
+
+  test("resets an unsaved Codex subagent limit to the persisted value", async () => {
+    setSavedCodexMaxConcurrentThreads(6);
+    render(<GlobalSettings activeSection="codex" />);
+
+    const input = screen.getByLabelText("Concurrent subagent limit") as HTMLInputElement;
+    const saveButton = screen.getByRole("button", {
+      name: "Save Changes",
+    }) as HTMLButtonElement;
+
+    fireEvent.change(input, { target: { value: "12" } });
+    await waitFor(() => expect(saveButton.disabled).toBe(false));
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+
+    expect(input.value).toBe("6");
+    await waitFor(() => expect(saveButton.disabled).toBe(true));
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+  });
+
+  test("resynchronizes the Codex subagent limit when the config store changes", async () => {
+    setSavedCodexMaxConcurrentThreads(4);
+    render(<GlobalSettings activeSection="codex" />);
+
+    const input = screen.getByLabelText("Concurrent subagent limit") as HTMLInputElement;
+    const saveButton = screen.getByRole("button", {
+      name: "Save Changes",
+    }) as HTMLButtonElement;
+    expect(input.value).toBe("4");
+
+    fireEvent.change(input, { target: { value: "8" } });
+    await waitFor(() => expect(saveButton.disabled).toBe(false));
+
+    act(() => setSavedCodexMaxConcurrentThreads(11));
+
+    await waitFor(() => expect(input.value).toBe("11"));
+    await waitFor(() => expect(saveButton.disabled).toBe(true));
+  });
+
+  test("retains a Codex subagent limit edit after a failed save so it can be retried", async () => {
+    setSavedCodexMaxConcurrentThreads(6);
+    mockUpdateGlobalConfig.mockRejectedValueOnce(new Error("disk full"));
+    render(<GlobalSettings activeSection="codex" />);
+
+    const input = screen.getByLabelText("Concurrent subagent limit") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "10" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Failed to save settings",
+        { description: "disk full" },
+      );
+    });
+    expect(input.value).toBe("10");
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(2));
+    expect(mockUpdateGlobalConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({ codexMaxConcurrentThreads: 10 }),
+    );
   });
 
   test("shows the shared backend status and credentials in Electron", async () => {

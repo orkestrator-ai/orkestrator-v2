@@ -27,7 +27,11 @@ import {
   type PersistedSessionTitleSource,
 } from "./session-titles.js";
 import { AppServerRuntime } from "./app-server-runtime.js";
-import { AppServerEngine } from "./engine/app-server-engine.js";
+import {
+  AppServerEngine,
+  type AppServerEngineOptions,
+} from "./engine/app-server-engine.js";
+import { codexAppServerConfigOverrides } from "./codex-config.js";
 import { APPROVAL_DECISIONS, isApprovalDecision } from "./app-server/approvals.js";
 import { EventRing, parseEventCursor } from "./event-ring.js";
 import {
@@ -138,8 +142,6 @@ const codexPathOverride = process.env.CODEX_PATH || "codex";
  * health payload stays a purely additive change for existing clients.
  */
 const BRIDGE_VERSION = "1.0.0";
-/** Orkestrator app version, forwarded to app-server as clientInfo.version. */
-const APP_VERSION = process.env.ORKESTRATOR_VERSION || "0.0.0";
 const execFile = promisify(execFileCallback);
 const subscribers = new Set<(event: SseEvent, revision: number) => Promise<void> | void>();
 /** Retains recent events so a reconnecting client can replay instead of resyncing. */
@@ -434,12 +436,15 @@ async function readCodexCliModelCache(): Promise<BridgeModel[] | null> {
   }
 }
 
-async function fetchLiveModelsFromCli(): Promise<BridgeModel[] | null> {
-  const codexPath = process.env.CODEX_PATH || "codex";
+async function fetchLiveModelsFromCli(
+  run: typeof execFile = execFile,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<BridgeModel[] | null> {
+  const codexPath = env.CODEX_PATH || "codex";
   try {
     // Background-only path — the generous timeout is safe because this never
     // blocks a response to the client (see ModelCatalogCache).
-    const { stdout } = await execFile(codexPath, ["debug", "models"], {
+    const { stdout } = await run(codexPath, ["debug", "models"], {
       maxBuffer: 16 * 1024 * 1024,
       timeout: 30_000,
     });
@@ -462,11 +467,6 @@ const modelCatalogCache = new ModelCatalogCache({
   fallback: FALLBACK_MODELS,
 });
 
-async function getAvailableModels(): Promise<{ models: BridgeModel[]; source: "cache" | "fallback" }> {
-  return modelCatalogCache.get();
-}
-
-
 /**
  * Composition root.
  *
@@ -475,13 +475,26 @@ async function getAvailableModels(): Promise<{ models: BridgeModel[]; source: "c
  * was removed once app-server reached parity — see
  * docs/adr/0001-codex-app-server-engine.md.
  */
-const codexEngine = new AppServerEngine({
-  codexPath: codexPathOverride,
-  cwd: getWorkingDirectory(),
-  codexHome: getCodexHomeDir(),
-  clientInfo: { name: "orkestrator", title: "Orkestrator", version: APP_VERSION },
-  configOverrides: { "features.goals": "true" },
-});
+type AppServerEngineFactory = (options: AppServerEngineOptions) => AppServerEngine;
+
+function createCodexEngine(
+  env: NodeJS.ProcessEnv = process.env,
+  createEngine: AppServerEngineFactory = (options) => new AppServerEngine(options),
+): AppServerEngine {
+  return createEngine({
+    codexPath: env.CODEX_PATH || "codex",
+    cwd: getWorkingDirectory(),
+    codexHome: getCodexHomeDir(),
+    clientInfo: {
+      name: "orkestrator",
+      title: "Orkestrator",
+      version: env.ORKESTRATOR_VERSION || "0.0.0",
+    },
+    configOverrides: codexAppServerConfigOverrides(env),
+  });
+}
+
+const codexEngine = createCodexEngine();
 
 const appServerRuntime = new AppServerRuntime({
   engine: codexEngine,
@@ -503,10 +516,18 @@ const appServerRuntime = new AppServerRuntime({
  * transcript and diff state. Without it a long-lived bridge accumulates every
  * transcript it has ever rendered.
  */
-const cleanupTimer = setInterval(() => {
-  void appServerRuntime.sweepIdle().catch((error) => {
+async function sweepIdleThreads(
+  runtime: Pick<AppServerRuntime, "sweepIdle"> = appServerRuntime,
+): Promise<void> {
+  try {
+    await runtime.sweepIdle();
+  } catch (error) {
     console.warn("[codex-bridge] Idle sweep failed:", error);
-  });
+  }
+}
+
+const cleanupTimer = setInterval(() => {
+  void sweepIdleThreads();
 }, CLEANUP_INTERVAL_MS);
 cleanupTimer.unref?.();
 
@@ -522,14 +543,17 @@ async function stopSelectedEngine(): Promise<void> {
  * beyond convenience: the supervisor refreshes PATH into `process.env` on start,
  * which would race anything else the importing process is doing.
  */
-async function startSelectedEngine(): Promise<void> {
-  if (process.env.CODEX_BRIDGE_NO_ENGINE === "1") {
+async function startSelectedEngine(
+  env: NodeJS.ProcessEnv = process.env,
+  runtime: Pick<AppServerRuntime, "start" | "getHealth"> = appServerRuntime,
+): Promise<void> {
+  if (env.CODEX_BRIDGE_NO_ENGINE === "1") {
     return;
   }
   try {
-    await appServerRuntime.start();
+    await runtime.start();
     console.error(
-      `[codex-bridge] app-server engine ready (codex ${appServerRuntime.getHealth().codexVersion ?? "unknown"})`,
+      `[codex-bridge] app-server engine ready (codex ${runtime.getHealth().codexVersion ?? "unknown"})`,
     );
   } catch (error) {
     // Reported through /global/health rather than crashing: the backend polls
@@ -553,12 +577,14 @@ export const __testing = {
   applyRuntimeEnvironmentOutput,
   BRIDGE_MODEL_CACHE_VERSION,
   createOpenSseWriterForTesting: createOpenSseWriter,
+  createCodexEngineForTesting: createCodexEngine,
   createSharedTranscriptMetaLoaderForTesting: createSharedTranscriptMetaLoader,
   createShutdownHandlerForTesting: createShutdownHandler,
   emitForTesting: emit,
   eventRingForTesting: () => eventRing,
   extractPersistedMessageTextForTesting: extractPersistedMessageText,
   FALLBACK_MODELS,
+  fetchLiveModelsFromCliForTesting: fetchLiveModelsFromCli,
   getPersistedSessionMetaForTesting: getPersistedSessionMeta,
   getSubscriberCountForTesting: () => subscribers.size,
   hydrateMessagesFromPersistedSessionForTesting: hydrateMessagesFromPersistedSession,
@@ -566,6 +592,7 @@ export const __testing = {
   mergePersistedSessionMetaForTesting: mergePersistedSessionMeta,
   normalizeLogPayloadForTesting: normalizeLogPayload,
   readPersistedBridgeCache,
+  readCodexCliModelCache,
   readTextFileIfPresentForTesting: readTextFileIfPresent,
   refreshRuntimeEnvironment,
   runInlinePromptCommand,
@@ -576,7 +603,9 @@ export const __testing = {
     sseRouteTestHooks = hooks;
   },
   startBridgeServerForTesting: startBridgeServer,
+  startSelectedEngineForTesting: startSelectedEngine,
   startSseKeepaliveForTesting: startSseKeepalive,
+  sweepIdleThreadsForTesting: sweepIdleThreads,
   subscribeForTesting: (
     subscriber: (event: SseEvent, revision: number) => Promise<void> | void,
   ) => {

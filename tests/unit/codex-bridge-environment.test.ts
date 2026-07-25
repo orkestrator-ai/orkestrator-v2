@@ -34,6 +34,12 @@ describe("codex bridge process environment", () => {
     expect(desktopMain).toContain("appVersion: app.getVersion()");
   });
 
+  test("both spawn paths forward the configured concurrent thread limit", () => {
+    const commands = read("apps/backend/src/core/commands.ts");
+    expect(commands).toContain("env[CODEX_MAX_CONCURRENT_THREADS_ENV] = String(");
+    expect(commands).toContain("export ${CODEX_MAX_CONCURRENT_THREADS_ENV}=${maxConcurrentThreads}");
+  });
+
   /**
    * `APP_VERSION` is interpolated into the `docker exec` script that starts the
    * container bridge, and it originates in the environment. Without sanitizing, a

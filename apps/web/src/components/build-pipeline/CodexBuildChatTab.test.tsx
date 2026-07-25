@@ -4,6 +4,7 @@ import {
   classifyCodexPromptOutcome as realClassifyCodexPromptOutcome,
   type CodexPromptSendOutcome,
 } from "@/lib/codex-client";
+import { TEST_STRUCTURED_REVIEW_OUTPUT } from "./structured-review-test-fixture";
 
 const mockCheckHealth = mock(async () => true);
 const mockCreateClient = mock(() => ({ baseUrl: "http://127.0.0.1:9999" }));
@@ -24,6 +25,7 @@ const mockSendPrompt = mock<
   ) => Promise<CodexPromptSendOutcome | boolean>
 >(async () => true);
 const mockAbortSession = mock(async () => true);
+const mockGetStructuredOutput = mock(async () => TEST_STRUCTURED_REVIEW_OUTPUT);
 const mockDetectPr = mock(async (): Promise<any> => null);
 const mockDetectPrLocal = mock(async (): Promise<any> => null);
 const mockGetProjectNotes = mock(async () => ({ content: "" }));
@@ -41,6 +43,7 @@ mock.module("@/lib/codex-client", () => ({
   createSession: mockCreateSession,
   getSessionMessages: mockGetSessionMessages,
   getSessionStatus: mockGetSessionStatus,
+  getStructuredOutput: mockGetStructuredOutput,
   sendPrompt: mockSendPrompt,
   // The real classifier: the component's handling of ambiguous sends is exactly
   // what these tests need to exercise, so it must not be stubbed.
@@ -488,6 +491,7 @@ function seedFailedPromptRecovery(options: {
   prompt: string;
   requestId: string;
   useTaskImages: boolean;
+  structuredReview?: boolean;
   messages?: ReturnType<typeof createTestMessage>[];
   images?: Array<{ filename: string; data: string }>;
 }) {
@@ -501,6 +505,7 @@ function seedFailedPromptRecovery(options: {
     prompt: options.prompt,
     useTaskImages: options.useTaskImages,
     requestId: options.requestId,
+    ...(options.structuredReview ? { structuredReview: true } : {}),
   };
 
   useBuildPipelineStore.setState((state) => {
@@ -1985,6 +1990,7 @@ describe("CodexBuildChatTab", () => {
       prompt,
       requestId: "review-request-1",
       useTaskImages: true,
+      structuredReview: true,
       images: [{ filename: "review.webp", data: "cmV2aWV3" }],
       messages: [
         createTestMessage("old-review-prompt", "user", "Start reviewing."),
@@ -2015,6 +2021,9 @@ describe("CodexBuildChatTab", () => {
             filename: "review.webp",
           }],
           requestId: "review-request-1",
+          outputSchema: expect.objectContaining({
+            type: "object",
+          }),
         },
       );
     });

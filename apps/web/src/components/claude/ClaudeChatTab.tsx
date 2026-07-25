@@ -22,6 +22,7 @@ import {
   getPendingQuestions,
   getPendingPlanApprovals,
   sendPrompt,
+  getStructuredOutput,
   abortSession,
   subscribeToEvents,
   checkHealth,
@@ -58,7 +59,10 @@ import { isSetupPending } from "@/lib/setup-commands";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import type { ClaudeAttachment } from "@/stores/claudeStore";
 import { normalizeClaudeMessage } from "@/lib/chat/native-message-adapters";
+import { hideRawStructuredReviewMessages } from "@/lib/structured-review-messages";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
+import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
+import { NativeStructuredReviewResult } from "@/components/review/NativeStructuredReviewResult";
 
 interface ClaudeChatTabProps {
   tabId: string;
@@ -392,8 +396,15 @@ export function ClaudeChatTab({
   // This prevents unnecessary recalculations when other session properties change
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
   const displayMessages = useMemo(
-    () => pinActiveNativeAgentParts(sessionMessages.map(normalizeClaudeMessage)),
-    [sessionMessages],
+    () => {
+      const messages = pinActiveNativeAgentParts(
+        sessionMessages.map(normalizeClaudeMessage),
+      );
+      return isReviewTab
+        ? hideRawStructuredReviewMessages(messages)
+        : messages;
+    },
+    [isReviewTab, sessionMessages],
   );
   const hasMessageHistory = sessionMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
@@ -877,6 +888,10 @@ export function ClaudeChatTab({
               effort: effortLevel,
               permissionMode,
               fastMode: fastModeEnabled && modelSupportsFastMode,
+              outputSchema: isReviewTab
+                ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
+                : undefined,
+              requestId: isReviewTab ? `normal-review-${tabId}` : undefined,
             });
 
             if (!success) {
@@ -1322,6 +1337,9 @@ export function ClaudeChatTab({
         effort,
         permissionMode,
         fastMode: fastModeEnabled && modelSupportsFastMode,
+        outputSchema: isReviewTab
+          ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
+          : undefined,
       });
 
       if (!success) {
@@ -1329,7 +1347,7 @@ export function ClaudeChatTab({
         setSessionLoading(sessionKey, false);
       }
     },
-    [client, session, sessionKey, environmentId, getSelectedModel, addMessage, removeMessage, setSessionLoading]
+    [client, session, sessionKey, environmentId, getSelectedModel, addMessage, removeMessage, setSessionLoading, isReviewTab]
   );
 
   handleSendRef.current = handleSend;
@@ -1425,6 +1443,16 @@ export function ClaudeChatTab({
   const effortValue = getEffort(sessionKey);
   const planModeEnabledValue = isPlanMode(sessionKey);
   const fastModeEnabledValue = isFastMode(sessionKey);
+  const loadStructuredReview = useCallback(
+    () => client && session
+      ? getStructuredOutput(client, session.sessionId)
+      : Promise.resolve(null),
+    [client, session],
+  );
+  const retryStructuredReview = useCallback(async () => {
+    if (!initialPrompt) throw new Error("The original review prompt is unavailable.");
+    await handleSend(initialPrompt, [], effortValue, false, fastModeEnabledValue);
+  }, [effortValue, fastModeEnabledValue, handleSend, initialPrompt]);
 
   // Send initial prompt on RECONNECTION to existing session only.
   // New sessions handle initial prompt directly in initialize() to avoid race conditions.
@@ -1700,6 +1728,13 @@ export function ClaudeChatTab({
                 </div>
               </div>
             )}
+            <NativeStructuredReviewResult
+              enabled={isReviewTab}
+              sessionId={session?.sessionId}
+              isLoading={session?.isLoading ?? false}
+              loadResult={loadStructuredReview}
+              onRetry={retryStructuredReview}
+            />
               <div className="h-32" aria-hidden="true" />
             </>
           }

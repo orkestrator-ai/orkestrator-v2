@@ -192,6 +192,7 @@ describe("reconcilePersistedLayout", () => {
       isLocal: true,
       worktreePath: "/worktrees/current",
       hasBuildPipeline: (pipelineId: string) => pipelineId === "pipeline-1",
+      hasLoopedReview: (workflowId: string) => workflowId === "workflow-1",
     };
     const restored = reconcilePersistedLayout(saved({
       kind: "leaf",
@@ -219,6 +220,11 @@ describe("reconcilePersistedLayout", () => {
           type: "claude-build",
           buildTabData: { environmentId: "old", pipelineId: "pipeline-1", taskId: "task-1" },
         },
+        {
+          id: "looped",
+          type: "looped-review",
+          loopedReviewTabData: { environmentId: "old", workflowId: "workflow-1" },
+        },
       ],
       activeTabId: "file",
     }, { containerId: null }), localContext);
@@ -231,9 +237,39 @@ describe("reconcilePersistedLayout", () => {
         { id: "open", openCodeNativeData: { environmentId: "env-1", sessionId: "oc-1", isLocal: true } },
         { id: "tmux", claudeTmuxData: { environmentId: "env-1", isLocal: true } },
         { id: "build", buildTabData: { environmentId: "env-1", pipelineId: "pipeline-1", taskId: "task-1", isLocal: true } },
+        { id: "looped", loopedReviewTabData: { environmentId: "env-1", workflowId: "workflow-1", isLocal: true } },
       ],
     });
     expect(JSON.stringify(restored)).not.toContain("stale");
+  });
+
+  test("drops looped-review tabs whose authoritative workflow no longer exists", () => {
+    const restored = reconcilePersistedLayout(saved({
+      kind: "leaf",
+      id: "pane",
+      tabs: [
+        { id: "plain", type: "plain" },
+        {
+          id: "missing-loop",
+          type: "looped-review",
+          loopedReviewTabData: {
+            environmentId: "env-1",
+            workflowId: "missing",
+          },
+        },
+      ],
+      activeTabId: "missing-loop",
+    }), {
+      ...context,
+      hasLoopedReview: () => false,
+    });
+
+    expect(restored?.root).toEqual({
+      kind: "leaf",
+      id: "pane",
+      tabs: [{ id: "plain", type: "plain" }],
+      activeTabId: "plain",
+    });
   });
 
   test("preserves child order and direction while normalizing split sizes", () => {

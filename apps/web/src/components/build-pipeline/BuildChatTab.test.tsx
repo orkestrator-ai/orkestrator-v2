@@ -1,5 +1,9 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test, mock } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  TEST_STRUCTURED_REVIEW_OUTPUT,
+  TEST_STRUCTURED_REVIEW_REPORT,
+} from "./structured-review-test-fixture";
 
 // ---------------------------------------------------------------------------
 // Mocks — must be declared BEFORE importing the component under test
@@ -51,6 +55,9 @@ const mockCreateSession = mock(() => Promise.resolve({ sessionId: "session-1" })
 const mockGetSessionMessages = mock(() => Promise.resolve([] as ClaudeMessage[]));
 const mockSendPrompt = mock(() => Promise.resolve(true));
 const mockAbortSession = mock(() => Promise.resolve(true));
+const mockGetStructuredOutput = mock(() =>
+  Promise.resolve(TEST_STRUCTURED_REVIEW_OUTPUT)
+);
 
 mock.module("@/lib/claude-client", () => ({
   createClient: mockCreateClient,
@@ -60,6 +67,7 @@ mock.module("@/lib/claude-client", () => ({
   getSessionMessages: mockGetSessionMessages,
   sendPrompt: mockSendPrompt,
   abortSession: mockAbortSession,
+  getStructuredOutput: mockGetStructuredOutput,
   subscribeToEvents: mockSubscribeToEvents,
   ERROR_MESSAGE_PREFIX: "[ERROR]",
   SYSTEM_MESSAGE_PREFIX: "[SYSTEM]",
@@ -458,6 +466,7 @@ describe("BuildChatTab", () => {
     mockGetSessionMessages.mockClear();
     mockSendPrompt.mockClear();
     mockAbortSession.mockClear();
+    mockGetStructuredOutput.mockClear();
 
     // Reset default implementations
     mockGetClaudeServerStatus.mockImplementation(() =>
@@ -477,6 +486,9 @@ describe("BuildChatTab", () => {
     mockGetSessionMessages.mockImplementation(() => Promise.resolve([]));
     mockSendPrompt.mockImplementation(() => Promise.resolve(true));
     mockAbortSession.mockImplementation(() => Promise.resolve(true));
+    mockGetStructuredOutput.mockImplementation(() =>
+      Promise.resolve(TEST_STRUCTURED_REVIEW_OUTPUT)
+    );
     mockDetectPr.mockImplementation(() => Promise.resolve(null));
     mockDetectPrLocal.mockImplementation(() => Promise.resolve(null));
   });
@@ -1339,12 +1351,12 @@ describe("BuildChatTab", () => {
         expect(mockSendPrompt).toHaveBeenCalledWith(
           { baseUrl: "http://127.0.0.1:9999" },
           SESSION_ID,
-          createAddressIssuesPrompt(),
+          createAddressIssuesPrompt(TEST_STRUCTURED_REVIEW_REPORT),
           { permissionMode: "bypassPermissions" },
         );
       });
 
-      const prompt = createAddressIssuesPrompt();
+      const prompt = createAddressIssuesPrompt(TEST_STRUCTURED_REVIEW_REPORT);
       expect(prompt).toContain(
         "Stage only files that clearly belong to the review fixes and test coverage changes you made",
       );
@@ -1354,6 +1366,60 @@ describe("BuildChatTab", () => {
       await act(async () => {
         resolvePrompt?.(true);
       });
+    });
+
+    test("skips addressing and proceeds directly to verification for a clean report", async () => {
+      mockGetStructuredOutput.mockResolvedValueOnce({
+        ok: true,
+        provider: "claude",
+        value: {
+          ...TEST_STRUCTURED_REVIEW_REPORT,
+          issues: [],
+          testCoverageGaps: [],
+          verdict: {
+            ready: "yes",
+            reasoning: "No findings remain.",
+          },
+        },
+      });
+      mockCreateSession.mockResolvedValueOnce({ sessionId: "verify-session" });
+      seedClaudeReviewPipeline();
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("verifying");
+        expect(pipeline?.structuredReview?.issues).toEqual([]);
+        expect(pipeline?.sessions.at(-1)?.sdkSessionId).toBe("verify-session");
+      });
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        { baseUrl: "http://127.0.0.1:9999" },
+        "verify-session",
+        expect.stringContaining("Verify the changes"),
+        expect.objectContaining({ permissionMode: "bypassPermissions" }),
+      );
+    });
+
+    test("pauses on an invalid structured report instead of advancing", async () => {
+      mockGetStructuredOutput.mockResolvedValueOnce({
+        ok: true,
+        provider: "claude",
+        value: { reviewSummary: "plaintext-like incomplete result" } as any,
+      });
+      seedClaudeReviewPipeline();
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      render(<BuildChatTab data={createContainerBuildData()} isActive />);
+
+      await waitFor(() => {
+        const pipeline = useBuildPipelineStore.getState().pipelines.get(PIPELINE_ID);
+        expect(pipeline?.phase).toBe("failed");
+        expect(pipeline?.error).toContain("Invalid structured-review-report");
+      });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+      expect(mockCreateSession).not.toHaveBeenCalled();
     });
 
     test("keeps the successful address-issues follow-up in the review session until it idles", async () => {
@@ -1372,7 +1438,9 @@ describe("BuildChatTab", () => {
 
       const reviewSession = useClaudeStore.getState().sessions.get(SESSION_KEY);
       expect(reviewSession?.isLoading).toBe(true);
-      expect(reviewSession?.messages.at(-1)?.content).toBe(createAddressIssuesPrompt());
+      expect(reviewSession?.messages.at(-1)?.content).toBe(
+        createAddressIssuesPrompt(TEST_STRUCTURED_REVIEW_REPORT),
+      );
       expect(mockCreateSession).not.toHaveBeenCalled();
     });
 

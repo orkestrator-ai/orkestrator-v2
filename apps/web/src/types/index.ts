@@ -165,6 +165,15 @@ export interface EnsureEnvironmentSetupResult extends StartEnvironmentResult {
   environment: Environment;
 }
 
+export interface PersistedLoopedReviewWorkflow<T = unknown> {
+  version: number;
+  id: string;
+  environmentId: string;
+  snapshot: T;
+  updatedAt: string;
+  revision: number;
+}
+
 export interface EnvironmentSetupSession {
   environmentId: string;
   sessionId: string;
@@ -303,8 +312,8 @@ export interface GlobalConfig {
   debugLogging?: boolean;
   /** Serve the app to authenticated browsers on the host's Tailscale network */
   webClientEnabled?: boolean;
-  /** Custom template for action-bar code reviews; omitted to use the built-in prompt */
-  reviewPrompt?: string;
+  /** Editable preference embedded inside Orkestrator's fixed review contract. */
+  reviewInstruction?: string;
 }
 
 export type { GatewayTokenSettings, WebClientStatus } from "./webClient.js";

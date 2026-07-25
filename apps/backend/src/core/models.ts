@@ -127,6 +127,23 @@ export interface PersistedPaneLayout {
   revision: number;
 }
 
+/**
+ * Versioned looped-review workflow persisted by the backend.
+ *
+ * The backend owns durability and compare-and-swap revisions while the web
+ * application owns and runtime-validates the workflow snapshot schema. Keeping
+ * the snapshot opaque here lets the workflow evolve without coupling backend
+ * releases to every report-contract field.
+ */
+export interface PersistedLoopedReviewWorkflow {
+  version: number;
+  id: string;
+  environmentId: string;
+  snapshot: unknown;
+  updatedAt: string;
+  revision: number;
+}
+
 export interface RepositoryConfig {
   defaultBranch: string;
   prBaseBranch: string;
@@ -180,7 +197,8 @@ export interface AppConfig {
     experimentalCodexRawEventLogging?: boolean;
     debugLogging?: boolean;
     webClientEnabled?: boolean;
-    reviewPrompt?: string;
+    /** Editable preference embedded inside Orkestrator's fixed review contract. */
+    reviewInstruction?: string;
   };
   repositories: Record<string, RepositoryConfig>;
 }

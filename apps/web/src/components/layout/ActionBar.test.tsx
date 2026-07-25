@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createContext, useContext, useState } from "react";
 import * as realAlertDialog from "@/components/ui/alert-dialog";
 import * as realContextMenu from "@/components/ui/context-menu";
@@ -55,6 +55,7 @@ const setEnvironmentPrBackendMock = mock(async (
 ) => {});
 const setEnvironmentPRStoreMock = mock(() => {});
 const createTabMock = mock((_agent: string, _options?: unknown) => {});
+const createLoopedWorkflowMock = mock((_options: unknown) => "looped-workflow-1");
 const selectTabMock = mock((_index: number) => {});
 const closeActiveTabMock = mock(() => {});
 const setProjectBoardTabMock = mock((_tab: string) => {});
@@ -332,7 +333,7 @@ mock.module("@/stores", () => ({
       global: {
         defaultAgent?: "claude" | "opencode" | "codex";
         preferredEditor?: "vscode" | "cursor";
-        reviewPrompt?: string;
+        reviewInstruction?: string;
       };
       repositories: Record<string, { prBaseBranch?: string }>;
     };
@@ -343,7 +344,7 @@ mock.module("@/stores", () => ({
           global: {
             defaultAgent: currentDefaultAgent,
             preferredEditor: currentPreferredEditor,
-            reviewPrompt: currentReviewPrompt,
+            reviewInstruction: currentReviewPrompt,
           },
           repositories: currentRepositoryConfig,
         },
@@ -408,6 +409,9 @@ mock.module("@/stores", () => ({
       },
       selector,
     ),
+  useLoopedReviewStore: <T,>(selector: (state: {
+    createWorkflow: typeof createLoopedWorkflowMock;
+  }) => T) => selector({ createWorkflow: createLoopedWorkflowMock }),
 }));
 
 mock.module("@/hooks", () => ({
@@ -489,6 +493,8 @@ beforeEach(() => {
   setEnvironmentPrBackendMock.mockReset();
   setEnvironmentPRStoreMock.mockReset();
   createTabMock.mockReset();
+  createLoopedWorkflowMock.mockReset();
+  createLoopedWorkflowMock.mockImplementation(() => "looped-workflow-1");
   selectTabMock.mockReset();
   closeActiveTabMock.mockReset();
   toastSuccessMock.mockReset();
@@ -1323,7 +1329,7 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
-  test("uses the saved custom review prompt and resolves its target branch", () => {
+  test("embeds the saved review instruction and resolves its target branch", () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -1338,7 +1344,9 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).toHaveBeenCalledWith(
       "codex",
       expect.objectContaining({
-        initialPrompt: "Inspect origin/main...HEAD for release blockers.",
+        initialPrompt: expect.stringContaining(
+          'User review instruction (JSON string): "Inspect origin/main...HEAD for release blockers."',
+        ),
         displayTitle: "Review",
         isReviewTab: true,
       }),
@@ -1446,13 +1454,8 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Code review" }));
     expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("radio", { name: "Codex" }));
-    fireEvent.click(
-      within(screen.getByRole("radiogroup", { name: "Codex mode" })).getByRole("radio", {
-        name: /^Native/,
-      }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "OK" }));
+    fireEvent.click(screen.getByRole("radio", { name: /^Codex/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(createTabMock).toHaveBeenLastCalledWith(
       "codex",
       expect.objectContaining({
@@ -1491,11 +1494,11 @@ describe("ActionBar workflow tabs", () => {
     expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
     expect(createTabMock).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "OK" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
     expect(createTabMock).toHaveBeenCalledWith(
       "codex",
       expect.objectContaining({
-        agentLaunchMode: "cli",
+        agentLaunchMode: "native",
         displayTitle: "Review",
         isReviewTab: true,
       }),
@@ -1540,7 +1543,7 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
-  test("maps every configured review tab type and closes without launch on Cancel", () => {
+  test("maps every configured native review provider and closes without launch on Cancel", () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -1556,34 +1559,53 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).not.toHaveBeenCalled();
 
     const cases = [
-      { provider: "Claude", modeLabel: "CLI", agent: "claude", mode: "cli" },
-      { provider: "Claude", modeLabel: "Native", agent: "claude", mode: "native" },
-      { provider: "Claude", modeLabel: "Tmux", agent: "claude", mode: "tmux" },
-      { provider: "Codex", modeLabel: "CLI", agent: "codex", mode: "cli" },
-      { provider: "Codex", modeLabel: "Native", agent: "codex", mode: "native" },
-      { provider: "OpenCode", modeLabel: "CLI", agent: "opencode", mode: "cli" },
-      { provider: "OpenCode", modeLabel: "Native", agent: "opencode", mode: "native" },
+      { provider: "Claude", agent: "claude" },
+      { provider: "Codex", agent: "codex" },
+      { provider: "OpenCode", agent: "opencode" },
     ] as const;
 
     for (const reviewCase of cases) {
       fireEvent.contextMenu(reviewButton);
-      fireEvent.click(screen.getByRole("radio", { name: reviewCase.provider }));
-      fireEvent.click(
-        within(
-          screen.getByRole("radiogroup", { name: `${reviewCase.provider} mode` }),
-        ).getByRole("radio", { name: new RegExp(`^${reviewCase.modeLabel}`) }),
-      );
-      fireEvent.click(screen.getByRole("button", { name: "OK" }));
+      fireEvent.click(screen.getByRole("radio", { name: new RegExp(`^${reviewCase.provider}`) }));
+      fireEvent.click(screen.getByRole("button", { name: "Start review" }));
       expect(createTabMock).toHaveBeenLastCalledWith(
         reviewCase.agent,
         expect.objectContaining({
-          agentLaunchMode: reviewCase.mode,
+          agentLaunchMode: "native",
           initialAgentModel: expect.any(String),
           isReviewTab: true,
         }),
       );
     }
     expect(createTabMock).toHaveBeenCalledTimes(cases.length);
+  });
+
+  test("launches one dedicated looped-review tab with the default six-pass allowance", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+    expect(
+      screen.getByRole("dialog", { name: "Configure looped code review" }),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+
+    expect(createLoopedWorkflowMock).toHaveBeenCalledWith(expect.objectContaining({
+      environmentId: "env-1",
+      projectId: "project-1",
+      agent: "codex",
+      targetBranch: "main",
+      allowance: 6,
+    }));
+    expect(createTabMock).toHaveBeenCalledWith("looped-review", {
+      loopedReviewId: "looped-workflow-1",
+      displayTitle: "Looped Review",
+    });
   });
 
   test("falls back from an absent environment and global workflow default to Claude", () => {

@@ -5,6 +5,7 @@ import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
+import { isJsonSchema } from "@orkestrator/protocol/structured-output";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { streamSSE } from "hono/streaming";
@@ -106,6 +107,7 @@ interface SseEvent {
     | "session.idle"
     | "session.error"
     | "session.title-updated"
+    | "session.structured-output"
     | "message.updated"
     | "session.approval-requested"
     | "session.approval-resolved"
@@ -788,11 +790,21 @@ app.get("/session/:id/status", (c) => {
   return c.json(status);
 });
 
+app.get("/session/:id/structured-output", (c) => {
+  const result = appServerRuntime.getStructuredOutput(
+    c.req.param("id"),
+    c.req.query("requestId")?.trim(),
+  );
+  if (!result) return c.json({ error: "Session not found" }, 404);
+  return c.json(result);
+});
+
 app.post("/session/:id/prompt", async (c) => {
   const sessionId = c.req.param("id");
   const body = await c.req.json().catch(() => ({}));
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
+  const outputSchema = body.outputSchema;
   const attachments = Array.isArray(body.attachments)
     ? body.attachments
         .map((entry: unknown) => {
@@ -827,11 +839,15 @@ app.post("/session/:id/prompt", async (c) => {
       400,
     );
   }
+  if (outputSchema !== undefined && !isJsonSchema(outputSchema)) {
+    return c.json({ error: "outputSchema must be a JSON Schema object" }, 400);
+  }
 
   const outcome = await appServerRuntime.prompt(sessionId, {
     prompt,
     requestId,
     attachments,
+    outputSchema,
   });
   if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
   return c.json(outcome.result, 202);

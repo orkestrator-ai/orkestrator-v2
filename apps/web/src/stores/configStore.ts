@@ -115,8 +115,8 @@ export const useConfigStore = create<ConfigState>()((set, get) => ({
   updateGlobalConfig: (updates) =>
     set((state) => {
       const global = { ...state.config.global, ...updates };
-      if ("reviewPrompt" in updates && updates.reviewPrompt === undefined) {
-        delete global.reviewPrompt;
+      if ("reviewInstruction" in updates && updates.reviewInstruction === undefined) {
+        delete global.reviewInstruction;
       }
       return {
         config: {

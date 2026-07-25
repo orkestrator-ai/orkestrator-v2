@@ -33,6 +33,7 @@ import {
   getSlashCommands,
   getSessionMessages,
   getSessionStatus,
+  getStructuredOutput,
   isCodexSessionPhase,
   lookupSessionStatus,
   parseApproval,
@@ -53,6 +54,7 @@ import {
 import { SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
+import { hideRawStructuredReviewMessages } from "@/lib/structured-review-messages";
 import { CodexComposeBar } from "./CodexComposeBar";
 import { CodexApprovalCard } from "./CodexApprovalCard";
 import { CodexPlanModeCard } from "./CodexPlanModeCard";
@@ -71,6 +73,8 @@ import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { cn } from "@/lib/utils";
 import type { CodexNativeData } from "@/types/paneLayout";
 import type { CodexAttachment } from "@/stores/codexStore";
+import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
+import { NativeStructuredReviewResult } from "@/components/review/NativeStructuredReviewResult";
 
 interface CodexChatTabProps {
   tabId: string;
@@ -390,8 +394,13 @@ export function CodexChatTab({
     [session?.messages],
   );
   const displayMessages = useMemo(
-    () => sessionMessages.map(normalizeCodexNativeMessage),
-    [sessionMessages],
+    () => {
+      const messages = sessionMessages.map(normalizeCodexNativeMessage);
+      return isReviewTab
+        ? hideRawStructuredReviewMessages(messages)
+        : messages;
+    },
+    [isReviewTab, sessionMessages],
   );
   const hasMessageHistory = sessionMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
@@ -584,6 +593,9 @@ export function CodexChatTab({
         rawSendOutcome = await sendPrompt(client, session.sessionId, text, {
           attachments: promptAttachments.length > 0 ? promptAttachments : undefined,
           requestId,
+          outputSchema: isReviewTab
+            ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
+            : undefined,
         });
       } finally {
         dispatchInFlightRef.current -= 1;
@@ -705,6 +717,7 @@ export function CodexChatTab({
       sessionKey,
       setSessionError,
       setSessionLoading,
+      isReviewTab,
     ],
   );
 
@@ -1989,6 +2002,17 @@ export function CodexChatTab({
     tabId,
   ]);
 
+  const loadStructuredReview = useCallback(
+    () => client && session?.sessionId
+      ? getStructuredOutput(client, session.sessionId)
+      : Promise.resolve(null),
+    [client, session?.sessionId],
+  );
+  const retryStructuredReview = useCallback(async () => {
+    if (!initialPrompt) throw new Error("The original review prompt is unavailable.");
+    await handleSend(initialPrompt, [], createUuid());
+  }, [handleSend, initialPrompt]);
+
   if (setupPending) {
     return (
       <SetupPendingOverlay
@@ -2097,6 +2121,13 @@ export function CodexChatTab({
                   </div>
                 </div>
               )}
+              <NativeStructuredReviewResult
+                enabled={isReviewTab}
+                sessionId={session?.sessionId}
+                isLoading={session?.isLoading ?? false}
+                loadResult={loadStructuredReview}
+                onRetry={retryStructuredReview}
+              />
 
               {/* h-32 ≈ compose bar; h-80 adds room for the plan card (~230px) above it */}
               <div className={showPlanModeCard ? "h-80" : "h-32"} aria-hidden="true" />

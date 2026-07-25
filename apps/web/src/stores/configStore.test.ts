@@ -45,11 +45,11 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
     expect(initialGlobal.codexMaxConcurrentThreads).toBe(backendGlobal.codexMaxConcurrentThreads);
     expect(initialGlobal.defaultAgent).toBe(backendGlobal.defaultAgent);
     expect(initialGlobal.webClientEnabled).toBe(backendGlobal.webClientEnabled);
-    expect(initialGlobal.reviewPrompt).toBe(backendGlobal.reviewPrompt);
+    expect(initialGlobal.reviewInstruction).toBe(backendGlobal.reviewInstruction);
   });
 });
 
-describe("configStore review prompt updates", () => {
+describe("configStore review instruction updates", () => {
   beforeEach(() => {
     useConfigStore.setState({
       config: structuredClone(useConfigStore.getInitialState().config),
@@ -58,20 +58,20 @@ describe("configStore review prompt updates", () => {
     });
   });
 
-  test("sets and removes a custom review prompt without changing sibling config", () => {
+  test("sets and removes a custom review instruction without changing sibling config", () => {
     const originalAgent = useConfigStore.getState().config.global.defaultAgent;
 
     useConfigStore.getState().updateGlobalConfig({
-      reviewPrompt: "Review {{targetBranch}}.",
+      reviewInstruction: "Review {{targetBranch}}.",
     });
-    expect(useConfigStore.getState().config.global.reviewPrompt).toBe(
+    expect(useConfigStore.getState().config.global.reviewInstruction).toBe(
       "Review {{targetBranch}}.",
     );
 
-    useConfigStore.getState().updateGlobalConfig({ reviewPrompt: undefined });
+    useConfigStore.getState().updateGlobalConfig({ reviewInstruction: undefined });
     const global = useConfigStore.getState().config.global;
-    expect(global.reviewPrompt).toBeUndefined();
-    expect(Object.hasOwn(global, "reviewPrompt")).toBe(false);
+    expect(global.reviewInstruction).toBeUndefined();
+    expect(Object.hasOwn(global, "reviewInstruction")).toBe(false);
     expect(global.defaultAgent).toBe(originalAgent);
   });
 });

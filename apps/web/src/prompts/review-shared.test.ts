@@ -52,6 +52,9 @@ describe("buildReviewBody", () => {
       expect(body).toContain(
         "Use subagents / threads to complete the work in parallel where possible.",
       );
+      expect(body).toContain("## User review instruction");
+      expect(body).toContain("provider-enforced output schema");
+      expect(body).toContain("User review instruction (JSON string):");
       expect(body).toContain("git diff origin/develop...HEAD");
       expect(body).toContain("## What Changed");
       expect(body).toContain('answering "What does this change do, and why?"');
@@ -68,6 +71,7 @@ describe("buildReviewBody", () => {
       expect(body.match(/^## What Changed$/gm)).toHaveLength(2);
       expect(extractLevelTwoHeadings(body)).toEqual([
         "## Security and instruction hierarchy",
+        "## User review instruction",
         "## Step 1: Commit Changes (rollback point)",
         "## Step 2: Run Tests",
         "## Step 3: Code Review",
@@ -119,7 +123,7 @@ describe("buildReviewBody", () => {
     expect(documentation).toContain("Settings → Review");
     expect(documentation).toContain("Reset to default");
     expect(documentation).toContain("100,000 characters");
-    expect(documentation).toContain("malformed, blank, or oversized persisted overrides");
+    expect(documentation).toContain("malformed, blank, or oversized persisted instructions");
     expect(documentation).toContain("{{targetBranch}}");
     expect(documentation).toContain(
       "| Output | Markdown sections: Review Scope, What Changed, Risk Profile, Test Results",
@@ -134,7 +138,7 @@ describe("buildReviewBody", () => {
     expect(headings.slice(0, 5)).toEqual([
       "## Source",
       "## How it is invoked",
-      "## Custom prompt setting",
+      "## Custom review instruction setting",
       "## Dynamic parameter",
       "## Full prompt text",
     ]);
@@ -145,13 +149,13 @@ describe("buildReviewBody", () => {
     ]);
 
     for (const expected of [
-      "| Prompt generator | `apps/web/src/prompts/git-workflows.ts` → `createReviewPrompt(targetBranch, customPrompt?)` |",
+      "| Prompt generator | `apps/web/src/prompts/git-workflows.ts` → `createReviewPrompt(targetBranch, reviewInstruction?)` |",
       "| Shared body | `apps/web/src/prompts/review-shared.ts` → `buildReviewBody(opts)` |",
       "| Export | `apps/web/src/prompts/index.ts` |",
       "| UI trigger | `apps/web/src/components/layout/ActionBar.tsx` → `handleReview()` |",
       "| Tests | `apps/web/src/prompts/git-workflows.test.ts` |",
       "`handleReview(agentOverride?)` runs:",
-      "Calls `createReviewPrompt(targetBranch, config.global.reviewPrompt)`.",
+      "Calls `createReviewPrompt(targetBranch, config.global.reviewInstruction)`.",
       'Opens a new agent tab via `createTab(agent, { initialPrompt: reviewPrompt, displayTitle: "Review" })`.',
       "**Right-click context menu**: explicit override — Claude, OpenCode, or Codex.",
       "**Keyboard**: `⌘R` (same as click; requires `canCreateTab` and `selectedProjectId`).",
@@ -159,7 +163,7 @@ describe("buildReviewBody", () => {
       "- Compare command: `` git diff origin/${targetBranch}...HEAD ``",
       "- Base ref line in Review Scope: `Base ref: origin/${targetBranch}...HEAD`",
       "- Target branch line in Review Scope: `Target branch: ${targetBranch}`",
-      "| Preamble | Security/instruction hierarchy",
+      "| Preamble | Fixed security/instruction hierarchy plus the subordinate shared user review instruction |",
       "| 1 | Commit only files that clearly belong to the change",
       "| 2 | Run full project test suite; record failures |",
       "| 3 | Diff against `origin/<targetBranch>...HEAD`",

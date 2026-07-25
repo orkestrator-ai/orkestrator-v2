@@ -7,7 +7,10 @@
     "./browser-preview": "./src/browser-preview.ts",
     "./connections": "./src/connections.ts",
     "./gateway-token": "./src/gateway-token.ts",
+    "./review-instruction": "./src/review-prompt.ts",
     "./review-prompt": "./src/review-prompt.ts",
+    "./structured-review": "./src/structured-review.ts",
+    "./structured-output": "./src/structured-output.ts",
     "./web-client": "./src/web-client.ts"
   },
   "scripts": {

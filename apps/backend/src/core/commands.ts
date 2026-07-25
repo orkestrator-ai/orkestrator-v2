@@ -3589,6 +3589,29 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     storage.deletePaneLayout(asString(environmentId, "environmentId")),
   );
 
+  register("get_looped_review_workflow", ({ workflowId }, { storage }) =>
+    storage.getLoopedReviewWorkflow(asString(workflowId, "workflowId")),
+  );
+  register("list_looped_review_workflows", ({ environmentId }, { storage }) =>
+    storage.listLoopedReviewWorkflows(asString(environmentId, "environmentId")),
+  );
+  register(
+    "save_looped_review_workflow",
+    ({ workflowId, environmentId, version, snapshot, expectedRevision }, { storage }) =>
+      storage.saveLoopedReviewWorkflow(
+        asString(workflowId, "workflowId"),
+        asString(environmentId, "environmentId"),
+        asNumber(version, "version"),
+        snapshot,
+        expectedRevision === undefined
+          ? undefined
+          : asNumber(expectedRevision, "expectedRevision"),
+      ),
+  );
+  register("delete_looped_review_workflow", ({ workflowId }, { storage }) =>
+    storage.deleteLoopedReviewWorkflow(asString(workflowId, "workflowId")),
+  );
+
   register("create_terminal_session", async ({ containerId, cols, rows, user, trackEnvironmentActivity }, { storage }) => {
     const resolvedContainerId = asString(containerId, "containerId");
     const shouldTrackActivity = asBoolean(trackEnvironmentActivity);

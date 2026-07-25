@@ -61,6 +61,9 @@ const mockAnswerQuestion = mock(() => true);
 const mockDismissQuestion = mock(() => true);
 const mockGetPendingPlanApprovals = mock(() => []);
 const mockRespondToPlanApproval = mock(() => true);
+const mockGetStructuredPromptDispatchState = mock<
+  typeof realSessionManager.getStructuredPromptDispatchState
+>(() => "new");
 
 mock.module("../services/session-manager.js", () => ({
   createSession: mockCreateSession,
@@ -76,6 +79,7 @@ mock.module("../services/session-manager.js", () => ({
   dismissQuestion: mockDismissQuestion,
   getPendingPlanApprovals: mockGetPendingPlanApprovals,
   respondToPlanApproval: mockRespondToPlanApproval,
+  getStructuredPromptDispatchState: mockGetStructuredPromptDispatchState,
 }));
 
 // Import the route after mocking
@@ -119,6 +123,8 @@ describe("session routes", () => {
     mockDismissQuestion.mockClear();
     mockGetPendingPlanApprovals.mockClear();
     mockRespondToPlanApproval.mockClear();
+    mockGetStructuredPromptDispatchState.mockReset();
+    mockGetStructuredPromptDispatchState.mockImplementation(() => "new");
   });
 
   // --- POST /session/create ---
@@ -187,6 +193,48 @@ describe("session routes", () => {
       expect(res.status).toBe(202);
       const data = await jsonBody(res);
       expect(data.status).toBe("processing");
+    });
+
+    test("forwards a structured schema and stable request id", async () => {
+      const outputSchema = { type: "object", properties: { summary: { type: "string" } } };
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Review",
+        outputSchema,
+        requestId: "structured-1",
+      });
+
+      expect(res.status).toBe(202);
+      expect(await jsonBody(res)).toMatchObject({
+        status: "processing",
+        requestId: "structured-1",
+      });
+      expect(mockSendPrompt).toHaveBeenCalledWith(
+        "s-1",
+        "Review",
+        expect.objectContaining({ outputSchema, requestId: "structured-1" }),
+      );
+    });
+
+    test("rejects malformed schemas and deduplicates a running structured request", async () => {
+      const malformed = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Review",
+        outputSchema: "not a schema",
+        requestId: "structured-1",
+      });
+      expect(malformed.status).toBe(400);
+
+      mockGetStructuredPromptDispatchState.mockReturnValueOnce("processing");
+      const duplicate = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Review",
+        outputSchema: { type: "object" },
+        requestId: "structured-1",
+      });
+      expect(duplicate.status).toBe(202);
+      expect(await jsonBody(duplicate)).toMatchObject({
+        status: "processing",
+        duplicate: true,
+      });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 
     test("returns 404 for unknown session", async () => {

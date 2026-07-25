@@ -14,6 +14,7 @@ import {
   getPendingQuestions,
   getSessionMessages,
   getSessionStatus,
+  getStructuredOutput,
   hasOpenCodeSubagentSession,
   listSessions,
   mergeOpenCodeSubagentTranscript,
@@ -23,6 +24,7 @@ import {
   replyToPermission,
   replyToQuestion,
   sendPrompt,
+  sendStructuredPrompt,
   subscribeToEvents,
   type OpencodeClient,
   type OpenCodeMessage,
@@ -879,6 +881,137 @@ describe("opencode-client sendPrompt", () => {
     expect(result.error).toContain("Status: 429");
     expect(result.error).toContain("Request ID: req_123");
     expect(result.error).toContain("Raw error:");
+  });
+
+  test("passes the JSON-schema format without disabling OpenCode tools", async () => {
+    let capturedRequest: Record<string, unknown> | undefined;
+    const client = {
+      session: {
+        promptAsync: async (request: Record<string, unknown>) => {
+          capturedRequest = request;
+          return { data: undefined, error: undefined };
+        },
+      },
+    } as unknown as OpencodeClient;
+    const schema = {
+      type: "object",
+      properties: { summary: { type: "string" } },
+      required: ["summary"],
+    };
+
+    const result = await sendStructuredPrompt(
+      client,
+      "session-1",
+      "Review this",
+      schema,
+      { requestId: "structured-1", retryCount: 3 },
+    );
+
+    expect(result).toEqual({ success: true, requestId: "structured-1" });
+    expect(capturedRequest).toMatchObject({
+      sessionID: "session-1",
+      messageID: "structured-1",
+      format: { type: "json_schema", schema, retryCount: 3 },
+    });
+    // Omitting `tools` preserves the server's normal agent/tool configuration.
+    expect(capturedRequest?.tools).toBeUndefined();
+  });
+
+  test("reads only OpenCode's structured field and types malformed/retry failures", async () => {
+    const successful = {
+      session: {
+        messages: async () => ({
+          data: [
+            {
+              info: {
+                id: "structured-1",
+                role: "user",
+                format: { type: "json_schema", schema: { type: "object" } },
+              },
+              parts: [],
+            },
+            {
+              info: {
+                id: "assistant-1",
+                role: "assistant",
+                parentID: "structured-1",
+                time: { created: 1, completed: 2 },
+                structured: { summary: "Looks good" },
+              },
+              parts: [],
+            },
+          ],
+        }),
+      },
+    } as unknown as OpencodeClient;
+    expect(await getStructuredOutput(successful, "session-1", "structured-1")).toEqual({
+      ok: true,
+      provider: "opencode",
+      requestId: "structured-1",
+      value: { summary: "Looks good" },
+    });
+
+    const plaintextOnly = {
+      session: {
+        messages: async () => ({
+          data: [
+            {
+              info: {
+                id: "structured-2",
+                role: "user",
+                format: { type: "json_schema", schema: { type: "object" } },
+              },
+              parts: [],
+            },
+            {
+              info: {
+                id: "assistant-2",
+                role: "assistant",
+                parentID: "structured-2",
+                time: { created: 1, completed: 2 },
+              },
+              parts: [{ type: "text", text: "{\"summary\":\"not trusted\"}" }],
+            },
+          ],
+        }),
+      },
+    } as unknown as OpencodeClient;
+    expect(await getStructuredOutput(plaintextOnly, "session-1", "structured-2"))
+      .toMatchObject({
+        ok: false,
+        error: { code: "malformed_output", retryable: true },
+      });
+
+    const exhausted = {
+      session: {
+        messages: async () => ({
+          data: [
+            {
+              info: {
+                id: "assistant-3",
+                role: "assistant",
+                parentID: "structured-3",
+                time: { created: 1, completed: 2 },
+                error: {
+                  name: "StructuredOutputError",
+                  data: { message: "Schema retries exhausted", retries: 3 },
+                },
+              },
+              parts: [],
+            },
+          ],
+        }),
+      },
+    } as unknown as OpencodeClient;
+    expect(await getStructuredOutput(exhausted, "session-1", "structured-3"))
+      .toMatchObject({
+        ok: false,
+        error: {
+          code: "schema_retry_exhausted",
+          retryable: true,
+          details: { retries: 3 },
+        },
+      });
   });
 });
 

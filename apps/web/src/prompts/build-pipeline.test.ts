@@ -52,6 +52,28 @@ describe("createBuildReviewPrompt", () => {
     expect(result).not.toContain("Ask clarifying questions if needed");
   });
 
+  test("embeds the shared editable instruction without replacing ticket-aware fixed framing", () => {
+    const task: TaskSnapshot = {
+      ...emptyTask,
+      title: "Preserve ticket context",
+      description: "The fixed pipeline context must remain.",
+    };
+    const result = createBuildReviewPrompt(
+      task,
+      "Keep project notes.",
+      "develop",
+      "Focus on public API compatibility with {{targetBranch}}.",
+    );
+
+    expect(result).toContain("Preserve ticket context");
+    expect(result).toContain("Keep project notes.");
+    expect(result).toContain("## Security and instruction hierarchy");
+    expect(result).toContain("## Step 1: Commit Changes (rollback point)");
+    expect(result).toContain(
+      'User review instruction (JSON string): "Focus on public API compatibility with develop."',
+    );
+  });
+
   test("uses safer no-issues wording", () => {
     const result = createBuildReviewPrompt(null, "", "main");
     expect(result).toContain(

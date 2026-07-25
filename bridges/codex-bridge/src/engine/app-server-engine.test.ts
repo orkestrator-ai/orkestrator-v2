@@ -412,6 +412,31 @@ describe("turn dispatch", () => {
     expect(params.input).toEqual([{ type: "text", text: "do the thing", text_elements: [] }]);
   });
 
+  test("forwards outputSchema on turn/start without changing the tool-capable turn", async () => {
+    const h = harness({
+      "thread/start": () => ({ thread: thread("t1") }),
+      "turn/start": () => ({ turn: { id: "turn-1" } }),
+    });
+    await h.engine.start();
+    const started = await h.engine.startThread({ config: BUILD });
+    const outputSchema = {
+      type: "object",
+      properties: { summary: { type: "string" } },
+      required: ["summary"],
+      additionalProperties: false,
+    };
+    await h.engine.startTurn({
+      handle: started.handle,
+      input: [{ type: "text", text: "review it" }],
+      config: BUILD,
+      outputSchema,
+    });
+
+    const params = h.child().requests.find((r) => r.method === "turn/start")!.params;
+    expect(params.outputSchema).toEqual(outputSchema);
+    expect(params.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
+  });
+
   test("sends a resolved sandboxPolicy object, not the mode shorthand", async () => {
     const h = harness({
       "thread/start": () => ({ thread: thread("t1") }),

@@ -633,6 +633,7 @@ export class AppServerEngine implements CodexEngine {
       // The at-most-once key: echoed back on the persisted userMessage as
       // `clientId`, which is what makes ambiguous dispatch recoverable.
       ...(options.requestId ? { clientUserMessageId: options.requestId } : {}),
+      ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}),
       input: options.input.map(toAppServerInput),
       ...this.toThreadParams(options.config),
       ...(options.config.reasoningEffort ? { effort: options.config.reasoningEffort } : {}),

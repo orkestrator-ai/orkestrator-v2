@@ -1271,6 +1271,118 @@ describe("sendPrompt", () => {
     expect(session.status).toBe("idle");
   });
 
+  test("passes Agent SDK outputFormat without removing tools and stores the structured payload", async () => {
+    const outputSchema = {
+      type: "object",
+      properties: { summary: { type: "string" } },
+      required: ["summary"],
+      additionalProperties: false,
+    };
+    const { events, stop } = captureEvents();
+    try {
+      const { session, call } = await runPromptWithMessages(
+        [{
+          type: "result",
+          subtype: "success",
+          structured_output: { summary: "Looks good" },
+        }],
+        { outputSchema, requestId: "structured-1" },
+      );
+
+      expect(call.options.outputFormat).toEqual({
+        type: "json_schema",
+        schema: outputSchema,
+      });
+      expect(call.options.allowedTools).toContain("Read");
+      expect(call.options.allowedTools).toContain("Bash");
+      expect(session.structuredOutput).toEqual({
+        ok: true,
+        provider: "claude",
+        requestId: "structured-1",
+        value: { summary: "Looks good" },
+      });
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "session.structured-output",
+        sessionId: session.id,
+      }));
+    } finally {
+      stop();
+    }
+  });
+
+  test("never accepts plaintext as a structured result and types schema retry exhaustion", async () => {
+    const outputSchema = { type: "object" };
+    const missingSession = createSession("missing-structured");
+    track(missingSession.id);
+    const missing = sendPrompt(missingSession.id, "review", {
+      outputSchema,
+      requestId: "structured-missing",
+    });
+    const missingCall = await nextQueryCall();
+    missingCall.push({
+      type: "assistant",
+      message: { id: "msg-plain", content: [{ type: "text", text: "Looks good" }] },
+    });
+    missingCall.push({ type: "result", subtype: "success", result: "Looks good" });
+    missingCall.finish();
+
+    await expect(missing).rejects.toThrow("without a structured result");
+    expect(missingSession.structuredOutput).toMatchObject({
+      ok: false,
+      error: { code: "malformed_output", retryable: true },
+    });
+
+    const exhaustedSession = createSession("exhausted");
+    track(exhaustedSession.id);
+    const exhausted = sendPrompt(exhaustedSession.id, "review", {
+      outputSchema,
+      requestId: "structured-exhausted",
+    });
+    const exhaustedCall = await nextQueryCall();
+    exhaustedCall.push({
+      type: "result",
+      subtype: "error_max_structured_output_retries",
+      errors: ["Could not match schema"],
+    });
+    exhaustedCall.finish();
+
+    await expect(exhausted).rejects.toThrow("Could not match schema");
+    expect(exhaustedSession.structuredOutput).toMatchObject({
+      ok: false,
+      requestId: "structured-exhausted",
+      error: { code: "schema_retry_exhausted", retryable: true },
+    });
+  });
+
+  test("a repeated structured request id attaches instead of launching another query", async () => {
+    const session = createSession("deduplicated");
+    track(session.id);
+    const options = {
+      outputSchema: { type: "object" },
+      requestId: "structured-once",
+    };
+    const first = sendPrompt(session.id, "review", options);
+    const call = await nextQueryCall();
+
+    await sendPrompt(session.id, "review", options);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+
+    call.push({
+      type: "result",
+      subtype: "success",
+      structured_output: { summary: "done" },
+    });
+    call.finish();
+    await first;
+
+    await sendPrompt(session.id, "review", options);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(session.structuredOutput).toMatchObject({
+      ok: true,
+      requestId: "structured-once",
+    });
+  });
+
   test("forwards query configuration and captures init, compact, generic system, and context events", async () => {
     mockGetMcpServersForSdk.mockImplementationOnce(async () => ({
       local: { command: "safe-command", args: [] },

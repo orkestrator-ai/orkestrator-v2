@@ -3,7 +3,7 @@ import { createContext, useContext, useCallback, useState, ReactNode } from "rea
 
 // Terminal-specific tab types
 export type TerminalTabType = "plain" | "claude" | "opencode" | "codex" | "root";
-export type CreatableTabType = TerminalTabType | "browser";
+export type CreatableTabType = TerminalTabType | "browser" | "looped-review";
 export type AgentLaunchModeOverride = "cli" | "native" | "tmux";
 
 // All tab types including file viewer and native agent tabs
@@ -15,7 +15,8 @@ export type TabType =
   | "claude-native"
   | "claude-tmux"
   | "codex-native"
-  | "claude-build";
+  | "claude-build"
+  | "looped-review";
 
 // Maximum number of tabs allowed (matches Ctrl+1-9 shortcuts)
 export const MAX_TABS = 9;
@@ -38,6 +39,8 @@ export interface CreateTabOptions {
   initialReasoningEffort?: string;
   /** Initial backend-local address for browser tabs. */
   initialUrl?: string;
+  /** Existing authoritative workflow opened by a looped-review tab. */
+  loopedReviewId?: string;
 }
 
 // Options for creating a file tab

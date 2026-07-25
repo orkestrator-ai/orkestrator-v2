@@ -31,13 +31,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { getGatewayTokenValidationError } from "@/lib/gateway-token";
 import {
-  getReviewPromptValidationError,
-  REVIEW_PROMPT_MAX_LENGTH,
-} from "@orkestrator/protocol/review-prompt";
+  getReviewInstructionValidationError,
+  REVIEW_INSTRUCTION_MAX_LENGTH,
+} from "@orkestrator/protocol/review-instruction";
 import { useTimedCopyFeedback } from "@/hooks";
 import {
-  DEFAULT_REVIEW_PROMPT_TEMPLATE,
-  REVIEW_PROMPT_TARGET_BRANCH_TOKEN,
+  DEFAULT_REVIEW_INSTRUCTION,
+  REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN,
 } from "@/prompts";
 import type {
   ClaudeMode,
@@ -65,10 +65,10 @@ const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
 // Codex V2 adds the root conversation to this child-only limit.
 const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;
 
-function getSavedReviewPrompt(value: unknown): string {
-  return typeof value === "string" && getReviewPromptValidationError(value) === null
+function getSavedReviewInstruction(value: unknown): string {
+  return typeof value === "string" && getReviewInstructionValidationError(value) === null
     ? value
-    : DEFAULT_REVIEW_PROMPT_TEMPLATE;
+    : DEFAULT_REVIEW_INSTRUCTION;
 }
 
 interface GlobalSettingsProps {
@@ -138,8 +138,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   );
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
   const [webClientEnabled, setWebClientEnabled] = useState(global.webClientEnabled ?? true);
-  const [reviewPrompt, setReviewPrompt] = useState(
-    getSavedReviewPrompt(global.reviewPrompt)
+  const [reviewInstruction, setReviewInstruction] = useState(
+    getSavedReviewInstruction(global.reviewInstruction)
   );
   const [webClientStatus, setWebClientStatus] = useState<WebClientStatus | null>(null);
   const [webClientApplyError, setWebClientApplyError] = useState<string | null>(null);
@@ -197,7 +197,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
     setWebClientEnabled(global.webClientEnabled ?? true);
-    setReviewPrompt(getSavedReviewPrompt(global.reviewPrompt));
+    setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
   }, [global]);
 
   const refreshWebClientStatus = useCallback(async () => {
@@ -288,14 +288,14 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       experimentalCodexRawEventLogging !== (global.experimentalCodexRawEventLogging ?? true) ||
       debugLogging !== (global.debugLogging ?? false) ||
       webClientEnabled !== (global.webClientEnabled ?? true) ||
-      reviewPrompt !== getSavedReviewPrompt(global.reviewPrompt) ||
+      reviewInstruction !== getSavedReviewInstruction(global.reviewInstruction) ||
       webClientApplyError !== null ||
       gatewayToken !== savedGatewayToken;
     setHasChanges(changed);
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, clearGithubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewPrompt, webClientApplyError, gatewayToken, savedGatewayToken, global]);
+  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, githubToken, clearGithubToken, allowedDomains, preferredEditor, defaultAgent, opencodeModel, opencodeMode, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, webClientApplyError, gatewayToken, savedGatewayToken, global]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -393,7 +393,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         experimentalCodexRawEventLogging: boolean;
         debugLogging: boolean;
         webClientEnabled: boolean;
-        reviewPrompt?: string;
+        reviewInstruction?: string;
       } = {
         containerResources: { cpuCores, memoryGb },
         envFilePatterns: patterns,
@@ -423,8 +423,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       };
 
       if (anthropicApiKey) newGlobal.anthropicApiKey = anthropicApiKey;
-      if (reviewPrompt !== DEFAULT_REVIEW_PROMPT_TEMPLATE) {
-        newGlobal.reviewPrompt = reviewPrompt;
+      if (reviewInstruction !== DEFAULT_REVIEW_INSTRUCTION) {
+        newGlobal.reviewInstruction = reviewInstruction;
       }
 
       let newConfig = await backend.updateGlobalConfig(newGlobal);
@@ -523,7 +523,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
     setWebClientEnabled(global.webClientEnabled ?? true);
-    setReviewPrompt(getSavedReviewPrompt(global.reviewPrompt));
+    setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
     setWebClientApplyError(null);
     setGatewayToken(savedGatewayToken);
     setDomainErrors([]);
@@ -533,8 +533,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
   // --- Section renderers ---
 
-  const isUsingDefaultReviewPrompt = reviewPrompt === DEFAULT_REVIEW_PROMPT_TEMPLATE;
-  const reviewPromptValidationError = getReviewPromptValidationError(reviewPrompt);
+  const isUsingDefaultReviewInstruction = reviewInstruction === DEFAULT_REVIEW_INSTRUCTION;
+  const reviewInstructionValidationError = getReviewInstructionValidationError(reviewInstruction);
 
   const renderReview = () => (
     <div className="max-w-3xl space-y-5">
@@ -542,32 +542,32 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         <div>
           <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
             <Eye className="h-4 w-4" />
-            Code review prompt
+            Code review instruction
           </h3>
           <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-            Used when Code Review or ⌘R opens a new review tab. Automated build-pipeline reviews keep their ticket-aware prompt.
+            Applied to normal, build-pipeline, and looped native reviews. Orkestrator adds the fixed safety, workflow, and output-schema contract around it.
           </p>
         </div>
         <span
           className={cn(
             "w-fit rounded-full border px-2 py-1 font-mono text-[10px] font-medium uppercase tracking-wider",
-            isUsingDefaultReviewPrompt
+            isUsingDefaultReviewInstruction
               ? "border-zinc-700 bg-zinc-900 text-muted-foreground"
               : "border-blue-500/40 bg-blue-500/10 text-blue-300"
           )}
         >
-          {isUsingDefaultReviewPrompt ? "Default" : "Custom"}
+          {isUsingDefaultReviewInstruction ? "Default" : "Custom"}
         </span>
       </div>
 
       <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/50">
         <div className="flex flex-col gap-3 border-b border-zinc-800 bg-zinc-900/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="space-y-1">
-            <Label htmlFor="review-prompt" className="text-sm font-medium">
-              Prompt template
+            <Label htmlFor="review-instruction" className="text-sm font-medium">
+              Review instruction
             </Label>
-            <p id="review-prompt-description" className="text-xs text-muted-foreground">
-              Use <code className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-[11px] text-zinc-300">{REVIEW_PROMPT_TARGET_BRANCH_TOKEN}</code> for the repository&apos;s PR base branch.
+            <p id="review-instruction-description" className="text-xs text-muted-foreground">
+              Describe what reviewers should emphasize. Use <code className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-[11px] text-zinc-300">{REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN}</code> for the repository&apos;s PR base branch.
             </p>
           </div>
           <Button
@@ -575,8 +575,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
             variant="outline"
             size="sm"
             className="h-8 w-fit gap-1.5 text-xs"
-            onClick={() => setReviewPrompt(DEFAULT_REVIEW_PROMPT_TEMPLATE)}
-            disabled={isUsingDefaultReviewPrompt || isSaving}
+            onClick={() => setReviewInstruction(DEFAULT_REVIEW_INSTRUCTION)}
+            disabled={isUsingDefaultReviewInstruction || isSaving}
           >
             <RotateCcw className="h-3.5 w-3.5" />
             Reset to default
@@ -584,36 +584,36 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         </div>
 
         <Textarea
-          id="review-prompt"
-          aria-describedby="review-prompt-description review-prompt-status"
-          aria-invalid={reviewPromptValidationError ? true : undefined}
-          value={reviewPrompt}
-          onChange={(event) => setReviewPrompt(event.target.value)}
-          maxLength={REVIEW_PROMPT_MAX_LENGTH}
+          id="review-instruction"
+          aria-describedby="review-instruction-description review-instruction-status"
+          aria-invalid={reviewInstructionValidationError ? true : undefined}
+          value={reviewInstruction}
+          onChange={(event) => setReviewInstruction(event.target.value)}
+          maxLength={REVIEW_INSTRUCTION_MAX_LENGTH}
           disabled={isSaving}
           spellCheck={false}
           className="h-[50vh] min-h-80 resize-y rounded-none border-0 bg-zinc-950 px-4 py-4 font-mono text-xs leading-5 shadow-none [field-sizing:fixed] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-500 sm:h-[min(60vh,40rem)] sm:min-h-[28rem]"
         />
 
         <div
-          id="review-prompt-status"
+          id="review-instruction-status"
           aria-live="polite"
           className="flex items-center justify-between gap-4 border-t border-zinc-800 bg-zinc-900/40 px-4 py-2 font-mono text-[10px] text-muted-foreground"
         >
-          <span>{reviewPrompt.includes(REVIEW_PROMPT_TARGET_BRANCH_TOKEN) ? "Target branch token active" : "No dynamic target branch token"}</span>
-          <span>{reviewPrompt.length.toLocaleString()} / {REVIEW_PROMPT_MAX_LENGTH.toLocaleString()} characters</span>
+          <span>{reviewInstruction.includes(REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN) ? "Target branch token active" : "No dynamic target branch token"}</span>
+          <span>{reviewInstruction.length.toLocaleString()} / {REVIEW_INSTRUCTION_MAX_LENGTH.toLocaleString()} characters</span>
         </div>
       </div>
 
-      {reviewPromptValidationError && (
+      {reviewInstructionValidationError && (
         <p className="flex items-start gap-1.5 text-xs text-destructive">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          {reviewPromptValidationError}
+          {reviewInstructionValidationError}
         </p>
       )}
 
       <p className="text-xs leading-relaxed text-muted-foreground/70">
-        A custom template replaces the complete built-in action-bar workflow, including its safety checks and report format. The change applies to newly opened review tabs.
+        Only this review preference is editable. It cannot remove or override the fixed safety rules, review workflow, or JSON schema. Changes apply to newly started review sessions.
       </p>
     </div>
   );
@@ -1664,7 +1664,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         <Button variant="outline" onClick={handleReset} disabled={!hasChanges}>
           Reset
         </Button>
-        <Button onClick={handleSave} disabled={!hasChanges || isSaving || saveSuccess || domainErrors.length > 0 || !!colorError || !!gatewayTokenValidationError || !!reviewPromptValidationError}>
+        <Button onClick={handleSave} disabled={!hasChanges || isSaving || saveSuccess || domainErrors.length > 0 || !!colorError || !!gatewayTokenValidationError || !!reviewInstructionValidationError}>
           {saveSuccess ? (
             <>
               <Check className="mr-2 h-4 w-4" />

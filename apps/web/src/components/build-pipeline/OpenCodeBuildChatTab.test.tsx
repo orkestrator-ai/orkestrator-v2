@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { TEST_STRUCTURED_REVIEW_OUTPUT } from "./structured-review-test-fixture";
 
 const mockCreateClient = mock(() => ({ session: {}, event: {} }));
 const mockCreateSession = mock(async () => ({ id: "review-session", createdAt: "2026-04-15T00:00:00.000Z" }));
@@ -11,6 +12,7 @@ const mockSendPrompt = mock(async (
   _options: unknown,
 ): Promise<{ success: boolean; error?: string }> => ({ success: true }));
 const mockAbortSession = mock(async () => true);
+const mockGetStructuredOutput = mock(async () => TEST_STRUCTURED_REVIEW_OUTPUT);
 const mockSubscribeToEvents = mock(async () => (async function* () {})());
 const mockReplyToPermission = mock(async () => true);
 const mockRejectQuestion = mock(async () => true);
@@ -29,6 +31,7 @@ mock.module("@/lib/opencode-client", () => ({
   createClient: mockCreateClient,
   createSession: mockCreateSession,
   getSessionMessages: mockGetSessionMessages,
+  getStructuredOutput: mockGetStructuredOutput,
   rejectQuestion: mockRejectQuestion,
   replyToPermission: mockReplyToPermission,
   sendPrompt: mockSendPrompt,

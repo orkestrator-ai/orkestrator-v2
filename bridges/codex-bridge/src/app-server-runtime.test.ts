@@ -920,6 +920,126 @@ describe("session lifecycle", () => {
     ).toBe("req-1");
   });
 
+  test("stores a schema-constrained final response and rehydrates it by request id", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const outputSchema = {
+      type: "object",
+      properties: { summary: { type: "string" } },
+      required: ["summary"],
+      additionalProperties: false,
+    };
+    await h.runtime.prompt(sessionId, {
+      prompt: "review",
+      requestId: "structured-1",
+      attachments: [],
+      outputSchema,
+    });
+
+    expect(
+      h.child().requests.find((request) => request.method === "turn/start")!.params.outputSchema,
+    ).toEqual(outputSchema);
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "answer-1",
+        type: "agentMessage",
+        text: JSON.stringify({ summary: "Looks good" }),
+      },
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    expect(h.runtime.getStructuredOutput(sessionId, "structured-1")).toEqual({
+      requestId: "structured-1",
+      structuredOutput: {
+        ok: true,
+        provider: "codex",
+        requestId: "structured-1",
+        value: { summary: "Looks good" },
+      },
+    });
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "idle",
+      structuredOutputRequestId: "structured-1",
+      structuredOutput: { ok: true, value: { summary: "Looks good" } },
+    });
+    const persisted = (await new BridgeSessionStore({
+      codexHome,
+      cwd: "/tmp/ws",
+    }).load())[0];
+    expect(persisted?.structuredOutput).toMatchObject({
+      ok: true,
+      requestId: "structured-1",
+    });
+  });
+
+  test("does not treat a plaintext final message as structured success", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "review",
+      requestId: "structured-plain",
+      attachments: [],
+      outputSchema: { type: "object" },
+    });
+    h.child().notify("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id: "answer-1", type: "agentMessage", text: "Looks good" },
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+
+    expect(h.runtime.getStructuredOutput(sessionId)).toMatchObject({
+      structuredOutput: {
+        ok: false,
+        error: { code: "malformed_output", retryable: true },
+      },
+    });
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "error",
+      phase: "failed",
+    });
+  });
+
+  test("maps Codex structured-output retry exhaustion to the shared failure code", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "review",
+      requestId: "structured-retries",
+      attachments: [],
+      outputSchema: { type: "object" },
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: {
+        id: "turn-1",
+        status: "failed",
+        error: {
+          message: "Structured output retries exhausted",
+          codexErrorInfo: "structuredOutputRetryExhausted",
+        },
+      },
+    });
+    await h.drain();
+
+    expect(h.runtime.getStructuredOutput(sessionId)).toMatchObject({
+      structuredOutput: {
+        ok: false,
+        error: { code: "schema_retry_exhausted", retryable: true },
+      },
+    });
+  });
+
   test("status reports running while a turn is live", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });

@@ -1,4 +1,15 @@
 // Type definitions for Claude Bridge Server
+import type {
+  JsonSchema,
+  StructuredOutputResult,
+} from "@orkestrator/protocol/structured-output";
+
+export type {
+  JsonSchema,
+  StructuredOutputFailure,
+  StructuredOutputFailureCode,
+  StructuredOutputResult,
+} from "@orkestrator/protocol/structured-output";
 
 // ============================================================================
 // Claude Agent SDK Message Types
@@ -39,6 +50,8 @@ export interface SdkResultMessage extends SdkMessageBase {
   is_error?: boolean;
   num_turns?: number;
   errors?: string[];
+  /** Present on successful turns requested with Agent SDK `outputFormat`. */
+  structured_output?: unknown;
 }
 
 /** Type guard for compact boundary message */
@@ -117,6 +130,10 @@ export interface SessionState {
   sdkSessionId?: string;
   /** Session initialization data (MCP servers, plugins, etc.) */
   initData?: SessionInitData;
+  /** Last completed schema-constrained turn, authoritative across UI remounts. */
+  structuredOutput?: StructuredOutputResult;
+  /** Request id of the structured turn currently running or last completed. */
+  structuredOutputRequestId?: string;
 }
 
 /** Effort level for controlling how much thinking/reasoning Claude applies */
@@ -171,6 +188,7 @@ export type SSEEventType =
   | "session.error"
   | "session.init"
   | "session.title-updated"
+  | "session.structured-output"
   | "message.updated"
   | "question.asked"
   | "question.answered"
@@ -221,6 +239,10 @@ export interface PromptOptions {
   permissionMode?: PermissionMode;
   /** When true, enables Claude Code fast mode (Opus 4.6 priority service tier). */
   fastMode?: boolean;
+  /** JSON Schema passed to the Agent SDK's structured-output option. */
+  outputSchema?: JsonSchema;
+  /** Stable caller id used to reconcile an async structured turn. */
+  requestId?: string;
   attachments?: Array<{
     type: "file" | "image";
     path: string;

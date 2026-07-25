@@ -22,6 +22,10 @@ export { useFeaturePlanStore, type FeaturePlan, type FeaturePlanMessage, type Fe
 export { useGitHubIssuesStore, githubIssueDetailKey } from "./githubIssuesStore";
 export { usePrMonitorStore, PR_MONITOR_INTERVALS, PR_MONITOR_TIMEOUTS, PR_MONITOR_BACKOFF, getEffectiveInterval } from "./prMonitorStore";
 export { useBuildPipelineStore } from "./buildPipelineStore";
+export {
+  useLoopedReviewStore,
+  LOOPED_REVIEW_DEFAULT_ALLOWANCE,
+} from "./loopedReviewStore";
 export type {
   BuildPipeline,
   BuildPhase,

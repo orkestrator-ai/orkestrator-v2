@@ -27,6 +27,10 @@ import {
 import { join } from "node:path";
 import type { EngineTurnConfig } from "../engine/types.js";
 import type { SessionTitleSource } from "./thread-registry.js";
+import {
+  isStructuredOutputResult,
+  type StructuredOutputResult,
+} from "@orkestrator/protocol/structured-output";
 
 export const BRIDGE_SESSION_REGISTRY_VERSION = 2;
 
@@ -40,6 +44,8 @@ export interface PersistedBridgeSession {
   config: EngineTurnConfig;
   /** Last prompt request id accepted, for duplicate suppression after restart. */
   lastAcceptedRequestId?: string;
+  structuredOutputRequestId?: string;
+  structuredOutput?: StructuredOutputResult;
   lastAccessed: string;
 }
 
@@ -132,6 +138,18 @@ function isPersistedBridgeSession(
   if (
     session.lastAcceptedRequestId !== undefined &&
     typeof session.lastAcceptedRequestId !== "string"
+  ) {
+    return false;
+  }
+  if (
+    session.structuredOutputRequestId !== undefined
+    && typeof session.structuredOutputRequestId !== "string"
+  ) {
+    return false;
+  }
+  if (
+    session.structuredOutput !== undefined
+    && !isStructuredOutputResult(session.structuredOutput)
   ) {
     return false;
   }
@@ -389,6 +407,8 @@ export class BridgeSessionStore {
     title?: string;
     titleSource?: SessionTitleSource;
     lastAcceptedRequestId?: string;
+    structuredOutputRequestId?: string;
+    structuredOutput?: StructuredOutputResult;
   }): PersistedBridgeSession {
     return {
       bridgeSessionId: options.bridgeSessionId,
@@ -398,6 +418,8 @@ export class BridgeSessionStore {
       title: options.title,
       titleSource: options.titleSource,
       lastAcceptedRequestId: options.lastAcceptedRequestId,
+      structuredOutputRequestId: options.structuredOutputRequestId,
+      structuredOutput: options.structuredOutput,
       lastAccessed: new Date(this.now()).toISOString(),
     };
   }

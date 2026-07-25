@@ -6,6 +6,12 @@ import type {
   ClaudeModelCatalogEntry,
   ClaudeModelCatalogSnapshot,
 } from "@/types";
+import {
+  isStructuredOutputResult,
+  structuredOutputFailure,
+  type JsonSchema,
+  type StructuredOutputResult,
+} from "@orkestrator/protocol/structured-output";
 
 export type { ClaudeModelCatalogSnapshot };
 
@@ -188,6 +194,7 @@ export interface ClaudeEvent {
     | "session.error"
     | "session.init"
     | "session.title-updated"
+    | "session.structured-output"
     | "message.updated"
     | "question.asked"
     | "question.answered"
@@ -394,6 +401,8 @@ export async function sendPrompt(
     effort?: ClaudeEffortLevel;
     permissionMode?: PermissionMode;
     fastMode?: boolean;
+    outputSchema?: JsonSchema;
+    requestId?: string;
   }
 ): Promise<boolean> {
   try {
@@ -405,6 +414,7 @@ export async function sendPrompt(
       effort: options?.effort,
       permissionMode: options?.permissionMode,
       fastMode: options?.fastMode,
+      structured: options?.outputSchema !== undefined,
     });
     const response = await fetch(`${client.baseUrl}/session/${sessionId}/prompt`, {
       method: "POST",
@@ -416,6 +426,8 @@ export async function sendPrompt(
         effort: options?.effort,
         permissionMode: options?.permissionMode,
         fastMode: options?.fastMode,
+        outputSchema: options?.outputSchema,
+        requestId: options?.requestId,
       }),
     });
     console.debug("[claude-client] Prompt response", {
@@ -431,6 +443,89 @@ export async function sendPrompt(
   } catch (error) {
     console.error("[claude-client] Failed to send prompt:", error);
     return false;
+  }
+}
+
+export interface ClaudeStructuredPromptAccepted {
+  status: "processing" | "already-processed";
+  requestId: string;
+  duplicate?: boolean;
+}
+
+/** Dispatch a schema-constrained turn while retaining Claude's normal tool set. */
+export async function sendStructuredPrompt(
+  client: ClaudeClient,
+  sessionId: string,
+  prompt: string,
+  outputSchema: JsonSchema,
+  options: {
+    model?: string;
+    attachments?: ClaudeAttachment[];
+    effort?: ClaudeEffortLevel;
+    permissionMode?: PermissionMode;
+    fastMode?: boolean;
+    requestId?: string;
+  } = {},
+): Promise<ClaudeStructuredPromptAccepted | null> {
+  const requestId = options.requestId ?? crypto.randomUUID();
+  try {
+    const response = await fetch(`${client.baseUrl}/session/${sessionId}/prompt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...options, prompt, outputSchema, requestId }),
+    });
+    if (!response.ok) return null;
+    const body = (await response.json().catch(() => ({}))) as {
+      requestId?: unknown;
+      status?: unknown;
+      duplicate?: unknown;
+    };
+    return {
+      status: body.status === "already-processed" ? "already-processed" : "processing",
+      requestId: typeof body.requestId === "string" ? body.requestId : requestId,
+      duplicate: body.duplicate === true,
+    };
+  } catch (error) {
+    console.error("[claude-client] Failed to send structured prompt:", error);
+    return null;
+  }
+}
+
+/**
+ * Rehydrate a completed structured turn from bridge-owned session state.
+ * `null` means the requested turn is still pending or no such turn is known.
+ */
+export async function getStructuredOutput<T = unknown>(
+  client: ClaudeClient,
+  sessionId: string,
+  requestId?: string,
+): Promise<StructuredOutputResult<T> | null> {
+  try {
+    const query = requestId ? `?requestId=${encodeURIComponent(requestId)}` : "";
+    const response = await fetchWithTimeout(
+      `${client.baseUrl}/session/${sessionId}/structured-output${query}`,
+    );
+    if (!response.ok) return null;
+    const body = (await response.json()) as { structuredOutput?: unknown };
+    if (body.structuredOutput === null || body.structuredOutput === undefined) {
+      return null;
+    }
+    if (isStructuredOutputResult(body.structuredOutput)) {
+      return body.structuredOutput as StructuredOutputResult<T>;
+    }
+    return structuredOutputFailure(
+      "claude",
+      "malformed_output",
+      "Claude bridge returned a malformed structured-output envelope.",
+      { requestId },
+    );
+  } catch (error) {
+    return structuredOutputFailure(
+      "claude",
+      "provider_error",
+      error instanceof Error ? error.message : "Failed to read Claude structured output.",
+      { requestId },
+    );
   }
 }
 
@@ -741,6 +836,7 @@ export function subscribeToEvents(
         "session.error",
         "session.init",
         "session.title-updated",
+        "session.structured-output",
         "message.updated",
         "question.asked",
         "question.answered",

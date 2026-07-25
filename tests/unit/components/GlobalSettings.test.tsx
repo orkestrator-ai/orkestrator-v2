@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import { mockWriteText } from "../../mocks/clipboard";
-import { REVIEW_PROMPT_MAX_LENGTH } from "../../../packages/protocol/src/review-prompt";
+import { REVIEW_INSTRUCTION_MAX_LENGTH } from "../../../packages/protocol/src/review-prompt";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 
 const mockUpdateGlobalConfig = mock(async (globalConfig: unknown) => ({
@@ -670,7 +670,7 @@ describe("GlobalSettings", () => {
     const { rerender } = render(<GlobalSettings activeSection="general" />);
     expect(screen.getByText("Preferred Editor")).toBeTruthy();
     rerender(<GlobalSettings activeSection="review" />);
-    expect(screen.getByText("Code review prompt")).toBeTruthy();
+    expect(screen.getByText("Code review instruction")).toBeTruthy();
     rerender(<GlobalSettings activeSection="claude" />);
     expect(screen.getByText("Choose how Claude runs in environments")).toBeTruthy();
     rerender(<GlobalSettings activeSection="opencode" />);
@@ -689,13 +689,15 @@ describe("GlobalSettings", () => {
     expect(screen.getByText("Save Logs for Debugging")).toBeTruthy();
   });
 
-  test("saves a custom action-bar review prompt", async () => {
+  test("saves one shared custom review instruction", async () => {
     render(<GlobalSettings activeSection="review" />);
 
-    const prompt = screen.getByLabelText("Prompt template") as HTMLTextAreaElement;
-    expect(prompt.value).toContain("{{targetBranch}}");
+    const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
+    expect(instruction.value).toContain("{{targetBranch}}");
+    expect(screen.getByText(/Applied to normal, build-pipeline, and looped native reviews/)).toBeTruthy();
+    expect(screen.getByText(/cannot remove or override the fixed safety rules/)).toBeTruthy();
 
-    fireEvent.change(prompt, {
+    fireEvent.change(instruction, {
       target: { value: "Review origin/{{targetBranch}}...HEAD for regressions." },
     });
     expect(screen.getByText("Custom")).toBeTruthy();
@@ -704,85 +706,85 @@ describe("GlobalSettings", () => {
     await waitFor(() => {
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({
-          reviewPrompt: "Review origin/{{targetBranch}}...HEAD for regressions.",
+          reviewInstruction: "Review origin/{{targetBranch}}...HEAD for regressions.",
         }),
       );
     });
   });
 
-  test("resets a saved custom review prompt to the built-in default", async () => {
+  test("resets a saved custom review instruction to the built-in default", async () => {
     useConfigStore.setState((state) => ({
       config: {
         ...state.config,
-        global: { ...state.config.global, reviewPrompt: "Only review tests." },
+        global: { ...state.config.global, reviewInstruction: "Only review tests." },
       },
     }));
     render(<GlobalSettings activeSection="review" />);
 
-    const prompt = screen.getByLabelText("Prompt template") as HTMLTextAreaElement;
-    expect(prompt.value).toBe("Only review tests.");
+    const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
+    expect(instruction.value).toBe("Only review tests.");
     fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
-    expect(prompt.value).toContain("Security and instruction hierarchy");
+    expect(instruction.value).toContain("correctness, regressions, security");
     expect(screen.getByText("Default")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledTimes(1));
     const savedGlobal = mockUpdateGlobalConfig.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(Object.hasOwn(savedGlobal, "reviewPrompt")).toBe(false);
+    expect(Object.hasOwn(savedGlobal, "reviewInstruction")).toBe(false);
   });
 
-  test("does not allow an empty review prompt to be saved", async () => {
+  test("does not allow an empty review instruction to be saved", async () => {
     render(<GlobalSettings activeSection="review" />);
     await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
 
-    fireEvent.change(screen.getByLabelText("Prompt template"), {
+    fireEvent.change(screen.getByLabelText("Review instruction"), {
       target: { value: "   " },
     });
 
-    expect(screen.getByText("Review prompt cannot be empty. Enter a prompt or reset to the default.")).toBeTruthy();
+    expect(screen.getByText("Review instruction cannot be empty. Enter an instruction or reset to the default.")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  test("falls back to the built-in prompt for malformed persisted values", () => {
+  test("falls back to the built-in instruction for malformed persisted values", () => {
     useConfigStore.setState((state) => ({
       config: {
         ...state.config,
-        global: { ...state.config.global, reviewPrompt: 123 as never },
+        global: { ...state.config.global, reviewInstruction: 123 as never },
       },
     }));
 
     render(<GlobalSettings activeSection="review" />);
 
-    const prompt = screen.getByLabelText("Prompt template") as HTMLTextAreaElement;
-    expect(prompt.value).toContain("Security and instruction hierarchy");
-    expect(prompt.getAttribute("aria-invalid")).toBeNull();
+    const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
+    expect(instruction.value).toContain("correctness, regressions, security");
+    expect(instruction.getAttribute("aria-invalid")).toBeNull();
     expect(screen.getByText("Default")).toBeTruthy();
   });
 
-  test("enforces the review prompt length boundary", async () => {
+  test("enforces the review instruction length boundary", async () => {
     render(<GlobalSettings activeSection="review" />);
     await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
-    const prompt = screen.getByLabelText("Prompt template") as HTMLTextAreaElement;
+    const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
 
-    expect(prompt.maxLength).toBe(REVIEW_PROMPT_MAX_LENGTH);
-    fireEvent.change(prompt, {
-      target: { value: "x".repeat(REVIEW_PROMPT_MAX_LENGTH + 1) },
+    expect(instruction.maxLength).toBe(REVIEW_INSTRUCTION_MAX_LENGTH);
+    fireEvent.change(instruction, {
+      target: { value: "x".repeat(REVIEW_INSTRUCTION_MAX_LENGTH + 1) },
     });
 
-    expect(screen.getByText("Review prompt must be 100,000 characters or fewer.")).toBeTruthy();
-    expect(prompt.getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByText("Review instruction must be 100,000 characters or fewer.")).toBeTruthy();
+    expect(instruction.getAttribute("aria-invalid")).toBe("true");
     expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  test("reports custom prompts that do not use the target branch token", async () => {
+  test("reports custom instructions that do not use the target branch token", async () => {
     render(<GlobalSettings activeSection="review" />);
     await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
-    const prompt = screen.getByLabelText("Prompt template") as HTMLTextAreaElement;
+    const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
 
-    fireEvent.change(prompt, { target: { value: "Review the current diff." } });
+    fireEvent.change(instruction, { target: { value: "Review the current diff." } });
 
     expect(screen.getByText("No dynamic target branch token")).toBeTruthy();
-    expect(screen.getByText(`24 / ${REVIEW_PROMPT_MAX_LENGTH.toLocaleString()} characters`)).toBeTruthy();
+    expect(screen.getByText(`24 / ${REVIEW_INSTRUCTION_MAX_LENGTH.toLocaleString()} characters`)).toBeTruthy();
   });
 
   test("saves non-default editor and agent selections", async () => {

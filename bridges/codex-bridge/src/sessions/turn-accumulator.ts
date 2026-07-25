@@ -50,6 +50,8 @@ export interface TurnAccumulatorOptions {
   threadId: string;
   turnId: string;
   requestId?: string;
+  /** True when the final agent message must be parsed as provider-constrained JSON. */
+  expectsStructuredOutput?: boolean;
   engineGeneration: EngineGeneration;
   assistantMessageId: string;
   startedAt?: string;
@@ -75,6 +77,7 @@ export function unconfirmedTurnId(requestId: string): string {
 export class TurnAccumulator {
   readonly threadId: string;
   readonly requestId?: string;
+  readonly expectsStructuredOutput: boolean;
   readonly assistantMessageId: string;
   readonly startedAt: string;
 
@@ -102,6 +105,7 @@ export class TurnAccumulator {
     this.threadId = options.threadId;
     this.turnId = options.turnId;
     this.requestId = options.requestId;
+    this.expectsStructuredOutput = options.expectsStructuredOutput ?? false;
     this.engineGeneration = options.engineGeneration;
     this.assistantMessageId = options.assistantMessageId;
     this.startedAt = options.startedAt ?? new Date().toISOString();

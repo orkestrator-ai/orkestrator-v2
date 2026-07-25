@@ -14,6 +14,7 @@
  */
 import type { ThreadItem } from "../codex-item-types.js";
 import type { CodexCollabToolCallItem } from "../codex-collaboration.js";
+import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 
 export type EngineKind = "app-server";
 
@@ -224,6 +225,8 @@ export interface StartTurnOptions {
    * so a lost response can be reconciled instead of blindly retried.
    */
   requestId?: string;
+  /** Optional JSON Schema constraining only the final assistant message. */
+  outputSchema?: JsonSchema;
 }
 
 export interface EngineEventMeta {
@@ -360,4 +363,3 @@ export const APP_SERVER_CAPABILITIES: EngineCapabilities = {
   itemDeltas: true,
   turnDiff: true,
 };
-

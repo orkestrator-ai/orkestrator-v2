@@ -39,6 +39,8 @@ import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
 import { listenForTerminalBrowserTabRequests } from "@/lib/terminal-links";
 import { createOrkestratorScriptPrompt } from "@/prompts";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
+import { hydrateLoopedReviewWorkflowsForEnvironment } from "@/lib/looped-review-persistence";
 import { PaneTree } from "@/components/pane-layout";
 import { TerminalPortalHost } from "./TerminalPortalHost";
 import { InitializationLogs } from "./InitializationLogs";
@@ -804,8 +806,11 @@ export function TerminalContainer({
         return;
       } else if (hydrationStatus === undefined) {
         beginHydration(environmentId);
-        void backend.getPaneLayout(environmentId)
-          .then((saved) => {
+        void Promise.all([
+          backend.getPaneLayout(environmentId),
+          hydrateLoopedReviewWorkflowsForEnvironment(environmentId),
+        ])
+          .then(([saved]) => {
             const paneStore = usePaneLayoutStore.getState();
             if (paneStore.hydration.get(environmentId) !== "pending") return;
 
@@ -826,6 +831,8 @@ export function TerminalContainer({
               worktreePath: latestEnvironment.worktreePath,
               hasBuildPipeline: (pipelineId) =>
                 useBuildPipelineStore.getState().pipelines.has(pipelineId),
+              hasLoopedReview: (workflowId) =>
+                useLoopedReviewStore.getState().workflows.has(workflowId),
             });
             paneStore.finishHydration(environmentId, restored ?? undefined);
           })
@@ -1377,6 +1384,25 @@ export function TerminalContainer({
           activePaneId,
           options?.displayTitle,
         );
+        return;
+      }
+
+      if (type === "looped-review") {
+        if (!options?.loopedReviewId) {
+          console.warn("[TerminalContainer] Refusing looped-review tab without workflow ID");
+          return;
+        }
+        const newTab: TabInfo = {
+          id: createUniqueTabId("looped-review"),
+          type: "looped-review",
+          displayTitle: options.displayTitle ?? "Looped Review",
+          loopedReviewTabData: {
+            environmentId,
+            workflowId: options.loopedReviewId,
+            isLocal: isLocalEnvironment,
+          },
+        };
+        addTab(activePaneId, newTab, environmentId);
         return;
       }
 

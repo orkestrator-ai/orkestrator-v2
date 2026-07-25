@@ -12,6 +12,7 @@ import {
   getModels,
   createSession,
   getSessionMessages,
+  getStructuredOutput,
   sendPrompt,
   abortSession,
   subscribeToEvents,
@@ -56,6 +57,12 @@ import {
   updatePipelineKanbanPrMetadata,
 } from "@/lib/build-pipeline-source";
 import { GitHubCompletionCommentStatus } from "./GitHubCompletionCommentStatus";
+import { StructuredReviewReportView } from "@/components/review/StructuredReviewReportView";
+import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
+import {
+  readValidatedBuildReview,
+  structuredReviewHasFindings,
+} from "@/lib/build-pipeline-structured-review";
 
 const LazyCodexBuildChatTab = lazy(async () => {
   const module = await import("./CodexBuildChatTab");
@@ -222,6 +229,8 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
     markSessionIdle,
     markSessionRunning,
     setVerificationResult,
+    beginStructuredReview,
+    setStructuredReview,
     incrementIteration,
     setPipelineError,
     pausePipeline,
@@ -571,8 +580,25 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
             break;
 
           case "review":
-            // Review complete -> send "address issues" to the same session
-            await sendAddressIssuesMessage(currentPipeline, completedSession);
+            {
+              const persisted = useBuildPipelineStore.getState().pipelines.get(pipelineId);
+              const report = await readValidatedBuildReview(() =>
+                getStructuredOutput(
+                  client,
+                  completedSession.sdkSessionId,
+                  persisted?.structuredReviewRequestId,
+                )
+              );
+              setStructuredReview(pipelineId, report);
+              if (structuredReviewHasFindings(report)) {
+                await sendAddressIssuesMessage(
+                  { ...currentPipeline, structuredReview: report },
+                  completedSession,
+                );
+              } else {
+                await startVerifySession({ ...currentPipeline, structuredReview: report });
+              }
+            }
             break;
 
           case "fix":
@@ -711,7 +737,10 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
       // Set loading for the session
       setSessionLoading(reviewSession.sessionKey, true);
 
-      const addressIssuesPrompt = createAddressIssuesPrompt();
+      if (!currentPipeline.structuredReview) {
+        throw new Error("Cannot address review findings before structured validation.");
+      }
+      const addressIssuesPrompt = createAddressIssuesPrompt(currentPipeline.structuredReview);
       const userMessage: ClaudeMessageType = {
         id: createUuid(),
         role: "user",
@@ -898,7 +927,12 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
 
       const repoConfig = config.repositories[currentPipeline.projectId];
       const targetBranch = repoConfig?.prBaseBranch || "main";
-      const reviewPrompt = createBuildReviewPrompt(task, projectNotes, targetBranch);
+      const reviewPrompt = createBuildReviewPrompt(
+        task,
+        projectNotes,
+        targetBranch,
+        config.global.reviewInstruction,
+      );
 
       const userMessage: ClaudeMessageType = {
         id: createUuid(),
@@ -910,16 +944,20 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
 
       addMessage(result.sessionKey, userMessage);
 
+      const requestId = createUuid();
+      beginStructuredReview(pipelineId, requestId);
       const success = await sendPrompt(client, result.sdkSessionId, reviewPrompt, {
         permissionMode: "bypassPermissions",
         attachments: taskImagesToAttachments(task.images),
+        outputSchema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+        requestId,
       });
 
       if (!success) {
         if (!isPipelinePaused()) setPipelineError(pipelineId, "Failed to send review prompt");
       }
     },
-    [client, pipelineId, config.repositories, createPipelineSession, addMessage, isPipelinePaused, setSessionLoading, setPhase, setPipelineError]
+    [client, pipelineId, config.global.reviewInstruction, config.repositories, createPipelineSession, addMessage, beginStructuredReview, isPipelinePaused, setSessionLoading, setPhase, setPipelineError]
   );
 
   // Start verification session (with ticket context)
@@ -1606,6 +1644,11 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
                 )}
               </div>
             ))
+          )}
+          {pipeline?.structuredReview && (
+            <div className="mx-auto w-full max-w-5xl px-4 py-4">
+              <StructuredReviewReportView report={pipeline.structuredReview} />
+            </div>
           )}
         </div>
       </div>

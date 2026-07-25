@@ -1,5 +1,11 @@
 import type { NativeMessage, NativeMessagePart } from "./chat/native-message-types";
 import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
+import {
+  isStructuredOutputResult,
+  structuredOutputFailure,
+  type JsonSchema,
+  type StructuredOutputResult,
+} from "@orkestrator/protocol/structured-output";
 
 export interface CodexReasoningOption {
   effort: CodexReasoningEffort;
@@ -109,6 +115,8 @@ interface CodexSessionStatusResponse {
   turnId?: string;
   requestId?: string;
   engineGeneration?: number;
+  structuredOutputRequestId?: string;
+  structuredOutput?: StructuredOutputResult;
 }
 
 export interface CodexClient {
@@ -147,6 +155,8 @@ export interface CodexSessionStatus {
   /** The prompt request id this turn is executing, for reconnect reconciliation. */
   requestId?: string;
   engineGeneration?: number;
+  structuredOutputRequestId?: string;
+  structuredOutput?: StructuredOutputResult;
 }
 
 export type CodexSessionStatusLookupResult =
@@ -169,6 +179,7 @@ export interface CodexEvent {
     | "session.idle"
     | "session.error"
     | "session.title-updated"
+    | "session.structured-output"
     | "message.updated"
     | "session.approval-requested"
     | "session.approval-resolved"
@@ -656,6 +667,12 @@ export async function lookupSessionStatus(
         ...(typeof data.engineGeneration === "number"
           ? { engineGeneration: data.engineGeneration }
           : {}),
+        ...(typeof data.structuredOutputRequestId === "string"
+          ? { structuredOutputRequestId: data.structuredOutputRequestId }
+          : {}),
+        ...(isStructuredOutputResult(data.structuredOutput)
+          ? { structuredOutput: data.structuredOutput }
+          : {}),
       },
     };
   } catch (error) {
@@ -744,6 +761,7 @@ export async function sendPrompt(
   options?: {
     attachments?: CodexPromptAttachment[];
     requestId?: string;
+    outputSchema?: JsonSchema;
   },
 ): Promise<CodexPromptSendOutcome> {
   const requestId = options?.requestId ?? crypto.randomUUID();
@@ -757,6 +775,7 @@ export async function sendPrompt(
           prompt,
           attachments: options?.attachments,
           requestId,
+          outputSchema: options?.outputSchema,
         }),
       },
     );
@@ -776,6 +795,44 @@ export async function sendPrompt(
   } catch (error) {
     console.error("[codex-client] Failed to send prompt:", error);
     return { outcome: "unknown", requestId };
+  }
+}
+
+/**
+ * Read a completed constrained turn from bridge-owned state. `null` means the
+ * requested turn is still running (or has not been dispatched).
+ */
+export async function getStructuredOutput<T = unknown>(
+  client: CodexClient,
+  sessionId: string,
+  requestId?: string,
+): Promise<StructuredOutputResult<T> | null> {
+  try {
+    const query = requestId ? `?requestId=${encodeURIComponent(requestId)}` : "";
+    const response = await fetchWithTimeout(
+      `${client.baseUrl}/session/${sessionId}/structured-output${query}`,
+    );
+    if (!response.ok) return null;
+    const body = (await response.json()) as { structuredOutput?: unknown };
+    if (body.structuredOutput === null || body.structuredOutput === undefined) {
+      return null;
+    }
+    if (isStructuredOutputResult(body.structuredOutput)) {
+      return body.structuredOutput as StructuredOutputResult<T>;
+    }
+    return structuredOutputFailure(
+      "codex",
+      "malformed_output",
+      "Codex bridge returned a malformed structured-output envelope.",
+      { requestId },
+    );
+  } catch (error) {
+    return structuredOutputFailure(
+      "codex",
+      "provider_error",
+      error instanceof Error ? error.message : "Failed to read Codex structured output.",
+      { requestId },
+    );
   }
 }
 
@@ -956,6 +1013,7 @@ export function subscribeToEvents(
           "session.idle",
           "session.error",
           "session.title-updated",
+          "session.structured-output",
           "message.updated",
           "session.approval-requested",
           "session.approval-resolved",

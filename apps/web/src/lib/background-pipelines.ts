@@ -1,4 +1,5 @@
 import type { BuildPipeline } from "@/stores/buildPipelineStore";
+import type { LoopedReviewWorkflow } from "@/stores/loopedReviewStore";
 import type { Environment } from "@/types";
 
 /**
@@ -22,6 +23,7 @@ export function getBackgroundProcessingEnvironments(
   loadingNativeSessionEnvironmentIds: Iterable<string> = [],
   queuedAgentPromptEnvironmentIds: Iterable<string> = [],
   pendingSetupEnvironmentIds: Iterable<string> = [],
+  loopedReviews: Iterable<LoopedReviewWorkflow> = [],
 ): Environment[] {
   const backgroundEnvIds = new Set<string>(setupRunningEnvironmentIds);
   for (const environmentId of pendingNativeLaunchEnvironmentIds) {
@@ -53,6 +55,15 @@ export function getBackgroundProcessingEnvironments(
   for (const pipeline of pipelines.values()) {
     if (pipeline.environmentId && pipeline.phase !== "complete" && pipeline.phase !== "failed") {
       backgroundEnvIds.add(pipeline.environmentId);
+    }
+  }
+  for (const workflow of loopedReviews) {
+    if (
+      workflow.environmentId
+      && workflow.phase !== "completed"
+      && workflow.phase !== "cancelled"
+    ) {
+      backgroundEnvIds.add(workflow.environmentId);
     }
   }
 

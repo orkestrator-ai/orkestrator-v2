@@ -39,6 +39,7 @@ import {
   getPendingQuestions,
   getAvailableSlashCommands,
   sendPrompt,
+  getStructuredOutput,
   formatOpenCodeError,
   abortSession,
   subscribeToEvents,
@@ -70,6 +71,7 @@ import {
 } from "@/lib/backend";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { normalizeOpenCodeNativeMessage } from "@/lib/chat/native-message-adapters";
+import { hideRawStructuredReviewMessages } from "@/lib/structured-review-messages";
 import { pinActiveNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { OpenCodeComposeBar } from "./OpenCodeComposeBar";
 import { OpenCodePermissionCard } from "./OpenCodePermissionCard";
@@ -82,6 +84,8 @@ import {
 import { getNativeSlashCommands } from "./slash-command-registry";
 import type { OpenCodeNativeData } from "@/types/paneLayout";
 import type { OpenCodeAttachment } from "@/stores/openCodeStore";
+import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
+import { NativeStructuredReviewResult } from "@/components/review/NativeStructuredReviewResult";
 
 interface OpenCodeChatTabProps {
   tabId: string;
@@ -288,8 +292,15 @@ export function OpenCodeChatTab({
 
   const sessionMessages = useMemo(() => session?.messages ?? [], [session?.messages]);
   const displayMessages = useMemo(
-    () => pinActiveNativeAgentParts(sessionMessages.map(normalizeOpenCodeNativeMessage)),
-    [sessionMessages],
+    () => {
+      const messages = pinActiveNativeAgentParts(
+        sessionMessages.map(normalizeOpenCodeNativeMessage),
+      );
+      return isReviewTab
+        ? hideRawStructuredReviewMessages(messages)
+        : messages;
+    },
+    [isReviewTab, sessionMessages],
   );
   const hasMessageHistory = sessionMessages.length > 0;
   const centerCompose = !hasMessageHistory && !(session?.isLoading ?? false);
@@ -1585,6 +1596,9 @@ export function OpenCodeChatTab({
         variant: selectedVariant,
         mode: selectedMode,
         attachments: sdkAttachments.length > 0 ? sdkAttachments : undefined,
+        outputSchema: isReviewTab
+          ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
+          : undefined,
       });
 
       if (!sendResult.success) {
@@ -1613,6 +1627,7 @@ export function OpenCodeChatTab({
       addMessage,
       removeMessage,
       setSessionLoading,
+      isReviewTab,
     ],
   );
 
@@ -1756,6 +1771,26 @@ export function OpenCodeChatTab({
     environmentId,
     getSelectedModel,
     getSelectedVariant,
+  ]);
+
+  const loadStructuredReview = useCallback(
+    () => client && session
+      ? getStructuredOutput(client, session.sessionId)
+      : Promise.resolve(null),
+    [client, session],
+  );
+  const retryStructuredReview = useCallback(async () => {
+    if (!initialPrompt) throw new Error("The original review prompt is unavailable.");
+    await handleSend(initialPrompt, [], {
+      model: getSelectedModel(environmentId),
+      variant: getSelectedVariant(environmentId),
+    });
+  }, [
+    environmentId,
+    getSelectedModel,
+    getSelectedVariant,
+    handleSend,
+    initialPrompt,
   ]);
 
   // Handle retry connection
@@ -2067,6 +2102,13 @@ export function OpenCodeChatTab({
                 </div>
               </div>
             )}
+            <NativeStructuredReviewResult
+              enabled={isReviewTab}
+              sessionId={session?.sessionId}
+              isLoading={session?.isLoading ?? false}
+              loadResult={loadStructuredReview}
+              onRetry={retryStructuredReview}
+            />
               <div className="h-32" aria-hidden="true" />
             </>
           }

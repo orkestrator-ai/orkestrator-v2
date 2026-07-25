@@ -12,6 +12,7 @@ import {
   dismissQuestion,
   getPendingQuestions,
   getSessionInitData,
+  getStructuredPromptDispatchState,
   respondToPlanApproval,
   getPendingPlanApprovals,
 } from "../services/session-manager.js";
@@ -20,6 +21,7 @@ import type {
   SessionListResponse,
   MessagesResponse,
 } from "../types/index.js";
+import { isJsonSchema } from "@orkestrator/protocol/structured-output";
 
 const session = new Hono();
 
@@ -91,6 +93,29 @@ session.get("/:id", (c) => {
     createdAt: sessionData.createdAt.toISOString(),
     lastActivity: sessionData.lastActivity.toISOString(),
     error: sessionData.error,
+    structuredOutputRequestId: sessionData.structuredOutputRequestId,
+    structuredOutput: sessionData.structuredOutput,
+  });
+});
+
+// Get the authoritative result of the latest (or requested) structured turn.
+session.get("/:id/structured-output", (c) => {
+  const id = c.req.param("id");
+  const sessionData = getSession(id);
+  if (!sessionData) {
+    return c.json({ error: "Session not found" }, 404);
+  }
+  const requestId = c.req.query("requestId")?.trim();
+  if (
+    requestId
+    && sessionData.structuredOutputRequestId
+    && requestId !== sessionData.structuredOutputRequestId
+  ) {
+    return c.json({ structuredOutput: null, requestId });
+  }
+  return c.json({
+    structuredOutput: sessionData.structuredOutput ?? null,
+    requestId: sessionData.structuredOutputRequestId,
   });
 });
 
@@ -139,6 +164,19 @@ session.post("/:id/prompt", async (c) => {
         }>
       | undefined;
     const fastMode = typeof body.fastMode === "boolean" ? body.fastMode : undefined;
+    const outputSchema = body.outputSchema;
+    const requestId = typeof body.requestId === "string" && body.requestId.trim().length > 0
+      ? body.requestId.trim()
+      : outputSchema === undefined
+        ? undefined
+        : crypto.randomUUID();
+
+    if (outputSchema !== undefined && !isJsonSchema(outputSchema)) {
+      return c.json({ error: "outputSchema must be a JSON Schema object" }, 400);
+    }
+    if (requestId && requestId.length > 200) {
+      return c.json({ error: "requestId must be at most 200 characters" }, 400);
+    }
 
     const attachmentsAreValid = attachments === undefined || (
       Array.isArray(attachments)
@@ -170,6 +208,19 @@ session.post("/:id/prompt", async (c) => {
       return c.json({ error: "Prompt is required" }, 400);
     }
 
+    if (outputSchema && requestId) {
+      const dispatchState = getStructuredPromptDispatchState(id, requestId);
+      if (dispatchState === "processing") {
+        return c.json({ status: "processing", requestId, duplicate: true }, 202);
+      }
+      if (dispatchState === "already-processed") {
+        return c.json({ status: "already-processed", requestId, duplicate: true });
+      }
+    }
+    if (sessionData.status === "running") {
+      return c.json({ error: "Session is already processing a prompt" }, 409);
+    }
+
     console.debug("[session] Prompt received", {
       sessionId: id,
       promptLength: prompt.length,
@@ -181,12 +232,20 @@ session.post("/:id/prompt", async (c) => {
     });
 
     // Start processing in background (don't await)
-    sendPrompt(id, prompt, { model, attachments, effort, permissionMode, fastMode }).catch((error) => {
+    sendPrompt(id, prompt, {
+      model,
+      attachments,
+      effort,
+      permissionMode,
+      fastMode,
+      outputSchema,
+      requestId,
+    }).catch((error) => {
       console.error("[session] Error processing prompt:", error);
     });
 
     console.debug("[session] Prompt accepted", { sessionId: id });
-    return c.json({ status: "processing" }, 202);
+    return c.json({ status: "processing", requestId }, 202);
   } catch (error) {
     console.error("[session] Error sending prompt:", error);
     return c.json(

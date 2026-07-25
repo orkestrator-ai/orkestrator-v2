@@ -3,11 +3,14 @@
  * pushing changes, and merge-conflict resolution.
  */
 
-import { buildReviewBody } from "./review-shared";
-import { getReviewPromptValidationError } from "@orkestrator/protocol/review-prompt";
+import {
+  buildReviewBody,
+  DEFAULT_REVIEW_INSTRUCTION,
+  REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN,
+} from "./review-shared";
 
-/** Token available in custom action-bar review prompt templates. */
-export const REVIEW_PROMPT_TARGET_BRANCH_TOKEN = "{{targetBranch}}";
+/** @deprecated Use REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN. */
+export const REVIEW_PROMPT_TARGET_BRANCH_TOKEN = REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN;
 
 /**
  * Generates the prompt for the PR creation workflow.
@@ -70,11 +73,18 @@ Begin by running git status to understand the current state.`;
  * This prompt instructs the agent to commit changes and perform a code review.
  * Shares its body with `createBuildReviewPrompt` via `buildReviewBody()`.
  */
-function createDefaultReviewPrompt(targetBranch: string): string {
+function createDefaultReviewPrompt(
+  targetBranch: string,
+  reviewInstruction?: unknown,
+): string {
   return [
     "You are performing a commit and code review workflow. Execute the steps in order.",
     "",
-    buildReviewBody({ targetBranch, allowClarifyingQuestions: true }),
+    buildReviewBody({
+      targetBranch,
+      reviewInstruction,
+      allowClarifyingQuestions: true,
+    }),
     "",
     "If issues are found and the user asks to fix them, run typechecking and build validation again as appropriate for the project.",
     "",
@@ -82,7 +92,7 @@ function createDefaultReviewPrompt(targetBranch: string): string {
   ].join("\n");
 }
 
-/** Built-in action-bar review prompt, kept as a template for the settings editor. */
+/** Complete built-in prompt retained as a compatibility/exported inspection value. */
 export const DEFAULT_REVIEW_PROMPT_TEMPLATE = createDefaultReviewPrompt(
   REVIEW_PROMPT_TARGET_BRANCH_TOKEN,
 );
@@ -90,20 +100,18 @@ export const DEFAULT_REVIEW_PROMPT_TEMPLATE = createDefaultReviewPrompt(
 /**
  * Generates the action-bar code review prompt.
  *
- * A saved custom template replaces the built-in workflow. Both templates may
- * use `{{targetBranch}}`, which is resolved when a review tab is created.
+ * A saved instruction is embedded inside the built-in safety, workflow, and
+ * output framing. It may use `{{targetBranch}}`, which is resolved when a
+ * review tab is created.
  */
-export function createReviewPrompt(targetBranch: string, customPrompt?: unknown): string {
-  const template = typeof customPrompt === "string"
-    && getReviewPromptValidationError(customPrompt) === null
-    ? customPrompt
-    : DEFAULT_REVIEW_PROMPT_TEMPLATE;
-
-  return template.replaceAll(
-    REVIEW_PROMPT_TARGET_BRANCH_TOKEN,
-    () => targetBranch,
-  );
+export function createReviewPrompt(targetBranch: string, reviewInstruction?: unknown): string {
+  return createDefaultReviewPrompt(targetBranch, reviewInstruction);
 }
+
+export {
+  DEFAULT_REVIEW_INSTRUCTION,
+  REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN,
+};
 
 /**
  * Generates the prompt for pushing changes to an existing PR.

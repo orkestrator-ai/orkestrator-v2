@@ -4,6 +4,7 @@
  */
 
 import { buildReviewBody } from "./review-shared";
+import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 
 export type TaskSnapshotImage = {
   filename: string;
@@ -19,7 +20,12 @@ export type TaskSnapshot = {
   images: TaskSnapshotImage[];
 };
 
-export function createBuildReviewPrompt(task: TaskSnapshot | null, projectNotes: string, targetBranch: string = "main"): string {
+export function createBuildReviewPrompt(
+  task: TaskSnapshot | null,
+  projectNotes: string,
+  targetBranch: string = "main",
+  reviewInstruction?: unknown,
+): string {
   const parts: string[] = [];
 
   if (task) {
@@ -45,7 +51,11 @@ export function createBuildReviewPrompt(task: TaskSnapshot | null, projectNotes:
     parts.push(`**Project Notes**:\n${projectNotes}\n`);
   }
 
-  parts.push(buildReviewBody({ targetBranch, allowClarifyingQuestions: false }));
+  parts.push(buildReviewBody({
+    targetBranch,
+    reviewInstruction,
+    allowClarifyingQuestions: false,
+  }));
   parts.push("");
   parts.push("Begin by running the git commands to understand the current state.");
 
@@ -81,8 +91,20 @@ export function createBuildPrompt(task: TaskSnapshot | null, projectNotes: strin
   return parts.join("\n");
 }
 
-export function createAddressIssuesPrompt(): string {
-  return `Please address all the above issues and test coverage gaps, without asking questions. Make sensible assumptions. Run typechecking and build validation to ensure the changes are valid as appropriate for the project.
+export function createAddressIssuesPrompt(report?: StructuredReviewReport): string {
+  const findings = report
+    ? `The validated review contract below is the sole source of findings for this phase:
+
+<structured-review-findings>
+${JSON.stringify({
+  issues: report.issues,
+  testCoverageGaps: report.testCoverageGaps,
+}, null, 2)}
+</structured-review-findings>
+
+`
+    : "";
+  return `${findings}Please address every explicit issue and test coverage gap above, without asking questions. Make sensible assumptions. Run typechecking and build validation to ensure the changes are valid as appropriate for the project.
 
 Before finishing:
 1. Run \`git status --porcelain\` and \`git diff HEAD\`.

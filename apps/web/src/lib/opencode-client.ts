@@ -10,6 +10,11 @@ import type {
   NativeMessagePart,
   NativeToolDiffMetadata,
 } from "./chat/native-message-types";
+import {
+  structuredOutputFailure,
+  type JsonSchema,
+  type StructuredOutputResult,
+} from "@orkestrator/protocol/structured-output";
 
 export { type OpencodeClient };
 
@@ -1493,6 +1498,8 @@ export interface PromptAttachment {
 export interface SendPromptResult {
   success: boolean;
   error?: string;
+  /** Stable OpenCode user-message id for structured-output reconciliation. */
+  requestId?: string;
 }
 
 /**
@@ -1507,6 +1514,9 @@ export async function sendPrompt(
     variant?: string;
     mode?: OpenCodeConversationMode;
     attachments?: PromptAttachment[];
+    outputSchema?: JsonSchema;
+    structuredOutputRetryCount?: number;
+    requestId?: string;
   }
 ): Promise<SendPromptResult> {
   try {
@@ -1556,8 +1566,12 @@ export async function sendPrompt(
       }
     }
 
-    await client.session.promptAsync({
+    const requestId = options?.outputSchema
+      ? (options.requestId ?? createUuid())
+      : options?.requestId;
+    const response = await client.session.promptAsync({
       sessionID: sessionId,
+      messageID: requestId,
       parts,
       model: options?.model ? {
         providerID: options.model.split("/")[0] || "",
@@ -1565,15 +1579,145 @@ export async function sendPrompt(
       } : undefined,
       agent: options?.mode,
       variant: options?.variant,
+      format: options?.outputSchema
+        ? {
+            type: "json_schema",
+            schema: options.outputSchema,
+            retryCount: options.structuredOutputRetryCount,
+          }
+        : undefined,
     });
 
-    return { success: true };
+    if (response && "error" in response && response.error) {
+      return {
+        success: false,
+        requestId,
+        error: formatOpenCodeError(response.error),
+      };
+    }
+
+    return { success: true, requestId };
   } catch (error) {
     console.error("[opencode-client] Failed to send prompt:", error);
     return {
       success: false,
       error: formatOpenCodeError(error),
     };
+  }
+}
+
+/** Dispatch a constrained native OpenCode turn while leaving its tools enabled. */
+export async function sendStructuredPrompt(
+  client: OpencodeClient,
+  sessionId: string,
+  message: string,
+  outputSchema: JsonSchema,
+  options: {
+    model?: string;
+    variant?: string;
+    mode?: OpenCodeConversationMode;
+    attachments?: PromptAttachment[];
+    retryCount?: number;
+    requestId?: string;
+  } = {},
+): Promise<SendPromptResult> {
+  return sendPrompt(client, sessionId, message, {
+    ...options,
+    outputSchema,
+    structuredOutputRetryCount: options.retryCount,
+  });
+}
+
+function openCodeStructuredFailure(
+  error: unknown,
+  requestId?: string,
+): StructuredOutputResult<never> {
+  const record = isRecord(error) ? error : {};
+  const name = typeof record.name === "string" ? record.name : "";
+  const data = isRecord(record.data) ? record.data : {};
+  const message = firstNonEmptyString([
+    data.message,
+    record.message,
+  ]) ?? "OpenCode failed to produce structured output.";
+  const retries = typeof data.retries === "number" ? data.retries : undefined;
+  return structuredOutputFailure(
+    "opencode",
+    name === "StructuredOutputError"
+      ? "schema_retry_exhausted"
+      : name === "MessageAbortedError"
+        ? "interrupted"
+        : "provider_error",
+    message,
+    {
+      requestId,
+      retryable: true,
+      details: retries === undefined ? undefined : { retries },
+    },
+  );
+}
+
+/**
+ * Read a completed structured result from OpenCode's authoritative message
+ * history. Ordinary text parts are deliberately never parsed as a fallback.
+ */
+export async function getStructuredOutput<T = unknown>(
+  client: OpencodeClient,
+  sessionId: string,
+  requestId?: string,
+): Promise<StructuredOutputResult<T> | null> {
+  try {
+    const response = await client.session.messages(
+      { sessionID: sessionId },
+      { throwOnError: false },
+    );
+    if (!response.data) {
+      return response.error
+        ? openCodeStructuredFailure(response.error, requestId)
+        : null;
+    }
+
+    const structuredUserIds = new Set(
+      response.data
+        .filter((entry) =>
+          entry.info.role === "user"
+          && entry.info.format?.type === "json_schema"
+        )
+        .map((entry) => entry.info.id),
+    );
+    const assistant = response.data
+      .filter((entry) =>
+        entry.info.role === "assistant"
+        && (
+          requestId
+            ? entry.info.parentID === requestId
+            : structuredUserIds.has(entry.info.parentID)
+        )
+      )
+      .at(-1);
+    if (!assistant || assistant.info.role !== "assistant") return null;
+    if (assistant.info.error) {
+      return openCodeStructuredFailure(
+        assistant.info.error,
+        requestId ?? assistant.info.parentID,
+      );
+    }
+    if (!assistant.info.time.completed) return null;
+    if (assistant.info.structured === undefined) {
+      return structuredOutputFailure(
+        "opencode",
+        "malformed_output",
+        "OpenCode completed the turn without a structured result.",
+        { requestId: requestId ?? assistant.info.parentID },
+      );
+    }
+    return {
+      ok: true,
+      provider: "opencode",
+      requestId: requestId ?? assistant.info.parentID,
+      value: assistant.info.structured as T,
+    };
+  } catch (error) {
+    return openCodeStructuredFailure(error, requestId);
   }
 }
 

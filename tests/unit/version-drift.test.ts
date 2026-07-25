@@ -109,20 +109,102 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     );
   });
 
-  test("Codex: SDK pin, managed binary, download script, and Docker CLI all match", () => {
-    const sdkPin = expectExactVersion(
-      "bridges/codex-bridge/package.json",
-      "@openai/codex-sdk",
-    );
-    const downloadScriptPin = getShellVar(
-      "scripts/download-codex.sh",
-      "CODEX_VERSION",
-    );
-    const dockerfilePin = getDockerfileArg("CODEX_CLI_VERSION");
+  test("Codex: managed binary, download script, and Docker CLI all match", () => {
+    // The bridge no longer depends on @openai/codex-sdk — it talks to
+    // `codex app-server` over JSON-RPC — so config/codex-version.json is the only
+    // pin, and the CLI version still matters for the binary and the image.
+    const configPin = (
+      JSON.parse(read("config/codex-version.json")) as { version: string }
+    ).version;
 
-    expect(downloadScriptPin).toBe(sdkPin);
-    expect(dockerfilePin).toBe(sdkPin);
-    expect(PINNED_TOOLCHAIN_VERSIONS.codex).toBe(sdkPin);
+    expect(getShellVar("scripts/download-codex.sh", "CODEX_VERSION")).toBe(configPin);
+    expect(getDockerfileArg("CODEX_CLI_VERSION")).toBe(configPin);
+    expect(PINNED_TOOLCHAIN_VERSIONS.codex).toBe(configPin);
+  });
+
+  test("Codex: the bridge does not depend on the Codex SDK", () => {
+    // A stray dependency would resurrect a second execution path and re-introduce
+    // the drift this consolidation removed.
+    const pkg = JSON.parse(read("bridges/codex-bridge/package.json")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    expect(pkg.dependencies?.["@openai/codex-sdk"]).toBeUndefined();
+    expect(pkg.devDependencies?.["@openai/codex-sdk"]).toBeUndefined();
+  });
+
+  test("Codex: config/codex-version.json is the single source of truth for every pin", () => {
+    // The app-server binary and the generated protocol bindings are only valid
+    // as a matched pair, so every place that names a Codex version has to agree
+    // with this one file.
+    const config = JSON.parse(read("config/codex-version.json")) as {
+      version: string;
+      appServerProtocol: { generatedFrom: string; outputDir: string };
+    };
+
+    expect(config.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(config.appServerProtocol.generatedFrom).toBe(config.version);
+    expect(getShellVar("scripts/download-codex.sh", "CODEX_VERSION")).toBe(config.version);
+    expect(getDockerfileArg("CODEX_CLI_VERSION")).toBe(config.version);
+    expect(PINNED_TOOLCHAIN_VERSIONS.codex).toBe(config.version);
+  });
+
+  test("Codex: committed app-server protocol manifest matches the pinned version", () => {
+    // A full regeneration needs the pinned binary, which normal CI does not
+    // have. This cheap check still catches the common failure: bumping the
+    // version without regenerating the bindings.
+    const config = JSON.parse(read("config/codex-version.json")) as {
+      version: string;
+      appServerProtocol: { outputDir: string };
+    };
+    const manifest = JSON.parse(
+      read(join(config.appServerProtocol.outputDir, "protocol-manifest.json")),
+    ) as {
+      codexVersion: string;
+      typescriptDigest: string;
+      schemaDigest: string;
+      typescriptFileCount: number;
+      clientRequestMethods: string[];
+      serverNotificationMethods: string[];
+      serverRequestMethods: string[];
+    };
+
+    expect(manifest.codexVersion).toBe(config.version);
+    expect(manifest.typescriptDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(manifest.schemaDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(manifest.typescriptFileCount).toBeGreaterThan(0);
+
+    // Every method the bridge depends on must exist in the pinned protocol.
+    // These are the exact methods bridges/codex-bridge/src/app-server calls.
+    for (const method of [
+      "initialize",
+      "thread/start",
+      "thread/resume",
+      "thread/read",
+      "thread/list",
+      "thread/unsubscribe",
+      "thread/name/set",
+      "turn/start",
+      "turn/interrupt",
+      "model/list",
+    ]) {
+      expect(manifest.clientRequestMethods).toContain(method);
+    }
+    for (const method of [
+      "thread/started",
+      "turn/started",
+      "turn/completed",
+      "item/started",
+      "item/completed",
+      "item/agentMessage/delta",
+      "item/commandExecution/outputDelta",
+      "item/fileChange/patchUpdated",
+      "error",
+    ]) {
+      expect(manifest.serverNotificationMethods).toContain(method);
+    }
+    // The router must stay exhaustive over this union.
+    expect(manifest.serverRequestMethods.length).toBeGreaterThan(0);
   });
 
   test("Codex: bundled binary download uses the Rust release artifact URL", () => {

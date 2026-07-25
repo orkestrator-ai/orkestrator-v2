@@ -7,8 +7,8 @@
     "build": "bunx tsc && bunx vite build",
     "dev": "bunx vite --host 127.0.0.1 --port 1422",
     "preview": "bunx vite preview --port 4422",
-    "test": "bun test src",
-    "test:workspace": "bun test src",
+    "test": "bun test src --parallel",
+    "test:workspace": "bun test src --parallel",
     "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {

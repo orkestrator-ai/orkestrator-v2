@@ -1,85 +1,209 @@
-import { spawnSync } from "node:child_process";
+/**
+ * Runs the whole test suite.
+ *
+ * Two levels of parallelism, because the suite is dominated by I/O waits (tests
+ * that boot real backend processes, bind ports, and drive happy-dom) rather than
+ * CPU:
+ *
+ *  1. **Within a group** — `bun test --parallel` runs test *files* across worker
+ *     processes. This is where almost all of the win is.
+ *  2. **Across groups** — the workspace, root and bridge suites are independent,
+ *     so they run concurrently instead of one after another.
+ *
+ * Group output is buffered and printed as a labelled block. Interleaving three
+ * concurrent `bun test` streams would make failures much harder to read, and a
+ * test log is only useful if you can tell which suite a failure came from.
+ *
+ * Unlike the previous sequential runner this does **not** stop at the first
+ * failing group: with concurrency the others have already run anyway, so
+ * reporting every failure saves a second full run.
+ */
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import path from "node:path";
 import process from "node:process";
 
 const root = path.resolve(import.meta.dir, "..");
 
-interface CommandResult {
+export interface CommandResult {
   status: number | null;
+  /** Combined stdout/stderr. */
+  output?: string;
 }
 
-interface CommandOptions {
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  stdio: "inherit";
+export interface TestGroup {
+  name: string;
+  command: string;
+  args: string[];
 }
 
 export interface TestAllDependencies {
-  spawn: (command: string, args: string[], options: CommandOptions) => CommandResult;
+  /** Runs one group to completion, capturing its output. */
+  runGroup: (group: TestGroup, env: NodeJS.ProcessEnv) => Promise<CommandResult>;
   exists: (target: string) => boolean;
   platform: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
   root: string;
+  /** Logical cores, used to size the per-group worker pools. */
+  cores: number;
+  log: (message: string) => void;
+}
+
+function defaultRunGroup(
+  group: TestGroup,
+  env: NodeJS.ProcessEnv,
+): Promise<CommandResult> {
+  return new Promise((resolve) => {
+    const child = spawn(group.command, group.args, {
+      cwd: root,
+      env,
+      // Captured rather than inherited so concurrent groups do not interleave.
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    const chunks: string[] = [];
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => chunks.push(chunk));
+    child.stderr?.on("data", (chunk: string) => chunks.push(chunk));
+
+    child.once("error", (error) => {
+      resolve({ status: 1, output: `${chunks.join("")}\n${error.message}` });
+    });
+    child.once("close", (code) => {
+      resolve({ status: code, output: chunks.join("") });
+    });
+  });
 }
 
 const defaultDependencies: TestAllDependencies = {
-  spawn: (command, args, options) => spawnSync(command, args, options),
+  runGroup: defaultRunGroup,
   exists: existsSync,
   platform: process.platform,
   env: process.env,
   root,
+  cores: availableParallelism(),
+  log: (message) => process.stdout.write(`${message}\n`),
 };
 
-export function runAllTests(
-  overrides: Partial<TestAllDependencies> = {},
-): number {
-  const dependencies = { ...defaultDependencies, ...overrides };
+/**
+ * Splits the available cores across the concurrent groups.
+ *
+ * Left to itself each group would spawn one worker per core, so three groups
+ * would oversubscribe the machine threefold — tolerable on an 18-core
+ * workstation, liable to thrash a 2-core CI runner. The root suite gets the
+ * largest share because it is by far the biggest and slowest.
+ */
+export function planWorkers(cores: number): { root: number; bridges: number } {
+  const usable = Math.max(1, cores);
+  return {
+    root: Math.max(2, Math.round(usable * 0.6)),
+    bridges: Math.max(2, Math.round(usable * 0.2)),
+  };
+}
 
-  function run(command: string, args: string[]): number {
-    const result = dependencies.spawn(command, args, {
-      cwd: dependencies.root,
-      env: dependencies.env,
-      stdio: "inherit",
-    });
-    return result.status ?? 1;
+export function buildConcurrentGroups(cores: number): TestGroup[] {
+  const workers = planWorkers(cores);
+  return [
+    {
+      name: "workspace (web, backend, web-public)",
+      command: "turbo",
+      args: [
+        "--cwd", ".",
+        "run", "test:workspace",
+        "--filter=@orkestrator/web",
+        "--filter=@orkestrator/backend",
+        "--filter=@orkestrator/web-public",
+        "--cache-dir", ".turbo",
+      ],
+    },
+    {
+      name: "root (tests/)",
+      command: "bun",
+      args: ["test", "tests", `--parallel=${workers.root}`],
+    },
+    {
+      // The bridge packages have no `test` script of their own, so they are not
+      // part of the turbo run above. Without this their suites never execute.
+      name: "bridges",
+      command: "bun",
+      args: ["test", "bridges", `--parallel=${workers.bridges}`],
+    },
+  ];
+}
+
+function formatDuration(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+}
+
+export async function runAllTests(
+  overrides: Partial<TestAllDependencies> = {},
+): Promise<number> {
+  const dependencies = { ...defaultDependencies, ...overrides };
+  const groups = buildConcurrentGroups(dependencies.cores);
+
+  dependencies.log(`Running ${groups.length} test groups concurrently…`);
+  const startedAt = Date.now();
+
+  const results = await Promise.all(
+    groups.map(async (group) => {
+      const groupStartedAt = Date.now();
+      const result = await dependencies.runGroup(group, dependencies.env);
+      return { group, result, elapsedMs: Date.now() - groupStartedAt };
+    }),
+  );
+
+  // Printed in declaration order, not completion order, so the log reads the
+  // same between runs even though groups finish in whatever order they finish.
+  let firstFailure = 0;
+  for (const { group, result, elapsedMs } of results) {
+    const status = result.status ?? 1;
+    const banner = "=".repeat(72);
+    dependencies.log(
+      `\n${banner}\n${status === 0 ? "PASS" : "FAIL"}  ${group.name}  (${formatDuration(elapsedMs)})\n${banner}`,
+    );
+    if (result.output) dependencies.log(result.output.trimEnd());
+    if (status !== 0 && firstFailure === 0) firstFailure = status;
   }
 
-  const workspaceStatus = run("turbo", [
-    "--cwd", ".",
-    "run", "test:workspace",
-    "--filter=@orkestrator/web",
-    "--filter=@orkestrator/backend",
-    "--filter=@orkestrator/web-public",
-    "--cache-dir", ".turbo",
-  ]);
-  if (workspaceStatus !== 0) return workspaceStatus;
+  dependencies.log(`\nTest groups finished in ${formatDuration(Date.now() - startedAt)}`);
 
-  const rootStatus = run("bun", ["test", "tests"]);
-  if (rootStatus !== 0) return rootStatus;
+  if (firstFailure !== 0) {
+    const failed = results
+      .filter(({ result }) => (result.status ?? 1) !== 0)
+      .map(({ group }) => group.name);
+    dependencies.log(`Failing groups: ${failed.join(", ")}`);
+    return firstFailure;
+  }
 
-  // The bridge packages have no `test` script of their own, so they are not
-  // part of the turbo run above. Without this their suites never execute in CI.
-  const bridgeStatus = run("bun", ["test", "bridges"]);
-  if (bridgeStatus !== 0) return bridgeStatus;
-
+  // iOS runs last and alone: it drives a simulator, a single shared machine
+  // resource that cannot be used alongside anything else.
   const xcodeDeveloperDirectory =
     dependencies.env.DEVELOPER_DIR ?? "/Applications/Xcode.app/Contents/Developer";
   if (dependencies.platform === "darwin" && dependencies.exists(xcodeDeveloperDirectory)) {
-    return run("bun", ["scripts/test-ios.ts"]);
+    const iosGroup: TestGroup = {
+      name: "ios",
+      command: "bun",
+      args: ["scripts/test-ios.ts"],
+    };
+    dependencies.log(`\nRunning ${iosGroup.name}…`);
+    const result = await dependencies.runGroup(iosGroup, dependencies.env);
+    if (result.output) dependencies.log(result.output.trimEnd());
+    return result.status ?? 1;
   }
 
   return 0;
 }
 
-export function main(
+export async function main(
   overrides: Partial<TestAllDependencies> = {},
   exit: (status: number) => void = (status) => process.exit(status),
-): void {
-  const status = runAllTests(overrides);
+): Promise<void> {
+  const status = await runAllTests(overrides);
   if (status !== 0) {
     exit(status);
   }
 }
 
-if (import.meta.main) main();
+if (import.meta.main) await main();

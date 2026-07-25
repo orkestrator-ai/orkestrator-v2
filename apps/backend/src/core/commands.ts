@@ -21,6 +21,7 @@ import {
 import { spawnPty, type PtyProcess } from "./pty.js";
 import {
   APP_SLUG,
+  APP_VERSION,
   CLAUDE_BRIDGE_PORT,
   CODEX_BRIDGE_PORT,
   DOCKER_IMAGE,
@@ -1892,6 +1893,8 @@ async function startLocalServer(
     // Point the bundled codex-sdk at our shipped codex binary so it does not
     // depend on a system install / PATH lookup in the packaged app.
     env.CODEX_PATH = resolveCodexBinary(context);
+    // Forwarded to app-server as clientInfo.version.
+    env.ORKESTRATOR_VERSION = APP_VERSION;
   }
 
   const bridgeEntrypoint = path.join(cwd, "dist", "index.js");
@@ -3458,6 +3461,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       export HOSTNAME=0.0.0.0
       export CWD=/workspace
       export CODEX_PATH="$(command -v codex 2>/dev/null || echo codex)"
+      export ORKESTRATOR_VERSION="${APP_VERSION}"
       setsid bun /opt/codex-bridge/dist/index.js > /tmp/codex-bridge.log 2>&1 &
     `),
   );

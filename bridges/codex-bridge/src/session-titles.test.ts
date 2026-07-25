@@ -10,7 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   SESSION_TITLE_MODEL,
@@ -32,25 +32,39 @@ import {
 const temporaryDirectories: string[] = [];
 
 /**
- * Locate the Codex CLI that ships with the pinned `@openai/codex-sdk`.
+ * Locate the Codex CLI matching the version pinned in config/codex-version.json.
  *
- * The version comes from package.json so bumping the SDK cannot silently point
- * this at a stale CLI, and both known bun layouts are tried so a hoisting change
- * surfaces as a clear failure rather than a skipped test.
+ * Session titles are the one thing that still spawns `codex exec` directly — a
+ * deliberately hermetic subprocess with its own model catalog, read-only sandbox
+ * and user config ignored (see docs/adr/0001-codex-app-server-engine.md). The
+ * version comes from the single source of truth so a bump cannot silently point
+ * this at a stale CLI, and the managed toolchain is preferred over PATH so the
+ * test exercises the binary the app actually ships.
  */
 function resolvePinnedCodexCli(): string {
   const repoRoot = join(import.meta.dir, "../../..");
-  const { dependencies } = JSON.parse(
-    readFileSync(join(import.meta.dir, "..", "package.json"), "utf8"),
-  ) as { dependencies?: Record<string, string> };
-  const pinned = dependencies?.["@openai/codex-sdk"];
-  if (!pinned) throw new Error("codex-bridge/package.json must pin @openai/codex-sdk");
+  const { version } = JSON.parse(
+    readFileSync(join(repoRoot, "config", "codex-version.json"), "utf8"),
+  ) as { version?: string };
+  if (!version) throw new Error("config/codex-version.json must pin a codex version");
+
+  const architecture = process.arch === "arm64" ? "arm64" : "x64";
+  const platform = process.platform === "darwin" ? "darwin" : "linux";
+  const toolchainRoot = process.platform === "darwin"
+    ? join(homedir(), "Library", "Application Support", "orkestrator-v2", "toolchains")
+    : join(
+        process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
+        "orkestrator-v2",
+        "toolchains",
+      );
 
   const candidates = [
-    join(repoRoot, "node_modules/.bun", `@openai+codex@${pinned}`, "node_modules/@openai/codex/bin/codex.js"),
-    join(repoRoot, "node_modules/@openai/codex/bin/codex.js"),
-  ];
-  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
+    process.env.CODEX_PROTOCOL_BINARY?.trim(),
+    join(toolchainRoot, "codex", version, `${platform}-${architecture}`, "codex"),
+    join(repoRoot, "binaries", "codex"),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[candidates.length - 1];
 }
 
 function createTemporaryDirectory(prefix = "orkestrator-session-title-test-"): string {

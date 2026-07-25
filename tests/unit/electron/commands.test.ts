@@ -290,6 +290,17 @@ function createContext(
   return { context, updates, emitted };
 }
 
+/**
+ * A `fetchedAt` the catalog cache will accept as fresh.
+ *
+ * `isFreshClaudeModelCatalog` applies a **5-minute** TTL, so a hardcoded absolute
+ * date is a time bomb: it reads as fresh only within five minutes of that instant
+ * and then fails forever. Keep this relative to now.
+ */
+function freshFetchedAt(): string {
+  return new Date().toISOString();
+}
+
 async function writeBridgeServer(
   appRoot: string,
   bridgeName: "claude-bridge" | "codex-bridge",
@@ -4317,7 +4328,7 @@ exit 0
         },
       ],
       source: "sdk",
-      fetchedAt: "2026-07-25T12:00:00.000Z",
+      fetchedAt: freshFetchedAt(),
       sdkVersion: "0.2.1",
       cliVersion: "5.0.0",
     });
@@ -4427,7 +4438,7 @@ exit 0
         },
       ],
       source: "sdk",
-      fetchedAt: "2026-07-25T12:00:00.000Z",
+      fetchedAt: freshFetchedAt(),
       sdkVersion: "0.2.1",
       cliVersion: "5.0.0",
     });

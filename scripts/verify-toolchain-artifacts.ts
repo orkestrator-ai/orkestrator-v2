@@ -144,12 +144,18 @@ async function hashExecutable(
   return digest;
 }
 
+/** Formats a size the way the manifest writes them, with `_` separators. */
+function formatManifestSize(size: number): string {
+  return size.toLocaleString("en-US").replace(/,/g, "_");
+}
+
 async function verifyArtifact(
   artifact: ToolchainArtifact,
   temporaryRoot: string,
+  options: { emit?: boolean } = {},
 ): Promise<void> {
   const target = `${artifact.name}:${artifact.platform}:${artifact.architecture}`;
-  console.log(`Verifying ${target} ${artifact.version}`);
+  console.log(`${options.emit ? "Hashing" : "Verifying"} ${target} ${artifact.version}`);
   const response = await fetchArtifact(artifact);
   const archivePath = join(
     temporaryRoot,
@@ -157,16 +163,32 @@ async function verifyArtifact(
   );
   await Bun.write(archivePath, response);
 
-  expectDigest(
-    `${target} archive`,
-    await hashFile(archivePath),
-    { size: artifact.archive.size, sha256: artifact.archive.sha256 },
-  );
-  expectDigest(
-    `${target} executable`,
-    await hashExecutable(artifact, archivePath),
-    { size: artifact.executable.size, sha256: artifact.executable.sha256 },
-  );
+  const archiveDigest = await hashFile(archivePath);
+  const executableDigest = await hashExecutable(artifact, archivePath);
+
+  if (options.emit) {
+    // A version bump changes all four digests per artifact. Printing them in
+    // manifest form means one download pass instead of one per mismatch.
+    console.log(
+      [
+        `  // ${target}`,
+        `  archive.size:      ${formatManifestSize(archiveDigest.size)},`,
+        `  archive.sha256:    "${archiveDigest.sha256}",`,
+        `  executable.size:   ${formatManifestSize(executableDigest.size)},`,
+        `  executable.sha256: "${executableDigest.sha256}",`,
+      ].join("\n"),
+    );
+  } else {
+    expectDigest(`${target} archive`, archiveDigest, {
+      size: artifact.archive.size,
+      sha256: artifact.archive.sha256,
+    });
+    expectDigest(`${target} executable`, executableDigest, {
+      size: artifact.executable.size,
+      sha256: artifact.executable.sha256,
+    });
+  }
+
   await rm(archivePath, { force: true });
 }
 
@@ -178,7 +200,11 @@ async function main(): Promise<void> {
     );
   }
 
-  const filters = parseFilters(process.argv.slice(2));
+  const args = process.argv.slice(2);
+  // `--emit` prints the computed digests instead of asserting them, for the
+  // version-bump workflow in docs/codex-upgrade-guide.md.
+  const emit = args.includes("--emit");
+  const filters = parseFilters(args);
   const selected = PINNED_TOOLCHAIN_ARTIFACTS.filter((artifact) =>
     (!filters.tool || artifact.name === filters.tool)
     && (!filters.platform || artifact.platform === filters.platform)
@@ -189,12 +215,16 @@ async function main(): Promise<void> {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "ork-toolchain-verify-"));
   try {
     for (const artifact of selected) {
-      await verifyArtifact(artifact, temporaryRoot);
+      await verifyArtifact(artifact, temporaryRoot, { emit });
     }
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
-  console.log(`Verified ${selected.length} pinned toolchain artifact(s)`);
+  console.log(
+    emit
+      ? `Hashed ${selected.length} artifact(s); paste the values into toolchain-manifest.ts`
+      : `Verified ${selected.length} pinned toolchain artifact(s)`,
+  );
 }
 
 if (import.meta.main) {

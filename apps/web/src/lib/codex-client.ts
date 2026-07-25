@@ -51,9 +51,16 @@ export type CodexReasoningEffort =
   | "ultra";
 export type CodexConversationMode = "build" | "plan";
 
+/**
+ * Where the catalog came from. `app-server` is authoritative (`model/list` on the
+ * live binary); `cache` is the bridge's persisted copy; `fallback` is the
+ * hardcoded catalog used when the engine cannot answer at all.
+ */
+export type CodexModelSource = "app-server" | "cache" | "fallback";
+
 interface CodexModelsResponse {
   models: CodexModel[];
-  source: "cache" | "fallback";
+  source: CodexModelSource;
 }
 
 interface CodexSlashCommandsResponse {
@@ -64,10 +71,31 @@ interface CodexSessionListResponse {
   sessions: CodexStoredSession[];
 }
 
+/**
+ * Detailed lifecycle phase, available on the app-server engine.
+ *
+ * `status` stays the three-state contract every existing caller reads.
+ * `cancelling` and `recovering` both report `status: "running"` on purpose: a turn
+ * in either phase may still be executing, so treating them as idle would let the
+ * build pipeline advance a phase or a tab start an overlapping prompt.
+ */
+export type CodexSessionPhase =
+  | "starting"
+  | "running"
+  | "cancelling"
+  | "recovering"
+  | "idle"
+  | "failed";
+
 interface CodexSessionStatusResponse {
   status: "idle" | "running" | "error";
+  phase?: CodexSessionPhase;
   title?: string;
   error?: string;
+  threadId?: string | null;
+  turnId?: string;
+  requestId?: string;
+  engineGeneration?: number;
 }
 
 export interface CodexClient {
@@ -97,8 +125,15 @@ export interface CodexStoredSession {
 
 export interface CodexSessionStatus {
   status: "idle" | "running" | "error";
+  /** Absent on older bridges that do not report a phase. */
+  phase?: CodexSessionPhase;
   title?: string;
   error?: string;
+  threadId?: string | null;
+  turnId?: string;
+  /** The prompt request id this turn is executing, for reconnect reconciliation. */
+  requestId?: string;
+  engineGeneration?: number;
 }
 
 export interface CodexPromptAttachment {
@@ -116,10 +151,67 @@ export interface CodexEvent {
     | "session.idle"
     | "session.error"
     | "session.title-updated"
-    | "message.updated";
+    | "message.updated"
+    | "session.approval-requested"
+    | "session.approval-resolved"
+    /** The bridge could not replay our gap; refetch state from scratch. */
+    | "session.reconcile-required";
   sessionId?: string;
   data?: Record<string, unknown>;
+  /**
+   * Monotonic bridge revision from the SSE `id:` field.
+   *
+   * Echoed back as `?since=` on reconnect so the bridge can replay only what we
+   * missed instead of us refetching the whole transcript.
+   */
+  revision?: number;
 }
+
+/** What Codex is asking permission for. */
+export type CodexApprovalKind = "command" | "file-change" | "permissions";
+
+export type CodexApprovalDecision = "approve" | "approve-for-session" | "deny" | "cancel";
+
+export interface CodexApprovalFileChange {
+  path: string;
+  kind: "add" | "delete" | "update";
+}
+
+/**
+ * A pending approval, as sent by the bridge.
+ *
+ * Mirrors `ApprovalRequest` in `bridges/codex-bridge/src/app-server/approvals.ts`.
+ * Most fields are optional because the underlying protocol methods disagree about
+ * which they populate — the v2 file-change approval, for instance, carries no
+ * changes at all.
+ */
+export interface CodexApproval {
+  approvalId: string;
+  kind: CodexApprovalKind;
+  method: string;
+  threadId: string | null;
+  turnId: string | null;
+  itemId: string | null;
+  requestedAt: number;
+  /** Auto-denies at this time, so the card can show a countdown. */
+  expiresAt: number;
+  command?: string;
+  cwd?: string;
+  changes?: CodexApprovalFileChange[];
+  permissions?: { network: boolean; fileSystem: boolean };
+  reason?: string;
+  grantRoot?: string;
+  networkHost?: string;
+  supportsApproveForSession: boolean;
+}
+
+/**
+ * Outcome of answering an approval.
+ *
+ * `stale` is expected, not exceptional: the five-minute window can close while the
+ * user is deciding, and a restart withdraws the request outright.
+ */
+export type CodexApprovalResponseResult = "applied" | "stale" | "forbidden" | "error";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -150,6 +242,39 @@ export async function checkHealth(client: CodexClient): Promise<boolean> {
   }
 }
 
+/** Engine and app-server detail from /global/health. */
+export interface CodexBridgeHealth {
+  status: "ok" | "error";
+  bridgeVersion?: string;
+  engine?: "app-server";
+  appServer?: {
+    state?: string;
+    generation?: number;
+    pid?: number | null;
+    codexVersion?: string;
+    restartCount?: number;
+    circuitOpen?: boolean;
+    lastError?: string;
+  };
+  activeThreads?: number;
+  activeTurns?: number;
+}
+
+/**
+ * Full health payload. Returns null when unreachable *or* when the engine has
+ * failed terminally (the bridge answers 503), so callers cannot mistake a dead
+ * app-server for a healthy bridge.
+ */
+export async function getBridgeHealth(client: CodexClient): Promise<CodexBridgeHealth | null> {
+  try {
+    const response = await fetchWithTimeout(`${client.baseUrl}/global/health`);
+    if (!response.ok) return null;
+    return (await response.json()) as CodexBridgeHealth;
+  } catch {
+    return null;
+  }
+}
+
 export async function getModels(client: CodexClient): Promise<CodexModelsResponse> {
   try {
     const response = await fetchWithTimeout(`${client.baseUrl}/global/models`);
@@ -164,7 +289,8 @@ export async function getModels(client: CodexClient): Promise<CodexModelsRespons
 
     return {
       models,
-      source: data.source === "cache" ? "cache" : "fallback",
+      source:
+        data.source === "app-server" || data.source === "cache" ? data.source : "fallback",
     };
   } catch (error) {
     console.error("[codex-client] Failed to get models:", error);
@@ -334,10 +460,19 @@ export async function getSessionStatus(
     ) {
       throw new Error("Codex session status response was malformed");
     }
+    // Spread in only when present, so the response shape is unchanged for a
+    // bridge that does not report them.
     return {
       status: data.status,
       title: typeof data.title === "string" ? data.title : undefined,
       error: typeof data.error === "string" ? data.error : undefined,
+      ...(typeof data.phase === "string" ? { phase: data.phase as CodexSessionPhase } : {}),
+      ...(typeof data.threadId === "string" ? { threadId: data.threadId } : {}),
+      ...(typeof data.turnId === "string" ? { turnId: data.turnId } : {}),
+      ...(typeof data.requestId === "string" ? { requestId: data.requestId } : {}),
+      ...(typeof data.engineGeneration === "number"
+        ? { engineGeneration: data.engineGeneration }
+        : {}),
     };
   } catch (error) {
     console.error("[codex-client] Failed to get session status:", error);
@@ -350,6 +485,29 @@ export async function getSessionStatus(
   }
 }
 
+/**
+ * What the bridge returns when it accepts a prompt.
+ *
+ * `already-processed` means the bridge recognised the request id as one it has
+ * already run to completion — the guarantee that a retried dispatch cannot
+ * execute a turn twice. `turnId`/`threadId` let a reconnecting client reconcile
+ * against the turn actually running rather than guessing from prompt text.
+ */
+export interface CodexPromptAcceptedResponse {
+  status: "processing" | "already-processed";
+  requestId?: string;
+  threadId?: string | null;
+  turnId?: string;
+  duplicate?: boolean;
+}
+
+/**
+ * Sends a prompt.
+ *
+ * Returns the acceptance details, or `null` on failure. Callers that only need a
+ * success check can keep treating the result as a boolean — an object is truthy
+ * and `null` is falsy.
+ */
 export async function sendPrompt(
   client: CodexClient,
   sessionId: string,
@@ -358,7 +516,7 @@ export async function sendPrompt(
     attachments?: CodexPromptAttachment[];
     requestId?: string;
   },
-): Promise<boolean> {
+): Promise<CodexPromptAcceptedResponse | null> {
   try {
     const response = await fetchWithTimeout(
       `${client.baseUrl}/session/${sessionId}/prompt`,
@@ -372,10 +530,19 @@ export async function sendPrompt(
         }),
       },
     );
-    return response.ok;
+    if (!response.ok) return null;
+
+    const data = (await response.json().catch(() => ({}))) as Partial<CodexPromptAcceptedResponse>;
+    return {
+      status: data.status === "already-processed" ? "already-processed" : "processing",
+      requestId: typeof data.requestId === "string" ? data.requestId : options?.requestId,
+      threadId: typeof data.threadId === "string" ? data.threadId : null,
+      turnId: typeof data.turnId === "string" ? data.turnId : undefined,
+      duplicate: data.duplicate === true,
+    };
   } catch (error) {
     console.error("[codex-client] Failed to send prompt:", error);
-    return false;
+    return null;
   }
 }
 
@@ -395,6 +562,61 @@ export async function abortSession(
   }
 }
 
+/**
+ * Fetches approvals still awaiting a decision.
+ *
+ * This is the rehydration path required by the background-reliability rules: a tab
+ * that was unmounted while Codex asked for approval never saw the SSE frame, so it
+ * must be able to ask on mount rather than trusting live events.
+ */
+export async function fetchPendingApprovals(
+  client: CodexClient,
+  sessionId: string,
+): Promise<CodexApproval[]> {
+  try {
+    const response = await fetchWithTimeout(
+      `${client.baseUrl}/session/${sessionId}/approvals`,
+    );
+    if (!response.ok) return [];
+    const body = (await response.json()) as { approvals?: unknown };
+    return Array.isArray(body.approvals) ? (body.approvals as CodexApproval[]) : [];
+  } catch (error) {
+    console.error("[codex-client] Failed to fetch pending approvals:", error);
+    return [];
+  }
+}
+
+/**
+ * Sends the user's decision.
+ *
+ * Distinguishes `stale` (409 — the window closed) from `error` (anything else),
+ * because the two need different UI: drop the card versus let the user retry.
+ */
+export async function respondToApproval(
+  client: CodexClient,
+  sessionId: string,
+  approvalId: string,
+  decision: CodexApprovalDecision,
+): Promise<CodexApprovalResponseResult> {
+  try {
+    const response = await fetchWithTimeout(
+      `${client.baseUrl}/session/${sessionId}/approvals/${encodeURIComponent(approvalId)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision }),
+      },
+    );
+    if (response.ok) return "applied";
+    if (response.status === 409) return "stale";
+    if (response.status === 403) return "forbidden";
+    return "error";
+  } catch (error) {
+    console.error("[codex-client] Failed to respond to approval:", error);
+    return "error";
+  }
+}
+
 export async function deleteSession(
   client: CodexClient,
   sessionId: string,
@@ -411,9 +633,18 @@ export async function deleteSession(
   }
 }
 
+/**
+ * Subscribes to the bridge event stream.
+ *
+ * `since` is the last revision this client processed. Passing it lets the bridge
+ * replay the gap instead of the client refetching everything; if the gap is longer
+ * than the bridge retained, it answers with `session.reconcile-required` and the
+ * caller must resync. Omit it for a fresh subscription.
+ */
 export function subscribeToEvents(
   client: CodexClient,
   signal?: AbortSignal,
+  since?: number,
 ): AsyncIterable<CodexEvent> {
   return {
     [Symbol.asyncIterator](): AsyncIterator<CodexEvent> {
@@ -426,10 +657,14 @@ export function subscribeToEvents(
       const handleEvent = (event: MessageEvent) => {
         try {
           const data = JSON.parse(event.data);
+          // `lastEventId` is the SSE `id:` field. Parsed here so consumers get a
+          // number and never have to know the wire format.
+          const revision = Number.parseInt(event.lastEventId ?? "", 10);
           const codexEvent: CodexEvent = {
             type: event.type as CodexEvent["type"],
             sessionId: data.sessionId,
             data,
+            ...(Number.isSafeInteger(revision) && revision >= 0 ? { revision } : {}),
           };
 
           if (resolver) {
@@ -457,7 +692,14 @@ export function subscribeToEvents(
 
       signal?.addEventListener("abort", cleanup);
 
-      eventSource = new EventSource(`${client.baseUrl}/event/subscribe`);
+      const url = new URL(`${client.baseUrl}/event/subscribe`);
+      // Only sent when we actually have a cursor; a fresh subscription must not
+      // ask for a replay from revision 0 and receive the whole ring.
+      if (since !== undefined && Number.isSafeInteger(since) && since >= 0) {
+        url.searchParams.set("since", String(since));
+      }
+
+      eventSource = new EventSource(url.toString());
       for (const eventType of [
         "connected",
         "keepalive",
@@ -466,6 +708,9 @@ export function subscribeToEvents(
         "session.error",
         "session.title-updated",
         "message.updated",
+        "session.approval-requested",
+        "session.approval-resolved",
+        "session.reconcile-required",
       ]) {
         eventSource.addEventListener(eventType, handleEvent);
       }

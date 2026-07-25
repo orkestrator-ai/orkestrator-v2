@@ -13,8 +13,8 @@
     "start": "bun dist/main.js",
     "start:web": "bun dist/main.js --fallback-host 127.0.0.1",
     "start:web-public": "bun dist/main.js --tailscale-serve --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev",
-    "test": "bun test src tests",
-    "test:workspace": "bun test src tests",
+    "test": "bun test src tests --parallel",
+    "test:workspace": "bun test src tests --parallel",
     "typecheck": "bunx tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

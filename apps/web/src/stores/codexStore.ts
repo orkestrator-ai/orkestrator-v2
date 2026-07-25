@@ -2,11 +2,13 @@ import { create } from "zustand";
 import {
   CODEX_MODELS,
   DEFAULT_CODEX_MODEL,
+  type CodexApproval,
   type CodexClient,
   type CodexConversationMode,
   type CodexMessage,
   type CodexModel,
   type CodexReasoningEffort,
+  type CodexSessionPhase,
   type CodexSlashCommand,
 } from "@/lib/codex-client";
 import { mergeNativeMessagesPreservingClientOnly } from "@/lib/chat/client-only-messages";
@@ -58,6 +60,22 @@ interface CodexState extends CodexChatSlice {
   selectedMode: Map<string, CodexConversationMode>;
   selectedReasoningEffort: Map<string, CodexReasoningEffort>;
   fastMode: Map<string, boolean>;
+  /**
+   * Detailed lifecycle phase reported by the bridge.
+   *
+   * Kept separate from `isLoading` because `cancelling` and `recovering` are both
+   * *loading* states — the turn may still be executing — but need distinct UI.
+   */
+  sessionPhase: Map<string, CodexSessionPhase>;
+  /**
+   * Approvals Codex is blocked on, per session, in arrival order.
+   *
+   * Held in the store rather than component state so a background environment
+   * still accumulates them: the bridge is the authority, but a tab that was
+   * unmounted when the request arrived rehydrates through `setPendingApprovals`
+   * on mount.
+   */
+  pendingApprovals: Map<string, CodexApproval[]>;
 
   // Agent-specific actions
   setModels: (models: CodexModel[]) => void;
@@ -69,6 +87,12 @@ interface CodexState extends CodexChatSlice {
     effort: CodexReasoningEffort,
   ) => void;
   setFastMode: (sessionKey: string, enabled: boolean) => void;
+  setSessionPhase: (sessionKey: string, phase: CodexSessionPhase | undefined) => void;
+  /** Replaces the whole list — the rehydration path. */
+  setPendingApprovals: (sessionKey: string, approvals: CodexApproval[]) => void;
+  /** Adds one, ignoring a duplicate id so an SSE replay cannot double-render. */
+  addPendingApproval: (sessionKey: string, approval: CodexApproval) => void;
+  removePendingApproval: (sessionKey: string, approvalId: string) => void;
   isFastMode: (sessionKey: string) => boolean;
   clearEnvironment: (environmentId: string) => void;
 }
@@ -88,6 +112,8 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
   selectedMode: new Map(),
   selectedReasoningEffort: new Map(),
   fastMode: new Map(),
+  sessionPhase: new Map(),
+  pendingApprovals: new Map(),
 
   // Agent-specific actions
   setModels: (models) => set({ models: models.length > 0 ? models : CODEX_MODELS }),
@@ -131,6 +157,53 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
       return { fastMode: next };
     }),
 
+  setSessionPhase: (sessionKey, phase) =>
+    set((state) => {
+      if (state.sessionPhase.get(sessionKey) === phase) return state;
+      const next = new Map(state.sessionPhase);
+      if (phase === undefined) next.delete(sessionKey);
+      else next.set(sessionKey, phase);
+      return { sessionPhase: next };
+    }),
+
+  setPendingApprovals: (sessionKey, approvals) =>
+    set((state) => {
+      const existing = state.pendingApprovals.get(sessionKey);
+      // Cheap identity check so a poll returning the same list does not rerender.
+      if (
+        (existing?.length ?? 0) === approvals.length
+        && (existing ?? []).every((entry, index) => entry.approvalId === approvals[index]?.approvalId)
+      ) {
+        return state;
+      }
+      const next = new Map(state.pendingApprovals);
+      if (approvals.length === 0) next.delete(sessionKey);
+      else next.set(sessionKey, approvals);
+      return { pendingApprovals: next };
+    }),
+
+  addPendingApproval: (sessionKey, approval) =>
+    set((state) => {
+      const existing = state.pendingApprovals.get(sessionKey) ?? [];
+      // A replayed SSE frame can deliver the same approval twice; the id is the
+      // dedupe key.
+      if (existing.some((entry) => entry.approvalId === approval.approvalId)) return state;
+      const next = new Map(state.pendingApprovals);
+      next.set(sessionKey, [...existing, approval]);
+      return { pendingApprovals: next };
+    }),
+
+  removePendingApproval: (sessionKey, approvalId) =>
+    set((state) => {
+      const existing = state.pendingApprovals.get(sessionKey);
+      if (!existing?.some((entry) => entry.approvalId === approvalId)) return state;
+      const remaining = existing.filter((entry) => entry.approvalId !== approvalId);
+      const next = new Map(state.pendingApprovals);
+      if (remaining.length === 0) next.delete(sessionKey);
+      else next.set(sessionKey, remaining);
+      return { pendingApprovals: next };
+    }),
+
   isFastMode: (sessionKey) => get().fastMode.get(sessionKey) ?? false,
 
   clearEnvironment: (environmentId) =>
@@ -158,6 +231,8 @@ export const useCodexStore = create<CodexState>()((set, get, api) => ({
         messageQueue: pruneSessionKeyedMap(state.messageQueue, prefix),
         selectedModel: pruneSessionKeyedMap(state.selectedModel, prefix),
         selectedMode: pruneSessionKeyedMap(state.selectedMode, prefix),
+        sessionPhase: pruneSessionKeyedMap(state.sessionPhase, prefix),
+        pendingApprovals: pruneSessionKeyedMap(state.pendingApprovals, prefix),
         selectedReasoningEffort: pruneSessionKeyedMap(
           state.selectedReasoningEffort,
           prefix,

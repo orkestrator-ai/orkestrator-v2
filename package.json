@@ -31,6 +31,8 @@
     "download:opencode": "./scripts/download-opencode.sh",
     "download:codex": "./scripts/download-codex.sh",
     "download:binaries": "bun run download:bun && bun run download:claude && bun run download:opencode && bun run download:codex",
+    "codex:protocol": "bun scripts/generate-codex-app-server-protocol.ts",
+    "codex:protocol:check": "bun scripts/generate-codex-app-server-protocol.ts --check",
     "setup": "bun install && bun run build:claude-bridge && bun run build:codex-bridge",
     "build:all": "turbo --cwd . run build --cache-dir .turbo",
     "preview": "bun run --cwd apps/web preview",

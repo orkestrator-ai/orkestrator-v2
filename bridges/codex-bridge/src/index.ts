@@ -8,19 +8,6 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { streamSSE } from "hono/streaming";
-import {
-  Codex,
-  type Input,
-  type ModelReasoningEffort,
-  type Thread,
-  type ThreadEvent,
-  type ThreadItem,
-  type ThreadOptions,
-  type UserInput,
-} from "@openai/codex-sdk";
-import { summarizeTodoList, mapTodoArgs } from "./todo-helpers.js";
-import { type TranscriptSubagentPart } from "./subagent-transcript.js";
-import { deriveTranscriptSubagentPartsForTurn } from "./subagent-transcript-parts.js";
 import { readCachedTranscript } from "./transcript-cache.js";
 import {
   applyCodexCollabStateToSubagentParts,
@@ -39,6 +26,51 @@ import {
   shutdownSessionTitleGeneration,
   type PersistedSessionTitleSource,
 } from "./session-titles.js";
+import { AppServerRuntime } from "./app-server-runtime.js";
+import { AppServerEngine } from "./engine/app-server-engine.js";
+import { APPROVAL_DECISIONS, isApprovalDecision } from "./app-server/approvals.js";
+import { EventRing, parseEventCursor } from "./event-ring.js";
+import {
+  BUILTIN_SLASH_COMMANDS,
+  buildPromptInput,
+  expandPromptTemplate,
+  getAvailableSlashCommandDefinitions,
+  isCodexCliNativeSlashCommand,
+  parseSlashCommandPrompt,
+  resolveConversationMode,
+  runInlinePromptCommand,
+  serializeSlashCommand,
+  wrapPromptForConversationMode,
+  type BridgeSlashCommand,
+  type BuiltinSlashCommand,
+  type ConversationMode,
+  type PromptSlashCommand,
+  type SlashCommandDefinition,
+} from "./prompts/slash-commands.js";
+import {
+  buildTranscriptCatalog,
+  createSharedTranscriptMetaLoader,
+  extractPersistedMessageText,
+  getCodexHomeDir,
+  getPersistedSessionMeta,
+  getWorkingDirectory,
+  hydrateMessagesFromPersistedSession,
+  listPersistedSessionsForCwd,
+  mergePersistedSessionMeta,
+  type PersistedSessionMeta,
+} from "./history/rollout.js";
+import {
+  itemToParts as renderItemToParts,
+  readTextFileIfPresent,
+  stringifyUnknown as stringifyUnknownValue,
+} from "./messages/normalization.js";
+import type {
+  FileChangeDiffContext,
+  MessageRole,
+  NormalizedMessage,
+  NormalizedPart,
+  ToolDiffMetadata,
+} from "./messages/types.js";
 import {
   DEFAULT_REASONING_EFFORT,
   MODEL_REASONING_EFFORTS,
@@ -51,93 +83,18 @@ import {
   type BridgeReasoningEffort,
 } from "./models-cache.js";
 
-type ToolState = "success" | "failure" | "pending";
-type MessageRole = "user" | "assistant" | "system";
-
-export interface NormalizedPart {
-  type: "text" | "thinking" | "tool-invocation" | "tool-result" | "file" | "subagent";
-  content: string;
-  fileUrl?: string;
-  toolName?: string;
-  toolArgs?: Record<string, unknown>;
-  toolState?: ToolState;
-  toolTitle?: string;
-  toolOutput?: string;
-  toolError?: string;
-  toolDiff?: ToolDiffMetadata;
-  subagentId?: string;
-  subagentName?: string;
-  subagentRole?: string;
-  subagentPrompt?: string;
-  subagentActions?: NormalizedPart[];
-  subagentActionCount?: number;
-}
-
-interface NormalizedMessage {
-  id: string;
-  role: MessageRole;
-  content: string;
-  parts: NormalizedPart[];
-  createdAt: string;
-  planReview?: boolean;
-}
-
-interface TurnSubagentRefreshController {
-  refreshNow(): Promise<void>;
-  markParentSettled(): void;
-  stop(): void;
-  isStopped(): boolean;
-}
-
-interface SessionState {
-  id: string;
-  title?: string;
-  titleSource?: "codex" | PersistedSessionTitleSource;
-  titleGenerationAttempted?: boolean;
-  titleGenerationToken?: symbol;
-  conversationMode: ConversationMode;
-  fastMode: boolean;
-  thread: Thread;
-  threadOptions: ThreadOptions;
-  threadId?: string | null;
-  messages: NormalizedMessage[];
-  status: "idle" | "running" | "error";
-  error?: string;
-  abortController?: AbortController;
-  currentAssistantMessageId?: string;
-  currentItems: Map<string, BridgeThreadItem>;
-  currentItemOrder: string[];
-  currentTimelineOrder: string[];
-  currentSubagentParts: Map<string, NormalizedPart>;
-  currentSubagentFingerprints: Map<string, string>;
-  currentTimelineGeneration: number;
-  currentTurnId?: string;
-  lastAcceptedPromptRequestId?: string;
-  currentTurnStartedAt?: string;
-  currentAssistantTurnStartedAt?: string;
-  subagentRefreshController?: TurnSubagentRefreshController;
-  fileChangeBaselines: Map<string, string | undefined>;
-  fileChangeDiffCache: Map<string, ToolDiffMetadata>;
-  pendingAttachments: PromptAttachmentInput[];
-  lastAccessed: number;
-}
-
-type BridgeThreadItem = ThreadItem | CodexCollabToolCallItem;
-
-interface ExpiredSessionState {
-  id: string;
-  title?: string;
-  titleSource?: "codex" | PersistedSessionTitleSource;
-  titleGenerationAttempted?: boolean;
-  conversationMode: ConversationMode;
-  fastMode: boolean;
-  threadOptions: ThreadOptions;
-  threadId?: string | null;
-  messages: NormalizedMessage[];
-  lastAcceptedPromptRequestId?: string;
-  lastAccessed: number;
-  compactedAt: number;
-}
+// The normalized message model and the item renderer live in ./messages so both
+// engines share one implementation. Re-exported here because existing importers
+// (and item-to-parts.test.ts) resolve them from this module.
+export { itemToParts, stringifyUnknown } from "./messages/normalization.js";
+export type {
+  FileChangeDiffContext,
+  MessageRole,
+  NormalizedMessage,
+  NormalizedPart,
+  ToolDiffMetadata,
+  ToolState,
+} from "./messages/types.js";
 
 interface SseEvent {
   type:
@@ -145,57 +102,13 @@ interface SseEvent {
     | "session.idle"
     | "session.error"
     | "session.title-updated"
-    | "message.updated";
+    | "message.updated"
+    | "session.approval-requested"
+    | "session.approval-resolved"
+    /** Emitted when a reconnecting client's cursor has aged out of the ring. */
+    | "session.reconcile-required";
   sessionId?: string;
   data?: Record<string, unknown>;
-}
-
-interface BridgeSlashCommand {
-  name: string;
-  description?: string;
-  argumentHint?: string;
-  source: "prompt" | "builtin";
-}
-
-interface PersistedSessionIndexEntry {
-  id?: unknown;
-  thread_name?: unknown;
-  updated_at?: unknown;
-}
-
-interface PersistedSessionMeta {
-  id: string;
-  title?: string;
-  titleSource?: "codex" | PersistedSessionTitleSource;
-  updatedAt: string;
-  cwd?: string;
-  transcriptPath?: string;
-}
-
-interface TranscriptCatalog {
-  metas: PersistedSessionMeta[];
-  metaByPath: Map<string, PersistedSessionMeta>;
-  transcriptPathByThreadId: Map<string, string>;
-}
-
-interface SessionStatusResponse {
-  status: SessionState["status"];
-  title?: string;
-  error?: string;
-}
-
-export interface ToolDiffMetadata {
-  filePath?: string;
-  additions?: number;
-  deletions?: number;
-  before?: string;
-  after?: string;
-  diff?: string;
-}
-
-export interface FileChangeDiffContext {
-  baselines: Map<string, string | undefined>;
-  cache: Map<string, ToolDiffMetadata>;
 }
 
 interface PromptAttachmentInput {
@@ -205,57 +118,27 @@ interface PromptAttachmentInput {
   filename?: string;
 }
 
-interface PromptSlashCommand extends BridgeSlashCommand {
-  source: "prompt";
-  path: string;
-  template: string;
-}
-
-interface BuiltinSlashCommand extends BridgeSlashCommand {
-  source: "builtin";
-}
-
-type SlashCommandDefinition = PromptSlashCommand | BuiltinSlashCommand;
-type ConversationMode = "build" | "plan";
 
 export const app = new Hono();
+/** Overridden in tests so title generation does not spawn a real `codex exec`. */
+type SessionTitleGenerator = (prompt: string) => Promise<string>;
+let sessionTitleGeneratorForTesting: SessionTitleGenerator | null = null;
+function setSessionTitleGeneratorForTesting(generator: SessionTitleGenerator | null): void {
+  sessionTitleGeneratorForTesting = generator;
+}
 const codexPathOverride = process.env.CODEX_PATH || "codex";
-const CODEX_GOALS_CONFIG = { features: { goals: true } };
-const codex = new Codex({
-  codexPathOverride,
-  config: CODEX_GOALS_CONFIG,
-});
-// Fast-mode variant: passes `--config service_tier=fast` to the Codex CLI,
-// which enables the ~1.5x-faster service tier (higher credit rate).
-// See https://developers.openai.com/codex/speed
-const codexFast = new Codex({
-  codexPathOverride,
-  config: { ...CODEX_GOALS_CONFIG, service_tier: "fast" },
-});
-function getCodex(fastMode: boolean): Codex {
-  return fastMode ? codexFast : codex;
-}
-let freshThreadFactoryForTesting: ((session: SessionState) => Thread) | null = null;
-let beforePromptExecutionForTesting: (() => Promise<void> | void) | null = null;
-let beforeAssistantMessageCommitForTesting: (() => Promise<void> | void) | null = null;
-let afterStreamEventLogForTesting: ((event: ThreadEvent) => Promise<void> | void) | null = null;
-let sessionTitleGeneratorForTesting: ((prompt: string) => Promise<string>) | null = null;
-function createFreshThreadForSession(session: SessionState): Thread {
-  if (freshThreadFactoryForTesting) {
-    return freshThreadFactoryForTesting(session);
-  }
-
-  return getCodex(session.fastMode).startThread(session.threadOptions);
-}
-function resolveFastMode(body: Record<string, unknown>): boolean {
-  return body.fastMode === true;
-}
+/**
+ * The bridge's own version, reported through /global/health. Held at 1.0.0 so the
+ * health payload stays a purely additive change for existing clients.
+ */
+const BRIDGE_VERSION = "1.0.0";
+/** Orkestrator app version, forwarded to app-server as clientInfo.version. */
+const APP_VERSION = process.env.ORKESTRATOR_VERSION || "0.0.0";
 const execFile = promisify(execFileCallback);
-const sessions = new Map<string, SessionState>();
-const expiredSessions = new Map<string, ExpiredSessionState>();
-const subscribers = new Set<(event: SseEvent) => Promise<void> | void>();
-const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
-const EXPIRED_SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const subscribers = new Set<(event: SseEvent, revision: number) => Promise<void> | void>();
+/** Retains recent events so a reconnecting client can replay instead of resyncing. */
+const eventRing = new EventRing<SseEvent>();
+/** Interval for the idle-thread sweep. */
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const codexRawLogDir = normalizeOptionalEnvPath("ORKESTRATOR_CODEX_RAW_LOG_DIR");
 const RUNTIME_ENV_SCRIPT_ENV = "ORKESTRATOR_RUNTIME_ENV_SCRIPT";
@@ -349,7 +232,7 @@ function normalizeLogPayload(value: unknown): unknown {
   try {
     return JSON.parse(JSON.stringify(value));
   } catch {
-    return stringifyUnknown(value);
+    return stringifyUnknownValue(value);
   }
 }
 
@@ -379,164 +262,35 @@ async function writeCodexRawLog(
   }
 }
 
-function updateSessionAccess(sessionId: string): void {
-  const session = sessions.get(sessionId);
-  if (session) {
-    session.lastAccessed = Date.now();
-  }
-}
-
-function compactSession(session: SessionState, compactedAt: number): ExpiredSessionState {
-  session.subagentRefreshController?.stop();
-  return {
-    id: session.id,
-    title: session.title,
-    titleSource: session.titleSource,
-    titleGenerationAttempted: session.titleGenerationAttempted,
-    conversationMode: session.conversationMode,
-    fastMode: session.fastMode,
-    threadOptions: session.threadOptions,
-    threadId: session.threadId,
-    messages: session.messages,
-    lastAcceptedPromptRequestId: session.lastAcceptedPromptRequestId,
-    lastAccessed: session.lastAccessed,
-    compactedAt,
-  };
-}
-
-function restoreExpiredSession(sessionId: string): SessionState | undefined {
-  const expired = expiredSessions.get(sessionId);
-  if (!expired) {
-    return undefined;
-  }
-
-  const sessionCodex = getCodex(expired.fastMode);
-  const thread = expired.threadId
-    ? sessionCodex.resumeThread(expired.threadId, expired.threadOptions)
-    : sessionCodex.startThread(expired.threadOptions);
-  const session: SessionState = {
-    id: expired.id,
-    title: expired.title,
-    titleSource: expired.titleSource,
-    titleGenerationAttempted: expired.titleGenerationAttempted,
-    conversationMode: expired.conversationMode,
-    fastMode: expired.fastMode,
-    thread,
-    threadOptions: expired.threadOptions,
-    threadId: expired.threadId,
-    messages: expired.messages,
-    lastAcceptedPromptRequestId: expired.lastAcceptedPromptRequestId,
-    status: "idle",
-    currentItems: new Map(),
-    currentItemOrder: [],
-    currentTimelineOrder: [],
-    currentSubagentParts: new Map(),
-    currentSubagentFingerprints: new Map(),
-    currentTimelineGeneration: 0,
-    currentTurnStartedAt: undefined,
-    fileChangeBaselines: new Map(),
-    fileChangeDiffCache: new Map(),
-    pendingAttachments: [],
-    lastAccessed: Date.now(),
-  };
-
-  expiredSessions.delete(sessionId);
-  sessions.set(sessionId, session);
-  return session;
-}
-
-function getSession(sessionId: string): SessionState | undefined {
-  return sessions.get(sessionId) ?? restoreExpiredSession(sessionId);
-}
-
-function ensureFileChangeDiffContext(session: SessionState): FileChangeDiffContext {
-  session.fileChangeBaselines ??= new Map();
-  session.fileChangeDiffCache ??= new Map();
-  return {
-    baselines: session.fileChangeBaselines,
-    cache: session.fileChangeDiffCache,
-  };
-}
-
-function ensureCurrentTimelineState(session: SessionState): void {
-  session.currentTimelineOrder ??= session.currentItemOrder.map(
-    (key) => `${CODEX_TIMELINE_ITEM_PREFIX}${key}`,
-  );
-  session.currentSubagentParts ??= new Map();
-  session.currentSubagentFingerprints ??= new Map();
-  session.currentTimelineGeneration ??= 0;
-}
-
-function resetCurrentTurnTimeline(session: SessionState): void {
-  session.currentTimelineGeneration = (session.currentTimelineGeneration ?? 0) + 1;
-  session.currentItems.clear();
-  session.currentItemOrder = [];
-  session.currentTimelineOrder = [];
-  session.currentSubagentParts = new Map();
-  session.currentSubagentFingerprints = new Map();
-}
-
-function cleanupIdleSessions(): void {
-  const now = Date.now();
-  for (const [sessionId, session] of sessions) {
-    if (
-      session.status === "idle"
-      && now - session.lastAccessed > SESSION_TIMEOUT_MS
-    ) {
-      expiredSessions.set(sessionId, compactSession(session, now));
-      sessions.delete(sessionId);
-    }
-  }
-
-  for (const [sessionId, session] of expiredSessions) {
-    if (now - session.compactedAt > EXPIRED_SESSION_RETENTION_MS) {
-      expiredSessions.delete(sessionId);
-    }
-  }
-}
-
-const cleanupTimer = setInterval(cleanupIdleSessions, CLEANUP_INTERVAL_MS);
-
 function createShutdownHandler(
   timer: ReturnType<typeof setInterval>,
   clearTimer: (timer: ReturnType<typeof setInterval>) => void = clearInterval,
   exit: (code: number) => void = (code) => process.exit(code),
   shutdownTitles: () => Promise<void> = shutdownSessionTitleGeneration,
+  /**
+   * Drains the persistent app-server child. Without this a `docker stop` or a
+   * backend-issued SIGTERM would leave an orphan holding the same CODEX_HOME —
+   * and, because the child owns a process group, its background terminals too.
+   */
+  stopEngine: () => Promise<void> = () => stopSelectedEngine(),
 ): () => void {
+  let shuttingDown = false;
   return () => {
+    // A second signal during a slow drain must not race the first.
+    if (shuttingDown) return;
+    shuttingDown = true;
     clearTimer(timer);
-    void shutdownTitles()
-      .catch((error) => {
+    void Promise.allSettled([
+      shutdownTitles().catch((error) => {
         console.warn("[codex-bridge] Failed to stop session-title generation:", error);
-      })
-      .finally(() => exit(0));
+      }),
+      stopEngine().catch((error) => {
+        console.warn("[codex-bridge] Failed to stop the Codex engine:", error);
+      }),
+    ]).finally(() => exit(0));
   };
 }
 
-const shutdownHandler = createShutdownHandler(cleanupTimer);
-
-for (const signal of ["SIGTERM", "SIGINT"] as const) {
-  process.on(signal, shutdownHandler);
-}
-
-const BUILTIN_SLASH_COMMANDS: BuiltinSlashCommand[] = [
-  {
-    name: "/help",
-    description: "Show available Codex slash commands in native mode.",
-    source: "builtin",
-  },
-  {
-    name: "/goal",
-    description: "Set or view an experimental goal for a long-running task.",
-    argumentHint: "<objective|pause|resume|clear>",
-    source: "builtin",
-  },
-  {
-    name: "/models",
-    description: "List available Codex models and current selection.",
-    source: "builtin",
-  },
-];
 const FALLBACK_MODELS: BridgeModel[] = [
   {
     id: "gpt-5.4",
@@ -598,10 +352,18 @@ const FALLBACK_MODELS: BridgeModel[] = [
   },
 ];
 
+/**
+ * Publishes an event to every live subscriber and retains it for replay.
+ *
+ * The revision is assigned *before* fan-out so a subscriber added mid-flight can
+ * tell what it has already seen. Fan-out stays fire-and-forget: a slow browser
+ * must never back-pressure the reducer that called this.
+ */
 function emit(event: SseEvent): void {
+  const revision = eventRing.append(event);
   for (const subscriber of subscribers) {
     try {
-      void Promise.resolve(subscriber(event)).catch((error) => {
+      void Promise.resolve(subscriber(event, revision)).catch((error) => {
         console.error("[codex-bridge] Failed to notify SSE subscriber:", error);
       });
     } catch (error) {
@@ -618,821 +380,6 @@ function createMessageId(): string {
   return `msg-${crypto.randomUUID()}`;
 }
 
-async function persistSessionTitleSafely(
-  threadId: string,
-  title: string,
-  source: PersistedSessionTitleSource,
-): Promise<void> {
-  try {
-    await persistSessionTitle(getCodexHomeDir(), threadId, title, { source });
-  } catch (error) {
-    console.warn("[codex-bridge] Failed to persist session title:", error);
-  }
-}
-
-function scheduleGeneratedSessionTitle(session: SessionState, prompt: string): void {
-  if (process.env.CODEX_BRIDGE_NO_SERVER === "1" && !sessionTitleGeneratorForTesting) {
-    return;
-  }
-
-  const generate = sessionTitleGeneratorForTesting
-    ?? ((sourcePrompt: string) => generateSessionTitleWithCodexExec(codexPathOverride, sourcePrompt));
-  const generationToken = Symbol("session-title-generation");
-  session.titleGenerationAttempted = true;
-  session.titleGenerationToken = generationToken;
-
-  void generate(prompt)
-    .then(async (title) => {
-      if (
-        sessions.get(session.id) !== session
-        || session.titleGenerationToken !== generationToken
-      ) {
-        return;
-      }
-      session.title = title;
-      session.titleSource = "generated";
-      if (session.threadId) {
-        await persistSessionTitleSafely(session.threadId, title, "generated");
-      }
-      if (
-        sessions.get(session.id) === session
-        && session.titleGenerationToken === generationToken
-      ) {
-        session.titleGenerationToken = undefined;
-        emit({
-          type: "session.title-updated",
-          sessionId: session.id,
-          data: { title },
-        });
-      }
-    })
-    .catch(() => {
-      if (session.titleGenerationToken === generationToken) {
-        session.titleGenerationToken = undefined;
-      }
-      console.warn("[codex-bridge] Failed to generate session title; using prompt fallback");
-    });
-}
-
-function resolveConversationMode(body: Record<string, unknown>): ConversationMode {
-  return body.mode === "plan" || body.mode === "build"
-    ? (body.mode as ConversationMode)
-    : "build";
-}
-
-// NOTE: This is a soft hint prepended to the user message, not a true system
-// prompt.  The model may not enforce it perfectly and a determined user could
-// override it.  This is acceptable because plan mode is a UX convenience, not
-// a security boundary.
-function wrapPromptForConversationMode(
-  prompt: string,
-  mode: ConversationMode,
-): string {
-  if (mode !== "plan") {
-    return prompt;
-  }
-
-  const preamble = [
-    "<system-reminder>",
-    "You are in Orkestrator plan mode.",
-    "This turn is planning-only. The user expects analysis, a concrete plan, and optional diffs before any implementation.",
-    "Treat the current session as consultative and read-only.",
-    "Do not claim to have made changes, completed implementation, or written files.",
-    "Do not attempt mutating commands or filesystem writes.",
-    "Inspect the codebase as needed, then produce:",
-    "1. a concise implementation plan,",
-    "2. important risks or open questions,",
-    "3. exact diffs or patch snippets when useful.",
-    "If the user approves the plan later, they will switch you back to build mode in a later turn.",
-    "</system-reminder>",
-  ].join("\n");
-
-  return `${preamble}\n\n${prompt}`;
-}
-
-function buildPromptInput(
-  prompt: string,
-  attachments: PromptAttachmentInput[],
-): Input {
-  if (attachments.length === 0) {
-    return prompt;
-  }
-
-  const input: UserInput[] = [];
-  if (prompt.length > 0) {
-    input.push({ type: "text", text: prompt });
-  }
-
-  for (const attachment of attachments) {
-    input.push({
-      type: "local_image",
-      path: attachment.path,
-    });
-  }
-
-  return input;
-}
-
-function createUserMessage(
-  prompt: string,
-  attachments: PromptAttachmentInput[] = [],
-): NormalizedMessage {
-  const parts: NormalizedPart[] = [];
-
-  if (prompt.length > 0) {
-    parts.push({ type: "text", content: prompt });
-  }
-
-  for (const attachment of attachments) {
-    parts.push({
-      type: "file",
-      content: attachment.filename || attachment.path,
-      fileUrl: attachment.dataUrl || `file://${attachment.path}`,
-    });
-  }
-
-  return {
-    id: createMessageId(),
-    role: "user",
-    content: prompt,
-    parts,
-    createdAt: new Date().toISOString(),
-  };
-}
-
-function createAssistantMessage(options: { planReview?: boolean } = {}): NormalizedMessage {
-  return {
-    id: createMessageId(),
-    role: "assistant",
-    content: "",
-    parts: [],
-    createdAt: new Date().toISOString(),
-    ...(options.planReview ? { planReview: true } : {}),
-  };
-}
-
-export function stringifyUnknown(value: unknown): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function getCodexHomeDir(): string {
-  return process.env.CODEX_HOME || join(homedir(), ".codex");
-}
-
-function getWorkingDirectory(explicitCwd?: string): string {
-  return explicitCwd || process.env.CWD || process.cwd();
-}
-
-async function walkJsonlFiles(dir: string): Promise<string[]> {
-  let entries: Array<{ isDirectory(): boolean; isFile(): boolean; name: string }>;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-
-  const files: string[] = [];
-  for (const entry of entries) {
-    const absolutePath = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...await walkJsonlFiles(absolutePath));
-      continue;
-    }
-
-    if (entry.isFile() && absolutePath.endsWith(".jsonl")) {
-      files.push(absolutePath);
-    }
-  }
-
-  return files;
-}
-
-async function listTranscriptPaths(): Promise<string[]> {
-  const searchRoots = [
-    join(getCodexHomeDir(), "sessions"),
-    join(getCodexHomeDir(), "archived_sessions"),
-  ];
-  return (await Promise.all(searchRoots.map((root) => walkJsonlFiles(root)))).flat();
-}
-
-async function findTranscriptPath(
-  threadId: string,
-  transcriptPaths?: readonly string[],
-): Promise<string | null> {
-  const paths = transcriptPaths ?? await listTranscriptPaths();
-  return paths.find((file) => file.includes(threadId)) ?? null;
-}
-
-async function readTranscriptLines(path: string): Promise<string[]> {
-  return (await readCachedTranscript(path)).lines;
-}
-
-async function getSessionMetaFromTranscriptPath(
-  transcriptPath: string,
-  fallbackTitle?: string,
-  fallbackUpdatedAt?: string,
-): Promise<PersistedSessionMeta | null> {
-  const { records } = await readCachedTranscript(transcriptPath);
-  const sessionMetaRecord = records.find((record) => record.type === "session_meta");
-
-  if (!sessionMetaRecord?.payload) {
-    return null;
-  }
-
-  const payload = sessionMetaRecord.payload;
-  const id =
-    typeof payload.id === "string" && payload.id.length > 0
-      ? payload.id
-      : null;
-
-  if (!id) {
-    return null;
-  }
-
-  let firstUserText: string | null = null;
-  for (const record of records) {
-    if (
-      record.type !== "response_item"
-      || record.payload?.type !== "message"
-      || record.payload?.role !== "user"
-    ) {
-      continue;
-    }
-    firstUserText = extractPersistedMessageText(record.payload.content, "user");
-    if (firstUserText) break;
-  }
-  const transcriptTitle = firstUserText
-    ? buildFallbackSessionTitle(firstUserText)
-    : undefined;
-
-  return {
-    id,
-    title: fallbackTitle ?? transcriptTitle,
-    titleSource: fallbackTitle ? "codex" : (transcriptTitle ? "prompt" : undefined),
-    updatedAt:
-      typeof payload.timestamp === "string"
-        ? payload.timestamp
-        : (fallbackUpdatedAt ?? new Date().toISOString()),
-    cwd: typeof payload.cwd === "string" ? payload.cwd : undefined,
-    transcriptPath,
-  };
-}
-
-async function buildTranscriptCatalog(): Promise<TranscriptCatalog> {
-  const metas: PersistedSessionMeta[] = [];
-  const metaByPath = new Map<string, PersistedSessionMeta>();
-  const transcriptPathByThreadId = new Map<string, string>();
-
-  for (const root of [
-    join(getCodexHomeDir(), "sessions"),
-    join(getCodexHomeDir(), "archived_sessions"),
-  ]) {
-    const files = await walkJsonlFiles(root);
-    for (const transcriptPath of files) {
-      const meta = await getSessionMetaFromTranscriptPath(transcriptPath);
-      if (!meta) {
-        continue;
-      }
-
-      metas.push(meta);
-      metaByPath.set(transcriptPath, meta);
-
-      const fileThreadId = basename(transcriptPath, ".jsonl");
-      if (!transcriptPathByThreadId.has(fileThreadId)) {
-        transcriptPathByThreadId.set(fileThreadId, transcriptPath);
-      }
-      if (!transcriptPathByThreadId.has(meta.id)) {
-        transcriptPathByThreadId.set(meta.id, transcriptPath);
-      }
-    }
-  }
-
-  return {
-    metas,
-    metaByPath,
-    transcriptPathByThreadId,
-  };
-}
-
-async function getPersistedSessionMeta(
-  threadId: string,
-  fallbackTitle?: string,
-  fallbackUpdatedAt?: string,
-  transcriptCatalog?: TranscriptCatalog,
-  transcriptPaths?: readonly string[],
-): Promise<PersistedSessionMeta | null> {
-  const transcriptPath = transcriptCatalog
-    ? transcriptCatalog.transcriptPathByThreadId.get(threadId) ??
-      transcriptCatalog.metas.find((meta) => meta.transcriptPath?.includes(threadId))
-        ?.transcriptPath ??
-      null
-    : await findTranscriptPath(threadId, transcriptPaths);
-  if (!transcriptPath) {
-    return fallbackUpdatedAt
-      ? {
-          id: threadId,
-          title: fallbackTitle,
-          titleSource: fallbackTitle ? "codex" : undefined,
-          updatedAt: fallbackUpdatedAt,
-        }
-      : null;
-  }
-
-  const cachedMeta = transcriptCatalog?.metaByPath.get(transcriptPath);
-  const meta = cachedMeta
-    ? {
-        ...cachedMeta,
-        title: fallbackTitle ?? cachedMeta.title,
-        titleSource: fallbackTitle ? "codex" as const : cachedMeta.titleSource,
-        updatedAt: cachedMeta.updatedAt || fallbackUpdatedAt || new Date().toISOString(),
-      }
-    : await getSessionMetaFromTranscriptPath(
-        transcriptPath,
-        fallbackTitle,
-        fallbackUpdatedAt,
-      );
-  if (!meta) {
-    return {
-      id: threadId,
-      title: fallbackTitle,
-      titleSource: fallbackTitle ? "codex" : undefined,
-      updatedAt: fallbackUpdatedAt || new Date().toISOString(),
-      transcriptPath,
-    };
-  }
-
-  if (meta.id !== threadId) {
-    meta.id = threadId;
-  }
-
-  return meta;
-}
-
-function createSharedTranscriptMetaLoader(
-  loadPaths: () => Promise<string[]> = listTranscriptPaths,
-  loadMeta: (
-    threadId: string,
-    transcriptPaths: readonly string[],
-  ) => Promise<PersistedSessionMeta | null> = (threadId, transcriptPaths) =>
-    getPersistedSessionMeta(
-      threadId,
-      undefined,
-      undefined,
-      undefined,
-      transcriptPaths,
-    ),
-): (threadId: string) => Promise<PersistedSessionMeta | null> {
-  let transcriptPathsPromise: Promise<string[]> | undefined;
-  return async (threadId) => {
-    transcriptPathsPromise ??= loadPaths();
-    return loadMeta(threadId, await transcriptPathsPromise);
-  };
-}
-
-async function listPersistedSessionsForCwd(cwd: string): Promise<PersistedSessionMeta[]> {
-  const indexPath = join(getCodexHomeDir(), "session_index.jsonl");
-  const lines = await readTranscriptLines(indexPath);
-  const sessions = new Map<string, PersistedSessionMeta>();
-  const transcriptCatalog = await buildTranscriptCatalog();
-
-  for (const line of lines) {
-    let entry: PersistedSessionIndexEntry;
-    try {
-      entry = JSON.parse(line) as PersistedSessionIndexEntry;
-    } catch {
-      continue;
-    }
-
-    const id = typeof entry.id === "string" ? entry.id : undefined;
-    if (!id) continue;
-
-    const meta = await getPersistedSessionMeta(
-      id,
-      typeof entry.thread_name === "string" ? entry.thread_name : undefined,
-      typeof entry.updated_at === "string" ? entry.updated_at : undefined,
-      transcriptCatalog,
-    );
-
-    if (!meta || meta.cwd !== cwd) {
-      continue;
-    }
-
-    sessions.set(meta.id, meta);
-  }
-
-  // Active sessions can exist on disk before Codex appends them to session_index.jsonl,
-  // so scan transcript files directly and merge any missing matches for this cwd.
-  for (const meta of transcriptCatalog.metas) {
-    if (meta.cwd !== cwd) {
-      continue;
-    }
-    mergePersistedSessionMeta(sessions, meta);
-  }
-
-  const generatedTitles = await readPersistedSessionTitleEntries(getCodexHomeDir());
-  for (const session of sessions.values()) {
-    const generatedTitle = generatedTitles.get(session.id);
-    if (generatedTitle && session.titleSource !== "codex") {
-      session.title = generatedTitle.title;
-      session.titleSource = generatedTitle.source;
-    }
-  }
-
-  return Array.from(sessions.values()).sort(
-    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-  );
-}
-
-function mergePersistedSessionMeta(
-  sessionsById: Map<string, PersistedSessionMeta>,
-  meta: PersistedSessionMeta,
-): void {
-  const indexed = sessionsById.get(meta.id);
-  if (!indexed) {
-    sessionsById.set(meta.id, { ...meta });
-    return;
-  }
-
-  if (new Date(meta.updatedAt).getTime() > new Date(indexed.updatedAt).getTime()) {
-    indexed.updatedAt = meta.updatedAt;
-  }
-}
-
-function isSyntheticPersistedUserText(text: string): boolean {
-  const trimmed = text.trim();
-  return trimmed.startsWith("# AGENTS.md instructions for ")
-    || trimmed.startsWith(
-      "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
-    );
-}
-
-function extractPersistedMessageText(
-  content: unknown,
-  role: MessageRole,
-): string | null {
-  if (!Array.isArray(content)) {
-    return null;
-  }
-
-  const key = role === "assistant" ? "output_text" : "input_text";
-  const segments = content
-    .map((item) => {
-      if (!item || typeof item !== "object") return null;
-      const record = item as Record<string, unknown>;
-      return record.type === key && typeof record.text === "string"
-        ? record.text
-        : null;
-    })
-    .filter((segment): segment is string => typeof segment === "string");
-
-  if (segments.length === 0) {
-    return null;
-  }
-
-  const text = segments.join("\n").trim();
-  if (!text) {
-    return null;
-  }
-
-  if (role === "user" && isSyntheticPersistedUserText(text)) {
-    return null;
-  }
-
-  return text;
-}
-
-async function hydrateMessagesFromPersistedSession(
-  threadId: string,
-): Promise<{
-  messages: NormalizedMessage[];
-  title?: string;
-  titleSource?: PersistedSessionMeta["titleSource"];
-}> {
-  const meta = (await listPersistedSessionsForCwd(getWorkingDirectory()))
-    .find((session) => session.id === threadId)
-    ?? await getPersistedSessionMeta(threadId);
-  if (!meta?.transcriptPath) {
-    return { messages: [], title: meta?.title, titleSource: meta?.titleSource };
-  }
-
-  const lines = await readTranscriptLines(meta.transcriptPath);
-  const messages: NormalizedMessage[] = [];
-
-  for (const line of lines) {
-    let record: {
-      timestamp?: unknown;
-      type?: unknown;
-      payload?: {
-        type?: unknown;
-        role?: unknown;
-        content?: unknown;
-      };
-    };
-
-    try {
-      record = JSON.parse(line);
-    } catch {
-      continue;
-    }
-
-    if (record.type !== "response_item" || record.payload?.type !== "message") {
-      continue;
-    }
-
-    const role =
-      record.payload.role === "assistant" || record.payload.role === "user"
-        ? (record.payload.role as MessageRole)
-        : null;
-    if (!role) continue;
-
-    const text = extractPersistedMessageText(record.payload.content, role);
-    if (!text) continue;
-
-    messages.push({
-      id: createMessageId(),
-      role,
-      content: text,
-      parts: [{ type: "text", content: text }],
-      createdAt:
-        typeof record.timestamp === "string"
-          ? record.timestamp
-          : new Date().toISOString(),
-    });
-  }
-
-  return {
-    messages,
-    title: meta.title,
-    titleSource: meta.titleSource,
-  };
-}
-
-function normalizeSlashCommandName(value: string): string {
-  const trimmed = value.trim().replace(/\\/g, "/");
-  if (!trimmed) return "";
-  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-}
-
-function parseSlashCommandPrompt(prompt: string): { name: string; args: string } | null {
-  const trimmed = prompt.trim();
-  if (!trimmed.startsWith("/") || trimmed.includes("\n")) {
-    return null;
-  }
-
-  const firstSpaceIndex = trimmed.indexOf(" ");
-  const rawName = firstSpaceIndex === -1 ? trimmed : trimmed.slice(0, firstSpaceIndex);
-  const args = firstSpaceIndex === -1 ? "" : trimmed.slice(firstSpaceIndex + 1).trim();
-  const name = normalizeSlashCommandName(rawName);
-
-  return name ? { name, args } : null;
-}
-
-function isCodexCliNativeSlashCommand(name: string): boolean {
-  return name.toLowerCase() === "/goal";
-}
-
-function extractFrontmatter(content: string): { body: string; fields: Record<string, string> } {
-  const match = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/);
-  if (!match) {
-    return { body: content, fields: {} };
-  }
-
-  const fields: Record<string, string> = {};
-  for (const line of match[1].split("\n")) {
-    const separatorIndex = line.indexOf(":");
-    if (separatorIndex === -1) continue;
-    const key = line.slice(0, separatorIndex).trim();
-    const value = line.slice(separatorIndex + 1).trim().replace(/^["']|["']$/g, "");
-    if (key) {
-      fields[key] = value;
-    }
-  }
-
-  return { body: content.slice(match[0].length), fields };
-}
-
-function summarizePromptTemplate(content: string): string | undefined {
-  const taskSectionMatch = content.match(/##\s+Your Task\s*\n+([\s\S]+)/i);
-  const candidateBlock = taskSectionMatch ? taskSectionMatch[1] : content;
-  const line = candidateBlock
-    .split("\n")
-    .map((entry) => entry.trim())
-    .find(
-      (entry) =>
-        entry.length > 0
-        && !entry.startsWith("#")
-        && !entry.startsWith("- Current")
-        && !entry.includes("$ARGUMENTS"),
-    );
-
-  return line ? line.replace(/\s+/g, " ").trim() : undefined;
-}
-
-async function collectPromptSlashCommandsFromDir(
-  rootDir: string,
-): Promise<PromptSlashCommand[]> {
-  async function walk(dir: string): Promise<PromptSlashCommand[]> {
-    let entries: Array<{ isDirectory(): boolean; isFile(): boolean; name: string }>;
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return [];
-    }
-
-    const commands: PromptSlashCommand[] = [];
-    for (const entry of entries) {
-      const absolutePath = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        commands.push(...await walk(absolutePath));
-        continue;
-      }
-
-      if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".md")) {
-        continue;
-      }
-
-      const rawTemplate = await readFile(absolutePath, "utf8").catch(() => null);
-      if (!rawTemplate) continue;
-
-      const { body, fields } = extractFrontmatter(rawTemplate);
-      const relativePath = relative(rootDir, absolutePath)
-        .replace(/\.md$/i, "")
-        .split(sep)
-        .join("/");
-      const name = normalizeSlashCommandName(relativePath);
-
-      if (!name) continue;
-
-      commands.push({
-        name,
-        description:
-          fields.description
-          || fields.short_description
-          || summarizePromptTemplate(body)
-          || `Run ${basename(relativePath)} prompt`,
-        argumentHint: fields.argument_hint || fields.arguments || undefined,
-        source: "prompt",
-        path: absolutePath,
-        template: body,
-      });
-    }
-
-    return commands;
-  }
-
-  return walk(rootDir);
-}
-
-async function getAvailableSlashCommandDefinitions(
-  cwd: string,
-): Promise<SlashCommandDefinition[]> {
-  const commandMap = new Map<string, SlashCommandDefinition>();
-  const promptDirs = [
-    join(cwd, ".codex", "prompts"),
-    join(getCodexHomeDir(), "prompts"),
-  ];
-
-  for (const promptDir of promptDirs) {
-    const commands = await collectPromptSlashCommandsFromDir(promptDir);
-    for (const command of commands) {
-      const key = command.name.toLowerCase();
-      if (!commandMap.has(key)) {
-        commandMap.set(key, command);
-      }
-    }
-  }
-
-  for (const command of BUILTIN_SLASH_COMMANDS) {
-    const key = command.name.toLowerCase();
-    if (!commandMap.has(key)) {
-      commandMap.set(key, command);
-    }
-  }
-
-  return Array.from(commandMap.values()).sort((a, b) => a.name.localeCompare(b.name));
-}
-
-function serializeSlashCommand(command: SlashCommandDefinition): BridgeSlashCommand {
-  return {
-    name: command.name,
-    description: command.description,
-    argumentHint: command.argumentHint,
-    source: command.source,
-  };
-}
-
-async function runInlinePromptCommand(command: string, cwd: string): Promise<string> {
-  const shell = process.env.SHELL || "/bin/zsh";
-
-  try {
-    await refreshRuntimeEnvironment();
-    const { stdout, stderr } = await execFile(shell, ["-c", command], {
-      cwd,
-      env: process.env,
-      maxBuffer: 2 * 1024 * 1024,
-    });
-    const output = stdout.trimEnd() || stderr.trimEnd();
-    return output.length > 0 ? output : "(no output)";
-  } catch (error) {
-    const stdout =
-      typeof (error as { stdout?: unknown }).stdout === "string"
-        ? (error as { stdout: string }).stdout
-        : "";
-    const stderr =
-      typeof (error as { stderr?: unknown }).stderr === "string"
-        ? (error as { stderr: string }).stderr
-        : "";
-    const message =
-      stdout.trimEnd()
-      || stderr.trimEnd()
-      || (error instanceof Error ? error.message : "Command failed");
-    return message;
-  }
-}
-
-async function expandPromptTemplate(
-  template: string,
-  args: string,
-  cwd: string,
-): Promise<string> {
-  const withArguments = template.replaceAll("$ARGUMENTS", args);
-  const matches = Array.from(withArguments.matchAll(/!`([^`]+)`/g));
-  if (matches.length === 0) {
-    return withArguments;
-  }
-
-  let expanded = "";
-  let cursor = 0;
-
-  for (const match of matches) {
-    const [fullMatch, command = ""] = match;
-    const startIndex = match.index ?? cursor;
-    expanded += withArguments.slice(cursor, startIndex);
-    expanded += await runInlinePromptCommand(command, cwd);
-    cursor = startIndex + fullMatch.length;
-  }
-
-  expanded += withArguments.slice(cursor);
-  return expanded;
-}
-
-function createAssistantTextMessage(content: string): NormalizedMessage {
-  return {
-    id: createMessageId(),
-    role: "assistant",
-    content,
-    parts: [{ type: "text", content }],
-    createdAt: new Date().toISOString(),
-  };
-}
-
-function emitLocalAssistantResponse(
-  session: SessionState,
-  prompt: string,
-  response: string,
-): void {
-  session.subagentRefreshController?.stop();
-  session.status = "idle";
-  session.error = undefined;
-  resetCurrentTurnTimeline(session);
-  session.currentTurnId = undefined;
-  session.currentTurnStartedAt = undefined;
-  session.currentAssistantTurnStartedAt = undefined;
-  session.abortController = undefined;
-  session.currentAssistantMessageId = undefined;
-
-  session.messages.push(createUserMessage(prompt));
-  const assistantMessage = createAssistantTextMessage(response);
-  session.messages.push(assistantMessage);
-
-  if (!session.title) {
-    session.title = buildFallbackSessionTitle(prompt);
-    session.titleSource = "prompt";
-    emit({
-      type: "session.title-updated",
-      sessionId: session.id,
-      data: { title: session.title },
-    });
-  }
-
-  emit({ type: "message.updated", sessionId: session.id, data: { message: assistantMessage } });
-  emit({ type: "session.updated", sessionId: session.id });
-  emit({
-    type: "session.idle",
-    sessionId: session.id,
-    data: { title: session.title },
-  });
-}
-
-// Persisted model catalog cache lives in the Orkestrator-owned subdirectory of
-// the Codex home so it survives bridge restarts without colliding with the
-// CLI's own `models_cache.json`.
 function bridgeCacheDir(): string {
   return join(getCodexHomeDir(), "orkestrator-bridge");
 }
@@ -1513,1109 +460,121 @@ async function getAvailableModels(): Promise<{ models: BridgeModel[]; source: "c
   return modelCatalogCache.get();
 }
 
-function buildThreadOptions(body: Record<string, unknown>): ThreadOptions {
-  const mode = resolveConversationMode(body);
-  const model =
-    typeof body.model === "string" && body.model.trim().length > 0
-      ? body.model.trim()
-      : undefined;
-  const modelReasoningEffort =
-    typeof body.modelReasoningEffort === "string"
-    && MODEL_REASONING_EFFORTS.has(body.modelReasoningEffort as BridgeReasoningEffort)
-      ? (body.modelReasoningEffort as BridgeReasoningEffort)
-      : undefined;
 
-  return {
-    workingDirectory: process.env.CWD || process.cwd(),
-    approvalPolicy: "never",
-    sandboxMode: mode === "plan" ? "read-only" : "danger-full-access",
-    networkAccessEnabled: true,
-    model,
-    // The CLI supports max/ultra before @openai/codex-sdk's type declaration
-    // does; the SDK forwards this string to the spawned Codex process.
-    modelReasoningEffort: modelReasoningEffort as ModelReasoningEffort | undefined,
-  };
-}
+/**
+ * Composition root.
+ *
+ * There is one Codex engine: a persistent `codex app-server --stdio` child per
+ * environment, supervised by this bridge. The per-turn `codex exec` path
+ * was removed once app-server reached parity — see
+ * docs/adr/0001-codex-app-server-engine.md.
+ */
+const codexEngine = new AppServerEngine({
+  codexPath: codexPathOverride,
+  cwd: getWorkingDirectory(),
+  codexHome: getCodexHomeDir(),
+  clientInfo: { name: "orkestrator", title: "Orkestrator", version: APP_VERSION },
+  configOverrides: { "features.goals": "true" },
+});
 
-async function readTextFileIfPresent(path: string): Promise<string | undefined> {
-  try {
-    return await readFile(path, "utf8");
-  } catch {
-    return undefined;
-  }
-}
+const appServerRuntime = new AppServerRuntime({
+  engine: codexEngine,
+  codexHome: getCodexHomeDir(),
+  cwd: getWorkingDirectory(),
+  emit,
+  loadCachedModels: () => modelCatalogCache.get(),
+  persistModels: writePersistedBridgeCache,
+  generateTitle: (prompt) =>
+    sessionTitleGeneratorForTesting
+      ? sessionTitleGeneratorForTesting(prompt)
+      : generateSessionTitleWithCodexExec(codexPathOverride, prompt),
+  // This module owns the sweep timer so shutdown can clear it alongside the rest.
+  sweepIntervalMs: 0,
+});
 
-async function readGitHeadTextFile(cwd: string, relativePath: string): Promise<string | undefined> {
-  try {
-    const { stdout } = await execFile("git", ["show", `HEAD:${relativePath}`], {
-      cwd,
-      maxBuffer: 2 * 1024 * 1024,
-    });
-    return stdout;
-  } catch {
-    return undefined;
-  }
-}
-
-async function runGitDiffNoIndex(
-  cwd: string,
-  relativePath: string,
-  before: string | undefined,
-  after: string | undefined,
-): Promise<string | undefined> {
-  if ((before ?? "") === (after ?? "")) {
-    return undefined;
-  }
-
-  const tempDir = await mkdtemp(join(tmpdir(), "orkestrator-codex-diff-"));
-  const beforePath = join(tempDir, "before");
-  const afterPath = join(tempDir, "after");
-  const normalizeOutput = (output: string) =>
-    output
-      .split(`a${beforePath}`).join(`a/${relativePath}`)
-      .split(`b${afterPath}`).join(`b/${relativePath}`)
-      .split(beforePath).join(`a/${relativePath}`)
-      .split(afterPath).join(`b/${relativePath}`);
-
-  try {
-    await writeFile(beforePath, before ?? "", "utf8");
-    await writeFile(afterPath, after ?? "", "utf8");
-
-    const args = [
-      "diff",
-      "--no-index",
-      "--no-ext-diff",
-      "--no-color",
-      "--unified=3",
-      beforePath,
-      afterPath,
-    ];
-
-    try {
-      const { stdout } = await execFile("git", args, {
-        cwd,
-        maxBuffer: 2 * 1024 * 1024,
-      });
-      const output = stdout.trimEnd();
-      return output.length > 0 ? normalizeOutput(output) : undefined;
-    } catch (error) {
-      const stdout = typeof (error as { stdout?: unknown }).stdout === "string"
-        ? (error as { stdout: string }).stdout.trimEnd()
-        : "";
-      return stdout.length > 0 ? normalizeOutput(stdout) : undefined;
-    }
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-}
-
-function countDiffLines(diff: string): { additions: number; deletions: number } {
-  let additions = 0;
-  let deletions = 0;
-
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("+") && !line.startsWith("+++")) {
-      additions += 1;
-    } else if (line.startsWith("-") && !line.startsWith("---")) {
-      deletions += 1;
-    }
-  }
-
-  return { additions, deletions };
-}
-
-async function getFileChangeDiffMetadata(
-  cwd: string,
-  change: Extract<ThreadItem, { type: "file_change" }>["changes"][number],
-  context?: FileChangeDiffContext,
-  cacheKey?: string,
-): Promise<ToolDiffMetadata> {
-  const resolvedPath = isAbsolute(change.path) ? change.path : join(cwd, change.path);
-  const relativePath = isAbsolute(change.path) ? relative(cwd, change.path) : change.path;
-  const cached = cacheKey ? context?.cache.get(cacheKey) : undefined;
-  if (cached) {
-    return cached;
-  }
-
-  const hasBaseline = context?.baselines.has(relativePath) ?? false;
-  const before = hasBaseline
-    ? context?.baselines.get(relativePath)
-    : change.kind === "add"
-      ? undefined
-      : await readGitHeadTextFile(cwd, relativePath);
-  const after = change.kind === "delete"
-    ? undefined
-    : await readTextFileIfPresent(resolvedPath);
-  const diff = await runGitDiffNoIndex(cwd, relativePath, before, after);
-  const { additions, deletions } = diff
-    ? countDiffLines(diff)
-    : { additions: 0, deletions: 0 };
-
-  const metadata: ToolDiffMetadata = {
-    filePath: resolvedPath,
-    before,
-    after,
-    diff,
-    additions,
-    deletions,
-  };
-
-  context?.baselines.set(relativePath, after);
-  if (cacheKey) {
-    context?.cache.set(cacheKey, metadata);
-  }
-
-  return metadata;
-}
-
-export async function itemToParts(
-  item: BridgeThreadItem,
-  cwd: string,
-  fileChangeContext?: FileChangeDiffContext,
-): Promise<NormalizedPart[]> {
-  switch (item.type) {
-    case "agent_message":
-      return [{ type: "text", content: item.text }];
-    case "reasoning":
-      return [{ type: "thinking", content: item.text }];
-    case "command_execution":
-      return [{
-        type: "tool-invocation",
-        content: item.command,
-        toolName: "bash",
-        toolArgs: { command: item.command },
-        toolState:
-          item.status === "failed"
-            ? "failure"
-            : item.status === "completed"
-              ? "success"
-              : "pending",
-        toolTitle: item.command,
-        toolOutput: item.aggregated_output || undefined,
-        toolError: item.status === "failed" ? item.aggregated_output || "Command failed" : undefined,
-      }];
-    case "file_change":
-      return Promise.all(
-        item.changes.map(async (change, index) => ({
-          type: "tool-invocation" as const,
-          content: change.path,
-          toolName: "apply_patch",
-          toolState: item.status === "failed" ? "failure" : "success",
-          toolTitle: `${change.kind}: ${change.path}`,
-          toolOutput: `${change.kind}: ${change.path}`,
-          toolDiff: await getFileChangeDiffMetadata(
-            cwd,
-            change,
-            fileChangeContext,
-            `${item.id}:${index}:${change.kind}:${change.path}`,
-          ),
-        })),
-      );
-    case "mcp_tool_call":
-      return [{
-        type: "tool-invocation",
-        content: item.tool,
-        toolName: item.tool,
-        toolArgs: (item.arguments ?? {}) as Record<string, unknown>,
-        toolState:
-          item.status === "failed"
-            ? "failure"
-            : item.status === "completed"
-              ? "success"
-              : "pending",
-        toolTitle: `${item.server}:${item.tool}`,
-        toolOutput: stringifyUnknown(item.result),
-        toolError: item.error?.message,
-      }];
-    case "web_search":
-      return [{
-        type: "tool-invocation",
-        content: item.query,
-        toolName: "web_search",
-        toolArgs: { query: item.query },
-        toolState: "success",
-        toolTitle: item.query,
-      }];
-    case "todo_list":
-      return [{
-        type: "tool-invocation",
-        content: summarizeTodoList(item.items),
-        toolName: "todo_list",
-        toolState: "success",
-        toolTitle: "Todo List",
-        toolArgs: mapTodoArgs(item.items),
-        toolOutput: summarizeTodoList(item.items),
-      }];
-    case "error":
-      return [{
-        type: "tool-result",
-        content: item.message,
-        toolName: "error",
-        toolState: "failure",
-        toolError: item.message,
-      }];
-    default:
-      return [];
-  }
-}
-
-interface AssistantRebuildSnapshot {
-  threadId?: string | null;
-  currentTurnStartedAt?: string;
-  currentAssistantTurnStartedAt?: string;
-  currentItemOrder: string[];
-  currentItems: Map<string, BridgeThreadItem>;
-}
-
-async function buildTranscriptSubagentParts(
-  snapshot: AssistantRebuildSnapshot,
-): Promise<NormalizedPart[]> {
-  const items = snapshot.currentItemOrder
-    .map((id) => snapshot.currentItems.get(id))
-    .filter((item): item is BridgeThreadItem => item !== undefined);
-  const loadSessionMeta = createSharedTranscriptMetaLoader();
-  const transcriptParts = await deriveTranscriptSubagentPartsForTurn({
-    threadId: snapshot.threadId,
-    currentTurnStartedAt:
-      snapshot.currentAssistantTurnStartedAt ?? snapshot.currentTurnStartedAt,
-    fallbackAgentIdsInSpawnOrder: getCodexSpawnedAgentIdsInOrder(items),
-    loadSessionMeta,
-    loadTranscript: (path) => readCachedTranscript(path),
+/**
+ * Frees idle threads: unsubscribes them from app-server and drops their cached
+ * transcript and diff state. Without it a long-lived bridge accumulates every
+ * transcript it has ever rendered.
+ */
+const cleanupTimer = setInterval(() => {
+  void appServerRuntime.sweepIdle().catch((error) => {
+    console.warn("[codex-bridge] Idle sweep failed:", error);
   });
-  const reconciledParts = applyCodexCollabStateToSubagentParts(transcriptParts, items);
+}, CLEANUP_INTERVAL_MS);
+cleanupTimer.unref?.();
 
-  return reconciledParts.map((part: TranscriptSubagentPart) => ({
-    type: "subagent",
-    content: part.content,
-    toolState: part.toolState,
-    subagentId: part.subagentId,
-    subagentName: part.subagentName,
-    subagentRole: part.subagentRole,
-    subagentPrompt: part.subagentPrompt,
-    subagentActions: part.subagentActions as NormalizedPart[],
-    subagentActionCount: part.subagentActionCount,
-  }));
-}
-
-type TodoListThreadItem = Extract<ThreadItem, { type: "todo_list" }>;
-
-function cloneTodoListItem(item: TodoListThreadItem): TodoListThreadItem {
-  // SDK stream events may reuse or mutate their payload objects. Keep each
-  // timeline snapshot independent so a later update cannot rewrite history.
-  return structuredClone(item);
-}
-
-function todoListStateMatches(
-  previous: TodoListThreadItem,
-  next: TodoListThreadItem,
-): boolean {
-  return JSON.stringify(previous.items) === JSON.stringify(next.items);
-}
-
-function findLatestCurrentItemKey(
-  session: SessionState,
-  itemId: string,
-): string | undefined {
-  for (let index = session.currentItemOrder.length - 1; index >= 0; index -= 1) {
-    const key = session.currentItemOrder[index];
-    if (key && session.currentItems.get(key)?.id === itemId) {
-      return key;
-    }
-  }
-  return undefined;
-}
-
-function normalizeBridgeThreadItem(item: unknown): BridgeThreadItem | null {
-  if (!item || typeof item !== "object" || Array.isArray(item)) return null;
-  if ((item as { type?: unknown }).type === "collab_tool_call") {
-    return normalizeCodexCollabToolCallItem(item);
-  }
-  if (typeof (item as { id?: unknown }).id !== "string") return null;
-  return structuredClone(item) as ThreadItem;
-}
-
-function recordCurrentItem(session: SessionState, rawItem: unknown): void {
-  const item = normalizeBridgeThreadItem(rawItem);
-  if (!item) return;
-  ensureCurrentTimelineState(session);
-  // Every accepted stream event versions the rebuild snapshot. Multiple
-  // rebuilds can overlap within one turn (for example an item event and a
-  // foreground /messages rehydration), so reset-only versioning is insufficient.
-  session.currentTimelineGeneration += 1;
-  if (item.type !== "todo_list") {
-    if (!session.currentItems.has(item.id)) {
-      session.currentItemOrder.push(item.id);
-      session.currentTimelineOrder.push(`${CODEX_TIMELINE_ITEM_PREFIX}${item.id}`);
-    }
-    session.currentItems.set(item.id, item);
-    return;
-  }
-
-  const previousKey = findLatestCurrentItemKey(session, item.id);
-  const previous = previousKey
-    ? session.currentItems.get(previousKey)
-    : undefined;
-  const nextSnapshot = cloneTodoListItem(item);
-
-  if (!previousKey || previous?.type !== "todo_list") {
-    session.currentItemOrder.push(item.id);
-    session.currentTimelineOrder.push(`${CODEX_TIMELINE_ITEM_PREFIX}${item.id}`);
-    session.currentItems.set(item.id, nextSnapshot);
-    return;
-  }
-
-  // A todo_list commonly starts as an empty shell and is then populated. That
-  // shell was never a meaningful visible state, so update it in place. Likewise,
-  // started/updated/completed events with identical items are one snapshot.
-  const isInitialEmptyShell = previousKey === item.id && previous.items.length === 0;
-  if (isInitialEmptyShell || todoListStateMatches(previous, item)) {
-    session.currentItems.set(previousKey, nextSnapshot);
-    return;
-  }
-
-  // Codex reuses one item id for every update_plan call in a turn. Store changed
-  // states under timeline-only keys so each update remains where it occurred.
-  let snapshotIndex = 2;
-  let snapshotKey = `${item.id}:snapshot:${snapshotIndex}`;
-  while (session.currentItems.has(snapshotKey)) {
-    snapshotIndex += 1;
-    snapshotKey = `${item.id}:snapshot:${snapshotIndex}`;
-  }
-  session.currentItemOrder.push(snapshotKey);
-  session.currentTimelineOrder.push(`${CODEX_TIMELINE_ITEM_PREFIX}${snapshotKey}`);
-  session.currentItems.set(snapshotKey, nextSnapshot);
-}
-
-async function rebuildAssistantMessage(
-  session: SessionState,
-  options: { receivedAt?: string } = {},
-): Promise<NormalizedMessage | null> {
-  ensureCurrentTimelineState(session);
-  const messageId = session.currentAssistantMessageId;
-  if (!messageId) return null;
-  const message = session.messages.find((entry) => entry.id === messageId);
-  if (!message) return null;
-  // A later rebuild may observe fresher transcript files even when no stream
-  // item changed. Version rebuild starts as well as item mutations so only the
-  // newest requested snapshot is allowed to commit.
-  session.currentTimelineGeneration += 1;
-  const generation = session.currentTimelineGeneration;
-  const cwd = getWorkingDirectory(session.threadOptions.workingDirectory);
-
-  const snapshotItems = new Map<string, BridgeThreadItem>();
-  for (const [key, item] of session.currentItems) {
-    snapshotItems.set(key, structuredClone(item));
-  }
-  const snapshot: AssistantRebuildSnapshot = {
-    threadId: session.threadId,
-    currentTurnStartedAt: session.currentTurnStartedAt,
-    currentAssistantTurnStartedAt: session.currentAssistantTurnStartedAt,
-    currentItemOrder: [...session.currentItemOrder],
-    currentItems: snapshotItems,
-  };
-  const timelineOrder = [...session.currentTimelineOrder];
-  const currentSubagentParts = new Map(
-    [...session.currentSubagentParts].map(([key, part]) => [key, structuredClone(part)]),
-  );
-  const currentSubagentFingerprints = new Map(session.currentSubagentFingerprints);
-  const fileChangeBaselines = new Map(session.fileChangeBaselines ?? []);
-  const fileChangeDiffCache = new Map(
-    [...(session.fileChangeDiffCache ?? new Map())].map(
-      ([key, value]) => [key, structuredClone(value)] as const,
-    ),
-  );
-  const items = snapshot.currentItemOrder
-    .map((id) => snapshot.currentItems.get(id))
-    .filter((item): item is BridgeThreadItem => item !== undefined);
-
-  const fileChangeContext: FileChangeDiffContext = {
-    baselines: fileChangeBaselines,
-    cache: fileChangeDiffCache,
-  };
-  const subagentParts = await buildTranscriptSubagentParts(snapshot);
-  reconcileCodexSubagentTimeline(
-    subagentParts,
-    timelineOrder,
-    currentSubagentParts,
-    currentSubagentFingerprints,
-  );
-
-  const parts: NormalizedPart[] = [];
-  for (const timelineKey of timelineOrder) {
-    if (timelineKey.startsWith(CODEX_TIMELINE_ITEM_PREFIX)) {
-      const itemKey = timelineKey.slice(CODEX_TIMELINE_ITEM_PREFIX.length);
-      const item = snapshot.currentItems.get(itemKey);
-      if (item) {
-        parts.push(...await itemToParts(item, cwd, fileChangeContext));
-      }
-      continue;
-    }
-    if (timelineKey.startsWith(CODEX_TIMELINE_SUBAGENT_PREFIX)) {
-      const subagentPart = currentSubagentParts.get(timelineKey);
-      if (subagentPart) parts.push(subagentPart);
-    }
-  }
-
-  const finalResponse = items
-    .filter((item): item is Extract<ThreadItem, { type: "agent_message" }> => item.type === "agent_message")
-    .at(-1)?.text ?? "";
-
-  if (beforeAssistantMessageCommitForTesting) {
-    await beforeAssistantMessageCommitForTesting();
-  }
-  if (
-    session.currentTimelineGeneration !== generation
-    || session.currentAssistantMessageId !== messageId
-    || session.messages.find((entry) => entry.id === messageId) !== message
-  ) {
-    return null;
-  }
-
-  session.currentTimelineOrder = timelineOrder;
-  session.currentSubagentParts = currentSubagentParts;
-  session.currentSubagentFingerprints = currentSubagentFingerprints;
-  session.fileChangeBaselines = fileChangeBaselines;
-  session.fileChangeDiffCache = fileChangeDiffCache;
-  message.parts = parts;
-  message.content = finalResponse || parts.find((part) => part.type === "text")?.content || "";
-  if (options.receivedAt) {
-    message.createdAt = options.receivedAt;
-  }
-  return message;
-}
-
-async function buildSlashHelpText(cwd: string): Promise<string> {
-  const commands = await getAvailableSlashCommandDefinitions(cwd);
-  const promptCommands = commands.filter(
-    (command): command is PromptSlashCommand => command.source === "prompt",
-  );
-  const builtinCommands = commands.filter(
-    (command): command is BuiltinSlashCommand => command.source === "builtin",
-  );
-
-  const sections: string[] = ["Available Codex slash commands:"];
-
-  if (builtinCommands.length > 0) {
-    sections.push("");
-    sections.push("Built in:");
-    for (const command of builtinCommands) {
-      sections.push(`- ${command.name}${command.description ? `: ${command.description}` : ""}`);
-    }
-  }
-
-  if (promptCommands.length > 0) {
-    sections.push("");
-    sections.push("Prompt commands:");
-    for (const command of promptCommands) {
-      const suffix = command.argumentHint ? ` ${command.argumentHint}` : "";
-      sections.push(
-        `- ${command.name}${suffix}${command.description ? `: ${command.description}` : ""}`,
-      );
-    }
-  }
-
-  if (promptCommands.length === 0) {
-    sections.push("");
-    sections.push("No Codex prompt commands were discovered in this environment.");
-  }
-
-  return sections.join("\n");
-}
-
-async function buildModelsText(session: SessionState): Promise<string> {
-  const { models } = await getAvailableModels();
-  const currentModel = session.threadOptions.model || models[0]?.id || "UNCONFIRMED";
-
-  return [
-    "Available Codex models:",
-    ...models.map((model) =>
-      `- ${model.id}${model.id === currentModel ? " (current)" : ""}${model.description ? `: ${model.description}` : ""}`,
-    ),
-  ].join("\n");
-}
-
-async function resolvePromptExecution(
-  session: SessionState,
-  prompt: string,
-  cwd: string,
-): Promise<
-  | { kind: "prompt"; expandedPrompt: string }
-  | { kind: "builtin"; response: string }
-  | null
-> {
-  const parsed = parseSlashCommandPrompt(prompt);
-  if (!parsed) {
-    return null;
-  }
-
-  if (parsed.name === "/help") {
-    return {
-      kind: "builtin",
-      response: await buildSlashHelpText(cwd),
-    };
-  }
-
-  if (parsed.name === "/models") {
-    return {
-      kind: "builtin",
-      response: await buildModelsText(session),
-    };
-  }
-
-  if (isCodexCliNativeSlashCommand(parsed.name)) {
-    return null;
-  }
-
-  const commands = await getAvailableSlashCommandDefinitions(cwd);
-  const promptCommand = commands.find(
-    (command): command is PromptSlashCommand =>
-      command.source === "prompt" && command.name.toLowerCase() === parsed.name.toLowerCase(),
-  );
-
-  if (!promptCommand) {
-    return null;
-  }
-
-  return {
-    kind: "prompt",
-    expandedPrompt: await expandPromptTemplate(promptCommand.template, parsed.args, cwd),
-  };
-}
-
-function isMissingRolloutError(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return normalized.includes("thread/resume")
-    && normalized.includes("no rollout found for thread id");
-}
-
-function messageTextForRecovery(message: NormalizedMessage): string {
-  if (message.content.trim()) {
-    return message.content.trim();
-  }
-
-  return message.parts
-    .map((part) => part.content?.trim())
-    .filter((part): part is string => Boolean(part))
-    .join("\n")
-    .trim();
-}
-
-function trimRecoveryTranscript(transcript: string): string {
-  if (transcript.length <= RECOVERY_TRANSCRIPT_CHAR_LIMIT) {
-    return transcript;
-  }
-
-  return transcript.slice(transcript.length - RECOVERY_TRANSCRIPT_CHAR_LIMIT);
-}
-
-function buildResumeRecoveryPrompt(
-  messages: NormalizedMessage[],
-  currentPrompt: string,
-): string {
-  const transcript = messages
-    .filter((message) => message.role === "user" || message.role === "assistant")
-    .map((message) => {
-      const text = messageTextForRecovery(message);
-      if (!text) return null;
-      const role = message.role === "assistant" ? "Codex" : "User";
-      return `${role}:\n${text}`;
-    })
-    .filter((entry): entry is string => entry !== null)
-    .join("\n\n");
-
-  const boundedTranscript = trimRecoveryTranscript(transcript);
-
-  return [
-    "The previous Codex thread could not be resumed by the local CLI.",
-    "Continue the work using the transcript below as context. Preserve completed repository changes and do not redo work unless needed.",
-    "",
-    "<conversation-transcript>",
-    boundedTranscript || "(no prior transcript was available)",
-    "</conversation-transcript>",
-    "",
-    "Current user request:",
-    currentPrompt,
-  ].join("\n");
-}
-
-const TURN_SUBAGENT_REFRESH_INTERVAL_MS = 3_000;
-const TURN_SUBAGENT_SETTLE_GRACE_MS = 30_000;
-const TURN_SUBAGENT_SETTLE_TIMEOUT_MS = 5 * 60_000;
-
-interface TurnSubagentRefreshOptions {
-  intervalMs?: number;
-  settleGraceMs?: number;
-  settleTimeoutMs?: number;
-  rebuild?: (session: SessionState) => Promise<NormalizedMessage | null>;
-  emitEvent?: (event: SseEvent) => void;
-  now?: () => number;
+async function stopSelectedEngine(): Promise<void> {
+  await appServerRuntime.stop();
 }
 
 /**
- * Multi-agent v2 collaboration tools (spawn_agent, wait_agent, send_message)
- * emit no thread items on the SDK stream; child activity is only observable in
- * rollout transcripts on disk. Rebuild periodically while a turn is running,
- * then keep watching through a bounded settlement window so child writes that
- * land after the parent terminal event are not lost.
+ * Starts the app-server child.
+ *
+ * Skipped when `CODEX_BRIDGE_NO_ENGINE=1`, so a test (or any consumer) can import
+ * this module for its helpers without spawning a Codex process. That matters
+ * beyond convenience: the supervisor refreshes PATH into `process.env` on start,
+ * which would race anything else the importing process is doing.
  */
-function startTurnSubagentRefresh(
-  session: SessionState,
-  isCurrentTurn: () => boolean,
-  options: TurnSubagentRefreshOptions = {},
-): TurnSubagentRefreshController {
-  session.subagentRefreshController?.stop();
-
-  const intervalMs = options.intervalMs ?? TURN_SUBAGENT_REFRESH_INTERVAL_MS;
-  const settleGraceMs = options.settleGraceMs ?? TURN_SUBAGENT_SETTLE_GRACE_MS;
-  const settleTimeoutMs = options.settleTimeoutMs ?? TURN_SUBAGENT_SETTLE_TIMEOUT_MS;
-  const rebuild = options.rebuild ?? rebuildAssistantMessage;
-  const emitEvent = options.emitEvent ?? emit;
-  const now = options.now ?? Date.now;
-  const targetMessageId = session.currentAssistantMessageId;
-  const targetStartedAt = session.currentAssistantTurnStartedAt;
-  const currentMessage = session.messages.find(
-    (entry) => entry.id === targetMessageId,
-  );
-  let lastFingerprint = currentMessage ? JSON.stringify(currentMessage.parts) : undefined;
-  let lastChangeAt = now();
-  let parentSettledAt: number | undefined;
-  let refreshing = false;
-  let stopped = false;
-  let timer: ReturnType<typeof setInterval>;
-
-  const isTargetCurrent = () =>
-    session.currentAssistantMessageId === targetMessageId
-    && session.currentAssistantTurnStartedAt === targetStartedAt;
-
-  const hasPendingSubagents = () =>
-    Array.from(session.currentSubagentParts.values()).some(
-      (part) => part.type === "subagent" && part.toolState === "pending",
+async function startSelectedEngine(): Promise<void> {
+  if (process.env.CODEX_BRIDGE_NO_ENGINE === "1") {
+    return;
+  }
+  try {
+    await appServerRuntime.start();
+    console.error(
+      `[codex-bridge] app-server engine ready (codex ${appServerRuntime.getHealth().codexVersion ?? "unknown"})`,
     );
-
-  const controller: TurnSubagentRefreshController = {
-    async refreshNow() {
-      if (stopped || refreshing || !isTargetCurrent()) {
-        if (!stopped && !isTargetCurrent()) controller.stop();
-        return;
-      }
-      if (parentSettledAt === undefined && !isCurrentTurn()) {
-        return;
-      }
-
-      refreshing = true;
-      try {
-        const message = await rebuild(session);
-        if (stopped || !isTargetCurrent()) {
-          if (!stopped) controller.stop();
-          return;
-        }
-        if (message) {
-          const fingerprint = JSON.stringify(message.parts);
-          if (fingerprint !== lastFingerprint) {
-            lastFingerprint = fingerprint;
-            lastChangeAt = now();
-            emitEvent({ type: "message.updated", sessionId: session.id, data: { message } });
-          }
-        }
-      } catch (error) {
-        console.error("[codex-bridge] Failed to refresh subagent activity:", error);
-      } finally {
-        refreshing = false;
-        if (stopped || parentSettledAt === undefined) return;
-
-        const elapsed = now() - parentSettledAt;
-        if (elapsed >= settleTimeoutMs) {
-          controller.stop();
-          return;
-        }
-        if (
-          !hasPendingSubagents()
-          && now() - Math.max(parentSettledAt, lastChangeAt) >= settleGraceMs
-        ) {
-          controller.stop();
-        }
-      }
-    },
-    markParentSettled() {
-      if (stopped || parentSettledAt !== undefined) return;
-      parentSettledAt = now();
-      void controller.refreshNow();
-    },
-    stop() {
-      if (stopped) return;
-      stopped = true;
-      clearInterval(timer);
-      if (session.subagentRefreshController === controller) {
-        session.subagentRefreshController = undefined;
-      }
-    },
-    isStopped() {
-      return stopped;
-    },
-  };
-
-  timer = setInterval(() => {
-    void controller.refreshNow();
-  }, intervalMs);
-  timer.unref?.();
-  session.subagentRefreshController = controller;
-  return controller;
-}
-
-async function processCodexStream(
-  session: SessionState,
-  executionInput: Input,
-  abortController: AbortController,
-  isCurrentTurn: () => boolean,
-): Promise<void> {
-  const finalizeIdleTurn = async () => {
-    const message = await rebuildAssistantMessage(session);
-    session.status = "idle";
-    emit(message
-      ? { type: "message.updated", sessionId: session.id, data: { message } }
-      : { type: "message.updated", sessionId: session.id });
-    emit({
-      type: "session.idle",
-      sessionId: session.id,
-      data: { title: session.title },
-    });
-  };
-
-  const streamed = await session.thread.runStreamed(executionInput, {
-    signal: abortController.signal,
-  });
-  await writeCodexRawLog(session.id, {
-    kind: "stream.start",
-    threadId: session.threadId ?? null,
-  });
-
-  const subagentRefreshController = startTurnSubagentRefresh(session, isCurrentTurn);
-  try {
-    for await (const event of streamed.events) {
-      if (!isCurrentTurn()) {
-        return;
-      }
-
-      await writeCodexRawLog(session.id, {
-        kind: "stream.event",
-        threadId: session.threadId ?? null,
-        eventType: event.type,
-        event: normalizeLogPayload(event),
-      });
-      if (afterStreamEventLogForTesting) {
-        await afterStreamEventLogForTesting(event);
-      }
-
-      if (event.type === "thread.started") {
-        if (!isCurrentTurn()) {
-          return;
-        }
-        session.threadId = event.thread_id;
-        await writeCodexRawLog(session.id, {
-          kind: "thread.started",
-          threadId: session.threadId,
-        });
-        if (
-          session.title
-          && (session.titleSource === "generated" || session.titleSource === "explicit")
-        ) {
-          await persistSessionTitleSafely(session.threadId, session.title, session.titleSource);
-        }
-        continue;
-      }
-
-      if (event.type === "item.started" || event.type === "item.updated" || event.type === "item.completed") {
-        if (!isCurrentTurn()) {
-          return;
-        }
-        const receivedAt = new Date().toISOString();
-        recordCurrentItem(session, event.item);
-        const message = await rebuildAssistantMessage(session, { receivedAt });
-        emit(message
-          ? { type: "message.updated", sessionId: session.id, data: { message } }
-          : { type: "message.updated", sessionId: session.id });
-        continue;
-      }
-
-      if (event.type === "turn.completed") {
-        if (!isCurrentTurn()) {
-          return;
-        }
-        await finalizeIdleTurn();
-        return;
-      }
-
-      if (event.type === "turn.failed" || event.type === "error") {
-        if (!isCurrentTurn()) {
-          return;
-        }
-        const error =
-          event.type === "turn.failed" ? event.error.message : event.message;
-        if (isMissingRolloutError(error)) {
-          throw new Error(error);
-        }
-        session.status = "error";
-        session.error = error;
-        await rebuildAssistantMessage(session);
-        emit({
-          type: "session.error",
-          sessionId: session.id,
-          data: { error },
-        });
-        await writeCodexRawLog(session.id, {
-          kind: "stream.error",
-          threadId: session.threadId ?? null,
-          error,
-        });
-        return;
-      }
-    }
-
-    if (!isCurrentTurn()) {
-      return;
-    }
-
-    await finalizeIdleTurn();
-  } finally {
-    subagentRefreshController.markParentSettled();
-  }
-}
-
-async function runPrompt(
-  session: SessionState,
-  prompt: string,
-  acceptedTurnId?: string,
-): Promise<void> {
-  await refreshRuntimeEnvironment();
-  if (acceptedTurnId && session.currentTurnId !== acceptedTurnId) {
-    return;
-  }
-  if (beforePromptExecutionForTesting) {
-    await beforePromptExecutionForTesting();
-  }
-  if (acceptedTurnId && session.currentTurnId !== acceptedTurnId) {
-    return;
-  }
-  session.subagentRefreshController?.stop();
-
-  const cwd = getWorkingDirectory(session.threadOptions.workingDirectory);
-  const resolvedSlashCommand = await resolvePromptExecution(session, prompt, cwd);
-  if (resolvedSlashCommand?.kind === "builtin") {
-    emitLocalAssistantResponse(session, prompt, resolvedSlashCommand.response);
-    return;
-  }
-
-  const executionPrompt =
-    resolvedSlashCommand?.kind === "prompt"
-      ? resolvedSlashCommand.expandedPrompt
-      : prompt;
-  const turnConversationMode = session.conversationMode;
-  const parsedExecutionSlashCommand = parseSlashCommandPrompt(executionPrompt);
-  const shouldBypassModeWrapper =
-    !!parsedExecutionSlashCommand
-    && isCodexCliNativeSlashCommand(parsedExecutionSlashCommand.name);
-  const isPlanReviewTurn = turnConversationMode === "plan" && !shouldBypassModeWrapper;
-  const attachments = session.pendingAttachments ?? [];
-  session.pendingAttachments = [];
-  const executionInput = buildPromptInput(
-    shouldBypassModeWrapper
-      ? executionPrompt
-      : wrapPromptForConversationMode(executionPrompt, turnConversationMode),
-    attachments,
-  );
-  const turnId = acceptedTurnId ?? crypto.randomUUID();
-  const abortController = new AbortController();
-  const isCurrentTurn = () => session.currentTurnId === turnId;
-
-  session.status = "running";
-  session.error = undefined;
-  resetCurrentTurnTimeline(session);
-  ensureFileChangeDiffContext(session).cache.clear();
-  session.currentTurnId = turnId;
-  session.currentTurnStartedAt = new Date().toISOString();
-  session.currentAssistantTurnStartedAt = session.currentTurnStartedAt;
-  session.abortController = abortController;
-
-  const userMessage = createUserMessage(prompt, attachments);
-  const shouldGenerateTitle = session.titleGenerationAttempted !== true
-    && (!session.title || session.titleSource === "prompt");
-  session.messages.push(userMessage);
-  session.pendingAttachments = [];
-  const assistantMessage = createAssistantMessage({ planReview: isPlanReviewTurn });
-  session.currentAssistantMessageId = assistantMessage.id;
-  session.messages.push(assistantMessage);
-
-  if (!session.title) {
-    session.title = buildFallbackSessionTitle(prompt);
-    session.titleSource = "prompt";
-    emit({
-      type: "session.title-updated",
-      sessionId: session.id,
-      data: { title: session.title },
-    });
-  }
-  if (shouldGenerateTitle) {
-    scheduleGeneratedSessionTitle(session, prompt);
-  }
-
-  emit({ type: "message.updated", sessionId: session.id, data: { message: assistantMessage } });
-  emit({ type: "session.updated", sessionId: session.id });
-
-  try {
-    await processCodexStream(session, executionInput, abortController, isCurrentTurn);
   } catch (error) {
-    if (abortController.signal.aborted || !isCurrentTurn()) {
-      return;
-    }
-
-    const message = error instanceof Error ? error.message : "Codex execution failed";
-    if (isMissingRolloutError(message)) {
-      const failedThreadId = session.threadId;
-      await writeCodexRawLog(session.id, {
-        kind: "stream.resume-recovery",
-        threadId: failedThreadId ?? null,
-        error: message,
-      });
-
-      session.thread = createFreshThreadForSession(session);
-      session.threadId = null;
-      session.error = undefined;
-      resetCurrentTurnTimeline(session);
-
-      const recoveryInput = buildPromptInput(
-        wrapPromptForConversationMode(
-          buildResumeRecoveryPrompt(
-            session.messages.filter((messageEntry) =>
-              messageEntry.id !== assistantMessage.id && messageEntry.id !== userMessage.id
-            ),
-            executionPrompt,
-          ),
-          turnConversationMode,
-        ),
-        attachments,
-      );
-
-      try {
-        await processCodexStream(session, recoveryInput, abortController, isCurrentTurn);
-        return;
-      } catch (recoveryError) {
-        if (abortController.signal.aborted || !isCurrentTurn()) {
-          return;
-        }
-        const recoveryMessage = recoveryError instanceof Error
-          ? recoveryError.message
-          : "Codex execution failed";
-        session.status = "error";
-        session.error = recoveryMessage;
-        await writeCodexRawLog(session.id, {
-          kind: "stream.recovery-exception",
-          originalThreadId: failedThreadId ?? null,
-          threadId: session.threadId ?? null,
-          error: recoveryMessage,
-        });
-        emit({
-          type: "session.error",
-          sessionId: session.id,
-          data: { error: recoveryMessage },
-        });
-        return;
-      }
-    }
-
-    session.status = "error";
-    session.error = message;
-    await writeCodexRawLog(session.id, {
-      kind: "stream.exception",
-      threadId: session.threadId ?? null,
-      error: message,
-    });
-    emit({
-      type: "session.error",
-      sessionId: session.id,
-      data: { error: message },
-    });
-  } finally {
-    if (isCurrentTurn()) {
-      session.pendingAttachments = [];
-      session.currentTurnId = undefined;
-      session.currentTurnStartedAt = undefined;
-      session.abortController = undefined;
-    }
+    // Reported through /global/health rather than crashing: the backend polls
+    // health, and a dead process gives it nothing to read.
+    console.error(
+      "[codex-bridge] Failed to start the app-server engine:",
+      error instanceof Error ? error.message : error,
+    );
   }
 }
 
+
+/**
+ * Test seams for engine-neutral helpers that live in this module.
+ *
+ * Everything specific to a turn now lives in `AppServerRuntime` and is tested
+ * directly in `app-server-runtime.test.ts`; this is only the surrounding shell
+ * (SSE fan-out, raw logging, model cache, shutdown, rollout reads).
+ */
 export const __testing = {
   applyRuntimeEnvironmentOutput,
   BRIDGE_MODEL_CACHE_VERSION,
-  buildThreadOptions,
-  cleanupIdleSessions,
+  createOpenSseWriterForTesting: createOpenSseWriter,
   createSharedTranscriptMetaLoaderForTesting: createSharedTranscriptMetaLoader,
   createShutdownHandlerForTesting: createShutdownHandler,
-  createFreshThreadForSessionForTesting: createFreshThreadForSession,
-  FALLBACK_MODELS,
-  EXPIRED_SESSION_RETENTION_MS,
-  expiredSessions: expiredSessions as Map<string, any>,
   emitForTesting: emit,
+  eventRingForTesting: () => eventRing,
   extractPersistedMessageTextForTesting: extractPersistedMessageText,
+  FALLBACK_MODELS,
   getPersistedSessionMetaForTesting: getPersistedSessionMeta,
-  handlePromptFailureForTesting: handlePromptFailure,
+  getSubscriberCountForTesting: () => subscribers.size,
   hydrateMessagesFromPersistedSessionForTesting: hydrateMessagesFromPersistedSession,
   listPersistedSessionsForCwdForTesting: listPersistedSessionsForCwd,
   mergePersistedSessionMetaForTesting: mergePersistedSessionMeta,
-  getSubscriberCountForTesting: () => subscribers.size,
-  rebuildAssistantMessage: rebuildAssistantMessage as (
-    session: any,
-    options?: { receivedAt?: string },
-  ) => Promise<any>,
-  recordCurrentItemForTesting: recordCurrentItem as (session: any, item: unknown) => void,
-  resetCurrentTurnTimelineForTesting: resetCurrentTurnTimeline as (session: any) => void,
-  refreshRuntimeEnvironment,
+  normalizeLogPayloadForTesting: normalizeLogPayload,
   readPersistedBridgeCache,
   readTextFileIfPresentForTesting: readTextFileIfPresent,
+  refreshRuntimeEnvironment,
   runInlinePromptCommand,
-  normalizeLogPayloadForTesting: normalizeLogPayload,
-  runPrompt: runPrompt as (
-    session: any,
-    prompt: string,
-    acceptedTurnId?: string,
-  ) => Promise<void>,
+  runtimeForTesting: () => appServerRuntime,
   sanitizeLogFileComponentForTesting: sanitizeLogFileComponent,
-  subscribeForTesting: (subscriber: (event: SseEvent) => Promise<void> | void) => {
+  setSessionTitleGeneratorForTesting,
+  startBridgeServerForTesting: startBridgeServer,
+  startSseKeepaliveForTesting: startSseKeepalive,
+  subscribeForTesting: (
+    subscriber: (event: SseEvent, revision: number) => Promise<void> | void,
+  ) => {
     subscribers.add(subscriber);
     return () => subscribers.delete(subscriber);
   },
   writeCodexRawLogForTesting: writeCodexRawLog,
-  buildResumeRecoveryPromptForTesting: buildResumeRecoveryPrompt,
-  setBeforePromptExecutionForTesting: (callback: (() => Promise<void> | void) | null) => {
-    beforePromptExecutionForTesting = callback;
-  },
-  setBeforeAssistantMessageCommitForTesting: (
-    callback: (() => Promise<void> | void) | null,
-  ) => {
-    beforeAssistantMessageCommitForTesting = callback;
-  },
-  setAfterStreamEventLogForTesting: (
-    callback: ((event: ThreadEvent) => Promise<void> | void) | null,
-  ) => {
-    afterStreamEventLogForTesting = callback;
-  },
-  setSessionTitleGeneratorForTesting: (
-    callback: ((prompt: string) => Promise<string>) | null,
-  ) => {
-    sessionTitleGeneratorForTesting = callback;
-  },
-  setFreshThreadFactoryForTesting: (factory: ((session: SessionState) => Thread) | null) => {
-    freshThreadFactoryForTesting = factory;
-  },
-  startBridgeServerForTesting: startBridgeServer,
-  startTurnSubagentRefreshForTesting: startTurnSubagentRefresh as (
-    session: any,
-    isCurrentTurn: () => boolean,
-    options?: TurnSubagentRefreshOptions,
-  ) => TurnSubagentRefreshController,
-  createOpenSseWriterForTesting: createOpenSseWriter,
-  startSseKeepaliveForTesting: startSseKeepalive,
-  sessions: sessions as Map<string, any>,
   writePersistedBridgeCache,
 };
 
@@ -2659,222 +618,102 @@ app.use("*", async (c, next) => {
 app.options("*", (c) => c.body(null, 204));
 
 app.get("/global/health", (c) => {
-  return c.json({ status: "ok", version: "1.0.0" });
+  const health = appServerRuntime.getHealth();
+  // A terminally failed engine must not read as healthy: the backend waits on
+  // this before reporting the Codex server started. A restartable state stays 200
+  // with an explicit engine state so a transient blip does not flap the UI.
+  const terminal = health.state === "failed" || health.circuitOpen;
+  return c.json(
+    {
+      status: terminal ? "error" : "ok",
+      version: BRIDGE_VERSION,
+      bridgeVersion: BRIDGE_VERSION,
+      engine: "app-server",
+      appServer: {
+        state: health.state,
+        generation: health.generation,
+        pid: health.pid,
+        codexVersion: health.codexVersion,
+        restartCount: health.restartCount,
+        circuitOpen: health.circuitOpen,
+        environmentFingerprint: health.environmentFingerprint,
+        lastError: health.lastError,
+      },
+      activeThreads: health.activeThreads,
+      activeTurns: health.activeTurns,
+      bridgeSessions: health.bridgeSessions,
+      // Memory budget: detached/re-attached counts plus the bounded caches.
+      storage: health.storage,
+      queues: {
+        notificationDepth: health.notificationQueueDepth,
+        notificationHighWaterMark: health.notificationQueueHighWaterMark,
+      },
+      // A rising `dropped` with clients still reconnecting means the ring is too
+      // small for this workload and reconnects are falling back to full resyncs.
+      events: { ...eventRing.getStats(), subscribers: subscribers.size },
+      protocol: {
+        unknownNotifications: health.unknownNotifications,
+        unsupportedItems: health.unsupportedItems,
+        serverRequests: health.serverRequests,
+      },
+      rpc: health.rpc,
+    },
+    terminal ? 503 : 200,
+  );
 });
 
 app.get("/global/models", async (c) => {
-  const { models, source } = await getAvailableModels();
+  const { models, source } = await appServerRuntime.listModels();
   return c.json({ models, source });
 });
 
 app.get("/global/slash-commands", async (c) => {
   const cwd = getWorkingDirectory();
   const commands = await getAvailableSlashCommandDefinitions(cwd);
-  return c.json({
-    commands: commands.map(serializeSlashCommand),
-    cwd,
-  });
+  return c.json({ commands: commands.map(serializeSlashCommand), cwd });
 });
 
 app.get("/session/list", async (c) => {
-  const cwd = getWorkingDirectory();
-  const sessions = await listPersistedSessionsForCwd(cwd);
-  return c.json({
-    sessions: sessions.map((session) => ({
-      id: session.id,
-      title: session.title,
-      updatedAt: session.updatedAt,
-    })),
-    cwd,
-  });
+  return c.json(await appServerRuntime.listSessions());
 });
 
 app.post("/session/create", async (c) => {
   const body = await c.req.json().catch(() => ({}));
-  const title = typeof body.title === "string" ? body.title : undefined;
-  const sessionId = createSessionId();
-  const conversationMode = resolveConversationMode(body);
-  const fastMode = resolveFastMode(body);
-  const threadOptions = buildThreadOptions(body);
-  const thread = getCodex(fastMode).startThread(threadOptions);
-
-  sessions.set(sessionId, {
-    id: sessionId,
-    title,
-    titleSource: title ? "explicit" : undefined,
-    titleGenerationAttempted: Boolean(title),
-    conversationMode,
-    fastMode,
-    thread,
-    threadOptions,
-    threadId: null,
-    messages: [],
-    status: "idle",
-    currentItems: new Map(),
-    currentItemOrder: [],
-    currentTimelineOrder: [],
-    currentSubagentParts: new Map(),
-    currentSubagentFingerprints: new Map(),
-    currentTimelineGeneration: 0,
-    currentTurnStartedAt: undefined,
-    fileChangeBaselines: new Map(),
-    fileChangeDiffCache: new Map(),
-    pendingAttachments: [],
-    lastAccessed: Date.now(),
-  });
-
-  return c.json({ sessionId, title }, 201);
+  return c.json(appServerRuntime.createSession(body), 201);
 });
 
 app.post("/session/resume", async (c) => {
   const body = await c.req.json().catch(() => ({}));
-  const threadId =
-    typeof body.threadId === "string" && body.threadId.trim().length > 0
-      ? body.threadId.trim()
-      : null;
-
-  if (!threadId) {
-    return c.json({ error: "threadId is required" }, 400);
-  }
-
-  const conversationMode = resolveConversationMode(body);
-  const fastMode = resolveFastMode(body);
-  const threadOptions = buildThreadOptions(body);
-  const thread = getCodex(fastMode).resumeThread(threadId, threadOptions);
-  const hydrated = await hydrateMessagesFromPersistedSession(threadId);
-  const sessionId = createSessionId();
-
-  sessions.set(sessionId, {
-    id: sessionId,
-    title: hydrated.title,
-    titleSource: hydrated.titleSource,
-    titleGenerationAttempted: true,
-    conversationMode,
-    fastMode,
-    thread,
-    threadOptions,
-    threadId,
-    messages: hydrated.messages,
-    status: "idle",
-    currentItems: new Map(),
-    currentItemOrder: [],
-    currentTimelineOrder: [],
-    currentSubagentParts: new Map(),
-    currentSubagentFingerprints: new Map(),
-    currentTimelineGeneration: 0,
-    currentTurnStartedAt: undefined,
-    fileChangeBaselines: new Map(),
-    fileChangeDiffCache: new Map(),
-    pendingAttachments: [],
-    lastAccessed: Date.now(),
-  });
-
-  return c.json(
-    {
-      sessionId,
-      title: hydrated.title,
-      threadId,
-      messages: hydrated.messages,
-    },
-    201,
-  );
+  const resumed = await appServerRuntime.resumeSession(body);
+  if (!resumed) return c.json({ error: "threadId is required" }, 400);
+  return c.json(resumed, 201);
 });
 
 app.post("/session/:id/config", async (c) => {
   const sessionId = c.req.param("id");
-  const session = getSession(sessionId);
-  if (!session) {
-    return c.json({ error: "Session not found" }, 404);
-  }
-  updateSessionAccess(sessionId);
-
-  if (session.status === "running") {
+  const body = await c.req.json().catch(() => ({}));
+  const outcome = await appServerRuntime.updateConfig(sessionId, body);
+  if (outcome === "not-found") return c.json({ error: "Session not found" }, 404);
+  if (outcome === "running") {
     return c.json({ error: "Cannot update settings while session is running" }, 409);
   }
-
-  // Mid-conversation config changes are allowed (e.g. switching plan↔build mode).
-  // When a threadId exists we resume it so the conversation context is preserved;
-  // otherwise we start a fresh thread.
-  const body = await c.req.json().catch(() => ({}));
-  session.conversationMode = resolveConversationMode(body);
-  session.fastMode = resolveFastMode(body);
-  session.threadOptions = buildThreadOptions(body);
-  const sessionCodex = getCodex(session.fastMode);
-  session.thread = session.threadId
-    ? sessionCodex.resumeThread(session.threadId, session.threadOptions)
-    : sessionCodex.startThread(session.threadOptions);
-
   return c.json({ status: "updated" });
 });
 
 app.get("/session/:id/messages", async (c) => {
-  const sessionId = c.req.param("id");
-  const session = getSession(sessionId);
-  if (!session) {
-    return c.json({ error: "Session not found" }, 404);
-  }
-  updateSessionAccess(sessionId);
-
-  if (
-    session.currentAssistantMessageId
-    && (
-      session.status === "running"
-      || session.currentAssistantTurnStartedAt
-      || session.currentTurnStartedAt
-    )
-  ) {
-    await rebuildAssistantMessage(session);
-  }
-
-  return c.json({ messages: session.messages });
+  const messages = await appServerRuntime.getMessages(c.req.param("id"));
+  if (!messages) return c.json({ error: "Session not found" }, 404);
+  return c.json({ messages });
 });
 
 app.get("/session/:id/status", (c) => {
-  const sessionId = c.req.param("id");
-  const session = getSession(sessionId);
-  if (!session) {
-    return c.json({ error: "Session not found" }, 404);
-  }
-  updateSessionAccess(sessionId);
-
-  return c.json({
-    status: session.status,
-    title: session.title,
-    error: session.error,
-  } satisfies SessionStatusResponse);
+  const status = appServerRuntime.getStatus(c.req.param("id"));
+  if (!status) return c.json({ error: "Session not found" }, 404);
+  return c.json(status);
 });
-
-function handlePromptFailure(
-  session: SessionState,
-  acceptedTurnId: string,
-  error: unknown,
-): void {
-  if (session.currentTurnId !== acceptedTurnId) {
-    return;
-  }
-  console.error("[codex-bridge] Prompt failed:", error);
-  const message = error instanceof Error ? error.message : "Codex execution failed";
-  session.status = "error";
-  session.error = message;
-  session.currentTurnId = undefined;
-  session.currentTurnStartedAt = undefined;
-  session.abortController = undefined;
-  session.pendingAttachments = [];
-  emit({
-    type: "session.error",
-    sessionId: session.id,
-    data: { error: message },
-  });
-}
 
 app.post("/session/:id/prompt", async (c) => {
   const sessionId = c.req.param("id");
-  const session = getSession(sessionId);
-  if (!session) {
-    return c.json({ error: "Session not found" }, 404);
-  }
-  updateSessionAccess(sessionId);
-
   const body = await c.req.json().catch(() => ({}));
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const requestId = typeof body.requestId === "string" ? body.requestId.trim() : "";
@@ -2906,104 +745,175 @@ app.post("/session/:id/prompt", async (c) => {
   if (!prompt && attachments.length === 0) {
     return c.json({ error: "Prompt or image attachment is required" }, 400);
   }
-
   if (body.requestId !== undefined && (!requestId || requestId.length > 200)) {
     return c.json({ error: "requestId must be a non-empty string of at most 200 characters" }, 400);
   }
 
-  if (
-    requestId
-    && session.lastAcceptedPromptRequestId === requestId
-    && session.status !== "error"
-  ) {
-    return c.json({
-      status: session.status === "running" ? "processing" : "already-processed",
-      duplicate: true,
-    }, 202);
-  }
-
-  if (session.status === "running") {
-    return c.json({ error: "Session is already running" }, 409);
-  }
-
-  session.pendingAttachments = attachments;
-  session.subagentRefreshController?.stop();
-  const acceptedTurnId = crypto.randomUUID();
-  session.currentTurnId = acceptedTurnId;
-  session.lastAcceptedPromptRequestId = requestId || undefined;
-  session.status = "running";
-  session.error = undefined;
-  emit({ type: "session.updated", sessionId: session.id });
-  runPrompt(session, prompt, acceptedTurnId).catch((error) => {
-    handlePromptFailure(session, acceptedTurnId, error);
+  const outcome = await appServerRuntime.prompt(sessionId, {
+    prompt,
+    requestId: requestId || undefined,
+    attachments,
   });
-
-  return c.json({ status: "processing" }, 202);
+  if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status);
+  return c.json(outcome.result, 202);
 });
 
-app.post("/session/:id/abort", (c) => {
-  const sessionId = c.req.param("id");
-  const session = getSession(sessionId);
-  if (!session) {
-    return c.json({ error: "Session not found" }, 404);
-  }
-  updateSessionAccess(sessionId);
-
-  session.abortController?.abort();
-  session.subagentRefreshController?.markParentSettled();
-  session.status = "idle";
-  session.error = undefined;
-  session.currentTurnId = undefined;
-  session.currentTurnStartedAt = undefined;
-  session.abortController = undefined;
-  session.pendingAttachments = [];
-  emit({ type: "session.idle", sessionId: session.id, data: { title: session.title } });
-  return c.json({ status: "aborted" });
+/**
+ * Approvals still awaiting a decision.
+ *
+ * The rehydration path: a chat tab that was unmounted while Codex asked for
+ * approval has missed the SSE frame entirely, so it must be able to ask. Returns
+ * `[]` rather than 404 for an unknown session — a stale tab polling a closed
+ * session should see "nothing pending", not an error.
+ */
+app.get("/session/:id/approvals", (c) => {
+  return c.json({ approvals: appServerRuntime.listApprovals(c.req.param("id")) });
 });
 
-app.delete("/session/:id", (c) => {
-  const sessionId = c.req.param("id");
-  const session = sessions.get(sessionId);
-  if (!session) {
-    if (expiredSessions.delete(sessionId)) {
-      return c.json({ status: "deleted" });
-    }
-    return c.json({ error: "Session not found" }, 404);
+app.post("/session/:id/approvals/:approvalId", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  if (!isApprovalDecision(body.decision)) {
+    return c.json(
+      { error: `decision must be one of: ${APPROVAL_DECISIONS.join(", ")}` },
+      400,
+    );
   }
 
-  session.abortController?.abort();
-  session.subagentRefreshController?.stop();
-  sessions.delete(session.id);
-  expiredSessions.delete(session.id);
-  return c.json({ status: "deleted" });
+  const outcome = appServerRuntime.respondToApproval(
+    c.req.param("id"),
+    c.req.param("approvalId"),
+    body.decision,
+  );
+  if (outcome === "wrong-session") {
+    return c.json({ error: "Approval does not belong to this session" }, 403);
+  }
+  if (outcome === "unknown") {
+    // 409, not 404: the approval existed but the window closed (answered,
+    // expired, or the child restarted). The UI should drop the card, not retry.
+    return c.json({ error: "Approval is no longer pending", status: "stale" }, 409);
+  }
+  return c.json({ status: "applied", decision: body.decision });
+});
+
+app.post("/session/:id/abort", async (c) => {
+  const outcome = await appServerRuntime.abort(c.req.param("id"));
+  if (!outcome) return c.json({ error: "Session not found" }, 404);
+  // 202: turn/interrupt is asynchronous, so the turn is not over yet. Reporting
+  // "aborted" here would let a new prompt overlap a turn still executing.
+  return c.json({ status: outcome.status, phase: outcome.phase }, 202);
+});
+
+app.delete("/session/:id", async (c) => {
+  // Closes the bridge session and, on the last reference, unsubscribes the
+  // thread. Never thread/delete: that would destroy the user's rollout.
+  const deleted = await appServerRuntime.deleteSession(c.req.param("id"));
+  return deleted ? c.json({ status: "deleted" }) : c.json({ error: "Session not found" }, 404);
 });
 
 app.get("/event/subscribe", (c) => {
-  return streamSSE(c, async (stream) => {
-    await stream.writeSSE({
-      event: "connected",
-      data: JSON.stringify({ status: "connected", timestamp: new Date().toISOString() }),
-    });
+  // `?since=` is what our own client sends; `Last-Event-ID` is what a native
+  // EventSource sends when the browser reconnects on its own. Accept both.
+  const cursor =
+    parseEventCursor(c.req.query("since")) ?? parseEventCursor(c.req.header("Last-Event-ID"));
 
+  return streamSSE(c, async (stream) => {
     let open = true;
     const writeWhileOpen = createOpenSseWriter(
       () => open,
-      (event: { event: string; data: string }) => stream.writeSSE(event),
+      (event: { event: string; data: string; id?: string }) => stream.writeSSE(event),
     );
-    const listener = async (event: SseEvent) => {
-      await writeWhileOpen({
-        event: event.type,
-        data: JSON.stringify({
-          sessionId: event.sessionId,
-          ...(event.data ?? {}),
-        }),
-      });
-    };
 
+    const frameFor = (event: SseEvent, revision: number) => ({
+      event: event.type,
+      // The `id:` is what makes replay possible at all — it is the cursor the
+      // client echoes back on its next connection.
+      id: String(revision),
+      data: JSON.stringify({
+        sessionId: event.sessionId,
+        ...(event.data ?? {}),
+      }),
+    });
+
+    /**
+     * Registered *before* the replay is computed, buffering into an array.
+     *
+     * Ordering matters: if we replayed first and subscribed second, an event
+     * emitted in between would be lost by both paths — the exact gap this endpoint
+     * exists to close. So we subscribe first, replay, then flush anything that
+     * arrived during the replay, skipping revisions the replay already covered.
+     */
+    let buffered: Array<{ event: SseEvent; revision: number }> | null = [];
+    let highestSent = cursor ?? 0;
+
+    const listener = async (event: SseEvent, revision: number) => {
+      if (buffered) {
+        buffered.push({ event, revision });
+        return;
+      }
+      if (revision <= highestSent) return;
+      highestSent = revision;
+      await writeWhileOpen(frameFor(event, revision));
+    };
     subscribers.add(listener);
+
     const keepalive = startSseKeepalive(writeWhileOpen);
 
     try {
+      const replay = cursor === null ? null : eventRing.since(cursor);
+
+      await writeWhileOpen({
+        event: "connected",
+        /**
+         * The client's *own* position, not the latest revision.
+         *
+         * A browser EventSource adopts the id of every frame it sees, including
+         * this one. If it took the latest revision here and the connection then
+         * died before the replay frames were read, it would reconnect asking for
+         * everything after the newest event — permanently skipping the very frames
+         * it had just asked to be replayed. Echoing its cursor back makes the
+         * handshake idempotent.
+         */
+        id: String(cursor ?? eventRing.latestRevision),
+        data: JSON.stringify({
+          status: "connected",
+          timestamp: new Date().toISOString(),
+          revision: eventRing.latestRevision,
+          // Tells the client whether the frames that follow are a replay or a
+          // fresh start, so it knows if it still owes itself a reconcile.
+          replayed: replay?.complete === true ? replay.events.length : 0,
+        }),
+      });
+
+      if (replay && !replay.complete) {
+        // The gap is longer than we retained. Say so explicitly rather than
+        // sending a partial history that would look whole.
+        await writeWhileOpen({
+          event: "session.reconcile-required",
+          id: String(eventRing.latestRevision),
+          data: JSON.stringify({
+            reason: "cursor-expired",
+            requestedRevision: cursor,
+            oldestAvailableRevision: eventRing.oldestRevision,
+            latestRevision: replay.latestRevision,
+          }),
+        });
+        highestSent = replay.latestRevision;
+      } else if (replay) {
+        for (const entry of replay.events) {
+          highestSent = Math.max(highestSent, entry.revision);
+          await writeWhileOpen(frameFor(entry.event, entry.revision));
+        }
+      }
+
+      // Switch to live mode and drain whatever landed during the replay.
+      const pending = buffered;
+      buffered = null;
+      for (const entry of pending ?? []) {
+        if (entry.revision <= highestSent) continue;
+        highestSent = entry.revision;
+        await writeWhileOpen(frameFor(entry.event, entry.revision));
+      }
+
       await new Promise<void>((resolve) => {
         c.req.raw.signal.addEventListener("abort", () => resolve());
       });
@@ -3032,4 +942,10 @@ function startBridgeServer(
   });
 }
 
+const shutdownHandler = createShutdownHandler(cleanupTimer);
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.on(signal, shutdownHandler);
+}
+
 startBridgeServer();
+void startSelectedEngine();

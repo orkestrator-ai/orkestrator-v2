@@ -45,6 +45,15 @@ packages/
 bridges/                    # Native-mode bridge servers
 ├── claude-bridge/          # Claude Native Mode bridge server
 └── codex-bridge/           # Codex Native Mode bridge server
+    └── src/
+        ├── index.ts            # Routes, SSE, composition root
+        ├── app-server-runtime.ts  # Session surface for the app-server engine
+        ├── engine/             # CodexEngine contract + AppServerEngine
+        ├── app-server/         # Supervisor, JSONL RPC, reducer, generated protocol
+        ├── sessions/           # Thread registry, turn accumulator, dispatch journal
+        ├── messages/           # Normalized message model + renderer (engine-neutral)
+        ├── prompts/            # Slash commands and prompt shaping
+        └── history/            # Rollout transcript parsing
 
 docker/                     # Docker configuration
 ├── Dockerfile              # Base image definition
@@ -148,6 +157,77 @@ The OpenCode server sends these event types:
 | `apps/web/src/stores/openCodeStore.ts`                   | OpenCode state management   |
 | `apps/web/src/lib/native/backend.ts`                     | Native IPC command wrapper  |
 
+### Codex bridge
+
+The bridge supervises one persistent `codex app-server --stdio` child per
+environment and talks to it over JSON-RPC on private stdio. There is no second
+engine and no feature flag: the per-turn `codex exec` path and the
+`@openai/codex-sdk` dependency were both removed once app-server reached parity.
+See [`docs/adr/0001-codex-app-server-engine.md`](docs/adr/0001-codex-app-server-engine.md).
+
+`session-titles.ts` is the deliberate exception — it still spawns its own hermetic
+`codex exec` with a custom model catalog, read-only sandbox and user config
+ignored, so title generation cannot inherit the user's tools or instructions.
+
+| File | Purpose |
+| ---- | ------- |
+| `bridges/codex-bridge/src/index.ts` | Routes, SSE, composition root |
+| `bridges/codex-bridge/src/app-server-runtime.ts` | Session surface for the app-server engine |
+| `bridges/codex-bridge/src/event-ring.ts` | Bounded SSE replay buffer + cursor parsing |
+| `bridges/codex-bridge/src/app-server/process-supervisor.ts` | Child lifecycle, generations, restart policy |
+| `bridges/codex-bridge/src/app-server/jsonl-rpc-client.ts` | Transport; must never await consumer work |
+| `bridges/codex-bridge/src/app-server/approvals.ts` | Approval descriptors + per-method response mapping |
+| `bridges/codex-bridge/src/app-server/server-request-router.ts` | Answers every server request, exactly once |
+| `bridges/codex-bridge/src/app-server/notification-recorder.ts` | Opt-in capture of the inbound stream for fixtures |
+| `bridges/codex-bridge/src/sessions/dispatch-journal.ts` | At-most-once prompt dispatch |
+| `bridges/codex-bridge/src/messages/normalization.ts` | Item → normalized part rendering |
+| `bridges/codex-bridge/src/messages/diff-budget.ts` | Caps the diff state, the largest memory consumer |
+| `bridges/codex-bridge/src/codex-item-types.ts` | Local thread-item types (was the Codex SDK) |
+| `bridges/codex-bridge/src/testing/replay-recording.ts` | Replays a recording through the real pipeline |
+
+When touching the app-server engine:
+
+- Never let the stdout read loop await a render, an SSE write, or the browser —
+  app-server's outbound queue is bounded, so that stalls **every** thread.
+- Never auto-retry an ambiguous dispatch. Only an explicit `-32001` overload means
+  the turn definitely did not run; anything else must reconcile via `thread/read`.
+- Never report `idle` for `cancelling`/`recovering`. Both map to `running`, which
+  is what stops the build pipeline advancing on a turn that may still be executing.
+- Never call `thread/delete`. Closing a session unsubscribes; deleting would
+  destroy the user's rollout and its descendants.
+- Never let a metadata scan read whole rollout files. `getSessionMetaFromTranscriptPath`
+  reads only the head; full reads are for hydrating one specific thread. A 1.6GB
+  Codex home cost ~5.3GB of retained heap before this.
+- Idle threads are detached (`thread/unsubscribe` + state freed) and re-attached
+  transparently on the next request. Detaching an **unmaterialized** thread must
+  clear its id: it has no rollout, so `thread/resume` would fail forever.
+- Codex version bumps follow [`docs/codex-upgrade-guide.md`](docs/codex-upgrade-guide.md);
+  the generated protocol under `app-server/generated/` is a lockfile.
+- Never resolve an approval to "approved" by default. Every timeout, disconnect,
+  generation death and unparseable answer denies. Approving on a technicality would
+  run a command the user never saw.
+- Never answer an approval belonging to a **dead generation**. app-server has
+  forgotten the request; withdraw the card and say so in the transcript instead
+  (`abandonGeneration`). Conversely a *live* child must always be answered —
+  closing a session declines on the way out rather than just forgetting.
+- Never let the fast server-request backstop fire on a parked approval. It exists
+  for a branch that failed to answer; a request awaiting a human has legitimately
+  not answered yet, and answering there resolves a prompt the user is reading.
+- Never treat an approval as visible just because the SSE frame was emitted. The
+  tab may have been unmounted; `/session/:id/approvals` is the authoritative
+  rehydration path and reconcile must call it.
+- SSE frames carry `id: <revision>`. The `connected` frame must echo the
+  **client's own cursor**, not the latest revision: a browser EventSource adopts
+  every id it sees, so anchoring at the latest would permanently skip the frames it
+  just asked to be replayed if the socket died mid-handshake.
+- Subscribe *before* computing an SSE replay, buffering into an array, then flush
+  past the replayed range. Replaying first and subscribing second drops anything
+  emitted in between — the exact gap the cursor exists to close.
+- Recordings (`CODEX_BRIDGE_RECORD_NOTIFICATIONS`) contain prompts, file contents
+  and absolute paths. Always run `scripts/scrub-codex-recording.ts` and read the
+  diff before committing one as a fixture. The recorder itself must stay O(1) in
+  the read loop — buffer and flush off-loop, never await a write.
+
 ### Backend
 
 | File                           | Purpose                                      |
@@ -199,11 +279,47 @@ Files:
 ## Testing
 
 ```bash
-bun run test                  # Full suite, isolated by workspace through Turbo
-bun test tests                # Root integration/unit tests only
+bun run test                  # Full suite: workspace + root + bridges concurrently, then iOS
+bun test tests --parallel     # Root integration/unit tests only
+bun test bridges --parallel   # Bridge suites only
 bun run --cwd apps/web typecheck       # Web TypeScript type checking
 bun run --cwd apps/desktop typecheck   # Electron TypeScript type checking
 bun run --cwd apps/backend typecheck   # Backend TypeScript type checking
+```
+
+### Parallelism
+
+The suite is dominated by I/O waits (tests that boot real backend processes, bind
+ports, drive happy-dom) rather than CPU, so it parallelizes well:
+
+- **Within a group** — `bun test --parallel` spreads test *files* across worker
+  processes. This is where nearly all of the win is (the root suite alone goes
+  from ~100s to ~30s).
+- **Across groups** — `scripts/test-all.ts` runs the workspace, root and bridge
+  groups concurrently, with bounded worker pools (`planWorkers`) so three groups
+  cannot oversubscribe a small CI runner. iOS runs last and alone: the simulator
+  is a single shared resource.
+
+Group output is buffered and printed as a labelled block, and **every** failing
+group is reported rather than stopping at the first — with concurrency the others
+have already run.
+
+Always add `--parallel` when running a suite directly; a sequential run of
+`tests/` takes roughly three times as long.
+
+**`--parallel` implies `--isolate`.** Each test file gets a fresh module registry,
+which removes the cross-file `mock.module()` leakage described below — but it also
+means a test that only passed because a *sibling* file had mutated a global will
+now fail. That is a real bug being exposed, not a parallelism problem: fix the
+test to set up what it needs itself. `bridges/claude-bridge/src/routes/events.test.ts`
+is the worked example — it guarded its `globalThis.TransformStream` polyfill with
+`if (!globalThis.TransformStream)`, so it silently depended on another suite
+installing that global first.
+
+Before assuming a parallel-only failure is a race, run the file on its own:
+
+```bash
+bun test path/to/one.test.ts   # if this fails alone, it was never self-sufficient
 ```
 
 ### Bun `mock.module()` Rules

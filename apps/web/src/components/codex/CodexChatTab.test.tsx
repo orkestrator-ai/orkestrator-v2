@@ -50,6 +50,7 @@ const mockGetSessionMessages = mock(async (): Promise<TestCodexMessage[]> => [])
 const mockSubscribeToEvents = mock(() => (async function* () {})());
 const mockUpdateSessionConfig = mock(async () => true);
 const mockAbortSession = mock(async () => true);
+const mockFetchPendingApprovals = mock(async () => []);
 const mockCreateSession = mock(async () => ({ sessionId: "session-1", title: "Test session" }));
 const mockGetSessionStatus = mock<
   (
@@ -94,6 +95,9 @@ mock.module("@/lib/codex-client", () => ({
   checkHealth: mockCheckHealth,
   createClient: mock(() => ({ baseUrl: "http://127.0.0.1:9999" })),
   createSession: mockCreateSession,
+  // Called on every reconcile. Stubbed so the suite does not attempt a real fetch
+  // to the fake bridge port on each state refresh.
+  fetchPendingApprovals: mockFetchPendingApprovals,
   getModels: mock(async () => ({ models: MOCK_MODELS, source: "fallback" })),
   getSlashCommands: mock(async () => []),
   getSessionMessages: mockGetSessionMessages,

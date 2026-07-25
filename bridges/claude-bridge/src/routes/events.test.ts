@@ -2,13 +2,17 @@ import { describe, expect, test } from "bun:test";
 import { Hono } from "hono";
 import { TransformStream } from "node:stream/web";
 
-// hono's streamSSE relies on the WHATWG TransformStream global, which Bun's
-// test runtime does not always expose. Polyfill from node:stream/web only
-// when missing so we don't shadow Bun's own implementation when present
-// (same approach as codex-bridge index-abort.test.ts).
-if (!globalThis.TransformStream) {
-  globalThis.TransformStream = TransformStream as typeof globalThis.TransformStream;
-}
+// hono's `streamSSE` constructs a `TransformStream` and immediately calls
+// `writable.getWriter()`. Bun's test runtime *does* expose a `TransformStream`
+// global, but its `writable` has no `getWriter`, so hono throws and the route
+// 500s. The node:stream/web implementation works, so install it unconditionally
+// — same as codex-bridge/src/index-abort.test.ts.
+//
+// This must not be guarded by `if (!globalThis.TransformStream)`: that guard
+// never fires, so the test only passed when another file (codex-bridge's) had
+// already replaced the global in a shared process. Under `bun test --parallel`
+// (which implies --isolate) that leakage is gone and the test fails on its own.
+globalThis.TransformStream = TransformStream as typeof globalThis.TransformStream;
 
 import events from "./events.js";
 import { eventEmitter } from "../services/event-emitter.js";

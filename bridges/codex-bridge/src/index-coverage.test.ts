@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 process.env.CODEX_BRIDGE_NO_SERVER = "1";
+// Importing index.ts otherwise spawns a real app-server child, whose environment
+// refresh mutates process.env underneath these tests.
+process.env.CODEX_BRIDGE_NO_ENGINE = "1";
 
 const { __testing } = await import("./index.js");
 
@@ -16,7 +19,6 @@ function temporaryRoot(): string {
 }
 
 afterEach(() => {
-  __testing.setAfterStreamEventLogForTesting(null);
   for (const root of temporaryRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
@@ -46,22 +48,6 @@ describe("codex bridge private boundary coverage", () => {
     expect(metadataCalls.every((call) => call.paths === paths)).toBe(true);
   });
 
-  test("constructs normal and fast SDK threads through the default factory", () => {
-    __testing.setFreshThreadFactoryForTesting(null);
-
-    const normal = __testing.createFreshThreadForSessionForTesting({
-      fastMode: false,
-      threadOptions: {},
-    });
-    const fast = __testing.createFreshThreadForSessionForTesting({
-      fastMode: true,
-      threadOptions: {},
-    });
-
-    expect(normal).not.toBe(fast);
-    expect(normal.runStreamed).toBeInstanceOf(Function);
-    expect(fast.runStreamed).toBeInstanceOf(Function);
-  });
 
   test("contains runtime environment executor failures", async () => {
     const errors: unknown[][] = [];
@@ -91,6 +77,9 @@ describe("codex bridge private boundary coverage", () => {
       async () => {
         calls.push(["shutdown-titles"]);
       },
+      // Stubbed: the real drain waits on the app-server child, which is covered
+      // by the engine-drain tests below. This test is about timer + title order.
+      async () => undefined,
     );
 
     handler();
@@ -101,6 +90,81 @@ describe("codex bridge private boundary coverage", () => {
       ["shutdown-titles"],
       ["exit", 0],
     ]);
+  });
+
+  test("drains the Codex engine before exiting", async () => {
+    // Skipping this would leave an orphaned app-server holding the same
+    // CODEX_HOME after `docker stop` or a backend-issued SIGTERM.
+    const timer = { id: "cleanup" } as unknown as ReturnType<typeof setInterval>;
+    const calls: unknown[] = [];
+
+    const handler = __testing.createShutdownHandlerForTesting(
+      timer,
+      () => calls.push(["clear"]),
+      (code: number) => calls.push(["exit", code]),
+      async () => {
+        calls.push(["shutdown-titles"]);
+      },
+      async () => {
+        calls.push(["stop-engine"]);
+      },
+    );
+
+    handler();
+    await Bun.sleep(0);
+
+    expect(calls).toContainEqual(["stop-engine"]);
+    expect(calls.at(-1)).toEqual(["exit", 0]);
+  });
+
+  test("still exits when draining the engine fails", async () => {
+    const timer = { id: "cleanup" } as unknown as ReturnType<typeof setInterval>;
+    const calls: unknown[] = [];
+    const originalWarn = console.warn;
+    console.warn = () => undefined;
+    try {
+      const handler = __testing.createShutdownHandlerForTesting(
+        timer,
+        () => calls.push(["clear"]),
+        (code: number) => calls.push(["exit", code]),
+        async () => undefined,
+        async () => {
+          throw new Error("engine refused to stop");
+        },
+      );
+
+      handler();
+      await Bun.sleep(0);
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    // A stuck child must not wedge the bridge process forever.
+    expect(calls).toContainEqual(["exit", 0]);
+  });
+
+  test("a second signal during shutdown is ignored", async () => {
+    const timer = { id: "cleanup" } as unknown as ReturnType<typeof setInterval>;
+    const exits: number[] = [];
+    let stopCalls = 0;
+
+    const handler = __testing.createShutdownHandlerForTesting(
+      timer,
+      () => undefined,
+      (code: number) => exits.push(code),
+      async () => undefined,
+      async () => {
+        stopCalls += 1;
+      },
+    );
+
+    handler();
+    handler();
+    await Bun.sleep(0);
+
+    // Draining twice concurrently would race the process-group kill.
+    expect(stopCalls).toBe(1);
+    expect(exits).toEqual([0]);
   });
 
   test("exits after a title-job shutdown failure and reports the error", async () => {
@@ -117,6 +181,7 @@ describe("codex bridge private boundary coverage", () => {
         async () => {
           throw new Error("shutdown failed");
         },
+        async () => undefined,
       );
 
       handler();
@@ -380,51 +445,6 @@ describe("codex bridge private boundary coverage", () => {
     expect(events).toEqual([{ event: "open" }]);
   });
 
-  test("handles stale and current detached prompt failures", () => {
-    const stale = {
-      id: "stale",
-      currentTurnId: "new-turn",
-      status: "running",
-      error: undefined,
-      pendingAttachments: [{ type: "image", path: "/tmp/image.png" }],
-    };
-    __testing.handlePromptFailureForTesting(stale, "old-turn", new Error("stale"));
-    expect(stale).toMatchObject({
-      currentTurnId: "new-turn",
-      status: "running",
-      error: undefined,
-      pendingAttachments: [{ type: "image", path: "/tmp/image.png" }],
-    });
-
-    const errors: unknown[][] = [];
-    const originalConsoleError = console.error;
-    console.error = (...args: unknown[]) => errors.push(args);
-    const current = {
-      id: "current",
-      currentTurnId: "accepted-turn",
-      currentTurnStartedAt: "2026-07-17T00:00:00.000Z",
-      abortController: new AbortController(),
-      status: "running",
-      error: undefined,
-      pendingAttachments: [{ type: "image", path: "/tmp/image.png" }],
-    };
-
-    try {
-      __testing.handlePromptFailureForTesting(current, "accepted-turn", "not an Error");
-    } finally {
-      console.error = originalConsoleError;
-    }
-
-    expect(current).toMatchObject({
-      currentTurnId: undefined,
-      currentTurnStartedAt: undefined,
-      abortController: undefined,
-      status: "error",
-      error: "Codex execution failed",
-      pendingAttachments: [],
-    });
-    expect(errors).toEqual([["[codex-bridge] Prompt failed:", "not an Error"]]);
-  });
 
   test("reads optional text files and returns undefined for missing paths", async () => {
     const root = temporaryRoot();

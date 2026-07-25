@@ -7,11 +7,13 @@ import {
   createClient,
   createSession,
   deleteSession,
+  fetchPendingApprovals,
   getModels,
   getSessionMessages,
   getSessionStatus,
   getSlashCommands,
   listSessions,
+  respondToApproval,
   resumeSession,
   sendPrompt,
   subscribeToEvents,
@@ -392,6 +394,33 @@ describe("codex-client getSessionStatus", () => {
     });
   });
 
+  test("surfaces the app-server phase and turn identifiers when present", async () => {
+    mockFetch(async () =>
+      new Response(
+        JSON.stringify({
+          status: "running",
+          phase: "cancelling",
+          threadId: "thread-1",
+          turnId: "turn-2",
+          requestId: "req-3",
+          engineGeneration: 4,
+        }),
+        { status: 200 },
+      ),
+    );
+
+    // `cancelling` must still report `running`: the turn may be executing, so a
+    // caller that advanced on idle here could overlap it.
+    await expect(getSessionStatus(client, "session-1")).resolves.toMatchObject({
+      status: "running",
+      phase: "cancelling",
+      threadId: "thread-1",
+      turnId: "turn-2",
+      requestId: "req-3",
+      engineGeneration: 4,
+    });
+  });
+
   test("returns null for invalid, non-ok, or failed responses", async () => {
     mockFetch(async () =>
       new Response(JSON.stringify({ status: "paused" }), { status: 200 }),
@@ -437,7 +466,7 @@ describe("codex-client sendPrompt", () => {
         filename: "screenshot.png",
       }],
       requestId: "request-1",
-    })).resolves.toBe(true);
+    })).resolves.toMatchObject({ status: "processing", requestId: "request-1" });
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "http://127.0.0.1:4000/session/session-1/prompt",
@@ -457,12 +486,49 @@ describe("codex-client sendPrompt", () => {
     );
   });
 
-  test("returns false on non-ok or failed responses", async () => {
+  test("returns null on non-ok or failed responses", async () => {
+    // Callers treat the result as a boolean, so null must stay falsy.
     mockFetch(async () => new Response(null, { status: 409 }));
-    await expect(sendPrompt(client, "session-1", "Review this")).resolves.toBe(false);
+    await expect(sendPrompt(client, "session-1", "Review this")).resolves.toBeNull();
 
     mockFetchError(new Error("offline"));
-    await expect(sendPrompt(client, "session-1", "Review this")).resolves.toBe(false);
+    await expect(sendPrompt(client, "session-1", "Review this")).resolves.toBeNull();
+  });
+
+  test("surfaces the accepted turn identifiers for reconnect reconciliation", async () => {
+    mockFetch(async () =>
+      new Response(
+        JSON.stringify({
+          status: "processing",
+          requestId: "request-1",
+          threadId: "thread-9",
+          turnId: "turn-3",
+        }),
+        { status: 202 },
+      ),
+    );
+
+    await expect(
+      sendPrompt(client, "session-1", "Go", { requestId: "request-1" }),
+    ).resolves.toEqual({
+      status: "processing",
+      requestId: "request-1",
+      threadId: "thread-9",
+      turnId: "turn-3",
+      duplicate: false,
+    });
+  });
+
+  test("reports an already-processed duplicate so the caller does not retry", async () => {
+    mockFetch(async () =>
+      new Response(JSON.stringify({ status: "already-processed", duplicate: true }), {
+        status: 202,
+      }),
+    );
+
+    await expect(
+      sendPrompt(client, "session-1", "Go", { requestId: "request-1" }),
+    ).resolves.toMatchObject({ status: "already-processed", duplicate: true });
   });
 });
 
@@ -583,8 +649,12 @@ describe("codex-client subscribeToEvents", () => {
       this.listeners.set(type, listeners);
     }
 
-    emit(type: string, data: Record<string, unknown>) {
-      const event = { type, data: JSON.stringify(data) } as MessageEvent;
+    emit(type: string, data: Record<string, unknown>, lastEventId?: string) {
+      const event = {
+        type,
+        data: JSON.stringify(data),
+        ...(lastEventId === undefined ? {} : { lastEventId }),
+      } as MessageEvent;
       for (const listener of this.listeners.get(type) ?? []) listener(event);
     }
   }
@@ -629,5 +699,170 @@ describe("codex-client subscribeToEvents", () => {
 
     await expect(pending).rejects.toThrow("SSE connection error");
     expect(source.close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("codex-client event cursor", () => {
+  const originalEventSource = globalThis.EventSource;
+  const instances: Array<{ url: string; listeners: Map<string, Array<(event: MessageEvent) => void>> }> = [];
+
+  class CursorMockEventSource {
+    readonly listeners = new Map<string, Array<(event: MessageEvent) => void>>();
+    readonly close = mock(() => {});
+    onerror: (() => void) | null = null;
+
+    constructor(readonly url: string) {
+      instances.push(this);
+    }
+
+    addEventListener(type: string, listener: (event: MessageEvent) => void) {
+      const listeners = this.listeners.get(type) ?? [];
+      listeners.push(listener);
+      this.listeners.set(type, listeners);
+    }
+
+    emit(type: string, data: Record<string, unknown>, lastEventId?: string) {
+      const event = {
+        type,
+        data: JSON.stringify(data),
+        ...(lastEventId === undefined ? {} : { lastEventId }),
+      } as MessageEvent;
+      for (const listener of this.listeners.get(type) ?? []) listener(event);
+    }
+  }
+
+  beforeEach(() => {
+    instances.length = 0;
+    (globalThis as unknown as { EventSource: unknown }).EventSource = CursorMockEventSource;
+  });
+
+  afterEach(() => {
+    (globalThis as unknown as { EventSource: unknown }).EventSource = originalEventSource;
+  });
+
+  test("omits ?since when no cursor is given", () => {
+    subscribeToEvents(client)[Symbol.asyncIterator]().next();
+    expect(instances[0]!.url).toBe("http://127.0.0.1:4000/event/subscribe");
+  });
+
+  test("sends ?since when a cursor is given, including zero", () => {
+    subscribeToEvents(client, undefined, 42)[Symbol.asyncIterator]().next();
+    expect(instances[0]!.url).toContain("since=42");
+
+    subscribeToEvents(client, undefined, 0)[Symbol.asyncIterator]().next();
+    // Cursor 0 is meaningful ("I have nothing yet"), so it must be sent.
+    expect(instances[1]!.url).toContain("since=0");
+  });
+
+  test("ignores a nonsensical cursor rather than sending it", () => {
+    subscribeToEvents(client, undefined, -1)[Symbol.asyncIterator]().next();
+    expect(instances[0]!.url).not.toContain("since");
+
+    subscribeToEvents(client, undefined, 1.5)[Symbol.asyncIterator]().next();
+    expect(instances[1]!.url).not.toContain("since");
+  });
+
+  test("exposes the SSE id as a numeric revision", async () => {
+    const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    (instances[0] as unknown as CursorMockEventSource).emit(
+      "session.idle",
+      { sessionId: "s1" },
+      "17",
+    );
+
+    const result = await pending;
+    expect(result.value.revision).toBe(17);
+  });
+
+  test("omits the revision when the id is absent or unparseable", async () => {
+    const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
+    const first = iterator.next();
+    (instances[0] as unknown as CursorMockEventSource).emit("session.idle", { sessionId: "s1" });
+    expect((await first).value.revision).toBeUndefined();
+
+    const second = iterator.next();
+    (instances[0] as unknown as CursorMockEventSource).emit(
+      "session.idle",
+      { sessionId: "s1" },
+      "not-a-number",
+    );
+    expect((await second).value.revision).toBeUndefined();
+  });
+
+  test("subscribes to the approval and reconcile event types", () => {
+    subscribeToEvents(client)[Symbol.asyncIterator]().next();
+    const types = [...instances[0]!.listeners.keys()];
+    expect(types).toContain("session.approval-requested");
+    expect(types).toContain("session.approval-resolved");
+    expect(types).toContain("session.reconcile-required");
+  });
+});
+
+describe("codex-client approvals", () => {
+  afterEach(restoreFetch);
+
+  test("fetchPendingApprovals returns the list", async () => {
+    mockFetch(() =>
+      Response.json({
+        approvals: [{ approvalId: "apr-1-1", kind: "command", command: "ls" }],
+      }),
+    );
+
+    const approvals = await fetchPendingApprovals(client, "session-1");
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]!.approvalId).toBe("apr-1-1");
+  });
+
+  test("fetchPendingApprovals returns [] on a bad response or a malformed body", async () => {
+    // Must never throw: this runs inside reconcile, and a failure here would take
+    // out the whole state refresh.
+    mockFetch(() => new Response("nope", { status: 500 }));
+    expect(await fetchPendingApprovals(client, "session-1")).toEqual([]);
+
+    mockFetch(() => Response.json({ approvals: "not-an-array" }));
+    expect(await fetchPendingApprovals(client, "session-1")).toEqual([]);
+
+    mockFetchError(new Error("network down"));
+    expect(await fetchPendingApprovals(client, "session-1")).toEqual([]);
+  });
+
+  test("respondToApproval posts the decision", async () => {
+    const fetchMock = mock(() => Response.json({ status: "applied" }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    expect(await respondToApproval(client, "session-1", "apr-1-1", "approve")).toBe("applied");
+
+    // `mock(() => …)` infers a zero-arg signature, so the recorded call args
+    // need widening before they can be read.
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:4000/session/session-1/approvals/apr-1-1");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({ decision: "approve" });
+  });
+
+  test("distinguishes stale, forbidden and error outcomes", async () => {
+    // The UI reacts differently to each: drop the card for the first two, offer a
+    // retry for the third.
+    mockFetch(() => new Response("{}", { status: 409 }));
+    expect(await respondToApproval(client, "s", "a", "deny")).toBe("stale");
+
+    mockFetch(() => new Response("{}", { status: 403 }));
+    expect(await respondToApproval(client, "s", "a", "deny")).toBe("forbidden");
+
+    mockFetch(() => new Response("{}", { status: 500 }));
+    expect(await respondToApproval(client, "s", "a", "deny")).toBe("error");
+
+    mockFetchError(new Error("offline"));
+    expect(await respondToApproval(client, "s", "a", "deny")).toBe("error");
+  });
+
+  test("encodes the approval id into the path", async () => {
+    const fetchMock = mock(() => Response.json({ status: "applied" }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await respondToApproval(client, "session-1", "apr/1?x", "deny");
+    const [url] = fetchMock.mock.calls[0] as unknown as [string];
+    expect(url).toContain("apr%2F1%3Fx");
   });
 });

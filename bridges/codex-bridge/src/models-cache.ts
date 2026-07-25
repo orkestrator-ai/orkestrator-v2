@@ -1,4 +1,4 @@
-import type { ModelReasoningEffort } from "@openai/codex-sdk";
+import type { ModelReasoningEffort } from "./codex-item-types.js";
 
 // The Codex CLI can expose reasoning levels before the SDK's declarations are
 // updated. Keep the bridge catalog aligned with the CLI's authoritative model

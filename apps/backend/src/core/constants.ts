@@ -11,10 +11,22 @@ export const OPENCODE_SERVER_PORT = 4096;
 export const CLAUDE_BRIDGE_PORT = 4097;
 export const CODEX_BRIDGE_PORT = 4098;
 export const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
+// Codex multi-agent V2 counts the root thread in addition to these child
+// threads, so reserve one safe-integer slot for the bridge's conversion.
+export const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;
 export const CODEX_MAX_CONCURRENT_THREADS_ENV = "CODEX_MAX_CONCURRENT_THREADS_PER_SESSION";
 
+export function isValidCodexMaxConcurrentThreads(value: unknown): value is number {
+  return (
+    typeof value === "number"
+    && Number.isSafeInteger(value)
+    && value >= 1
+    && value <= MAX_CODEX_CONCURRENT_THREADS
+  );
+}
+
 export function resolveCodexMaxConcurrentThreads(value: unknown): number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1
+  return isValidCodexMaxConcurrentThreads(value)
     ? value
     : DEFAULT_CODEX_MAX_CONCURRENT_THREADS;
 }

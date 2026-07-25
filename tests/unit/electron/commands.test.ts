@@ -302,6 +302,16 @@ function freshFetchedAt(): string {
   return new Date().toISOString();
 }
 
+async function writeBridgeEntrypoint(
+  appRoot: string,
+  bridgeName: "claude-bridge" | "codex-bridge",
+  source: string,
+): Promise<void> {
+  const bridgeDist = path.join(appRoot, "bridges", bridgeName, "dist");
+  await fs.mkdir(bridgeDist, { recursive: true });
+  await fs.writeFile(path.join(bridgeDist, "index.js"), source);
+}
+
 async function writeBridgeServer(
   appRoot: string,
   bridgeName: "claude-bridge" | "codex-bridge",
@@ -4284,6 +4294,30 @@ exit 0
     expect(await fs.readFile(maxConcurrentThreadsMarkerPath, "utf8")).toBe("8");
 
     await commands.get("stop_local_codex_server_cmd")?.({ environmentId: environment.id }, context);
+
+    const fallbackEnvironment = createEnvironment({
+      id: "env-local-codex-fallback",
+      worktreePath,
+    });
+    const { context: fallbackContext } = createContext(fallbackEnvironment, {
+      globalConfig: { codexMaxConcurrentThreads: "invalid" },
+    });
+    fallbackContext.appRoot = appRoot;
+    fallbackContext.resourceRoot = appRoot;
+    fallbackContext.toolchainBinDir = toolchainBinDir;
+    const fallbackResult = await commands.get("start_local_codex_server_cmd")?.(
+      { environmentId: fallbackEnvironment.id },
+      fallbackContext,
+    ) as { port: number; pid: number; wasRunning: boolean };
+    try {
+      expect(fallbackResult.wasRunning).toBe(false);
+      expect(await fs.readFile(maxConcurrentThreadsMarkerPath, "utf8")).toBe("5");
+    } finally {
+      await commands.get("stop_local_codex_server_cmd")?.(
+        { environmentId: fallbackEnvironment.id },
+        fallbackContext,
+      );
+    }
   });
 
   test("launches the local claude bridge through the bundled bun binary in resources", async () => {
@@ -4698,6 +4732,122 @@ exit 0
     }
   });
 
+  test("keeps the in-container Claude bridge on its bun entrypoint", async () => {
+    const hostPort = await reserveFreePort();
+    const pidFile = path.join(await createTempDir("ork-claude-bridge-pid-"), "pid");
+    const environment = createEnvironment({
+      id: "env-container-claude",
+      environmentType: "containerized",
+      containerId: "container-claude",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+    const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
+    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+    process.env.FAKE_BRIDGE_PID_FILE = pidFile;
+
+    const dockerScript = `#!/bin/sh
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
+    printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
+    exit 0 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async (logs) => {
+        const result = await commands.get("start_claude_server")?.(
+          { containerId: "container-claude" },
+          context,
+        );
+        expect(result).toEqual({ hostPort, wasRunning: false });
+
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(execLog).toContain("setsid bun /opt/claude-bridge/dist/index.js");
+        expect(execLog).not.toContain("setsid node");
+      });
+    } finally {
+      const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
+      if (pid) {
+        try {
+          process.kill(Number(pid));
+        } catch {
+          // already gone
+        }
+      }
+      if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
+      else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
+      if (previousPidFile === undefined) delete process.env.FAKE_BRIDGE_PID_FILE;
+      else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
+    }
+  });
+
+  test("defaults a malformed in-container Codex thread limit before shell interpolation", async () => {
+    const hostPort = await reserveFreePort();
+    const pidFile = path.join(await createTempDir("ork-codex-fallback-pid-"), "pid");
+    const environment = createEnvironment({
+      id: "env-container-codex-fallback",
+      environmentType: "containerized",
+      containerId: "container-codex-fallback",
+      status: "running",
+    });
+    const { context } = createContext(environment, {
+      globalConfig: { codexMaxConcurrentThreads: "invalid" },
+    });
+    const commands = createCommandRegistry();
+
+    const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+    const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
+    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+    process.env.FAKE_BRIDGE_PID_FILE = pidFile;
+
+    const dockerScript = `#!/bin/sh
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404);s.end()}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
+    printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
+    exit 0 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async (logs) => {
+        await commands.get("start_codex_server")?.(
+          { containerId: "container-codex-fallback" },
+          context,
+        );
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(execLog).toContain("export CODEX_MAX_CONCURRENT_THREADS_PER_SESSION=5");
+        expect(execLog).not.toContain("invalid");
+      });
+    } finally {
+      const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
+      if (pid) {
+        try {
+          process.kill(Number(pid));
+        } catch {
+          // already gone
+        }
+      }
+      if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
+      else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
+      if (previousPidFile === undefined) delete process.env.FAKE_BRIDGE_PID_FILE;
+      else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
+    }
+  });
+
   test("does not persist local bridge process state when the bridge entrypoint is missing", async () => {
     const appRoot = await createTempDir("ork-electron-app-missing-");
     const worktreePath = await createTempDir("ork-electron-worktree-missing-");
@@ -4713,6 +4863,93 @@ exit 0
       "codex bridge entrypoint not found",
     );
     expect(updates).toHaveLength(0);
+  });
+
+  test("replaces an unhealthy local bridge process before restarting it", async () => {
+    const appRoot = await createTempDir("ork-electron-app-stale-bridge-");
+    const worktreePath = await createTempDir("ork-electron-worktree-stale-bridge-");
+    await writeBridgeEntrypoint(
+      appRoot,
+      "codex-bridge",
+      `
+        const http = require("node:http");
+        const server = http.createServer((req, res) => {
+          if (req.url === "/disable") {
+            res.writeHead(200);
+            res.end();
+            server.close();
+            return;
+          }
+          res.writeHead(req.url === "/global/health" ? 200 : 404);
+          res.end();
+        });
+        server.listen(Number(process.env.PORT), "127.0.0.1");
+        setInterval(() => {}, 60_000);
+      `,
+    );
+
+    const environment = createEnvironment({ worktreePath });
+    const { context, updates } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+
+    const first = await commands.get("start_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as { port: number; pid: number; wasRunning: boolean };
+    expect(first.wasRunning).toBe(false);
+    await expect(requestOk(first.port, "/disable")).resolves.toBe(true);
+    await Bun.sleep(25);
+
+    const second = await commands.get("start_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    ) as { port: number; pid: number; wasRunning: boolean };
+    try {
+      expect(second.wasRunning).toBe(false);
+      expect(second.pid).not.toBe(first.pid);
+      expect(second.port).not.toBe(first.port);
+      expect(updates.at(-1)).toEqual({
+        localCodexPort: second.port,
+        codexBridgePid: second.pid,
+      });
+      await expect(requestOk(second.port, "/global/health")).resolves.toBe(true);
+    } finally {
+      await commands.get("stop_local_codex_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      );
+    }
+  });
+
+  test("clears persisted local bridge state when startup exits before health", async () => {
+    const appRoot = await createTempDir("ork-electron-app-failed-bridge-");
+    const worktreePath = await createTempDir("ork-electron-worktree-failed-bridge-");
+    await writeBridgeEntrypoint(
+      appRoot,
+      "codex-bridge",
+      `process.exitCode = 23;`,
+    );
+
+    const environment = createEnvironment({ worktreePath });
+    const { context, updates } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    const commands = createCommandRegistry();
+
+    await expect(
+      commands.get("start_local_codex_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      ),
+    ).rejects.toThrow("codex server exited before becoming healthy");
+    expect(updates).toContainEqual({
+      localCodexPort: null,
+      codexBridgePid: null,
+    });
+    expect(environment.localCodexPort).toBeNull();
+    expect(environment.codexBridgePid).toBeNull();
   });
 
   test("starts local terminal sessions through a PTY and forwards byte payloads", async () => {

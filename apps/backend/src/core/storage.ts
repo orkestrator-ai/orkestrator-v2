@@ -9,7 +9,12 @@ import {
   getReviewPromptValidationError,
   parseReviewPrompt,
 } from "@orkestrator/protocol/review-prompt";
-import { DEFAULT_CODEX_MAX_CONCURRENT_THREADS } from "./constants.js";
+import {
+  DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
+  isValidCodexMaxConcurrentThreads,
+  MAX_CODEX_CONCURRENT_THREADS,
+  resolveCodexMaxConcurrentThreads,
+} from "./constants.js";
 import type {
   AppConfig,
   ClaudeModelCatalogSnapshot,
@@ -246,19 +251,30 @@ function isClaudeModelCatalogSnapshot(
     && (value.error == null || typeof value.error === "string");
 }
 
-function validateConfigReviewPrompt(value: unknown): AppConfig {
+function validateCodexMaxConcurrentThreads(value: unknown): number {
+  if (!isValidCodexMaxConcurrentThreads(value)) {
+    throw new Error(
+      `codexMaxConcurrentThreads must be an integer between 1 and ${MAX_CODEX_CONCURRENT_THREADS}.`,
+    );
+  }
+  return value;
+}
+
+function validateConfig(value: unknown): AppConfig {
   if (!isRecord(value) || !isRecord(value.global)) {
     throw new Error("Expected config.global to be an object.");
   }
   parseReviewPrompt(value.global.reviewPrompt);
+  validateCodexMaxConcurrentThreads(value.global.codexMaxConcurrentThreads);
   return value as unknown as AppConfig;
 }
 
-function validateGlobalReviewPrompt(value: unknown): AppConfig["global"] {
+function validateGlobalConfig(value: unknown): AppConfig["global"] {
   if (!isRecord(value)) {
     throw new Error("Expected global config to be an object.");
   }
   parseReviewPrompt(value.reviewPrompt);
+  validateCodexMaxConcurrentThreads(value.codexMaxConcurrentThreads);
   return value as unknown as AppConfig["global"];
 }
 
@@ -274,6 +290,29 @@ function sanitizePersistedReviewPrompt(config: AppConfig): AppConfig {
   return {
     ...config,
     global: sanitizedGlobal as unknown as AppConfig["global"],
+  };
+}
+
+function normalizePersistedConfig(config: AppConfig): AppConfig {
+  const reviewPromptSanitized = sanitizePersistedReviewPrompt(config);
+  const global = reviewPromptSanitized && isRecord(reviewPromptSanitized.global)
+    ? reviewPromptSanitized.global as unknown as JsonRecord
+    : null;
+  if (!global) return reviewPromptSanitized;
+
+  const codexMaxConcurrentThreads = resolveCodexMaxConcurrentThreads(
+    global.codexMaxConcurrentThreads,
+  );
+  if (global.codexMaxConcurrentThreads === codexMaxConcurrentThreads) {
+    return reviewPromptSanitized;
+  }
+
+  return {
+    ...reviewPromptSanitized,
+    global: {
+      ...global,
+      codexMaxConcurrentThreads,
+    } as unknown as AppConfig["global"],
   };
 }
 
@@ -1002,11 +1041,11 @@ export class StorageService {
 
   async loadConfig(): Promise<AppConfig> {
     const config = await this.loadJson<AppConfig>(this.configFile(), defaultConfig);
-    return sanitizePersistedReviewPrompt(config);
+    return normalizePersistedConfig(config);
   }
 
   async saveConfig(config: AppConfig): Promise<void> {
-    const validated = validateConfigReviewPrompt(config);
+    const validated = validateConfig(config);
     await this.enqueueConfigMutation(() => this.saveJson(this.configFile(), validated));
   }
 
@@ -1045,7 +1084,7 @@ export class StorageService {
   }
 
   async updateGlobalConfig(globalConfig: AppConfig["global"]): Promise<AppConfig> {
-    const validated = validateGlobalReviewPrompt(globalConfig);
+    const validated = validateGlobalConfig(globalConfig);
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadConfig();
       config.global = validated;

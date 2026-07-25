@@ -170,7 +170,7 @@ export interface AppConfig {
     codexMode: CodexMode;
     codexNativeFastModeDefault?: boolean;
     /** Maximum concurrently open spawned-agent threads per native Codex session. */
-    codexMaxConcurrentThreads?: number;
+    codexMaxConcurrentThreads: number;
     terminalAppearance: {
       fontFamily: string;
       fontSize: number;

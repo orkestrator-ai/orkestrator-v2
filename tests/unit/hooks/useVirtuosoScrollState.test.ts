@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from "bun:test";
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, waitFor } from "@testing-library/react";
 import {
   useVirtuosoScrollState,
   clearPersistedVirtuosoState,
@@ -307,9 +307,13 @@ describe("useVirtuosoScrollState", () => {
         result.current.scrollToBottom();
       });
 
-      // Let all retries fire (10 attempts × 16ms + slack)
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 250));
+      // Each retry schedules the next one, so fixed wall-clock slack becomes
+      // flaky when the full repository suite is competing for the event loop.
+      await waitFor(() => {
+        expect(scrollToIndexCalls).toHaveLength(10);
+        expect(scrollToCalls).toHaveLength(1);
+      }, {
+        timeout: 2_000,
       });
 
       // Exhaustion: exactly MAX_ATTEMPTS (10) retries when isAtBottom never flips

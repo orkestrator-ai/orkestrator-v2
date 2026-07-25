@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, expectTypeOf, test } from "bun:test";
 import { useConfigStore } from "./configStore";
 import { defaultConfig } from "../../../backend/src/core/storage";
+import type { GlobalConfig } from "../types";
 
 // `getInitialState()` returns the store's DEFAULT_CONFIG regardless of any
 // mutations other tests may have applied, so these assertions are isolation-safe.
@@ -13,6 +14,8 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
     expect(initialGlobal.codexModel).toBe("gpt-5.4");
     expect(initialGlobal.codexReasoningEffort).toBe("medium");
     expect(initialGlobal.codexMaxConcurrentThreads).toBe(5);
+    expectTypeOf<GlobalConfig["codexMaxConcurrentThreads"]>()
+      .toEqualTypeOf<number | undefined>();
   });
 
   test("does not default to any retired model id", () => {

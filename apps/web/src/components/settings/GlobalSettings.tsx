@@ -62,6 +62,8 @@ import {
 // Domain validation regex
 const DOMAIN_REGEX = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
 const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
+// Codex V2 adds the root conversation to this child-only limit.
+const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;
 
 function getSavedReviewPrompt(value: unknown): string {
   return typeof value === "string" && getReviewPromptValidationError(value) === null
@@ -1003,11 +1005,16 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
           id="codex-max-concurrent-threads"
           type="number"
           min={1}
+          max={MAX_CODEX_CONCURRENT_THREADS}
           step={1}
           value={codexMaxConcurrentThreads}
           onChange={(event) => {
             const value = Number(event.target.value);
-            if (Number.isSafeInteger(value) && value >= 1) {
+            if (
+              Number.isSafeInteger(value)
+              && value >= 1
+              && value <= MAX_CODEX_CONCURRENT_THREADS
+            ) {
               setCodexMaxConcurrentThreads(value);
             }
           }}

@@ -41,7 +41,7 @@
     "verify:opencode:live": "RUN_LIVE_OPENCODE_COMPATIBILITY=1 bun test --cwd apps/web src/lib/opencode-live-compatibility.test.ts",
     "verify:toolchains:live": "RUN_LIVE_TOOLCHAIN_ARTIFACTS=1 bun scripts/verify-toolchain-artifacts.ts",
     "docker:build": "docker build -t orkestrator-v2:latest -f docker/Dockerfile .",
-    "package": "bun run download:bun && bun run build:all && bunx electron-builder && bun scripts/install-packaged-app.ts"
+    "package": "bun install --frozen-lockfile && bun run download:bun && bun run build:all && bunx electron-builder && bun scripts/install-packaged-app.ts"
   },
   "build": {
     "appId": "com.orkestrator.v2",

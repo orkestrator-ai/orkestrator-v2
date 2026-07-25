@@ -125,11 +125,14 @@ export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 /** Model info */
 export interface ModelInfo {
   id: string;
+  resolvedModel?: string;
   name: string;
   description?: string;
   supportsFastMode?: boolean;
   supportsEffort?: boolean;
   supportedEffortLevels?: EffortLevel[];
+  supportsAdaptiveThinking?: boolean;
+  supportsAutoMode?: boolean;
 }
 
 /** Question option for AskUserQuestion tool */
@@ -252,6 +255,10 @@ export interface MessagesResponse {
 
 export interface ModelsResponse {
   models: ModelInfo[];
+  source: "sdk" | "fallback";
+  fetchedAt: string;
+  sdkVersion?: string;
+  cliVersion?: string;
 }
 
 export interface HealthResponse {

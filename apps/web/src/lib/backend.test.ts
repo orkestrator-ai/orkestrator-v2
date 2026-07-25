@@ -27,6 +27,7 @@ const {
   ensureEnvironmentSetup,
   deletePaneLayout,
   getEnvironmentSnapshots,
+  getClaudeModelCatalog,
   getPaneLayout,
   getLinearConnection,
   getLinearIssue,
@@ -99,6 +100,23 @@ describe("backend setup wrappers", () => {
     expect(invokeMock.mock.calls).toEqual([
       ["ensure_environment_setup", { environmentId: "env-1" }],
     ]);
+  });
+
+  test("requests an environment-scoped Claude model catalog refresh", async () => {
+    const snapshot = {
+      environmentId: "env-1",
+      models: [{ id: "claude-opus-5", name: "Claude Opus 5" }],
+      source: "sdk" as const,
+      fetchedAt: "2026-07-25T12:00:00.000Z",
+      stale: false,
+    };
+    invokeMock.mockResolvedValue(snapshot);
+
+    await expect(getClaudeModelCatalog("env-1", true)).resolves.toEqual(snapshot);
+    expect(invokeMock).toHaveBeenCalledWith("get_claude_model_catalog", {
+      environmentId: "env-1",
+      forceRefresh: true,
+    });
   });
 
   test("calls the create-environment Electron command with naming prompt", async () => {

@@ -8,6 +8,9 @@ import {
   PANE_LAYOUT_VERSION,
   type Environment,
   type AppConfig,
+  type ClaudeEffortLevel,
+  type ClaudeModelCatalogEntry,
+  type ClaudeModelCatalogSnapshot,
   type EnvironmentStatus,
   type EnvironmentType,
   type PortMapping,
@@ -116,6 +119,8 @@ const terminalOutputBuffers = new Map<string, string>();
 const terminalActivityTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const terminalActivityArmed = new Set<string>();
 const localServerProcesses = new Map<string, ChildProcessWithoutNullStreams>();
+const CLAUDE_MODEL_CATALOG_TTL_MS = 5 * 60_000;
+const CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS = 30_000;
 const CONTAINER_WORKSPACE_SETUP_COMMAND = "if command -v flock >/dev/null 2>&1; then flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh'; else /usr/local/bin/workspace-setup.sh; fi";
 const SETUP_DONE_OSC_SEQUENCE = "\u001b]9999;setup_done\u0007";
 const SETUP_FAILED_OSC_SEQUENCE = "\u001b]9999;setup_failed\u0007";
@@ -428,6 +433,10 @@ function resolveCodexBinary(context: CommandContext): string {
 
 function resolveOpenCodeBinary(context: CommandContext): string {
   return resolveManagedBinary(context, "opencode") ?? "opencode";
+}
+
+function resolveClaudeBinary(context: CommandContext): string {
+  return resolveManagedBinary(context, "claude") ?? "claude";
 }
 
 function hasPackagedOrPathBinary(context: CommandContext, name: string): Promise<boolean> {
@@ -1876,6 +1885,7 @@ async function startLocalServer(
   } else if (kind === "claude") {
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "claude-bridge");
+    env.CLAUDE_CLI_PATH = resolveClaudeBinary(context);
   } else {
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "codex-bridge");
@@ -2512,10 +2522,147 @@ async function startContainerServer(containerId: string, port: number, processNa
   return { hostPort, wasRunning: false };
 }
 
+const CLAUDE_BRIDGE_CONTAINER_START_COMMAND = `
+  cd /workspace
+  rm -f /tmp/claude-bridge.log
+  source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
+  orkestrator_source_runtime_env 2>/dev/null || true
+  export PORT=${CLAUDE_BRIDGE_PORT}
+  export HOSTNAME=0.0.0.0
+  setsid bun /opt/claude-bridge/dist/index.js > /tmp/claude-bridge.log 2>&1 &
+`;
+
+type ClaudeBridgeModelCatalogResponse = {
+  models: ClaudeModelCatalogEntry[];
+  source: "sdk" | "fallback";
+  fetchedAt: string;
+  sdkVersion?: string;
+  cliVersion?: string;
+};
+
+function optionalCatalogString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function optionalCatalogBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function parseClaudeBridgeModelCatalog(value: unknown): ClaudeBridgeModelCatalogResponse {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Claude bridge returned an invalid model catalog");
+  }
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.models) || (record.source !== "sdk" && record.source !== "fallback")) {
+    throw new Error("Claude bridge returned an invalid model catalog");
+  }
+
+  const allowedEffortLevels = new Set(["low", "medium", "high", "xhigh", "max"]);
+  const models = record.models.map((candidate): ClaudeModelCatalogEntry => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new Error("Claude bridge returned an invalid model entry");
+    }
+    const model = candidate as Record<string, unknown>;
+    const id = optionalCatalogString(model.id);
+    const name = optionalCatalogString(model.name);
+    if (!id || !name) throw new Error("Claude bridge returned a model without an id or name");
+    const supportedEffortLevels = Array.isArray(model.supportedEffortLevels)
+      ? model.supportedEffortLevels.filter(
+          (level): level is ClaudeEffortLevel =>
+            typeof level === "string" && allowedEffortLevels.has(level),
+        )
+      : undefined;
+    return {
+      id,
+      resolvedModel: optionalCatalogString(model.resolvedModel),
+      name,
+      description: optionalCatalogString(model.description),
+      supportsFastMode: optionalCatalogBoolean(model.supportsFastMode),
+      supportsEffort: optionalCatalogBoolean(model.supportsEffort),
+      supportedEffortLevels,
+      supportsAdaptiveThinking: optionalCatalogBoolean(model.supportsAdaptiveThinking),
+      supportsAutoMode: optionalCatalogBoolean(model.supportsAutoMode),
+    };
+  });
+  if (models.length === 0) throw new Error("Claude bridge returned an empty model catalog");
+
+  return {
+    models,
+    source: record.source,
+    fetchedAt: optionalCatalogString(record.fetchedAt) ?? new Date().toISOString(),
+    sdkVersion: optionalCatalogString(record.sdkVersion),
+    cliVersion: optionalCatalogString(record.cliVersion),
+  };
+}
+
+async function fetchClaudeBridgeModelCatalog(port: number): Promise<ClaudeBridgeModelCatalogResponse> {
+  const response = await fetch(`http://127.0.0.1:${port}/config/models`, {
+    signal: AbortSignal.timeout(CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`Claude bridge model discovery failed with HTTP ${response.status}`);
+  }
+  return parseClaudeBridgeModelCatalog(await response.json());
+}
+
+function isFreshClaudeModelCatalog(snapshot: ClaudeModelCatalogSnapshot | undefined): boolean {
+  if (!snapshot || snapshot.models.length === 0) return false;
+  const fetchedAt = Date.parse(snapshot.fetchedAt);
+  return Number.isFinite(fetchedAt) && Date.now() - fetchedAt < CLAUDE_MODEL_CATALOG_TTL_MS;
+}
+
+function conciseError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length > 500 ? `${message.slice(0, 500)}…` : message;
+}
+
+async function refreshClaudeModelCatalog(
+  environmentId: string,
+  context: CommandContext,
+): Promise<ClaudeModelCatalogSnapshot> {
+  const environment = await context.storage.getEnvironment(environmentId);
+  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+
+  let port: number;
+  if (environment.environmentType === "local") {
+    port = (await startLocalServer(environmentId, context, "claude")).port;
+  } else {
+    if (!environment.containerId) {
+      throw new Error("Container ID is required for Claude model discovery");
+    }
+    port = (
+      await startContainerServer(
+        environment.containerId,
+        CLAUDE_BRIDGE_PORT,
+        "claude",
+        CLAUDE_BRIDGE_CONTAINER_START_COMMAND,
+      )
+    ).hostPort;
+  }
+
+  const catalog = await fetchClaudeBridgeModelCatalog(port);
+  const snapshot: ClaudeModelCatalogSnapshot = {
+    environmentId,
+    models: catalog.models,
+    source: catalog.source,
+    fetchedAt: catalog.fetchedAt,
+    sdkVersion: catalog.sdkVersion,
+    cliVersion: catalog.cliVersion,
+    stale: catalog.source !== "sdk",
+  };
+  await context.storage.updateEnvironment(environmentId, {
+    claudeModelCatalog: snapshot,
+  });
+  context.emit("claude-model-catalog-updated", snapshot);
+  return snapshot;
+}
+
 export function createCommandRegistry(): Map<string, CommandHandler> {
   const commands = new Map<string, CommandHandler>();
   const register = (name: string, handler: CommandHandler) => commands.set(name, handler);
   const pendingEnvironmentRenameTasks = new Map<string, Promise<void>>();
+  const claudeModelCatalogRefreshes = new Map<string, Promise<ClaudeModelCatalogSnapshot>>();
+  const validatedClaudeModelCatalogs = new Set<string>();
 
   const schedulePendingEnvironmentRename = (environmentId: string, context: CommandContext): void => {
     if (pendingEnvironmentRenameTasks.has(environmentId)) return;
@@ -3242,15 +3389,12 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     return JSON.parse(await fs.readFile(modelPath, "utf8"));
   });
   register("start_claude_server", ({ containerId }) =>
-    startContainerServer(asString(containerId, "containerId"), CLAUDE_BRIDGE_PORT, "claude", `
-      cd /workspace
-      rm -f /tmp/claude-bridge.log
-      source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
-      orkestrator_source_runtime_env 2>/dev/null || true
-      export PORT=${CLAUDE_BRIDGE_PORT}
-      export HOSTNAME=0.0.0.0
-      setsid bun /opt/claude-bridge/dist/index.js > /tmp/claude-bridge.log 2>&1 &
-    `),
+    startContainerServer(
+      asString(containerId, "containerId"),
+      CLAUDE_BRIDGE_PORT,
+      "claude",
+      CLAUDE_BRIDGE_CONTAINER_START_COMMAND,
+    ),
   );
   register("stop_claude_server", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "pkill -f 'claude-bridge' || true").then(() => undefined));
   register("get_claude_server_status", async ({ containerId }) => {
@@ -3259,6 +3403,50 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     return { running: hostPort ? await checkHttpHealth(hostPort) : false, hostPort };
   });
   register("get_claude_server_log", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "cat /tmp/claude-bridge.log 2>/dev/null || true"));
+  register("get_claude_model_catalog", async ({ environmentId, forceRefresh }, context) => {
+    const id = asString(environmentId, "environmentId");
+    const environment = await context.storage.getEnvironment(id);
+    if (!environment) throw new Error(`Environment not found: ${id}`);
+    const cached = environment.claudeModelCatalog;
+    if (
+      forceRefresh !== true &&
+      validatedClaudeModelCatalogs.has(id) &&
+      isFreshClaudeModelCatalog(cached)
+    ) {
+      return cached;
+    }
+
+    const existingRefresh = claudeModelCatalogRefreshes.get(id);
+    if (existingRefresh) return existingRefresh;
+
+    const refresh = refreshClaudeModelCatalog(id, context)
+      .then((snapshot) => {
+        validatedClaudeModelCatalogs.add(id);
+        return snapshot;
+      })
+      .catch(async (error): Promise<ClaudeModelCatalogSnapshot> => {
+        if (!cached?.models.length) throw error;
+        const stale: ClaudeModelCatalogSnapshot = {
+          ...cached,
+          source: "last-known-good",
+          stale: true,
+          error: conciseError(error),
+        };
+        await context.storage.updateEnvironment(id, {
+          claudeModelCatalog: stale,
+        });
+        context.emit("claude-model-catalog-updated", stale);
+        validatedClaudeModelCatalogs.add(id);
+        return stale;
+      })
+      .finally(() => {
+        if (claudeModelCatalogRefreshes.get(id) === refresh) {
+          claudeModelCatalogRefreshes.delete(id);
+        }
+      });
+    claudeModelCatalogRefreshes.set(id, refresh);
+    return refresh;
+  });
   register("start_codex_server", ({ containerId }) =>
     startContainerServer(asString(containerId, "containerId"), CODEX_BRIDGE_PORT, "codex", `
       cd /workspace

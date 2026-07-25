@@ -36,6 +36,7 @@ describe("Electron packaging configuration", () => {
 
     expect(packageJson.main).toBe("apps/desktop/dist/electron/main.js");
     expect(packageJson.scripts.build).toContain("turbo");
+    expect(packageJson.scripts.package).toStartWith("bun install --frozen-lockfile && ");
     expect(packageJson.scripts.package).toContain("bun run download:bun");
     expect(packageJson.scripts.package).toContain("bun run build:all");
     expect(packageJson.scripts.package).toContain("electron-builder");

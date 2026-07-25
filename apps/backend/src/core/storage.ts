@@ -11,6 +11,7 @@ import {
 } from "@orkestrator/protocol/review-prompt";
 import type {
   AppConfig,
+  ClaudeModelCatalogSnapshot,
   Environment,
   EnvironmentStatus,
   EnvironmentType,
@@ -196,6 +197,52 @@ function isPortMapping(value: unknown): value is PortMapping {
     && isPortNumber(value.containerPort)
     && isPortNumber(value.hostPort)
     && (value.protocol === "tcp" || value.protocol === "udp");
+}
+
+function isClaudeModelCatalogSnapshot(
+  value: unknown,
+  environmentId: string,
+): value is ClaudeModelCatalogSnapshot {
+  if (
+    !isRecord(value)
+    || value.environmentId !== environmentId
+    || !Array.isArray(value.models)
+    || !isOneOf(value.source, ["sdk", "last-known-good", "fallback"])
+    || typeof value.fetchedAt !== "string"
+    || !Number.isFinite(Date.parse(value.fetchedAt))
+    || typeof value.stale !== "boolean"
+  ) {
+    return false;
+  }
+
+  const effortLevels = ["low", "medium", "high", "xhigh", "max"] as const;
+  return value.models.every((model) => {
+    if (!isRecord(model) || !isNonBlankString(model.id) || !isNonBlankString(model.name)) {
+      return false;
+    }
+    const optionalStrings = ["resolvedModel", "description"] as const;
+    if (optionalStrings.some((field) => field in model && model[field] != null && typeof model[field] !== "string")) {
+      return false;
+    }
+    const optionalBooleans = [
+      "supportsFastMode",
+      "supportsEffort",
+      "supportsAdaptiveThinking",
+      "supportsAutoMode",
+    ] as const;
+    if (optionalBooleans.some((field) => field in model && model[field] != null && typeof model[field] !== "boolean")) {
+      return false;
+    }
+    return !("supportedEffortLevels" in model)
+      || model.supportedEffortLevels == null
+      || (
+        Array.isArray(model.supportedEffortLevels)
+        && model.supportedEffortLevels.every((level) => isOneOf(level, effortLevels))
+      );
+  })
+    && (value.sdkVersion == null || typeof value.sdkVersion === "string")
+    && (value.cliVersion == null || typeof value.cliVersion === "string")
+    && (value.error == null || typeof value.error === "string");
 }
 
 function validateConfigReviewPrompt(value: unknown): AppConfig {
@@ -869,6 +916,13 @@ export class StorageService {
         if (updates.setupScriptsComplete == null) environment.setupScriptsComplete = false;
         else if (typeof updates.setupScriptsComplete === "boolean") {
           environment.setupScriptsComplete = updates.setupScriptsComplete;
+        }
+      }
+      if ("claudeModelCatalog" in updates) {
+        if (updates.claudeModelCatalog == null) {
+          environment.claudeModelCatalog = undefined;
+        } else if (isClaudeModelCatalogSnapshot(updates.claudeModelCatalog, environmentId)) {
+          environment.claudeModelCatalog = updates.claudeModelCatalog;
         }
       }
       if ("networkAccessMode" in updates && (updates.networkAccessMode === "full" || updates.networkAccessMode === "restricted")) {

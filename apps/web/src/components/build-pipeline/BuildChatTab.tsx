@@ -385,7 +385,7 @@ function ClaudeBuildChatTab({ data, isActive }: BuildChatTabProps) {
 
         const availableModels = await getModels(bridgeClient);
         if (!mounted) return;
-        setModels(availableModels);
+        setModels(availableModels, environmentId);
 
         isInitializedRef.current = true;
         setConnectionState("connected");

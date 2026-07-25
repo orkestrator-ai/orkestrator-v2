@@ -25,6 +25,13 @@ let mockIsAtBottom = true;
 let lastVirtualizedMessages: any[] = [];
 const mockCreateSession = mock(async () => ({ sessionId: "session-1" }));
 const mockGetModels = mock(async (): Promise<ClaudeModel[]> => []);
+const mockGetClaudeModelCatalog = mock(async () => ({
+  environmentId: "env-1",
+  models: await mockGetModels(),
+  source: "sdk" as const,
+  fetchedAt: "2026-07-25T12:00:00.000Z",
+  stale: false,
+}));
 const mockGetSessionMessages = mock<
   (_client: unknown, _sessionId: string) => Promise<ClaudeMessageType[]>
 >(async () => []);
@@ -105,6 +112,7 @@ mock.module("@/lib/backend", () => ({
   getClaudeServerLog: mock(async () => ""),
   startLocalClaudeServer: mock(async () => ({ running: true, port: 9999, pid: 1234 })),
   getLocalClaudeServerStatus: mock(async () => ({ running: true, port: 9999, pid: 1234 })),
+  getClaudeModelCatalog: mockGetClaudeModelCatalog,
   renameEnvironmentFromPrompt: mockRenameEnvironmentFromPrompt,
   readFileBase64: mockReadFileBase64,
   readContainerFileBase64: mockReadContainerFileBase64,
@@ -225,6 +233,7 @@ function resetStores(environmentName = "review-table") {
     pendingQuestions: new Map(),
     pendingPlanApprovals: new Map(),
     models: [],
+    modelCatalogs: new Map(),
     fastMode: new Map(),
   });
 
@@ -318,6 +327,14 @@ describe("ClaudeChatTab", () => {
     mockCreateSession.mockClear();
     mockGetModels.mockReset();
     mockGetModels.mockImplementation(async () => []);
+    mockGetClaudeModelCatalog.mockReset();
+    mockGetClaudeModelCatalog.mockImplementation(async () => ({
+      environmentId: ENVIRONMENT_ID,
+      models: await mockGetModels(),
+      source: "sdk" as const,
+      fetchedAt: "2026-07-25T12:00:00.000Z",
+      stale: false,
+    }));
     mockGetSessionMessages.mockReset();
     mockGetSessionMessages.mockImplementation(async () => []);
     mockGetSession.mockReset();
@@ -1149,7 +1166,9 @@ describe("ClaudeChatTab", () => {
       sessions: new Map(),
     }));
     seedPaneLayout();
-    mockGetModels.mockRejectedValueOnce(new Error("model load failed"));
+    mockGetModels
+      .mockRejectedValueOnce(new Error("model load failed"))
+      .mockRejectedValueOnce(new Error("model load failed"));
 
     render(<ClaudeChatTab tabId={TAB_ID} data={createData()} isActive />);
 
@@ -1432,6 +1451,10 @@ describe("ClaudeChatTab", () => {
   });
 
   test("prefers the persisted Claude model when warm path creates a new session", async () => {
+    mockGetModels.mockResolvedValue([
+      { id: "opus", name: "Opus" },
+      { id: "sonnet", name: "Sonnet" },
+    ] as any);
     useConfigStore.setState((state) => ({
       ...state,
       config: {
@@ -1502,6 +1525,51 @@ describe("ClaudeChatTab", () => {
       expect(mockCreateSession).toHaveBeenCalled();
       expect(useClaudeStore.getState().getSelectedModel(SESSION_KEY)).toBe("opus");
     });
+  });
+
+  test("falls back to direct bridge discovery when the authoritative catalog is unavailable", async () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: { ...state.config.global, claudeModel: "sonnet" },
+      },
+    }));
+    useClaudeStore.setState((state) => ({
+      ...state,
+      clients: new Map(),
+      sessions: new Map(),
+      selectedModel: new Map(),
+      models: [],
+      modelCatalogs: new Map(),
+    }));
+    // The backend-owned catalog is unreachable, so the tab must recover through
+    // the direct bridge discovery path.
+    mockGetClaudeModelCatalog.mockRejectedValue(new Error("catalog unavailable"));
+    mockGetModels.mockImplementation(async () => [
+      { id: "opus", name: "Opus" },
+      { id: "sonnet", name: "Sonnet" },
+    ] as any);
+
+    render(
+      <ClaudeChatTab tabId={TAB_ID} data={createData()} isActive={false} />,
+    );
+
+    await waitFor(() => {
+      expect(mockGetClaudeModelCatalog).toHaveBeenCalled();
+      expect(mockGetModels).toHaveBeenCalled();
+      // Direct discovery results are cached in the environment-scoped catalog,
+      // not the legacy global list, and still drive selection.
+      expect(
+        useClaudeStore.getState().getModels(ENVIRONMENT_ID).map((m) => m.id),
+      ).toEqual(["opus", "sonnet"]);
+      expect(useClaudeStore.getState().getSelectedModel(SESSION_KEY)).toBe("sonnet");
+    });
+    expect(
+      useClaudeStore.getState().getModelCatalog(ENVIRONMENT_ID)?.models.map((m) => m.id),
+    ).toEqual(["opus", "sonnet"]);
+    // The global fallback list stays empty; scoping is per environment.
+    expect(useClaudeStore.getState().models).toEqual([]);
   });
 
   test("drains queued prompts when the session is idle", async () => {

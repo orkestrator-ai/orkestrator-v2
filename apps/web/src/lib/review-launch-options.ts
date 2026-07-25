@@ -10,7 +10,13 @@ const CLAUDE_FALLBACK_MODELS: ReviewModelOption[] = [
   {
     id: "default",
     name: "Default (recommended)",
-    description: "Use Claude's recommended model",
+    description: "Opus 5 with 1M context · Best for everyday, complex tasks",
+    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+  },
+  {
+    id: "opus[1m]",
+    name: "Opus (1M context)",
+    description: "Opus 5 with 1M context · Best for everyday, complex tasks",
     reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
   },
   {
@@ -22,8 +28,8 @@ const CLAUDE_FALLBACK_MODELS: ReviewModelOption[] = [
   {
     id: "sonnet",
     name: "Sonnet",
-    description: "Efficient for routine tasks",
-    reasoningEfforts: ["low", "medium", "high", "max"],
+    description: "Sonnet 5 · Efficient for routine tasks",
+    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
   },
   {
     id: "haiku",

@@ -44,6 +44,7 @@ import {
   getClaudeServerLog,
   startLocalClaudeServer,
   getLocalClaudeServerStatus,
+  getClaudeModelCatalog,
   renameEnvironmentFromPrompt,
 } from "@/lib/backend";
 import { NativeMessage } from "@/components/chat/NativeMessage";
@@ -117,8 +118,10 @@ export function ClaudeChatTab({
 
   const {
     setClient,
-    models,
+    models: fallbackModels,
+    modelCatalogs,
     setModels,
+    setModelCatalog,
     setSession,
     addMessage,
     removeMessage,
@@ -150,6 +153,32 @@ export function ClaudeChatTab({
     pendingQuestions: pendingQuestionsMap,
     pendingPlanApprovals: pendingPlanApprovalsMap,
   } = useClaudeStore();
+  const models = modelCatalogs.get(environmentId)?.models ?? fallbackModels;
+
+  const loadAuthoritativeModels = useCallback(
+    async (
+      bridgeClient: ReturnType<typeof createClient>,
+      forceRefresh = false,
+    ) => {
+      try {
+        const catalog = await getClaudeModelCatalog(
+          environmentId,
+          forceRefresh,
+        );
+        setModelCatalog(catalog);
+        return catalog.models;
+      } catch (error) {
+        console.debug(
+          "[ClaudeChatTab] Backend model catalog unavailable; using direct bridge discovery",
+          error,
+        );
+        const directModels = await getModels(bridgeClient);
+        setModels(directModels, environmentId);
+        return directModels;
+      }
+    },
+    [environmentId, setModelCatalog, setModels],
+  );
 
   // Pane layout store - for clearing initialPrompt after it's been sent
   const { clearTabInitialPrompt, updateTabNativeSessionId } = usePaneLayoutStore();
@@ -273,6 +302,7 @@ export function ClaudeChatTab({
       getSessionMessages(activeClient, sessionId, { throwOnError: true }),
       getPendingQuestions(activeClient, sessionId, { throwOnError: true }),
       getPendingPlanApprovals(activeClient, sessionId, { throwOnError: true }),
+      loadAuthoritativeModels(activeClient, true),
     ]);
 
     if (requestSequence !== manualRefreshSequenceRef.current) return;
@@ -323,6 +353,7 @@ export function ClaudeChatTab({
     addPendingPlanApproval,
     addPendingQuestion,
     environmentId,
+    loadAuthoritativeModels,
     removePendingPlanApproval,
     removePendingQuestion,
     sessionKey,
@@ -520,10 +551,9 @@ export function ClaudeChatTab({
 
           // Reuse models from store if available, otherwise fetch
           let resolvedModels = models;
-          if (resolvedModels.length === 0) {
-            resolvedModels = await getModels(bridgeClient);
+          if (!modelCatalogs.has(environmentId)) {
+            resolvedModels = await loadAuthoritativeModels(bridgeClient);
             if (!mounted) return;
-            setModels(resolvedModels);
           }
 
           const currentSelectedModel = getSelectedModel(sessionKey);
@@ -658,10 +688,9 @@ export function ClaudeChatTab({
         const healthy = await checkHealth(bridgeClient);
         console.debug("[ClaudeChatTab] Claude bridge health:", healthy);
         const modelsStart = Date.now();
-        const availableModels = await getModels(bridgeClient);
+        const availableModels = await loadAuthoritativeModels(bridgeClient);
         if (!mounted) return;
         console.debug("[ClaudeChatTab] Available models:", availableModels, "durationMs:", Date.now() - modelsStart);
-        setModels(availableModels);
 
         // Set default model if not already selected
         const currentSelectedModel = getSelectedModel(sessionKey);
@@ -836,7 +865,8 @@ export function ClaudeChatTab({
             const permissionMode = planModeEnabled ? "plan" : "bypassPermissions";
             const modelSupportsFastMode = useClaudeStore
               .getState()
-              .models.find((m) => m.id === selectedModel)?.supportsFastMode !== false;
+              .getModels(environmentId)
+              .find((m) => m.id === selectedModel)?.supportsFastMode !== false;
 
             // Start SSE subscription first so we can receive the response
             startSharedEventSubscription(bridgeClient);
@@ -1283,7 +1313,8 @@ export function ClaudeChatTab({
       // Guard: only honor fast mode if the selected model supports it.
       const modelSupportsFastMode = useClaudeStore
         .getState()
-        .models.find((m) => m.id === selectedModel)?.supportsFastMode !== false;
+        .getModels(environmentId)
+        .find((m) => m.id === selectedModel)?.supportsFastMode !== false;
 
       const success = await sendPrompt(client, session.sessionId, text, {
         model: selectedModel,

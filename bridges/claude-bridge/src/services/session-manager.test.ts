@@ -158,11 +158,14 @@ const mockQuery = mock((args: { prompt: unknown; options: QueryCall["options"] }
     supportedModels: async () => [
       {
         value: "claude-opus-mock",
+        resolvedModel: "claude-opus-mock-20260701",
         displayName: "Claude Opus (mock)",
         description: "Mock model",
         supportsFastMode: true,
         supportsEffort: true,
         supportedEffortLevels: ["low", "medium", "high"] as const,
+        supportsAdaptiveThinking: true,
+        supportsAutoMode: true,
       },
     ],
   });
@@ -204,7 +207,9 @@ const {
   respondToPlanApproval,
   getPendingPlanApprovals,
   getSessionInitData,
+  getAvailableModelCatalog,
   getAvailableModels,
+  getClaudeRuntimeVersions,
 } = sessionManager;
 
 // ---------------------------------------------------------------------------
@@ -1902,9 +1907,29 @@ describe("getAvailableModels", () => {
     expect(models.length).toBeGreaterThan(0);
     expect(models[0]).toMatchObject({
       id: "claude-opus-mock",
+      resolvedModel: "claude-opus-mock-20260701",
       name: "Claude Opus (mock)",
       supportsFastMode: true,
+      supportsAdaptiveThinking: true,
+      supportsAutoMode: true,
     });
+  });
+
+  test("discovers models with the exact managed Claude executable", async () => {
+    const previousClaudeCliPath = process.env.CLAUDE_CLI_PATH;
+    process.env.CLAUDE_CLI_PATH = "/managed/toolchain/claude";
+    try {
+      await expect(getAvailableModelCatalog()).resolves.toMatchObject({
+        source: "sdk",
+        models: [{ id: "claude-opus-mock" }],
+      });
+      expect(mockQuery.mock.calls.at(-1)?.[0]?.options).toMatchObject({
+        pathToClaudeCodeExecutable: "/managed/toolchain/claude",
+      });
+    } finally {
+      if (previousClaudeCliPath === undefined) delete process.env.CLAUDE_CLI_PATH;
+      else process.env.CLAUDE_CLI_PATH = previousClaudeCliPath;
+    }
   });
 
   test("falls back to the built-in catalog when the SDK query throws", async () => {
@@ -1917,14 +1942,15 @@ describe("getAvailableModels", () => {
     const models = await getAvailableModels();
 
     expect(models.map((m) => m.id)).toEqual([
-      "claude-fable-5",
-      "claude-opus-4-8",
-      "claude-sonnet-5",
-      "claude-haiku-4-5-20251001",
+      "default",
+      "opus[1m]",
+      "claude-fable-5[1m]",
+      "sonnet",
+      "haiku",
     ]);
   });
 
-  test("fallback marks only Opus as fast-mode capable and Haiku without effort", async () => {
+  test("fallback marks the Opus aliases as fast-mode capable and Haiku without effort", async () => {
     mockQuery.mockImplementationOnce(() => {
       throw new Error("SDK unavailable");
     });
@@ -1932,14 +1958,16 @@ describe("getAvailableModels", () => {
     const models = await getAvailableModels();
     const byId = new Map(models.map((m) => [m.id, m]));
 
-    // Fast mode is an Opus-tier capability; no other fallback model advertises it.
-    expect(byId.get("claude-opus-4-8")?.supportsFastMode).toBe(true);
+    // Default currently resolves to Opus, so both Opus aliases advertise fast mode.
+    expect(byId.get("default")?.supportsFastMode).toBe(true);
+    expect(byId.get("opus[1m]")?.supportsFastMode).toBe(true);
     expect(models.filter((m) => m.supportsFastMode).map((m) => m.id)).toEqual([
-      "claude-opus-4-8",
+      "default",
+      "opus[1m]",
     ]);
 
     // Reasoning-capable models expose the full effort ladder incl. xhigh/max.
-    for (const id of ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"]) {
+    for (const id of ["default", "opus[1m]", "claude-fable-5[1m]", "sonnet"]) {
       const model = byId.get(id);
       expect(model?.supportsEffort).toBe(true);
       expect(model?.supportedEffortLevels).toEqual([
@@ -1952,7 +1980,7 @@ describe("getAvailableModels", () => {
     }
 
     // Haiku is the fast, non-reasoning tier.
-    expect(byId.get("claude-haiku-4-5-20251001")?.supportsEffort).toBe(false);
+    expect(byId.get("haiku")?.supportsEffort).toBeUndefined();
   });
 
   test("cleans up the SDK query after success, failure, and cleanup errors", async () => {
@@ -1993,5 +2021,109 @@ describe("getAvailableModels", () => {
     );
     mockQuery.mockImplementationOnce(() => cleanupFailure as never);
     expect(await getAvailableModels()).toEqual([]);
+  });
+});
+
+describe("getClaudeRuntimeVersions", () => {
+  async function readBundledManifest(): Promise<{
+    version?: string;
+    claudeCodeVersion?: string;
+  }> {
+    const sdkEntryUrl = import.meta.resolve("@anthropic-ai/claude-agent-sdk");
+    return JSON.parse(
+      await realFs.promises.readFile(
+        new URL("./package.json", sdkEntryUrl),
+        "utf8",
+      ),
+    );
+  }
+
+  async function withClaudeCliPath<T>(
+    value: string | undefined,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const previous = process.env.CLAUDE_CLI_PATH;
+    if (value === undefined) delete process.env.CLAUDE_CLI_PATH;
+    else process.env.CLAUDE_CLI_PATH = value;
+    try {
+      return await fn();
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CLI_PATH;
+      else process.env.CLAUDE_CLI_PATH = previous;
+    }
+  }
+
+  function stubClaudeVersionOutput(
+    executable: string,
+    output: string | (() => never),
+  ): void {
+    mockExecFileSync.mockImplementation(((file: string, args?: string[]) => {
+      if (file === executable && args?.[0] === "--version") {
+        return typeof output === "function" ? output() : output;
+      }
+      return originalExecFileSync(
+        file as never,
+        args as never,
+      ) as never;
+    }) as never);
+  }
+
+  test("reports the bundled SDK/CLI version when no managed executable is set", async () => {
+    await withClaudeCliPath(undefined, async () => {
+      const manifest = await readBundledManifest();
+      const versions = await getClaudeRuntimeVersions();
+
+      expect(versions.sdkVersion).toBe(manifest.version);
+      expect(versions.cliVersion).toBe(manifest.claudeCodeVersion);
+      // The managed CLI is not probed when CLAUDE_CLI_PATH is unset.
+      expect(
+        mockExecFileSync.mock.calls.some((call) =>
+          (call[1] as string[] | undefined)?.includes("--version"),
+        ),
+      ).toBe(false);
+    });
+  });
+
+  test("parses the managed CLI --version output when configured", async () => {
+    await withClaudeCliPath("/managed/toolchain/claude", async () => {
+      stubClaudeVersionOutput(
+        "/managed/toolchain/claude",
+        "5.4.2 (Claude Code)\n",
+      );
+
+      const versions = await getClaudeRuntimeVersions();
+
+      expect(versions.cliVersion).toBe("5.4.2");
+      expect(versions.sdkVersion).toBe((await readBundledManifest()).version);
+      const call = mockExecFileSync.mock.calls.find(
+        (c) => c[0] === "/managed/toolchain/claude",
+      );
+      expect(call?.[1]).toEqual(["--version"]);
+    });
+  });
+
+  test("falls back to the bundled version when the managed CLI probe throws", async () => {
+    await withClaudeCliPath("/managed/toolchain/claude", async () => {
+      stubClaudeVersionOutput("/managed/toolchain/claude", () => {
+        throw new Error("spawn ENOENT");
+      });
+
+      const manifest = await readBundledManifest();
+      const versions = await getClaudeRuntimeVersions();
+
+      expect(versions.cliVersion).toBe(manifest.claudeCodeVersion);
+      expect(versions.sdkVersion).toBe(manifest.version);
+    });
+  });
+
+  test("falls back to the bundled version when --version has no semver token", async () => {
+    await withClaudeCliPath("/managed/toolchain/claude", async () => {
+      stubClaudeVersionOutput("/managed/toolchain/claude", "nightly-build\n");
+
+      const manifest = await readBundledManifest();
+      const versions = await getClaudeRuntimeVersions();
+
+      expect(versions.cliVersion).toBe(manifest.claudeCodeVersion);
+    });
   });
 });

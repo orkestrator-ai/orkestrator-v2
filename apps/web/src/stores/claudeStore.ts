@@ -12,6 +12,7 @@ import {
   type ClaudeSessionKey,
   type ClaudeSdkSessionId,
   type ClaudeEffortLevel,
+  type ClaudeModelCatalogSnapshot,
 } from "@/lib/claude-client";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import { createSessionKey } from "@/lib/utils";
@@ -106,6 +107,7 @@ type ClaudeChatSlice = NativeChatStoreSlice<
 interface ClaudeState extends ClaudeChatSlice {
   // Agent-specific state
   models: ClaudeModel[];
+  modelCatalogs: Map<string, ClaudeModelCatalogSnapshot>;
   eventSubscriptions: Map<string, ClaudeEventSubscriptionState>;
   isComposing: Map<ClaudeSessionKey, boolean>;
   effort: Map<ClaudeSessionKey, ClaudeEffortLevel>;
@@ -118,7 +120,8 @@ interface ClaudeState extends ClaudeChatSlice {
   pendingPlanApprovals: Map<string, ClaudePlanApprovalRequest>;
 
   // Agent-specific actions
-  setModels: (models: ClaudeModel[]) => void;
+  setModels: (models: ClaudeModel[], environmentId?: string) => void;
+  setModelCatalog: (catalog: ClaudeModelCatalogSnapshot) => void;
   setSelectedModel: (sessionKey: ClaudeSessionKey, modelId: string) => void;
   setComposing: (sessionKey: ClaudeSessionKey, isComposing: boolean) => void;
   setEffort: (sessionKey: ClaudeSessionKey, effort: ClaudeEffortLevel) => void;
@@ -151,6 +154,10 @@ interface ClaudeState extends ClaudeChatSlice {
 
   // Selectors
   getSelectedModel: (sessionKey: ClaudeSessionKey) => string | undefined;
+  getModels: (environmentId: string) => ClaudeModel[];
+  getModelCatalog: (
+    environmentId: string,
+  ) => ClaudeModelCatalogSnapshot | undefined;
   isComposingFor: (sessionKey: ClaudeSessionKey) => boolean;
   getEffort: (sessionKey: ClaudeSessionKey) => ClaudeEffortLevel;
   isPlanMode: (sessionKey: ClaudeSessionKey) => boolean;
@@ -190,6 +197,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
 
   // Agent-specific state
   models: [],
+  modelCatalogs: new Map(),
   eventSubscriptions: new Map(),
   isComposing: new Map(),
   effort: new Map(),
@@ -202,7 +210,26 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   pendingPlanApprovals: new Map(),
 
   // Agent-specific actions
-  setModels: (models) => set({ models }),
+  setModels: (models, environmentId) =>
+    set((state) => {
+      if (!environmentId) return { models };
+      const next = new Map(state.modelCatalogs);
+      next.set(environmentId, {
+        environmentId,
+        models,
+        source: "sdk",
+        fetchedAt: new Date().toISOString(),
+        stale: false,
+      });
+      return { modelCatalogs: next };
+    }),
+
+  setModelCatalog: (catalog) =>
+    set((state) => {
+      const next = new Map(state.modelCatalogs);
+      next.set(catalog.environmentId, catalog);
+      return { modelCatalogs: next };
+    }),
 
   setSelectedModel: (sessionKey, modelId) =>
     set((state) => {
@@ -286,11 +313,13 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       const nextClients = new Map(state.clients);
       const nextEventSubscriptions = new Map(state.eventSubscriptions);
       const nextSessionInitData = new Map(state.sessionInitData);
+      const nextModelCatalogs = new Map(state.modelCatalogs);
 
       nextServerStatus.delete(environmentId);
       nextClients.delete(environmentId);
       nextEventSubscriptions.delete(environmentId);
       nextSessionInitData.delete(environmentId);
+      nextModelCatalogs.delete(environmentId);
 
       const prefix = `env-${environmentId}:`;
 
@@ -333,6 +362,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
         pendingPlanApprovals: nextPendingPlanApprovals,
         eventSubscriptions: nextEventSubscriptions,
         sessionInitData: nextSessionInitData,
+        modelCatalogs: nextModelCatalogs,
       };
     });
   },
@@ -435,6 +465,9 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
 
   // Selectors
   getSelectedModel: (sessionKey) => get().selectedModel.get(sessionKey),
+  getModels: (environmentId) =>
+    get().modelCatalogs.get(environmentId)?.models ?? get().models,
+  getModelCatalog: (environmentId) => get().modelCatalogs.get(environmentId),
   isComposingFor: (sessionKey) => get().isComposing.get(sessionKey) ?? false,
   // Default to "high" effort if not explicitly set
   getEffort: (sessionKey) => get().effort.get(sessionKey) ?? "high",

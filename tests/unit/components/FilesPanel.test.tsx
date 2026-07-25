@@ -190,6 +190,10 @@ describe("Files panel components", () => {
     expect(filename.className).toContain("shrink-0");
     expect(filename.className).toContain("max-w-full");
     expect(filename.className).toContain("truncate");
+    expect(filename.parentElement?.className).toContain("items-baseline");
+    expect(filename.parentElement?.className).toContain("text-xs");
+    expect(directory.className).not.toContain("text-xs");
+    expect(filename.className).not.toContain("text-sm");
     expect(screen.getByText("+12").className).toContain("text-green-500");
     expect(screen.getByText("-3").className).toContain("text-red-400");
 

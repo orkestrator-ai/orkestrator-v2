@@ -151,7 +151,39 @@ async function expectAccessibleFullPath(path: Locator, fullPath: string) {
   );
 }
 
-test("wide and narrow paths keep their separator and filename in visual order", async ({
+async function changedFileTypography(path: Locator) {
+  return path.evaluate((element) => {
+    const visualPath = element.children[1];
+    if (!(visualPath instanceof HTMLElement)) {
+      throw new Error("Missing changed-file visual path");
+    }
+
+    const [directoryElement, filenameElement] = Array.from(visualPath.children);
+    if (
+      !(directoryElement instanceof HTMLElement)
+      || !(filenameElement instanceof HTMLElement)
+    ) {
+      throw new Error("Expected changed-file directory and filename elements");
+    }
+
+    const textBox = (container: HTMLElement) => {
+      const range = document.createRange();
+      range.selectNodeContents(container);
+      return range.getBoundingClientRect();
+    };
+    const directoryBox = textBox(directoryElement);
+    const filenameBox = textBox(filenameElement);
+
+    return {
+      alignItems: getComputedStyle(visualPath).alignItems,
+      directoryFontSize: getComputedStyle(directoryElement).fontSize,
+      filenameFontSize: getComputedStyle(filenameElement).fontSize,
+      textBottomDelta: Math.abs(directoryBox.bottom - filenameBox.bottom),
+    };
+  });
+}
+
+test("wide and narrow paths preserve filename order and changed-file typography", async ({
   page,
 }, testInfo) => {
   test.skip(
@@ -174,6 +206,13 @@ test("wide and narrow paths keep their separator and filename in visual order", 
     narrowWidth: 260,
   });
   await expectAccessibleFullPath(changedFilePath, pathCases[0].fullPath);
+  const typography = await changedFileTypography(changedFilePath);
+  expect(typography).toMatchObject({
+    alignItems: "baseline",
+    directoryFontSize: "12px",
+    filenameFontSize: "12px",
+  });
+  expect(typography.textBottomDelta).toBeLessThanOrEqual(1);
 
   for (const pathCase of pathCases) {
     const pane = page.getByTestId(`${pathCase.kind}-path-pane`);

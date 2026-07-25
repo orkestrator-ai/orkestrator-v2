@@ -30,6 +30,7 @@ export type ReviewTabType =
   | "opencode-native";
 
 export type ReviewAgent = "claude" | "codex" | "opencode";
+type ReviewMode = "cli" | "native" | "tmux";
 
 export interface ReviewModelOption {
   id: string;
@@ -51,17 +52,30 @@ interface ReviewTabOption {
   label: string;
   description: string;
   agent: ReviewAgent;
+  mode: ReviewMode;
 }
 
 export const REVIEW_TAB_OPTIONS: ReviewTabOption[] = [
-  { value: "claude-cli", label: "Claude CLI", description: "Terminal interface", agent: "claude" },
-  { value: "claude-native", label: "Claude Native", description: "SDK chat interface", agent: "claude" },
-  { value: "claude-tmux", label: "Claude Tmux", description: "Native UI over Claude CLI", agent: "claude" },
-  { value: "codex-cli", label: "Codex CLI", description: "Terminal interface", agent: "codex" },
-  { value: "codex-native", label: "Codex Native", description: "Bridge chat interface", agent: "codex" },
-  { value: "opencode-cli", label: "OpenCode CLI", description: "Terminal interface", agent: "opencode" },
-  { value: "opencode-native", label: "OpenCode Native", description: "SDK chat interface", agent: "opencode" },
+  { value: "claude-cli", label: "Claude CLI", description: "Terminal interface", agent: "claude", mode: "cli" },
+  { value: "claude-native", label: "Claude Native", description: "SDK chat interface", agent: "claude", mode: "native" },
+  { value: "claude-tmux", label: "Claude Tmux", description: "Native UI over Claude CLI", agent: "claude", mode: "tmux" },
+  { value: "codex-cli", label: "Codex CLI", description: "Terminal interface", agent: "codex", mode: "cli" },
+  { value: "codex-native", label: "Codex Native", description: "Bridge chat interface", agent: "codex", mode: "native" },
+  { value: "opencode-cli", label: "OpenCode CLI", description: "Terminal interface", agent: "opencode", mode: "cli" },
+  { value: "opencode-native", label: "OpenCode Native", description: "SDK chat interface", agent: "opencode", mode: "native" },
 ];
+
+const REVIEW_AGENT_OPTIONS: Array<{ value: ReviewAgent; label: string }> = [
+  { value: "claude", label: "Claude" },
+  { value: "codex", label: "Codex" },
+  { value: "opencode", label: "OpenCode" },
+];
+
+const REVIEW_MODE_LABELS: Record<ReviewMode, string> = {
+  cli: "CLI",
+  native: "Native",
+  tmux: "Tmux",
+};
 
 export function getReviewAgent(tabType: ReviewTabType): ReviewAgent {
   return REVIEW_TAB_OPTIONS.find((option) => option.value === tabType)?.agent ?? "claude";
@@ -85,8 +99,8 @@ function Step({
   last?: boolean;
 }) {
   return (
-    <div className="grid grid-cols-[2rem_minmax(0,1fr)] gap-3">
-      <div className="flex flex-col items-center" aria-hidden="true">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-[2rem_minmax(0,1fr)]">
+      <div className="hidden flex-col items-center sm:flex" aria-hidden="true">
         <div className="relative grid size-8 place-items-center rounded-full border border-blue-400/35 bg-blue-500/10 text-blue-300">
           {icon}
           <span className="absolute -right-1.5 -top-1.5 grid size-4 place-items-center rounded-full bg-zinc-800 text-[9px] font-semibold text-zinc-300 ring-1 ring-zinc-600">
@@ -163,6 +177,8 @@ export function ReviewLaunchDialog({
   }, [catalog, defaultTabType, open, preferredModels, preferredReasoningEfforts]);
 
   const agent = getReviewAgent(tabType);
+  const agentLabel = REVIEW_AGENT_OPTIONS.find((option) => option.value === agent)?.label ?? agent;
+  const availableModes = REVIEW_TAB_OPTIONS.filter((option) => option.agent === agent);
   const models = catalog[agent];
   const selectedModel = models.find((option) => option.id === model) ?? models[0];
   const reasoningEfforts = selectedModel?.reasoningEfforts ?? [];
@@ -176,7 +192,16 @@ export function ReviewLaunchDialog({
     return `${tabLabel} · ${selectedModel?.name ?? model} · ${effortAvailable ? effortLabel : "default effort"}`;
   }, [effortAvailable, model, reasoningEffort, selectedModel?.name, tabType]);
 
-  const handleTabTypeChange = (nextTabType: ReviewTabType) => {
+  const handleAgentChange = (nextAgent: ReviewAgent) => {
+    const currentMode = REVIEW_TAB_OPTIONS.find((option) => option.value === tabType)?.mode;
+    const nextTabType = (
+      REVIEW_TAB_OPTIONS.find(
+        (option) => option.agent === nextAgent && option.mode === currentMode,
+      )
+      ?? REVIEW_TAB_OPTIONS.find((option) => option.agent === nextAgent)
+    )?.value;
+    if (!nextTabType) return;
+
     const nextModel = firstModelFor(nextTabType, catalog, preferredModels);
     setTabType(nextTabType);
     setModel(nextModel);
@@ -194,8 +219,8 @@ export function ReviewLaunchDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[min(calc(100%-1rem),38rem)] gap-5 overflow-hidden border-zinc-700/80 bg-[#111113] p-0 sm:max-w-[38rem]">
-        <DialogHeader className="border-b border-zinc-800 bg-gradient-to-br from-blue-500/[0.08] via-transparent to-transparent px-5 pb-4 pt-5 sm:px-6">
+      <DialogContent className="flex w-[min(calc(100%-1rem),38rem)] flex-col gap-0 overflow-hidden border-zinc-700/80 bg-[#111113] p-0 sm:max-w-[38rem]">
+        <DialogHeader className="shrink-0 border-b border-zinc-800 bg-gradient-to-br from-blue-500/[0.08] via-transparent to-transparent px-5 pb-4 pt-5 sm:px-6">
           <DialogTitle className="flex items-center gap-2 text-base">
             <span className="grid size-8 place-items-center rounded-lg border border-blue-400/25 bg-blue-500/10 text-blue-300">
               <BrainCircuit className="size-4" />
@@ -208,7 +233,7 @@ export function ReviewLaunchDialog({
         </DialogHeader>
 
         <form
-          className="space-y-0 px-5 sm:px-6"
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
           onSubmit={(event) => {
             event.preventDefault();
             onConfirm({
@@ -219,102 +244,146 @@ export function ReviewLaunchDialog({
             });
           }}
         >
-          <Step number={1} icon={<TerminalSquare className="size-3.5" />}>
-            <Label className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
-              Tab type
-            </Label>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Review tab type">
-              {REVIEW_TAB_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={tabType === option.value}
-                  onClick={() => handleTabTypeChange(option.value)}
-                  className={cn(
-                    "flex min-w-0 items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70",
-                    tabType === option.value
-                      ? "border-blue-400/55 bg-blue-500/10 text-zinc-100"
-                      : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900",
-                  )}
-                >
-                  <AgentIcon agent={option.agent} className="size-4 shrink-0" />
-                  <span className="min-w-0">
-                    <span className="block truncate text-sm font-medium">{option.label}</span>
-                    <span className="block truncate text-[11px] text-zinc-500">{option.description}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </Step>
+          <div
+            role="region"
+            aria-label="Review configuration"
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6"
+          >
+            <Step number={1} icon={<TerminalSquare className="size-3.5" />}>
+              <Label className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
+                Provider and mode
+              </Label>
+              <div
+                role="group"
+                aria-label="Provider and mode"
+                className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] gap-2"
+              >
+                <div className="min-w-0">
+                  <p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-zinc-500">
+                    Provider
+                  </p>
+                  <div className="grid gap-1.5" role="radiogroup" aria-label="Review provider">
+                    {REVIEW_AGENT_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={agent === option.value}
+                        onClick={() => handleAgentChange(option.value)}
+                        className={cn(
+                          "flex min-w-0 items-center gap-2 rounded-lg border px-2.5 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70",
+                          agent === option.value
+                            ? "border-blue-400/55 bg-blue-500/10 text-zinc-100"
+                            : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900",
+                        )}
+                      >
+                        <AgentIcon agent={option.value} className="size-4 shrink-0" />
+                        <span className="min-w-0 truncate text-sm font-medium">{option.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-          <Step number={2} icon={<Bot className="size-3.5" />}>
-            <Label htmlFor="review-model" className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
-              Model
-            </Label>
-            <Select value={selectedModel?.id ?? model} onValueChange={handleModelChange}>
-              <SelectTrigger id="review-model" className="h-11 w-full border-zinc-700/80 bg-zinc-900">
-                <span className="flex min-w-0 flex-1 flex-col text-left">
-                  <span className="truncate text-sm">{selectedModel?.name ?? "Choose a model"}</span>
-                  {selectedModel?.description && (
-                    <span className="truncate text-[11px] font-normal text-zinc-500">
-                      {selectedModel.description}
-                    </span>
-                  )}
-                </span>
-              </SelectTrigger>
-              <SelectContent position="popper" className="max-h-72">
-                {models.map((option) => (
-                  <SelectItem key={option.id} value={option.id} className="py-2">
-                    <span className="min-w-0">
-                      <span className="block truncate">{option.name}</span>
-                      {option.description && (
-                        <span className="block max-w-[28rem] truncate text-[11px] text-zinc-500">
+                <div className="min-w-0 border-l border-zinc-800 pl-2">
+                  <p className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-zinc-500">
+                    Mode
+                  </p>
+                  <div className="grid gap-1.5" role="radiogroup" aria-label={`${agentLabel} mode`}>
+                    {availableModes.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={tabType === option.value}
+                        onClick={() => setTabType(option.value)}
+                        className={cn(
+                          "min-w-0 rounded-lg border px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70",
+                          tabType === option.value
+                            ? "border-blue-400/55 bg-blue-500/10 text-zinc-100"
+                            : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900",
+                        )}
+                      >
+                        <span className="block truncate text-sm font-medium">
+                          {REVIEW_MODE_LABELS[option.mode]}
+                        </span>
+                        <span className="hidden truncate text-[11px] text-zinc-500 min-[390px]:block">
                           {option.description}
                         </span>
-                      )}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Step>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </Step>
 
-          <Step number={3} icon={<BrainCircuit className="size-3.5" />} last>
-            <Label htmlFor="review-effort" className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
-              Reasoning effort
-            </Label>
-            <Select
-              value={effortAvailable ? reasoningEffort : "default"}
-              onValueChange={setReasoningEffort}
-              disabled={!effortAvailable}
-            >
-              <SelectTrigger id="review-effort" className="h-11 w-full border-zinc-700/80 bg-zinc-900">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent position="popper">
-                <SelectItem value="default">Default</SelectItem>
-                {reasoningEfforts.map((effort) => (
-                  <SelectItem key={effort} value={effort}>
-                    {effort === "xhigh" ? "Extra high" : effort.charAt(0).toUpperCase() + effort.slice(1)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {!effortAvailable && (
-              <p className="mt-1.5 text-xs text-zinc-500">
-                {tabType === "opencode-cli"
-                  ? "OpenCode CLI does not expose a launch-time reasoning option."
-                  : "This model uses its default reasoning setting."}
-              </p>
-            )}
-          </Step>
+            <Step number={2} icon={<Bot className="size-3.5" />}>
+              <Label htmlFor="review-model" className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
+                Model
+              </Label>
+              <Select value={selectedModel?.id ?? model} onValueChange={handleModelChange}>
+                <SelectTrigger id="review-model" className="h-11 w-full border-zinc-700/80 bg-zinc-900">
+                  <span className="flex min-w-0 flex-1 flex-col text-left">
+                    <span className="truncate text-sm">{selectedModel?.name ?? "Choose a model"}</span>
+                    {selectedModel?.description && (
+                      <span className="truncate text-[11px] font-normal text-zinc-500">
+                        {selectedModel.description}
+                      </span>
+                    )}
+                  </span>
+                </SelectTrigger>
+                <SelectContent position="popper" className="max-h-72">
+                  {models.map((option) => (
+                    <SelectItem key={option.id} value={option.id} className="py-2">
+                      <span className="min-w-0">
+                        <span className="block truncate">{option.name}</span>
+                        {option.description && (
+                          <span className="block max-w-[28rem] truncate text-[11px] text-zinc-500">
+                            {option.description}
+                          </span>
+                        )}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Step>
 
-          <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400">
-            <span className="text-zinc-500">Launch:</span> {summary}
+            <Step number={3} icon={<BrainCircuit className="size-3.5" />} last>
+              <Label htmlFor="review-effort" className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
+                Reasoning effort
+              </Label>
+              <Select
+                value={effortAvailable ? reasoningEffort : "default"}
+                onValueChange={setReasoningEffort}
+                disabled={!effortAvailable}
+              >
+                <SelectTrigger id="review-effort" className="h-11 w-full border-zinc-700/80 bg-zinc-900">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper">
+                  <SelectItem value="default">Default</SelectItem>
+                  {reasoningEfforts.map((effort) => (
+                    <SelectItem key={effort} value={effort}>
+                      {effort === "xhigh" ? "Extra high" : effort.charAt(0).toUpperCase() + effort.slice(1)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {!effortAvailable && (
+                <p className="mt-1.5 text-xs text-zinc-500">
+                  {tabType === "opencode-cli"
+                    ? "OpenCode CLI does not expose a launch-time reasoning option."
+                    : "This model uses its default reasoning setting."}
+                </p>
+              )}
+            </Step>
+
+            <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400">
+              <span className="text-zinc-500">Launch:</span> {summary}
+            </div>
           </div>
 
-          <DialogFooter className="-mx-5 mt-5 border-t border-zinc-800 bg-zinc-950/40 px-5 py-4 sm:-mx-6 sm:px-6">
+          <DialogFooter className="shrink-0 flex-row justify-end border-t border-zinc-800 bg-zinc-950/40 px-5 py-4 sm:px-6">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>

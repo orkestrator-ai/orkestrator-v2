@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createContext, useContext, useState } from "react";
 import * as realAlertDialog from "@/components/ui/alert-dialog";
 import * as realContextMenu from "@/components/ui/context-menu";
@@ -1446,7 +1446,12 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Code review" }));
     expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("radio", { name: /Codex Native/ }));
+    fireEvent.click(screen.getByRole("radio", { name: "Codex" }));
+    fireEvent.click(
+      within(screen.getByRole("radiogroup", { name: "Codex mode" })).getByRole("radio", {
+        name: /^Native/,
+      }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "OK" }));
     expect(createTabMock).toHaveBeenLastCalledWith(
       "codex",
@@ -1551,18 +1556,23 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).not.toHaveBeenCalled();
 
     const cases = [
-      { label: /^Claude CLI/, agent: "claude", mode: "cli" },
-      { label: /^Claude Native/, agent: "claude", mode: "native" },
-      { label: /^Claude Tmux/, agent: "claude", mode: "tmux" },
-      { label: /^Codex CLI/, agent: "codex", mode: "cli" },
-      { label: /^Codex Native/, agent: "codex", mode: "native" },
-      { label: /^OpenCode CLI/, agent: "opencode", mode: "cli" },
-      { label: /^OpenCode Native/, agent: "opencode", mode: "native" },
+      { provider: "Claude", modeLabel: "CLI", agent: "claude", mode: "cli" },
+      { provider: "Claude", modeLabel: "Native", agent: "claude", mode: "native" },
+      { provider: "Claude", modeLabel: "Tmux", agent: "claude", mode: "tmux" },
+      { provider: "Codex", modeLabel: "CLI", agent: "codex", mode: "cli" },
+      { provider: "Codex", modeLabel: "Native", agent: "codex", mode: "native" },
+      { provider: "OpenCode", modeLabel: "CLI", agent: "opencode", mode: "cli" },
+      { provider: "OpenCode", modeLabel: "Native", agent: "opencode", mode: "native" },
     ] as const;
 
     for (const reviewCase of cases) {
       fireEvent.contextMenu(reviewButton);
-      fireEvent.click(screen.getByRole("radio", { name: reviewCase.label }));
+      fireEvent.click(screen.getByRole("radio", { name: reviewCase.provider }));
+      fireEvent.click(
+        within(
+          screen.getByRole("radiogroup", { name: `${reviewCase.provider} mode` }),
+        ).getByRole("radio", { name: new RegExp(`^${reviewCase.modeLabel}`) }),
+      );
       fireEvent.click(screen.getByRole("button", { name: "OK" }));
       expect(createTabMock).toHaveBeenLastCalledWith(
         reviewCase.agent,

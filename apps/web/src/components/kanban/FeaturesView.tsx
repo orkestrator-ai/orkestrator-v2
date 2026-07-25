@@ -51,7 +51,12 @@ import { cn } from "@/lib/utils";
 import { useConfigStore, useEnvironmentStore, useFeaturePlanStore, useKanbanStore, useProjectStore } from "@/stores";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import type { Environment, EnvironmentType } from "@/types";
-import type { FeaturePlan, FeaturePlanMessage, FeatureStoryCard } from "@/stores/featurePlanStore";
+import type {
+  ActiveFeatureConversation,
+  FeaturePlan,
+  FeaturePlanMessage,
+  FeatureStoryCard,
+} from "@/stores/featurePlanStore";
 import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-message-types";
 
 type RightPaneTab = "chat" | "stories" | `story:${string}`;
@@ -240,6 +245,37 @@ function latestUserMessageTime(feature: FeaturePlan): number {
   return latest;
 }
 
+function latestUnansweredConversation(feature: FeaturePlan): ActiveFeatureConversation | null {
+  const candidates: ActiveFeatureConversation[] = [];
+  const featureMessage = feature.messages.at(-1);
+  if (featureMessage?.role === "user") {
+    candidates.push({
+      featureId: feature.id,
+      startedAt: featureMessage.createdAt,
+      phase: "running",
+    });
+  }
+
+  for (const story of feature.stories) {
+    const storyMessage = story.messages.at(-1);
+    if (storyMessage?.role !== "user") continue;
+    candidates.push({
+      featureId: feature.id,
+      storyId: story.id,
+      startedAt: storyMessage.createdAt,
+      phase: "running",
+    });
+  }
+
+  return candidates.sort((a, b) => {
+    const aTime = Date.parse(a.startedAt);
+    const bTime = Date.parse(b.startedAt);
+    if (Number.isNaN(aTime)) return 1;
+    if (Number.isNaN(bTime)) return -1;
+    return bTime - aTime;
+  })[0] ?? null;
+}
+
 interface FeaturesViewProps {
   projectId: string;
 }
@@ -254,18 +290,19 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   const appendStoryMessage = useFeaturePlanStore((state) => state.appendStoryMessage);
   const chatDrafts = useFeaturePlanStore((state) => state.chatDrafts);
   const setChatDraft = useFeaturePlanStore((state) => state.setChatDraft);
+  const currentProjectId = useFeaturePlanStore((state) => state.currentProjectId);
+  const activeConversations = useFeaturePlanStore((state) => state.activeConversations);
+  const setConversationActive = useFeaturePlanStore((state) => state.setConversationActive);
+  const setConversationSettled = useFeaturePlanStore((state) => state.setConversationSettled);
   const addTask = useKanbanStore((state) => state.addTask);
   const { startBuild } = useBuildPipeline();
   const { createEnvironment, startEnvironment } = useEnvironments(null, { listenForRenameEvents: false });
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
   const [rightTab, setRightTab] = useState<RightPaneTab>("chat");
   const [openStoryTabs, setOpenStoryTabs] = useState<string[]>([]);
-  const [runningConversation, setRunningConversation] = useState<{
-    featureId: string;
-    storyId?: string;
-  } | null>(null);
   const [buildingFeatureId, setBuildingFeatureId] = useState<string | null>(null);
   const clientsRef = useRef<Map<string, CodexClient>>(new Map());
+  const reconciledProjectRef = useRef<string | null>(null);
 
   useEffect(() => {
     void loadFeatures(projectId);
@@ -286,6 +323,10 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
   const selectedFeature = useMemo(
     () => projectFeatures.find((feature) => feature.id === selectedFeatureId) ?? projectFeatures[0] ?? null,
     [projectFeatures, selectedFeatureId],
+  );
+  const hasRunningConversation = useMemo(
+    () => projectFeatures.some((feature) => activeConversations.has(feature.id)),
+    [activeConversations, projectFeatures],
   );
   const featureDraft = selectedFeature
     ? chatDrafts.get(featureChatDraftId(selectedFeature.id)) ?? ""
@@ -328,6 +369,160 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
     const storyId = rightTab.slice("story:".length);
     return selectedFeature.stories.find((story) => story.id === storyId) ?? null;
   }, [rightTab, selectedFeature]);
+
+  const getExistingCodexSession = useCallback(
+    async (feature: FeaturePlan): Promise<{ client: CodexClient; sessionId: string } | null> => {
+      if (!feature.codexEnvironmentId || !feature.codexSessionId) return null;
+
+      const environment = useEnvironmentStore.getState().getEnvironmentById(feature.codexEnvironmentId)
+        ?? await backend.getEnvironment(feature.codexEnvironmentId);
+      if (!environment || environment.status !== "running") return null;
+
+      let client = clientsRef.current.get(environment.id);
+      if (!client) {
+        let port: number | null = null;
+        if (environment.environmentType === "local") {
+          const status = await backend.getLocalCodexServerStatus(environment.id);
+          if (!status.running) return null;
+          port = status.port ?? null;
+        } else {
+          if (!environment.containerId) return null;
+          const status = await backend.getCodexServerStatus(environment.containerId);
+          if (!status.running) return null;
+          port = status.hostPort ?? null;
+        }
+
+        if (!port) return null;
+        client = createClient(`http://127.0.0.1:${port}`);
+        clientsRef.current.set(environment.id, client);
+      }
+
+      return { client, sessionId: feature.codexSessionId };
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (isLoading || currentProjectId !== projectId) return;
+    if (reconciledProjectRef.current === projectId) return;
+
+    let cancelled = false;
+    const timers = new Map<ReturnType<typeof setTimeout>, () => void>();
+    const waitToPoll = () => new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        resolve();
+      }, POLL_INTERVAL_MS);
+      timers.set(timer, resolve);
+    });
+
+    const startTimer = setTimeout(() => {
+      timers.delete(startTimer);
+      if (cancelled) return;
+
+      const state = useFeaturePlanStore.getState();
+      if (state.isLoading || state.currentProjectId !== projectId) return;
+      if (reconciledProjectRef.current === projectId) return;
+      reconciledProjectRef.current = projectId;
+
+      const pendingConversations = state.features
+        .filter((feature) => (
+          feature.projectId === projectId
+          && feature.codexEnvironmentId
+          && feature.codexSessionId
+        ))
+        .map(latestUnansweredConversation)
+        .filter((conversation): conversation is ActiveFeatureConversation => conversation !== null);
+
+      for (const conversation of pendingConversations) {
+        const cachedConversation = state.activeConversations.get(conversation.featureId);
+        const wasDispatching = (
+          cachedConversation?.storyId === conversation.storyId
+          && cachedConversation?.startedAt === conversation.startedAt
+          && cachedConversation?.phase === "dispatching"
+        );
+        setConversationActive(wasDispatching ? cachedConversation : conversation);
+        void (async () => {
+          let sawRunning = false;
+          let idleWithoutReplySince: number | null = null;
+
+          while (!cancelled) {
+            const feature = useFeaturePlanStore.getState().features.find(
+              (candidate) => candidate.id === conversation.featureId,
+            );
+            const stillPending = feature ? latestUnansweredConversation(feature) : null;
+            if (
+              !feature
+              || !stillPending
+              || stillPending.storyId !== conversation.storyId
+              || stillPending.startedAt !== conversation.startedAt
+            ) {
+              setConversationSettled(conversation.featureId);
+              return;
+            }
+
+            let status = null;
+            try {
+              const existingSession = await getExistingCodexSession(feature);
+              if (cancelled) return;
+              status = existingSession
+                ? await getSessionStatus(
+                    existingSession.client,
+                    existingSession.sessionId,
+                    { throwOnError: true },
+                  )
+                : null;
+            } catch {
+              if (feature.codexEnvironmentId) {
+                clientsRef.current.delete(feature.codexEnvironmentId);
+              }
+              await waitToPoll();
+              continue;
+            }
+            if (cancelled) return;
+
+            if (status?.status === "running") {
+              sawRunning = true;
+              idleWithoutReplySince = null;
+              setConversationActive({ ...conversation, phase: "running" });
+            } else if (status?.status === "error") {
+              setConversationSettled(conversation.featureId);
+              return;
+            } else {
+              idleWithoutReplySince ??= Date.now();
+              if (
+                sawRunning
+                || !wasDispatching
+                || Date.now() - idleWithoutReplySince >= IDLE_WITHOUT_REPLY_TIMEOUT_MS
+              ) {
+                setConversationSettled(conversation.featureId);
+                return;
+              }
+            }
+
+            await waitToPoll();
+          }
+        })();
+      }
+    }, 0);
+    timers.set(startTimer, () => undefined);
+
+    return () => {
+      cancelled = true;
+      for (const [timer, resolve] of timers) {
+        clearTimeout(timer);
+        resolve();
+      }
+      timers.clear();
+    };
+  }, [
+    currentProjectId,
+    getExistingCodexSession,
+    isLoading,
+    projectId,
+    setConversationActive,
+    setConversationSettled,
+  ]);
 
   const ensureCodexSession = useCallback(
     async (feature: FeaturePlan): Promise<{ client: CodexClient; sessionId: string; feature: FeaturePlan }> => {
@@ -454,15 +649,26 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
     async (text: string) => {
       const feature = selectedFeature;
       const trimmed = text.trim();
-      if (!feature || !trimmed || runningConversation) return;
+      if (!feature || !trimmed || hasRunningConversation) return;
 
       setChatDraft(featureChatDraftId(feature.id), "");
-      setRunningConversation({ featureId: feature.id });
+      let conversationStartedAt = new Date().toISOString();
+      setConversationActive({
+        featureId: feature.id,
+        startedAt: conversationStartedAt,
+        phase: "dispatching",
+      });
       let userMessagePersisted = false;
       try {
         const withUserMessage = await appendMessage(feature.id, "user", trimmed);
         if (!withUserMessage) throw new Error("Failed to persist the feature message");
         userMessagePersisted = true;
+        conversationStartedAt = withUserMessage.messages.at(-1)?.createdAt ?? conversationStartedAt;
+        setConversationActive({
+          featureId: feature.id,
+          startedAt: conversationStartedAt,
+          phase: "dispatching",
+        });
         const latestFeature = withUserMessage;
         const previousSessionId = latestFeature.codexSessionId;
         const { client, sessionId } = await ensureCodexSession(latestFeature);
@@ -478,6 +684,11 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         if (!wasCodexPromptAccepted(sent)) {
           throw new Error("Failed to send feature planning prompt");
         }
+        setConversationActive({
+          featureId: feature.id,
+          startedAt: conversationStartedAt,
+          phase: "running",
+        });
 
         const assistantContent = await waitForCodexReply(
           client,
@@ -501,10 +712,19 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
           description: error instanceof Error ? error.message : "Unknown error",
         });
       } finally {
-        setRunningConversation(null);
+        setConversationSettled(feature.id);
       }
     },
-    [appendMessage, applyFeaturePlannerState, ensureCodexSession, runningConversation, selectedFeature, setChatDraft],
+    [
+      appendMessage,
+      applyFeaturePlannerState,
+      ensureCodexSession,
+      hasRunningConversation,
+      selectedFeature,
+      setChatDraft,
+      setConversationActive,
+      setConversationSettled,
+    ],
   );
 
   const refreshFeatureChat = useCallback(
@@ -512,9 +732,13 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       if (
         !feature.codexEnvironmentId
         || !feature.codexSessionId
-        || runningConversation
+        || hasRunningConversation
       ) return;
-      setRunningConversation({ featureId: feature.id });
+      setConversationActive({
+        featureId: feature.id,
+        startedAt: new Date().toISOString(),
+        phase: "running",
+      });
       try {
         const { client, sessionId } = await ensureCodexSession(feature);
         const messages = await getSessionMessages(client, sessionId);
@@ -537,10 +761,17 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
           description: error instanceof Error ? error.message : "Unknown error",
         });
       } finally {
-        setRunningConversation(null);
+        setConversationSettled(feature.id);
       }
     },
-    [appendMessage, applyFeaturePlannerState, ensureCodexSession, runningConversation],
+    [
+      appendMessage,
+      applyFeaturePlannerState,
+      ensureCodexSession,
+      hasRunningConversation,
+      setConversationActive,
+      setConversationSettled,
+    ],
   );
 
   const applyStoryRefinement = useCallback(
@@ -573,15 +804,29 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
     async (story: FeatureStoryCard, text: string) => {
       const feature = selectedFeature;
       const trimmed = text.trim();
-      if (!feature || !trimmed || runningConversation) return;
+      if (!feature || !trimmed || hasRunningConversation) return;
 
       setChatDraft(storyChatDraftId(feature.id, story.id), "");
-      setRunningConversation({ featureId: feature.id, storyId: story.id });
+      let conversationStartedAt = new Date().toISOString();
+      setConversationActive({
+        featureId: feature.id,
+        storyId: story.id,
+        startedAt: conversationStartedAt,
+        phase: "dispatching",
+      });
       let userMessagePersisted = false;
       try {
         const withUserMessage = await appendStoryMessage(feature.id, story.id, "user", trimmed);
         if (!withUserMessage) throw new Error("Failed to persist the story message");
         userMessagePersisted = true;
+        const persistedStory = withUserMessage.stories.find((candidate) => candidate.id === story.id);
+        conversationStartedAt = persistedStory?.messages.at(-1)?.createdAt ?? conversationStartedAt;
+        setConversationActive({
+          featureId: feature.id,
+          storyId: story.id,
+          startedAt: conversationStartedAt,
+          phase: "dispatching",
+        });
         const latestFeature = withUserMessage;
         const latestStory = latestFeature.stories.find((candidate) => candidate.id === story.id) ?? story;
         const { client, sessionId } = await ensureCodexSession(latestFeature);
@@ -591,6 +836,12 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
         if (!wasCodexPromptAccepted(sent)) {
           throw new Error("Failed to send story refinement prompt");
         }
+        setConversationActive({
+          featureId: feature.id,
+          storyId: story.id,
+          startedAt: conversationStartedAt,
+          phase: "running",
+        });
 
         const assistantContent = await waitForCodexReply(
           client,
@@ -617,10 +868,19 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
           description: error instanceof Error ? error.message : "Unknown error",
         });
       } finally {
-        setRunningConversation(null);
+        setConversationSettled(feature.id);
       }
     },
-    [appendStoryMessage, applyStoryRefinement, ensureCodexSession, runningConversation, selectedFeature, setChatDraft],
+    [
+      appendStoryMessage,
+      applyStoryRefinement,
+      ensureCodexSession,
+      hasRunningConversation,
+      selectedFeature,
+      setChatDraft,
+      setConversationActive,
+      setConversationSettled,
+    ],
   );
 
   const refreshStoryChat = useCallback(
@@ -628,9 +888,14 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
       if (
         !feature.codexEnvironmentId
         || !feature.codexSessionId
-        || runningConversation
+        || hasRunningConversation
       ) return;
-      setRunningConversation({ featureId: feature.id, storyId: story.id });
+      setConversationActive({
+        featureId: feature.id,
+        storyId: story.id,
+        startedAt: new Date().toISOString(),
+        phase: "running",
+      });
       try {
         const { client, sessionId } = await ensureCodexSession(feature);
         const messages = await getSessionMessages(client, sessionId);
@@ -657,10 +922,17 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
           description: error instanceof Error ? error.message : "Unknown error",
         });
       } finally {
-        setRunningConversation(null);
+        setConversationSettled(feature.id);
       }
     },
-    [appendStoryMessage, applyStoryRefinement, ensureCodexSession, runningConversation],
+    [
+      appendStoryMessage,
+      applyStoryRefinement,
+      ensureCodexSession,
+      hasRunningConversation,
+      setConversationActive,
+      setConversationSettled,
+    ],
   );
 
   const openStory = useCallback((storyId: string) => {
@@ -840,11 +1112,11 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
             </div>
 
             <TabsContent value="chat" className={RIGHT_PANE_CONTENT_CLASS}>
-                <FeatureChatPanel
-                  feature={selectedFeature}
-                  draft={featureDraft}
-                  setDraft={(value) => setChatDraft(featureChatDraftId(selectedFeature.id), value)}
-                  isRunning={runningConversation !== null}
+              <FeatureChatPanel
+                feature={selectedFeature}
+                draft={featureDraft}
+                setDraft={(value) => setChatDraft(featureChatDraftId(selectedFeature.id), value)}
+                isRunning={hasRunningConversation}
                 onSend={sendFeatureMessage}
                 onRefresh={() => void refreshFeatureChat(selectedFeature)}
               />
@@ -866,7 +1138,7 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
                     storyChatDraftId(selectedFeature.id, selectedStory.id),
                     value,
                   )}
-                  isRunning={runningConversation !== null}
+                  isRunning={hasRunningConversation}
                   onSend={(text) => void sendStoryMessage(selectedStory, text)}
                   onRefresh={() => void refreshStoryChat(selectedFeature, selectedStory)}
                 />

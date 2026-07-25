@@ -100,6 +100,7 @@ describe("featurePlanStore", () => {
       isLoading: false,
       currentProjectId: null,
       chatDrafts: new Map(),
+      activeConversations: new Map(),
     });
   });
 
@@ -129,6 +130,36 @@ describe("featurePlanStore", () => {
     expect(state.getChatDraft("feature:feature-1")).toBe("   ");
     expect(state.chatDrafts.has("feature:feature-1")).toBe(true);
     expect(state.chatDrafts.has("feature:missing")).toBe(false);
+  });
+
+  test("keeps active feature conversations outside the mounted view until they settle", () => {
+    const store = useFeaturePlanStore.getState();
+    store.setConversationActive({
+      featureId: "feature-1",
+      storyId: "story-1",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      phase: "dispatching",
+    });
+
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toEqual({
+      featureId: "feature-1",
+      storyId: "story-1",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      phase: "dispatching",
+    });
+
+    store.setConversationActive({
+      featureId: "feature-1",
+      storyId: "story-1",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      phase: "running",
+    });
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")?.phase).toBe("running");
+
+    useFeaturePlanStore.getState().setConversationSettled("feature-1");
+    useFeaturePlanStore.getState().setConversationSettled("feature-1");
+
+    expect(useFeaturePlanStore.getState().activeConversations.has("feature-1")).toBe(false);
   });
 
   test("loadFeatures populates features and tracks the current project", async () => {

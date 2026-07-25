@@ -18,11 +18,26 @@ export type {
   FeatureStoryCard,
 };
 
+export interface ActiveFeatureConversation {
+  featureId: string;
+  storyId?: string;
+  startedAt: string;
+  phase: "dispatching" | "running";
+}
+
 interface FeaturePlanState {
   features: FeaturePlan[];
   isLoading: boolean;
   currentProjectId: string | null;
   chatDrafts: Map<string, string>;
+  /**
+   * Renderer cache of feature sessions known to be working.
+   *
+   * The Codex bridge remains authoritative. FeaturesView rehydrates this map
+   * from persisted unanswered messages plus `/session/:id/status` whenever it
+   * mounts again after an environment switch.
+   */
+  activeConversations: Map<string, ActiveFeatureConversation>;
 
   loadFeatures: (projectId: string) => Promise<void>;
   createFeature: (projectId: string) => Promise<string | undefined>;
@@ -53,6 +68,8 @@ interface FeaturePlanState {
   ) => Promise<FeaturePlan | undefined>;
   setChatDraft: (chatId: string, text: string) => void;
   getChatDraft: (chatId: string) => string;
+  setConversationActive: (conversation: ActiveFeatureConversation) => void;
+  setConversationSettled: (featureId: string) => void;
 }
 
 function upsertFeature(features: FeaturePlan[], updated: FeaturePlan): FeaturePlan[] {
@@ -67,6 +84,7 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
   isLoading: false,
   currentProjectId: null,
   chatDrafts: new Map(),
+  activeConversations: new Map(),
 
   loadFeatures: async (projectId) => {
     set({ isLoading: true, currentProjectId: projectId });
@@ -139,4 +157,27 @@ export const useFeaturePlanStore = create<FeaturePlanState>()((set, get) => ({
     }),
 
   getChatDraft: (chatId) => get().chatDrafts.get(chatId) ?? "",
+
+  setConversationActive: (conversation) =>
+    set((state) => {
+      const current = state.activeConversations.get(conversation.featureId);
+      if (
+        current?.storyId === conversation.storyId
+        && current?.startedAt === conversation.startedAt
+        && current?.phase === conversation.phase
+      ) {
+        return state;
+      }
+      const activeConversations = new Map(state.activeConversations);
+      activeConversations.set(conversation.featureId, conversation);
+      return { activeConversations };
+    }),
+
+  setConversationSettled: (featureId) =>
+    set((state) => {
+      if (!state.activeConversations.has(featureId)) return state;
+      const activeConversations = new Map(state.activeConversations);
+      activeConversations.delete(featureId);
+      return { activeConversations };
+    }),
 }));

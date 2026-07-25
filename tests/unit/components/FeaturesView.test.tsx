@@ -342,6 +342,7 @@ function seedStores(featureOrFeatures: FeaturePlan | FeaturePlan[]) {
     features,
     isLoading: false,
     currentProjectId: "project-1",
+    activeConversations: new Map(),
     loadFeatures: loadFeaturesMock as unknown as ReturnType<typeof useFeaturePlanStore.getState>["loadFeatures"],
     createFeature: createFeatureMock as unknown as ReturnType<typeof useFeaturePlanStore.getState>["createFeature"],
     updateFeature: updateFeatureMock as unknown as ReturnType<typeof useFeaturePlanStore.getState>["updateFeature"],
@@ -461,7 +462,10 @@ beforeEach(() => {
     setupScriptsRunning: new Set(),
     sessionActivated: new Set(),
   });
-  useFeaturePlanStore.setState({ chatDrafts: new Map() });
+  useFeaturePlanStore.setState({
+    chatDrafts: new Map(),
+    activeConversations: new Map(),
+  });
   useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
 });
 
@@ -784,6 +788,76 @@ describe("FeaturesView conversation ordering", () => {
 });
 
 describe("FeaturesView lifecycle and navigation", () => {
+  test("keeps the working state when the view is unmounted and mounted again", async () => {
+    sendPromptMock.mockImplementationOnce(() => new Promise(() => undefined));
+    seedStores(chatFeature());
+    seedExistingCodexEnvironment();
+    const view = render(<FeaturesView projectId="project-1" />);
+
+    fireEvent.change(screen.getByPlaceholderText("Describe the feature or answer Codex..."), {
+      target: { value: "Keep working in the background" },
+    });
+    fireEvent.click(screen.getByTitle("Send message"));
+    await screen.findByText("Codex is working...");
+
+    view.unmount();
+    getSessionStatusMock.mockImplementation(async () => ({ status: "running" }));
+    render(<FeaturesView projectId="project-1" />);
+
+    expect(screen.getByText("Codex is working...")).toBeTruthy();
+    expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
+  });
+
+  test("rehydrates working state from the Codex session after renderer state is lost", async () => {
+    seedStores(chatFeature({
+      messages: [{
+        id: "pending-user",
+        role: "user",
+        content: "Continue even while this view is inactive",
+        createdAt: NOW,
+      }],
+    }));
+    seedExistingCodexEnvironment();
+    useFeaturePlanStore.setState({ activeConversations: new Map() });
+    getSessionStatusMock.mockImplementation(async () => ({ status: "running" }));
+
+    render(<FeaturesView projectId="project-1" />);
+
+    await screen.findByText("Codex is working...");
+    expect(useFeaturePlanStore.getState().activeConversations.get("feature-1")).toEqual({
+      featureId: "feature-1",
+      startedAt: NOW,
+      phase: "running",
+    });
+    expect(screen.getByTitle("Send message").hasAttribute("disabled")).toBe(true);
+  });
+
+  test("settles a restored conversation when the Codex session is already idle", async () => {
+    seedStores(chatFeature({
+      messages: [{
+        id: "pending-user",
+        role: "user",
+        content: "This turn finished while the view was inactive",
+        createdAt: NOW,
+      }],
+    }));
+    seedExistingCodexEnvironment();
+    useFeaturePlanStore.getState().setConversationActive({
+      featureId: "feature-1",
+      startedAt: NOW,
+      phase: "running",
+    });
+    getSessionStatusMock.mockImplementation(async () => ({ status: "idle" }));
+
+    render(<FeaturesView projectId="project-1" />);
+    expect(screen.getByText("Codex is working...")).toBeTruthy();
+
+    await waitFor(() => {
+      expect(useFeaturePlanStore.getState().activeConversations.has("feature-1")).toBe(false);
+      expect(screen.queryByText("Codex is working...")).toBeNull();
+    });
+  });
+
   test("shows loading state instead of a false empty state while feature loading is pending", async () => {
     seedStores([]);
     useFeaturePlanStore.setState({ isLoading: true });

@@ -114,6 +114,58 @@ describe("renderTurn", () => {
     expect(state.timelineOrder).toHaveLength(2);
   });
 
+  test("renders later parent messages below an inactive subagent until it has new activity", async () => {
+    const accumulator = turn();
+    const state = createTurnRenderState();
+    let subagent = {
+      type: "subagent" as const,
+      content: "child",
+      subagentId: "child-1",
+      toolState: "pending" as const,
+      subagentActions: [],
+    };
+    const render = () => renderTurn(accumulator, {
+      threadId: "thread-1",
+      cwd: "/tmp",
+      state,
+      loadSubagentParts: async () => [subagent],
+    });
+
+    accumulator.onItemCompleted({ id: "before-agent", type: "agent_message", text: "Delegating" });
+    expect((await render()).parts.map((part) => part.type)).toEqual(["text", "subagent"]);
+
+    subagent = {
+      ...subagent,
+      toolState: "success",
+      subagentActions: [{ type: "text" as const, content: "Finished" }],
+    };
+    expect((await render()).parts.map((part) => part.type)).toEqual(["text", "subagent"]);
+
+    accumulator.onItemCompleted({
+      id: "after-agent",
+      type: "agent_message",
+      text: "Parent continued",
+    });
+    expect((await render()).parts.map((part) => part.type)).toEqual([
+      "text",
+      "subagent",
+      "text",
+    ]);
+
+    subagent = {
+      ...subagent,
+      subagentActions: [
+        ...subagent.subagentActions,
+        { type: "text" as const, content: "Follow-up finished" },
+      ],
+    };
+    expect((await render()).parts.map((part) => part.type)).toEqual([
+      "text",
+      "text",
+      "subagent",
+    ]);
+  });
+
   test("subagent loader failure is additive and never blanks normal output", async () => {
     const accumulator = turn();
     accumulator.onItemCompleted({ id: "text", type: "agent_message", text: "kept" });

@@ -203,13 +203,22 @@ export async function renderTurn(
     itemsByKey.set(accumulator.id, item);
   }
 
-  // Rebuild the item portion of the timeline, preserving any sub-agent entries
-  // already spliced in on a previous render.
+  // Reconcile the authoritative item set without rebuilding its order around
+  // the sub-agent entries. New parent items belong at the end of the timeline;
+  // a later sub-agent snapshot can then move its own row after them. Starting
+  // from `[...itemKeys, ...existingSubagentKeys]` on every render would instead
+  // pin even completed agents below every parent message that followed them.
   const itemKeys = [...itemsByKey.keys()].map((key) => `${CODEX_TIMELINE_ITEM_PREFIX}${key}`);
-  const existingSubagentKeys = options.state.timelineOrder.filter((key) =>
-    key.startsWith(CODEX_TIMELINE_SUBAGENT_PREFIX),
+  const currentItemKeys = new Set(itemKeys);
+  const timelineOrder = options.state.timelineOrder.filter((key) =>
+    key.startsWith(CODEX_TIMELINE_SUBAGENT_PREFIX) || currentItemKeys.has(key),
   );
-  const timelineOrder = [...itemKeys, ...existingSubagentKeys];
+  const timelineKeys = new Set(timelineOrder);
+  for (const key of itemKeys) {
+    if (timelineKeys.has(key)) continue;
+    timelineOrder.push(key);
+    timelineKeys.add(key);
+  }
 
   const load = options.loadSubagentParts ?? loadSubagentPartsFromTranscripts;
   let subagentParts: NormalizedPart[] = [];

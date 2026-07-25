@@ -7,19 +7,28 @@ import { Hono } from "hono";
 import * as realSessionManager from "../services/session-manager.js";
 const realSessionManagerSnapshot = { ...realSessionManager };
 
-const mockGetAvailableModels = mock(async () => [
-  {
-    id: "claude-sonnet-4-6",
-    name: "Claude Sonnet 4.6",
-    description: "Latest model",
-    supportsFastMode: true,
-    supportsEffort: true,
-    supportedEffortLevels: ["low", "medium", "high"],
-  },
-]);
+const mockGetAvailableModelCatalog = mock(async () => ({
+  source: "sdk" as const,
+  models: [
+    {
+      id: "claude-sonnet-4-6",
+      resolvedModel: "claude-sonnet-4-6-20260615",
+      name: "Claude Sonnet 4.6",
+      description: "Latest model",
+      supportsFastMode: true,
+      supportsEffort: true,
+      supportedEffortLevels: ["low", "medium", "high"],
+    },
+  ],
+}));
+const mockGetClaudeRuntimeVersions = mock(async () => ({
+  sdkVersion: "0.2.1",
+  cliVersion: "5.0.0",
+}));
 
 mock.module("../services/session-manager.js", () => ({
-  getAvailableModels: mockGetAvailableModels,
+  getAvailableModelCatalog: mockGetAvailableModelCatalog,
+  getClaudeRuntimeVersions: mockGetClaudeRuntimeVersions,
 }));
 
 const { default: config } = await import("./config.js");
@@ -33,7 +42,8 @@ afterAll(() => {
 
 describe("GET /models", () => {
   beforeEach(() => {
-    mockGetAvailableModels.mockClear();
+    mockGetAvailableModelCatalog.mockClear();
+    mockGetClaudeRuntimeVersions.mockClear();
   });
 
   test("returns the model list from session-manager", async () => {
@@ -41,19 +51,34 @@ describe("GET /models", () => {
     expect(res.status).toBe(200);
 
     const body = await res.json();
-    expect(mockGetAvailableModels).toHaveBeenCalledTimes(1);
+    expect(mockGetAvailableModelCatalog).toHaveBeenCalledTimes(1);
+    expect(mockGetClaudeRuntimeVersions).toHaveBeenCalledTimes(1);
     expect(body.models).toHaveLength(1);
     expect(body.models[0]).toMatchObject({
       id: "claude-sonnet-4-6",
       name: "Claude Sonnet 4.6",
       supportsFastMode: true,
     });
+    expect(body).toMatchObject({
+      source: "sdk",
+      sdkVersion: "0.2.1",
+      cliVersion: "5.0.0",
+    });
+    expect(Date.parse(body.fetchedAt)).not.toBeNaN();
   });
 
   test("returns an empty list when no models are available", async () => {
-    mockGetAvailableModels.mockImplementationOnce(async () => []);
+    mockGetAvailableModelCatalog.mockImplementationOnce(async () => ({
+      models: [],
+      source: "fallback",
+    }));
     const res = await app.request("/models");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ models: [] });
+    expect(await res.json()).toMatchObject({
+      models: [],
+      source: "fallback",
+      sdkVersion: "0.2.1",
+      cliVersion: "5.0.0",
+    });
   });
 });

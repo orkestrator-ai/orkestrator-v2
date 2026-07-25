@@ -57,6 +57,13 @@ const updateGlobalConfigMock = mock(async (global: any) => ({
   global,
   repositories: {},
 }));
+const getClaudeModelCatalogMock = mock(async (environmentId: string) => ({
+  environmentId,
+  models: useClaudeStore.getState().models,
+  source: "fallback" as const,
+  fetchedAt: "2026-07-25T12:00:00.000Z",
+  stale: false,
+}));
 
 const startSessionMock = mock(async () => ({
   tab_id: "tab-1",
@@ -175,6 +182,7 @@ mock.module("@/lib/backend", () => ({
   renameEnvironmentFromPrompt: renameEnvironmentFromPromptMock,
   openInBrowser: openInBrowserMock,
   updateGlobalConfig: updateGlobalConfigMock,
+  getClaudeModelCatalog: getClaudeModelCatalogMock,
 }));
 
 mock.module("@/components/chat/FileMentionMenu", () => ({
@@ -403,6 +411,14 @@ describe("ClaudeTmuxChatTab", () => {
       global,
       repositories: {},
     }));
+    getClaudeModelCatalogMock.mockReset();
+    getClaudeModelCatalogMock.mockImplementation(async (environmentId: string) => ({
+      environmentId,
+      models: useClaudeStore.getState().models,
+      source: "fallback" as const,
+      fetchedAt: "2026-07-25T12:00:00.000Z",
+      stale: false,
+    }));
     startSessionMock.mockClear();
     getStatusMock.mockClear();
     getStatusMock.mockImplementation(async () => null);
@@ -456,7 +472,7 @@ describe("ClaudeTmuxChatTab", () => {
     });
     // The tmux tab prefers the live SDK model list shared via the claude
     // store; keep it empty by default so tests exercise the fallback list.
-    useClaudeStore.setState({ models: [] });
+    useClaudeStore.setState({ models: [], modelCatalogs: new Map() });
     useConfigStore.setState((state) => ({
       ...state,
       config: {
@@ -3379,6 +3395,24 @@ Running 1 Explore agent...
 
   test("resets effort to the default when the new model doesn't support the chosen level", async () => {
     seedPane();
+    useClaudeStore.setState({
+      models: [
+        {
+          id: "default",
+          name: "Default (recommended)",
+          description: "Opus 5 with 1M context",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+        },
+        {
+          id: "sonnet",
+          name: "Sonnet",
+          description: "SDK model with a restricted effort ladder",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high"],
+        },
+      ] as ClaudeModel[],
+    });
     useConfigStore.setState((state) => ({
       ...state,
       config: {
@@ -3407,7 +3441,8 @@ Running 1 Explore agent...
     });
     expect(screen.getByRole("button", { name: "Extra High" })).toBeTruthy();
 
-    // Sonnet has no xhigh level, so the preference snaps back to the default.
+    // This SDK-provided Sonnet entry has no xhigh level, so the preference
+    // snaps back to the default.
     fireEvent.pointerDown(screen.getByRole("button", { name: /Default/ }));
     const sonnetOption = await screen.findByText("Sonnet");
     await act(async () => {
@@ -3415,6 +3450,67 @@ Running 1 Explore agent...
     });
 
     expect(screen.getByRole("button", { name: "High" })).toBeTruthy();
+  });
+
+  test("offers Opus 5 in the tmux fallback catalog", async () => {
+    seedPane();
+    useClaudeStore.setState({ models: [] });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Sonnet/ }));
+
+    expect(await screen.findByText("Opus (1M context)")).toBeTruthy();
+    expect(screen.getAllByText(/Opus 5 with 1M context/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Opus 4\.8/)).toBeNull();
+  });
+
+  test("rehydrates the environment-scoped authoritative model catalog", async () => {
+    seedPane();
+    getClaudeModelCatalogMock.mockResolvedValueOnce({
+      environmentId: "env-1",
+      models: [
+        {
+          id: "claude-opus-5",
+          resolvedModel: "claude-opus-5-20260701",
+          name: "Authoritative Opus 5",
+          description: "Discovered from the managed Claude runtime",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high", "max"],
+        },
+      ],
+      source: "sdk",
+      fetchedAt: "2026-07-25T12:00:00.000Z",
+      sdkVersion: "0.2.1",
+      cliVersion: "5.0.0",
+      stale: false,
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getClaudeModelCatalogMock).toHaveBeenCalledWith("env-1", false);
+      expect(useClaudeStore.getState().getModels("env-1")[0]?.id).toBe(
+        "claude-opus-5",
+      );
+    });
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: /Default/ }));
+    expect(await screen.findByText("Authoritative Opus 5")).toBeTruthy();
+    expect(screen.queryByText("Opus (1M context)")).toBeNull();
   });
 
   test("prefers the live SDK model list and prepends the Default sentinel when missing", async () => {
@@ -3448,7 +3544,7 @@ Running 1 Explore agent...
     expect(await screen.findByText("Newer Opus")).toBeTruthy();
     expect(screen.getByText("Newer Haiku")).toBeTruthy();
     // Fallback-only entries are replaced by the live list.
-    expect(screen.queryByText("Sonnet (1M context)")).toBeNull();
+    expect(screen.queryByText("Opus (1M context)")).toBeNull();
     expect(screen.queryByText("Fable")).toBeNull();
   });
 

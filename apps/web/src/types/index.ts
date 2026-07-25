@@ -34,6 +34,31 @@ export interface PortMapping {
   protocol: PortProtocol;
 }
 
+export type ClaudeCatalogEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+
+export interface ClaudeModelCatalogEntry {
+  id: string;
+  resolvedModel?: string;
+  name: string;
+  description?: string;
+  supportsFastMode?: boolean;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: ClaudeCatalogEffortLevel[];
+  supportsAdaptiveThinking?: boolean;
+  supportsAutoMode?: boolean;
+}
+
+export interface ClaudeModelCatalogSnapshot {
+  environmentId: string;
+  models: ClaudeModelCatalogEntry[];
+  source: "sdk" | "last-known-good" | "fallback";
+  fetchedAt: string;
+  sdkVersion?: string;
+  cliVersion?: string;
+  stale: boolean;
+  error?: string;
+}
+
 export interface Environment {
   id: string;
   projectId: string;
@@ -85,6 +110,8 @@ export interface Environment {
   localClaudePort?: number;
   /** Host port for codex-bridge server (local mode) */
   localCodexPort?: number;
+  /** Last backend-owned Claude model catalog for this environment. */
+  claudeModelCatalog?: ClaudeModelCatalogSnapshot;
 
   // === Agent settings overrides ===
   /** Per-environment default agent override (undefined = use global config) */

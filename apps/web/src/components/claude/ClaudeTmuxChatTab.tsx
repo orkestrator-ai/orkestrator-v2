@@ -109,7 +109,11 @@ import { useClaudeStore } from "@/stores/claudeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
-import { renameEnvironmentFromPrompt, updateGlobalConfig } from "@/lib/backend";
+import {
+  getClaudeModelCatalog,
+  renameEnvironmentFromPrompt,
+  updateGlobalConfig,
+} from "@/lib/backend";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import type { ClaudeTmuxData } from "@/types/paneLayout";
 import type { FileCandidate, FileMention } from "@/types";
@@ -136,7 +140,16 @@ const TMUX_FALLBACK_MODELS: ClaudeModel[] = [
   {
     id: "default",
     name: "Default (recommended)",
-    description: "Opus 4.8 with 1M context · Best for everyday, complex tasks",
+    description: "Opus 5 with 1M context · Best for everyday, complex tasks",
+    supportsFastMode: true,
+    supportsEffort: true,
+    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+  },
+  {
+    id: "opus[1m]",
+    name: "Opus (1M context)",
+    description: "Opus 5 with 1M context · Best for everyday, complex tasks",
+    supportsFastMode: true,
     supportsEffort: true,
     supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
   },
@@ -151,16 +164,9 @@ const TMUX_FALLBACK_MODELS: ClaudeModel[] = [
   {
     id: "sonnet",
     name: "Sonnet",
-    description: "Sonnet 4.6 · Efficient for routine tasks",
+    description: "Sonnet 5 · Efficient for routine tasks",
     supportsEffort: true,
-    supportedEffortLevels: ["low", "medium", "high", "max"],
-  },
-  {
-    id: "sonnet[1m]",
-    name: "Sonnet (1M context)",
-    description: "Sonnet 4.6 with 1M context · Draws from usage credits",
-    supportsEffort: true,
-    supportedEffortLevels: ["low", "medium", "high", "max"],
+    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
   },
   {
     id: "haiku",
@@ -176,6 +182,8 @@ const DEFAULT_MODEL = "default";
  */
 const LEGACY_TMUX_MODEL_ALIASES: Record<string, string> = {
   "claude-fable-5": "default",
+  "claude-opus-5": "default",
+  "claude-opus-5[1m]": "opus[1m]",
   "claude-opus-4-8": "default",
   "claude-opus-4-7": "default",
   "claude-opus-4-6": "default",
@@ -349,7 +357,10 @@ export function ClaudeTmuxChatTab({
   const [showTui, setShowTui] = useState(false);
   const [interactiveMode, setInteractiveMode] = useState(false);
   const [tuiSnapshot, setTuiSnapshot] = useState<string>("");
-  const sdkModels = useClaudeStore((s) => s.models);
+  const sdkModels = useClaudeStore(
+    (s) => s.modelCatalogs.get(environmentId)?.models ?? s.models,
+  );
+  const setModelCatalog = useClaudeStore((s) => s.setModelCatalog);
   const availableModels = useMemo(() => tmuxModelList(sdkModels), [sdkModels]);
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,
@@ -361,7 +372,7 @@ export function ClaudeTmuxChatTab({
   const [selectedModel, setSelectedModel] = useState<string>(() =>
     resolveTmuxModelPreference(
       initialLaunchModel ?? useConfigStore.getState().config.global.claudeModel,
-      tmuxModelList(useClaudeStore.getState().models),
+      tmuxModelList(useClaudeStore.getState().getModels(environmentId)),
     ),
   );
   const [modelSwitching, setModelSwitching] = useState(false);
@@ -667,6 +678,30 @@ export function ClaudeTmuxChatTab({
     replaceTranscript,
     replacePendingHooks,
   ]);
+
+  // Rehydrate the authoritative backend-owned catalog even when no Claude
+  // native tab has ever mounted for this environment.
+  useEffect(() => {
+    if (!backendHydrated) return;
+    let cancelled = false;
+
+    void getClaudeModelCatalog(environmentId, refreshRequestId > 0)
+      .then((catalog) => {
+        if (!cancelled) setModelCatalog(catalog);
+      })
+      .catch((catalogError) => {
+        if (!cancelled) {
+          console.debug(
+            "[ClaudeTmuxChatTab] Claude model catalog unavailable; using bundled fallback",
+            catalogError,
+          );
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [backendHydrated, environmentId, refreshRequestId, setModelCatalog]);
 
   // 1. Subscribe to backend events (one listener for the whole tab).
   useEffect(() => {

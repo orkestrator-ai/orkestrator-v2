@@ -70,6 +70,13 @@ describe("buildReviewModelCatalog", () => {
     const catalog = buildReviewModelCatalog(undefined);
 
     expect(catalog.claude.length).toBeGreaterThan(0);
+    expect(catalog.claude).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "opus[1m]",
+        name: "Opus (1M context)",
+        description: expect.stringContaining("Opus 5"),
+      }),
+    ]));
     expect(catalog.codex.length).toBeGreaterThan(0);
     expect(catalog.opencode).toEqual([{
       id: "default",

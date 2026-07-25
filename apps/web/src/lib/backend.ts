@@ -27,6 +27,7 @@ import type {
   OpenCodeMode,
   EnvironmentSetupSession,
   PersistedPaneLayout,
+  ClaudeModelCatalogSnapshot,
 } from "@/types";
 import type {
   LinearCompletionCommentResult,
@@ -785,6 +786,17 @@ export async function getClaudeServerStatus(containerId: string): Promise<Claude
 /** Get the Claude bridge server log from a container (for debugging) */
 export async function getClaudeServerLog(containerId: string): Promise<string> {
   return invoke<string>("get_claude_server_log", { containerId });
+}
+
+/** Read or refresh the backend-owned Claude model catalog for an environment. */
+export async function getClaudeModelCatalog(
+  environmentId: string,
+  forceRefresh = false,
+): Promise<ClaudeModelCatalogSnapshot> {
+  return invoke<ClaudeModelCatalogSnapshot>("get_claude_model_catalog", {
+    environmentId,
+    forceRefresh,
+  });
 }
 
 /** Start the Codex bridge server in a container */

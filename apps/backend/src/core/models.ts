@@ -25,6 +25,30 @@ export type ClaudeMode = "terminal" | "native";
 export type ClaudeNativeBackend = "sdk" | "tmux";
 export type CodexMode = "terminal" | "native";
 export type AgentStyle = "terminal" | "native";
+export type ClaudeEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+
+export interface ClaudeModelCatalogEntry {
+  id: string;
+  resolvedModel?: string;
+  name: string;
+  description?: string;
+  supportsFastMode?: boolean;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: ClaudeEffortLevel[];
+  supportsAdaptiveThinking?: boolean;
+  supportsAutoMode?: boolean;
+}
+
+export interface ClaudeModelCatalogSnapshot {
+  environmentId: string;
+  models: ClaudeModelCatalogEntry[];
+  source: "sdk" | "last-known-good" | "fallback";
+  fetchedAt: string;
+  sdkVersion?: string;
+  cliVersion?: string;
+  stale: boolean;
+  error?: string;
+}
 
 export interface Environment {
   id: string;
@@ -56,6 +80,8 @@ export interface Environment {
   localOpencodePort?: number;
   localClaudePort?: number;
   localCodexPort?: number;
+  /** Last backend-owned Claude model catalog for this environment. */
+  claudeModelCatalog?: ClaudeModelCatalogSnapshot;
   defaultAgent?: DefaultAgent;
   claudeMode?: ClaudeMode;
   claudeNativeBackend?: ClaudeNativeBackend;

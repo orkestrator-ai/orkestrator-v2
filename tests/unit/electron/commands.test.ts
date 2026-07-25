@@ -294,6 +294,7 @@ async function writeBridgeServer(
   appRoot: string,
   bridgeName: "claude-bridge" | "codex-bridge",
   environmentMarkerPath?: string,
+  modelCatalog?: Record<string, unknown>,
 ): Promise<void> {
   const bridgeDist = path.join(appRoot, "bridges", bridgeName, "dist");
   await fs.mkdir(bridgeDist, { recursive: true });
@@ -303,7 +304,7 @@ async function writeBridgeServer(
       const http = require("node:http");
       const port = Number(process.env.PORT);
       ${environmentMarkerPath
-        ? `require("node:fs").writeFileSync(${JSON.stringify(environmentMarkerPath)}, process.env.CODEX_PATH ?? "");`
+        ? `require("node:fs").writeFileSync(${JSON.stringify(environmentMarkerPath)}, process.env.${bridgeName === "claude-bridge" ? "CLAUDE_CLI_PATH" : "CODEX_PATH"} ?? "");`
         : ""}
       http.createServer((req, res) => {
         if (req.url === "/global/health") {
@@ -311,6 +312,16 @@ async function writeBridgeServer(
           res.end(JSON.stringify({ ok: true }));
           return;
         }
+        ${modelCatalog
+          ? `if (req.url === "/config/models") {
+          res.writeHead(200, {
+            "content-type": "application/json",
+            "access-control-allow-origin": "*",
+          });
+          res.end(${JSON.stringify(JSON.stringify(modelCatalog))});
+          return;
+        }`
+          : ""}
         res.writeHead(404);
         res.end();
       }).listen(port, "127.0.0.1");
@@ -4283,6 +4294,118 @@ exit 0
     } finally {
       await commands.get("stop_local_claude_server_cmd")?.({ environmentId: environment.id }, context);
     }
+  });
+
+  test("discovers and persists the Claude model catalog from the managed local runtime", async () => {
+    const appRoot = await createTempDir("ork-electron-app-claude-models-");
+    const toolchainBinDir = await createTempDir("ork-electron-tools-claude-models-");
+    const worktreePath = await createTempDir("ork-electron-worktree-claude-models-");
+    const markerPath = path.join(toolchainBinDir, "claude-cli-path.log");
+    const managedClaudePath = path.join(toolchainBinDir, "claude");
+    await fs.writeFile(managedClaudePath, "#!/bin/sh\nexit 0\n");
+    await fs.chmod(managedClaudePath, 0o755);
+    await writeBridgeServer(appRoot, "claude-bridge", markerPath, {
+      models: [
+        {
+          id: "claude-opus-5",
+          resolvedModel: "claude-opus-5-20260701",
+          name: "Claude Opus 5",
+          description: "Latest Opus model",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high", "max"],
+          supportsAdaptiveThinking: true,
+        },
+      ],
+      source: "sdk",
+      fetchedAt: "2026-07-25T12:00:00.000Z",
+      sdkVersion: "0.2.1",
+      cliVersion: "5.0.0",
+    });
+
+    const environment = createEnvironment({ worktreePath });
+    const { context, updates, emitted } = createContext(environment);
+    context.appRoot = appRoot;
+    context.resourceRoot = appRoot;
+    context.toolchainBinDir = toolchainBinDir;
+    const commands = createCommandRegistry();
+
+    try {
+      const snapshot = await commands.get("get_claude_model_catalog")?.(
+        { environmentId: environment.id, forceRefresh: true },
+        context,
+      );
+
+      expect(snapshot).toMatchObject({
+        environmentId: environment.id,
+        source: "sdk",
+        sdkVersion: "0.2.1",
+        cliVersion: "5.0.0",
+        stale: false,
+        models: [
+          {
+            id: "claude-opus-5",
+            resolvedModel: "claude-opus-5-20260701",
+            name: "Claude Opus 5",
+            supportsAdaptiveThinking: true,
+            supportedEffortLevels: ["low", "medium", "high", "max"],
+          },
+        ],
+      });
+      expect(await fs.readFile(markerPath, "utf8")).toBe(managedClaudePath);
+      expect(updates).toContainEqual({ claudeModelCatalog: snapshot });
+      expect(emitted).toContainEqual({
+        event: "claude-model-catalog-updated",
+        payload: snapshot,
+      });
+
+      const updateCount = updates.length;
+      await expect(
+        commands.get("get_claude_model_catalog")?.(
+          { environmentId: environment.id },
+          context,
+        ),
+      ).resolves.toEqual(snapshot);
+      expect(updates).toHaveLength(updateCount);
+    } finally {
+      await commands.get("stop_local_claude_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      );
+    }
+  });
+
+  test("returns the persisted Claude catalog as last-known-good when refresh fails", async () => {
+    const worktreePath = await createTempDir("ork-electron-worktree-stale-claude-models-");
+    const missingBridgeRoot = await createTempDir("ork-electron-missing-claude-models-");
+    const cachedCatalog = {
+      environmentId: "env-local",
+      models: [{ id: "claude-opus-5", name: "Claude Opus 5" }],
+      source: "sdk" as const,
+      fetchedAt: new Date().toISOString(),
+      stale: false,
+    };
+    const environment = createEnvironment({
+      worktreePath,
+      claudeModelCatalog: cachedCatalog,
+    });
+    const { context, updates } = createContext(environment);
+    context.appRoot = missingBridgeRoot;
+    context.resourceRoot = missingBridgeRoot;
+
+    const snapshot = await createCommandRegistry()
+      .get("get_claude_model_catalog")?.(
+        { environmentId: environment.id },
+        context,
+      );
+
+    expect(snapshot).toMatchObject({
+      environmentId: environment.id,
+      models: cachedCatalog.models,
+      source: "last-known-good",
+      stale: true,
+    });
+    expect(snapshot).toHaveProperty("error");
+    expect(updates).toContainEqual({ claudeModelCatalog: snapshot });
   });
 
   test("launches the local opencode server through the managed toolchain cache", async () => {

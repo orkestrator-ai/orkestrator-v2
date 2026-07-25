@@ -5,6 +5,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ImageBlockParam, TextBlockParam, ContentBlockParam } from "@anthropic-ai/sdk/resources/messages/messages";
 import type {
+  ModelInfo,
   SessionState,
   NormalizedMessage,
   NormalizedPart,
@@ -33,6 +34,11 @@ import { join } from "node:path";
 
 // Store for active sessions
 const sessions = new Map<string, SessionState>();
+
+function claudeExecutableOptions(): { pathToClaudeCodeExecutable: string } | Record<string, never> {
+  const executable = process.env.CLAUDE_CLI_PATH?.trim();
+  return executable ? { pathToClaudeCodeExecutable: executable } : {};
+}
 
 // Pending questions waiting for answers
 const pendingQuestions = new Map<string, QuestionRequest>();
@@ -1111,6 +1117,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       prompt: sdkPrompt,
       options: {
         cwd,
+        ...claudeExecutableOptions(),
         model: options?.model,
         permissionMode,
         // Required when using bypassPermissions mode
@@ -2134,14 +2141,10 @@ export function getSessionInitData(sessionId: string): SessionInitData | undefin
  * Get available models from the Claude Agent SDK
  * The supportedModels() method is available on the Query object returned by query()
  */
-export async function getAvailableModels(): Promise<Array<{
-  id: string;
-  name: string;
-  description?: string;
-  supportsFastMode?: boolean;
-  supportsEffort?: boolean;
-  supportedEffortLevels?: ("low" | "medium" | "high" | "xhigh" | "max")[];
-}>> {
+export async function getAvailableModelCatalog(): Promise<{
+  models: ModelInfo[];
+  source: "sdk" | "fallback";
+}> {
   let q: ReturnType<typeof query> | undefined;
   try {
     const cwd = process.env.CWD || process.cwd();
@@ -2153,6 +2156,7 @@ export async function getAvailableModels(): Promise<Array<{
       options: {
         maxTurns: 0,
         cwd,
+        ...claudeExecutableOptions(),
       },
     });
 
@@ -2160,47 +2164,68 @@ export async function getAvailableModels(): Promise<Array<{
     const models = await q.supportedModels();
     console.log("[session-manager] Supported models fetched", { count: models.length });
 
-    return models.map((model: { value: string; displayName: string; description?: string; supportsFastMode?: boolean; supportsEffort?: boolean; supportedEffortLevels?: ("low" | "medium" | "high" | "xhigh" | "max")[] }) => ({
-      id: model.value,
-      name: model.displayName,
-      description: model.description,
-      supportsFastMode: model.supportsFastMode,
-      supportsEffort: model.supportsEffort,
-      supportedEffortLevels: model.supportedEffortLevels,
-    }));
+    return {
+      source: "sdk",
+      models: models.map((model) => ({
+        id: model.value,
+        resolvedModel: model.resolvedModel,
+        name: model.displayName,
+        description: model.description,
+        supportsFastMode: model.supportsFastMode,
+        supportsEffort: model.supportsEffort,
+        supportedEffortLevels: model.supportedEffortLevels,
+        supportsAdaptiveThinking: model.supportsAdaptiveThinking,
+        supportsAutoMode: model.supportsAutoMode,
+      })),
+    };
   } catch (error) {
     console.error("[session-manager] Error fetching supported models:", error);
     // Return fallback models if SDK call fails
-    return [
+    return {
+      source: "fallback",
+      models: [
       {
-        id: "claude-fable-5",
-        name: "Claude Fable 5",
-        description: "Anthropic's most capable widely released model",
-        supportsEffort: true,
-        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-      },
-      {
-        id: "claude-opus-4-8",
-        name: "Claude Opus 4.8",
-        description: "Most capable Opus-tier model for complex reasoning and agentic coding",
+        id: "default",
+        resolvedModel: "claude-opus-5[1m]",
+        name: "Default (recommended)",
+        description: "Opus 5 with 1M context · Best for everyday, complex tasks",
         supportsFastMode: true,
         supportsEffort: true,
         supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
       },
       {
-        id: "claude-sonnet-5",
-        name: "Claude Sonnet 5",
-        description: "Frontier intelligence for coding, agents, and enterprise workflows",
+        id: "opus[1m]",
+        resolvedModel: "claude-opus-5[1m]",
+        name: "Opus (1M context)",
+        description: "Opus 5 with 1M context · Best for everyday, complex tasks",
+        supportsFastMode: true,
         supportsEffort: true,
         supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
       },
       {
-        id: "claude-haiku-4-5-20251001",
-        name: "Claude Haiku 4.5",
-        description: "Fastest current Claude model",
-        supportsEffort: false,
+        id: "claude-fable-5[1m]",
+        resolvedModel: "claude-fable-5",
+        name: "Fable",
+        description: "Fable 5 · Most capable for your hardest and longest-running tasks",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
       },
-    ];
+      {
+        id: "sonnet",
+        resolvedModel: "claude-sonnet-5",
+        name: "Sonnet",
+        description: "Sonnet 5 · Efficient for routine tasks",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+      },
+      {
+        id: "haiku",
+        resolvedModel: "claude-haiku-4-5-20251001",
+        name: "Haiku",
+        description: "Haiku 4.5 · Fastest for quick answers",
+      },
+      ],
+    };
   } finally {
     if (q?.return) {
       try {
@@ -2209,5 +2234,47 @@ export async function getAvailableModels(): Promise<Array<{
         console.debug("[session-manager] Failed to clean up model query:", error);
       }
     }
+  }
+}
+
+export async function getAvailableModels(): Promise<ModelInfo[]> {
+  return (await getAvailableModelCatalog()).models;
+}
+
+export async function getClaudeRuntimeVersions(): Promise<{
+  sdkVersion?: string;
+  cliVersion?: string;
+}> {
+  let sdkVersion: string | undefined;
+  let bundledCliVersion: string | undefined;
+  try {
+    const sdkEntryUrl = import.meta.resolve("@anthropic-ai/claude-agent-sdk");
+    const manifest = JSON.parse(
+      await readFile(new URL("./package.json", sdkEntryUrl), "utf8"),
+    ) as { version?: string; claudeCodeVersion?: string };
+    sdkVersion = manifest.version;
+    bundledCliVersion = manifest.claudeCodeVersion;
+  } catch (error) {
+    console.debug("[session-manager] Failed to read Claude SDK version:", error);
+  }
+
+  const executable = process.env.CLAUDE_CLI_PATH?.trim();
+  if (!executable) {
+    return { sdkVersion, cliVersion: bundledCliVersion };
+  }
+
+  try {
+    const output = execFileSync(executable, ["--version"], {
+      encoding: "utf8",
+      timeout: 5_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return {
+      sdkVersion,
+      cliVersion: output.match(/\d+\.\d+\.\d+/)?.[0] ?? bundledCliVersion,
+    };
+  } catch (error) {
+    console.debug("[session-manager] Failed to read Claude CLI version:", error);
+    return { sdkVersion, cliVersion: bundledCliVersion };
   }
 }

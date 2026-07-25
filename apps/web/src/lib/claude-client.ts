@@ -2,6 +2,12 @@
 // Provides typed functions for interacting with the Claude bridge server
 
 import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
+import type {
+  ClaudeModelCatalogEntry,
+  ClaudeModelCatalogSnapshot,
+} from "@/types";
+
+export type { ClaudeModelCatalogSnapshot };
 
 /**
  * Session key used as the Map key in the Zustand store.
@@ -111,12 +117,7 @@ export interface ClaudeMessage {
 /** Effort level for controlling Claude's thinking depth */
 export type ClaudeEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
-export interface ClaudeModel {
-  id: string;
-  name: string;
-  description?: string;
-  supportsFastMode?: boolean;
-  supportsEffort?: boolean;
+export interface ClaudeModel extends ClaudeModelCatalogEntry {
   supportedEffortLevels?: ClaudeEffortLevel[];
 }
 

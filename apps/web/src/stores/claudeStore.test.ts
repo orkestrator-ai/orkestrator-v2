@@ -22,6 +22,7 @@ function resetClaudeStore() {
     pendingQuestions: new Map(),
     pendingPlanApprovals: new Map(),
     models: [],
+    modelCatalogs: new Map(),
   });
 }
 
@@ -137,6 +138,13 @@ describe("claudeStore cleanup and queue helpers", () => {
       percentUsed: 10,
     });
     store.setSessionInitData("env-1", { cwd: "/workspace" } as any);
+    store.setModelCatalog({
+      environmentId: "env-1",
+      models: [{ id: "opus", name: "Opus 5" }],
+      source: "sdk",
+      fetchedAt: "2026-07-25T12:00:00.000Z",
+      stale: false,
+    });
     store.addToQueue(sessionKeyA, {
       id: "queue-a",
       text: "queued",
@@ -165,11 +173,30 @@ describe("claudeStore cleanup and queue helpers", () => {
     expect(store.isComposingFor(sessionKeyA)).toBe(false);
     expect(store.getContextUsage(sessionKeyA)).toBeUndefined();
     expect(store.getSessionInitData("env-1")).toBeUndefined();
+    expect(store.getModelCatalog("env-1")).toBeUndefined();
     expect(store.getQueueLength(sessionKeyA)).toBe(0);
     expect(store.getPendingQuestion("question-a")).toBeUndefined();
     expect(store.getPendingQuestion("question-b")).toBeDefined();
     expect(store.getPendingPlanApproval("approval-a")).toBeUndefined();
     expect(store.getPendingPlanApproval("approval-b")).toBeDefined();
+  });
+
+  test("keeps authoritative model catalogs scoped to their environment", () => {
+    const store = useClaudeStore.getState();
+    store.setModels([{ id: "legacy", name: "Legacy" }]);
+    store.setModelCatalog({
+      environmentId: "env-1",
+      models: [{ id: "opus", name: "Opus 5" }],
+      source: "sdk",
+      fetchedAt: "2026-07-25T12:00:00.000Z",
+      stale: false,
+    });
+
+    expect(store.getModels("env-1").map((model) => model.id)).toEqual(["opus"]);
+    expect(store.getModels("env-2").map((model) => model.id)).toEqual(["legacy"]);
+    expect(useClaudeStore.getState().models.map((model) => model.id)).toEqual([
+      "legacy",
+    ]);
   });
 
   test("queues prompts in FIFO order and clears only the targeted session queue", () => {

@@ -81,8 +81,33 @@ describe("NativeMessage task list rendering", () => {
     expect(container.textContent).toContain(
       "Let me analyze the code structure here",
     );
-    // Should NOT have a collapsible trigger (no chevron button)
-    expect(container.querySelector("button")).toBeNull();
+    // Collapsed preview is a single truncated line, not the expanded body
+    expect(screen.getByRole("button", { name: /thinking/i })).toBeTruthy();
+    expect(
+      screen.getByText("Let me analyze the code structure here").className,
+    ).toContain("truncate");
+  });
+
+  test("expands a long thinking part to show the full text", () => {
+    const content =
+      "First I inspect the reducer.\n\nThen I trace the dispatch path all the way through the bridge before deciding on a fix.";
+    const message = makeMessage([{ type: "thinking", content }]);
+
+    const { container } = render(<NativeMessage message={message} />);
+
+    // Collapsed: whitespace is flattened into a single truncated preview line
+    expect(container.textContent).toContain(
+      "First I inspect the reducer. Then I trace the dispatch path",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /thinking/i }));
+
+    // Expanded: the full text renders as markdown paragraphs
+    expect(container.textContent).toContain("First I inspect the reducer.");
+    expect(container.textContent).toContain(
+      "Then I trace the dispatch path all the way through the bridge before deciding on a fix.",
+    );
+    expect(container.querySelectorAll("p").length).toBeGreaterThan(1);
   });
 
   test("text parts with task lists render checkboxes directly (no collapsible)", () => {
@@ -527,7 +552,8 @@ describe("NativeMessage task list rendering", () => {
       screen.getByRole("button", { name: /task list/i }).parentElement?.className,
     ).toContain("my-0");
     expect(
-      screen.getByText("Regular thinking wrapper").parentElement?.className,
+      screen.getByRole("button", { name: /regular thinking wrapper/i })
+        .parentElement?.className,
     ).toContain("my-0");
     expect(screen.getByRole("button", { name: /screenshot\.png/i }).className)
       .toContain("my-0");

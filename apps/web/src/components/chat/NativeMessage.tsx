@@ -146,56 +146,49 @@ function useAgentExpansion(part: NativeAgentActivityPart) {
   ] as const;
 }
 
-/** Render a thinking/reasoning part inline */
+/** Render a thinking/reasoning part inline - expandable to show the full text */
 function ThinkingPart({ content }: { content: string }) {
   const hasTaskList = useMemo(
     () => TASK_LIST_SYNTAX_PATTERN.test(content),
     [content],
   );
   const [isOpen, setIsOpen] = useState(false);
-
-  if (hasTaskList) {
-    return (
-      <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
-        <CollapsibleTrigger
-          className="flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md transition-colors hover:text-foreground cursor-pointer"
-        >
-          <ChevronRight
-            className={cn(
-              "w-3 h-3 transition-transform shrink-0",
-              isOpen && "rotate-90",
-            )}
-          />
-          <Brain className="h-3.5 w-3.5 shrink-0" />
-          <span className="font-medium shrink-0">Thinking</span>
-          {!isOpen && (
-            <span className="font-mono text-muted-foreground/80 truncate min-w-0">
-              task list
-            </span>
-          )}
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <div className="mt-1 border-l border-border/40 pl-3">
-            <MessageMarkdown
-              content={content}
-              components={markdownComponents}
-              className="text-muted-foreground/80 prose-invert prose-p:my-1 prose-headings:my-2 prose-headings:text-muted-foreground prose-ul:my-1 prose-ol:my-1 prose-pre:my-1 prose-pre:p-2"
-              enableBreaks={false}
-            />
-          </div>
-        </CollapsibleContent>
-      </Collapsible>
-    );
-  }
+  // The collapsed row is a single line, so flatten whitespace for the preview.
+  const preview = useMemo(
+    () => (hasTaskList ? "task list" : content.trim().replace(/\s+/g, " ")),
+    [content, hasTaskList],
+  );
 
   return (
-    <div className="my-0 flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md">
-      <Brain className="w-3.5 h-3.5 shrink-0" />
-      <span className="font-medium shrink-0">Thinking</span>
-      <span className="font-mono text-muted-foreground/80 truncate min-w-0">
-        {content}
-      </span>
-    </div>
+    <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
+      <CollapsibleTrigger
+        className="flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md transition-colors hover:text-foreground cursor-pointer"
+      >
+        <ChevronRight
+          className={cn(
+            "w-3 h-3 transition-transform shrink-0",
+            isOpen && "rotate-90",
+          )}
+        />
+        <Brain className="h-3.5 w-3.5 shrink-0" />
+        <span className="font-medium shrink-0">Thinking</span>
+        {!isOpen && (
+          <span className="font-mono text-muted-foreground/80 truncate min-w-0 text-left">
+            {preview}
+          </span>
+        )}
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="mt-1 border-l border-border/40 pl-3">
+          <MessageMarkdown
+            content={content}
+            components={markdownComponents}
+            className="text-muted-foreground/80 prose-invert prose-p:my-1 prose-headings:my-2 prose-headings:text-muted-foreground prose-ul:my-1 prose-ol:my-1 prose-pre:my-1 prose-pre:p-2"
+            enableBreaks={!hasTaskList}
+          />
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 

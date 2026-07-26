@@ -4299,6 +4299,32 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         }],
       },
     }, context)).rejects.toThrow("parent directory traversal");
+
+    // Agents commonly return the filename relative to the artifact directory
+    // they were told to write into. That names the same evidence file.
+    const bareFilenames = await command({
+      ...args,
+      preparation: {
+        ...args.preparation,
+        validation: [{
+          ...args.preparation.validation[0],
+          stdoutPath: "validation-01.stdout.txt",
+          stderrPath: "validation-01.stderr.txt",
+        }],
+      },
+    }, context);
+    expect(bareFilenames).toEqual(first);
+
+    await expect(command({
+      ...args,
+      preparation: {
+        ...args.preparation,
+        validation: [{
+          ...args.preparation.validation[0],
+          stdoutPath: "validation-02.stdout.txt",
+        }],
+      },
+    }, context)).rejects.toThrow("artifact paths are not deterministic");
   });
 
   test("deletes the remote head branch during merged local environment cleanup", async () => {

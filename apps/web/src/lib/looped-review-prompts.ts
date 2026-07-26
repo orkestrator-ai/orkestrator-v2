@@ -215,12 +215,12 @@ Target branch: \`${input.targetBranch}\`
 
 1. Inspect \`git status --porcelain\`, staged/unstaged diffs, and untracked files.
 2. Commit only relevant changes using the existing conventional-commit and hook safety rules. Record excluded files with their actual reasons.
-3. Create the Git-excluded directory \`${artifactDirectory}\`. Use deterministic filenames \`validation-01.stdout.txt\`, \`validation-01.stderr.txt\`, then 02, 03, and so on in execution order.
+3. Create the Git-excluded directory \`${artifactDirectory}\`. Use deterministic filenames \`validation-01.stdout.txt\`, \`validation-01.stderr.txt\`, then 02, 03, and so on. The two-digit ordinal is the command's 1-based position in the \`validation\` array you return, counting skipped commands, so entry N always uses ordinal N.
 4. Run the project's relevant full tests, typechecking, and build validation exactly once for this round. Redirect each command's stdout and stderr directly to its two artifact files. Capture the original exit code and elapsed milliseconds even when the command fails; a failed validation command must not stop preparation of the remaining evidence.
 5. Return only the preparation metadata matching the enforced JSON Schema:
    - \`command\` is the exact command that was executed.
    - \`uncommittedFiles\` lists every remaining non-ignored Git status path and why it was excluded. The backend verifies this set.
-   - A command that ran has \`stdoutPath\` and \`stderrPath\` set to its relative artifact paths under \`${artifactDirectory}\`.
+   - A command that ran has \`stdoutPath\` and \`stderrPath\` set to its full workspace-relative artifact paths, including the directory: entry 1 is exactly \`${artifactDirectory}/validation-01.stdout.txt\` and \`${artifactDirectory}/validation-01.stderr.txt\`, entry 2 uses ordinal 02, and so on. Do not return the bare filename.
    - A skipped command has \`status="skipped"\`, \`exitCode=null\`, \`stdoutPath=null\`, and \`stderrPath=null\`, with the reason in \`limitation\`.
    - A command that ran has its actual integer exit code, \`status="passed"\` only for exit code 0, and \`limitation=null\` unless a real limitation applies.
    - Do not include Git refs, diffs, hashes, or file contents. Orkestrator resolves those from the prepared HEAD.

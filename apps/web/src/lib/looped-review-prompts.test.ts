@@ -123,6 +123,11 @@ describe("looped-review prompts", () => {
     expect(prompt).toContain("Run the project's relevant full tests, typechecking, and build validation exactly once");
     expect(prompt).toContain("Orkestrator's backend—not you—will deterministically generate");
     expect(prompt).toContain(".orkestrator/review-artifacts/package-2");
+    expect(prompt).toContain(
+      ".orkestrator/review-artifacts/package-2/validation-01.stdout.txt",
+    );
+    expect(prompt).toContain("Do not return the bare filename.");
+    expect(prompt).toContain("counting skipped commands");
     expect(prompt).toContain("without cleanup, redaction, summarization, or truncation");
     expect(prompt).toContain("Do not include Git refs, diffs, hashes, or file contents");
     expect(prompt).toContain("Structured reviews");

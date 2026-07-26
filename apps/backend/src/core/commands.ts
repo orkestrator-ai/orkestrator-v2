@@ -887,6 +887,24 @@ function parseReviewRound(value: unknown): number {
   return value as number;
 }
 
+/**
+ * Anchors a validation artifact path to the round's artifact directory. Agents
+ * routinely return the bare filename they were told to write inside that
+ * directory; both forms name the same file, and the caller still enforces the
+ * deterministic name, so anchoring here avoids failing a whole round over the
+ * spelling of a path the backend already knows.
+ */
+function resolveValidationArtifactPath(
+  value: string,
+  artifactDirectory: string,
+  label: string,
+): string {
+  const relativePath = validateWorkspaceMutationPath(value, label);
+  return relativePath.includes("/")
+    ? relativePath
+    : `${artifactDirectory}/${relativePath}`;
+}
+
 function parseReviewPreparationValidation(
   value: unknown,
   packageId: string,
@@ -973,16 +991,22 @@ function parseReviewPreparationValidation(
     const artifactDirectory = `.orkestrator/review-artifacts/${packageId}`;
     const expectedStdoutPath = `${artifactDirectory}/validation-${ordinal}.stdout.txt`;
     const expectedStderrPath = `${artifactDirectory}/validation-${ordinal}.stderr.txt`;
-    const stdoutPath = validateWorkspaceMutationPath(
+    const stdoutPath = resolveValidationArtifactPath(
       asString(entry.stdoutPath, `validation[${index}].stdoutPath`),
+      artifactDirectory,
       `validation[${index}].stdoutPath`,
     );
-    const stderrPath = validateWorkspaceMutationPath(
+    const stderrPath = resolveValidationArtifactPath(
       asString(entry.stderrPath, `validation[${index}].stderrPath`),
+      artifactDirectory,
       `validation[${index}].stderrPath`,
     );
     if (stdoutPath !== expectedStdoutPath || stderrPath !== expectedStderrPath) {
-      throw new Error(`Validation[${index}] artifact paths are not deterministic`);
+      throw new Error(
+        `Validation[${index}] artifact paths are not deterministic: expected `
+        + `${expectedStdoutPath} and ${expectedStderrPath}, received `
+        + `${stdoutPath} and ${stderrPath}`,
+      );
     }
     return {
       command,

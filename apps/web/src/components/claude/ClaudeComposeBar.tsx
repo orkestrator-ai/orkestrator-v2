@@ -34,6 +34,7 @@ import {
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useFileMentions } from "@/hooks/useFileMentions";
 import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { FileMention, FileCandidate } from "@/types";
 
 const EFFORT_LABELS: Record<ClaudeEffortLevel, string> = {
@@ -107,6 +108,7 @@ export function ClaudeComposeBar({
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
+  const isMobile = useMediaQuery("(max-width: 767px)");
 
   // Create sessionKey for store lookups (format: "env-{environmentId}:{tabId}")
   const sessionKey = createClaudeSessionKey(environmentId, tabId);
@@ -285,8 +287,10 @@ export function ClaudeComposeBar({
 
   // Focus input on mount
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    if (!isMobile) {
+      inputRef.current?.focus();
+    }
+  }, [isMobile]);
 
   // Detect "/" being typed to show slash command menu
   useEffect(() => {

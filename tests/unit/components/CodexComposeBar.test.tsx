@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "b
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { forwardRef, useImperativeHandle } from "react";
 import { mockReadImage } from "../../mocks/clipboard";
+import { setMobileViewport } from "../../mocks/match-media";
 
 const mockWriteContainerFile = mock(async () => {});
 const mockWriteLocalFile = mock(async () => "/tmp/file.png");
@@ -20,6 +21,7 @@ const mockInsertMentionAtCursor = mock(() => {});
 const mockInputFocus = mock(() => {});
 let mockFileMentionMenuOpen = false;
 let mockFileSearchError: string | null = null;
+const originalMatchMedia = window.matchMedia;
 
 // Snapshot modules before stubbing them so later suites that exercise the
 // real file mention flow do not inherit these isolated compose-bar stubs.
@@ -37,6 +39,7 @@ afterAll(() => {
   mock.module("@/hooks", () => realHooksSnapshot);
   mock.module("@/hooks/useFileMentions", () => realUseFileMentionsSnapshot);
   mock.module("@/hooks/useFileSearch", () => realUseFileSearchSnapshot);
+  window.matchMedia = originalMatchMedia;
 });
 
 // --- Module mocks (must be before component import) ---
@@ -232,6 +235,7 @@ function renderComposeBar(
 
 describe("CodexComposeBar", () => {
   beforeEach(() => {
+    setMobileViewport(false);
     mockReadImage.mockReset();
     mockWriteContainerFile.mockReset();
     mockWriteLocalFile.mockReset();
@@ -281,6 +285,18 @@ describe("CodexComposeBar", () => {
   test("renders input placeholder", () => {
     renderComposeBar();
     expect(screen.getByPlaceholderText("Ask Codex anything...")).toBeTruthy();
+  });
+
+  test("focuses on desktop but not on mobile mount", () => {
+    const desktop = renderComposeBar();
+    expect(mockInputFocus).toHaveBeenCalledTimes(1);
+
+    desktop.unmount();
+    mockInputFocus.mockClear();
+    setMobileViewport(true);
+    renderComposeBar();
+
+    expect(mockInputFocus).not.toHaveBeenCalled();
   });
 
   test("renders selected model name in dropdown trigger", () => {

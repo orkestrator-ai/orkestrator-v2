@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { createElement, type ComponentProps } from "react";
 import type { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 import { mockReadImage } from "../../mocks/clipboard";
+import { setMobileViewport } from "../../mocks/match-media";
 import { useClaudeOptionsStore, useConfigStore, useUIStore } from "@/stores";
 import type { Environment, Project } from "@/types";
 
@@ -19,6 +20,7 @@ const realUseEnvironmentsSnapshot = { ...realUseEnvironments };
 const realUseEnvironmentDiffStatsSnapshot = { ...realUseEnvironmentDiffStats };
 const realBackendSnapshot = { ...realBackend };
 const realEnvironmentSettingsDialogSnapshot = { ...realEnvironmentSettingsDialog };
+const originalMatchMedia = window.matchMedia;
 
 const project: Project = {
   id: "project-1",
@@ -150,6 +152,7 @@ afterAll(() => {
     "@/components/environments/EnvironmentSettingsDialog",
     () => realEnvironmentSettingsDialogSnapshot,
   );
+  window.matchMedia = originalMatchMedia;
 });
 
 if (typeof globalThis.ImageData === "undefined") {
@@ -198,6 +201,7 @@ function mockActivityRowOffsetTop(
 
 describe("HierarchicalSidebar", () => {
   beforeEach(() => {
+    setMobileViewport(false);
     cleanup();
     createEnvironmentMock.mockClear();
     updateEnvironmentAgentSettingsMock.mockClear();
@@ -1331,6 +1335,22 @@ describe("HierarchicalSidebar", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Environment Three" }));
     await waitFor(() => expect(startEnvironmentMock).toHaveBeenCalledWith("env-3"));
+  });
+
+  test("blurs the active input before activating an environment on mobile", () => {
+    setMobileViewport(true);
+    environmentsValue = [
+      { ...createdEnvironment, id: "env-mobile", name: "Mobile Environment" },
+    ];
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+    render(<HierarchicalSidebar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Mobile Environment" }));
+
+    expect(document.activeElement).not.toBe(input);
+    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-mobile");
   });
 
   test("reports an automatic local environment start failure", async () => {

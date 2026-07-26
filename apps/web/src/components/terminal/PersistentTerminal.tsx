@@ -4,6 +4,7 @@ import { writeText } from "@/lib/native/clipboard";
 import { useTerminal } from "@/hooks/useTerminal";
 import { useAgentState } from "@/hooks/useAgentState";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { escapePathForTerminalInput, handleTerminalPaste } from "@/lib/terminal-paste";
 import { useTerminalSessionStore, createSessionKey, useConfigStore, usePaneLayoutStore, useEnvironmentStore } from "@/stores";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
@@ -104,6 +105,7 @@ export function PersistentTerminal({
   onSetupComplete,
   onWrite,
 }: PersistentTerminalProps) {
+  const isMobile = useMediaQuery("(max-width: 767px)");
   const terminalRef = useRef<HTMLDivElement>(null);
   const writeRef = useRef<(data: string) => Promise<void>>(() => Promise.resolve());
   const [isEnvironmentReady, setIsEnvironmentReady] = useState(false);
@@ -1228,10 +1230,12 @@ export function PersistentTerminal({
   // Focus when active
   useEffect(() => {
     if (isActive && isConnected) {
-      terminal.focus();
+      if (!isMobile) {
+        terminal.focus();
+      }
       scheduleFit();
     }
-  }, [isActive, isConnected, terminal, scheduleFit]);
+  }, [isActive, isConnected, isMobile, terminal, scheduleFit]);
 
   // Get setActivePane to update focus when terminal is clicked
   const setActivePane = usePaneLayoutStore((state) => state.setActivePane);

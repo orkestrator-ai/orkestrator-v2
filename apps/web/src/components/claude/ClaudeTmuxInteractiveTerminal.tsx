@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { listen, type UnlistenFn } from "@/lib/native/events";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import {
   createInteractiveTerminal,
   detachInteractiveTerminal,
@@ -37,6 +38,8 @@ export function ClaudeTmuxInteractiveTerminal({
   isActive,
   className,
 }: ClaudeTmuxInteractiveTerminalProps) {
+  const isMobile = useMediaQuery("(max-width: 767px)");
+  const isMobileRef = useRef(isMobile);
   const terminalHostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -44,6 +47,10 @@ export function ClaudeTmuxInteractiveTerminal({
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    isMobileRef.current = isMobile;
+  }, [isMobile]);
 
   const terminalAppearance = useConfigStore(
     (state) => state.config.global.terminalAppearance,
@@ -243,7 +250,9 @@ export function ClaudeTmuxInteractiveTerminal({
         setConnected(true);
         setError(null);
         fit();
-        terminal.focus();
+        if (!isMobileRef.current) {
+          terminal.focus();
+        }
       } catch (e) {
         cleanupCreatedSession();
         if (!cancelled) setError(String(e));
@@ -288,9 +297,11 @@ export function ClaudeTmuxInteractiveTerminal({
       } catch {
         return;
       }
-      terminal.focus();
+      if (!isMobile) {
+        terminal.focus();
+      }
     });
-  }, [isActive]);
+  }, [isActive, isMobile]);
 
   return (
     <div

@@ -6,6 +6,7 @@ import * as realBackendEvent from "@/lib/native/events";
 import * as realTmuxClient from "@/lib/claude-tmux-client";
 import * as realTerminalPaste from "@/lib/terminal-paste";
 import * as realClipboardImagePaste from "@/hooks/useClipboardImagePaste";
+import { setMobileViewport } from "../../mocks/match-media";
 
 const realXtermSnapshot = { ...realXterm };
 const realFitAddonSnapshot = { ...realFitAddon };
@@ -143,6 +144,7 @@ const { ClaudeTmuxInteractiveTerminal } = await import(
 describe("ClaudeTmuxInteractiveTerminal", () => {
   const originalResizeObserver = globalThis.ResizeObserver;
   const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+  const originalMatchMedia = window.matchMedia;
   const environmentId = "env-1";
 
   afterAll(() => {
@@ -154,9 +156,11 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     mock.module("@/hooks/useClipboardImagePaste", () => realClipboardImagePasteSnapshot);
     globalThis.ResizeObserver = originalResizeObserver;
     globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+    window.matchMedia = originalMatchMedia;
   });
 
   beforeEach(() => {
+    setMobileViewport(false);
     cleanup();
     terminalInstances.length = 0;
     fitInstances.length = 0;
@@ -226,6 +230,22 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     expect(unlistenMock).toHaveBeenCalledTimes(1);
     expect(detachInteractiveTerminalMock).toHaveBeenCalledWith("pty-1");
     expect(terminalInstances[0]!.disposed).toBe(true);
+  });
+
+  test("fits without focusing the terminal when activated on mobile", async () => {
+    setMobileViewport(true);
+    render(
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+
+    expect(fitInstances[0]!.fit).toHaveBeenCalled();
+    expect(terminalInstances[0]!.focused).toBe(false);
   });
 
   test("handles keyboard paste through the shared terminal paste helper", async () => {

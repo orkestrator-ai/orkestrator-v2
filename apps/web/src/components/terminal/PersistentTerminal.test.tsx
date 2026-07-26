@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import * as realSessionStore from "@/stores/sessionStore";
 import * as realClipboardImagePaste from "@/hooks/useClipboardImagePaste";
 import { mockReadText, mockWriteText } from "../../../../../tests/mocks/clipboard";
+import { setMobileViewport } from "../../../../../tests/mocks/match-media";
 
 // Mock modules that require a real backend runtime or have side effects.
 // IMPORTANT: Do NOT mock @/stores (barrel) or @/lib/backend here — doing so
@@ -94,6 +95,7 @@ const persistentSessionStore = {
 };
 
 const realSessionStoreSnapshot = { ...realSessionStore };
+const originalMatchMedia = window.matchMedia;
 mock.module("@/stores/sessionStore", () => ({
   useSessionStore: () => persistentSessionStore,
 }));
@@ -101,6 +103,7 @@ mock.module("@/stores/sessionStore", () => ({
 afterAll(() => {
   mock.module("@/stores/sessionStore", () => realSessionStoreSnapshot);
   mock.module("@/hooks/useClipboardImagePaste", () => realClipboardImagePasteSnapshot);
+  window.matchMedia = originalMatchMedia;
 });
 
 let storedContainerElement: HTMLDivElement;
@@ -258,6 +261,7 @@ function createTerminalData(options?: {
 
 describe("PersistentTerminal", () => {
   beforeEach(() => {
+    setMobileViewport(false);
     cleanup();
     resizeMock.mockClear();
     connectMock.mockClear();
@@ -395,6 +399,31 @@ describe("PersistentTerminal", () => {
       const resizeCalls = resizeMock.mock.calls as unknown as Array<[number, number]>;
       expect(resizeCalls.some(([cols, rows]) => cols === 80 && rows === 25)).toBe(false);
     });
+  });
+
+  it("fits without focusing the terminal when activated on mobile", async () => {
+    setMobileViewport(true);
+    const terminalData = createTerminalData();
+
+    render(
+      <PersistentTerminal
+        terminalData={terminalData}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(terminalData.fitAddon.fit).toHaveBeenCalled();
+    });
+    expect(terminalData.terminal.focus).not.toHaveBeenCalled();
   });
 
   it("forces a redraw when the environment becomes visible again", async () => {

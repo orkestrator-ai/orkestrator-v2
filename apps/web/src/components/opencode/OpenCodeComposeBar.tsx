@@ -48,7 +48,7 @@ import {
   createWorkspaceAttachment,
   NativeAttachmentMenu,
 } from "@/components/chat/NativeAttachmentMenu";
-import { useFileMentions, useFileSearch, useNativeComposeBarPaste } from "@/hooks";
+import { useFileMentions, useFileSearch, useMediaQuery, useNativeComposeBarPaste } from "@/hooks";
 import { OpenCodeSlashCommandMenu } from "./OpenCodeSlashCommandMenu";
 import type {
   OpenCodeModel,
@@ -232,6 +232,7 @@ export function OpenCodeComposeBar({
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
   const [slashFilter, setSlashFilter] = useState("");
   const [modelSearch, setModelSearch] = useState("");
+  const isMobile = useMediaQuery("(max-width: 767px)");
 
   // Get worktree path for local environments
   const worktreePath = useEnvironmentStore(
@@ -271,8 +272,10 @@ export function OpenCodeComposeBar({
   }, [fileMentionMenuOpen, refreshFileTree]);
 
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    if (!isMobile) {
+      inputRef.current?.focus();
+    }
+  }, [isMobile]);
 
   useEffect(() => {
     if (text.startsWith("/") && slashCommands.length > 0) {

@@ -36,6 +36,7 @@ import { useEnvironmentListPolling } from "@/hooks/useEnvironmentListPolling";
 import { useUIStore } from "@/stores";
 import { RepositorySettings } from "@/components/settings/RepositorySettings";
 import { useEnvironmentDiffStats } from "@/hooks/useEnvironmentDiffStats";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { Environment, Project } from "@/types";
 import { ServerConnectionSwitcher } from "./ServerConnectionSwitcher";
 import {
@@ -319,6 +320,7 @@ export function HierarchicalSidebar() {
   const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
   const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null);
+  const isMobile = useMediaQuery("(max-width: 767px)");
 
   const { projects, addProject, removeProject, updateProject, reorderProjects, validateGitUrl, isLoading: projectsLoading } = useProjects();
   const {
@@ -558,6 +560,9 @@ export function HierarchicalSidebar() {
     }
 
     // Normal click: clear multi-selection and select single environment
+    if (isMobile && document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
     clearMultiSelection();
     const environment = allEnvironments.find((e) => e.id === selection.environmentId);
     if (environment) {

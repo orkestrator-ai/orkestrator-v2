@@ -1699,14 +1699,20 @@ exit 0
       await expect(setupPromise).rejects.toThrow("Setup script failed");
 
       expect(environment.setupScriptsComplete).toBe(false);
-      expect(emitted).toContainEqual({
-        event: "environment-setup-complete",
-        payload: {
-          environment_id: environment.id,
-          success: false,
-          error: "Setup script failed",
-        },
+      const failure = emitted.find((entry) =>
+        entry.event === "environment-setup-complete"
+        && (entry.payload as { success?: boolean }).success === false
+      );
+      expect(failure?.payload).toMatchObject({
+        environment_id: environment.id,
+        success: false,
+        error: "Setup script failed",
       });
+      // A launch that can never be honoured must not survive the failure.
+      expect(environment.pendingAgentLaunch).toBe(false);
+      expect(
+        (failure?.payload as { environment?: Environment }).environment?.pendingAgentLaunch,
+      ).toBe(false);
     });
   });
 
@@ -1762,13 +1768,15 @@ exit 0
       await expect(setupPromise).rejects.toThrow("Setup terminal exited before reporting completion");
 
       expect(environment.setupScriptsComplete).toBe(false);
-      expect(emitted).toContainEqual({
-        event: "environment-setup-complete",
-        payload: {
-          environment_id: environment.id,
-          success: false,
-          error: "Setup terminal exited before reporting completion",
-        },
+      expect(
+        emitted.find((entry) =>
+          entry.event === "environment-setup-complete"
+          && (entry.payload as { success?: boolean }).success === false
+        )?.payload,
+      ).toMatchObject({
+        environment_id: environment.id,
+        success: false,
+        error: "Setup terminal exited before reporting completion",
       });
     });
   });
@@ -7174,7 +7182,9 @@ exit 1
     const commands = createCommandRegistry();
 
     await commands.get("stop_environment")?.({ environmentId: local.id }, context);
-    expect(updates).toContainEqual({ status: "stopped" });
+    // A stopped environment cannot honour a post-setup agent launch, and the
+    // renderer no longer mounts it, so the intent is dropped here.
+    expect(updates).toContainEqual({ status: "stopped", pendingAgentLaunch: false });
     await withFakeDocker(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 exit 0
@@ -7182,6 +7192,11 @@ exit 0
       await commands.get("stop_environment")?.({ environmentId: container.id }, context);
       expect(await fs.readFile(logs.all, "utf8")).toContain("stop container-1");
     });
+    // Both lanes clear it, containerized as well as local.
+    expect(
+      updates.filter((update) => (update as { status?: string }).status === "stopped"),
+    ).toHaveLength(2);
+    expect(updates).toContainEqual({ status: "stopped", pendingAgentLaunch: false });
     await expect(commands.get("recreate_environment")?.({ environmentId: local.id }, context)).resolves.toBeUndefined();
   });
 
@@ -7207,7 +7222,7 @@ exit 0
     // does not think a server is already running.
     expect(commandTesting.getLocalServerProcess(`codex:${environment.id}`)).toBeUndefined();
     expect(updates).toContainEqual({ codexBridgePid: null, localCodexPort: null });
-    expect(updates).toContainEqual({ status: "stopped" });
+    expect(updates).toContainEqual({ status: "stopped", pendingAgentLaunch: false });
   });
 
   test("a local environment is still marked stopped when a bridge refuses to die", async () => {
@@ -7231,7 +7246,7 @@ exit 0
 
     // ...but not at the cost of stranding the environment as running, with no
     // way for the user to stop it from the UI.
-    expect(updates).toContainEqual({ status: "stopped" });
+    expect(updates).toContainEqual({ status: "stopped", pendingAgentLaunch: false });
 
     commandTesting.setTerminateProcessTree(async () => true);
   });
@@ -7284,11 +7299,68 @@ exit 0
       codexMode: "native",
       pendingAgentLaunch: true,
     });
+    // Omitting the flag must leave an in-flight launch intent alone: the settings
+    // dialog, FeaturesView and the non-Claude pipeline lanes all call this
+    // command without it while an environment may still be awaiting its launch.
+    await commands.get("update_environment_agent_settings")?.({
+      environmentId: environment.id,
+      defaultAgent: "claude",
+      claudeMode: "terminal",
+      claudeNativeBackend: null,
+      opencodeMode: null,
+      codexMode: null,
+    }, context);
+    expect(updates).toContainEqual({
+      defaultAgent: "claude",
+      claudeMode: "terminal",
+      claudeNativeBackend: null,
+      opencodeMode: null,
+      codexMode: null,
+    });
+    expect(updates.at(-1)).not.toHaveProperty("pendingAgentLaunch");
+    // A non-boolean must not be coerced either.
+    await commands.get("update_environment_agent_settings")?.({
+      environmentId: environment.id,
+      defaultAgent: "claude",
+      claudeMode: "terminal",
+      claudeNativeBackend: null,
+      opencodeMode: null,
+      codexMode: null,
+      pendingAgentLaunch: "true",
+    }, context);
+    expect(updates.at(-1)).not.toHaveProperty("pendingAgentLaunch");
+
     await commands.get("set_environment_pending_agent_launch")?.({
       environmentId: environment.id,
       pending: false,
     }, context);
     expect(updates).toContainEqual({ pendingAgentLaunch: false });
+    await commands.get("set_environment_pending_agent_launch")?.({
+      environmentId: environment.id,
+      pending: true,
+    }, context);
+    expect(updates).toContainEqual({ pendingAgentLaunch: true });
+    // A malformed call must fail rather than silently destroying the intent by
+    // reading a missing/garbage value as `false`.
+    expect(() => commands.get("set_environment_pending_agent_launch")?.({
+      environmentId: environment.id,
+    }, context)).toThrow("Expected pending to be a boolean");
+    expect(() => commands.get("set_environment_pending_agent_launch")?.({
+      environmentId: environment.id,
+      pending: "false",
+    }, context)).toThrow("Expected pending to be a boolean");
+
+    await commands.get("set_environment_initial_prompt")?.({
+      environmentId: environment.id,
+      initialPrompt: "Fix the bug [image](/work/attachment-1.png)",
+    }, context);
+    expect(updates).toContainEqual({
+      initialPrompt: "Fix the bug [image](/work/attachment-1.png)",
+    });
+    expect(() => commands.get("set_environment_initial_prompt")?.({
+      environmentId: environment.id,
+      initialPrompt: 42,
+    }, context)).toThrow("Expected initialPrompt to be a string");
     await commands.get("update_environment_allowed_domains")?.({
       environmentId: environment.id,
       domains: ["one.example.com", "two.example.com"],

@@ -1203,6 +1203,21 @@ export async function setEnvironmentPendingAgentLaunch(
   });
 }
 
+/**
+ * Persist the initial prompt after the renderer has rewritten it (for example to
+ * add references to uploaded attachments), so a recovered launch reads the same
+ * prompt the uninterrupted path would have used.
+ */
+export async function setEnvironmentInitialPrompt(
+  environmentId: string,
+  initialPrompt: string,
+): Promise<Environment> {
+  return invoke<Environment>("set_environment_initial_prompt", {
+    environmentId,
+    initialPrompt,
+  });
+}
+
 export type AgentExtensionId = "claude" | "codex" | "opencode";
 
 export interface AgentExtensionItem {

@@ -6,6 +6,7 @@ import { createSessionKey, useBuildPipelineStore, useClaudeOptionsStore, useConf
 import { useSessionStore } from "@/stores/sessionStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import * as backend from "@/lib/backend";
+import { preserveCompletedSetupState } from "@/lib/setup-commands";
 import { WEB_GATEWAY_CONNECTED_EVENT } from "@/lib/native/web-gateway";
 import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, PrState } from "@/types";
 
@@ -118,15 +119,8 @@ function bindSetupTerminalSession(environment: Environment, sessionId: string): 
   });
 }
 
-function preserveCompletedSetupState(environmentId: string, environment: Environment): Environment {
-  const current = useEnvironmentStore.getState().getEnvironmentById(environmentId);
-  if (current?.setupScriptsComplete && environment.setupScriptsComplete === false) {
-    return { ...environment, setupScriptsComplete: true };
-  }
-  return environment;
-}
-
 let setupSnapshotReconciliation: Promise<void> | null = null;
+let setupSnapshotReconcileRequested = false;
 
 /**
  * Reconcile setup gates from backend snapshots after a mobile browser resumes
@@ -135,7 +129,14 @@ let setupSnapshotReconciliation: Promise<void> | null = null;
  * suspended browser missed the one-shot completion frame.
  */
 export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
-  if (setupSnapshotReconciliation) return setupSnapshotReconciliation;
+  // Coalesce, but never drop. A trigger that arrives after the in-flight reads
+  // were issued would otherwise be answered by a snapshot older than the event
+  // it is reacting to, so remember it and run one more pass on completion. On
+  // mobile resume four triggers fire in a burst, which makes this the norm.
+  if (setupSnapshotReconciliation) {
+    setupSnapshotReconcileRequested = true;
+    return setupSnapshotReconciliation;
+  }
 
   const environmentStore = useEnvironmentStore.getState();
   const pendingLaunchEnvironmentIds = new Set([
@@ -187,6 +188,10 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
     }
   })).then(() => undefined).finally(() => {
     setupSnapshotReconciliation = null;
+    if (setupSnapshotReconcileRequested) {
+      setupSnapshotReconcileRequested = false;
+      void reconcileEnvironmentSetupSnapshots();
+    }
   });
 
   return setupSnapshotReconciliation;
@@ -322,13 +327,22 @@ export function useEnvironments(
           error: event.payload.error ?? null,
         });
         if (environment) {
-          updateEnvironmentInStore(environment_id, environment);
+          updateEnvironmentInStore(
+            environment_id,
+            preserveCompletedSetupState(environment_id, environment),
+          );
         }
         consumePendingSetupCommands(environment_id);
         setSetupCommandsResolved(environment_id, true);
         setSetupScriptsRunning(environment_id, false);
         if (success) {
           setWorkspaceReady(environment_id, true);
+        } else {
+          // The backend clears the durable launch intent on failure and sends the
+          // updated environment above. Mirror it locally even when the payload
+          // omitted the environment, so a failed setup cannot leave this renderer
+          // holding a launch it will never be able to perform.
+          updateEnvironmentInStore(environment_id, { pendingAgentLaunch: false });
         }
       });
       if (disposed) stopComplete();

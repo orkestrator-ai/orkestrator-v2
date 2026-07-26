@@ -80,6 +80,9 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       return;
     }
     if (typeof parsed.event !== "string") return;
+    // Transport-level events are synthesized locally and share this listener
+    // map, so a server frame must never be able to impersonate one.
+    if (parsed.event === WEB_GATEWAY_CONNECTED_EVENT) return;
     const callbacks = listeners.get(parsed.event);
     if (!callbacks) return;
     for (const callback of callbacks) callback(parsed.payload);

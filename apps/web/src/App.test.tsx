@@ -792,6 +792,30 @@ describe("App background processing mounts", () => {
     expect(screen.getByTestId("terminal-env-durable-launch").getAttribute("data-active")).toBe("false");
   });
 
+  test("does not mount a stopped environment that still carries a durable launch", async () => {
+    resetStores({
+      environments: [
+        makeEnvironment("env-visible", "project-1"),
+        {
+          ...makeEnvironment("env-stopped-launch", "project-2"),
+          status: "stopped",
+          pendingAgentLaunch: true,
+        },
+      ],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("terminal-env-visible")).toBeTruthy();
+    });
+    // A stopped environment cannot act on the launch, so mounting it would buy a
+    // terminal, store subscriptions and listeners for no work at all.
+    expect(screen.queryByTestId("terminal-env-stopped-launch")).toBeNull();
+  });
+
   test("keeps off-screen environments with a pending tab initialPrompt mounted", async () => {
     resetStores({
       environments: [

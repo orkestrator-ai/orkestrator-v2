@@ -46,6 +46,9 @@ describe("StorageService core coverage", () => {
     const environment = await storage.addEnvironment(
       createEnvironment("project-1", { name: "fields" }),
     );
+    // A new environment starts with no durable launch intent, so an environment
+    // that was never created with "launch agent" cannot inherit one.
+    expect(environment.pendingAgentLaunch).toBe(false);
     const portMappings = [
       { containerPort: 3000, hostPort: 43000, protocol: "tcp" as const },
       { containerPort: 5353, hostPort: 45353, protocol: "udp" as const },

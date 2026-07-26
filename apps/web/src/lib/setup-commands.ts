@@ -1,7 +1,27 @@
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as backend from "@/lib/backend";
+import type { Environment } from "@/types";
 
 const setupCompletionPersistenceInFlight = new Set<string>();
+
+/**
+ * Guard a backend environment snapshot against regressing a completed setup.
+ *
+ * Backend writes are serialized but their *responses* are not, so a snapshot
+ * returned by an unrelated update can be older than one already applied. Merging
+ * it verbatim would re-close the setup gate on a ready workspace. Every path
+ * that writes a backend snapshot into the environment store goes through here.
+ */
+export function preserveCompletedSetupState(
+  environmentId: string,
+  environment: Environment,
+): Environment {
+  const current = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+  if (current?.setupScriptsComplete && environment.setupScriptsComplete === false) {
+    return { ...environment, setupScriptsComplete: true };
+  }
+  return environment;
+}
 
 interface ShouldAutoResolveSetupCommandsOptions {
   isLocalEnvironment: boolean;

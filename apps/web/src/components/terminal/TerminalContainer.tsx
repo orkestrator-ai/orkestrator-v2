@@ -16,7 +16,7 @@ import {
   type Collision,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
-import { useTerminalContext, MAX_TABS, type CreatableTabType, type TerminalTabType, type CreateTabOptions, type CreateFileTabOptions } from "@/contexts";
+import { useTerminalContext, MAX_TABS, type CreatableTabType, type TabType, type TerminalTabType, type CreateTabOptions, type CreateFileTabOptions } from "@/contexts";
 import { createSessionKey, useClaudeOptionsStore, usePaneLayoutStore, useEnvironmentStore, useConfigStore, useTerminalSessionStore, getAllLeaves } from "@/stores";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/context-menu";
 import { FilePlus2, Play, Terminal as TerminalIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { markSetupScriptsComplete, shouldAutoResolveSetupCommands } from "@/lib/setup-commands";
+import { markSetupScriptsComplete, preserveCompletedSetupState, shouldAutoResolveSetupCommands } from "@/lib/setup-commands";
 import * as backend from "@/lib/backend";
 import {
   buildInitialPromptWithAttachmentReferences,
@@ -36,7 +36,7 @@ import {
 } from "@/lib/initial-prompt-attachments";
 import { resolveClaudeConfig } from "@/lib/claude-mode-resolver";
 import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
-import { createPersistedPaneLayoutInput } from "@/lib/pane-layout-persistence";
+import { createPersistedPaneLayoutInput, flushPaneLayoutNow } from "@/lib/pane-layout-persistence";
 import { listenForTerminalBrowserTabRequests } from "@/lib/terminal-links";
 import { createOrkestratorScriptPrompt } from "@/prompts";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
@@ -131,19 +131,35 @@ function createUniqueTabId(prefix: string): string {
   return `${prefix}-${Date.now()}-${tabIdCounter}`;
 }
 
-const STARTUP_AGENT_TAB_TYPES = new Set([
-  "claude",
-  "claude-native",
-  "claude-tmux",
-  "codex",
-  "codex-native",
-  "opencode",
-  "opencode-native",
-]);
+/**
+ * Which tab types count as "the agent a post-setup launch was asking for".
+ *
+ * Exhaustive over `TabType` on purpose: this table decides when a durable
+ * `pendingAgentLaunch` is considered satisfied and can be cleared. A new tab type
+ * that silently defaulted to `false` here would make the launch effect open a
+ * duplicate agent forever, so adding one must be a compile error rather than a
+ * behaviour change.
+ */
+const STARTUP_AGENT_TAB_TYPES: Record<TabType, boolean> = {
+  claude: true,
+  "claude-native": true,
+  "claude-tmux": true,
+  codex: true,
+  "codex-native": true,
+  opencode: true,
+  "opencode-native": true,
+  // Not startup agents: pipeline/review surfaces and non-agent tabs.
+  "claude-build": false,
+  "looped-review": false,
+  browser: false,
+  file: false,
+  plain: false,
+  root: false,
+};
 
 function hasStartupAgentTab(state: { root: PaneNode }): boolean {
   return getAllLeaves(state.root)
-    .some((leaf) => leaf.tabs.some((tab) => STARTUP_AGENT_TAB_TYPES.has(tab.type)));
+    .some((leaf) => leaf.tabs.some((tab) => STARTUP_AGENT_TAB_TYPES[tab.type] === true));
 }
 
 type TerminalTabDragEndAction =
@@ -441,11 +457,7 @@ export function TerminalContainer({
           containerId: result.environment.containerId ?? null,
         });
         const store = useEnvironmentStore.getState();
-        const currentEnvironment = store.getEnvironmentById(environmentId);
-        const safeEnvironment =
-          currentEnvironment?.setupScriptsComplete && result.environment.setupScriptsComplete === false
-            ? { ...result.environment, setupScriptsComplete: true }
-            : result.environment;
+        const safeEnvironment = preserveCompletedSetupState(environmentId, result.environment);
         store.updateEnvironment(environmentId, safeEnvironment);
         if (result.setupSessionId) {
           const key = createSessionKey(safeEnvironment.containerId ?? null, "default", environmentId);
@@ -692,7 +704,11 @@ export function TerminalContainer({
       // Persist the tab before clearing the launch intent. If the page is
       // evicted between these operations, the still-pending flag retries; if
       // clearing succeeds, rehydration is guaranteed to find the agent tab.
-      void backend.savePaneLayout(
+      // The write goes through the persistence loop's per-environment chain:
+      // save_pane_layout is last-writer-wins, so an unsynchronized write here
+      // could be overtaken by an older debounced one and lose the agent tab
+      // after the flag had already been cleared.
+      void flushPaneLayoutNow(
         environmentId,
         createPersistedPaneLayoutInput(currentEnvState),
       )
@@ -700,7 +716,7 @@ export function TerminalContainer({
         .then((updatedEnvironment) => {
           useEnvironmentStore.getState().updateEnvironment(
             environmentId,
-            updatedEnvironment,
+            preserveCompletedSetupState(environmentId, updatedEnvironment),
           );
         })
         .catch((error) => {
@@ -959,14 +975,39 @@ export function TerminalContainer({
               const currentOptions = useClaudeOptionsStore.getState().getOptions(environmentId);
               if (!currentOptions) return;
 
+              const promptWithReferences = buildInitialPromptWithAttachmentReferences(
+                currentOptions.initialPrompt,
+                savedAttachments,
+              );
               setOptions(environmentId, {
                 ...currentOptions,
-                initialPrompt: buildInitialPromptWithAttachmentReferences(
-                  currentOptions.initialPrompt,
-                  savedAttachments,
-                ),
+                initialPrompt: promptWithReferences,
                 initialPromptAttachments: [],
               });
+
+              // The attachments now live in the workspace, but the references to
+              // them only existed in this renderer's options store. Persist the
+              // rewritten prompt so a launch recovered after page eviction reads
+              // a prompt whose references still resolve, instead of the raw text
+              // the user typed. (Eviction *before* this point still loses the
+              // attachments themselves — they are never persisted.)
+              if (promptWithReferences !== currentOptions.initialPrompt) {
+                try {
+                  const updatedEnvironment = await backend.setEnvironmentInitialPrompt(
+                    environmentId,
+                    promptWithReferences,
+                  );
+                  useEnvironmentStore.getState().updateEnvironment(
+                    environmentId,
+                    preserveCompletedSetupState(environmentId, updatedEnvironment),
+                  );
+                } catch (error) {
+                  console.warn(
+                    "[TerminalContainer] Failed to persist initial prompt attachment references:",
+                    error,
+                  );
+                }
+              }
             } catch (error) {
               console.error("[TerminalContainer] Failed to save initial prompt attachments:", error);
               const currentOptions = useClaudeOptionsStore.getState().getOptions(environmentId);

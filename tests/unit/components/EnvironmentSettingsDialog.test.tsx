@@ -204,6 +204,9 @@ describe("EnvironmentSettingsDialog", () => {
         "terminal",
       );
     });
+    // Editing settings must leave any pending launch intent alone: the argument is
+    // omitted rather than sent as `false`, which the backend would apply.
+    expect(mockUpdateEnvironmentAgentSettings.mock.calls[0]).toHaveLength(6);
 
     expect(onUpdate).toHaveBeenCalledWith(
       expect.objectContaining({

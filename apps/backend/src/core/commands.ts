@@ -386,6 +386,16 @@ function asBoolean(value: unknown, fallback = false): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
+/**
+ * Boolean argument that must be supplied. Use this instead of `asBoolean` when
+ * the fallback would silently destroy state — a malformed call should fail, not
+ * be read as `false`.
+ */
+function asRequiredBoolean(value: unknown, name: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`Expected ${name} to be a boolean`);
+  return value;
+}
+
 function asNumber(value: unknown, name: string): number {
   if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`Expected ${name} to be a number`);
   return value;
@@ -2360,7 +2370,7 @@ async function completeEnvironmentSetup(
   return updated;
 }
 
-function failEnvironmentSetup(environmentId: string, error: unknown, context: CommandContext): void {
+async function failEnvironmentSetup(environmentId: string, error: unknown, context: CommandContext): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   const session = environmentSetupSessions.get(environmentId);
   logSetupTerminal("setup failed", {
@@ -2378,10 +2388,25 @@ function failEnvironmentSetup(environmentId: string, error: unknown, context: Co
       error: message,
     });
   }
+  // A post-setup agent launch can no longer be honoured: the workspace never
+  // became ready. Clearing the durable intent here is what stops it outliving
+  // this attempt — the renderer only clears it once an agent tab exists, so a
+  // failed setup would otherwise leave the flag set forever and auto-dispatch
+  // the original prompt whenever the environment is next started.
+  let updated: Environment | undefined;
+  try {
+    updated = await context.storage.updateEnvironment(environmentId, { pendingAgentLaunch: false });
+  } catch (clearError) {
+    console.warn(
+      `[setup] Failed to clear pending agent launch for ${environmentId}:`,
+      clearError,
+    );
+  }
   context.emit("environment-setup-complete", {
     environment_id: environmentId,
     success: false,
     error: message,
+    ...(updated ? { environment: updated } : {}),
   });
 }
 
@@ -2448,8 +2473,8 @@ async function startEnvironmentSetup(
       }
       return completeEnvironmentSetup(current, context);
     })
-    .catch((error) => {
-      failEnvironmentSetup(current.id, error, context);
+    .catch(async (error) => {
+      await failEnvironmentSetup(current.id, error, context);
       throw error;
     })
     .finally(() => {
@@ -4244,9 +4269,14 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     // Discovery runs inside the environment, so its cached result stops being
     // meaningful the moment the environment does.
     extensionDiscoveryCache.invalidate(environment.id);
+    // A stopped environment cannot honour a post-setup agent launch, and the
+    // renderer cannot clear the intent for an environment it no longer mounts.
+    // Dropping it here keeps the durable flag from outliving the run it belongs
+    // to. This matches the renderer clearing its transient pending launch when
+    // the container stops.
     if (environment.containerId) {
       await runCommand("docker", ["stop", environment.containerId], { timeoutMs: 60_000 });
-      await storage.updateEnvironment(environment.id, { status: "stopped" });
+      await storage.updateEnvironment(environment.id, { status: "stopped", pendingAgentLaunch: false });
       return;
     }
 
@@ -4268,7 +4298,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
         stopError = error;
       }
     }
-    await storage.updateEnvironment(environment.id, { status: "stopped" });
+    await storage.updateEnvironment(environment.id, { status: "stopped", pendingAgentLaunch: false });
     if (stopError) throw stopError;
   });
   register("recreate_environment", async ({ environmentId }, context) => {
@@ -4341,8 +4371,32 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("update_port_mappings", ({ environmentId, portMappings }, { storage }) =>
     storage.updateEnvironment(asString(environmentId, "environmentId"), { portMappings: asPortMappings(portMappings) ?? [] }),
   );
-  register("update_environment_agent_settings", ({ environmentId, defaultAgent, claudeMode, claudeNativeBackend, opencodeMode, codexMode }, { storage }) =>
-    storage.updateEnvironment(asString(environmentId, "environmentId"), { defaultAgent, claudeMode, claudeNativeBackend, opencodeMode, codexMode }),
+  register("update_environment_agent_settings", ({ environmentId, defaultAgent, claudeMode, claudeNativeBackend, opencodeMode, codexMode, pendingAgentLaunch }, { storage }) => {
+    const updates = {
+      defaultAgent,
+      claudeMode,
+      claudeNativeBackend,
+      opencodeMode,
+      codexMode,
+    } as Partial<Environment>;
+    if (typeof pendingAgentLaunch === "boolean") {
+      updates.pendingAgentLaunch = pendingAgentLaunch;
+    }
+    return storage.updateEnvironment(asString(environmentId, "environmentId"), updates);
+  });
+  register("set_environment_pending_agent_launch", ({ environmentId, pending }, { storage }) =>
+    storage.updateEnvironment(asString(environmentId, "environmentId"), {
+      pendingAgentLaunch: asRequiredBoolean(pending, "pending"),
+    }),
+  );
+  // The renderer rewrites the initial prompt once it has uploaded the create
+  // dialog's attachments and knows their in-workspace paths. Persisting that
+  // rewritten text is what lets a post-eviction launch recover a prompt whose
+  // attachment references still resolve.
+  register("set_environment_initial_prompt", ({ environmentId, initialPrompt }, { storage }) =>
+    storage.updateEnvironment(asString(environmentId, "environmentId"), {
+      initialPrompt: asString(initialPrompt, "initialPrompt"),
+    }),
   );
   register("get_environment_extensions", async ({ environmentId, refresh }, context) => {
     const id = asString(environmentId, "environmentId");

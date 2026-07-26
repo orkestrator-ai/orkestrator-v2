@@ -2,10 +2,12 @@
 import { useCallback, useEffect } from "react";
 import { listen, type UnlistenFn } from "@/lib/native/events";
 import { toast } from "sonner";
-import { createSessionKey, useBuildPipelineStore, useConfigStore, useEnvironmentStore, useErrorDialogStore, useTerminalSessionStore, useUIStore } from "@/stores";
+import { createSessionKey, useBuildPipelineStore, useClaudeOptionsStore, useConfigStore, useEnvironmentStore, useErrorDialogStore, useTerminalSessionStore, useUIStore } from "@/stores";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import * as backend from "@/lib/backend";
+import { preserveCompletedSetupState } from "@/lib/setup-commands";
+import { WEB_GATEWAY_CONNECTED_EVENT } from "@/lib/native/web-gateway";
 import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, PrState } from "@/types";
 
 /**
@@ -117,12 +119,82 @@ function bindSetupTerminalSession(environment: Environment, sessionId: string): 
   });
 }
 
-function preserveCompletedSetupState(environmentId: string, environment: Environment): Environment {
-  const current = useEnvironmentStore.getState().getEnvironmentById(environmentId);
-  if (current?.setupScriptsComplete && environment.setupScriptsComplete === false) {
-    return { ...environment, setupScriptsComplete: true };
+let setupSnapshotReconciliation: Promise<void> | null = null;
+let setupSnapshotReconcileRequested = false;
+
+/**
+ * Reconcile setup gates from backend snapshots after a mobile browser resumes
+ * or its gateway event stream reconnects. Live setup events are intentionally
+ * treated as incremental updates: this snapshot is the catch-up path when a
+ * suspended browser missed the one-shot completion frame.
+ */
+export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
+  // Coalesce, but never drop. A trigger that arrives after the in-flight reads
+  // were issued would otherwise be answered by a snapshot older than the event
+  // it is reacting to, so remember it and run one more pass on completion. On
+  // mobile resume four triggers fire in a burst, which makes this the norm.
+  if (setupSnapshotReconciliation) {
+    setupSnapshotReconcileRequested = true;
+    return setupSnapshotReconciliation;
   }
-  return environment;
+
+  const environmentStore = useEnvironmentStore.getState();
+  const pendingLaunchEnvironmentIds = new Set([
+    ...Object.keys(useClaudeOptionsStore.getState().pendingNativeLaunches),
+    ...environmentStore.environments
+      .filter((environment) => environment.pendingAgentLaunch)
+      .map((environment) => environment.id),
+  ]);
+  const targets = environmentStore.environments.filter((environment) =>
+    environment.status === "running"
+    && (
+      environmentStore.isSetupScriptsRunning(environment.id)
+      || pendingLaunchEnvironmentIds.has(environment.id)
+    )
+  );
+
+  if (targets.length === 0) return Promise.resolve();
+
+  setupSnapshotReconciliation = Promise.all(targets.map(async (environment) => {
+    try {
+      const snapshot = await backend.getEnvironment(environment.id);
+      if (!snapshot) return;
+
+      const store = useEnvironmentStore.getState();
+      const safeSnapshot = preserveCompletedSetupState(environment.id, snapshot);
+      store.updateEnvironment(environment.id, safeSnapshot);
+
+      if (safeSnapshot.setupScriptsComplete) {
+        store.setSetupCommandsResolved(environment.id, true);
+        store.setSetupScriptsRunning(environment.id, false);
+        store.setWorkspaceReady(environment.id, true);
+        return;
+      }
+
+      const setupSession = await backend.getEnvironmentSetupSession(environment.id);
+      if (!setupSession) return;
+      store.setSetupCommandsResolved(environment.id, true);
+      store.setSetupScriptsRunning(environment.id, setupSession.running);
+      if (setupSession.success === true) {
+        store.setWorkspaceReady(environment.id, true);
+      } else if (!setupSession.running) {
+        store.setWorkspaceReady(environment.id, false);
+      }
+    } catch (error) {
+      console.warn(
+        `[useEnvironments] Failed to reconcile setup snapshot for ${environment.id}:`,
+        error,
+      );
+    }
+  })).then(() => undefined).finally(() => {
+    setupSnapshotReconciliation = null;
+    if (setupSnapshotReconcileRequested) {
+      setupSnapshotReconcileRequested = false;
+      void reconcileEnvironmentSetupSnapshots();
+    }
+  });
+
+  return setupSnapshotReconciliation;
 }
 
 export function useEnvironments(
@@ -255,13 +327,22 @@ export function useEnvironments(
           error: event.payload.error ?? null,
         });
         if (environment) {
-          updateEnvironmentInStore(environment_id, environment);
+          updateEnvironmentInStore(
+            environment_id,
+            preserveCompletedSetupState(environment_id, environment),
+          );
         }
         consumePendingSetupCommands(environment_id);
         setSetupCommandsResolved(environment_id, true);
         setSetupScriptsRunning(environment_id, false);
         if (success) {
           setWorkspaceReady(environment_id, true);
+        } else {
+          // The backend clears the durable launch intent on failure and sends the
+          // updated environment above. Mirror it locally even when the payload
+          // omitted the environment, so a failed setup cannot leave this renderer
+          // holding a launch it will never be able to perform.
+          updateEnvironmentInStore(environment_id, { pendingAgentLaunch: false });
         }
       });
       if (disposed) stopComplete();
@@ -282,6 +363,36 @@ export function useEnvironments(
     setWorkspaceReady,
     updateEnvironmentInStore,
   ]);
+
+  // Mobile browsers routinely suspend network streams while backgrounded.
+  // Reconcile from authoritative backend snapshots whenever the gateway
+  // reconnects or the document becomes usable again.
+  useEffect(() => {
+    let unlistenConnected: UnlistenFn | null = null;
+    let disposed = false;
+    const reconcile = () => {
+      void reconcileEnvironmentSetupSnapshots();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") reconcile();
+    };
+
+    void listen(WEB_GATEWAY_CONNECTED_EVENT, reconcile).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlistenConnected = unlisten;
+    });
+    window.addEventListener("pageshow", reconcile);
+    window.addEventListener("online", reconcile);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      disposed = true;
+      unlistenConnected?.();
+      window.removeEventListener("pageshow", reconcile);
+      window.removeEventListener("online", reconcile);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
 
   const loadEnvironments = useCallback(
     async (pid: string, options: LoadEnvironmentsOptions = {}) => {

@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { createBrowserGatewayApi, installBrowserGatewayApi } from "./web-gateway";
+import {
+  createBrowserGatewayApi,
+  installBrowserGatewayApi,
+  WEB_GATEWAY_CONNECTED_EVENT,
+} from "./web-gateway";
 import {
   clearDirectGatewayTransport,
   configureDirectGatewayTransport,
@@ -27,6 +31,7 @@ type TestGatewayWindow = {
 class MockEventSource {
   static instances: MockEventSource[] = [];
   onmessage: ((message: MessageEvent) => void) | null = null;
+  onopen: ((event: Event) => void) | null = null;
   onerror: (() => void) | null = null;
   closed = false;
 
@@ -268,6 +273,114 @@ describe("web gateway browser API", () => {
     }
   });
 
+  test("notifies listeners when a direct gateway stream connects", async () => {
+    globalThis.fetch = mock(async () =>
+      new Response(new ReadableStream({ start() {} }), { status: 200 })
+    ) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+    });
+
+    await new Promise<void>((resolve) => {
+      const unsubscribe = api.listen(WEB_GATEWAY_CONNECTED_EVENT, () => {
+        unsubscribe();
+        resolve();
+      });
+    });
+  });
+
+  test("re-notifies connected listeners on each successful direct reconnect, not on failed attempts", async () => {
+    const warning = mock(() => undefined);
+    const originalWarn = console.warn;
+    console.warn = warning;
+    let attempt = 0;
+    const attemptsAtConnect: number[] = [];
+    globalThis.fetch = mock(async () => {
+      attempt += 1;
+      // Fail the first attempt, then succeed and immediately end the stream so
+      // the reconnect loop runs again.
+      if (attempt === 1) return new Response(null, { status: 503 });
+      return new Response(new ReadableStream({ start(controller) { controller.close(); } }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+      eventReconnectDelayMs: 0,
+    });
+
+    try {
+      await new Promise<void>((resolve) => {
+        const unsubscribe = api.listen(WEB_GATEWAY_CONNECTED_EVENT, () => {
+          attemptsAtConnect.push(attempt);
+          if (attemptsAtConnect.length === 2) {
+            unsubscribe();
+            resolve();
+          }
+        });
+      });
+
+      // The 503 attempt throws before the connected event is dispatched, so the
+      // first notification belongs to attempt 2 and never to attempt 1.
+      expect(attemptsAtConnect[0]).toBe(2);
+      expect(attemptsAtConnect[1]).toBe(3);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("ignores a server frame that impersonates the transport connected event", async () => {
+    const encoder = new TextEncoder();
+    globalThis.fetch = mock(async () =>
+      new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(
+            `data: {"event":"${WEB_GATEWAY_CONNECTED_EVENT}","payload":"spoofed"}\n\n`,
+          ));
+          controller.enqueue(encoder.encode('data: {"event":"changed","payload":"real"}\n\n'));
+        },
+      }), { status: 200 })
+    ) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+    });
+
+    const connectedPayloads: unknown[] = [];
+    const stopConnected = api.listen(WEB_GATEWAY_CONNECTED_EVENT, (payload) => {
+      connectedPayloads.push(payload);
+    });
+
+    const changed = await new Promise<string>((resolve) => {
+      const unsubscribe = api.listen<string>("changed", (value) => {
+        unsubscribe();
+        resolve(value);
+      });
+    });
+    stopConnected();
+
+    expect(changed).toBe("real");
+    // Exactly one notification: the synthetic connect. The server frame carrying
+    // the same event name must not reach transport listeners.
+    expect(connectedPayloads).toEqual([undefined]);
+  });
+
+  test("tolerates a connect with no subscribers for the connected event", async () => {
+    globalThis.fetch = mock(async () =>
+      new Response(new ReadableStream({ start() {} }), { status: 200 })
+    ) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+    });
+
+    // Only "changed" is subscribed, so dispatchEvent finds no callback set for
+    // the connected event and must return without throwing.
+    const unsubscribe = api.listen("changed", () => undefined);
+    await Promise.resolve();
+    expect(() => unsubscribe()).not.toThrow();
+  });
+
   test("throws gateway invoke errors from non-ok responses", async () => {
     globalThis.fetch = mock(async () =>
       new Response(JSON.stringify({ error: "not allowed" }), { status: 403 })
@@ -377,6 +490,14 @@ describe("web gateway browser API", () => {
     expect(source.url).toBe("/__orkestrator/events");
     expect(source.options).toEqual({ withCredentials: true });
 
+    const connectedCallback = mock(() => undefined);
+    const unsubscribeConnected = api.listen(
+      WEB_GATEWAY_CONNECTED_EVENT,
+      connectedCallback,
+    );
+    source.onopen?.({} as Event);
+    expect(connectedCallback).toHaveBeenCalledTimes(1);
+
     source.onmessage?.({
       data: JSON.stringify({ event: "other", payload: "out" }),
     } as MessageEvent);
@@ -398,6 +519,7 @@ describe("web gateway browser API", () => {
       console.warn = originalWarn;
     }
 
+    unsubscribeConnected();
     unsubscribe();
 
     expect(source.closed).toBe(true);

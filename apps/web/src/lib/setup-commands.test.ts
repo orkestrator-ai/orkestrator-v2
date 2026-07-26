@@ -7,6 +7,7 @@ import {
   forceResolveSetupRuntime,
   isSetupPending,
   markSetupScriptsComplete,
+  preserveCompletedSetupState,
   shouldAutoResolveSetupCommands,
 } from "./setup-commands";
 
@@ -237,6 +238,52 @@ describe("setup-commands", () => {
 
     await waitFor(() => {
       expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupScriptsComplete).toBe(true);
+    });
+  });
+
+  describe("preserveCompletedSetupState", () => {
+    test("rewrites a snapshot that would regress a locally-completed setup", () => {
+      useEnvironmentStore.setState({
+        environments: [createEnvironment({ setupScriptsComplete: true })],
+      });
+
+      const snapshot = createEnvironment({ setupScriptsComplete: false, branch: "from-backend" });
+      const guarded = preserveCompletedSetupState("env-1", snapshot);
+
+      // Backend responses are not ordered, so an older snapshot must not reopen
+      // the setup gate on a workspace that is already ready.
+      expect(guarded.setupScriptsComplete).toBe(true);
+      expect(guarded.branch).toBe("from-backend");
+      // The input is not mutated.
+      expect(snapshot.setupScriptsComplete).toBe(false);
+    });
+
+    test("passes a snapshot through untouched when nothing would regress", () => {
+      useEnvironmentStore.setState({
+        environments: [createEnvironment({ setupScriptsComplete: true })],
+      });
+
+      const completed = createEnvironment({ setupScriptsComplete: true });
+      expect(preserveCompletedSetupState("env-1", completed)).toBe(completed);
+
+      const undefinedFlag = createEnvironment({ setupScriptsComplete: undefined });
+      expect(preserveCompletedSetupState("env-1", undefinedFlag)).toBe(undefinedFlag);
+    });
+
+    test("does not invent completion for an environment that never completed setup", () => {
+      useEnvironmentStore.setState({
+        environments: [createEnvironment({ setupScriptsComplete: false })],
+      });
+
+      const snapshot = createEnvironment({ setupScriptsComplete: false });
+      expect(preserveCompletedSetupState("env-1", snapshot).setupScriptsComplete).toBe(false);
+    });
+
+    test("passes through for an environment the store does not know", () => {
+      useEnvironmentStore.setState({ environments: [] });
+
+      const snapshot = createEnvironment({ setupScriptsComplete: false });
+      expect(preserveCompletedSetupState("env-unknown", snapshot)).toBe(snapshot);
     });
   });
 });

@@ -290,7 +290,10 @@ export function useBuildPipeline() {
         // 3. Link pipeline to environment
         setPipelineEnvironment(pipelineId, environment.id);
 
-        // 4. Configure environment for the selected pipeline agent.
+        // 4. Configure environment for the selected pipeline agent. When this
+        // pipeline will open Claude, record the launch intent durably too: the
+        // options store below is renderer-memory only, so a mobile page eviction
+        // between here and workspace-ready would otherwise lose the launch.
         let configuredEnvironment = await backend.updateEnvironmentAgentSettings(
           environment.id,
           agentSettings.defaultAgent,
@@ -298,6 +301,7 @@ export function useBuildPipeline() {
           null,
           agentSettings.opencodeMode,
           agentSettings.codexMode,
+          agentSettings.shouldLaunchClaude,
         );
 
         // Update environment in store

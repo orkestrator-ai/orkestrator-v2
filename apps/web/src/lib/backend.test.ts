@@ -53,6 +53,9 @@ const {
   setGatewayToken,
   setGitHubToken,
   setEnvironmentSetupComplete,
+  setEnvironmentPendingAgentLaunch,
+  setEnvironmentInitialPrompt,
+  updateEnvironmentAgentSettings,
 } = backendWrappers;
 
 afterEach(() => {
@@ -72,6 +75,79 @@ describe("backend setup wrappers", () => {
 
     expect(invokeMock.mock.calls).toEqual([
       ["set_environment_setup_complete", { environmentId: "env-1", complete: true }],
+    ]);
+  });
+
+  test("persists the durable post-setup agent launch flag", async () => {
+    await setEnvironmentPendingAgentLaunch("env-1", false);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["set_environment_pending_agent_launch", {
+        environmentId: "env-1",
+        pending: false,
+      }],
+    ]);
+  });
+
+  test("configures an environment and its durable launch intent together", async () => {
+    await updateEnvironmentAgentSettings(
+      "env-1",
+      "codex",
+      null,
+      null,
+      null,
+      "native",
+      true,
+    );
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["update_environment_agent_settings", {
+        environmentId: "env-1",
+        defaultAgent: "codex",
+        claudeMode: null,
+        claudeNativeBackend: null,
+        opencodeMode: null,
+        codexMode: "native",
+        pendingAgentLaunch: true,
+      }],
+    ]);
+  });
+
+  test("omits the launch intent key entirely when no launch is being configured", async () => {
+    await updateEnvironmentAgentSettings("env-1", "codex", null, null, null, "native");
+
+    // Omission is load-bearing: the settings dialog and FeaturesView both call
+    // this while an environment may still be awaiting its launch, and sending
+    // `false` would clear it.
+    const [[command, args]] = invokeMock.mock.calls as [[string, Record<string, unknown>]];
+    expect(command).toBe("update_environment_agent_settings");
+    expect(args).not.toHaveProperty("pendingAgentLaunch");
+  });
+
+  test("records a cleared launch intent when one is explicitly configured off", async () => {
+    await updateEnvironmentAgentSettings("env-1", "claude", "terminal", null, null, null, false);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["update_environment_agent_settings", {
+        environmentId: "env-1",
+        defaultAgent: "claude",
+        claudeMode: "terminal",
+        claudeNativeBackend: null,
+        opencodeMode: null,
+        codexMode: null,
+        pendingAgentLaunch: false,
+      }],
+    ]);
+  });
+
+  test("persists a rewritten initial prompt so a recovered launch keeps its attachment references", async () => {
+    await setEnvironmentInitialPrompt("env-1", "Fix it [img](/work/a.png)");
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["set_environment_initial_prompt", {
+        environmentId: "env-1",
+        initialPrompt: "Fix it [img](/work/a.png)",
+      }],
     ]);
   });
 

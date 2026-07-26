@@ -3415,6 +3415,9 @@ describe("FeaturesView Codex session bootstrap", () => {
       null,
       "native",
     );
+    // This path drives the Codex bridge directly and opens no agent tab, so it
+    // must not touch a durable launch intent.
+    expect(updateEnvironmentAgentSettingsMock.mock.calls.at(-1)).toHaveLength(6);
     expect(startEnvironmentMock).toHaveBeenCalledWith("env-local", undefined, { silent: true });
     expect(startLocalCodexServerMock).toHaveBeenCalledWith("env-local");
     expect(createClientMock).toHaveBeenCalledWith("http://127.0.0.1:4100");

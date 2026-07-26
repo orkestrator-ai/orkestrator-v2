@@ -3,6 +3,7 @@ import { renderHook, act, waitFor } from "@testing-library/react";
 import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
+import { useClaudeOptionsStore } from "../../../apps/web/src/stores/claudeOptionsStore";
 import { useLoopedReviewStore } from "../../../apps/web/src/stores/loopedReviewStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, StartEnvironmentResult } from "../../../apps/web/src/types";
@@ -22,6 +23,7 @@ function createDeferred<T>() {
 const mockGetEnvironments = mock<(projectId: string) => Promise<Environment[]>>(() => Promise.resolve([]));
 const mockGetEnvironmentSnapshots = mock<(projectId: string) => Promise<Environment[]>>(() => Promise.resolve([]));
 const mockGetEnvironment = mock<(environmentId: string) => Promise<Environment | null>>(() => Promise.resolve(null));
+const mockGetEnvironmentSetupSession = mock(() => Promise.resolve(null));
 const mockCreateEnvironment = mock<(
   projectId: string,
   name?: string,
@@ -52,6 +54,7 @@ mock.module("@/lib/backend", () => ({
   getEnvironments: mockGetEnvironments,
   getEnvironmentSnapshots: mockGetEnvironmentSnapshots,
   getEnvironment: mockGetEnvironment,
+  getEnvironmentSetupSession: mockGetEnvironmentSetupSession,
   createEnvironment: mockCreateEnvironment,
   deleteEnvironment: mockDeleteEnvironment,
   startEnvironment: mockStartEnvironment,
@@ -67,7 +70,10 @@ import { listen } from "@/lib/native/events";
 const mockListen = listen as ReturnType<typeof mock>;
 
 // Import hook AFTER mocking
-import { useEnvironments } from "../../../apps/web/src/hooks/useEnvironments";
+import {
+  reconcileEnvironmentSetupSnapshots,
+  useEnvironments,
+} from "../../../apps/web/src/hooks/useEnvironments";
 
 describe("useEnvironments", () => {
   beforeEach(() => {
@@ -89,6 +95,7 @@ describe("useEnvironments", () => {
       buildEnvironmentIds: new Set(),
     });
     useLoopedReviewStore.setState({ workflows: new Map() });
+    useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
     useConfigStore.setState({
       config: {
         version: "1.0",
@@ -106,6 +113,7 @@ describe("useEnvironments", () => {
     mockGetEnvironments.mockClear();
     mockGetEnvironmentSnapshots.mockClear();
     mockGetEnvironment.mockClear();
+    mockGetEnvironmentSetupSession.mockClear();
     mockCreateEnvironment.mockClear();
     mockDeleteEnvironment.mockClear();
     mockStartEnvironment.mockClear();
@@ -120,6 +128,7 @@ describe("useEnvironments", () => {
     mockGetEnvironments.mockImplementation(() => Promise.resolve([]));
     mockGetEnvironmentSnapshots.mockImplementation(() => Promise.resolve([]));
     mockGetEnvironment.mockImplementation(() => Promise.resolve(null));
+    mockGetEnvironmentSetupSession.mockImplementation(() => Promise.resolve(null));
     mockCreateEnvironment.mockImplementation((projectId) =>
       Promise.resolve(createMockEnvironment({ id: "new-env-id", projectId, name: "test-env" }))
     );
@@ -1234,6 +1243,35 @@ describe("useEnvironments", () => {
     expect(state.isWorkspaceReady("env-1")).toBe(true);
   });
 
+  test("reconciles a missed setup-completion event from the backend snapshot", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      setupScriptsComplete: false,
+      pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({
+      environments: [environment],
+      setupCommandsResolved: new Set(["env-1"]),
+      setupScriptsRunning: new Set(["env-1"]),
+      workspaceReadyEnvironments: new Set(),
+    });
+    mockGetEnvironment.mockResolvedValue({
+      ...environment,
+      setupScriptsComplete: true,
+    });
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    const state = useEnvironmentStore.getState();
+    expect(mockGetEnvironment).toHaveBeenCalledWith("env-1");
+    expect(state.getEnvironmentById("env-1")?.setupScriptsComplete).toBe(true);
+    expect(state.isSetupScriptsRunning("env-1")).toBe(false);
+    expect(state.isWorkspaceReady("env-1")).toBe(true);
+    expect(mockGetEnvironmentSetupSession).not.toHaveBeenCalled();
+  });
+
   test("does not mark the workspace ready after a failed setup completion event", async () => {
     const environment = createMockEnvironment({ id: "env-1", projectId: "project-1" });
     useEnvironmentStore.setState({ environments: [environment] });
@@ -1254,6 +1292,476 @@ describe("useEnvironments", () => {
     expect(state.isWorkspaceReady("env-1")).toBe(false);
   });
 
+  test("clears the durable agent launch when setup fails", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({ environments: [environment] });
+    let completeCallback: ((event: { payload: any }) => void) | undefined;
+    mockListen.mockImplementation((eventName: string, callback: (event: { payload: any }) => void) => {
+      if (eventName === "environment-setup-complete") completeCallback = callback;
+      return Promise.resolve(() => {});
+    });
+    renderHook(() => useEnvironments(null));
+    await waitFor(() => expect(completeCallback).toBeDefined());
+
+    act(() => {
+      completeCallback?.({ payload: { environment_id: "env-1", success: false, error: "setup failed" } });
+    });
+
+    // A launch that can never happen must not survive as durable state, or it
+    // auto-dispatches the original prompt the next time this env is started.
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.pendingAgentLaunch).toBe(false);
+  });
+
+  test("keeps the durable agent launch when setup succeeds", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({ environments: [environment] });
+    let completeCallback: ((event: { payload: any }) => void) | undefined;
+    mockListen.mockImplementation((eventName: string, callback: (event: { payload: any }) => void) => {
+      if (eventName === "environment-setup-complete") completeCallback = callback;
+      return Promise.resolve(() => {});
+    });
+    renderHook(() => useEnvironments(null));
+    await waitFor(() => expect(completeCallback).toBeDefined());
+
+    act(() => {
+      completeCallback?.({ payload: { environment_id: "env-1", success: true } });
+    });
+
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.pendingAgentLaunch).toBe(true);
+  });
+
+  test("skips reconciliation entirely when no environment is awaiting setup or a launch", async () => {
+    useEnvironmentStore.setState({
+      environments: [createMockEnvironment({ id: "env-1", projectId: "project-1", status: "running" })],
+      setupCommandsResolved: new Set(),
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(),
+    });
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    expect(mockGetEnvironment).not.toHaveBeenCalled();
+  });
+
+  test("skips a stopped environment that still carries a durable launch", async () => {
+    useEnvironmentStore.setState({
+      environments: [createMockEnvironment({
+        id: "env-1",
+        projectId: "project-1",
+        status: "stopped",
+        pendingAgentLaunch: true,
+      })],
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(),
+    });
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    expect(mockGetEnvironment).not.toHaveBeenCalled();
+  });
+
+  test("reconciles an environment targeted only by a transient pending native launch", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      setupScriptsComplete: false,
+    });
+    useEnvironmentStore.setState({
+      environments: [environment],
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(),
+    });
+    useClaudeOptionsStore.setState({
+      options: {},
+      pendingNativeLaunches: {
+        "env-1": {
+          containerId: null,
+          environmentId: "env-1",
+          targetPaneId: "default",
+          agentType: "claude",
+          launchMode: "native",
+        } as any,
+      },
+    });
+    mockGetEnvironment.mockResolvedValue({ ...environment, setupScriptsComplete: true });
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    expect(mockGetEnvironment).toHaveBeenCalledWith("env-1");
+    expect(useEnvironmentStore.getState().isWorkspaceReady("env-1")).toBe(true);
+  });
+
+  test("reconciles an environment targeted only by running setup scripts", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      setupScriptsComplete: false,
+    });
+    useEnvironmentStore.setState({
+      environments: [environment],
+      setupScriptsRunning: new Set(["env-1"]),
+      workspaceReadyEnvironments: new Set(),
+    });
+    mockGetEnvironment.mockResolvedValue({ ...environment, setupScriptsComplete: true });
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    expect(mockGetEnvironment).toHaveBeenCalledWith("env-1");
+  });
+
+  test("leaves the store untouched when the snapshot read returns nothing", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      setupScriptsComplete: false,
+      pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({
+      environments: [environment],
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(),
+    });
+    mockGetEnvironment.mockResolvedValue(null);
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    const state = useEnvironmentStore.getState();
+    expect(state.isSetupCommandsResolved("env-1")).toBe(false);
+    expect(state.isWorkspaceReady("env-1")).toBe(false);
+    expect(mockGetEnvironmentSetupSession).not.toHaveBeenCalled();
+  });
+
+  test("survives a rejected snapshot read and stays usable afterwards", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      setupScriptsComplete: false,
+      pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({
+      environments: [environment],
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(),
+    });
+    const originalWarn = console.warn;
+    console.warn = mock(() => undefined);
+    try {
+      mockGetEnvironment.mockRejectedValueOnce(new Error("offline"));
+      await reconcileEnvironmentSetupSnapshots();
+      expect(console.warn).toHaveBeenCalled();
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    // The singleton must have been released, or reconciliation is wedged for the
+    // rest of the session.
+    mockGetEnvironment.mockResolvedValue({ ...environment, setupScriptsComplete: true });
+    await reconcileEnvironmentSetupSnapshots();
+    expect(useEnvironmentStore.getState().isWorkspaceReady("env-1")).toBe(true);
+  });
+
+  test("marks the workspace ready from a setup session that already succeeded", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      setupScriptsComplete: false,
+      pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({
+      environments: [environment],
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(),
+    });
+    mockGetEnvironment.mockResolvedValue(environment);
+    mockGetEnvironmentSetupSession.mockResolvedValue({
+      sessionId: "setup-1",
+      running: false,
+      success: true,
+    } as any);
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    const state = useEnvironmentStore.getState();
+    expect(state.isSetupCommandsResolved("env-1")).toBe(true);
+    expect(state.isSetupScriptsRunning("env-1")).toBe(false);
+    expect(state.isWorkspaceReady("env-1")).toBe(true);
+  });
+
+  test("keeps the setup gate closed for a setup session still running", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      setupScriptsComplete: false,
+      pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({
+      environments: [environment],
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(),
+    });
+    mockGetEnvironment.mockResolvedValue(environment);
+    mockGetEnvironmentSetupSession.mockResolvedValue({
+      sessionId: "setup-1",
+      running: true,
+    } as any);
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    const state = useEnvironmentStore.getState();
+    expect(state.isSetupScriptsRunning("env-1")).toBe(true);
+    expect(state.isWorkspaceReady("env-1")).toBe(false);
+  });
+
+  test("does not unblock the workspace for a setup session that finished unsuccessfully", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      setupScriptsComplete: false,
+      pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({
+      environments: [environment],
+      setupScriptsRunning: new Set(["env-1"]),
+      workspaceReadyEnvironments: new Set(["env-1"]),
+    });
+    mockGetEnvironment.mockResolvedValue(environment);
+    mockGetEnvironmentSetupSession.mockResolvedValue({
+      sessionId: "setup-1",
+      running: false,
+      success: false,
+    } as any);
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    const state = useEnvironmentStore.getState();
+    expect(state.isSetupScriptsRunning("env-1")).toBe(false);
+    expect(state.isWorkspaceReady("env-1")).toBe(false);
+  });
+
+  test("returns without touching gates when no setup session exists", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      setupScriptsComplete: false,
+      pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({
+      environments: [environment],
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(),
+    });
+    mockGetEnvironment.mockResolvedValue(environment);
+    mockGetEnvironmentSetupSession.mockResolvedValue(null);
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    expect(useEnvironmentStore.getState().isSetupCommandsResolved("env-1")).toBe(false);
+  });
+
+  test("does not let a stale snapshot reopen a locally-completed setup", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      setupScriptsComplete: true,
+      pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({
+      environments: [environment],
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(),
+    });
+    // An out-of-order response can carry an older view of the flag.
+    mockGetEnvironment.mockResolvedValue({ ...environment, setupScriptsComplete: false });
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    const state = useEnvironmentStore.getState();
+    expect(state.getEnvironmentById("env-1")?.setupScriptsComplete).toBe(true);
+    expect(state.isWorkspaceReady("env-1")).toBe(true);
+    expect(mockGetEnvironmentSetupSession).not.toHaveBeenCalled();
+  });
+
+  test("reconciles every awaiting environment in one pass", async () => {
+    const first = createMockEnvironment({
+      id: "env-1", projectId: "project-1", status: "running", pendingAgentLaunch: true,
+    });
+    const second = createMockEnvironment({
+      id: "env-2", projectId: "project-1", status: "running", pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({
+      environments: [first, second],
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(),
+    });
+    mockGetEnvironment.mockImplementation((id: string) =>
+      Promise.resolve({ ...(id === "env-1" ? first : second), setupScriptsComplete: true })
+    );
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    expect(mockGetEnvironment).toHaveBeenCalledWith("env-1");
+    expect(mockGetEnvironment).toHaveBeenCalledWith("env-2");
+    const state = useEnvironmentStore.getState();
+    expect(state.isWorkspaceReady("env-1")).toBe(true);
+    expect(state.isWorkspaceReady("env-2")).toBe(true);
+  });
+
+  test("coalesces concurrent reconciles but still runs one more pass for the later trigger", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      setupScriptsComplete: false,
+      pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({
+      environments: [environment],
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(),
+    });
+    const firstRead = createDeferred<Environment | null>();
+    mockGetEnvironment.mockImplementationOnce(() => firstRead.promise);
+    mockGetEnvironment.mockImplementation(() =>
+      Promise.resolve({ ...environment, setupScriptsComplete: true })
+    );
+
+    const first = reconcileEnvironmentSetupSnapshots();
+    const second = reconcileEnvironmentSetupSnapshots();
+    // Both callers share the in-flight pass rather than issuing duplicate reads.
+    expect(second).toBe(first);
+    expect(mockGetEnvironment).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      firstRead.resolve(environment);
+      await first;
+      await Promise.resolve();
+    });
+
+    // The second trigger arrived after the first pass had already read, so it must
+    // be answered by a fresh read rather than the stale snapshot.
+    await waitFor(() => {
+      expect(mockGetEnvironment).toHaveBeenCalledTimes(2);
+      expect(useEnvironmentStore.getState().isWorkspaceReady("env-1")).toBe(true);
+    });
+  });
+
+  test("reconciles when the gateway stream reconnects and when the page becomes visible", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      setupScriptsComplete: false,
+      pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({
+      environments: [environment],
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(),
+    });
+    mockGetEnvironment.mockResolvedValue({ ...environment, setupScriptsComplete: true });
+    const listened: string[] = [];
+    let connectedCallback: (() => void) | undefined;
+    mockListen.mockImplementation((eventName: string, callback: () => void) => {
+      listened.push(eventName);
+      if (eventName === "web-gateway-connected") connectedCallback = callback;
+      return Promise.resolve(() => {});
+    });
+
+    const { unmount } = renderHook(() => useEnvironments(null));
+    await waitFor(() => expect(listened).toContain("web-gateway-connected"));
+    expect(connectedCallback).toBeDefined();
+
+    await act(async () => {
+      connectedCallback?.();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(mockGetEnvironment).toHaveBeenCalledWith("env-1"));
+
+    // pageshow and online are the mobile-resume signals; visibilitychange only
+    // reconciles when the document actually became visible again.
+    for (const eventName of ["pageshow", "online"] as const) {
+      mockGetEnvironment.mockClear();
+      await act(async () => {
+        window.dispatchEvent(new Event(eventName));
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(mockGetEnvironment).toHaveBeenCalledWith("env-1"));
+    }
+
+    mockGetEnvironment.mockClear();
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(mockGetEnvironment).toHaveBeenCalledWith("env-1"));
+
+    // After unmount the DOM listeners must be gone.
+    unmount();
+    mockGetEnvironment.mockClear();
+    await act(async () => {
+      window.dispatchEvent(new Event("pageshow"));
+      window.dispatchEvent(new Event("online"));
+      document.dispatchEvent(new Event("visibilitychange"));
+      await Promise.resolve();
+    });
+    expect(mockGetEnvironment).not.toHaveBeenCalled();
+  });
+
+  test("does not reconcile when the document is being hidden", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      setupScriptsComplete: false,
+      pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({
+      environments: [environment],
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(),
+    });
+    mockGetEnvironment.mockResolvedValue({ ...environment, setupScriptsComplete: true });
+    mockListen.mockImplementation(() => Promise.resolve(() => {}));
+
+    const visibility = Object.getOwnPropertyDescriptor(Document.prototype, "visibilityState");
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "hidden",
+    });
+    try {
+      renderHook(() => useEnvironments(null));
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await Promise.resolve();
+      });
+      // Backgrounding is not a resume signal; reading snapshots there would burn
+      // requests on a page that is about to be suspended.
+      expect(mockGetEnvironment).not.toHaveBeenCalled();
+    } finally {
+      delete (document as unknown as Record<string, unknown>).visibilityState;
+      if (visibility) Object.defineProperty(Document.prototype, "visibilityState", visibility);
+    }
+  });
+
   test("can disable rename events while keeping setup lifecycle listeners", async () => {
     const eventNames: string[] = [];
     mockListen.mockImplementation((eventName: string) => {
@@ -1268,25 +1776,32 @@ describe("useEnvironments", () => {
 
   test("disposes listeners that finish registering after unmount", async () => {
     const resolvers: Array<(unlisten: () => void) => void> = [];
-    const unlisteners = [mock(() => {}), mock(() => {}), mock(() => {})];
+    const unlisteners = [
+      mock(() => {}),
+      mock(() => {}),
+      mock(() => {}),
+      mock(() => {}),
+    ];
     mockListen.mockImplementation(() => new Promise((resolve) => {
       resolvers.push(resolve);
     }));
     const { unmount } = renderHook(() => useEnvironments(null));
-    await waitFor(() => expect(resolvers).toHaveLength(2));
+    await waitFor(() => expect(resolvers).toHaveLength(3));
 
     unmount();
     await act(async () => {
       resolvers[0]?.(unlisteners[0]!);
       resolvers[1]?.(unlisteners[1]!);
-      await Promise.resolve();
       resolvers[2]?.(unlisteners[2]!);
+      await Promise.resolve();
+      resolvers[3]?.(unlisteners[3]!);
       await Promise.resolve();
     });
 
     expect(unlisteners[0]).toHaveBeenCalledTimes(1);
     expect(unlisteners[1]).toHaveBeenCalledTimes(1);
     expect(unlisteners[2]).toHaveBeenCalledTimes(1);
+    expect(unlisteners[3]).toHaveBeenCalledTimes(1);
   });
 
   // --- environment-renamed event listener tests ---

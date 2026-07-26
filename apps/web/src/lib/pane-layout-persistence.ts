@@ -76,6 +76,37 @@ export function createPersistedPaneLayoutInput(
   };
 }
 
+type PaneLayoutEnqueue = (
+  environmentId: string,
+  input: PersistedPaneLayoutInput,
+) => Promise<void>;
+
+/**
+ * Set while `startPaneLayoutPersistence` is active so out-of-band writers can
+ * join its per-environment write chain instead of racing it.
+ */
+let activeEnqueue: PaneLayoutEnqueue | null = null;
+
+/**
+ * Persist a layout immediately, ordered against the debounced writer.
+ *
+ * `save_pane_layout` is last-writer-wins with no revision check, so an
+ * unsynchronized direct write can be overtaken by an older in-flight debounced
+ * write and lose whatever it was trying to record. Callers that must know a
+ * layout is durable before doing something else (clearing a launch intent, say)
+ * go through here.
+ */
+export function flushPaneLayoutNow(
+  environmentId: string,
+  input: PersistedPaneLayoutInput,
+  save: SavePaneLayout = backend.savePaneLayout,
+): Promise<void> {
+  if (activeEnqueue) return activeEnqueue(environmentId, input);
+  // No persistence loop running (tests, teardown): write directly rather than
+  // silently dropping the layout.
+  return save(environmentId, input).then(() => undefined);
+}
+
 export function startPaneLayoutPersistence(
   options: PaneLayoutPersistenceOptions = {},
 ): () => void {
@@ -116,6 +147,18 @@ export function startPaneLayoutPersistence(
     return nextWrite;
   };
 
+  // Joins the same chain as the debounced writes so ordering holds. Priming
+  // `lastEnqueued` also stops the subscriber echoing this exact layout back.
+  const enqueueImmediate: PaneLayoutEnqueue = (environmentId, input) => {
+    const serialized = JSON.stringify(input);
+    if (pendingWrites.get(environmentId)?.serialized === serialized) {
+      cancelTimer(environmentId);
+      pendingWrites.delete(environmentId);
+    }
+    lastEnqueued.set(environmentId, serialized);
+    return enqueueWrite(environmentId, { input, serialized });
+  };
+
   const flushEnvironment = (environmentId: string): Promise<void> | undefined => {
     const pending = pendingWrites.get(environmentId);
     if (!pending) return undefined;
@@ -141,6 +184,7 @@ export function startPaneLayoutPersistence(
 
   window.addEventListener("pagehide", handlePageHide);
   document.addEventListener("visibilitychange", handleVisibilityChange);
+  activeEnqueue = enqueueImmediate;
 
   const unsubscribe = usePaneLayoutStore.subscribe((state, previous) => {
     const environmentIds = new Set([
@@ -188,6 +232,7 @@ export function startPaneLayoutPersistence(
 
   return () => {
     unsubscribe();
+    if (activeEnqueue === enqueueImmediate) activeEnqueue = null;
     window.removeEventListener("pagehide", handlePageHide);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     // Start all pending writes while the renderer/backend connection is still

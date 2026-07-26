@@ -1051,7 +1051,15 @@ describe("HierarchicalSidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => {
-      expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled();
+      expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalledWith(
+        "env-created",
+        "claude",
+        "terminal",
+        null,
+        null,
+        null,
+        true,
+      );
       expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
       expect(startEnvironmentMock).toHaveBeenCalledWith("env-created", "");
       expect(screen.queryByText("Create Ork (Environment)")).toBeNull();

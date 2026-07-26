@@ -84,7 +84,7 @@ interface UseVirtuosoScrollStateReturn {
   virtuosoRef: React.RefObject<VirtuosoHandle | null>;
   /** Props to spread onto the Virtuoso component */
   scrollProps: {
-    followOutput: (isAtBottom: boolean) => "smooth" | false;
+    followOutput: (isAtBottom: boolean) => "auto" | false;
     atBottomStateChange: (atBottom: boolean) => void;
     atBottomThreshold: number;
     totalListHeightChanged: (height: number) => void;
@@ -108,8 +108,11 @@ interface UseVirtuosoScrollStateReturn {
  * - Environment-switch handling (when environmentId is provided): returning
  *   to a view after the selected environment changed always jumps to the
  *   absolute bottom, even if the user had scrolled up before leaving
- * - Smooth animated scroll-to-bottom that keeps pace with late-rendering
- *   footer content (thinking indicator, question/approval cards)
+ * - Jitter-free streaming follow: content growth pins the viewport to the
+ *   bottom synchronously (pre-paint), so the tail of the transcript and the
+ *   thinking indicator hold a fixed position while tokens arrive
+ * - Smooth animated scroll-to-bottom for the *user-initiated* jump (the
+ *   scroll-down button), which keeps pace with late-rendering footer content
  */
 export function useVirtuosoScrollState(
   options: UseVirtuosoScrollStateOptions = {}
@@ -204,9 +207,16 @@ export function useVirtuosoScrollState(
     }
   }, []);
 
+  // Always "auto", never "smooth". Virtuoso re-invokes followOutput on every
+  // item change, and a native smooth scroll restarts its easing from scratch
+  // each time it is re-issued — so against a target that keeps moving (tokens
+  // streaming in) it never converges. The tail drifts progressively lower,
+  // then snaps back up when the stream pauses and the animation finally lands.
+  // Instant follow is what actually *reads* as smooth: content grows, the
+  // viewport stays pinned to the bottom, nothing bobs.
   const followOutput = useCallback(
-    (atBottom: boolean): "smooth" | false => {
-      return atBottom || wantsStickRef.current ? "smooth" : false;
+    (atBottom: boolean): "auto" | false => {
+      return atBottom || wantsStickRef.current ? "auto" : false;
     },
     []
   );
@@ -331,19 +341,57 @@ export function useVirtuosoScrollState(
     [performScrollToBottom]
   );
 
+  /**
+   * Pin the scroller to the bottom in one synchronous write.
+   *
+   * Called from the Resize/Mutation observers, which run after layout but
+   * *before paint*, so growing content never gets a frame at the displaced
+   * position — the previous rAF hop always cost one visible frame of drift.
+   *
+   * Returns false only when there is no scroller yet, so callers can fall back
+   * to the handle-driven retry loop.
+   */
+  const pinToBottom = useCallback((): boolean => {
+    const el = scrollerElRef.current;
+    if (!el) return false;
+    // Only ever move down. Content shrinking is clamped by the browser, and
+    // pulling the viewport *up* here would fight a user mid-scroll.
+    const target = el.scrollHeight - el.clientHeight;
+    if (target > el.scrollTop) {
+      el.scrollTop = target;
+    }
+    return true;
+  }, []);
+
   const isActiveRef = useRef(isActive);
   useEffect(() => {
     isActiveRef.current = isActive;
   }, [isActive]);
 
+  /**
+   * Follow content that grew on its own (streaming tokens, the thinking
+   * indicator, a late-measuring question card).
+   *
+   * Deliberately does *not* go through performScrollToBottom: that loop holds
+   * scrollInFlightRef for the length of its retries plus a 400ms watch window,
+   * which swallowed every growth event in between and left the tail to drift
+   * until the flag cleared. A direct pin is both cheaper and exact.
+   */
+  const followContentGrowth = useCallback(() => {
+    if (!isActiveRef.current) return;
+    if (!wantsStickRef.current) return;
+    if (scrollInFlightRef.current) return;
+    if (pinToBottom()) return;
+    // No scroller mounted yet — fall back to the handle. "auto", not "smooth":
+    // this is content catching up, not a user-requested journey.
+    performScrollToBottom("auto");
+  }, [pinToBottom, performScrollToBottom]);
+
   const totalListHeightChanged = useCallback(
     (_height: number) => {
-      if (!isActiveRef.current) return;
-      if (wantsStickRef.current && !scrollInFlightRef.current) {
-        scrollToBottom();
-      }
+      followContentGrowth();
     },
-    [scrollToBottom]
+    [followContentGrowth]
   );
 
   // User-scroll-up detection: only a user action can release stick intent.
@@ -389,29 +437,21 @@ export function useVirtuosoScrollState(
   }, [scrollerEl]);
 
   // ResizeObserver fallback: when content grows (e.g. footer gains a thinking
-  // indicator or question card) and the user still wants stick, scroll to
-  // the new bottom. followOutput only fires on data-item changes.
+  // indicator or question card) and the user still wants stick, pin to the new
+  // bottom. followOutput only fires on data-item changes.
+  //
+  // Note: we deliberately do NOT skip when isAtBottomRef.current is true.
+  // followOutput only fires on data-item changes, so footer-only growth
+  // (thinking indicator, late-rendering cards) leaves Virtuoso reporting
+  // atBottom=true while the new content sits below the viewport.
+  //
+  // The pin runs synchronously inside the observer callbacks rather than on a
+  // scheduled rAF: both fire within the frame that produced the growth, before
+  // it is painted, so the correction is invisible instead of one frame late.
   useEffect(() => {
     if (!scrollerEl || typeof ResizeObserver === "undefined") return;
 
-    let rafId: number | null = null;
-    const schedule = () => {
-      if (rafId !== null) return;
-      rafId = requestAnimationFrame(() => {
-        rafId = null;
-        if (!isActiveRef.current) return;
-        // Note: we deliberately do NOT skip when isAtBottomRef.current is true.
-        // followOutput only fires on data-item changes, so footer-only growth
-        // (thinking indicator, late-rendering cards) leaves Virtuoso reporting
-        // atBottom=true while the new content sits below the viewport. The
-        // scrollInFlightRef guard prevents stacking with an in-flight retry.
-        if (wantsStickRef.current && !scrollInFlightRef.current) {
-          scrollToBottom();
-        }
-      });
-    };
-
-    const resizeObserver = new ResizeObserver(schedule);
+    const resizeObserver = new ResizeObserver(followContentGrowth);
     const observed = new WeakSet<Element>();
     const observeChildren = () => {
       for (const child of Array.from(scrollerEl.children)) {
@@ -435,7 +475,7 @@ export function useVirtuosoScrollState(
               (r) => r.target === scrollerEl && r.addedNodes.length > 0
             );
             if (directChildAdded) observeChildren();
-            schedule();
+            followContentGrowth();
           })
         : null;
     mutationObserver?.observe(scrollerEl, {
@@ -444,11 +484,10 @@ export function useVirtuosoScrollState(
     });
 
     return () => {
-      if (rafId !== null) cancelAnimationFrame(rafId);
       resizeObserver.disconnect();
       mutationObserver?.disconnect();
     };
-  }, [scrollerEl, scrollToBottom]);
+  }, [scrollerEl, followContentGrowth]);
 
   const cancelActivationScrollFrame = useCallback(() => {
     if (activationScrollRafRef.current !== null) {

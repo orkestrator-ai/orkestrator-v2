@@ -11,7 +11,7 @@ const mockHandleFileMentionCursorChange = mock(() => {});
 const mockHandleFileMentionKeyDown = mock(() => false);
 const mockCloseFileMentionMenu = mock(() => {});
 const mockRefreshFileTree = mock(() => {});
-const mockSearchFiles = mock(async () => []);
+const mockSearchFiles = mock(() => []);
 const mockInputFocus = mock(() => {});
 const mockInsertMention = mock(() => {});
 const mockCreateMention = mock(() => ({
@@ -24,9 +24,12 @@ let mockFileSearchError: string | null = null;
 let mockFilteredFiles = [{ filename: "app.ts", relativePath: "src/app.ts", isDirectory: false }];
 
 const mockUseFileSearch = () => ({
+  flatFiles: [],
   searchFiles: mockSearchFiles,
+  isLoading: false,
   error: mockFileSearchError,
   refresh: mockRefreshFileTree,
+  isAvailable: true,
 });
 
 const mockUseFileMentions = () => ({
@@ -255,7 +258,7 @@ describe("OpenCodeComposeBar", () => {
     mockCloseFileMentionMenu.mockReset();
     mockRefreshFileTree.mockReset();
     mockSearchFiles.mockReset();
-    mockSearchFiles.mockImplementation(async () => []);
+    mockSearchFiles.mockImplementation(() => []);
     mockInputFocus.mockReset();
     mockInsertMention.mockReset();
     mockToastError.mockClear();
@@ -928,26 +931,34 @@ describe("OpenCodeComposeBar", () => {
     });
   });
 
-  test("opens, closes, and dismisses the attachment menu", () => {
+  test("portals the attachment menu and attaches a selected workspace file", async () => {
+    useEnvironmentStore.setState({ environments: [createLocalEnvironment()] });
+    mockSearchFiles.mockImplementation(() => [{
+      filename: "notes.txt",
+      relativePath: "docs/notes.txt",
+      isDirectory: false,
+    }]);
     const { container } = renderComposeBar();
-    const attachmentButton = container.querySelector(
-      '[data-native-compose-controls="primary"] button',
-    )!;
+    const toolbar = container.querySelector("[data-native-compose-toolbar]")!;
+    const attachmentButton = screen.getByRole("button", { name: "Add attachment" });
 
-    fireEvent.click(attachmentButton);
-    expect(screen.getByText("Attach file from workspace")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Paste image/ }).hasAttribute("disabled")).toBe(true);
+    fireEvent.pointerDown(attachmentButton);
+    const menu = await screen.findByRole("menu");
+    expect(toolbar.contains(menu)).toBe(false);
 
-    fireEvent.click(screen.getByText("Attach file from workspace"));
-    expect(screen.queryByText("Attach file from workspace")).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Attach file from workspace" }));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /notes\.txt/ }));
 
-    fireEvent.click(attachmentButton);
-    fireEvent.mouseDown(document.body);
-    expect(screen.queryByText("Attach file from workspace")).toBeNull();
-
-    fireEvent.click(attachmentButton);
-    fireEvent.click(attachmentButton);
-    expect(screen.queryByText("Attach file from workspace")).toBeNull();
+    await waitFor(() => {
+      expect(useOpenCodeStore.getState().getAttachments(SESSION_KEY)).toEqual([
+        expect.objectContaining({
+          type: "file",
+          path: "/tmp/opencode-worktree/docs/notes.txt",
+          name: "notes.txt",
+        }),
+      ]);
+    });
   });
 
   test("writes pasted images into a local worktree", async () => {

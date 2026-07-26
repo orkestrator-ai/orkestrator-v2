@@ -4,6 +4,8 @@ import { mockReadImage } from "../../mocks/clipboard";
 
 const mockWriteContainerFile = mock(async () => {});
 const mockWriteLocalFile = mock(async () => "/tmp/file.png");
+const mockGetFileTree = mock(async () => []);
+const mockGetLocalFileTree = mock(async () => []);
 const mockUpdateGlobalConfig = mock(async (global: any) => ({
   version: "1.0",
   global,
@@ -54,8 +56,8 @@ mock.module("@/lib/backend", () => ({
   writeContainerFile: mockWriteContainerFile,
   writeLocalFile: mockWriteLocalFile,
   updateGlobalConfig: mockUpdateGlobalConfig,
-  getFileTree: async () => [],
-  getLocalFileTree: async () => [],
+  getFileTree: mockGetFileTree,
+  getLocalFileTree: mockGetLocalFileTree,
 }));
 
 // @/lib/native/clipboard is centrally mocked in tests/setup.ts.
@@ -128,6 +130,7 @@ import { useClaudeStore } from "../../../apps/web/src/stores/claudeStore";
 import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "../../../apps/web/src/lib/review-actions";
+import type { Environment } from "../../../apps/web/src/types";
 
 if (typeof globalThis.ImageData === "undefined") {
   (globalThis as Record<string, unknown>).ImageData = class ImageData {
@@ -154,6 +157,25 @@ const defaultModels = [
   { id: "sonnet", name: "Sonnet", supportsFastMode: true, supportsEffort: true, supportedEffortLevels: ["low", "medium", "high"] as const },
 ];
 
+function createLocalEnvironment(): Environment {
+  return {
+    id: ENV_ID,
+    projectId: "project-1",
+    name: "Local environment",
+    branch: "main",
+    containerId: null,
+    status: "running",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: "2026-07-26T00:00:00.000Z",
+    networkAccessMode: "restricted",
+    order: 0,
+    environmentType: "local",
+    worktreePath: "/tmp/claude-worktree",
+  };
+}
+
 function renderComposeBar(overrides: Partial<Parameters<typeof ClaudeComposeBar>[0]> = {}) {
   const onSend = mock(() => {});
   const onStop = mock(() => {});
@@ -179,6 +201,10 @@ describe("ClaudeComposeBar", () => {
     mockReadImage.mockReset();
     mockWriteContainerFile.mockReset();
     mockWriteLocalFile.mockReset();
+    mockGetFileTree.mockReset();
+    mockGetFileTree.mockResolvedValue([]);
+    mockGetLocalFileTree.mockReset();
+    mockGetLocalFileTree.mockResolvedValue([]);
     mockUpdateGlobalConfig.mockReset();
     mockUpdateGlobalConfig.mockImplementation(async (global: any) => ({
       version: "1.0",
@@ -221,6 +247,7 @@ describe("ClaudeComposeBar", () => {
       sessionInitData: new Map(),
       contextUsage: new Map(),
     });
+    useEnvironmentStore.setState({ environments: [] });
     useConfigStore.getState().updateGlobalConfig({ claudeModel: "opus" });
   });
 
@@ -618,6 +645,35 @@ describe("ClaudeComposeBar", () => {
       expect(useClaudeStore.getState().getDraftText(SESSION_KEY)).toBe("/goal ");
     });
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  test("portals the attachment menu and attaches a workspace file", async () => {
+    useEnvironmentStore.setState({ environments: [createLocalEnvironment()] });
+    mockGetLocalFileTree.mockResolvedValue([{
+      name: "requirements.md",
+      path: "docs/requirements.md",
+      isDirectory: false,
+      extension: ".md",
+    }]);
+    const { container } = renderComposeBar();
+    const toolbar = container.querySelector("[data-native-compose-toolbar]")!;
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+    const menu = await screen.findByRole("menu");
+    expect(toolbar.contains(menu)).toBe(false);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Attach file from workspace" }));
+    fireEvent.click(await screen.findByRole("button", { name: /requirements\.md/ }));
+
+    await waitFor(() => {
+      expect(useClaudeStore.getState().getAttachments(SESSION_KEY)).toEqual([
+        expect.objectContaining({
+          type: "file",
+          path: "/tmp/claude-worktree/docs/requirements.md",
+          name: "requirements.md",
+        }),
+      ]);
+    });
   });
 
   test("adds a pasted image attachment through the shared paste hook", async () => {

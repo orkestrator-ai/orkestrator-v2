@@ -1,5 +1,6 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { forwardRef, useImperativeHandle } from "react";
 import { mockReadImage } from "../../mocks/clipboard";
 
 const mockWriteContainerFile = mock(async () => {});
@@ -15,6 +16,7 @@ const mockCreateMention = mock(() => ({
 }));
 const mockRefreshFileTree = mock(() => {});
 const mockSearchFiles = mock(() => []);
+const mockInsertMentionAtCursor = mock(() => {});
 let mockFileMentionMenuOpen = false;
 let mockFileSearchError: string | null = null;
 
@@ -50,26 +52,33 @@ mock.module("@/lib/backend", () => ({
 // terminal-paste tests that rely on them.
 
 mock.module("@/components/chat/MentionableInput", () => ({
-  MentionableInput: (props: {
+  MentionableInput: forwardRef(function MockMentionableInput(props: {
     value: string;
     placeholder?: string;
     disabled?: boolean;
     onKeyDown?: (e: unknown) => void;
     onChange?: (text: string, mentions: unknown[]) => void;
     onCursorChange?: (position: number, text: string) => void;
-  }) => (
-    <textarea
-      data-testid="mentionable-input"
-      value={props.value}
-      placeholder={props.placeholder}
-      disabled={props.disabled}
-      onChange={(e) => {
-        props.onChange?.(e.target.value, []);
-        props.onCursorChange?.(e.target.selectionStart, e.target.value);
-      }}
-      onKeyDown={props.onKeyDown as React.KeyboardEventHandler}
-    />
-  ),
+  }, ref) {
+    useImperativeHandle(ref, () => ({
+      focus: () => {},
+      insertMention: () => {},
+      insertMentionAtCursor: mockInsertMentionAtCursor,
+    }));
+    return (
+      <textarea
+        data-testid="mentionable-input"
+        value={props.value}
+        placeholder={props.placeholder}
+        disabled={props.disabled}
+        onChange={(e) => {
+          props.onChange?.(e.target.value, []);
+          props.onCursorChange?.(e.target.selectionStart, e.target.value);
+        }}
+        onKeyDown={props.onKeyDown as React.KeyboardEventHandler}
+      />
+    );
+  }),
 }));
 
 mock.module("@/components/opencode/OpenCodeSlashCommandMenu", () => ({
@@ -230,6 +239,7 @@ describe("CodexComposeBar", () => {
     mockRefreshFileTree.mockReset();
     mockSearchFiles.mockReset();
     mockSearchFiles.mockImplementation(() => []);
+    mockInsertMentionAtCursor.mockReset();
     mockFileMentionMenuOpen = false;
     mockFileSearchError = null;
     mockReadImage.mockImplementation(async () => ({
@@ -935,28 +945,47 @@ describe("CodexComposeBar", () => {
     });
   });
 
-  test("toggles and dismisses the attachment menu and removes its outside listener", () => {
-    const removeEventListener = spyOn(document, "removeEventListener");
-    const { container, unmount } = renderComposeBar();
-    const plusButton = container.querySelector(
-      '[data-native-compose-controls="primary"] button',
-    )!;
+  test("portals the attachment menu outside the scrollable toolbar", async () => {
+    const { container } = renderComposeBar();
+    const toolbar = container.querySelector("[data-native-compose-toolbar]")!;
+    const attachmentButton = screen.getByRole("button", { name: "Add attachment" });
 
-    fireEvent.click(plusButton);
-    expect(screen.getByText("Attach file from workspace")).toBeTruthy();
-    expect(screen.getByText("Paste image (Cmd+V)")).toBeTruthy();
+    fireEvent.pointerDown(attachmentButton);
 
-    fireEvent.click(plusButton);
-    expect(screen.queryByText("Attach file from workspace")).toBeNull();
+    const menu = await screen.findByRole("menu");
+    expect(toolbar.contains(menu)).toBe(false);
+    expect(screen.getByRole("menuitem", { name: "Mention file from workspace" })).toBeTruthy();
+    expect(
+      screen.getByRole("menuitem", { name: /Paste image into the input/ }).getAttribute("aria-disabled"),
+    ).toBe("true");
 
-    fireEvent.click(plusButton);
-    fireEvent.mouseDown(document.body);
-    expect(screen.queryByText("Attach file from workspace")).toBeNull();
+    fireEvent.pointerDown(attachmentButton);
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  });
 
-    fireEvent.click(plusButton);
-    unmount();
-    expect(removeEventListener).toHaveBeenCalledWith("mousedown", expect.any(Function));
-    removeEventListener.mockRestore();
+  test("inserts a selected workspace file as a Codex mention", async () => {
+    const selectedFile = {
+      filename: "architecture.md",
+      relativePath: "docs/architecture.md",
+      isDirectory: false,
+    };
+    mockSearchFiles.mockImplementation(() => [selectedFile]);
+    renderComposeBar();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Mention file from workspace" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /architecture\.md/ }));
+
+    await waitFor(() => {
+      expect(mockCreateMention).toHaveBeenCalledWith(selectedFile);
+      expect(mockInsertMentionAtCursor).toHaveBeenCalledWith({
+        id: "mention-created",
+        filename: "app.ts",
+        relativePath: "src/app.ts",
+      });
+    });
   });
 
   test("reorders and removes queued prompts from the dialog", async () => {

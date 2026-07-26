@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, ChevronDown, ChevronUp, FileText, Image as ImageIcon, Plus, Square, X, Zap } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, ChevronUp, FileText, Square, X, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -20,6 +20,7 @@ import { useCodexStore } from "@/stores";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import { MentionableInput, type MentionableInputRef } from "@/components/chat/MentionableInput";
+import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
 import { OpenCodeSlashCommandMenu } from "@/components/opencode/OpenCodeSlashCommandMenu";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useFileMentions, useFileSearch, useNativeComposeBarPaste } from "@/hooks";
@@ -112,7 +113,6 @@ export function CodexComposeBar({
 }: CodexComposeBarProps) {
   const [isSending, setIsSending] = useState(false);
   const inputRef = useRef<MentionableInputRef>(null);
-  const attachmentMenuRef = useRef<HTMLDivElement>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const prevFileMentionMenuOpen = useRef(false);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
@@ -139,15 +139,15 @@ export function CodexComposeBar({
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
   const [slashFilter, setSlashFilter] = useState("");
-  const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
 
   const worktreePath = useEnvironmentStore(
     (state) => state.getEnvironmentById(environmentId)?.worktreePath,
   );
-  const { searchFiles, error: fileSearchError, refresh: refreshFileTree } = useFileSearch(
+  const fileSearch = useFileSearch(
     containerId,
     worktreePath,
   );
+  const { searchFiles, error: fileSearchError, refresh: refreshFileTree } = fileSearch;
   const {
     isMenuOpen: fileMentionMenuOpen,
     selectedIndex: fileMentionSelectedIndex,
@@ -341,21 +341,14 @@ export function CodexComposeBar({
     [closeFileMentionMenu, createMention],
   );
 
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (
-        attachmentMenuRef.current
-        && !attachmentMenuRef.current.contains(event.target as Node)
-      ) {
-        setShowAttachmentMenu(false);
-      }
-    }
-
-    if (showAttachmentMenu) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
-    }
-  }, [showAttachmentMenu]);
+  const handleWorkspaceFileSelect = useCallback(
+    (file: FileCandidate) => {
+      const mention = createMention(file);
+      closeFileMentionMenu({ suppressReopenFor: file.filename });
+      inputRef.current?.insertMentionAtCursor(mention);
+    },
+    [closeFileMentionMenu, createMention],
+  );
 
   useNativeComposeBarPaste({
     inputContainerRef,
@@ -543,37 +536,15 @@ export function CodexComposeBar({
           data-native-compose-controls="primary"
           className="flex w-full min-w-0 items-center gap-1 sm:w-auto"
         >
-        <div className="relative" ref={attachmentMenuRef}>
-          <button
-            type="button"
-            className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+          <NativeAttachmentMenu
             disabled={disabled}
-            onClick={() => setShowAttachmentMenu((open) => !open)}
-          >
-            <Plus className="h-4 w-4" />
-          </button>
-
-          {showAttachmentMenu ? (
-            <div className="absolute bottom-full left-0 z-50 mb-1 w-56 rounded-xl border border-zinc-700/70 bg-zinc-900/95 p-1 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm">
-              <button
-                type="button"
-                className="flex w-full cursor-default items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted-foreground"
-                disabled
-              >
-                <FileText className="h-4 w-4" />
-                Attach file from workspace
-              </button>
-              <button
-                type="button"
-                className="flex w-full cursor-default items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted-foreground"
-                disabled
-              >
-                <ImageIcon className="h-4 w-4" />
-                Paste image (Cmd+V)
-              </button>
-            </div>
-          ) : null}
-        </div>
+            fileSearch={fileSearch}
+            onSelectFile={handleWorkspaceFileSelect}
+            onCloseAutoFocus={() => inputRef.current?.focus()}
+            fileActionLabel="Mention file from workspace"
+            filePickerTitle="Mention workspace file"
+            filePickerDescription="Search this environment and mention a file in the current prompt."
+          />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

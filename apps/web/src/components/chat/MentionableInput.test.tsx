@@ -313,6 +313,30 @@ describe("MentionableInput", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  test("inserts a picker mention at the last known cursor without an active token", () => {
+    const onChange = mock(() => {});
+    const inputRef = createRef<MentionableInputRef>();
+    render(
+      <MentionableInput
+        ref={inputRef}
+        value="Review utils"
+        mentions={[]}
+        onChange={onChange}
+      />,
+    );
+
+    inputRef.current!.insertMentionAtCursor({
+      id: "mention-1",
+      filename: "utils.ts",
+      relativePath: "src/utils.ts",
+    });
+
+    expect(onChange).toHaveBeenCalledWith(
+      "Review utils @utils.ts ",
+      [{ id: "mention-1", filename: "utils.ts", relativePath: "src/utils.ts" }],
+    );
+  });
+
   test("does not treat the cursor before @ as an active mention token", () => {
     const onChange = mock(() => {});
     const inputRef = createRef<MentionableInputRef>();

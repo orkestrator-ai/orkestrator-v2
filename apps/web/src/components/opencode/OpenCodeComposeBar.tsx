@@ -8,9 +8,7 @@ import {
 } from "react";
 import {
   X,
-  Plus,
   FileText,
-  Image as ImageIcon,
   ChevronDown,
   ChevronUp,
   ArrowUp,
@@ -45,6 +43,10 @@ import { ContextUsageWheel } from "@/components/chat/ContextUsageWheel";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import { MentionableInput, type MentionableInputRef } from "@/components/chat/MentionableInput";
+import {
+  createWorkspaceAttachment,
+  NativeAttachmentMenu,
+} from "@/components/chat/NativeAttachmentMenu";
 import { useFileMentions, useFileSearch, useNativeComposeBarPaste } from "@/hooks";
 import { OpenCodeSlashCommandMenu } from "./OpenCodeSlashCommandMenu";
 import type {
@@ -106,10 +108,8 @@ export function OpenCodeComposeBar({
   layout = "bottom",
 }: OpenCodeComposeBarProps) {
   const [isSending, setIsSending] = useState(false);
-  const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   const inputRef = useRef<MentionableInputRef>(null);
-  const attachmentMenuRef = useRef<HTMLDivElement>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const prevFileMentionMenuOpen = useRef(false);
 
@@ -162,10 +162,11 @@ export function OpenCodeComposeBar({
   const worktreePath = useEnvironmentStore(
     (state) => state.getEnvironmentById(environmentId)?.worktreePath
   );
-  const { searchFiles, error: fileSearchError, refresh: refreshFileTree } = useFileSearch(
+  const fileSearch = useFileSearch(
     containerId,
     worktreePath
   );
+  const { searchFiles, error: fileSearchError, refresh: refreshFileTree } = fileSearch;
   const {
     isMenuOpen: fileMentionMenuOpen,
     selectedIndex: fileMentionSelectedIndex,
@@ -197,23 +198,6 @@ export function OpenCodeComposeBar({
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
-
-  // Close attachment menu when clicking outside
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (
-        attachmentMenuRef.current &&
-        !attachmentMenuRef.current.contains(event.target as Node)
-      ) {
-        setShowAttachmentMenu(false);
-      }
-    }
-
-    if (showAttachmentMenu) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
-    }
-  }, [showAttachmentMenu]);
 
   useEffect(() => {
     if (text.startsWith("/") && slashCommands.length > 0) {
@@ -272,6 +256,24 @@ export function OpenCodeComposeBar({
       inputRef.current?.insertMention(mention);
     },
     [closeFileMentionMenu, createMention]
+  );
+
+  const handleWorkspaceFileSelect = useCallback(
+    (file: FileCandidate) => {
+      const attachment = createWorkspaceAttachment(
+        file,
+        containerId,
+        worktreePath,
+      );
+      if (!attachment) {
+        toast.error("Cannot attach file", {
+          description: "Environment not properly configured for attachments",
+        });
+        return;
+      }
+      addAttachment(sessionKey, attachment);
+    },
+    [addAttachment, containerId, sessionKey, worktreePath],
   );
 
   useNativeComposeBarPaste({
@@ -580,38 +582,12 @@ export function OpenCodeComposeBar({
             data-native-compose-controls="primary"
             className="flex w-full min-w-0 items-center gap-1 sm:w-auto"
           >
-          {/* Attachment button */}
-          <div className="relative" ref={attachmentMenuRef}>
-            <button
-              className="p-1.5 rounded hover:bg-muted/50 text-muted-foreground hover:text-foreground transition-colors"
+            <NativeAttachmentMenu
               disabled={disabled}
-              onClick={() => setShowAttachmentMenu(!showAttachmentMenu)}
-            >
-              <Plus className="w-4 h-4" />
-            </button>
-
-            {/* Attachment menu popover */}
-            {showAttachmentMenu && (
-              <div className="absolute bottom-full left-0 z-50 mb-1 w-56 rounded-xl border border-zinc-700/70 bg-zinc-900/95 p-1 shadow-[0_18px_48px_rgba(0,0,0,0.42)] backdrop-blur-sm">
-                <button
-                  className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-zinc-800/70 hover:text-foreground"
-                  onClick={() => {
-                    setShowAttachmentMenu(false);
-                  }}
-                >
-                  <FileText className="w-4 h-4" />
-                  Attach file from workspace
-                </button>
-                <button
-                  className="flex w-full cursor-default items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted-foreground"
-                  disabled
-                >
-                  <ImageIcon className="w-4 h-4" />
-                  Paste image (Cmd+V)
-                </button>
-              </div>
-            )}
-          </div>
+              fileSearch={fileSearch}
+              onSelectFile={handleWorkspaceFileSelect}
+              onCloseAutoFocus={() => inputRef.current?.focus()}
+            />
 
           {/* Mode dropdown - minimal style */}
           <DropdownMenu>

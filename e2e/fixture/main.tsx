@@ -23,6 +23,23 @@ declare global {
   }
 }
 
+function assertFixtureArgs(
+  command: string,
+  actual: Record<string, unknown> | undefined,
+  expected: Record<string, unknown>,
+) {
+  const actualEntries = Object.entries(actual ?? {}).sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  const expectedEntries = Object.entries(expected).sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+
+  if (JSON.stringify(actualEntries) !== JSON.stringify(expectedEntries)) {
+    throw new Error(`Unexpected arguments for fixture command: ${command}`);
+  }
+}
+
 function CreateEnvironmentFixture() {
   const [open, setOpen] = useState(true);
 
@@ -262,8 +279,106 @@ function PathTruncationFixture() {
   );
 }
 
+const diffFixtureOriginal = [
+  "# Frontend State Audit",
+  "",
+  "**Goal:** minimise renderer-owned state so that every client of the same backend",
+  "converges on a consistent view.",
+  "",
+  "## 1. Current architecture",
+  "",
+  "The backend already owns a lot. Storage persists projects, environments and review",
+  "workflows, plus kanban tasks and completion-comment markers.",
+  "",
+  "### The gap",
+  "",
+  "Two things are missing, and every finding below is downstream of them.",
+].join("\n");
+
+const diffFixtureModified = [
+  "# Frontend State Audit — What Should Move",
+  "",
+  "**Goal:** minimise renderer-owned state so that every client of the same backend",
+  "converges on a consistent view of the world.",
+  "",
+  "## 1. Current architecture",
+  "",
+  "The backend already owns a lot. `StorageService` persists projects, environments,",
+  "config, review workflows, kanban tasks and completion-comment markers.",
+  "",
+  "### The gap",
+  "",
+  "Two things are missing, and every finding below is downstream of them.",
+  "",
+  "**(a) There is no general change-notification broadcast** — only a fixed set of",
+  "event names is ever emitted across the whole surface:",
+  "",
+  "```",
+  "environment-renamed",
+  "environment-setup-started",
+  "claude-model-catalog-updated",
+  "```",
+].join("\n");
+
+/**
+ * Renders the diff viewer at full height so the phone layout (inline mode, wrapped
+ * lines, trimmed gutters) can be inspected at a real mobile viewport.
+ */
+function DiffViewerFixture() {
+  const params = new URLSearchParams(window.location.search);
+  const status = params.get("status");
+  const gitStatus = status === "new" ? "A" : status === "deleted" ? "D" : "M";
+  const filePath = "docs/audits/frontend-state-audit.md";
+  const containerId = "fixture-container";
+  const baseBranch =
+    params.get("branch") ?? "63d12576e9198f24bc2271a6a8c3702dfb391eae";
+  const [viewFileCount, setViewFileCount] = useState(0);
+
+  window.orkestrator = {
+    invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
+      switch (command) {
+        case "read_container_file":
+          assertFixtureArgs(command, args, { containerId, filePath });
+          return {
+            path: filePath,
+            content: diffFixtureModified,
+            language: "markdown",
+          } as T;
+        case "read_file_at_branch":
+          assertFixtureArgs(command, args, { containerId, filePath, branch: baseBranch });
+          return {
+            path: filePath,
+            content: diffFixtureOriginal,
+            language: "markdown",
+          } as T;
+        default:
+          throw new Error(`Unexpected fixture command: ${command}`);
+      }
+    },
+  } as Window["orkestrator"];
+
+  return (
+    <main className="h-screen bg-background text-foreground">
+      <section data-testid="diff-viewer-pane" className="relative h-full w-full">
+        <DiffViewerTab
+          filePath={filePath}
+          containerId={containerId}
+          baseBranch={baseBranch}
+          gitStatus={gitStatus}
+          isActive
+          onSwitchToFileView={() => setViewFileCount((count) => count + 1)}
+        />
+      </section>
+      <output data-testid="view-file-count" className="sr-only">
+        {viewFileCount}
+      </output>
+    </main>
+  );
+}
+
 function fixtureForPath() {
   if (window.location.pathname === "/browser") return <BrowserFixture />;
+  if (window.location.pathname === "/diff-viewer") return <DiffViewerFixture />;
   if (window.location.pathname === "/codex-compose") return <CodexComposeFixture />;
   if (window.location.pathname === "/path-truncation") return <PathTruncationFixture />;
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;

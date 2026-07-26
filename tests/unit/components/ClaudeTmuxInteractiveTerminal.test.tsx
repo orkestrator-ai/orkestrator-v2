@@ -6,6 +6,11 @@ import * as realBackendEvent from "@/lib/native/events";
 import * as realTmuxClient from "@/lib/claude-tmux-client";
 import * as realTerminalPaste from "@/lib/terminal-paste";
 import * as realClipboardImagePaste from "@/hooks/useClipboardImagePaste";
+import {
+  emitViewportChange,
+  restoreMatchMedia,
+  setMobileViewport,
+} from "../../mocks/match-media";
 
 const realXtermSnapshot = { ...realXterm };
 const realFitAddonSnapshot = { ...realFitAddon };
@@ -154,9 +159,11 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     mock.module("@/hooks/useClipboardImagePaste", () => realClipboardImagePasteSnapshot);
     globalThis.ResizeObserver = originalResizeObserver;
     globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+    restoreMatchMedia();
   });
 
   beforeEach(() => {
+    setMobileViewport(false);
     cleanup();
     terminalInstances.length = 0;
     fitInstances.length = 0;
@@ -226,6 +233,84 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     expect(unlistenMock).toHaveBeenCalledTimes(1);
     expect(detachInteractiveTerminalMock).toHaveBeenCalledWith("pty-1");
     expect(terminalInstances[0]!.disposed).toBe(true);
+  });
+
+  test("fits without focusing the terminal when activated on mobile", async () => {
+    setMobileViewport(true);
+    render(
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+
+    expect(fitInstances[0]!.fit).toHaveBeenCalled();
+    expect(terminalInstances[0]!.focused).toBe(false);
+  });
+
+  test("focuses the terminal when it is attached on desktop", async () => {
+    render(
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+
+    await waitFor(() => expect(terminalInstances[0]!.focused).toBe(true));
+  });
+
+  test("focuses on desktop, but not on mobile, when the tab becomes active again", async () => {
+    const view = render(
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        isActive={false}
+      />,
+    );
+
+    await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
+    const terminal = terminalInstances[0]!;
+    // The connect path focuses on desktop; reset so this test observes only
+    // the isActive false -> true transition.
+    terminal.focused = false;
+
+    view.rerender(
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        isActive
+      />,
+    );
+    expect(terminal.focused).toBe(true);
+
+    terminal.focused = false;
+    act(() => emitViewportChange(true));
+    view.rerender(
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        isActive={false}
+      />,
+    );
+    view.rerender(
+      <ClaudeTmuxInteractiveTerminal
+        tabId="tab-1"
+        environmentId={environmentId}
+        isActive
+      />,
+    );
+
+    expect(terminal.focused).toBe(false);
+    // The same terminal instance throughout: a viewport change must never
+    // tear down and recreate the tmux attachment.
+    expect(terminalInstances).toHaveLength(1);
+    expect(detachInteractiveTerminalMock).not.toHaveBeenCalled();
   });
 
   test("handles keyboard paste through the shared terminal paste helper", async () => {

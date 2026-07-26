@@ -48,7 +48,7 @@ import {
   createWorkspaceAttachment,
   NativeAttachmentMenu,
 } from "@/components/chat/NativeAttachmentMenu";
-import { useFileMentions, useFileSearch, useNativeComposeBarPaste } from "@/hooks";
+import { useFileMentions, useFileSearch, useMediaQuery, useNativeComposeBarPaste } from "@/hooks";
 import { OpenCodeSlashCommandMenu } from "./OpenCodeSlashCommandMenu";
 import type {
   OpenCodeModel,
@@ -232,6 +232,10 @@ export function OpenCodeComposeBar({
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
   const [slashFilter, setSlashFilter] = useState("");
   const [modelSearch, setModelSearch] = useState("");
+  const isMobile = useMediaQuery("(max-width: 767px)");
+  // Sampled once so a later resize across the breakpoint cannot re-run the
+  // mount focus effect and steal focus from whatever the user is doing.
+  const autoFocusOnMountRef = useRef(!isMobile);
 
   // Get worktree path for local environments
   const worktreePath = useEnvironmentStore(
@@ -270,8 +274,12 @@ export function OpenCodeComposeBar({
     }
   }, [fileMentionMenuOpen, refreshFileTree]);
 
+  // Focus input on mount, except on mobile where it would raise the on-screen
+  // keyboard over the transcript before the user has asked to type.
   useEffect(() => {
-    inputRef.current?.focus();
+    if (autoFocusOnMountRef.current) {
+      inputRef.current?.focus();
+    }
   }, []);
 
   useEffect(() => {

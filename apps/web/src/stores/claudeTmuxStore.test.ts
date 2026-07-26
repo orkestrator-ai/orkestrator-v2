@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import type { TranscriptLine } from "@/lib/claude-tmux-client";
+import type { TranscriptContent, TranscriptLine } from "@/lib/claude-tmux-client";
 import { ERROR_MESSAGE_PREFIX, type ClaudeMessage } from "@/lib/claude-client";
 import {
   createClaudeTmuxStateKey,
@@ -552,6 +552,46 @@ describe("applyTranscriptLine", () => {
     expect(thinking?.content).toContain("let me see");
     expect(text?.content).toContain("result");
     expect(tool?.toolName).toBe("Read");
+  });
+
+  test("drops redacted thinking blocks that carry a signature but no text", () => {
+    // What the CLI writes when thinking display is "omitted" — the reasoning is
+    // sealed in the signature, so there is nothing to render. The tmux launcher
+    // asks for "summarized" precisely so this shape does not reach the UI.
+    const redacted: TranscriptContent = { type: "thinking", thinking: "", signature: "EqQBCkYIBxgC" };
+    const line: TranscriptLine = {
+      type: "assistant",
+      uuid: "a3",
+      message: {
+        role: "assistant",
+        content: [redacted, { type: "text", text: "answer" }],
+      },
+    };
+    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
+    const msg = useClaudeTmuxStore.getState().getTab("e").messages[0]!;
+    expect(msg.parts.map((p) => p.type)).toEqual(["text"]);
+  });
+
+  test("keeps a summarized thinking block that carries both text and a signature", () => {
+    // The shape `--thinking-display summarized` produces, and the reason the
+    // launcher asks for it: the signature rides along, but so does the summary.
+    const summarized: TranscriptContent = {
+      type: "thinking",
+      thinking: "weighing two options",
+      signature: "EqQBCkYIBxgC",
+    };
+    const line: TranscriptLine = {
+      type: "assistant",
+      uuid: "a4",
+      message: {
+        role: "assistant",
+        content: [summarized, { type: "text", text: "answer" }],
+      },
+    };
+    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
+    const msg = useClaudeTmuxStore.getState().getTab("e").messages[0]!;
+    expect(msg.parts.map((p) => p.type)).toEqual(["thinking", "text"]);
+    expect(msg.parts[0]?.content).toBe("weighing two options");
   });
 });
 

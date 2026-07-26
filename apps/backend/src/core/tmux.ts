@@ -14,7 +14,7 @@ import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 type CommandHandler = (args: JsonRecord, context: CommandContext) => Promise<unknown> | unknown;
 type RegisterCommand = (name: string, handler: CommandHandler) => void;
 
-type ExecOutput = {
+export type ExecOutput = {
   status: number;
   stdout: string;
   stderr: string;
@@ -33,6 +33,18 @@ const PERMISSION_MODE_POLL_MS = 100;
 const BACKUP_SENTINEL_NO_ORIGINAL = "__orkestrator_no_original__";
 const CLAUDE_SETTINGS_LOCAL_GIT_EXCLUDE_PATTERN = ".claude/settings.local.json";
 const RUNTIME_ROOT_PREFIX = "/tmp/orkestrator-v2-claude-tmux";
+/**
+ * The thinking flags the launcher asks for. The probe below is built from these
+ * same constants so the pair it validates can never drift from the pair the
+ * launch command passes.
+ */
+const THINKING_MODE_ARGS = ["--thinking", "adaptive"] as const;
+const THINKING_DISPLAY_FLAG = "--thinking-display";
+const THINKING_DISPLAY_VALUE = "summarized";
+/** Never a valid `--thinking-display` choice, so the CLI has to reject it. */
+const THINKING_DISPLAY_PROBE_VALUE = "__orkestrator_probe__";
+/** A capability probe that has not answered by now is not going to. */
+const THINKING_DISPLAY_PROBE_TIMEOUT_MS = 10_000;
 
 const HOOK_EVENT_KINDS = new Set([
   "PreToolUse",
@@ -47,6 +59,18 @@ const HOOK_EVENT_KINDS = new Set([
   "Notification",
   "SessionStart",
 ]);
+
+/**
+ * `docker exec` argv for running `args` inside a container. Every container-mode
+ * command — including the launch-time capability probes — goes through here, so
+ * the argv must survive the wrapper unmodified.
+ */
+export function containerExecArgs(containerId: string, args: string[], withStdin: boolean): string[] {
+  const dockerArgs = ["exec", "-u", "node", "-w", "/workspace"];
+  if (withStdin) dockerArgs.push("-i");
+  dockerArgs.push(containerId, ...args);
+  return dockerArgs;
+}
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string") throw new Error(`Expected ${name} to be a string`);
@@ -201,10 +225,11 @@ class TmuxBackend {
     }
 
     if (!this.containerId) throw new Error("container backend has no container id");
-    const dockerArgs = ["exec", "-u", "node", "-w", "/workspace"];
-    if (stdin !== undefined) dockerArgs.push("-i");
-    dockerArgs.push(this.containerId, ...args);
-    return execWithOutput("docker", dockerArgs, { stdin, timeoutMs });
+    return execWithOutput(
+      "docker",
+      containerExecArgs(this.containerId, args, stdin !== undefined),
+      { stdin, timeoutMs },
+    );
   }
 
   async readFile(filePath: string): Promise<string | undefined> {
@@ -914,6 +939,71 @@ function permissionModeFromPane(snapshot: string): string | undefined {
   return undefined;
 }
 
+/** The `exec` surface the thinking-display probe needs, so it can be tested without a backend. */
+type ProbeExec = (args: string[], stdin?: string, timeoutMs?: number) => Promise<ExecOutput>;
+
+/**
+ * The argv used to detect thinking-flag support.
+ *
+ * It carries the *real* `--thinking adaptive` alongside a deliberately invalid
+ * `--thinking-display` value, so one probe validates both flags the launch
+ * command will pass. `--version` keeps it off the API path.
+ */
+export function thinkingDisplayProbeArgs(claudeCommand: string): string[] {
+  return [
+    claudeCommand,
+    ...THINKING_MODE_ARGS,
+    THINKING_DISPLAY_FLAG,
+    THINKING_DISPLAY_PROBE_VALUE,
+    "--version",
+  ];
+}
+
+/**
+ * Whether a probe result means the CLI understands both thinking flags.
+ *
+ * Unlike `--effort`, the thinking flags are hidden from `--help`, so the
+ * helpText check used elsewhere would report "unsupported" on every CLI.
+ * Commander validates a *known* option's argument before doing anything else
+ * and exits non-zero naming the flag, so an argument-validation failure that
+ * names `--thinking-display` is the signal that both flags parsed. A CLI that
+ * has never heard of either option reports `unknown option` (and would name
+ * `--thinking` first), and one that ignores unknown options on the `--version`
+ * path exits 0; both are read as unsupported.
+ */
+export function thinkingDisplayProbeIndicatesSupport(probe: ExecOutput): boolean {
+  const output = `${probe.stdout}\n${probe.stderr}`;
+  return (
+    probe.status !== 0
+    && output.includes(THINKING_DISPLAY_FLAG)
+    // A future CLI that rejects an unknown option here would also name the
+    // flag; only an argument-validation failure means it is supported.
+    && !output.toLowerCase().includes("unknown option")
+  );
+}
+
+/**
+ * Run the probe, failing closed. Any spawn-level failure, timeout or
+ * unrecognised output launches Claude the way it was launched before the
+ * thinking flags existed, which is always safe.
+ */
+export async function probeThinkingDisplaySupport(
+  exec: ProbeExec,
+  claudeCommand: string,
+): Promise<boolean> {
+  try {
+    const probe = await exec(
+      thinkingDisplayProbeArgs(claudeCommand),
+      undefined,
+      THINKING_DISPLAY_PROBE_TIMEOUT_MS,
+    );
+    return thinkingDisplayProbeIndicatesSupport(probe);
+  } catch (error) {
+    console.warn("[tmux] --thinking-display probe failed; launching without it", error);
+    return false;
+  }
+}
+
 class TmuxSession {
   readonly sessionId: string;
   readonly tmuxSession: string;
@@ -1059,7 +1149,17 @@ class TmuxSession {
     const alive = await this.tmuxAlive();
     const launchedNew = !alive;
     if (launchedNew) {
-      const claudeCmd = this.claudeLaunchCommand(claudeCommand, helpText, model, effort);
+      const thinkingDisplay = await probeThinkingDisplaySupport(
+        (args, stdin, timeoutMs) => this.backend.exec(args, stdin, timeoutMs),
+        claudeCommand,
+      );
+      const claudeCmd = this.claudeLaunchCommand(
+        claudeCommand,
+        helpText,
+        model,
+        effort,
+        thinkingDisplay,
+      );
       const wrapped = `${claudeCmd}; echo '[claude exited]'; exec bash`;
       const out = await this.backend.exec([
         this.tmuxCommand,
@@ -1123,6 +1223,7 @@ class TmuxSession {
     helpText: string,
     model: string | undefined,
     effort: string | undefined,
+    supportsThinkingDisplay: boolean,
   ): string {
     let command = shellArg(claudeCommand);
     if (model?.trim()) command += ` --model ${shellArg(model)}`;
@@ -1132,6 +1233,13 @@ class TmuxSession {
       } else {
         console.warn("[tmux] claude CLI does not support --effort; launching without it");
       }
+    }
+    // Opus 4.7 and newer default adaptive thinking display to "omitted", which
+    // writes thinking blocks to the transcript with an empty `thinking` string
+    // (signature only). Native Mode opts back into "summarized" through the
+    // Agent SDK; do the same here so the tmux chat tab renders reasoning too.
+    if (supportsThinkingDisplay) {
+      command += ` ${THINKING_MODE_ARGS.join(" ")} ${THINKING_DISPLAY_FLAG} ${THINKING_DISPLAY_VALUE}`;
     }
     command += " --dangerously-skip-permissions";
     command += this.resumed ? ` --resume ${this.sessionId}` : ` --session-id ${this.sessionId}`;

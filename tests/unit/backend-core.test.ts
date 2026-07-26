@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { __testing as commandTesting } from "../../apps/backend/src/core/commands";
 import { OrkestratorBackend } from "../../apps/backend/src/core/index";
 
 const tempDirs: string[] = [];
@@ -13,6 +14,7 @@ async function createTempDir(prefix: string): Promise<string> {
 }
 
 afterEach(async () => {
+  commandTesting.resetLocalServerLifecycle();
   await Promise.all(tempDirs.splice(0).map((directory) =>
     rm(directory, { recursive: true, force: true })
   ));
@@ -42,6 +44,26 @@ describe("OrkestratorBackend", () => {
     });
     await expect(backend.invoke("unknown-command")).rejects.toThrow(
       "Unknown backend command: unknown-command",
+    );
+  });
+
+  test("shuts down idempotently and rejects later command invocations", async () => {
+    const root = await createTempDir("ork-backend-core-shutdown-");
+    const backend = new OrkestratorBackend({
+      dataDir: path.join(root, "data"),
+      toolchainBinDir: path.join(root, "toolchains", "bin"),
+      appRoot: root,
+      resourceRoot: root,
+      emit: () => undefined,
+    });
+    await backend.init();
+
+    await expect(Promise.all([
+      backend.shutdown(),
+      backend.shutdown(),
+    ])).resolves.toEqual([undefined, undefined]);
+    await expect(backend.invoke("greet", { name: "late" })).rejects.toThrow(
+      "Backend is shutting down",
     );
   });
 });

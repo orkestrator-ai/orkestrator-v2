@@ -937,6 +937,198 @@ describe("sendPrompt", () => {
     }
   });
 
+  // -------------------------------------------------------------------------
+  // Streamed-delta coalescing
+  // -------------------------------------------------------------------------
+  //
+  // Deltas accumulate immediately but the expensive snapshot (ordered-part
+  // rebuild + full-message emit) is deferred by STREAM_EVENT_COALESCE_MS. These
+  // tests pin the two properties that makes safe: nothing is lost on any exit
+  // path, and non-delta messages still observe the deltas that preceded them.
+
+  const textDelta = (uuid: string, text: string) => ({
+    type: "stream_event",
+    uuid,
+    session_id: "sdk-session-coalesce",
+    parent_tool_use_id: null,
+    event: {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text },
+    },
+  });
+
+  const assistantContent = (sessionId: string): string | undefined =>
+    getSessionMessages(sessionId).find((m) => m.role === "assistant")?.content;
+
+  /**
+   * `message.updated` carries the live `NormalizedMessage`, so a captured event
+   * keeps changing as the turn mutates it. Snapshot `content` at emit time to
+   * see the sequence the client actually received.
+   */
+  function captureAssistantContentFrames(): { frames: string[]; stop: () => void } {
+    const frames: string[] = [];
+    const stop = eventEmitter.subscribe((event) => {
+      if (event.type !== "message.updated") return;
+      const message = (event.data as { message?: { role?: string; content?: string } }).message;
+      if (message?.role === "assistant") frames.push(message.content ?? "");
+    });
+    return { frames, stop };
+  }
+
+  /**
+   * Lets the session manager drain the messages already queued on the mock
+   * iterator, without reaching STREAM_EVENT_COALESCE_MS. The mock checks its
+   * error/finished flags before its queue, so failing or aborting immediately
+   * after a push would discard the pushed messages entirely.
+   */
+  const settleQueuedMessages = () => new Promise((resolve) => setTimeout(resolve, 15));
+
+  test("coalesces a burst of deltas into a single accumulated snapshot", async () => {
+    const session = createSession("coalescing");
+    track(session.id);
+
+    const { events, stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "Stream a burst");
+      const call = await nextQueryCall();
+
+      call.push({
+        type: "stream_event",
+        uuid: "burst-1",
+        session_id: "sdk-session-coalesce",
+        parent_tool_use_id: null,
+        event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      });
+      for (const chunk of ["a", "b", "c", "d", "e"]) {
+        call.push(textDelta("burst-1", chunk));
+      }
+
+      await waitFor(() => assistantContent(session.id) === "abcde");
+
+      // The whole burst lands in one window, so it costs far fewer emits than
+      // the one-per-token rebuild this replaced.
+      const updates = events.filter((event) => event.type === "message.updated");
+      expect(updates.length).toBeLessThan(5);
+      expect(updates.length).toBeGreaterThan(0);
+
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+    } finally {
+      stop();
+    }
+  });
+
+  test("a non-delta message observes every delta that preceded it", async () => {
+    const session = createSession("coalescing-order");
+    track(session.id);
+
+    const { frames, stop } = captureAssistantContentFrames();
+    try {
+      const promptPromise = sendPrompt(session.id, "Stream then settle");
+      const call = await nextQueryCall();
+
+      call.push({
+        type: "stream_event",
+        uuid: "order-1",
+        session_id: "sdk-session-coalesce",
+        parent_tool_use_id: null,
+        event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      });
+      call.push(textDelta("order-1", "streamed"));
+      // Arrives well inside the coalescing window, so the pending snapshot has
+      // not been published by the timer yet.
+      call.push({
+        type: "assistant",
+        uuid: "order-1",
+        message: { content: [{ type: "text", text: "streamed and final" }] },
+      });
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+
+      // The flush ran before the assistant message was handled, so the streamed
+      // text was published in its own frame rather than being skipped over.
+      expect(frames).toContain("streamed");
+      expect(frames.indexOf("streamed")).toBeLessThan(
+        frames.lastIndexOf("streamed and final"),
+      );
+      expect(assistantContent(session.id)).toBe("streamed and final");
+    } finally {
+      stop();
+    }
+  });
+
+  test("publishes pending deltas when the SDK stream fails mid-turn", async () => {
+    const session = createSession("coalescing-failure");
+    track(session.id);
+
+    const { events, stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "Stream then explode");
+      const call = await nextQueryCall();
+
+      call.push({
+        type: "stream_event",
+        uuid: "doomed-1",
+        session_id: "sdk-session-coalesce",
+        parent_tool_use_id: null,
+        event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      });
+      call.push(textDelta("doomed-1", "half a sentence"));
+      await settleQueuedMessages();
+      // Fails inside the coalescing window: without an explicit flush on the
+      // error path these deltas would never reach session.messages, and the
+      // user would lose the tail of a turn they had already watched stream.
+      call.fail(new Error("SDK hung up"));
+
+      await expect(promptPromise).rejects.toThrow(/SDK hung up/);
+
+      expect(assistantContent(session.id)).toBe("half a sentence");
+
+      // The completed message is emitted before the terminal error frame.
+      const updateIndex = events.findIndex((event) => event.type === "message.updated"
+        && (event.data as { message?: { role?: string } }).message?.role === "assistant");
+      const errorIndex = events.findIndex((event) => event.type === "session.error");
+      expect(updateIndex).toBeGreaterThanOrEqual(0);
+      expect(errorIndex).toBeGreaterThanOrEqual(0);
+      expect(updateIndex).toBeLessThan(errorIndex);
+    } finally {
+      stop();
+    }
+  });
+
+  test("publishes pending deltas when the turn is aborted mid-stream", async () => {
+    const session = createSession("coalescing-abort");
+    track(session.id);
+
+    const { stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "Stream then abort");
+      const call = await nextQueryCall();
+
+      call.push({
+        type: "stream_event",
+        uuid: "aborted-1",
+        session_id: "sdk-session-coalesce",
+        parent_tool_use_id: null,
+        event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      });
+      call.push(textDelta("aborted-1", "interrupted text"));
+      await settleQueuedMessages();
+      abortSession(session.id);
+
+      await promptPromise;
+
+      // An interrupted turn keeps whatever streamed; the transcript is the only
+      // record of it, since the SDK will not replay the turn.
+      expect(assistantContent(session.id)).toBe("interrupted text");
+    } finally {
+      stop();
+    }
+  });
+
   test("abortSession during a running query unblocks the iterator and emits session.idle", async () => {
     const session = createSession("abort-me");
     track(session.id);

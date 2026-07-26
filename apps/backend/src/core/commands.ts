@@ -4118,14 +4118,30 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
     if (environment.containerId) {
       await runCommand("docker", ["stop", environment.containerId], { timeoutMs: 60_000 });
-    } else if (environment.worktreePath) {
-      // A stopped local environment must not keep its bridge processes (and
-      // the codex app-server tree behind them) running; they restart on demand.
-      await enqueueLocalServerEnvironmentOperation(environment.id, () =>
-        stopLocalServersForEnvironmentUnlocked(environment.id, context),
-      );
+      await storage.updateEnvironment(environment.id, { status: "stopped" });
+      return;
+    }
+
+    // A stopped local environment must not keep its bridge processes (and the
+    // codex app-server tree behind them) running; they restart on demand.
+    //
+    // The status is recorded even when a bridge refuses to die. Stopping is
+    // partial progress the user can see — some servers did stop, and their
+    // PID/port records were cleared — so leaving the environment marked
+    // "running" would strand it with no way to stop it from the UI. The
+    // failure is still surfaced, just after the state is consistent.
+    let stopError: unknown;
+    if (environment.worktreePath) {
+      try {
+        await enqueueLocalServerEnvironmentOperation(environment.id, () =>
+          stopLocalServersForEnvironmentUnlocked(environment.id, context),
+        );
+      } catch (error) {
+        stopError = error;
+      }
     }
     await storage.updateEnvironment(environment.id, { status: "stopped" });
+    if (stopError) throw stopError;
   });
   register("recreate_environment", async ({ environmentId }, context) => {
     const environment = await context.storage.getEnvironment(asString(environmentId, "environmentId"));

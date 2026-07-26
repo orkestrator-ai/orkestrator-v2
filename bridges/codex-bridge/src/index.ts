@@ -56,7 +56,7 @@ import {
   PARENT_PID_ENV,
   parseParentPid,
   startParentWatchdog,
-} from "./parent-watchdog.js";
+} from "@orkestrator/protocol/parent-watchdog";
 import {
   buildTranscriptCatalog,
   createSharedTranscriptMetaLoader,

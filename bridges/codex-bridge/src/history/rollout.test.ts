@@ -3,6 +3,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  clearTranscriptPathCache,
+  getTranscriptPathCacheStats,
+  setTranscriptPathCacheLimitsForTesting,
   createSharedTranscriptMetaLoader,
   extractPersistedMessageText,
   findTranscriptPath,
@@ -25,6 +28,8 @@ async function temporaryRollout(threadId: string, lines: unknown[]): Promise<str
 }
 
 afterEach(async () => {
+  clearTranscriptPathCache();
+  setTranscriptPathCacheLimitsForTesting();
   await Promise.all(
     temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
   );
@@ -36,6 +41,99 @@ describe("rollout public helpers", () => {
       .toBe("/b/thread-2.jsonl");
     expect(await findTranscriptPath("missing", ["/a/thread-1.jsonl"])).toBeNull();
   });
+
+  test("an explicit array snapshot is never cached", async () => {
+    expect(await findTranscriptPath("thread-9", ["/a/thread-9.jsonl"])).toBe("/a/thread-9.jsonl");
+    // The caller may have scoped or filtered that listing, so it must not
+    // become the answer for a later unscoped lookup.
+    expect(getTranscriptPathCacheStats().entries).toBe(0);
+  });
+});
+
+describe("findTranscriptPath path cache", () => {
+  test("serves a still-present path from cache instead of walking again", async () => {
+    const path = await temporaryRollout("thread-cached", [{ type: "session_meta" }]);
+    let walks = 0;
+    const listPaths = async () => {
+      walks += 1;
+      return [path];
+    };
+
+    expect(await findTranscriptPath("thread-cached", listPaths)).toBe(path);
+    expect(await findTranscriptPath("thread-cached", listPaths)).toBe(path);
+    expect(walks).toBe(1);
+  });
+
+  test("re-walks once a cached rollout no longer exists on disk", async () => {
+    const path = await temporaryRollout("thread-vanishing", [{ type: "session_meta" }]);
+    const replacement = await temporaryRollout("thread-vanishing", [{ type: "session_meta" }]);
+    let walks = 0;
+    const listPaths = async () => {
+      walks += 1;
+      return walks === 1 ? [path] : [replacement];
+    };
+
+    expect(await findTranscriptPath("thread-vanishing", listPaths)).toBe(path);
+    await rm(path);
+    // The stat revalidation fails, so the stale entry is dropped rather than
+    // pinning a path that would fail every later read.
+    expect(await findTranscriptPath("thread-vanishing", listPaths)).toBe(replacement);
+    expect(walks).toBe(2);
+  });
+
+  test("a negative result is cached only for its short TTL", async () => {
+    let walks = 0;
+    const listPaths = async () => {
+      walks += 1;
+      return [] as readonly string[];
+    };
+
+    expect(await findTranscriptPath("thread-missing", listPaths)).toBeNull();
+    expect(await findTranscriptPath("thread-missing", listPaths)).toBeNull();
+    expect(walks).toBe(1);
+
+    // A freshly spawned thread's rollout appears moments after the miss, so the
+    // negative entry must expire rather than pin "no transcript" for the session.
+    setTranscriptPathCacheLimitsForTesting({ negativeTtlMs: 0 });
+    expect(await findTranscriptPath("thread-missing", listPaths)).toBeNull();
+    expect(walks).toBe(2);
+  });
+
+  test("evicts least-recently-used entries past the cap", async () => {
+    setTranscriptPathCacheLimitsForTesting({ maxEntries: 2 });
+    const listPaths = async () => [] as readonly string[];
+
+    await findTranscriptPath("thread-a", listPaths);
+    await findTranscriptPath("thread-b", listPaths);
+    await findTranscriptPath("thread-c", listPaths);
+
+    expect(getTranscriptPathCacheStats().entries).toBe(2);
+  });
+
+  test("reading a missing session index yields no lines rather than throwing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "rollout-test-"));
+    temporaryDirectories.push(root);
+    // The session index is absent in a fresh Codex home; callers treat that as
+    // "no persisted sessions", so it must not propagate as an error.
+    expect(await readTranscriptLines(join(root, "session_index.jsonl"))).toEqual([]);
+    expect(await readTranscriptLines(root)).toEqual([]);
+  });
+
+  test("clearTranscriptPathCache forces the next lookup to walk", async () => {
+    let walks = 0;
+    const listPaths = async () => {
+      walks += 1;
+      return [] as readonly string[];
+    };
+
+    await findTranscriptPath("thread-cleared", listPaths);
+    clearTranscriptPathCache();
+    await findTranscriptPath("thread-cleared", listPaths);
+    expect(walks).toBe(2);
+  });
+});
+
+describe("rollout public helpers (continued)", () => {
 
   test("reads JSONL lines and extracts defensive metadata", async () => {
     const path = await temporaryRollout("thread-1", [

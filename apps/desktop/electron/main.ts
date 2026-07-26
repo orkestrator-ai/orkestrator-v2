@@ -20,6 +20,7 @@ import {
   registerBrowserPreviewWindowCleanup,
 } from "./browser-preview-startup.js";
 import { createBrowserPreviewMainAdapters } from "./browser-preview-main-adapters.js";
+import { claimSingleInstanceLock, registerSecondInstanceFocus } from "./single-instance.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,15 +29,8 @@ const isDev = process.env.ELECTRON_DEV === "1";
 app.setName(PRODUCT_NAME);
 app.setPath("userData", path.join(app.getPath("appData"), APP_SLUG));
 
-// Two instances would share this userData dir: each spawns its own backend
-// against the same storage, and the second silently takes a fallback port and
-// starts a duplicate set of bridge processes. Refuse to be the second instance
-// and hand focus to the first instead. The lock is scoped to userData, so a
-// dev build and a packaged build (which share it) exclude each other too.
-const isPrimaryInstance = app.requestSingleInstanceLock();
-if (!isPrimaryInstance) {
-  app.quit();
-}
+// Must follow the `userData` override above: the lock is scoped to that path.
+const isPrimaryInstance = claimSingleInstanceLock(app);
 
 let mainWindow: BrowserWindow | null = null;
 let backend: BackendHttpClient | null = null;
@@ -238,11 +232,7 @@ async function startApplication(): Promise<void> {
 }
 
 if (isPrimaryInstance) {
-  app.on("second-instance", () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-  });
+  registerSecondInstanceFocus(app, () => mainWindow);
 
   void app.whenReady().then(startApplication).catch((error: unknown) => {
     console.error("[Desktop] Startup failed:", error);

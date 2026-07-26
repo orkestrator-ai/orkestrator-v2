@@ -180,9 +180,9 @@ function messageContentText(value: unknown): string | undefined {
  * unbounded tool result here multiplies across renders and sub-agents.
  */
 export const MAX_SUBAGENT_ACTION_OUTPUT_CHARS = 256 * 1024;
-const SUBAGENT_OUTPUT_TRUNCATION_NOTICE = "\n… output truncated";
+export const SUBAGENT_OUTPUT_TRUNCATION_NOTICE = "\n… output truncated";
 
-function capActionOutput(text: string): string {
+export function capActionOutput(text: string): string {
   if (text.length <= MAX_SUBAGENT_ACTION_OUTPUT_CHARS) return text;
   return (
     text.slice(0, MAX_SUBAGENT_ACTION_OUTPUT_CHARS) + SUBAGENT_OUTPUT_TRUNCATION_NOTICE

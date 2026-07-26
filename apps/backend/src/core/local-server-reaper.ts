@@ -10,11 +10,18 @@
  *
  * A recorded PID is killed only when it can be positively identified:
  *
- *   - its command line must contain the marker for the recorded server kind
- *     (a recycled PID belonging to a stranger must never be signalled), and
+ *   - its command line must contain *every* marker for the recorded server
+ *     kind (a recycled PID belonging to a stranger must never be signalled),
  *   - it must actually be orphaned (`ppid == 1`). A bridge whose parent is
  *     still alive belongs to another live backend sharing this data dir, and
- *     killing it would break that instance.
+ *     killing it would break that instance, and
+ *   - it must be its own process-group leader (`pgid == pid`). Termination
+ *     signals the group, so a PID that leads no group would spray SIGKILL
+ *     across an unrelated group. Every bridge is spawned `detached`, which
+ *     makes it a group leader, so this only ever rejects a misidentification.
+ *
+ * Each check independently prefers a false negative (a leaked process survives
+ * until the next startup) over a false positive (killing someone else's work).
  *
  * Stale records are cleared in every case except a kill that failed, so a
  * later startup can retry it.
@@ -29,14 +36,40 @@ interface ReapableServer {
   kind: LocalServerReapKind;
   pidField: "opencodePid" | "claudeBridgePid" | "codexBridgePid";
   portField: "localOpencodePort" | "localClaudePort" | "localCodexPort";
-  /** Substring that must appear in the process's command line. */
-  marker: string;
+  /**
+   * Substrings that must *all* appear in the process's command line.
+   *
+   * These mirror what `startLocalServerUnlocked` actually spawns:
+   *   opencode → `<binary> serve --port N --hostname 127.0.0.1`
+   *   claude   → `<bun> <…>/claude-bridge/dist/index.js`
+   *   codex    → `<bun> <…>/codex-bridge/dist/index.js`
+   *
+   * A bare `"opencode"` was too weak on its own: it matches a hand-started
+   * `opencode` in any mode, or any command line that merely mentions the word,
+   * which is exactly the stranger a recycled PID would land on.
+   */
+  markers: readonly string[];
 }
 
 const REAPABLE_SERVERS: readonly ReapableServer[] = [
-  { kind: "opencode", pidField: "opencodePid", portField: "localOpencodePort", marker: "opencode" },
-  { kind: "claude", pidField: "claudeBridgePid", portField: "localClaudePort", marker: "claude-bridge" },
-  { kind: "codex", pidField: "codexBridgePid", portField: "localCodexPort", marker: "codex-bridge" },
+  {
+    kind: "opencode",
+    pidField: "opencodePid",
+    portField: "localOpencodePort",
+    markers: ["opencode", "serve", "--hostname"],
+  },
+  {
+    kind: "claude",
+    pidField: "claudeBridgePid",
+    portField: "localClaudePort",
+    markers: ["claude-bridge", "dist/index.js"],
+  },
+  {
+    kind: "codex",
+    pidField: "codexBridgePid",
+    portField: "localCodexPort",
+    markers: ["codex-bridge", "dist/index.js"],
+  },
 ];
 
 /**
@@ -49,7 +82,30 @@ const REAP_KILL_WAIT_MS = 1_000;
 
 export interface ProcessIdentity {
   parentPid: number;
+  processGroupId: number;
   commandLine: string;
+}
+
+/**
+ * Parses one `ps -o ppid=,pgid=,command=` row.
+ *
+ * Exported for tests: the shape of this output is the reaper's only evidence
+ * about a process it is about to signal, so a parsing slip here is what turns
+ * a stranger into a target.
+ */
+export function parseProcessIdentity(stdout: string): ProcessIdentity | null {
+  const line = stdout
+    .split("\n")
+    .map((entry) => entry.trim())
+    .find((entry) => entry.length > 0);
+  if (!line) return null;
+  // `command` is last and may contain anything, including whitespace runs.
+  const match = /^(\d+)\s+(\d+)\s+(\S.*)$/.exec(line);
+  if (!match) return null;
+  const parentPid = Number(match[1]);
+  const processGroupId = Number(match[2]);
+  if (!Number.isInteger(parentPid) || !Number.isInteger(processGroupId)) return null;
+  return { parentPid, processGroupId, commandLine: match[3] ?? "" };
 }
 
 async function readProcessIdentity(pid: number): Promise<ProcessIdentity | null> {
@@ -57,24 +113,22 @@ async function readProcessIdentity(pid: number): Promise<ProcessIdentity | null>
   try {
     const { stdout } = await runCommand(
       "ps",
-      ["-p", String(pid), "-ww", "-o", "ppid=,command="],
+      ["-p", String(pid), "-ww", "-o", "ppid=,pgid=,command="],
       { timeoutMs: 5_000 },
     );
-    const line = stdout
-      .split("\n")
-      .map((entry) => entry.trim())
-      .find((entry) => entry.length > 0);
-    if (!line) return null;
-    const match = /^(\d+)\s+(.+)$/.exec(line);
-    if (!match) return null;
-    return { parentPid: Number(match[1]), commandLine: match[2] ?? "" };
+    return parseProcessIdentity(stdout);
   } catch {
     // `ps -p` exits non-zero when the PID no longer exists.
     return null;
   }
 }
 
-function isPidAlive(pid: number): boolean {
+/**
+ * EPERM means the process exists but belongs to another user: alive, and not
+ * ours. Reporting it dead would let the caller treat someone else's live
+ * process as a stale record.
+ */
+export function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -87,7 +141,7 @@ function isPidAlive(pid: number): boolean {
  * A handle over a bare PID that `terminateProcessTree` can drive. There is no
  * ChildProcess for an orphan, so exit status is derived by probing liveness.
  */
-function detachedProcessHandle(pid: number): {
+export function detachedProcessHandle(pid: number): {
   pid: number;
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
@@ -114,7 +168,12 @@ export interface ReapedLocalServer {
   environmentId: string;
   kind: LocalServerReapKind;
   pid: number;
-  outcome: "reaped" | "cleared" | "kill-failed" | "skipped-live-owner";
+  outcome:
+    | "reaped"
+    | "cleared"
+    | "kill-failed"
+    | "skipped-live-owner"
+    | "skipped-not-group-leader";
 }
 
 export interface ReapOrphanedLocalServersOptions {
@@ -164,7 +223,9 @@ export async function reapOrphanedLocalServers(
       }
 
       const identity = await readIdentity(pid);
-      if (!identity || !identity.commandLine.includes(server.marker)) {
+      const matchesKind = identity !== null
+        && server.markers.every((marker) => identity.commandLine.includes(marker));
+      if (!matchesKind) {
         // Dead, or a recycled PID now owned by a stranger. Either way the
         // record is stale and must not be trusted again.
         await clearRecord();
@@ -176,6 +237,18 @@ export async function reapOrphanedLocalServers(
         // Still parented to a live process: another backend instance sharing
         // this data dir owns it. Not ours to kill, not stale to clear.
         record("skipped-live-owner");
+        continue;
+      }
+
+      if (identity.processGroupId !== pid) {
+        // Termination signals the process *group*. A PID that does not lead its
+        // own group cannot be a bridge we spawned (`detached` makes them group
+        // leaders), and signalling `-pid` would hit an unrelated group. Keep the
+        // record: clearing it would hide the anomaly from the next startup.
+        log(
+          `[backend] Refusing to reap ${server.kind} pid ${pid}: it leads no process group (pgid ${identity.processGroupId})`,
+        );
+        record("skipped-not-group-leader");
         continue;
       }
 

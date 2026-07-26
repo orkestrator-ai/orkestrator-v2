@@ -13,8 +13,8 @@ const events = new Hono();
  * the client reconnects and rehydrates from the REST endpoints, which the UI
  * must be able to do anyway (missed events are never the only source of truth).
  */
-const MAX_PENDING_SSE_FRAMES = 1_000;
-const MAX_PENDING_SSE_BYTES = 16 * 1024 * 1024;
+export const MAX_PENDING_SSE_FRAMES = 1_000;
+export const MAX_PENDING_SSE_BYTES = 16 * 1024 * 1024;
 
 interface SseFrame {
   event: string;
@@ -25,11 +25,17 @@ interface SseFrame {
  * Serializes writes onto one promise chain (concurrent `writeSSE` calls can
  * interleave frame bytes) and bounds the backlog. The first frame is always
  * accepted so a single oversized frame cannot wedge an idle connection.
+ *
+ * Exported for tests: the limits are per-connection module constants, so
+ * driving the real ones would need a 16MB fixture.
  */
-function createBoundedSseWriter(
+export function createBoundedSseWriter(
   write: (frame: SseFrame) => Promise<void>,
   onOverflow: () => void,
+  limits: { maxPendingFrames?: number; maxPendingBytes?: number } = {},
 ): (frame: SseFrame) => Promise<void> {
+  const maxPendingFrames = limits.maxPendingFrames ?? MAX_PENDING_SSE_FRAMES;
+  const maxPendingBytes = limits.maxPendingBytes ?? MAX_PENDING_SSE_BYTES;
   let tail: Promise<void> = Promise.resolve();
   let pendingFrames = 0;
   let pendingBytes = 0;
@@ -39,8 +45,8 @@ function createBoundedSseWriter(
     const frameBytes = frame.data.length;
     if (
       pendingFrames > 0 &&
-      (pendingFrames >= MAX_PENDING_SSE_FRAMES ||
-        pendingBytes + frameBytes > MAX_PENDING_SSE_BYTES)
+      (pendingFrames >= maxPendingFrames ||
+        pendingBytes + frameBytes > maxPendingBytes)
     ) {
       overflowed = true;
       onOverflow();

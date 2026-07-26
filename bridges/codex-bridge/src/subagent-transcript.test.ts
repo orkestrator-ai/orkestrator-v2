@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  capActionOutput,
   deriveSubagentPartsFromTranscriptRecords,
+  MAX_SUBAGENT_ACTION_OUTPUT_CHARS,
   mergeSubagentPartsIntoMessageParts,
   parseSubAgentActivityRecords,
   parseTranscriptRecords,
+  SUBAGENT_OUTPUT_TRUNCATION_NOTICE,
   type TranscriptRecord,
 } from "./subagent-transcript.js";
 
@@ -1844,5 +1847,65 @@ describe("deriveSubagentPartsFromTranscriptRecords", () => {
     ];
     const merged = mergeSubagentPartsIntoMessageParts(parts, []);
     expect(merged).toBe(parts);
+  });
+});
+
+describe("capActionOutput", () => {
+  test("leaves output at or below the cap untouched", () => {
+    expect(capActionOutput("")).toBe("");
+    expect(capActionOutput("short")).toBe("short");
+    const exact = "x".repeat(MAX_SUBAGENT_ACTION_OUTPUT_CHARS);
+    // Boundary: exactly at the cap is not truncated.
+    expect(capActionOutput(exact)).toBe(exact);
+  });
+
+  test("truncates one character past the cap and says so", () => {
+    const oversized = "x".repeat(MAX_SUBAGENT_ACTION_OUTPUT_CHARS + 1);
+    const capped = capActionOutput(oversized);
+
+    expect(capped).toHaveLength(
+      MAX_SUBAGENT_ACTION_OUTPUT_CHARS + SUBAGENT_OUTPUT_TRUNCATION_NOTICE.length,
+    );
+    expect(capped.endsWith(SUBAGENT_OUTPUT_TRUNCATION_NOTICE)).toBe(true);
+    // The retained prefix is the head of the original, not a re-encoding.
+    expect(capped.slice(0, MAX_SUBAGENT_ACTION_OUTPUT_CHARS)).toBe(
+      oversized.slice(0, MAX_SUBAGENT_ACTION_OUTPUT_CHARS),
+    );
+  });
+});
+
+describe("sub-agent action output capping", () => {
+  const oversized = "x".repeat(MAX_SUBAGENT_ACTION_OUTPUT_CHARS + 5_000);
+
+  function partsForOutput(output: unknown) {
+    return deriveSingleSubagent(recordsFromLines([
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          call_id: "call-1",
+          name: "shell",
+          arguments: JSON.stringify({ command: ["echo", "hi"] }),
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: { type: "function_call_output", call_id: "call-1", output },
+      }),
+    ]));
+  }
+
+  test("caps a huge string tool result", () => {
+    // These parts are re-derived on every transcript probe and retained per
+    // sub-agent, so an uncapped result multiplies across renders.
+    const serialized = JSON.stringify(partsForOutput(oversized));
+    expect(serialized).toContain("output truncated");
+    expect(serialized.length).toBeLessThan(oversized.length + 10_000);
+  });
+
+  test("caps a huge structured tool result", () => {
+    const serialized = JSON.stringify(partsForOutput({ stdout: oversized }));
+    expect(serialized).toContain("output truncated");
+    expect(serialized.length).toBeLessThan(oversized.length + 10_000);
   });
 });

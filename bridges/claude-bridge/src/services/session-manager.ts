@@ -1360,6 +1360,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let earlyWarningTimeout: ReturnType<typeof setTimeout> | null = null;
   let streamEventFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  // Hoisted out of the `try` so the error path can still publish whatever the
+  // coalescing window was holding. Null until the streaming state it closes
+  // over exists, which is everything before the SDK query is created.
+  let flushPendingStreamedDeltas: (() => void) | null = null;
 
   try {
     // Create the query with Claude Agent SDK
@@ -1813,6 +1817,8 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
       emitCurrentAssistantMessage();
     };
+
+    flushPendingStreamedDeltas = flushStreamedAssistantMessage;
 
     const scheduleStreamedAssistantMessageFlush = () => {
       streamEventsDirty = true;
@@ -2355,6 +2361,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       durationMs: Date.now() - startedAt,
     });
   } catch (error) {
+    // The turn died mid-stream with deltas still coalescing. Publish them
+    // before anything else here: the alternative is that the last window of
+    // streamed text is silently dropped from the transcript, and the `finally`
+    // below discards the pending timer, so this is the last chance to emit it.
+    // Ordered before the failure is recorded so the client sees the completed
+    // message first and `session.error` stays terminal.
+    flushPendingStreamedDeltas?.();
+
     if (abortController.signal.aborted) {
       if (options?.outputSchema && structuredRequestId && !session.structuredOutput) {
         recordStructuredOutput(
@@ -2412,8 +2426,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       clearTimeout(earlyWarningTimeout);
     }
     if (streamEventFlushTimer) {
-      // The turn is over one way or another; a late flush would emit a stale
-      // snapshot after session.idle/session.error.
+      // Every exit path has already flushed synchronously (after the loop, or
+      // at the top of the catch), so anything still armed here is a timer with
+      // nothing left to publish. Clearing it stops a late callback emitting a
+      // duplicate snapshot after session.idle/session.error.
       clearTimeout(streamEventFlushTimer);
       streamEventFlushTimer = null;
     }

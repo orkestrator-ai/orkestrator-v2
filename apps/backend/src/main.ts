@@ -7,6 +7,7 @@ import { OrkestratorGateway } from "./gateway.js";
 import { createManagedWebClient } from "./managed-web-client.js";
 import { assertSupportedPlatform, parseOptions } from "./options.js";
 import { createBackendShutdownHandler } from "./shutdown.js";
+import { startReparentWatchdog } from "@orkestrator/protocol/parent-watchdog";
 import { getTailscaleServeTargetPort, TailscaleServeManager } from "./tailscale-serve.js";
 
 assertSupportedPlatform();
@@ -123,15 +124,11 @@ process.on("SIGTERM", () => void stop("SIGTERM"));
 // force-killed, and this process would otherwise keep every local bridge (and
 // each bridge's codex app-server tree) alive as orphans. When the parent that
 // spawned us disappears — ppid is reparented — run the same drain a SIGTERM
-// would have. Started under a service manager the ppid is stable, so this
-// never fires there.
-const initialParentPid = process.ppid;
-if (initialParentPid > 1) {
-  const parentWatchdog = setInterval(() => {
-    if (process.ppid === initialParentPid) return;
-    clearInterval(parentWatchdog);
+// would have. Started under a service manager the ppid is already 1, so the
+// watchdog declines to start and this never fires there.
+startReparentWatchdog({
+  onReparented: () => {
     console.warn("[Backend] Parent process exited; shutting down local servers");
     void stop("SIGTERM");
-  }, 15_000);
-  parentWatchdog.unref();
-}
+  },
+});

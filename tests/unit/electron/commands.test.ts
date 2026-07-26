@@ -6806,6 +6806,57 @@ exit 0
     await expect(commands.get("recreate_environment")?.({ environmentId: local.id }, context)).resolves.toBeUndefined();
   });
 
+  test("stopping a local environment also stops its bridge processes", async () => {
+    const worktreePath = await createTempDir("ork-electron-stop-local-");
+    const environment = createEnvironment({
+      id: "env-stop-local",
+      environmentType: "local",
+      containerId: null,
+      worktreePath,
+      localCodexPort: 40201,
+      codexBridgePid: 95001,
+    });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+    const child = createFakeChild(95001);
+    commandTesting.setLocalServerProcess(`codex:${environment.id}`, child);
+    commandTesting.setTerminateProcessTree(async () => true);
+
+    await commands.get("stop_environment")?.({ environmentId: environment.id }, context);
+
+    // The bridge is gone and its ownership entry released, so a later start
+    // does not think a server is already running.
+    expect(commandTesting.getLocalServerProcess(`codex:${environment.id}`)).toBeUndefined();
+    expect(updates).toContainEqual({ codexBridgePid: null, localCodexPort: null });
+    expect(updates).toContainEqual({ status: "stopped" });
+  });
+
+  test("a local environment is still marked stopped when a bridge refuses to die", async () => {
+    const worktreePath = await createTempDir("ork-electron-stop-local-failure-");
+    const environment = createEnvironment({
+      id: "env-stop-local-failure",
+      environmentType: "local",
+      containerId: null,
+      worktreePath,
+    });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+    commandTesting.setLocalServerProcess(`codex:${environment.id}`, createFakeChild(95002));
+    commandTesting.setTerminateProcessTree(async () => false);
+
+    // The failure is surfaced...
+    await expect(commands.get("stop_environment")?.(
+      { environmentId: environment.id },
+      context,
+    )).rejects.toThrow("Failed to stop all local servers");
+
+    // ...but not at the cost of stranding the environment as running, with no
+    // way for the user to stop it from the UI.
+    expect(updates).toContainEqual({ status: "stopped" });
+
+    commandTesting.setTerminateProcessTree(async () => true);
+  });
+
   test("stores PR metadata, normalized settings, and deduplicated domain changes", async () => {
     const environment = createEnvironment({ allowedDomains: ["api.example.com", "shared.example.com"] });
     const { context, updates } = createContext(environment);

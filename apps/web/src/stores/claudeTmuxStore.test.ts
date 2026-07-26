@@ -558,20 +558,40 @@ describe("applyTranscriptLine", () => {
     // What the CLI writes when thinking display is "omitted" — the reasoning is
     // sealed in the signature, so there is nothing to render. The tmux launcher
     // asks for "summarized" precisely so this shape does not reach the UI.
+    const redacted: TranscriptContent = { type: "thinking", thinking: "", signature: "EqQBCkYIBxgC" };
     const line: TranscriptLine = {
       type: "assistant",
       uuid: "a3",
       message: {
         role: "assistant",
-        content: [
-          { type: "thinking", thinking: "", signature: "EqQBCkYIBxgC" } as TranscriptContent,
-          { type: "text", text: "answer" },
-        ],
+        content: [redacted, { type: "text", text: "answer" }],
       },
     };
     useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
     const msg = useClaudeTmuxStore.getState().getTab("e").messages[0]!;
     expect(msg.parts.map((p) => p.type)).toEqual(["text"]);
+  });
+
+  test("keeps a summarized thinking block that carries both text and a signature", () => {
+    // The shape `--thinking-display summarized` produces, and the reason the
+    // launcher asks for it: the signature rides along, but so does the summary.
+    const summarized: TranscriptContent = {
+      type: "thinking",
+      thinking: "weighing two options",
+      signature: "EqQBCkYIBxgC",
+    };
+    const line: TranscriptLine = {
+      type: "assistant",
+      uuid: "a4",
+      message: {
+        role: "assistant",
+        content: [summarized, { type: "text", text: "answer" }],
+      },
+    };
+    useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
+    const msg = useClaudeTmuxStore.getState().getTab("e").messages[0]!;
+    expect(msg.parts.map((p) => p.type)).toEqual(["thinking", "text"]);
+    expect(msg.parts[0]?.content).toBe("weighing two options");
   });
 });
 

@@ -4,12 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
+  containerExecArgs,
   newestJsonlFindCommand,
   newestJsonlInDir,
   parseFreshJsonlFindOutput,
+  probeThinkingDisplaySupport,
   registerTmuxBackendCommands,
+  thinkingDisplayProbeArgs,
+  thinkingDisplayProbeIndicatesSupport,
   transcriptContainsSessionId,
   tmuxSessionName,
+  type ExecOutput,
 } from "../../../apps/backend/src/core/tmux";
 import type { Environment } from "../../../apps/backend/src/core/models";
 
@@ -168,22 +173,38 @@ case "$command" in
 esac
 `);
   // Mirrors the real CLI closely enough for the launch-time capability probes:
-  // `--effort` is advertised by `--help`, while `--thinking-display` is hidden
-  // and only discoverable by having its argument rejected.
+  // `--effort` is advertised by `--help`, while the thinking flags are hidden
+  // and only discoverable by having an argument rejected. Options are validated
+  // in argv order, the way commander does, so a probe carrying a valid
+  // `--thinking` and an invalid `--thinking-display` fails on the latter.
   await fs.writeFile(path.join(binDir, "claude"), `#!/bin/sh
 if [ "$1" = "--help" ]; then
   printf '%s\\n' '--session-id --resume --effort'
   exit 0
 fi
-if [ "$1" = "--thinking-display" ]; then
-  case "$2" in
-    summarized|omitted) ;;
-    *)
-      printf '%s\\n' "error: option '--thinking-display <display>' argument '$2' is invalid. Allowed choices are summarized, omitted." >&2
-      exit 1
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --thinking)
+      case "$2" in
+        adaptive|off) shift 2 ;;
+        *)
+          printf '%s\\n' "error: option '--thinking <mode>' argument '$2' is invalid. Allowed choices are adaptive, off." >&2
+          exit 1
+          ;;
+      esac
       ;;
+    --thinking-display)
+      case "$2" in
+        summarized|omitted) shift 2 ;;
+        *)
+          printf '%s\\n' "error: option '--thinking-display <display>' argument '$2' is invalid. Allowed choices are summarized, omitted." >&2
+          exit 1
+          ;;
+      esac
+      ;;
+    *) shift ;;
   esac
-fi
+done
 printf '%s\\n' 'Claude Code test'
 exit 0
 `);
@@ -406,18 +427,19 @@ exit 0
     });
   });
 
-  test("omits the thinking flags when the installed CLI does not understand them", async () => {
+  test("omits the thinking and effort flags when an older CLI ignores what it does not know", async () => {
     const handlers = createHandlers();
 
     await withFakeTmuxRuntime(async ({ environment, log }) => {
       const toolchainBinDir = await createTempDir("ork-tmux-old-cli-");
       const oldClaude = path.join(toolchainBinDir, "claude");
       // An older CLI ignores the unknown option on the `--version` path and
-      // exits 0, which is exactly what the probe treats as "unsupported".
+      // exits 0, which is exactly what the probe treats as "unsupported". Its
+      // `--help` also omits `--effort`, so that flag must be dropped too.
       await fs.writeFile(oldClaude, `#!/bin/sh
 case "$1" in
-  --help) printf '%s\n' '--session-id <uuid>' ;;
-  *) printf '2.1.2\n' ;;
+  --help) printf '%s\\n' '--session-id <uuid>' ;;
+  *) printf '2.1.2\\n' ;;
 esac
 exit 0
 `);
@@ -433,12 +455,14 @@ exit 0
       await invoke(
         handlers,
         "claude_tmux_start",
-        { tabId: "tab-old-cli", environmentId: environment.id },
+        { tabId: "tab-old-cli", environmentId: environment.id, model: "sonnet", effort: "high" },
         context,
       );
 
       const launchLog = await fs.readFile(log, "utf8");
       expect(launchLog).toContain(" --dangerously-skip-permissions");
+      expect(launchLog).toContain(" --model 'sonnet'");
+      expect(launchLog).not.toContain("--effort");
       expect(launchLog).not.toContain("--thinking-display");
       expect(launchLog).not.toContain("--thinking adaptive");
 
@@ -450,6 +474,220 @@ exit 0
       );
     });
   });
+
+  test("omits the thinking flags when the CLI knows --thinking-display but not --thinking", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, log }) => {
+      const toolchainBinDir = await createTempDir("ork-tmux-split-cli-");
+      const splitClaude = path.join(toolchainBinDir, "claude");
+      // The flags must be probed as a pair. A CLI that accepts one and rejects
+      // the other would otherwise be launched with an option it cannot parse,
+      // and Claude would exit before the tmux session ever showed a prompt.
+      await fs.writeFile(splitClaude, `#!/bin/sh
+case "$1" in
+  --help) printf '%s\\n' '--session-id <uuid>' ;;
+  --thinking)
+    printf '%s\\n' "error: unknown option '--thinking'" >&2
+    exit 1
+    ;;
+  --thinking-display)
+    case "$2" in
+      summarized|omitted) ;;
+      *)
+        printf '%s\\n' "error: option '--thinking-display <display>' argument '$2' is invalid. Allowed choices are summarized, omitted." >&2
+        exit 1
+        ;;
+    esac
+    printf '2.1.2\\n'
+    ;;
+  *) printf '2.1.2\\n' ;;
+esac
+exit 0
+`);
+      await fs.chmod(splitClaude, 0o500);
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+        toolchainBinDir,
+      };
+
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-split-cli", environmentId: environment.id },
+        context,
+      );
+
+      const launchLog = await fs.readFile(log, "utf8");
+      expect(launchLog).toContain(" --dangerously-skip-permissions");
+      expect(launchLog).not.toContain("--thinking");
+
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-split-cli", environmentId: environment.id },
+        context,
+      );
+    });
+  });
+
+  test("resumes an existing session id and still requests the thinking flags", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, log }) => {
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const resumeSessionId = "11111111-2222-3333-4444-555555555555";
+
+      const status = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-resume", environmentId: environment.id, model: "opus", effort: "medium", resumeSessionId },
+        context,
+      ) as { session_id: string; resumed: boolean };
+
+      expect(status.session_id).toBe(resumeSessionId);
+      expect(status.resumed).toBe(true);
+
+      const launchLog = await fs.readFile(log, "utf8");
+      expect(launchLog).toContain(` --resume ${resumeSessionId}`);
+      expect(launchLog).not.toContain("--session-id");
+      expect(launchLog).toContain(" --model 'opus'");
+      expect(launchLog).toContain(" --effort 'medium'");
+      // The probe runs on the resume path too — a resumed session is still a
+      // fresh CLI process and needs the same thinking display.
+      expect(launchLog).toContain(" --thinking adaptive --thinking-display summarized");
+
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-resume", environmentId: environment.id },
+        context,
+      );
+    });
+  });
+
+  test("sends text and keys, captures, resizes, rejects blank switches, and answers PreToolUse", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, log, alive }) => {
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const tabId = "tab-commands";
+      const status = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId, environmentId: environment.id },
+        context,
+      ) as { session_id: string };
+      const session = tmuxSessionName(environment.id, tabId);
+      const inputBuffer = path.join(alive, `buffer-claude-tmux-input-${session}`);
+
+      // sendText pastes through a tmux buffer rather than send-keys, so the
+      // pasted payload has to survive verbatim.
+      await invoke(handlers, "claude_tmux_send_text", { tabId, environmentId: environment.id, text: "hello 👋" });
+      await expect(fs.readFile(inputBuffer, "utf8")).resolves.toBe("hello 👋");
+      await expect(fs.readFile(path.join(alive, `${session}.input`), "utf8")).resolves.toBe("hello 👋");
+
+      await invoke(handlers, "claude_tmux_send_keys", { tabId, environmentId: environment.id, keys: ["Escape", "Enter"] });
+      expect(await fs.readFile(log, "utf8")).toContain("-- Escape Enter");
+
+      // tmux sessions launch in bypass mode, which is what the fake pane shows.
+      await expect(invoke(
+        handlers,
+        "claude_tmux_capture_pane",
+        { tabId, environmentId: environment.id },
+      )).resolves.toContain("bypass permissions on");
+      expect(await fs.readFile(log, "utf8")).toContain(`capture-pane -t ${session} -p -J`);
+
+      await invoke(handlers, "claude_tmux_resize", { tabId, environmentId: environment.id, cols: 120, rows: 40 });
+      expect(await fs.readFile(log, "utf8")).toContain(`resize-window -t ${session} -x 120 -y 40`);
+      await expect(invoke(
+        handlers,
+        "claude_tmux_resize",
+        { tabId, environmentId: environment.id, cols: 0, rows: 40 },
+      )).rejects.toThrow("cols");
+
+      // A blank model or effort must be rejected before anything reaches tmux.
+      const beforeRejected = await fs.readFile(log, "utf8");
+      await expect(invoke(
+        handlers,
+        "claude_tmux_switch_model",
+        { tabId, environmentId: environment.id, model: "   " },
+      )).rejects.toThrow("model id cannot be empty");
+      await expect(invoke(
+        handlers,
+        "claude_tmux_switch_effort",
+        { tabId, environmentId: environment.id, effort: "" },
+      )).rejects.toThrow("effort level cannot be empty");
+      expect(await fs.readFile(log, "utf8")).toBe(beforeRejected);
+
+      const sessionRoot = path.join("/tmp", "orkestrator-v2-claude-tmux", environment.id, "sessions", status.session_id);
+      await fs.mkdir(path.join(sessionRoot, "pending"), { recursive: true });
+      await fs.writeFile(
+        path.join(sessionRoot, "pending", "PreToolUse-event-9.json"),
+        JSON.stringify({ tool_name: "Bash" }),
+      );
+      await invoke(handlers, "claude_tmux_answer_pre_tool_use", {
+        tabId,
+        environmentId: environment.id,
+        eventId: "event-9",
+        decision: "block",
+        reason: "not this time",
+      });
+      await expect(
+        fs.readFile(path.join(sessionRoot, "response", "PreToolUse-event-9.json"), "utf8").then(JSON.parse),
+      ).resolves.toEqual({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: "not this time",
+        },
+      });
+      await expect(fs.stat(path.join(sessionRoot, "pending", "PreToolUse-event-9.json"))).rejects.toThrow();
+
+      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+    });
+  });
+
+  // Model and effort switches are typed as slash commands into the running TUI
+  // — the CLI flags only apply at launch — and each one then waits out the
+  // no-hook settle window, so this needs more than the default per-test budget.
+  test("switches model and effort as slash commands in the live TUI", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ environment, alive }) => {
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const tabId = "tab-switches";
+      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
+      const session = tmuxSessionName(environment.id, tabId);
+      const inputBuffer = path.join(alive, `buffer-claude-tmux-input-${session}`);
+
+      await invoke(handlers, "claude_tmux_switch_model", { tabId, environmentId: environment.id, model: "opus" });
+      await expect(fs.readFile(inputBuffer, "utf8")).resolves.toBe("/model opus");
+
+      await invoke(handlers, "claude_tmux_switch_effort", { tabId, environmentId: environment.id, effort: "high" });
+      await expect(fs.readFile(inputBuffer, "utf8")).resolves.toBe("/effort high");
+
+      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
+    });
+  }, 20_000);
 
   test("starts with installed hooks, reads transcripts, replies to hooks, and maps interactive input", async () => {
     const handlers = createHandlers();
@@ -1405,5 +1643,113 @@ describe("newestJsonlInDir container backend", () => {
     await expect(
       newestJsonlInDir(backend, "/home/node/.claude/projects/p", 1700000000, "mine"),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("thinking display capability probe", () => {
+  function result(overrides: Partial<ExecOutput>): ExecOutput {
+    return { status: 0, stdout: "", stderr: "", ...overrides };
+  }
+
+  const invalidDisplayArgument =
+    "error: option '--thinking-display <display>' argument '__orkestrator_probe__' is invalid."
+    + " Allowed choices are summarized, omitted.";
+
+  test("probes both launch flags at once and stays off the API path", () => {
+    expect(thinkingDisplayProbeArgs("/opt/toolchains/claude")).toEqual([
+      "/opt/toolchains/claude",
+      "--thinking",
+      "adaptive",
+      "--thinking-display",
+      "__orkestrator_probe__",
+      "--version",
+    ]);
+  });
+
+  test("reads an argument-validation failure that names the flag as support", () => {
+    expect(thinkingDisplayProbeIndicatesSupport(result({ status: 1, stderr: invalidDisplayArgument }))).toBe(true);
+    // Some CLIs report usage errors on stdout.
+    expect(thinkingDisplayProbeIndicatesSupport(result({ status: 1, stdout: invalidDisplayArgument }))).toBe(true);
+  });
+
+  test("rejects a CLI that does not know --thinking", () => {
+    expect(thinkingDisplayProbeIndicatesSupport(
+      result({ status: 1, stderr: "error: unknown option '--thinking'" }),
+    )).toBe(false);
+  });
+
+  test("rejects a CLI that does not know --thinking-display", () => {
+    expect(thinkingDisplayProbeIndicatesSupport(
+      result({ status: 1, stderr: "error: unknown option '--thinking-display'" }),
+    )).toBe(false);
+  });
+
+  test("rejects an unknown-option report whatever its casing", () => {
+    expect(thinkingDisplayProbeIndicatesSupport(
+      result({ status: 2, stderr: "Unknown option: --thinking-display" }),
+    )).toBe(false);
+  });
+
+  test("rejects a CLI that ignores the flags and exits 0", () => {
+    expect(thinkingDisplayProbeIndicatesSupport(
+      result({ status: 0, stdout: "2.1.2", stderr: "ignoring --thinking-display" }),
+    )).toBe(false);
+  });
+
+  test("rejects a probe that failed without naming the flag", () => {
+    expect(thinkingDisplayProbeIndicatesSupport(result({ status: 1, stderr: "boom" }))).toBe(false);
+    // A killed probe: execWithOutput reports -1 and appends this to stderr.
+    expect(thinkingDisplayProbeIndicatesSupport(result({ status: -1, stderr: "Command timed out" }))).toBe(false);
+  });
+
+  test("bounds the probe so a hung CLI cannot stall session start", async () => {
+    const calls: Array<{ args: string[]; stdin?: string; timeoutMs?: number }> = [];
+    const supported = await probeThinkingDisplaySupport(async (args, stdin, timeoutMs) => {
+      calls.push({ args, stdin, timeoutMs });
+      return result({ status: 1, stderr: invalidDisplayArgument });
+    }, "claude");
+
+    expect(supported).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.args).toEqual(thinkingDisplayProbeArgs("claude"));
+    expect(calls[0]!.stdin).toBeUndefined();
+    expect(calls[0]!.timeoutMs).toBeGreaterThan(0);
+    expect(calls[0]!.timeoutMs).toBeLessThanOrEqual(15_000);
+  });
+
+  test("survives the container wrapper unchanged", () => {
+    // Container environments run the same probe through `docker exec`; a
+    // rewritten or re-ordered argv would change what the CLI validates.
+    expect(containerExecArgs("container-1", thinkingDisplayProbeArgs("claude"), false)).toEqual([
+      "exec",
+      "-u",
+      "node",
+      "-w",
+      "/workspace",
+      "container-1",
+      "claude",
+      "--thinking",
+      "adaptive",
+      "--thinking-display",
+      "__orkestrator_probe__",
+      "--version",
+    ]);
+    // `-i` is attached only when the caller actually pipes stdin.
+    expect(containerExecArgs("container-1", ["cat"], true).slice(0, 7)).toEqual([
+      "exec",
+      "-u",
+      "node",
+      "-w",
+      "/workspace",
+      "-i",
+      "container-1",
+    ]);
+  });
+
+  test("fails closed when the probe cannot be spawned at all", async () => {
+    const missingBinary = Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT" });
+    await expect(probeThinkingDisplaySupport(async () => {
+      throw missingBinary;
+    }, "claude")).resolves.toBe(false);
   });
 });

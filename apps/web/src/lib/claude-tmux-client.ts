@@ -114,7 +114,13 @@ export interface TmuxPendingHook {
 
 export type TranscriptContent =
   | { type: "text"; text: string }
-  | { type: "thinking"; thinking: string }
+  /**
+   * `signature` is present on every thinking block. When the CLI's thinking
+   * display is "omitted" it is the *only* thing present: `thinking` is an empty
+   * string and the reasoning stays sealed in the signature, so there is nothing
+   * to render. The tmux launcher asks for "summarized" to avoid that shape.
+   */
+  | { type: "thinking"; thinking: string; signature?: string }
   | {
       type: "tool_use";
       id: string;

@@ -54,21 +54,21 @@ export const REVIEW_TAB_OPTIONS: Array<{
   {
     value: "claude-native",
     label: "Claude Native",
-    description: "Agent SDK structured output",
+    description: "Agent SDK Markdown review",
     agent: "claude",
     mode: "native",
   },
   {
     value: "codex-native",
     label: "Codex Native",
-    description: "App-server structured output",
+    description: "App-server Markdown review",
     agent: "codex",
     mode: "native",
   },
   {
     value: "opencode-native",
     label: "OpenCode Native",
-    description: "SDK v2 structured output",
+    description: "SDK v2 Markdown review",
     agent: "opencode",
     mode: "native",
   },
@@ -307,7 +307,7 @@ export function ReviewLaunchDialog({
           <DialogDescription>
             {kind === "looped"
               ? "Run fresh native review sessions, reconcile and fix their pooled findings, then create a PR."
-              : "Run one native review with a validated structured report. CLI and tmux remain available for non-review tabs."}
+              : "Run one native review and return its report directly in Markdown."}
           </DialogDescription>
         </DialogHeader>
 

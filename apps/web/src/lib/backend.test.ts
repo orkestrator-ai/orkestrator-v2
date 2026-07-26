@@ -474,7 +474,7 @@ describe("backend command wrapper coverage", () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
-  test("forwards PR and review-package verification evidence", async () => {
+  test("forwards PR verification and deterministic package-generation inputs", async () => {
     invokeMock.mockResolvedValueOnce({
       url: "https://github.com/acme/repo/pull/42",
       headRefName: "feature/review",
@@ -492,34 +492,35 @@ describe("backend command wrapper coverage", () => {
       targetBranch: "main",
     });
 
-    invokeMock.mockResolvedValueOnce(true);
-    await backendWrappers.verifyLoopedReviewPackage("env-1", {
-      targetBranch: "main",
-      baseRef: "a".repeat(40),
-      headRef: "b".repeat(40),
-      completeDiff: "diff",
-      changedFiles: [{
-        path: "src/a.ts",
-        status: "M",
-        content: "updated",
-        contentSha256: "c".repeat(64),
-        omittedReason: null,
+    const preparation = {
+      validation: [{
+        command: "bun test",
+        status: "passed" as const,
+        exitCode: 0,
+        stdoutPath: ".orkestrator/review-artifacts/package-1/validation-01.stdout.txt",
+        stderrPath: ".orkestrator/review-artifacts/package-1/validation-01.stderr.txt",
+        durationMs: 42,
+        limitation: null,
       }],
-    });
+      uncommittedFiles: [],
+      limitations: [],
+    };
+    invokeMock.mockResolvedValueOnce({});
+    await backendWrappers.generateLoopedReviewPackage(
+      "env-1",
+      "package-1",
+      2,
+      "main",
+      preparation,
+    );
     expect(invokeMock).toHaveBeenLastCalledWith(
-      "verify_looped_review_package",
+      "generate_looped_review_package",
       {
         environmentId: "env-1",
+        packageId: "package-1",
+        round: 2,
         targetBranch: "main",
-        baseRef: "a".repeat(40),
-        headRef: "b".repeat(40),
-        completeDiff: "diff",
-        changedFiles: [{
-          path: "src/a.ts",
-          status: "M",
-          content: "updated",
-          contentSha256: "c".repeat(64),
-        }],
+        preparation,
       },
     );
   });

@@ -4,7 +4,6 @@ import { createOpenCodeSessionKey, useOpenCodeStore } from "@/stores/openCodeSto
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
-import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import * as realOpenCodeClient from "@/lib/opencode-client";
@@ -34,7 +33,14 @@ let mockIsAtBottom = true;
 let lastVirtualizedMessages: any[] = [];
 
 const mockRenameEnvironmentFromPrompt = mock(async () => {});
-const mockSendPrompt = mock(async () => ({ success: true }));
+const mockSendPrompt = mock<
+  (
+    _client: unknown,
+    _sessionId: string,
+    _prompt: string,
+    _options?: Record<string, unknown>,
+  ) => Promise<{ success: boolean; requestId?: string; error?: string }>
+>(async () => ({ success: true }));
 const mockAbortSession = mock(async () => true);
 const mockCreateSession = mock(async () => ({
   id: "session-1",
@@ -1420,42 +1426,8 @@ describe("OpenCodeChatTab", () => {
     expect(screen.getByTestId("opencode-address-all-state").textContent).toBe("shown");
   });
 
-  test("queries the fresh structured request after retry instead of reusing the prior result", async () => {
-    const requestIds = ["structured-first", "structured-retry"];
-    mockSendPrompt.mockImplementation(async () => {
-      const requestId = requestIds.shift()!;
-      queueMicrotask(() => {
-        useOpenCodeStore.getState().setSessionLoading(SESSION_KEY, false);
-      });
-      return { success: true, requestId };
-    });
-    mockGetStructuredOutput.mockImplementation(
-      async (_client, _sessionId, requestId) => {
-        if (requestId === "structured-first") {
-          return {
-            ok: false,
-            provider: "opencode",
-            requestId,
-            error: {
-              provider: "opencode",
-              code: "malformed_output",
-              message: "The first structured result was malformed.",
-              retryable: true,
-              requestId,
-            },
-          };
-        }
-        if (requestId === "structured-retry") {
-          return {
-            ok: true,
-            provider: "opencode",
-            requestId,
-            value: TEST_STRUCTURED_REVIEW_REPORT,
-          };
-        }
-        return null;
-      },
-    );
+  test("sends a normal review as Markdown without a structured output schema", async () => {
+    const reviewPrompt = "## Review Scope\n\nReturn the review in Markdown.";
 
     render(
       <OpenCodeChatTab
@@ -1463,24 +1435,18 @@ describe("OpenCodeChatTab", () => {
         data={createData()}
         isActive={false}
         isReviewTab
-        initialPrompt="Run the structured review"
+        initialPrompt={reviewPrompt}
       />,
     );
 
-    expect(await screen.findByText("The first structured result was malformed.")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-
-    expect(await screen.findByText("Review Scope")).toBeTruthy();
-    expect(mockGetStructuredOutput.mock.calls).toContainEqual([
-      MOCK_CLIENT,
-      "session-1",
-      "structured-retry",
-    ]);
-    expect(mockSendPrompt).toHaveBeenCalledTimes(2);
-    const callsAfterRetry = mockGetStructuredOutput.mock.calls.filter(
-      (call) => call[2] === "structured-retry",
-    );
-    expect(callsAfterRetry.length).toBeGreaterThan(0);
+    await waitFor(() => {
+      const call = mockSendPrompt.mock.calls.find(
+        (candidate) => candidate[2] === reviewPrompt,
+      );
+      expect(call).toBeDefined();
+      expect(call?.[3]).not.toHaveProperty("outputSchema");
+    });
+    expect(mockGetStructuredOutput).not.toHaveBeenCalled();
   });
 
   test("removes the optimistic message and shows an error when sendPrompt fails", async () => {

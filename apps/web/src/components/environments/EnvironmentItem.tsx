@@ -18,7 +18,14 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { Bell, Trash2, Play, Square, Container, Laptop, Shield, Globe, Settings2, RotateCw, Loader2, Network, Copy } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Bell, Trash2, Play, Square, Container, Laptop, Shield, Globe, Settings2, RotateCw, Loader2, Network, Copy, MoreVertical } from "lucide-react";
 import { toast } from "sonner";
 import type { Environment } from "@/types";
 import { useAgentActivityStore, useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore, useUIStore } from "@/stores";
@@ -168,6 +175,59 @@ export function EnvironmentItem({
   const createdDate = new Date(environment.createdAt).toLocaleDateString();
   const tooltipAnchorRef = useRef<HTMLDivElement>(null);
   const tooltip = useHoverTooltip();
+  const menuItems = [
+    {
+      key: "settings",
+      label: "Settings",
+      icon: <Settings2 className="h-4 w-4 mr-2" />,
+      onClick: () => setShowSettingsDialog(true),
+    },
+    ...(localAddress
+      ? [{
+          key: "copy-address",
+          label: "Copy Address",
+          icon: <Copy className="h-4 w-4 mr-2" />,
+          onClick: copyAddress,
+        }]
+      : []),
+    ...(initialPrompt
+      ? [{
+          key: "copy-initial-prompt",
+          label: "Copy Initial Prompt",
+          icon: <Copy className="h-4 w-4 mr-2" />,
+          onClick: copyInitialPrompt,
+        }]
+      : []),
+    ...(!isLocalEnvironment
+      ? [
+          { key: "container-actions", separator: true as const },
+          {
+            key: "power",
+            label: isRunning ? "Stop" : "Start",
+            icon: isRunning
+              ? <Square className="h-4 w-4 mr-2" />
+              : <Play className="h-4 w-4 mr-2" />,
+            onClick: () => isRunning ? onStop(environment.id) : onStart(environment.id),
+            disabled: isTransitioning,
+          },
+          {
+            key: "restart",
+            label: "Restart",
+            icon: <RotateCw className="h-4 w-4 mr-2" />,
+            onClick: () => onRestart(environment.id),
+            disabled: !isRunning || isTransitioning,
+          },
+        ]
+      : []),
+    { key: "delete-separator", separator: true as const },
+    {
+      key: "delete",
+      label: "Delete",
+      icon: <Trash2 className="h-4 w-4 mr-2" />,
+      onClick: () => setShowDeleteDialog(true),
+      variant: "destructive" as const,
+    },
+  ];
 
   return (
     <>
@@ -184,7 +244,7 @@ export function EnvironmentItem({
             onFocus={tooltip.show}
             onBlur={tooltip.hide}
             className={cn(
-              "group flex w-full cursor-pointer items-center gap-2 py-1.5 pr-2 text-left text-[13px] transition-colors",
+              "group flex w-full cursor-pointer select-none items-center gap-2 py-1.5 pr-2 text-left text-[13px] transition-colors md:select-auto",
               subtitle && "py-2",
               isSelected && !isMultiSelectMode
                 ? "text-foreground"
@@ -257,6 +317,42 @@ export function EnvironmentItem({
                 )}
               </span>
             )}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="-my-1 -mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-zinc-700/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:hidden"
+                  aria-label={`Open actions for ${environment.name}`}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => event.stopPropagation()}
+                  onFocus={(event) => event.stopPropagation()}
+                >
+                  <MoreVertical className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
+              >
+                {menuItems.map((item) => (
+                  "separator" in item ? (
+                    <DropdownMenuSeparator key={item.key} />
+                  ) : (
+                    <DropdownMenuItem
+                      key={item.key}
+                      variant={item.variant}
+                      disabled={item.disabled}
+                      onClick={item.onClick}
+                    >
+                      {item.icon}
+                      {item.label}
+                    </DropdownMenuItem>
+                  )
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </ContextMenuTrigger>
         <HoverTooltipContent
@@ -325,50 +421,21 @@ export function EnvironmentItem({
             </div>
         </HoverTooltipContent>
         <ContextMenuContent>
-          <ContextMenuItem onClick={() => setShowSettingsDialog(true)}>
-            <Settings2 className="h-4 w-4 mr-2" />
-            Settings
-          </ContextMenuItem>
-          {localAddress && (
-            <ContextMenuItem onClick={copyAddress}>
-              <Copy className="h-4 w-4 mr-2" />
-              Copy Address
-            </ContextMenuItem>
-          )}
-          {initialPrompt && (
-            <ContextMenuItem onClick={copyInitialPrompt}>
-              <Copy className="h-4 w-4 mr-2" />
-              Copy Initial Prompt
-            </ContextMenuItem>
-          )}
-          {/* Start/Stop/Restart only applicable for containerized environments */}
-          {!isLocalEnvironment && (
-            <>
-              <ContextMenuSeparator />
-              <ContextMenuItem onClick={() => isRunning ? onStop(environment.id) : onStart(environment.id)} disabled={isTransitioning}>
-                {isRunning ? (
-                  <>
-                    <Square className="h-4 w-4 mr-2" />
-                    Stop
-                  </>
-                ) : (
-                  <>
-                    <Play className="h-4 w-4 mr-2" />
-                    Start
-                  </>
-                )}
+          {menuItems.map((item) => (
+            "separator" in item ? (
+              <ContextMenuSeparator key={item.key} />
+            ) : (
+              <ContextMenuItem
+                key={item.key}
+                variant={item.variant}
+                disabled={item.disabled}
+                onClick={item.onClick}
+              >
+                {item.icon}
+                {item.label}
               </ContextMenuItem>
-              <ContextMenuItem onClick={() => onRestart(environment.id)} disabled={!isRunning || isTransitioning}>
-                <RotateCw className="h-4 w-4 mr-2" />
-                Restart
-              </ContextMenuItem>
-            </>
-          )}
-          <ContextMenuSeparator />
-          <ContextMenuItem variant="destructive" onClick={() => setShowDeleteDialog(true)}>
-            <Trash2 className="h-4 w-4 mr-2" />
-            Delete
-          </ContextMenuItem>
+            )
+          ))}
         </ContextMenuContent>
       </ContextMenu>
 

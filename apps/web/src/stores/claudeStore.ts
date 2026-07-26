@@ -1,8 +1,10 @@
 import { create } from "zustand";
 import {
+  applyClaudeMessagePatch,
   ERROR_MESSAGE_PREFIX,
   SYSTEM_MESSAGE_PREFIX,
   type ClaudeMessage,
+  type ClaudeMessagePatch,
   type ClaudeModel,
   type ClaudeClient,
   type ClaudeQuestionRequest,
@@ -119,6 +121,16 @@ interface ClaudeState extends ClaudeChatSlice {
   pendingQuestions: Map<string, ClaudeQuestionRequest>;
   pendingPlanApprovals: Map<string, ClaudePlanApprovalRequest>;
 
+  /**
+   * Apply an incremental part patch to an already-stored assistant message.
+   *
+   * Returns false when this session holds no message with the patch's id — the
+   * caller must then fall back to an authoritative refetch, since a patch
+   * cannot reconstruct a message the store never received (a tab that mounted
+   * mid-turn, or a subscription that reconnected).
+   */
+  patchMessage: (sessionKey: ClaudeSessionKey, patch: ClaudeMessagePatch) => boolean;
+
   // Agent-specific actions
   setModels: (models: ClaudeModel[], environmentId?: string) => void;
   setModelCatalog: (catalog: ClaudeModelCatalogSnapshot) => void;
@@ -208,6 +220,32 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   contextUsage: new Map(),
   pendingQuestions: new Map(),
   pendingPlanApprovals: new Map(),
+
+  patchMessage: (sessionKey, patch) => {
+    // Located twice on purpose: the read below decides the return value, and
+    // the read inside `set` is the one that actually mutates, so a message
+    // that arrives or is replaced in between cannot be patched blind.
+    const messages = get().sessions.get(sessionKey)?.messages;
+    if (!messages?.some((message) => message.id === patch.messageId)) return false;
+
+    set((state) => {
+      const session = state.sessions.get(sessionKey);
+      if (!session) return state;
+      const index = session.messages.findIndex(
+        (message) => message.id === patch.messageId,
+      );
+      const target = index === -1 ? undefined : session.messages[index];
+      if (!target) return state;
+
+      const nextMessages = session.messages.slice();
+      nextMessages[index] = applyClaudeMessagePatch(target, patch);
+      const next = new Map(state.sessions);
+      next.set(sessionKey, { ...session, messages: nextMessages });
+      return { sessions: next };
+    });
+
+    return true;
+  },
 
   // Agent-specific actions
   setModels: (models, environmentId) =>

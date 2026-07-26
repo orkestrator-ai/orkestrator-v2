@@ -9,10 +9,11 @@
  * Project-specific configs override global configs for plugins with the same name.
  */
 
-import { readFile, readdir, access } from "node:fs/promises";
+import { readdir, access } from "node:fs/promises";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import type { PluginInfo, PluginConfig, ClaudeJsonPluginsConfig, InstalledPluginsFile } from "../types/plugins.js";
+import { readJsonFileCached } from "./json-file-cache.js";
 
 /**
  * SDK plugin config type - matching the SDK's expected format
@@ -23,15 +24,12 @@ export interface SdkPluginConfig {
 }
 
 /**
- * Read and parse a JSON file, returning null if it doesn't exist or is invalid
+ * Read and parse a JSON file, returning null if it doesn't exist or is invalid.
+ * Backed by a stat-validated cache: these files are read several times per
+ * prompt and change rarely.
  */
 async function readJsonFile<T>(filePath: string): Promise<T | null> {
-  try {
-    const content = await readFile(filePath, "utf-8");
-    return JSON.parse(content) as T;
-  } catch {
-    return null;
-  }
+  return readJsonFileCached<T>(filePath);
 }
 
 /**

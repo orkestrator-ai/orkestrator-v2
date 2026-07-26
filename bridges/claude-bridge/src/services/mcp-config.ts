@@ -8,9 +8,9 @@
  * Project-specific configs override global configs for servers with the same name.
  */
 
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { readJsonFileCached } from "./json-file-cache.js";
 import type {
   ClaudeJsonConfig,
   McpJsonConfig,
@@ -50,15 +50,12 @@ type SdkMcpServerConfig = SdkMcpStdioServerConfig | SdkMcpSSEServerConfig | SdkM
 export type SdkMcpServersConfig = Record<string, SdkMcpServerConfig>;
 
 /**
- * Read and parse a JSON file, returning null if it doesn't exist or is invalid
+ * Read and parse a JSON file, returning null if it doesn't exist or is invalid.
+ * Backed by a stat-validated cache: these files are read several times per
+ * prompt and change rarely.
  */
 async function readJsonFile<T>(filePath: string): Promise<T | null> {
-  try {
-    const content = await readFile(filePath, "utf-8");
-    return JSON.parse(content) as T;
-  } catch {
-    return null;
-  }
+  return readJsonFileCached<T>(filePath);
 }
 
 /**
@@ -262,4 +259,33 @@ export async function getMcpServerInfo(cwd: string): Promise<McpServerInfo[]> {
 export async function getMcpServerNames(cwd: string): Promise<Set<string>> {
   const configs = await getMergedMcpServers(cwd);
   return new Set(Object.keys(configs));
+}
+
+/**
+ * Everything `sendPrompt` needs from MCP config, resolved from a single merge.
+ *
+ * Calling `getMcpServersForSdk` and `getMcpServerNames` separately merged the
+ * same three config sources twice per prompt — and each merge reads
+ * `~/.claude.json` twice, so the file was touched four times for one turn.
+ */
+export async function getMcpRuntimeConfig(cwd: string): Promise<{
+  servers: SdkMcpServersConfig;
+  names: Set<string>;
+}> {
+  const configs = await getMergedMcpServers(cwd);
+  const servers: SdkMcpServersConfig = {};
+
+  for (const [name, config] of Object.entries(configs)) {
+    const sdkConfig = configToSdkFormat(config);
+    if (sdkConfig) {
+      servers[name] = sdkConfig;
+    } else {
+      console.warn(`Unknown MCP server config type for "${name}":`, config);
+    }
+  }
+
+  // Names come from the merged config, not from `servers`: a server whose
+  // config shape we can't translate is still an MCP server as far as tool-name
+  // parsing is concerned, and dropping it would misattribute its tools.
+  return { servers, names: new Set(Object.keys(configs)) };
 }

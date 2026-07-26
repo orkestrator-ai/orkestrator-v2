@@ -179,9 +179,21 @@ const mockGetMcpServersForSdk = mock(async () => ({}));
 const mockGetMcpServerNames = mock(async () => new Set<string>());
 const mockGetPluginsForSdk = mock(async () => [] as Array<{ type: "local"; path: string }>);
 
+/**
+ * `sendPrompt` resolves both halves of the MCP config in one call so the
+ * underlying files are read once per prompt. Composing it from the two
+ * existing mocks keeps every per-test `mockImplementationOnce` override
+ * working against the combined entry point.
+ */
+const mockGetMcpRuntimeConfig = mock(async () => ({
+  servers: await mockGetMcpServersForSdk(),
+  names: await mockGetMcpServerNames(),
+}));
+
 mock.module("./mcp-config.js", () => ({
   getMcpServersForSdk: mockGetMcpServersForSdk,
   getMcpServerNames: mockGetMcpServerNames,
+  getMcpRuntimeConfig: mockGetMcpRuntimeConfig,
 }));
 
 mock.module("./plugin-config.js", () => ({
@@ -191,7 +203,11 @@ mock.module("./plugin-config.js", () => ({
 // Import AFTER mocks are installed so session-manager picks them up.
 const sessionManager = await import("./session-manager.js");
 const { eventEmitter } = await import("./event-emitter.js");
-import type { SSEEvent } from "../types/index.js";
+import type {
+  MessagePatchEventData,
+  NormalizedPart,
+  SSEEvent,
+} from "../types/index.js";
 
 const {
   createSession,
@@ -962,19 +978,52 @@ describe("sendPrompt", () => {
     getSessionMessages(sessionId).find((m) => m.role === "assistant")?.content;
 
   /**
-   * `message.updated` carries the live `NormalizedMessage`, so a captured event
-   * keeps changing as the turn mutates it. Snapshot `content` at emit time to
-   * see the sequence the client actually received.
+   * Reconstructs the assistant content a subscriber holds after each frame.
+   *
+   * A turn publishes one `message.updated` and then patches it, so neither
+   * event type alone shows the sequence the client sees. This applies both the
+   * way the client does — including deriving `content` from the text parts,
+   * which is what lets a patch avoid re-sending it.
+   *
+   * `message.updated` carries the live `NormalizedMessage`, which keeps
+   * mutating as the turn proceeds, so content is snapshotted at emit time.
    */
   function captureAssistantContentFrames(): { frames: string[]; stop: () => void } {
     const frames: string[] = [];
+    let parts: NormalizedPart[] = [];
+
+    const contentOf = (current: NormalizedPart[]) =>
+      current
+        .filter((part) => part.type === "text")
+        .map((part) => part.content ?? "")
+        .join("");
+
     const stop = eventEmitter.subscribe((event) => {
-      if (event.type !== "message.updated") return;
-      const message = (event.data as { message?: { role?: string; content?: string } }).message;
-      if (message?.role === "assistant") frames.push(message.content ?? "");
+      if (event.type === "message.updated") {
+        const message = (event.data as {
+          message?: { role?: string; content?: string; parts?: NormalizedPart[] };
+        }).message;
+        if (message?.role !== "assistant") return;
+        parts = (message.parts ?? []).slice();
+        frames.push(message.content ?? "");
+        return;
+      }
+
+      if (event.type !== "message.patched") return;
+      const patch = event.data as MessagePatchEventData;
+      for (const { index, part } of patch.changedParts) parts[index] = part;
+      parts.length = patch.partCount;
+      frames.push(contentOf(parts));
     });
+
     return { frames, stop };
   }
+
+  /** Frames of either kind — what the client re-renders on. */
+  const messageFrames = (events: SSEEvent[]): SSEEvent[] =>
+    events.filter(
+      (event) => event.type === "message.updated" || event.type === "message.patched",
+    );
 
   /**
    * Lets the session manager drain the messages already queued on the mock
@@ -1007,14 +1056,107 @@ describe("sendPrompt", () => {
       await waitFor(() => assistantContent(session.id) === "abcde");
 
       // The whole burst lands in one window, so it costs far fewer emits than
-      // the one-per-token rebuild this replaced.
-      const updates = events.filter((event) => event.type === "message.updated");
+      // the one-per-token rebuild this replaced. Counted across both frame
+      // kinds: the first publish is a full message and the rest are patches.
+      const updates = messageFrames(events);
       expect(updates.length).toBeLessThan(5);
       expect(updates.length).toBeGreaterThan(0);
 
       call.push({ type: "result", subtype: "success" });
       call.finish();
       await promptPromise;
+    } finally {
+      stop();
+    }
+  });
+
+  test("publishes each message once in full, then only the parts that changed", async () => {
+    const session = createSession("patching");
+    track(session.id);
+
+    const { events, stop } = captureEvents();
+    try {
+      const promptPromise = sendPrompt(session.id, "Stream, call a tool, stream again");
+      const call = await nextQueryCall();
+
+      call.push({
+        type: "stream_event",
+        uuid: "patch-1",
+        session_id: "sdk-session-coalesce",
+        parent_tool_use_id: null,
+        event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      });
+      call.push(textDelta("patch-1", "before"));
+      await waitFor(() => assistantContent(session.id) === "before");
+
+      // A tool with a large result: the payload that made full frames O(turn
+      // size) and must therefore appear in exactly one frame, not all of them.
+      const bulkyOutput = "x".repeat(50_000);
+      call.push({
+        type: "assistant",
+        message: {
+          id: "patch-1",
+          content: [{ type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "/a.ts" } }],
+        },
+      });
+      call.push({
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "tool-1", content: bulkyOutput }],
+        },
+      });
+      await waitFor(() =>
+        getSessionMessages(session.id).some((message) =>
+          message.parts.some((part) => part.toolOutput === bulkyOutput),
+        ),
+      );
+
+      call.push(textDelta("patch-1", " after"));
+      await waitFor(() => (assistantContent(session.id) ?? "").endsWith(" after"));
+
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+
+      // The prompt's own user message is published as a full frame too; this
+      // is about the assistant message the turn streams into.
+      const frames = messageFrames(events).filter(
+        (frame) =>
+          frame.type === "message.patched" ||
+          (frame.data as { message?: { role?: string } }).message?.role === "assistant",
+      );
+      const fullFrames = frames.filter((frame) => frame.type === "message.updated");
+      const patches = frames.filter((frame) => frame.type === "message.patched");
+      const finalMessage = getSessionMessages(session.id).find((m) => m.role === "assistant")!;
+
+      // One full frame for the message, and everything after it is a patch.
+      expect(fullFrames).toHaveLength(1);
+      expect(patches.length).toBeGreaterThan(0);
+      for (const patch of patches) {
+        expect((patch.data as MessagePatchEventData).messageId).toBe(finalMessage.id);
+      }
+
+      // The bulky tool output crosses the wire once. Before this change it rode
+      // along in every frame emitted for the rest of the turn.
+      const framesCarryingOutput = frames.filter((frame) =>
+        JSON.stringify(frame.data).includes(bulkyOutput),
+      );
+      expect(framesCarryingOutput).toHaveLength(1);
+
+      // Replaying the frames must land a subscriber exactly where the
+      // authoritative transcript is — the patches are not allowed to lose or
+      // reorder anything the full frame would have carried.
+      let parts: NormalizedPart[] = [];
+      for (const frame of frames) {
+        if (frame.type === "message.updated") {
+          parts = ((frame.data as { message: { parts: NormalizedPart[] } }).message.parts).slice();
+          continue;
+        }
+        const patch = frame.data as MessagePatchEventData;
+        for (const { index, part } of patch.changedParts) parts[index] = part;
+        parts.length = patch.partCount;
+      }
+      expect(parts).toEqual(finalMessage.parts);
     } finally {
       stop();
     }

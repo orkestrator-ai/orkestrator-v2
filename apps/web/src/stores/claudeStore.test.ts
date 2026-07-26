@@ -267,3 +267,79 @@ describe("claudeStore cleanup and queue helpers", () => {
     expect(store.hasActiveEventSubscription("env-1")).toBe(false);
   });
 });
+
+describe("claudeStore message patching", () => {
+  const patch = (overrides: Partial<Parameters<
+    ReturnType<typeof useClaudeStore.getState>["patchMessage"]
+  >[1]> = {}) => ({
+    messageId: "assistant-1",
+    partCount: 1,
+    changedParts: [{ index: 0, part: { type: "text" as const, content: "streamed" } }],
+    timestamp: "2026-07-20T12:00:01.000Z",
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    resetClaudeStore();
+    useClaudeStore.getState().setSession(SESSION_KEY, {
+      sessionId: "session-1",
+      messages: [
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "",
+          parts: [{ type: "text", content: "" }],
+          timestamp: "2026-07-20T12:00:00.000Z",
+        },
+      ],
+      isLoading: true,
+    });
+  });
+
+  test("applies a patch to the matching message and reports success", () => {
+    expect(useClaudeStore.getState().patchMessage(SESSION_KEY, patch())).toBe(true);
+
+    const messages = useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages;
+    expect(messages?.[0]).toMatchObject({
+      id: "assistant-1",
+      content: "streamed",
+      parts: [{ type: "text", content: "streamed" }],
+    });
+  });
+
+  test("reports failure without touching state when the message is unknown", () => {
+    const before = useClaudeStore.getState().sessions.get(SESSION_KEY);
+
+    // This is the signal the tab uses to fall back to an authoritative
+    // refetch — a tab that mounted mid-turn has no message to patch, and
+    // silently succeeding here would strand it on an empty transcript.
+    expect(
+      useClaudeStore.getState().patchMessage(SESSION_KEY, patch({ messageId: "never-seen" })),
+    ).toBe(false);
+    expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toBe(before);
+  });
+
+  test("reports failure for a session that does not exist", () => {
+    expect(
+      useClaudeStore
+        .getState()
+        .patchMessage(createClaudeSessionKey("env-1", "other-tab"), patch()),
+    ).toBe(false);
+  });
+
+  test("leaves other messages in the session alone", () => {
+    const store = useClaudeStore.getState();
+    store.addMessage(SESSION_KEY, {
+      id: "assistant-2",
+      role: "assistant",
+      content: "second",
+      parts: [{ type: "text", content: "second" }],
+      timestamp: "2026-07-20T12:00:02.000Z",
+    });
+    const untouched = useClaudeStore.getState().sessions.get(SESSION_KEY)!.messages[1];
+
+    useClaudeStore.getState().patchMessage(SESSION_KEY, patch());
+
+    expect(useClaudeStore.getState().sessions.get(SESSION_KEY)!.messages[1]).toBe(untouched);
+  });
+});

@@ -134,6 +134,74 @@ export interface ClaudeMessage {
   timestamp: string;
 }
 
+/**
+ * Payload of a `message.patched` event: the parts of an assistant message that
+ * changed since the previous frame, addressed by index.
+ *
+ * The bridge sends a message in full once, then patches it for the rest of the
+ * turn — a streaming turn publishes ~10 frames a second, and re-sending every
+ * tool output and written file on each of them is O(turn size) per frame.
+ *
+ * A recipient holding no message with `messageId` cannot apply the patch and
+ * must refetch the transcript instead; live events are never the only source
+ * of truth.
+ */
+export interface ClaudeMessagePatch {
+  messageId: string;
+  /** Final length of the parts array after applying this patch. */
+  partCount: number;
+  changedParts: { index: number; part: ClaudeMessagePart }[];
+  timestamp: string;
+}
+
+/**
+ * Rebuild a message's flat text from its parts.
+ *
+ * Mirrors the bridge's own rule (`getMessageTextFromParts`) so a patched
+ * message ends up with exactly the `content` a full frame would have carried,
+ * without every patch having to re-send the whole thing.
+ */
+export function contentFromParts(parts: ClaudeMessagePart[]): string {
+  let content = "";
+  for (const part of parts) {
+    if (part.type === "text") content += part.content || "";
+  }
+  return content;
+}
+
+/**
+ * Apply a patch to a message, returning a new message.
+ *
+ * Indices beyond the current array are appends; `partCount` then truncates,
+ * which is what makes a finalized message replacing streamed blocks
+ * representable.
+ */
+export function applyClaudeMessagePatch(
+  message: ClaudeMessage,
+  patch: ClaudeMessagePatch,
+): ClaudeMessage {
+  const parts = message.parts.slice();
+  for (const { index, part } of patch.changedParts) {
+    if (index < 0) continue;
+    parts[index] = part;
+  }
+  parts.length = patch.partCount;
+
+  // A sparse hole would render as a crash rather than a gap. It should not
+  // happen — the bridge always patches every index it grows past — but the
+  // renderer is not the place to find out.
+  for (let index = 0; index < parts.length; index += 1) {
+    parts[index] ??= { type: "text", content: "" };
+  }
+
+  return {
+    ...message,
+    parts,
+    content: contentFromParts(parts),
+    timestamp: patch.timestamp || message.timestamp,
+  };
+}
+
 export interface ClaudeSession {
   id: string;
   title?: string;
@@ -224,6 +292,7 @@ export interface ClaudeEvent {
     | "session.title-updated"
     | "session.structured-output"
     | "message.updated"
+    | "message.patched"
     | "question.asked"
     | "question.answered"
     | "plan.enter-requested"
@@ -235,6 +304,22 @@ export interface ClaudeEvent {
   sessionId?: string;
   data?: unknown;
 }
+
+/**
+ * Event types never worth scanning for a context-usage snapshot.
+ *
+ * `extractContextUsage` walks a payload breadth-first. These are the
+ * highest-frequency frames and also the largest, and none of them carries
+ * usage — transcript frames describe message content, keepalives and
+ * handshakes carry nothing. Every other event type is still scanned, so an
+ * event that starts carrying usage keeps working without being listed here.
+ */
+export const USAGE_SCAN_EXEMPT_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "message.updated",
+  "message.patched",
+  "keepalive",
+  "connected",
+]);
 
 /** Attachment for prompts */
 export interface ClaudeAttachment {
@@ -929,6 +1014,7 @@ export function subscribeToEvents(
         "session.title-updated",
         "session.structured-output",
         "message.updated",
+        "message.patched",
         "question.asked",
         "question.answered",
         "plan.enter-requested",

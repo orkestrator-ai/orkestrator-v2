@@ -627,6 +627,72 @@ describe("BuildChatTab", () => {
   // -----------------------------------------------------------------------
 
   describe("container bridge connection", () => {
+    test("refetches the transcript for incremental part patches", async () => {
+      // This tab never applies an event payload, it refetches. The bridge
+      // sends one full frame per message and patches the rest of the turn, so
+      // ignoring patches would freeze the build transcript mid-turn and only
+      // let it catch up at session.idle.
+      const queue: unknown[] = [];
+      let closed = false;
+      let wake: () => void = () => {};
+      let wakePromise = new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+      mockSubscribeToEvents.mockImplementation(() =>
+        (async function* () {
+          while (!closed) {
+            if (queue.length === 0) await wakePromise;
+            while (queue.length > 0) yield queue.shift() as never;
+          }
+        })(),
+      );
+
+      seedPipeline("waiting-for-setup");
+      seedEnvironment({ isLocal: false, workspaceReady: true });
+
+      try {
+        render(<BuildChatTab data={createContainerBuildData()} isActive />);
+        await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+
+        // The pipeline creates its session lazily once a stage runs; seed one
+        // so the event loop has a session to match this frame against.
+        act(() => {
+          useClaudeStore.getState().setSession(SESSION_KEY, {
+            sessionId: SESSION_ID,
+            messages: [],
+            isLoading: true,
+          });
+        });
+        mockGetSessionMessages.mockClear();
+
+        queue.push({
+          type: "message.patched",
+          sessionId: SESSION_ID,
+          data: {
+            messageId: "assistant-1",
+            partCount: 1,
+            changedParts: [{ index: 0, part: { type: "text", content: "streaming" } }],
+            timestamp: "2026-07-20T12:00:00.000Z",
+          },
+        });
+        wake();
+        wakePromise = new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+
+        await waitFor(() => {
+          expect(mockGetSessionMessages).toHaveBeenCalled();
+        });
+      } finally {
+        closed = true;
+        wake();
+        useClaudeStore.getState().closeEventSubscription(ENV_ID);
+        // `mockClear` in beforeEach resets calls but not implementations, so
+        // this stream would otherwise be handed to every later test.
+        mockSubscribeToEvents.mockImplementation(() => (async function* () {})());
+      }
+    });
+
     test("starts Claude server when workspace becomes ready", async () => {
       seedPipeline("waiting-for-setup");
       seedEnvironment({ isLocal: false, workspaceReady: true });

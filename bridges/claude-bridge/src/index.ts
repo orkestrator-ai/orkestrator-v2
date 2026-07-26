@@ -10,6 +10,7 @@ import session from "./routes/session.js";
 import events from "./routes/events.js";
 import mcp from "./routes/mcp.js";
 import plugins from "./routes/plugins.js";
+import { isDebugLoggingEnabled } from "./services/logger.js";
 import {
   PARENT_PID_ENV,
   parseParentPid,
@@ -27,7 +28,12 @@ app.use(
     allowHeaders: ["Content-Type", "Authorization"],
   })
 );
-app.use("*", logger());
+// Request logging is debug-only. In Docker the bridge's stdout is an unrotated
+// /tmp/claude-bridge.log, and in local mode the backend re-logs every line it
+// reads, so per-request noise is paid for twice for no routine benefit.
+if (isDebugLoggingEnabled) {
+  app.use("*", logger());
+}
 app.use("*", async (c, next) => {
   await next();
   c.header("Access-Control-Allow-Private-Network", "true");

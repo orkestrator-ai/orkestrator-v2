@@ -24,7 +24,10 @@ import {
   getSlashCommands,
   subscribeToEvents,
   SessionNotFoundError,
+  applyClaudeMessagePatch,
+  contentFromParts,
   type ClaudeClient,
+  type ClaudeMessage,
 } from "./claude-client";
 import { StructuredOutputReadUnavailableError } from "@orkestrator/protocol/structured-output";
 
@@ -656,6 +659,85 @@ describe("claude-client", () => {
       expect(error.name).toBe("SessionNotFoundError");
       expect(error.message).toBe("Session not found: s-42");
       expect(error).toBeInstanceOf(Error);
+    });
+  });
+
+  describe("applyClaudeMessagePatch", () => {
+    const base: ClaudeMessage = {
+      id: "m-1",
+      role: "assistant",
+      content: "hello",
+      parts: [
+        { type: "text", content: "hello" },
+        { type: "tool-invocation", toolName: "Read", toolUseId: "t-1", toolState: "pending" },
+      ],
+      timestamp: "2026-07-20T12:00:00.000Z",
+    };
+
+    test("replaces only the indexed parts and leaves the rest untouched", () => {
+      const patched = applyClaudeMessagePatch(base, {
+        messageId: "m-1",
+        partCount: 2,
+        changedParts: [{ index: 0, part: { type: "text", content: "hello there" } }],
+        timestamp: "2026-07-20T12:00:01.000Z",
+      });
+
+      expect(patched.parts[0]).toEqual({ type: "text", content: "hello there" });
+      // The tool part was not in the patch, so it must survive by identity.
+      expect(patched.parts[1]).toBe(base.parts[1]);
+      // And the original message is not mutated in place.
+      expect(base.parts[0]).toEqual({ type: "text", content: "hello" });
+    });
+
+    test("derives content from the text parts so patches need not resend it", () => {
+      const patched = applyClaudeMessagePatch(base, {
+        messageId: "m-1",
+        partCount: 3,
+        changedParts: [{ index: 2, part: { type: "text", content: " and more" } }],
+        timestamp: "2026-07-20T12:00:01.000Z",
+      });
+
+      expect(patched.content).toBe("hello and more");
+      expect(patched.content).toBe(contentFromParts(patched.parts));
+    });
+
+    test("appends beyond the current length", () => {
+      const patched = applyClaudeMessagePatch(base, {
+        messageId: "m-1",
+        partCount: 3,
+        changedParts: [{ index: 2, part: { type: "thinking", content: "pondering" } }],
+        timestamp: base.timestamp,
+      });
+
+      expect(patched.parts).toHaveLength(3);
+      expect(patched.parts[2]).toEqual({ type: "thinking", content: "pondering" });
+    });
+
+    test("truncates to partCount when a finalized message replaces streamed blocks", () => {
+      const patched = applyClaudeMessagePatch(base, {
+        messageId: "m-1",
+        partCount: 1,
+        changedParts: [{ index: 0, part: { type: "text", content: "final" } }],
+        timestamp: base.timestamp,
+      });
+
+      expect(patched.parts).toHaveLength(1);
+      expect(patched.content).toBe("final");
+    });
+
+    test("never leaves a hole the renderer would trip over", () => {
+      // A gap should not reach here — the bridge patches every index it grows
+      // past — but a sparse array would crash the renderer rather than degrade.
+      const patched = applyClaudeMessagePatch(base, {
+        messageId: "m-1",
+        partCount: 4,
+        changedParts: [{ index: 3, part: { type: "text", content: "far" } }],
+        timestamp: base.timestamp,
+      });
+
+      expect(patched.parts).toHaveLength(4);
+      expect(patched.parts[2]).toEqual({ type: "text", content: "" });
+      expect(patched.parts.every((part) => part !== undefined)).toBe(true);
     });
   });
 });

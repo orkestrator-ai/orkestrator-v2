@@ -21,6 +21,7 @@ import type {
   SdkResultMessage,
   SdkSystemMessage,
   TaskListSnapshot,
+  MessagePatchEventData,
 } from "../types/index.js";
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
@@ -29,7 +30,9 @@ import {
   type StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
 import { eventEmitter } from "./event-emitter.js";
-import { getMcpServersForSdk, getMcpServerNames } from "./mcp-config.js";
+import { debugLog, isDebugLoggingEnabled } from "./logger.js";
+import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
+import { getMcpRuntimeConfig } from "./mcp-config.js";
 import { getPluginsForSdk } from "./plugin-config.js";
 import type { McpToolMetadata } from "../types/mcp.js";
 import { execFileSync, spawn } from "node:child_process";
@@ -739,11 +742,13 @@ function parseMessageContent(
       if ((isEditTool || isWriteTool) && block.input) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const input = block.input as any;
-        toolDiff = {
+        // `after` is the whole file for a Write, so this is bounded before it
+        // is retained for the life of the session.
+        toolDiff = applyDiffBudget({
           filePath: input.file_path || input.filePath,
           before: isWriteTool ? "" : input.old_string || input.oldString,
           after: isWriteTool ? input.content : input.new_string || input.newString,
-        };
+        });
       }
 
       // Check if this is an MCP tool
@@ -815,9 +820,13 @@ function parseMessageContent(
             ? undefined
             : taskRegistry?.apply(pendingTool?.toolName, pendingTool?.toolArgs, resultContent);
 
+        // The task registry above parses the *full* result; only what the
+        // session goes on to retain is capped.
         toolTracker.updateToolResult(block.tool_use_id, {
-          output: block.is_error ? undefined : resultContent,
-          error: block.is_error ? resultContent : undefined,
+          ...applyToolResultBudget({
+            output: block.is_error ? undefined : resultContent,
+            error: block.is_error ? resultContent : undefined,
+          }),
           state: block.is_error ? "failure" : "success",
           taskSnapshot,
         });
@@ -872,6 +881,27 @@ function buildMessageParts(
   }
 
   return result;
+}
+
+/**
+ * Whether a rebuilt part is indistinguishable from the one already published
+ * at that index, and so can be left out of a patch frame.
+ *
+ * Tool parts are compared by identity, which is exact: `ToolTracker` hands out
+ * the same object until a result arrives and replaces it. Text and thinking
+ * parts are rebuilt from the accumulated deltas on every pass, so they never
+ * match by identity and are compared on the one field they carry.
+ */
+function isSamePublishedPart(
+  published: NormalizedPart | undefined,
+  next: NormalizedPart,
+): boolean {
+  if (published === next) return true;
+  if (!published || published.type !== next.type) return false;
+  if (next.type === "text" || next.type === "thinking") {
+    return published.content === next.content;
+  }
+  return false;
 }
 
 function getMessageTextFromParts(parts: NormalizedPart[]): string {
@@ -1399,12 +1429,12 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // This allows the Claude SDK to operate on the actual project directory
     const cwd = process.env.CWD || process.cwd();
 
-    // Load MCP servers from config files
-    const mcpServers = await getMcpServersForSdk(cwd);
-    const mcpServerNames = await getMcpServerNames(cwd);
-
-    // Load plugins from config files
-    const plugins = await getPluginsForSdk(cwd);
+    // Load MCP servers and plugins from config files. Both resolutions read
+    // the same on-disk config, so they run concurrently and each merges once.
+    const [{ servers: mcpServers, names: mcpServerNames }, plugins] = await Promise.all([
+      getMcpRuntimeConfig(cwd),
+      getPluginsForSdk(cwd),
+    ]);
 
     const mcpServerCount = Object.keys(mcpServers).length;
     const pluginCount = plugins.length;
@@ -1804,12 +1834,55 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     let planApprovedThisTurn = false;
     let pendingPlanApprovalContinuation: string | null = null;
 
+    // Parts exactly as last published to subscribers. Compared against the
+    // freshly built parts to decide what a frame actually needs to carry.
+    // Snapshotting the array is enough because parts are never mutated in
+    // place: `ToolTracker` replaces a tool's object when its result lands, and
+    // text/thinking parts are rebuilt from scratch each time.
+    let publishedParts: NormalizedPart[] = [];
+    let publishedMessageId: string | null = null;
+
     const emitCurrentAssistantMessage = () => {
       if (!currentAssistantMessage) return;
+      const parts = currentAssistantMessage.parts;
+
+      // A subscriber cannot patch a message it has never seen, so the first
+      // frame for each message is always the whole thing.
+      if (publishedMessageId !== currentAssistantMessage.id) {
+        publishedMessageId = currentAssistantMessage.id;
+        publishedParts = parts.slice();
+        eventEmitter.emit({
+          type: "message.updated",
+          sessionId,
+          data: { message: currentAssistantMessage },
+        });
+        return;
+      }
+
+      const changedParts: { index: number; part: NormalizedPart }[] = [];
+      for (let index = 0; index < parts.length; index += 1) {
+        const part = parts[index];
+        if (part && !isSamePublishedPart(publishedParts[index], part)) {
+          changedParts.push({ index, part });
+        }
+      }
+
+      // Nothing moved and nothing was dropped: a frame here would only cost
+      // the client a re-render of identical content.
+      if (changedParts.length === 0 && parts.length === publishedParts.length) {
+        return;
+      }
+
+      publishedParts = parts.slice();
       eventEmitter.emit({
-        type: "message.updated",
+        type: "message.patched",
         sessionId,
-        data: { message: currentAssistantMessage },
+        data: {
+          messageId: currentAssistantMessage.id,
+          partCount: parts.length,
+          changedParts,
+          timestamp: currentAssistantMessage.timestamp,
+        } satisfies MessagePatchEventData,
       });
     };
 
@@ -1952,14 +2025,17 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
       sdkMessageCount += 1;
       lastSdkMessageAt = Date.now();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const subtype = (message as any)?.subtype;
-      console.debug("[session-manager] SDK event received", {
-        sessionId,
-        type: message.type,
-        subtype,
-        sdkMessageCount,
-      });
+      // Fires once per streamed delta — i.e. per token. Both the object
+      // literal and the write are guarded, not just the write.
+      if (isDebugLoggingEnabled) {
+        debugLog("[session-manager] SDK event received", {
+          sessionId,
+          type: message.type,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          subtype: (message as any)?.subtype,
+          sdkMessageCount,
+        });
+      }
 
       // Deltas are coalesced; everything else must observe them in order, so
       // settle the pending snapshot before handling a non-delta message.
@@ -2136,14 +2212,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             timestamp: new Date().toISOString(),
           };
           session.messages.push(currentAssistantMessage);
-          console.debug("[session-manager] Created assistant message", {
+          debugLog("[session-manager] Created assistant message", {
             sessionId,
             messageId: currentAssistantMessage.id,
           });
         } else {
           currentAssistantMessage.content = accumulatedContent;
           currentAssistantMessage.parts = finalParts;
-          console.debug("[session-manager] Updated assistant message", {
+          debugLog("[session-manager] Updated assistant message", {
             sessionId,
             messageId: currentAssistantMessage.id,
           });

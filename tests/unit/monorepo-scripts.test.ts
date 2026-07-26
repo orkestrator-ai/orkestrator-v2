@@ -49,6 +49,31 @@ describe("monorepo orchestration scripts", () => {
     expect(source).toContain('name.startsWith("claude-agent-sdk-")');
   });
 
+  test("Docker builds both bridges with their shared protocol workspace dependency", () => {
+    const source = read("docker/Dockerfile");
+    const install = "RUN bun install --filter claude-bridge --filter codex-bridge";
+    const installIndex = source.indexOf(install);
+
+    expect(installIndex).toBeGreaterThan(-1);
+    expect(source.indexOf("COPY --chown=node:node package.json bun.lock /opt/bridge-build/"))
+      .toBeLessThan(installIndex);
+    expect(source.indexOf(
+      "COPY --chown=node:node packages/protocol /opt/bridge-build/packages/protocol",
+    )).toBeLessThan(installIndex);
+    expect(source.indexOf(
+      "COPY --chown=node:node bridges/claude-bridge /opt/bridge-build/bridges/claude-bridge",
+    )).toBeLessThan(installIndex);
+    expect(source.indexOf(
+      "COPY --chown=node:node bridges/codex-bridge /opt/bridge-build/bridges/codex-bridge",
+    )).toBeLessThan(installIndex);
+    expect(source).toContain(
+      "mv /opt/bridge-build/bridges/claude-bridge /opt/claude-bridge",
+    );
+    expect(source).toContain(
+      "mv /opt/bridge-build/bridges/codex-bridge /opt/codex-bridge",
+    );
+  });
+
   test("full tests run workspace, root, bridge, and protocol checks concurrently", () => {
     // The groups are independent, so they run at once rather than in sequence.
     // Behaviour is asserted properly in tests/unit/test-all.test.ts; this only

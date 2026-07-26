@@ -147,9 +147,18 @@ RUN "$CLAUDE_CLI_PATH" --version \
  && "$CODEX_CLI_PATH" --version \
  && "$OPENCODE_CLI_PATH" --version
 
-# Copy and build Claude Bridge Server
-COPY --chown=node:node bridges/claude-bridge /opt/claude-bridge
-WORKDIR /opt/claude-bridge
+# Build both bridge servers from a filtered monorepo install. They import the
+# shared @orkestrator/protocol workspace package, so copying either bridge as a
+# standalone package leaves its `workspace:*` dependency impossible to resolve.
+COPY --chown=node:node package.json bun.lock /opt/bridge-build/
+COPY --chown=node:node packages/protocol /opt/bridge-build/packages/protocol
+COPY --chown=node:node bridges/claude-bridge /opt/bridge-build/bridges/claude-bridge
+COPY --chown=node:node bridges/codex-bridge /opt/bridge-build/bridges/codex-bridge
+WORKDIR /opt/bridge-build
+RUN bun install --filter claude-bridge --filter codex-bridge
+
+# Build Claude Bridge Server.
+WORKDIR /opt/bridge-build/bridges/claude-bridge
 # The build bundles src into dist/index.js and the `vendor` step copies the
 # Claude Agent SDK (which is kept external) into dist/node_modules — so the top-
 # level node_modules is build-only and is discarded afterward. The SDK selects
@@ -161,19 +170,24 @@ WORKDIR /opt/claude-bridge
 # base, keep musl and strip gnu instead.
 # Verified in oven/bun:1.3.14-debian: bridge boots and /global/health returns 200,
 # resolving the gnu binary.
-RUN bun install \
- && bun run build \
+RUN bun run build \
  && rm -rf node_modules \
  && rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl
 
-# Copy and build Codex Bridge Server. Its build bundles every dependency into
+# Build Codex Bridge Server. Its build bundles every dependency into
 # dist/index.js (nothing is kept external), so node_modules is build-only and is
 # removed entirely after the build.
-COPY --chown=node:node bridges/codex-bridge /opt/codex-bridge
-WORKDIR /opt/codex-bridge
-RUN bun install \
- && bun run build \
+WORKDIR /opt/bridge-build/bridges/codex-bridge
+RUN bun run build \
  && rm -rf node_modules
+
+# Preserve the runtime paths expected by the backend, then remove the temporary
+# workspace metadata and shared install.
+USER root
+RUN mv /opt/bridge-build/bridges/claude-bridge /opt/claude-bridge \
+ && mv /opt/bridge-build/bridges/codex-bridge /opt/codex-bridge \
+ && rm -rf /opt/bridge-build
+USER node
 WORKDIR /workspace
 
 # Copy and set up firewall scripts

@@ -62,6 +62,7 @@ import {
   validateRelativeFilePath,
   workspaceFilePath,
 } from "./path-safety.js";
+import { terminateProcessTree } from "./process-tree.js";
 import { registerTmuxBackendCommands } from "./tmux.js";
 import {
   getLinearIssue,
@@ -122,6 +123,18 @@ const terminalOutputBuffers = new Map<string, string>();
 const terminalActivityTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const terminalActivityArmed = new Set<string>();
 const localServerProcesses = new Map<string, ChildProcessWithoutNullStreams>();
+const localServerEnvironmentOperations = new Map<string, Promise<void>>();
+const deletingLocalServerEnvironments = new Set<string>();
+type LocalServerKind = "opencode" | "claude" | "codex";
+const LOCAL_SERVER_KINDS: readonly LocalServerKind[] = ["opencode", "claude", "codex"];
+// Codex bridge shutdown can spend five seconds draining app-server before its
+// one-second hard-kill fallback. Give that path time to reap the MCP process
+// group before escalating the bridge itself.
+const LOCAL_SERVER_SHUTDOWN_GRACE_MS = 8_000;
+const LOCAL_SERVER_KILL_WAIT_MS = 1_000;
+let localServerShutdownRequested = false;
+let localServerShutdownPromise: Promise<void> | null = null;
+let terminateProcessTreeImpl = terminateProcessTree;
 const CLAUDE_MODEL_CATALOG_TTL_MS = 5 * 60_000;
 const CLAUDE_MODEL_CATALOG_REQUEST_TIMEOUT_MS = 30_000;
 const CONTAINER_WORKSPACE_SETUP_COMMAND = "if command -v flock >/dev/null 2>&1; then flock /tmp/orkestrator-workspace-setup.lock -c '/usr/local/bin/workspace-setup.sh'; else /usr/local/bin/workspace-setup.sh; fi";
@@ -1863,10 +1876,42 @@ function getBridgePath(context: CommandContext, bridgeName: "claude-bridge" | "c
   return path.join(context.resourceRoot, bridgeName);
 }
 
-async function startLocalServer(
+function enqueueLocalServerEnvironmentOperation<T>(
+  environmentId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = localServerEnvironmentOperations.get(environmentId) ?? Promise.resolve();
+  const result = previous.then(operation, operation);
+  const tail = result.then(() => undefined, () => undefined);
+  localServerEnvironmentOperations.set(environmentId, tail);
+  void tail.finally(() => {
+    if (localServerEnvironmentOperations.get(environmentId) === tail) {
+      localServerEnvironmentOperations.delete(environmentId);
+    }
+  });
+  return result;
+}
+
+function assertLocalServerStartAllowed(environmentId: string): void {
+  if (localServerShutdownRequested) {
+    throw new Error("Backend is shutting down; local servers cannot be started");
+  }
+  if (deletingLocalServerEnvironments.has(environmentId)) {
+    throw new Error(`Environment is being deleted: ${environmentId}`);
+  }
+}
+
+function releaseLocalServerOwnership(
+  key: string,
+  child: ChildProcessWithoutNullStreams,
+): void {
+  if (localServerProcesses.get(key) === child) localServerProcesses.delete(key);
+}
+
+async function startLocalServerUnlocked(
   environmentId: string,
   context: CommandContext,
-  kind: "opencode" | "claude" | "codex",
+  kind: LocalServerKind,
 ): Promise<{ port: number; pid: number; wasRunning: boolean }> {
   const key = `${kind}:${environmentId}`;
   const existing = localServerProcesses.get(key);
@@ -1876,8 +1921,7 @@ async function startLocalServer(
     if (port && await checkHttpHealth(port)) {
       return { port, pid: existing.pid, wasRunning: true };
     }
-    existing.kill();
-    localServerProcesses.delete(key);
+    await terminateLocalServerChild(key, existing);
   }
 
   const environment = await context.storage.getEnvironment(environmentId);
@@ -1922,33 +1966,86 @@ async function startLocalServer(
   const args = kind === "opencode"
     ? ["serve", "--port", String(port), "--hostname", "127.0.0.1"]
     : [bridgeEntrypoint];
-  const child = spawnCommand(command, args, { cwd, env });
+  const child = spawnCommand(command, args, {
+    cwd,
+    env,
+    // A dedicated group lets shutdown reach ordinary descendants immediately.
+    // Explicit descendant signalling also covers children that create new groups.
+    detached: process.platform !== "win32",
+  });
   localServerProcesses.set(key, child);
   child.stdout.on("data", (data) => console.debug(`[${kind}:${environmentId}] ${data.toString()}`));
   child.stderr.on("data", (data) => console.error(`[${kind}:${environmentId}] ${data.toString()}`));
-  child.once("exit", () => localServerProcesses.delete(key));
+  child.once("exit", () => {
+    // An unhealthy child may exit after its replacement has already claimed the
+    // key. Only the process that still owns the entry may remove it.
+    releaseLocalServerOwnership(key, child);
+  });
 
   const field = kind === "opencode" ? "localOpencodePort" : kind === "claude" ? "localClaudePort" : "localCodexPort";
   const pidField = kind === "opencode" ? "opencodePid" : kind === "claude" ? "claudeBridgePid" : "codexBridgePid";
   try {
     await waitForLocalServerStartup(child, port, kind);
+    await context.storage.updateEnvironment(environmentId, { [field]: port, [pidField]: child.pid });
   } catch (error) {
-    child.kill();
-    localServerProcesses.delete(key);
+    let terminationError: unknown;
+    try {
+      await terminateLocalServerChild(key, child);
+    } catch (caught) {
+      terminationError = caught;
+    }
     await context.storage.updateEnvironment(environmentId, { [field]: null, [pidField]: null }).catch(() => undefined);
+    if (terminationError) {
+      throw new AggregateError(
+        [error, terminationError],
+        `Failed to start and clean up local server: ${key}`,
+      );
+    }
     throw error;
   }
-  await context.storage.updateEnvironment(environmentId, { [field]: port, [pidField]: child.pid });
   return { port, pid: child.pid ?? 0, wasRunning: false };
 }
 
-async function stopLocalServer(environmentId: string, context: CommandContext, kind: "opencode" | "claude" | "codex"): Promise<void> {
+function startLocalServer(
+  environmentId: string,
+  context: CommandContext,
+  kind: LocalServerKind,
+): Promise<{ port: number; pid: number; wasRunning: boolean }> {
+  assertLocalServerStartAllowed(environmentId);
+  return enqueueLocalServerEnvironmentOperation(environmentId, async () => {
+    // Shutdown may have begun while this start was queued behind an earlier
+    // lifecycle operation.
+    if (localServerShutdownRequested) {
+      throw new Error("Backend is shutting down; local servers cannot be started");
+    }
+    return startLocalServerUnlocked(environmentId, context, kind);
+  });
+}
+
+async function terminateLocalServerChild(
+  key: string,
+  child: ChildProcessWithoutNullStreams,
+): Promise<void> {
+  const exited = await terminateProcessTreeImpl(child, {
+    graceMs: LOCAL_SERVER_SHUTDOWN_GRACE_MS,
+    killWaitMs: LOCAL_SERVER_KILL_WAIT_MS,
+  });
+  if (!exited) {
+    // Keep the ownership entry so shutdown or a retry can target it again.
+    // Forgetting a process that is still alive recreates the orphan leak.
+    throw new Error(`Local server process tree did not exit: ${key}`);
+  }
+  releaseLocalServerOwnership(key, child);
+}
+
+async function stopLocalServerUnlocked(
+  environmentId: string,
+  context: CommandContext,
+  kind: LocalServerKind,
+): Promise<void> {
   const key = `${kind}:${environmentId}`;
   const child = localServerProcesses.get(key);
-  if (child) {
-    child.kill();
-    localServerProcesses.delete(key);
-  }
+  if (child) await terminateLocalServerChild(key, child);
   const fields = kind === "opencode"
     ? { opencodePid: null, localOpencodePort: null }
     : kind === "claude"
@@ -1957,7 +2054,113 @@ async function stopLocalServer(environmentId: string, context: CommandContext, k
   await context.storage.updateEnvironment(environmentId, fields);
 }
 
-async function getLocalServerStatus(environmentId: string, context: CommandContext, kind: "opencode" | "claude" | "codex"): Promise<{ running: boolean; port: number | null; pid: number | null }> {
+function stopLocalServer(
+  environmentId: string,
+  context: CommandContext,
+  kind: LocalServerKind,
+): Promise<void> {
+  return enqueueLocalServerEnvironmentOperation(
+    environmentId,
+    () => stopLocalServerUnlocked(environmentId, context, kind),
+  );
+}
+
+function aggregateRejectedResults(
+  results: PromiseSettledResult<unknown>[],
+  message: string,
+): void {
+  const errors = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : []
+  );
+  if (errors.length > 0) throw new AggregateError(errors, message);
+}
+
+async function stopLocalServersForEnvironmentUnlocked(
+  environmentId: string,
+  context: CommandContext,
+): Promise<void> {
+  const results = await Promise.allSettled(
+    LOCAL_SERVER_KINDS.map((kind) =>
+      stopLocalServerUnlocked(environmentId, context, kind)
+    ),
+  );
+  aggregateRejectedResults(
+    results,
+    `Failed to stop all local servers for environment: ${environmentId}`,
+  );
+}
+
+async function deleteEnvironment(
+  environmentId: string,
+  context: CommandContext,
+): Promise<void> {
+  if (localServerShutdownRequested) {
+    throw new Error("Backend is shutting down; environments cannot be deleted");
+  }
+  if (deletingLocalServerEnvironments.has(environmentId)) {
+    throw new Error(`Environment is already being deleted: ${environmentId}`);
+  }
+
+  // Set the tombstone before queueing so a later start cannot join the queue
+  // behind deletion and recreate a process for a removed environment.
+  deletingLocalServerEnvironments.add(environmentId);
+  try {
+    await enqueueLocalServerEnvironmentOperation(environmentId, async () => {
+      const { storage } = context;
+      const environment = await storage.getEnvironment(environmentId);
+      if (environment) await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
+      if (environment?.containerId) {
+        await runCommand(
+          "docker",
+          ["rm", "-f", environment.containerId],
+          { timeoutMs: 60_000 },
+        ).catch(() => undefined);
+      }
+      await stopLocalServersForEnvironmentUnlocked(environmentId, context);
+      if (environment?.worktreePath) {
+        await removeLocalWorktree(environment.worktreePath).catch(() => undefined);
+      }
+      await storage.removeSessionsByEnvironment(environmentId).catch(() => undefined);
+      await storage.removeEnvironment(environmentId);
+      await storage.deletePaneLayout(environmentId).catch(() => undefined);
+      cleanupEnvironmentSetupState(environmentId);
+    });
+  } finally {
+    deletingLocalServerEnvironments.delete(environmentId);
+  }
+}
+
+async function waitForLocalServerEnvironmentOperations(): Promise<void> {
+  while (localServerEnvironmentOperations.size > 0) {
+    await Promise.allSettled([...new Set(localServerEnvironmentOperations.values())]);
+  }
+}
+
+/** Drains every local agent server still owned by this backend process. */
+export async function shutdownLocalServers(): Promise<void> {
+  if (localServerShutdownPromise) return localServerShutdownPromise;
+  localServerShutdownRequested = true;
+
+  const attempt = (async () => {
+    await waitForLocalServerEnvironmentOperations();
+    const owned = [...localServerProcesses.entries()];
+    const results = await Promise.allSettled(
+      owned.map(([key, child]) => terminateLocalServerChild(key, child)),
+    );
+    aggregateRejectedResults(results, "Failed to shut down all local servers");
+  })();
+  localServerShutdownPromise = attempt;
+
+  try {
+    await attempt;
+  } catch (error) {
+    // A retained process can be targeted by an explicit retry.
+    if (localServerShutdownPromise === attempt) localServerShutdownPromise = null;
+    throw error;
+  }
+}
+
+async function getLocalServerStatus(environmentId: string, context: CommandContext, kind: LocalServerKind): Promise<{ running: boolean; port: number | null; pid: number | null }> {
   const key = `${kind}:${environmentId}`;
   const child = localServerProcesses.get(key);
   const env = await context.storage.getEnvironment(environmentId);
@@ -3104,17 +3307,9 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
     await storage.updateRepositoryConfig(project.id, { ...repoConfig, lastEnvironmentType: env.environmentType });
     return storage.addEnvironment(env);
   });
-  register("delete_environment", async ({ environmentId }, { storage }) => {
-    const envId = asString(environmentId, "environmentId");
-    const environment = await storage.getEnvironment(envId);
-    if (environment) await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
-    if (environment?.containerId) await runCommand("docker", ["rm", "-f", environment.containerId], { timeoutMs: 60_000 }).catch(() => undefined);
-    if (environment?.worktreePath) await removeLocalWorktree(environment.worktreePath).catch(() => undefined);
-    await storage.removeSessionsByEnvironment(envId).catch(() => undefined);
-    await storage.removeEnvironment(envId);
-    await storage.deletePaneLayout(envId).catch(() => undefined);
-    cleanupEnvironmentSetupState(envId);
-  });
+  register("delete_environment", ({ environmentId }, context) =>
+    deleteEnvironment(asString(environmentId, "environmentId"), context)
+  );
   register("rename_environment", ({ environmentId, name }, { storage }) => {
     const newName = sanitizeEnvironmentName(asString(name, "name"));
     return storage.updateEnvironment(asString(environmentId, "environmentId"), {
@@ -3949,3 +4144,31 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
 
   return commands;
 }
+
+export const __testing = {
+  setLocalServerProcess(
+    key: string,
+    child: ChildProcessWithoutNullStreams,
+  ): void {
+    localServerProcesses.set(key, child);
+  },
+  getLocalServerProcess(key: string): ChildProcessWithoutNullStreams | undefined {
+    return localServerProcesses.get(key);
+  },
+  releaseLocalServerOwnership,
+  setTerminateProcessTree(
+    implementation: typeof terminateProcessTree,
+  ): void {
+    terminateProcessTreeImpl = implementation;
+  },
+  resetLocalServerLifecycle(): void {
+    if (localServerEnvironmentOperations.size > 0) {
+      throw new Error("Cannot reset local server lifecycle while operations are active");
+    }
+    localServerProcesses.clear();
+    deletingLocalServerEnvironments.clear();
+    localServerShutdownRequested = false;
+    localServerShutdownPromise = null;
+    terminateProcessTreeImpl = terminateProcessTree;
+  },
+};

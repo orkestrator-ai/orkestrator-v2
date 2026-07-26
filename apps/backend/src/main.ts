@@ -6,6 +6,7 @@ import { fixPath } from "./core/fix-path.js";
 import { OrkestratorGateway } from "./gateway.js";
 import { createManagedWebClient } from "./managed-web-client.js";
 import { assertSupportedPlatform, parseOptions } from "./options.js";
+import { createBackendShutdownHandler } from "./shutdown.js";
 import { getTailscaleServeTargetPort, TailscaleServeManager } from "./tailscale-serve.js";
 
 assertSupportedPlatform();
@@ -107,22 +108,13 @@ process.stdout.write(`${JSON.stringify({
   browserError: info.browserError,
 })}\n`);
 
-let stopping = false;
-async function stop(signal: NodeJS.Signals): Promise<void> {
-  if (stopping) return;
-  stopping = true;
-  if (tailscaleServe) {
-    await tailscaleServe.stop().catch((error: unknown) => {
-      console.warn(`[TailscaleServe] Failed to remove Serve configuration: ${error instanceof Error ? error.message : String(error)}`);
-    });
-  }
-  if (managedWebClient) {
-    await managedWebClient.shutdown().catch((error: unknown) => {
-      console.warn(`[TailscaleServe] Failed to remove desktop web access: ${error instanceof Error ? error.message : String(error)}`);
-    });
-  }
-  await gateway.stop();
-  process.exit(signal === "SIGINT" ? 130 : 0);
-}
+const stop = createBackendShutdownHandler({
+  stopTailscaleServe: tailscaleServe ? () => tailscaleServe!.stop() : undefined,
+  stopManagedWebClient: managedWebClient ? () => managedWebClient!.shutdown() : undefined,
+  stopGateway: () => gateway.stop(),
+  stopBackend: () => backend.shutdown(),
+  warn: (message) => console.warn(message),
+  exit: (code) => process.exit(code),
+});
 process.on("SIGINT", () => void stop("SIGINT"));
 process.on("SIGTERM", () => void stop("SIGTERM"));

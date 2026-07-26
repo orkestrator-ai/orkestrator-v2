@@ -86,11 +86,12 @@ export async function runCommand(
 export function spawnCommand(
   command: string,
   args: string[] = [],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; detached?: boolean } = {},
 ): ChildProcessWithoutNullStreams {
   return spawn(command, args, {
     cwd: options.cwd,
     env: options.env,
+    detached: options.detached,
     stdio: "pipe",
   });
 }

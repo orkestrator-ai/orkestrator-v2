@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowDown, History, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, ArrowDown, GitFork, History, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
@@ -29,6 +29,8 @@ import {
   createClient,
   createSession,
   fetchPendingApprovals,
+  fetchPendingInteractions,
+  forkCodexSession,
   getModels,
   getSlashCommands,
   getSessionMessages,
@@ -36,6 +38,7 @@ import {
   isCodexSessionPhase,
   lookupSessionStatus,
   parseApproval,
+  parseInteraction,
   resumeSession,
   sendPrompt,
   subscribeToEvents,
@@ -55,6 +58,7 @@ import { NativeMessage } from "@/components/chat/NativeMessage";
 import { normalizeCodexNativeMessage } from "@/lib/chat/native-message-adapters";
 import { CodexComposeBar } from "./CodexComposeBar";
 import { CodexApprovalCard } from "./CodexApprovalCard";
+import { CodexInteractionCard } from "./CodexInteractionCard";
 import { CodexPlanModeCard } from "./CodexPlanModeCard";
 import { CodexResumeSessionDialog } from "./CodexResumeSessionDialog";
 import { hasPendingInitialPrompt } from "./reconcile-guards";
@@ -187,6 +191,8 @@ export function CodexChatTab({
   const dispatchInFlightRef = useRef(0);
   const approvalSnapshotSequenceRef = useRef(0);
   const approvalActivitySequenceRef = useRef(0);
+  const interactionSnapshotSequenceRef = useRef(0);
+  const interactionActivitySequenceRef = useRef(0);
   const reconcileSessionStateRef = useRef<
     (options?: ReconcileSessionOptions) => Promise<ReconcileSessionResult>
   >(async () => "unavailable");
@@ -279,9 +285,13 @@ export function CodexChatTab({
   const setSessionError = useCodexStore((state) => state.setSessionError);
   const setSessionTitle = useCodexStore((state) => state.setSessionTitle);
   const setSessionPhase = useCodexStore((state) => state.setSessionPhase);
+  const setContextUsage = useCodexStore((state) => state.setContextUsage);
   const setPendingApprovals = useCodexStore((state) => state.setPendingApprovals);
   const addPendingApproval = useCodexStore((state) => state.addPendingApproval);
   const removePendingApproval = useCodexStore((state) => state.removePendingApproval);
+  const setPendingInteractions = useCodexStore((state) => state.setPendingInteractions);
+  const addPendingInteraction = useCodexStore((state) => state.addPendingInteraction);
+  const removePendingInteraction = useCodexStore((state) => state.removePendingInteraction);
   const setSelectedModel = useCodexStore((state) => state.setSelectedModel);
   const setSelectedMode = useCodexStore((state) => state.setSelectedMode);
   const setSelectedReasoningEffort = useCodexStore((state) => state.setSelectedReasoningEffort);
@@ -300,6 +310,10 @@ export function CodexChatTab({
     useCallback((state) => state.pendingApprovals.get(sessionKey), [sessionKey]),
   );
   const pendingApprovals = storedPendingApprovals ?? [];
+  const storedPendingInteractions = useCodexStore(
+    useCallback((state) => state.pendingInteractions.get(sessionKey), [sessionKey]),
+  );
+  const pendingInteractions = storedPendingInteractions ?? [];
   const selectedModel = useCodexStore(
     useCallback(
       (state) => state.selectedModel.get(sessionKey) ?? DEFAULT_CODEX_MODEL,
@@ -481,6 +495,8 @@ export function CodexChatTab({
     refreshControllerRef.current.markActivity();
     approvalSnapshotSequenceRef.current += 1;
     approvalActivitySequenceRef.current += 1;
+    interactionSnapshotSequenceRef.current += 1;
+    interactionActivitySequenceRef.current += 1;
     retryablePromptRef.current = null;
     unconfirmedDispatchRef.current = null;
   }, [sessionKey, session?.sessionId]);
@@ -932,6 +948,27 @@ export function CodexChatTab({
       environmentId,
     ],
   );
+
+  const handleForkFromMessage = useCallback(async (messageId: string) => {
+    if (!client || !session?.sessionId) return;
+    try {
+      const fork = await forkCodexSession(client, session.sessionId, messageId);
+      if (!fork) throw new Error("This Codex turn cannot be used as a fork boundary");
+      const paneStore = usePaneLayoutStore.getState();
+      paneStore.addTab(
+        paneStore.getActivePaneId(environmentId),
+        {
+          id: createUuid(),
+          type: "codex-native",
+          displayTitle: fork.title ?? "Codex fork",
+          codexNativeData: { ...data, sessionId: fork.sessionId },
+        },
+        environmentId,
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to fork Codex session");
+    }
+  }, [client, data, environmentId, session?.sessionId]);
 
   useEffect(() => {
     persistedPreferencesRef.current = getPersistedCodexPreferences(config);
@@ -1451,6 +1488,8 @@ export function CodexChatTab({
    */
   const showApprovals =
     pendingApprovals.length > 0 && !!client && !!session?.sessionId;
+  const showInteractions =
+    pendingInteractions.length > 0 && !!client && !!session?.sessionId;
 
   const reconcileSessionState = useCallback(async (
     options?: ReconcileSessionOptions,
@@ -1551,8 +1590,26 @@ export function CodexChatTab({
         console.error("[CodexChatTab] Failed to rehydrate approvals:", error);
       });
 
+    const interactionSnapshotSequence = ++interactionSnapshotSequenceRef.current;
+    const interactionActivitySequence = interactionActivitySequenceRef.current;
+    void fetchPendingInteractions(client, session.sessionId)
+      .then((interactions) => {
+        if (
+          interactionSnapshotSequence === interactionSnapshotSequenceRef.current
+          && interactionActivitySequence === interactionActivitySequenceRef.current
+        ) {
+          setPendingInteractions(sessionKey, interactions);
+        }
+      })
+      .catch((error: unknown) => {
+        console.error("[CodexChatTab] Failed to rehydrate interactions:", error);
+      });
+
     if (typeof status.title === "string" && status.title.trim().length > 0) {
       setSessionTitle(sessionKey, status.title);
+    }
+    if (status.contextUsage) {
+      setContextUsage(sessionKey, status.contextUsage);
     }
 
     /**
@@ -1608,6 +1665,8 @@ export function CodexChatTab({
     session?.sessionId,
     sessionKey,
     setPendingApprovals,
+    setPendingInteractions,
+    setContextUsage,
     setSessionError,
     setSessionLoading,
     setSessionPhase,
@@ -1774,6 +1833,24 @@ export function CodexChatTab({
               continue;
             }
 
+            if (event.type === "session.interaction-requested") {
+              const interaction = parseInteraction(event.data?.interaction);
+              if (interaction) {
+                interactionActivitySequenceRef.current += 1;
+                addPendingInteraction(sessionKey, interaction);
+              }
+              continue;
+            }
+
+            if (event.type === "session.interaction-resolved") {
+              const interactionId = event.data?.interactionId;
+              if (typeof interactionId === "string") {
+                interactionActivitySequenceRef.current += 1;
+                removePendingInteraction(sessionKey, interactionId);
+              }
+              continue;
+            }
+
             if (event.type === "message.updated") {
               const message = event.data?.message as CodexMessage | undefined;
               if (message?.id) {
@@ -1785,6 +1862,12 @@ export function CodexChatTab({
             }
 
             if (event.type === "session.updated") {
+              if (event.data?.contextUsage) {
+                setContextUsage(
+                  sessionKey,
+                  event.data.contextUsage as import("@/lib/context-usage").ContextUsageSnapshot,
+                );
+              }
               const phase = event.data?.phase;
               if (isCodexSessionPhase(phase)) {
                 const terminal = phase === "idle" || phase === "failed";
@@ -2046,6 +2129,18 @@ export function CodexChatTab({
               message={message}
               previousMessage={prev}
               assistantLabel="Codex"
+              actions={message.role === "user" && message.turnId ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  title="Fork from here"
+                  aria-label="Fork Codex session from this message"
+                  onClick={() => void handleForkFromMessage(message.id)}
+                >
+                  <GitFork className="h-3.5 w-3.5" />
+                </Button>
+              ) : undefined}
             />
           )}
           footer={
@@ -2100,7 +2195,7 @@ export function CodexChatTab({
       <NativeComposeDock
         centered={centerCompose}
         topAccessory={
-          !isAtBottom || showPlanModeCard || showApprovals ? (
+          !isAtBottom || showPlanModeCard || showApprovals || showInteractions ? (
             <div className="flex w-full flex-col gap-2">
               {/*
                 * Pinned directly above the composer rather than placed in the
@@ -2113,6 +2208,18 @@ export function CodexChatTab({
                     <CodexApprovalCard
                       key={approval.approvalId}
                       approval={approval}
+                      client={client!}
+                      sessionId={session!.sessionId!}
+                      sessionKey={sessionKey}
+                    />
+                  ))
+                : null}
+
+              {showInteractions
+                ? pendingInteractions.map((interaction) => (
+                    <CodexInteractionCard
+                      key={interaction.interactionId}
+                      interaction={interaction}
                       client={client!}
                       sessionId={session!.sessionId!}
                       sessionKey={sessionKey}

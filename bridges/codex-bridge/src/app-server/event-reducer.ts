@@ -13,7 +13,12 @@
 import { adaptAppServerItem, planUpdateToTodoList } from "./item-adapter.js";
 import { codexErrorInfoToCode } from "./errors.js";
 import type { InboundNotification } from "./envelope-validation.js";
-import type { EngineError, EngineEvent, EngineGeneration } from "../engine/types.js";
+import type {
+  EngineError,
+  EngineEvent,
+  EngineGeneration,
+  EngineRateLimitWindow,
+} from "../engine/types.js";
 
 export interface ReduceResult {
   events: EngineEvent[];
@@ -67,7 +72,6 @@ function turnStatus(value: unknown): "completed" | "interrupted" | "failed" {
 const IGNORED_METHODS = new Set([
   // Connection/account scope, not thread scope.
   "account/updated",
-  "account/rateLimits/updated",
   "account/login/completed",
   "app/list/updated",
   "remoteControl/status/changed",
@@ -95,7 +99,6 @@ const IGNORED_METHODS = new Set([
   "rawResponse/completed",
   // Bookkeeping the bridge tracks itself.
   "serverRequest/resolved",
-  "thread/tokenUsage/updated",
   "thread/status/changed",
   "thread/settings/updated",
   "thread/compacted",
@@ -151,6 +154,83 @@ export function reduceNotification(
   const turnId = isRecord(params) ? str(params.turnId) : undefined;
 
   switch (notification.method) {
+    case "thread/tokenUsage/updated": {
+      if (!isRecord(params) || !threadId || !turnId || !isRecord(params.tokenUsage)) {
+        return { events: [] };
+      }
+      const total = isRecord(params.tokenUsage.total) ? params.tokenUsage.total : {};
+      const last = isRecord(params.tokenUsage.last) ? params.tokenUsage.last : {};
+      const contextWindow = num(params.tokenUsage.modelContextWindow) ?? 0;
+      const usedTokens = num(last.totalTokens) ?? 0;
+      return {
+        events: [{
+          kind: "thread.usage.updated",
+          threadId,
+          turnId,
+          usage: {
+            usedTokens,
+            totalTokens: contextWindow,
+            percentUsed: contextWindow > 0
+              ? Math.min(100, (usedTokens / contextWindow) * 100)
+              : 0,
+            inputTokens: num(total.inputTokens),
+            outputTokens: num(total.outputTokens),
+            cacheReadTokens: num(total.cachedInputTokens),
+            cacheWriteTokens: num(total.cacheWriteInputTokens),
+            reasoningTokens: num(total.reasoningOutputTokens),
+            lastTurnTokens: usedTokens,
+            sessionTokens: num(total.totalTokens),
+            estimated: false,
+            source: "provider",
+            updatedAt: new Date().toISOString(),
+          },
+          ...base,
+        }],
+      };
+    }
+
+    case "account/rateLimits/updated": {
+      if (!isRecord(params) || !isRecord(params.rateLimits)) return { events: [] };
+      const snapshot = params.rateLimits;
+      const windows: EngineRateLimitWindow[] = [];
+      for (const [key, label] of [["primary", "Primary"], ["secondary", "Secondary"]] as const) {
+        const window = isRecord(snapshot[key]) ? snapshot[key] : undefined;
+        if (!window) continue;
+        const resetsAt = num(window.resetsAt);
+        windows.push({
+          label: typeof snapshot.limitName === "string" && key === "primary"
+            ? snapshot.limitName
+            : label,
+          usedPercent: num(window.usedPercent),
+          ...(resetsAt !== undefined
+            ? { resetsAt: new Date(resetsAt * 1_000).toISOString() }
+            : {}),
+        });
+      }
+      const rawCredits = isRecord(snapshot.credits) ? snapshot.credits : null;
+      const credits = rawCredits
+        ? {
+            ...(typeof rawCredits.balance === "string"
+              ? { balance: rawCredits.balance }
+              : {}),
+            ...(typeof rawCredits.hasCredits === "boolean"
+              ? { hasCredits: rawCredits.hasCredits }
+              : {}),
+            ...(typeof rawCredits.unlimited === "boolean"
+              ? { unlimited: rawCredits.unlimited }
+              : {}),
+          }
+        : undefined;
+      return {
+        events: [{
+          kind: "account.rateLimits.updated",
+          rateLimits: windows,
+          ...(credits ? { credits } : {}),
+          ...base,
+        }],
+      };
+    }
+
     case "thread/started": {
       const thread = isRecord(params) ? params.thread : undefined;
       const id = isRecord(thread) ? str(thread.id) : undefined;

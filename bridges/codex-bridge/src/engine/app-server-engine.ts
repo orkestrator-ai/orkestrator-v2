@@ -32,6 +32,11 @@ import type {
   ApprovalRequest,
   ApprovalResolution,
 } from "../app-server/approvals.js";
+import type {
+  InteractionAnswer,
+  InteractionRequest,
+  InteractionResolution,
+} from "../app-server/interactions.js";
 import { reduceHistoricalTurns, reduceNotification } from "../app-server/event-reducer.js";
 import {
   AppServerRpcError,
@@ -128,6 +133,12 @@ interface TerminalWaiter {
   turnId: string;
 }
 
+interface RuntimeNotice {
+  method: string;
+  message: string;
+  receivedAt: string;
+}
+
 const DEFAULT_INTERRUPT_TIMEOUT_MS = 15_000;
 
 export class AppServerEngine implements CodexEngine {
@@ -143,11 +154,18 @@ export class AppServerEngine implements CodexEngine {
   private readonly interruptTimeoutMs: number;
   private unknownNotificationCount = 0;
   private unsupportedItemCount = 0;
+  private readonly runtimeNotices: RuntimeNotice[] = [];
   private approvalHandler?: (request: ApprovalRequest) => boolean;
   private approvalResolvedHandler?: (
     request: ApprovalRequest,
     decision: ApprovalDecision,
     resolution: ApprovalResolution,
+  ) => void;
+  private interactionHandler?: (request: InteractionRequest) => boolean;
+  private interactionResolvedHandler?: (
+    request: InteractionRequest,
+    answer: InteractionAnswer,
+    resolution: InteractionResolution,
   ) => void;
 
   constructor(private readonly options: AppServerEngineOptions) {
@@ -213,6 +231,9 @@ export class AppServerEngine implements CodexEngine {
       presentApproval: (request) => this.approvalHandler?.(request) === true,
       onApprovalResolved: (request, decision, resolution) =>
         this.approvalResolvedHandler?.(request, decision, resolution),
+      presentInteraction: (request) => this.interactionHandler?.(request) === true,
+      onInteractionResolved: (request, answer, resolution) =>
+        this.interactionResolvedHandler?.(request, answer, resolution),
     });
   }
 
@@ -235,6 +256,18 @@ export class AppServerEngine implements CodexEngine {
     this.approvalResolvedHandler = handlers.resolved;
   }
 
+  setInteractionHandlers(handlers: {
+    present: (request: InteractionRequest) => boolean;
+    resolved: (
+      request: InteractionRequest,
+      answer: InteractionAnswer,
+      resolution: InteractionResolution,
+    ) => void;
+  }): void {
+    this.interactionHandler = handlers.present;
+    this.interactionResolvedHandler = handlers.resolved;
+  }
+
   /** Applies a user's answer. False when the approval is already gone. */
   resolveApproval(approvalId: string, decision: ApprovalDecision): boolean {
     return this.router.resolveApproval(approvalId, decision);
@@ -242,6 +275,14 @@ export class AppServerEngine implements CodexEngine {
 
   getParkedApprovals(): readonly ApprovalRequest[] {
     return this.router.getParkedApprovals();
+  }
+
+  resolveInteraction(interactionId: string, answer: InteractionAnswer): boolean {
+    return this.router.resolveInteraction(interactionId, answer);
+  }
+
+  getParkedInteractions(): readonly InteractionRequest[] {
+    return this.router.getParkedInteractions();
   }
 
   /** Drops approvals for a thread that is being closed. */
@@ -311,6 +352,35 @@ export class AppServerEngine implements CodexEngine {
   ): void {
     // Anything from a replaced process describes state that no longer exists.
     if (generation !== this.supervisor.getGeneration()) return;
+
+    if (
+      notification.method === "warning"
+      || notification.method === "guardianWarning"
+      || notification.method === "deprecationNotice"
+      || notification.method === "configWarning"
+      || notification.method === "model/rerouted"
+      || notification.method === "mcpServer/startupStatus/updated"
+    ) {
+      const params =
+        notification.params
+        && typeof notification.params === "object"
+        && !Array.isArray(notification.params)
+          ? notification.params as Record<string, unknown>
+          : {};
+      const message = [
+        params.message,
+        params.reason,
+        params.error,
+        params.status,
+      ].find((value): value is string => typeof value === "string" && value.length > 0)
+        ?? notification.method.replaceAll("/", " ");
+      this.runtimeNotices.push({
+        method: notification.method,
+        message: message.slice(0, 1_000),
+        receivedAt: new Date().toISOString(),
+      });
+      if (this.runtimeNotices.length > 100) this.runtimeNotices.shift();
+    }
 
     const result = reduceNotification(notification, generation);
     if (result.unknownMethod) {
@@ -453,6 +523,96 @@ export class AppServerEngine implements CodexEngine {
     // app-server reconstructs turn history on resume by default.
     thread.turns = this.extractTurns(response.thread);
     return thread;
+  }
+
+  async forkThread(
+    threadId: string,
+    config: EngineTurnConfig,
+    lastTurnId?: string,
+  ): Promise<EngineThread> {
+    const response = await this.supervisor.request<{ thread: Record<string, unknown> }>(
+      "thread/fork",
+      {
+        threadId,
+        ...(lastTurnId ? { lastTurnId } : {}),
+        ...this.toThreadParams(config),
+      },
+    );
+    return this.bindThread(response.thread, config);
+  }
+
+  async compactThread(threadId: string): Promise<void> {
+    await this.supervisor.request("thread/compact/start", { threadId });
+  }
+
+  async steerTurn(
+    threadId: string,
+    expectedTurnId: string,
+    input: EngineUserInput[],
+    clientUserMessageId?: string,
+  ): Promise<string> {
+    const response = await this.supervisor.request<{ turnId: string }>(
+      "turn/steer",
+      {
+        threadId,
+        expectedTurnId,
+        input: input.map(toAppServerInput),
+        ...(clientUserMessageId ? { clientUserMessageId } : {}),
+      },
+    );
+    return response.turnId;
+  }
+
+  async startReview(
+    threadId: string,
+    target:
+      | { type: "uncommittedChanges" }
+      | { type: "baseBranch"; branch: string }
+      | { type: "commit"; sha: string; title: string | null }
+      | { type: "custom"; instructions: string },
+    delivery: "inline" | "detached" = "inline",
+  ): Promise<{ reviewThreadId: string; turnId: string }> {
+    const response = await this.supervisor.request<{
+      reviewThreadId: string;
+      turn: { id: string };
+    }>("review/start", { threadId, target, delivery });
+    return { reviewThreadId: response.reviewThreadId, turnId: response.turn.id };
+  }
+
+  async getRuntimeHealth(threadId?: string): Promise<{
+    engine: ReturnType<AppServerEngine["getHealth"]>;
+    mcp: unknown;
+    skills: unknown;
+    hooks: unknown;
+    notices: RuntimeNotice[];
+    rateLimits: unknown;
+  }> {
+    const [mcp, skills, hooks, rateLimits] = await Promise.allSettled([
+      this.supervisor.request("mcpServerStatus/list", {
+        limit: 100,
+        detail: "full",
+        ...(threadId ? { threadId } : {}),
+      }),
+      this.supervisor.request("skills/list", {
+        cwds: [this.options.cwd],
+      }),
+      this.supervisor.request("hooks/list", {
+        cwds: [this.options.cwd],
+      }),
+      this.supervisor.request("account/rateLimits/read", undefined),
+    ]);
+    const value = (result: PromiseSettledResult<unknown>) =>
+      result.status === "fulfilled"
+        ? result.value
+        : { error: result.reason instanceof Error ? result.reason.message : String(result.reason) };
+    return {
+      engine: this.getHealth(),
+      mcp: value(mcp),
+      skills: value(skills),
+      hooks: value(hooks),
+      notices: [...this.runtimeNotices],
+      rateLimits: value(rateLimits),
+    };
   }
 
   async readThread(threadId: string, options: ReadThreadOptions = {}): Promise<EngineThread | null> {

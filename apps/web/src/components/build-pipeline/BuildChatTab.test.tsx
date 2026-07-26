@@ -1309,11 +1309,13 @@ describe("BuildChatTab", () => {
         expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([
           refreshedMessage,
         ]);
-        expect(useClaudeStore.getState().contextUsage.get(SESSION_KEY)).toEqual({
+        expect(useClaudeStore.getState().contextUsage.get(SESSION_KEY)).toMatchObject({
           usedTokens: 2_500,
           totalTokens: 10_000,
           percentUsed: 25,
           modelId: "anthropic/claude-sonnet",
+          estimated: true,
+          source: "heuristic",
         });
       });
     });

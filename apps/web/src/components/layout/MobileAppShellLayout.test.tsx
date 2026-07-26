@@ -13,6 +13,7 @@ function renderLayout(overrides: Partial<React.ComponentProps<typeof MobileAppSh
     filesPanelOpen: false,
     centralPanelStyle: { backgroundColor: "rgb(1, 2, 3)" },
     actionBar: <button type="button">Actions</button>,
+    agentInfoButton: <button type="button">Agent info</button>,
     sidebar: <div>Projects</div>,
     filesPanel: <div>Files</div>,
     onTitleBarMouseDown: mock(() => undefined),
@@ -23,6 +24,15 @@ function renderLayout(overrides: Partial<React.ComponentProps<typeof MobileAppSh
 }
 
 describe("MobileAppShellLayout", () => {
+  test("places agent information immediately left of the tools spanner", () => {
+    renderLayout();
+
+    const tools = screen.getByRole("button", { name: "Open tools" });
+    const info = screen.getByRole("button", { name: "Agent info" });
+    expect(tools.classList.contains("right-1.5")).toBe(true);
+    expect(info.parentElement?.classList.contains("right-11.5")).toBe(true);
+  });
+
   test("shows the active project name and opens tools in a popover", () => {
     renderLayout();
 

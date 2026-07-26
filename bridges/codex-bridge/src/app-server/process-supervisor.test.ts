@@ -282,7 +282,7 @@ describe("startup", () => {
     expect(params.capabilities).toEqual({
       experimentalApi: false,
       requestAttestation: false,
-      mcpServerOpenaiFormElicitation: false,
+      mcpServerOpenaiFormElicitation: true,
     });
     // Identifying as Orkestrator drives app-server's compliance logging.
     expect(params.clientInfo.name).toBe("orkestrator");

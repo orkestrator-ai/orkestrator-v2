@@ -19,6 +19,9 @@ describe("context-usage extractContextUsage", () => {
       totalTokens: 200_000,
       percentUsed: 6.25,
       modelId: "anthropic/claude-sonnet-4",
+      estimated: true,
+      source: "heuristic",
+      updatedAt: expect.any(String),
     });
   });
 
@@ -39,6 +42,9 @@ describe("context-usage extractContextUsage", () => {
       totalTokens: 10_000,
       percentUsed: 30,
       modelId: "openai/gpt-5",
+      estimated: true,
+      source: "heuristic",
+      updatedAt: expect.any(String),
     });
   });
 

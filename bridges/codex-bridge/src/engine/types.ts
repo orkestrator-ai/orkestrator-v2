@@ -151,6 +151,36 @@ export interface EngineTurn {
   duplicate?: boolean;
 }
 
+export interface EngineRateLimitWindow {
+  label: string;
+  usedPercent?: number;
+  resetsAt?: string;
+}
+
+export interface EngineCreditSnapshot {
+  hasCredits?: boolean;
+  unlimited?: boolean;
+  balance?: string;
+}
+
+export interface EngineUsageSnapshot {
+  usedTokens: number;
+  totalTokens: number;
+  percentUsed: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  lastTurnTokens?: number;
+  sessionTokens?: number;
+  credits?: EngineCreditSnapshot;
+  rateLimits?: EngineRateLimitWindow[];
+  estimated: false;
+  source: "provider";
+  updatedAt: string;
+}
+
 export interface EngineModelReasoningOption {
   effort: string;
   description?: string;
@@ -278,6 +308,17 @@ export type EngineEvent = EngineEventMeta &
         willRetry: boolean;
       }
     | { kind: "thread.name.updated"; threadId: string; name?: string }
+    | {
+        kind: "thread.usage.updated";
+        threadId: string;
+        turnId: string;
+        usage: EngineUsageSnapshot;
+      }
+    | {
+        kind: "account.rateLimits.updated";
+        rateLimits: EngineRateLimitWindow[];
+        credits?: EngineCreditSnapshot;
+      }
     | { kind: "engine.state"; state: EngineState; detail?: string }
     /**
      * A replacement child is ready. Every loaded thread must be re-subscribed and

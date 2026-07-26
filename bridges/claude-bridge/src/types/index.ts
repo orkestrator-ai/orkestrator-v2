@@ -58,6 +58,16 @@ export interface SdkResultMessage extends SdkMessageBase {
   is_error?: boolean;
   num_turns?: number;
   errors?: string[];
+  usage?: Record<string, unknown>;
+  modelUsage?: Record<string, {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
+    costUSD?: number;
+    contextWindow?: number;
+  }>;
+  permission_denials?: unknown[];
   /** Present on successful turns requested with Agent SDK `outputFormat`. */
   structured_output?: unknown;
 }
@@ -172,6 +182,60 @@ export interface SessionState {
    * is the authoritative copy `GET /session/:id/tasks` serves.
    */
   taskRegistry?: TaskRegistry;
+  /** True once the persisted SDK transcript has been normalized on demand. */
+  persistedMessagesLoaded?: boolean;
+  /** Latest provider-reported context, token, cost, and rate-limit snapshot. */
+  usage?: SessionUsageSnapshot;
+  /** Predicted next prompt emitted by the SDK after a completed turn. */
+  promptSuggestion?: string;
+  /** Live background/subagent tasks keyed by provider task id. */
+  backgroundTasks?: Record<string, BackgroundTaskSnapshot>;
+  queryControl?: {
+    stopTask?: (taskId: string) => Promise<void>;
+    backgroundTasks?: (toolUseId?: string) => Promise<boolean>;
+    getContextUsage?: () => Promise<unknown>;
+    rewindFiles?: (
+      userMessageId: string,
+      options?: { dryRun?: boolean },
+    ) => Promise<unknown>;
+  };
+}
+
+export interface SessionUsageSnapshot {
+  usedTokens: number;
+  totalTokens: number;
+  percentUsed: number;
+  modelId?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  lastTurnTokens?: number;
+  sessionTokens?: number;
+  costUsd?: number;
+  durationMs?: number;
+  apiDurationMs?: number;
+  estimated?: boolean;
+  source: "claude";
+  updatedAt: string;
+  permissionDenials?: number;
+  contextCategories?: Array<{ name: string; tokens: number; color?: string }>;
+  rateLimits?: Array<{
+    label: string;
+    usedPercent?: number;
+    resetsAt?: string;
+  }>;
+}
+
+export interface BackgroundTaskSnapshot {
+  id: string;
+  description?: string;
+  status: "pending" | "running" | "completed" | "failed" | "killed" | "paused";
+  isBackgrounded?: boolean;
+  startedAt?: number;
+  endedAt?: number;
+  error?: string;
 }
 
 /** Effort level for controlling how much thinking/reasoning Claude applies */
@@ -259,6 +323,12 @@ export interface SessionInitData {
   mcpServers: McpServerRuntimeStatus[];
   plugins: PluginRuntimeStatus[];
   slashCommands?: string[];
+  agents?: Array<{
+    name: string;
+    description?: string;
+    model?: string;
+    color?: string;
+  }>;
 }
 
 /**
@@ -309,6 +379,12 @@ export interface PromptOptions {
   permissionMode?: PermissionMode;
   /** When true, enables Claude Code fast mode (Opus 4.6 priority service tier). */
   fastMode?: boolean;
+  /** Named top-level agent/profile discovered from the SDK. */
+  agent?: string;
+  /** Include `.claude/settings.local.json` for native-settings fidelity. */
+  includeLocalSettings?: boolean;
+  /** Opt into provider-generated follow-up prompt suggestions. */
+  promptSuggestions?: boolean;
   /** JSON Schema passed to the Agent SDK's structured-output option. */
   outputSchema?: JsonSchema;
   /** Stable caller id used to reconcile an async structured turn. */

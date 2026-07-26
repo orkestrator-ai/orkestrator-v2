@@ -22,6 +22,8 @@ import type {
   SdkSystemMessage,
   TaskListSnapshot,
   MessagePatchEventData,
+  SessionUsageSnapshot,
+  BackgroundTaskSnapshot,
 } from "../types/index.js";
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
@@ -116,6 +118,19 @@ function recordStructuredOutput(
  */
 function generateSessionId(): string {
   return `session-${crypto.randomUUID()}`;
+}
+
+function sdkSessionIdFromBridgeId(sessionId: string): string | null {
+  const value = sessionId.startsWith("session-")
+    ? sessionId.slice("session-".length)
+    : sessionId;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+    ? value
+    : null;
+}
+
+function bridgeSessionIdFromSdkId(sessionId: string): string {
+  return sessionId.startsWith("session-") ? sessionId : `session-${sessionId}`;
 }
 
 /**
@@ -213,6 +228,133 @@ function extractContextUsageFromUnknown(payload: unknown, fallbackModel?: string
   }
 
   return null;
+}
+
+async function buildClaudeUsageSnapshot(
+  session: SessionState,
+  result: SdkResultMessage,
+  queryControl: SessionState["queryControl"],
+  fallbackModel?: string,
+): Promise<SessionUsageSnapshot | undefined> {
+  const modelEntries = Object.entries(result.modelUsage ?? {});
+  const modelTotals = modelEntries.reduce(
+    (sum, [, usage]) => ({
+      input: sum.input + (usage.inputTokens ?? 0),
+      output: sum.output + (usage.outputTokens ?? 0),
+      cacheRead: sum.cacheRead + (usage.cacheReadInputTokens ?? 0),
+      cacheWrite: sum.cacheWrite + (usage.cacheCreationInputTokens ?? 0),
+      cost: sum.cost + (usage.costUSD ?? 0),
+    }),
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+  );
+  const rawUsage = result.usage ?? {};
+  const totals = modelEntries.length > 0
+    ? modelTotals
+    : {
+        input:
+          parseTokenValue(rawUsage.inputTokens)
+          ?? parseTokenValue(rawUsage.input_tokens)
+          ?? 0,
+        output:
+          parseTokenValue(rawUsage.outputTokens)
+          ?? parseTokenValue(rawUsage.output_tokens)
+          ?? 0,
+        cacheRead:
+          parseTokenValue(rawUsage.cacheReadInputTokens)
+          ?? parseTokenValue(rawUsage.cache_read_input_tokens)
+          ?? parseTokenValue(rawUsage.cacheReadTokens)
+          ?? parseTokenValue(rawUsage.cache_read_tokens)
+          ?? 0,
+        cacheWrite:
+          parseTokenValue(rawUsage.cacheCreationInputTokens)
+          ?? parseTokenValue(rawUsage.cache_creation_input_tokens)
+          ?? parseTokenValue(rawUsage.cacheWriteTokens)
+          ?? parseTokenValue(rawUsage.cache_write_tokens)
+          ?? 0,
+        cost: 0,
+      };
+
+  let context:
+    | {
+        totalTokens?: number;
+        maxTokens?: number;
+        percentage?: number;
+        model?: string;
+        categories?: Array<{ name: string; tokens: number; color?: string }>;
+      }
+    | undefined;
+  if (queryControl?.getContextUsage) {
+    try {
+      const raw = await queryControl.getContextUsage();
+      if (raw && typeof raw === "object") {
+        const value = raw as Record<string, unknown>;
+        context = {
+          totalTokens: parseTokenValue(value.totalTokens),
+          maxTokens: parseTokenValue(value.maxTokens),
+          percentage:
+            typeof value.percentage === "number" ? value.percentage : undefined,
+          model: typeof value.model === "string" ? value.model : undefined,
+          categories: Array.isArray(value.categories)
+            ? value.categories.flatMap((entry) => {
+                if (!entry || typeof entry !== "object") return [];
+                const item = entry as Record<string, unknown>;
+                const name = typeof item.name === "string" ? item.name : undefined;
+                const tokens = parseTokenValue(item.tokens);
+                if (!name || tokens === undefined) return [];
+                return [{
+                  name,
+                  tokens,
+                  color: typeof item.color === "string" ? item.color : undefined,
+                }];
+              })
+            : undefined,
+        };
+      }
+    } catch (error) {
+      console.debug("[session-manager] Context usage control request failed:", error);
+    }
+  }
+
+  const heuristic = extractContextUsageFromUnknown(result, fallbackModel);
+  const usedTokens =
+    context?.totalTokens
+    ?? heuristic?.usedTokens
+    ?? totals.input + totals.output + totals.cacheRead;
+  const contextWindow =
+    context?.maxTokens
+    ?? heuristic?.totalTokens
+    ?? Math.max(...modelEntries.map(([, usage]) => usage.contextWindow ?? 0), 0);
+  if (usedTokens <= 0 || contextWindow <= 0) return undefined;
+
+  const previous = session.usage;
+  const lastTurnTokens = totals.input + totals.output + totals.cacheRead + totals.cacheWrite;
+  return {
+    usedTokens,
+    totalTokens: contextWindow,
+    percentUsed:
+      context?.percentage
+      ?? Math.max(0, Math.min(100, (usedTokens / contextWindow) * 100)),
+    modelId: context?.model ?? modelEntries.at(-1)?.[0] ?? fallbackModel,
+    inputTokens: (previous?.inputTokens ?? 0) + totals.input,
+    outputTokens: (previous?.outputTokens ?? 0) + totals.output,
+    cacheReadTokens: (previous?.cacheReadTokens ?? 0) + totals.cacheRead,
+    cacheWriteTokens: (previous?.cacheWriteTokens ?? 0) + totals.cacheWrite,
+    lastTurnTokens,
+    sessionTokens: (previous?.sessionTokens ?? 0) + lastTurnTokens,
+    costUsd:
+      (previous?.costUsd ?? 0)
+      + (result.total_cost_usd ?? totals.cost),
+    durationMs: (previous?.durationMs ?? 0) + (result.duration_ms ?? 0),
+    apiDurationMs: (previous?.apiDurationMs ?? 0) + (result.duration_api_ms ?? 0),
+    permissionDenials:
+      (previous?.permissionDenials ?? 0)
+      + (result.permission_denials?.length ?? 0),
+    contextCategories: context?.categories,
+    estimated: context?.totalTokens === undefined,
+    source: "claude",
+    updatedAt: new Date().toISOString(),
+    rateLimits: previous?.rateLimits,
+  };
 }
 
 /**
@@ -888,6 +1030,303 @@ function buildMessageParts(
   return result;
 }
 
+function normalizePersistedSessionMessages(
+  persisted: Array<{
+    type: "user" | "assistant" | "system";
+    uuid: string;
+    session_id: string;
+    message: unknown;
+    parent_tool_use_id: string | null;
+  }>,
+): { messages: NormalizedMessage[]; taskRegistry: TaskRegistry } {
+  const toolTracker = new ToolTracker();
+  const taskRegistry = new TaskRegistry();
+  const activeTaskIds = new Set<string>();
+  const parsed: Array<{
+    raw: (typeof persisted)[number];
+    content: string;
+    orderedParts: OrderedPartEntry[];
+  }> = [];
+
+  for (const raw of persisted) {
+    if (raw.type === "system") continue;
+    const result = parseMessageContent(
+      raw,
+      toolTracker,
+      undefined,
+      activeTaskIds,
+      taskRegistry,
+    );
+    for (const taskId of result.newTaskIds) activeTaskIds.add(taskId);
+    for (const taskId of result.completedTaskIds) activeTaskIds.delete(taskId);
+    parsed.push({
+      raw,
+      content: result.content,
+      orderedParts: result.orderedParts,
+    });
+  }
+
+  const now = Date.now();
+  const messages: NormalizedMessage[] = [];
+  for (let index = 0; index < parsed.length; index += 1) {
+    const entry = parsed[index]!;
+    const parts = buildMessageParts(entry.orderedParts, toolTracker);
+    if (entry.raw.type === "user" && !entry.content.trim()) continue;
+    if (entry.raw.type === "assistant" && parts.length === 0 && !entry.content.trim()) {
+      continue;
+    }
+    const rawTimestamp = (entry.raw as unknown as { timestamp?: unknown }).timestamp;
+    const timestamp =
+      typeof rawTimestamp === "string"
+        ? rawTimestamp
+        : new Date(now + index).toISOString();
+    messages.push({
+      id: entry.raw.uuid || generateMessageId(),
+      role: entry.raw.type,
+      content: entry.content,
+      parts,
+      timestamp,
+    });
+  }
+  return { messages, taskRegistry };
+}
+
+async function claudeSdk() {
+  return import("@anthropic-ai/claude-agent-sdk");
+}
+
+function currentWorkingDirectory(): string {
+  return process.env.CWD || process.cwd();
+}
+
+/**
+ * Reconcile lightweight SDK session metadata into the bridge registry.
+ *
+ * Transcript bodies are deliberately loaded only when one session is opened.
+ * Listing must stay bounded even for a large Claude home.
+ */
+export async function reconcilePersistedSessions(): Promise<void> {
+  const sdk = await claudeSdk();
+  if (typeof sdk.listSessions !== "function") return;
+  const infos = await sdk.listSessions({
+    dir: currentWorkingDirectory(),
+    includeProgrammatic: true,
+  });
+  for (const info of infos) {
+    const id = bridgeSessionIdFromSdkId(info.sessionId);
+    const existing = sessions.get(id);
+    if (existing) {
+      existing.title = info.customTitle || info.summary || existing.title;
+      existing.lastActivity = new Date(info.lastModified);
+      existing.sdkSessionId = info.sessionId;
+      continue;
+    }
+    sessions.set(id, {
+      id,
+      title: info.customTitle || info.summary || `Session ${info.sessionId.slice(-6)}`,
+      messages: [],
+      status: "idle",
+      createdAt: new Date(info.createdAt ?? info.lastModified),
+      lastActivity: new Date(info.lastModified),
+      sdkSessionId: info.sessionId,
+      persistedMessagesLoaded: false,
+    });
+  }
+}
+
+export async function ensurePersistedSession(
+  sessionId: string,
+): Promise<SessionState | undefined> {
+  const existing = sessions.get(sessionId);
+  if (existing) return existing;
+
+  const sdkId = sdkSessionIdFromBridgeId(sessionId);
+  if (!sdkId) return undefined;
+  const sdk = await claudeSdk();
+  if (typeof sdk.getSessionInfo !== "function") return undefined;
+  const info = await sdk.getSessionInfo(sdkId, {
+    dir: currentWorkingDirectory(),
+  });
+  if (!info) return undefined;
+  const state: SessionState = {
+    id: sessionId,
+    title: info.customTitle || info.summary || `Session ${sdkId.slice(-6)}`,
+    messages: [],
+    status: "idle",
+    createdAt: new Date(info.createdAt ?? info.lastModified),
+    lastActivity: new Date(info.lastModified),
+    sdkSessionId: sdkId,
+    persistedMessagesLoaded: false,
+  };
+  sessions.set(sessionId, state);
+  return state;
+}
+
+export async function hydratePersistedSessionMessages(
+  sessionId: string,
+): Promise<NormalizedMessage[]> {
+  const session = await ensurePersistedSession(sessionId);
+  if (!session) return [];
+  if (session.persistedMessagesLoaded !== false) return session.messages;
+  if (!session.sdkSessionId) return session.messages;
+
+  const sdk = await claudeSdk();
+  if (typeof sdk.getSessionMessages !== "function") return session.messages;
+  const persisted = await sdk.getSessionMessages(session.sdkSessionId, {
+    dir: currentWorkingDirectory(),
+    includeSystemMessages: true,
+  });
+  const hydrated = normalizePersistedSessionMessages(persisted);
+  session.messages = hydrated.messages;
+  session.taskRegistry = hydrated.taskRegistry;
+  session.persistedMessagesLoaded = true;
+  return session.messages;
+}
+
+export async function deleteSessionDurably(sessionId: string): Promise<boolean> {
+  const session = await ensurePersistedSession(sessionId);
+  if (!session) return false;
+  if (session.sdkSessionId) {
+    const sdk = await claudeSdk();
+    if (typeof sdk.deleteSession === "function") {
+      await sdk.deleteSession(session.sdkSessionId, {
+        dir: currentWorkingDirectory(),
+      });
+    }
+  }
+  return deleteSession(sessionId);
+}
+
+export async function renameSessionDurably(
+  sessionId: string,
+  title: string,
+): Promise<boolean> {
+  const session = await ensurePersistedSession(sessionId);
+  if (!session) return false;
+  if (session.sdkSessionId) {
+    const sdk = await claudeSdk();
+    if (typeof sdk.renameSession === "function") {
+      await sdk.renameSession(session.sdkSessionId, title, {
+        dir: currentWorkingDirectory(),
+      });
+    }
+  }
+  session.title = title;
+  session.lastActivity = new Date();
+  eventEmitter.emit({
+    type: "session.title-updated",
+    sessionId,
+    data: { title },
+  });
+  return true;
+}
+
+export async function forkPersistedSession(
+  sessionId: string,
+  options: { upToMessageId?: string; title?: string } = {},
+): Promise<SessionState> {
+  const source = await ensurePersistedSession(sessionId);
+  if (!source?.sdkSessionId) throw new Error("Session has not been materialized");
+  if (source.status === "running") throw new Error("Cannot fork a running session");
+  const sdk = await claudeSdk();
+  if (typeof sdk.forkSession !== "function") {
+    throw new Error("Installed Claude Agent SDK does not support session forking");
+  }
+  const boundaryId = options.upToMessageId
+    ? await resolvePersistedMessageId(source, options.upToMessageId)
+    : undefined;
+  if (options.upToMessageId && !boundaryId) {
+    throw new Error("The selected Claude message is not a persisted fork boundary");
+  }
+  const result = await sdk.forkSession(source.sdkSessionId, {
+    dir: currentWorkingDirectory(),
+    upToMessageId: boundaryId,
+    title: options.title,
+  });
+  const id = bridgeSessionIdFromSdkId(result.sessionId);
+  const now = new Date();
+  const forked: SessionState = {
+    id,
+    title: options.title || `${source.title || "Session"} (fork)`,
+    messages: [],
+    status: "idle",
+    createdAt: now,
+    lastActivity: now,
+    sdkSessionId: result.sessionId,
+    persistedMessagesLoaded: false,
+  };
+  sessions.set(id, forked);
+  return forked;
+}
+
+async function resolvePersistedMessageId(
+  session: SessionState,
+  normalizedMessageId: string,
+): Promise<string | undefined> {
+  if (!session.sdkSessionId) return undefined;
+  const sdk = await claudeSdk();
+  if (typeof sdk.getSessionMessages !== "function") return normalizedMessageId;
+  const persisted = await sdk.getSessionMessages(session.sdkSessionId, {
+    dir: currentWorkingDirectory(),
+    includeSystemMessages: false,
+  });
+  const conversational = persisted.filter(
+    (message) => message.type === "user" || message.type === "assistant",
+  );
+  const direct = conversational.find((message) => message.uuid === normalizedMessageId);
+  if (direct) return direct.uuid;
+  const normalized = session.messages.filter(
+    (message) => message.role === "user" || message.role === "assistant",
+  );
+  const ordinal = normalized.findIndex((message) => message.id === normalizedMessageId);
+  if (ordinal < 0) return undefined;
+  const role = normalized[ordinal]?.role;
+  const candidate = conversational[ordinal];
+  return candidate?.type === role ? candidate.uuid : undefined;
+}
+
+export async function rewindSessionFiles(
+  sessionId: string,
+  userMessageId: string,
+  dryRun = false,
+): Promise<unknown> {
+  const session = await ensurePersistedSession(sessionId);
+  if (!session?.sdkSessionId) throw new Error("Session has not been materialized");
+  if (session.status === "running") throw new Error("Cannot rewind a running session");
+  const persistedMessageId = await resolvePersistedMessageId(session, userMessageId);
+  if (!persistedMessageId) {
+    throw new Error("The selected Claude message is not a persisted checkpoint");
+  }
+  const iterator = query({
+    prompt: "",
+    options: {
+      cwd: currentWorkingDirectory(),
+      ...claudeExecutableOptions(),
+      resume: session.sdkSessionId,
+      enableFileCheckpointing: true,
+    },
+  });
+  for await (const _message of iterator) {
+    if (typeof iterator.rewindFiles !== "function") {
+      throw new Error("Installed Claude Agent SDK does not support file rewind");
+    }
+    const result = await iterator.rewindFiles(persistedMessageId, { dryRun });
+    await iterator.return?.();
+    return result;
+  }
+  throw new Error("Claude session could not be opened for file rewind");
+}
+
+export async function stopBackgroundTask(
+  sessionId: string,
+  taskId: string,
+): Promise<boolean> {
+  const session = sessions.get(sessionId);
+  if (!session?.queryControl?.stopTask) return false;
+  await session.queryControl.stopTask(taskId);
+  return true;
+}
+
 /**
  * Whether a rebuilt part is indistinguishable from the one already published
  * at that index, and so can be left out of a patch frame.
@@ -1421,6 +1860,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let earlyWarningTimeout: ReturnType<typeof setTimeout> | null = null;
   let streamEventFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  let queryIteratorControl: SessionState["queryControl"];
   // Hoisted out of the `try` so the error path can still publish whatever the
   // coalescing window was holding. Null until the streaming state it closes
   // over exists, which is everything before the SDK query is created.
@@ -1479,6 +1919,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         cwd,
         ...claudeExecutableOptions(),
         model: options?.model,
+        agent: options?.agent,
         ...(options?.outputSchema
           ? {
               outputFormat: {
@@ -1511,8 +1952,17 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           "mcp:*",
         ],
         abortController,
-        // Resume session if we have a previous SDK session ID
-        resume: session.sdkSessionId,
+        // A deterministic UUID makes the bridge id recoverable from the SDK's
+        // persisted session store after a bridge restart.
+        ...(session.sdkSessionId
+          ? { resume: session.sdkSessionId }
+          : {
+              sessionId:
+                sdkSessionIdFromBridgeId(session.id) ?? crypto.randomUUID(),
+            }),
+        enableFileCheckpointing: true,
+        promptSuggestions: options?.promptSuggestions === true,
+        agentProgressSummaries: true,
         // Use Claude Code system prompt with additional instructions
         systemPrompt: {
           type: "preset",
@@ -1522,7 +1972,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         },
         // Load user settings (from ~/.claude.json including MCP servers) and project settings (CLAUDE.md files)
         // Using "user" lets the SDK handle MCP server loading natively, which supports all transport types
-        settingSources: ["user", "project"],
+        settingSources: options?.includeLocalSettings
+          ? ["user", "project", "local"]
+          : ["user", "project"],
         // Fast mode is a Claude Code setting (Opus 4.6 priority service tier).
         // Pass it through the flag-layer settings so the user can opt in per prompt.
         ...(fastMode && { settings: { fastMode: true } }),
@@ -1719,6 +2171,20 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         },
       },
     });
+    session.queryControl = queryIterator;
+    queryIteratorControl = queryIterator;
+    let supportedAgents: NonNullable<SessionInitData["agents"]> = [];
+    if (typeof queryIterator.supportedAgents === "function") {
+      try {
+        supportedAgents = (await queryIterator.supportedAgents()).map((agent) => ({
+          name: agent.name,
+          description: agent.description,
+          model: agent.model,
+        }));
+      } catch (error) {
+        console.debug("[session-manager] Agent discovery unavailable:", error);
+      }
+    }
 
     // Log an early warning if SDK doesn't respond within 5 seconds
     earlyWarningTimeout = setTimeout(() => {
@@ -2111,6 +2577,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           mcpServers: mcpServerStatuses,
           plugins: pluginStatuses,
           slashCommands: initMsg.slash_commands,
+          agents: supportedAgents,
         };
 
         console.log("[session-manager] Session init data captured", {
@@ -2147,6 +2614,56 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             trigger: compactMetadata.trigger,
           },
         });
+      } else if (message.type === "prompt_suggestion") {
+        const suggestion =
+          typeof (message as { suggestion?: unknown }).suggestion === "string"
+            ? (message as { suggestion: string }).suggestion.trim()
+            : "";
+        if (suggestion) {
+          session.promptSuggestion = suggestion;
+          eventEmitter.emit({
+            type: "session.updated",
+            sessionId,
+            data: { promptSuggestion: suggestion },
+          });
+        }
+      } else if (message.type === "rate_limit_event") {
+        const info = (message as {
+          rate_limit_info?: {
+            rateLimitType?: string;
+            utilization?: number;
+            resetsAt?: number;
+          };
+        }).rate_limit_info;
+        if (info) {
+          const label = (info.rateLimitType ?? "usage")
+            .replaceAll("_", " ")
+            .replace(/\b\w/g, (letter) => letter.toUpperCase());
+          const nextWindow = {
+            label,
+            usedPercent: info.utilization,
+            resetsAt:
+              typeof info.resetsAt === "number"
+                ? new Date(info.resetsAt).toISOString()
+                : undefined,
+          };
+          const existing = session.usage?.rateLimits ?? [];
+          if (session.usage) {
+            session.usage = {
+              ...session.usage,
+              rateLimits: [
+                ...existing.filter((window) => window.label !== label),
+                nextWindow,
+              ],
+              updatedAt: new Date().toISOString(),
+            };
+            eventEmitter.emit({
+              type: "session.updated",
+              sessionId,
+              data: { contextUsage: session.usage },
+            });
+          }
+        }
       } else if (message.type === "system") {
         // Handle other system messages (log for debugging)
         const sysMsg = message as SdkSystemMessage;
@@ -2154,6 +2671,53 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           sessionId,
           subtype: sysMsg.subtype,
         });
+
+        const taskMessage = message as {
+          subtype?: string;
+          task_id?: string;
+          description?: string;
+          patch?: {
+            status?: BackgroundTaskSnapshot["status"];
+            description?: string;
+            end_time?: number;
+            error?: string;
+            is_backgrounded?: boolean;
+          };
+        };
+        if (
+          (taskMessage.subtype === "task_started"
+            || taskMessage.subtype === "task_progress"
+            || taskMessage.subtype === "task_updated")
+          && taskMessage.task_id
+        ) {
+          const previous = session.backgroundTasks?.[taskMessage.task_id];
+          const task: BackgroundTaskSnapshot = {
+            id: taskMessage.task_id,
+            description:
+              taskMessage.patch?.description
+              ?? taskMessage.description
+              ?? previous?.description,
+            status:
+              taskMessage.patch?.status
+              ?? previous?.status
+              ?? "running",
+            isBackgrounded:
+              taskMessage.patch?.is_backgrounded
+              ?? previous?.isBackgrounded,
+            startedAt: previous?.startedAt ?? Date.now(),
+            endedAt: taskMessage.patch?.end_time ?? previous?.endedAt,
+            error: taskMessage.patch?.error ?? previous?.error,
+          };
+          session.backgroundTasks = {
+            ...(session.backgroundTasks ?? {}),
+            [task.id]: task,
+          };
+          eventEmitter.emit({
+            type: "session.updated",
+            sessionId,
+            data: { backgroundTasks: session.backgroundTasks },
+          });
+        }
 
         // Emit generic system event for other subtypes
         if (sysMsg.subtype && sysMsg.subtype !== "init") {
@@ -2309,13 +2873,19 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           durationMs: resultMsg.duration_ms,
         });
 
-        const contextUsage = extractContextUsageFromUnknown(resultMsg, options?.model);
-        if (contextUsage) {
+        const exactUsage = await buildClaudeUsageSnapshot(
+          session,
+          resultMsg,
+          session.queryControl,
+          options?.model,
+        );
+        if (exactUsage) {
+          session.usage = exactUsage;
           eventEmitter.emit({
             type: "session.updated",
             sessionId,
             data: {
-              contextUsage,
+              contextUsage: exactUsage,
             },
           });
         }
@@ -2546,6 +3116,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     }
     throw error;
   } finally {
+    if (session.queryControl === queryIteratorControl) {
+      session.queryControl = undefined;
+    }
     if (heartbeat) {
       clearInterval(heartbeat);
     }

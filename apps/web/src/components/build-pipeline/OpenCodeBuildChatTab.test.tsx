@@ -850,11 +850,13 @@ describe("OpenCodeBuildChatTab", () => {
 
     await waitFor(() => {
       expect(useOpenCodeStore.getState().sessions.get(SESSION_KEY)?.messages).toEqual([refreshedMessage]);
-      expect(useOpenCodeStore.getState().contextUsage.get(SESSION_KEY)).toEqual({
+      expect(useOpenCodeStore.getState().contextUsage.get(SESSION_KEY)).toMatchObject({
         usedTokens: 50,
         totalTokens: 1_000,
         percentUsed: 5,
         modelId: "openai/gpt-5",
+        estimated: true,
+        source: "heuristic",
       });
     });
 

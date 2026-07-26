@@ -16,6 +16,7 @@ import {
   type StructuredOutputResult,
   StructuredOutputReadUnavailableError,
 } from "@orkestrator/protocol/structured-output";
+import type { ContextUsageSnapshot } from "./context-usage";
 
 export { type OpencodeClient };
 
@@ -31,6 +32,7 @@ export interface OpenCodeModel {
   inputCost?: number;
   /** Output cost per token (0 means free) */
   outputCost?: number;
+  contextWindow?: number;
 }
 
 export interface OpenCodeModelDefaults {
@@ -115,6 +117,18 @@ export type OpenCodeMessagePart = NativeMessagePart;
 export type OpenCodeMessage = NativeMessage & {
   /** Whether the SDK marked this assistant message as failed. Raw error data is intentionally not retained. */
   hasError?: boolean;
+  providerUsage?: {
+    cost: number;
+    inputTokens: number;
+    outputTokens: number;
+    reasoningTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    totalTokens?: number;
+    modelId: string;
+    agent?: string;
+    durationMs?: number;
+  };
 };
 
 
@@ -806,6 +820,32 @@ export function normalizeOpenCodeMessage(rawMessage: unknown): OpenCodeMessage |
     ...(info?.error !== undefined && info?.error !== null
       ? { hasError: true }
       : {}),
+    ...(info?.role === "assistant" && info?.tokens
+      ? {
+          providerUsage: {
+            cost: typeof info.cost === "number" ? info.cost : 0,
+            inputTokens: Number(info.tokens.input) || 0,
+            outputTokens: Number(info.tokens.output) || 0,
+            reasoningTokens: Number(info.tokens.reasoning) || 0,
+            cacheReadTokens: Number(info.tokens.cache?.read) || 0,
+            cacheWriteTokens: Number(info.tokens.cache?.write) || 0,
+            totalTokens:
+              typeof info.tokens.total === "number"
+                ? info.tokens.total
+                : undefined,
+            modelId:
+              typeof info.providerID === "string" && typeof info.modelID === "string"
+                ? `${info.providerID}/${info.modelID}`
+                : String(info.modelID ?? ""),
+            agent: typeof info.agent === "string" ? info.agent : undefined,
+            durationMs:
+              typeof info.time?.completed === "number"
+              && typeof info.time?.created === "number"
+                ? Math.max(0, info.time.completed - info.time.created)
+                : undefined,
+          },
+        }
+      : {}),
   };
 }
 
@@ -1009,6 +1049,7 @@ export async function getModelsWithDefaults(client: OpencodeClient): Promise<Ope
           // Cost fields may be in cost.input/cost.output or directly as inputCost/outputCost
           const inputCost = m.cost?.input ?? m.inputCost ?? m.input_cost;
           const outputCost = m.cost?.output ?? m.outputCost ?? m.output_cost;
+          const contextWindow = m.limit?.context ?? m.contextWindow ?? m.context_window;
 
           // Variants are provider/model specific (e.g. low/high/xhigh)
           // Response shape: variants: { [variantName]: { disabled?: boolean, ... } }
@@ -1040,6 +1081,8 @@ export async function getModelsWithDefaults(client: OpencodeClient): Promise<Ope
             variants: variants.length > 0 ? variants : undefined,
             inputCost: typeof inputCost === "number" ? inputCost : undefined,
             outputCost: typeof outputCost === "number" ? outputCost : undefined,
+            contextWindow:
+              typeof contextWindow === "number" ? contextWindow : undefined,
           });
         }
       }
@@ -1580,6 +1623,12 @@ export async function sendPrompt(
     outputSchema?: JsonSchema;
     structuredOutputRetryCount?: number;
     requestId?: string;
+    command?: {
+      name: string;
+      arguments?: string;
+    };
+    agent?: string;
+    directory?: string;
   }
 ): Promise<SendPromptResult> {
   try {
@@ -1632,24 +1681,37 @@ export async function sendPrompt(
     const requestId = options?.outputSchema
       ? (options.requestId ?? createUuid())
       : options?.requestId;
-    const response = await client.session.promptAsync({
-      sessionID: sessionId,
-      messageID: requestId,
-      parts,
-      model: options?.model ? {
-        providerID: options.model.split("/")[0] || "",
-        modelID: options.model.split("/")[1] || options.model,
-      } : undefined,
-      agent: options?.mode,
-      variant: options?.variant,
-      format: options?.outputSchema
-        ? {
-            type: "json_schema",
-            schema: options.outputSchema,
-            retryCount: options.structuredOutputRetryCount,
-          }
-        : undefined,
-    });
+    const response = options?.command
+      ? await client.session.command({
+          sessionID: sessionId,
+          directory: options.directory,
+          messageID: requestId,
+          command: options.command.name.replace(/^\//, ""),
+          arguments: options.command.arguments,
+          model: options.model,
+          agent: options.agent ?? options.mode,
+          variant: options.variant,
+          parts: parts.filter((part) => part.type === "file"),
+        })
+      : await client.session.promptAsync({
+          sessionID: sessionId,
+          directory: options?.directory,
+          messageID: requestId,
+          parts,
+          model: options?.model ? {
+            providerID: options.model.split("/")[0] || "",
+            modelID: options.model.split("/")[1] || options.model,
+          } : undefined,
+          agent: options?.agent ?? options?.mode,
+          variant: options?.variant,
+          format: options?.outputSchema
+            ? {
+                type: "json_schema",
+                schema: options.outputSchema,
+                retryCount: options.structuredOutputRetryCount,
+              }
+            : undefined,
+        });
 
     if (response && "error" in response && response.error) {
       return {
@@ -1667,6 +1729,249 @@ export async function sendPrompt(
       error: formatOpenCodeError(error),
     };
   }
+}
+
+export interface OpenCodeAgent {
+  name: string;
+  description?: string;
+  mode: "subagent" | "primary" | "all";
+  native?: boolean;
+  hidden?: boolean;
+  modelId?: string;
+  variant?: string;
+}
+
+export interface OpenCodeRuntimeHealth {
+  agents: OpenCodeAgent[];
+  skills: Array<{ name: string; description?: string; location?: string }>;
+  mcpServers: Array<{ name: string; status: string; error?: string }>;
+  lspServers: Array<{ id: string; name: string; root: string; status: string }>;
+  formatters: Array<{ name: string; enabled: boolean; extensions: string[] }>;
+  todos?: Array<{ content: string; status: string; priority: string }>;
+  diffs?: Array<{
+    file?: string;
+    patch?: string;
+    additions: number;
+    deletions: number;
+    status?: "added" | "deleted" | "modified";
+  }>;
+  fetchedAt: string;
+}
+
+export function summarizeOpenCodeUsage(
+  messages: OpenCodeMessage[],
+  models: OpenCodeModel[],
+): ContextUsageSnapshot | null {
+  const turns = messages
+    .map((message) => message.providerUsage)
+    .filter((usage): usage is NonNullable<OpenCodeMessage["providerUsage"]> => !!usage);
+  const latest = turns.at(-1);
+  if (!latest) return null;
+
+  const session = turns.reduce(
+    (sum, turn) => ({
+      cost: sum.cost + turn.cost,
+      input: sum.input + turn.inputTokens,
+      output: sum.output + turn.outputTokens,
+      reasoning: sum.reasoning + turn.reasoningTokens,
+      cacheRead: sum.cacheRead + turn.cacheReadTokens,
+      cacheWrite: sum.cacheWrite + turn.cacheWriteTokens,
+      duration: sum.duration + (turn.durationMs ?? 0),
+    }),
+    {
+      cost: 0,
+      input: 0,
+      output: 0,
+      reasoning: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      duration: 0,
+    },
+  );
+  const model = models.find((candidate) => candidate.id === latest.modelId);
+  const usedTokens =
+    latest.totalTokens
+    ?? latest.inputTokens + latest.outputTokens + latest.cacheReadTokens;
+  const totalTokens = model?.contextWindow ?? Math.max(usedTokens, 1);
+
+  return {
+    usedTokens,
+    totalTokens,
+    percentUsed: Math.max(0, Math.min(100, (usedTokens / totalTokens) * 100)),
+    modelId: latest.modelId,
+    inputTokens: session.input,
+    outputTokens: session.output,
+    cacheReadTokens: session.cacheRead,
+    cacheWriteTokens: session.cacheWrite,
+    reasoningTokens: session.reasoning,
+    lastTurnTokens: usedTokens,
+    sessionTokens:
+      session.input + session.output + session.cacheRead + session.cacheWrite,
+    costUsd: session.cost,
+    durationMs: session.duration,
+    estimated: model?.contextWindow === undefined,
+    source: "opencode",
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export async function getOpenCodeRuntimeHealth(
+  client: OpencodeClient,
+  directory?: string,
+  sessionId?: string,
+): Promise<OpenCodeRuntimeHealth> {
+  // Some managed OpenCode installations and test doubles expose only a subset of
+  // the v2 surface. Defer each lookup into its own promise so a missing namespace
+  // becomes one unavailable capability rather than aborting the whole snapshot.
+  const attempt = <T,>(operation: () => Promise<T>): Promise<T> =>
+    Promise.resolve().then(operation);
+  const [agents, skills, mcp, lsp, formatters, todos, diffs] = await Promise.allSettled([
+    attempt(() => client.app.agents({ directory })),
+    attempt(() => client.app.skills({ directory })),
+    attempt(() => client.mcp.status({ directory })),
+    attempt(() => client.lsp.status({ directory })),
+    attempt(() => client.formatter.status({ directory })),
+    sessionId
+      ? attempt(() => client.session.todo({ sessionID: sessionId, directory }))
+      : Promise.resolve({ data: [] }),
+    sessionId
+      ? attempt(() => client.session.diff({ sessionID: sessionId, directory }))
+      : Promise.resolve({ data: [] }),
+  ]);
+
+  const data = <T,>(result: PromiseSettledResult<{ data?: T }>, fallback: T): T =>
+    result.status === "fulfilled" && result.value.data !== undefined
+      ? result.value.data
+      : fallback;
+  const mcpData = data<Record<string, { status?: string; error?: string }>>(mcp, {});
+
+  return {
+    agents: data<Array<{
+      name: string;
+      description?: string;
+      mode: "subagent" | "primary" | "all";
+      native?: boolean;
+      hidden?: boolean;
+      model?: { providerID: string; modelID: string };
+      variant?: string;
+    }>>(agents, [])
+      .filter((agent) => !agent.hidden)
+      .map((agent) => ({
+        name: agent.name,
+        description: agent.description,
+        mode: agent.mode,
+        native: agent.native,
+        hidden: agent.hidden,
+        modelId: agent.model
+          ? `${agent.model.providerID}/${agent.model.modelID}`
+          : undefined,
+        variant: agent.variant,
+      })),
+    skills: data<Array<{ name: string; description?: string; location?: string }>>(skills, []),
+    mcpServers: Object.entries(mcpData).map(([name, status]) => ({
+      name,
+      status: status.status ?? "unknown",
+      error: status.error,
+    })),
+    lspServers: data<
+      Array<{ id: string; name: string; root: string; status: string }>
+    >(lsp, []),
+    formatters: data<
+      Array<{ name: string; enabled: boolean; extensions: string[] }>
+    >(formatters, []),
+    todos: data<Array<{ content: string; status: string; priority: string }>>(
+      todos,
+      [],
+    ),
+    diffs: data<Array<{
+      file?: string;
+      patch?: string;
+      additions: number;
+      deletions: number;
+      status?: "added" | "deleted" | "modified";
+    }>>(diffs, []),
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+export async function forkOpenCodeSession(
+  client: OpencodeClient,
+  sessionId: string,
+  messageId?: string,
+): Promise<OpenCodeSession> {
+  const response = await client.session.fork({
+    sessionID: sessionId,
+    messageID: messageId,
+  }, { throwOnError: true });
+  if (!response.data) {
+    throw new Error("OpenCode returned an empty fork response");
+  }
+  return {
+    id: response.data.id,
+    title: response.data.title,
+    createdAt: new Date(response.data.time.created).toISOString(),
+  };
+}
+
+export async function compactOpenCodeSession(
+  client: OpencodeClient,
+  sessionId: string,
+  model?: string,
+): Promise<void> {
+  const [providerID, modelID] = model?.split("/") ?? [];
+  const response = await client.session.summarize({
+    sessionID: sessionId,
+    providerID,
+    modelID,
+    auto: false,
+  }, { throwOnError: true });
+  void response;
+}
+
+export async function revertOpenCodeSession(
+  client: OpencodeClient,
+  sessionId: string,
+  messageId?: string,
+): Promise<void> {
+  const response = await client.session.revert({
+    sessionID: sessionId,
+    messageID: messageId,
+  }, { throwOnError: true });
+  void response;
+}
+
+export async function unrevertOpenCodeSession(
+  client: OpencodeClient,
+  sessionId: string,
+): Promise<void> {
+  const response = await client.session.unrevert({
+    sessionID: sessionId,
+  }, { throwOnError: true });
+  void response;
+}
+
+export async function shareOpenCodeSession(
+  client: OpencodeClient,
+  sessionId: string,
+): Promise<string | undefined> {
+  const response = await client.session.share({
+    sessionID: sessionId,
+  }, { throwOnError: true });
+  if (!response.data) {
+    throw new Error("OpenCode returned an empty share response");
+  }
+  const share = (response.data as { share?: { url?: string } }).share;
+  return share?.url;
+}
+
+export async function unshareOpenCodeSession(
+  client: OpencodeClient,
+  sessionId: string,
+): Promise<void> {
+  const response = await client.session.unshare({
+    sessionID: sessionId,
+  }, { throwOnError: true });
+  void response;
 }
 
 /** Dispatch a constrained native OpenCode turn while leaving its tools enabled. */

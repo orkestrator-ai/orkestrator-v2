@@ -18,10 +18,17 @@ import type {
   ApprovalResolution,
 } from "./app-server/approvals.js";
 import type {
+  InteractionAnswer,
+  InteractionRequest,
+  InteractionResolution,
+} from "./app-server/interactions.js";
+import type {
   EngineEvent,
   EngineGeneration,
+  EngineRateLimitWindow,
   EngineThread,
   EngineTurnConfig,
+  EngineUsageSnapshot,
   EngineUserInput,
 } from "./engine/types.js";
 import {
@@ -95,7 +102,9 @@ export interface RuntimeSseEvent {
     /** Codex is blocked on a human decision. */
     | "session.approval-requested"
     /** The approval is no longer actionable — answered, expired or withdrawn. */
-    | "session.approval-resolved";
+    | "session.approval-resolved"
+    | "session.interaction-requested"
+    | "session.interaction-resolved";
   sessionId?: string;
   data?: Record<string, unknown>;
 }
@@ -417,6 +426,13 @@ export class AppServerRuntime {
     string,
     { request: ApprovalRequest }
   >();
+  private readonly pendingInteractions = new Map<
+    string,
+    { request: InteractionRequest }
+  >();
+  private readonly usageByThread = new Map<string, EngineUsageSnapshot>();
+  private accountRateLimits: EngineRateLimitWindow[] = [];
+  private accountCredits?: import("./engine/types.js").EngineCreditSnapshot;
 
   constructor(options: AppServerRuntimeOptions) {
     this.options = options;
@@ -435,6 +451,11 @@ export class AppServerRuntime {
       present: (request) => this.presentApproval(request),
       resolved: (request, decision, resolution) =>
         this.onApprovalResolved(request, decision, resolution),
+    });
+    options.engine.setInteractionHandlers({
+      present: (request) => this.presentInteraction(request),
+      resolved: (request, answer, resolution) =>
+        this.onInteractionResolved(request, answer, resolution),
     });
   }
 
@@ -565,6 +586,91 @@ export class AppServerRuntime {
     // that can never be answered.
     this.pendingApprovals.delete(approvalId);
     return "unknown";
+  }
+
+  private presentInteraction(request: InteractionRequest): boolean {
+    const sessionIds = this.sessionIdsForThread(request.threadId);
+    if (sessionIds.length === 0) return false;
+    this.pendingInteractions.set(request.interactionId, { request });
+    for (const sessionId of sessionIds) {
+      this.options.emit({
+        type: "session.interaction-requested",
+        sessionId,
+        data: { interaction: request },
+      });
+    }
+    return true;
+  }
+
+  private onInteractionResolved(
+    request: InteractionRequest,
+    answer: InteractionAnswer,
+    resolution: InteractionResolution,
+  ): void {
+    this.pendingInteractions.delete(request.interactionId);
+    for (const sessionId of this.sessionIdsForThread(request.threadId)) {
+      this.options.emit({
+        type: "session.interaction-resolved",
+        sessionId,
+        data: { interactionId: request.interactionId, action: answer.action, resolution },
+      });
+    }
+  }
+
+  private sessionIdsForThread(threadId: string): string[] {
+    return this.registry.sessionsForThread(threadId).map((session) => session.id);
+  }
+
+  listInteractions(sessionId: string): InteractionRequest[] {
+    const session = this.registry.getSession(sessionId);
+    if (!session?.threadId) return [];
+    return [...this.pendingInteractions.values()]
+      .filter((entry) => entry.request.threadId === session.threadId)
+      .map((entry) => entry.request);
+  }
+
+  respondToInteraction(
+    sessionId: string,
+    interactionId: string,
+    answer: InteractionAnswer,
+  ): "applied" | "unknown" | "wrong-session" | "invalid" {
+    const entry = this.pendingInteractions.get(interactionId);
+    if (!entry) return "unknown";
+    if (!this.sessionIdsForThread(entry.request.threadId).includes(sessionId)) {
+      return "wrong-session";
+    }
+    if (entry.request.kind === "question" && answer.action === "accept") {
+      const expectedIds = new Set(entry.request.questions?.map((question) => question.id));
+      if (
+        !answer.answers
+        || [...expectedIds].some(
+          (id) => !answer.answers?.[id]?.some((value) => value.length > 0),
+        )
+        || Object.keys(answer.answers).some((id) => !expectedIds.has(id))
+        || Object.values(answer.answers).some(
+          (values) =>
+            !Array.isArray(values)
+            || values.length === 0
+            || values.some((value) => typeof value !== "string" || value.length === 0),
+        )
+      ) {
+        return "invalid";
+      }
+    }
+    if (
+      entry.request.kind === "mcp-form"
+      && answer.action === "accept"
+      && (
+        !answer.content
+        || typeof answer.content !== "object"
+        || Array.isArray(answer.content)
+      )
+    ) {
+      return "invalid";
+    }
+    return this.options.engine.resolveInteraction(interactionId, answer)
+      ? "applied"
+      : "unknown";
   }
 
   /**
@@ -1030,6 +1136,27 @@ export class AppServerRuntime {
       return;
     }
     if (event.kind === "unknown.protocol") return;
+    if (event.kind === "account.rateLimits.updated") {
+      this.accountRateLimits = event.rateLimits;
+      this.accountCredits = event.credits;
+      for (const [threadId, usage] of this.usageByThread) {
+        const merged = {
+          ...usage,
+          rateLimits: this.accountRateLimits,
+          ...(this.accountCredits ? { credits: this.accountCredits } : {}),
+          updatedAt: new Date(this.now()).toISOString(),
+        };
+        this.usageByThread.set(threadId, merged);
+        for (const sessionId of this.sessionIdsForThread(threadId)) {
+          this.options.emit({
+            type: "session.updated",
+            sessionId,
+            data: { contextUsage: merged },
+          });
+        }
+      }
+      return;
+    }
 
     const threadId = "threadId" in event ? event.threadId : null;
     if (!threadId) return;
@@ -1042,6 +1169,14 @@ export class AppServerRuntime {
       && context.engineGeneration !== 0
       && event.engineGeneration < context.engineGeneration
     ) {
+      return;
+    }
+
+    // Usage is a thread snapshot, not a transcript mutation. It can legitimately
+    // arrive just after `turn/completed`, when there is no active accumulator to
+    // accept its turn id, so apply it directly instead of parking it forever.
+    if (event.kind === "thread.usage.updated") {
+      this.applyEvent(context, event);
       return;
     }
 
@@ -1109,6 +1244,24 @@ export class AppServerRuntime {
       case "thread.name.updated":
         context.name = event.name ?? null;
         return;
+      case "thread.usage.updated": {
+        const usage = {
+          ...event.usage,
+          ...(this.accountRateLimits.length > 0
+            ? { rateLimits: this.accountRateLimits }
+            : {}),
+          ...(this.accountCredits ? { credits: this.accountCredits } : {}),
+        };
+        this.usageByThread.set(threadId, usage);
+        for (const sessionId of context.bridgeSessionIds) {
+          this.options.emit({
+            type: "session.updated",
+            sessionId,
+            data: { contextUsage: usage },
+          });
+        }
+        return;
+      }
       case "turn.started": {
         const turn = context.activeTurn;
         if (turn && turn.turnId === event.turnId) turn.markRunning(event.turnId);
@@ -1536,6 +1689,174 @@ export class AppServerRuntime {
     };
   }
 
+  async forkSession(
+    sessionId: string,
+    lastMessageId?: string,
+  ): Promise<{
+    sessionId: string;
+    title?: string;
+    threadId: string;
+    messages: NormalizedMessage[];
+  } | null> {
+    const parent = this.registry.getSession(sessionId);
+    if (!parent?.threadId) return null;
+    const parentContext = await this.ensureAttached(sessionId);
+    if (!parentContext || phaseToExternalStatus(parentContext.phase) === "running") {
+      return null;
+    }
+    const lastTurnId = lastMessageId
+      ? parentContext.messages.find((message) => message.id === lastMessageId)?.turnId
+      : undefined;
+    if (lastMessageId && !lastTurnId) return null;
+    const fork = await this.options.engine.forkThread(
+      parent.threadId,
+      parent.config,
+      lastTurnId,
+    );
+    if (!fork.id) return null;
+    const child = this.registry.createSession({
+      id: createSessionId(),
+      threadId: null,
+      config: { ...parent.config },
+      title: parent.title ? `${parent.title} (fork)` : "Forked session",
+      titleSource: "explicit",
+      titleGenerationAttempted: true,
+    });
+    const context = this.registry.attach(child.id, fork.id, {
+      engineHandle: fork.handle,
+      engineGeneration: this.options.engine.info().generation,
+      cwd: fork.cwd,
+      name: fork.name,
+    });
+    context.materialized = true;
+    const hydrated = await hydrateMessagesFromPersistedSession(fork.id);
+    context.messages = hydrated.messages;
+    if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
+    await this.persistSession(child);
+    return {
+      sessionId: child.id,
+      title: child.title,
+      threadId: fork.id,
+      messages: context.messages,
+    };
+  }
+
+  async compactSession(sessionId: string): Promise<"accepted" | "not-found" | "running"> {
+    const session = this.registry.getSession(sessionId);
+    if (!session?.threadId) return "not-found";
+    const context = await this.ensureAttached(sessionId);
+    if (!context) return "not-found";
+    if (phaseToExternalStatus(context.phase) === "running") return "running";
+    await this.options.engine.compactThread(session.threadId);
+    this.options.emit({
+      type: "session.updated",
+      sessionId,
+      data: { compacted: true },
+    });
+    return "accepted";
+  }
+
+  async steerSession(
+    sessionId: string,
+    input: string,
+    requestId?: string,
+  ): Promise<"accepted" | "not-found" | "idle" | "mismatch"> {
+    const session = this.registry.getSession(sessionId);
+    const context = this.registry.getThreadForSession(sessionId);
+    const turn = context?.activeTurn;
+    if (!session?.threadId || !context) return "not-found";
+    if (!turn || phaseToExternalStatus(context.phase) !== "running") return "idle";
+    try {
+      await this.options.engine.steerTurn(
+        session.threadId,
+        turn.turnId,
+        [{ type: "text", text: input }],
+        requestId,
+      );
+      return "accepted";
+    } catch {
+      return "mismatch";
+    }
+  }
+
+  async startNativeReview(
+    sessionId: string,
+    target:
+      | { type: "uncommittedChanges" }
+      | { type: "baseBranch"; branch: string }
+      | { type: "commit"; sha: string; title: string | null }
+      | { type: "custom"; instructions: string },
+  ): Promise<
+    | { outcome: "accepted"; turnId: string }
+    | { outcome: "not-found" | "running" | "unavailable" }
+  > {
+    const session = this.registry.getSession(sessionId);
+    if (!session?.threadId) return { outcome: "not-found" };
+    const context = await this.ensureAttached(sessionId);
+    if (!context) return { outcome: "not-found" };
+    if (phaseToExternalStatus(context.phase) === "running") {
+      return { outcome: "running" };
+    }
+
+    const assistantMessage: NormalizedMessage = {
+      id: createMessageId(),
+      role: "assistant",
+      content: "",
+      parts: [],
+      createdAt: new Date(this.now()).toISOString(),
+    };
+    context.messages.push(assistantMessage);
+    this.bumpMessageRevision(context);
+    for (const id of context.bridgeSessionIds) {
+      this.options.emit({
+        type: "message.updated",
+        sessionId: id,
+        data: { message: assistantMessage },
+      });
+    }
+
+    try {
+      const review = await this.options.engine.startReview(
+        session.threadId,
+        target,
+        "inline",
+      );
+      const accumulator = new TurnAccumulator({
+        threadId: context.threadId,
+        turnId: review.turnId,
+        requestId: `review-${review.turnId}`,
+        engineGeneration: this.options.engine.info().generation,
+        assistantMessageId: assistantMessage.id,
+        expectsStructuredOutput: false,
+      });
+      accumulator.markRunning();
+      context.activeTurn = accumulator;
+      this.registry.setPhase(context, "running");
+      const state = this.stateFor(context.threadId);
+      state.render = beginTurnRenderState(state.render);
+      state.assistantMessageId = assistantMessage.id;
+      this.emitStatus(context);
+      this.drainPendingEvents(context, review.turnId);
+      return { outcome: "accepted", turnId: review.turnId };
+    } catch (error) {
+      context.messages = context.messages.filter(
+        (message) => message.id !== assistantMessage.id,
+      );
+      this.registry.setPhase(
+        context,
+        "failed",
+        error instanceof Error ? error.message : "Native review failed",
+      );
+      this.emitStatus(context);
+      return { outcome: "unavailable" };
+    }
+  }
+
+  async getRuntimeHealth(sessionId?: string): Promise<unknown> {
+    const session = sessionId ? this.registry.getSession(sessionId) : undefined;
+    return this.options.engine.getRuntimeHealth(session?.threadId ?? undefined);
+  }
+
   /**
    * Applies a configuration change to the engine, memory and disk.
    *
@@ -1621,6 +1942,7 @@ export class AppServerRuntime {
     requestId?: string;
     structuredOutputRequestId?: string;
     structuredOutput?: StructuredOutputResult;
+    contextUsage?: EngineUsageSnapshot;
     engineGeneration: number;
     messageRevision: number;
   } | null {
@@ -1647,6 +1969,9 @@ export class AppServerRuntime {
       requestId: context?.activeTurn?.requestId,
       structuredOutputRequestId: session.structuredOutputRequestId,
       structuredOutput: session.structuredOutput,
+      contextUsage: session.threadId
+        ? this.usageByThread.get(session.threadId)
+        : undefined,
       engineGeneration: this.options.engine.info().generation,
       messageRevision: session.messageRevision,
     };
@@ -2026,6 +2351,7 @@ export class AppServerRuntime {
         requestId,
         outputSchema: input.outputSchema,
       });
+      userMessage.turnId = turn.turnId;
 
       await this.journal.markAccepted(requestId, {
         threadId: context.threadId,

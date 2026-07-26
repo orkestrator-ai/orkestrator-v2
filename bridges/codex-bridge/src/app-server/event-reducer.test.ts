@@ -79,6 +79,70 @@ describe("thread and turn lifecycle", () => {
   });
 });
 
+describe("usage and limits", () => {
+  test("preserves exact Codex token breakdown and context window", () => {
+    const events = reduce("thread/tokenUsage/updated", {
+      threadId: "t1",
+      turnId: "turn-1",
+      tokenUsage: {
+        total: {
+          totalTokens: 15_000,
+          inputTokens: 10_000,
+          cachedInputTokens: 2_000,
+          cacheWriteInputTokens: 500,
+          outputTokens: 3_000,
+          reasoningOutputTokens: 1_000,
+        },
+        last: {
+          totalTokens: 25_000,
+          inputTokens: 20_000,
+          cachedInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          outputTokens: 5_000,
+          reasoningOutputTokens: 2_000,
+        },
+        modelContextWindow: 100_000,
+      },
+    });
+
+    expect(events[0]).toMatchObject({
+      kind: "thread.usage.updated",
+      threadId: "t1",
+      usage: {
+        usedTokens: 25_000,
+        totalTokens: 100_000,
+        percentUsed: 25,
+        inputTokens: 10_000,
+        outputTokens: 3_000,
+        cacheReadTokens: 2_000,
+        reasoningTokens: 1_000,
+        sessionTokens: 15_000,
+        estimated: false,
+      },
+    });
+  });
+
+  test("normalizes account rate-limit windows and credits", () => {
+    const events = reduce("account/rateLimits/updated", {
+      rateLimits: {
+        limitName: "Five hour",
+        primary: { usedPercent: 60, resetsAt: 1_800_000_000 },
+        secondary: { usedPercent: 20, resetsAt: null },
+        credits: { balance: "12.50", hasCredits: true, unlimited: false },
+      },
+    });
+
+    expect(events[0]).toMatchObject({
+      kind: "account.rateLimits.updated",
+      credits: { balance: "12.50", hasCredits: true, unlimited: false },
+      rateLimits: [
+        { label: "Five hour", usedPercent: 60 },
+        { label: "Secondary", usedPercent: 20 },
+      ],
+    });
+  });
+});
+
 describe("deltas", () => {
   test("agent message delta", () => {
     const events = reduce("item/agentMessage/delta", {
@@ -161,7 +225,7 @@ describe("unknown and ignored notifications", () => {
   });
 
   test("known-but-irrelevant methods are silently ignored", () => {
-    for (const method of ["account/updated", "warning", "thread/tokenUsage/updated"]) {
+    for (const method of ["account/updated", "warning"]) {
       const result = reduceNotification(notify(method, {}), 1);
       expect(result.events).toEqual([]);
       expect(result.unknownMethod).toBeUndefined();

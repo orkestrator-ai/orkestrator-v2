@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from "react";
-import { Loader2, AlertCircle, RefreshCw, ArrowDown, History } from "lucide-react";
+import { Loader2, AlertCircle, RefreshCw, ArrowDown, GitFork, History } from "lucide-react";
 import { toast } from "sonner";
 import { useVirtuosoScrollState, clearPersistedVirtuosoState, useElapsedTimer } from "@/hooks";
 import { formatElapsed } from "@/lib/format-elapsed";
@@ -21,6 +21,7 @@ import {
   getSessionMessages,
   getPendingQuestions,
   getPendingPlanApprovals,
+  forkClaudeSession,
   sendPrompt,
   abortSession,
   subscribeToEvents,
@@ -39,7 +40,10 @@ import {
   type SystemMessageEventData,
   type ClaudeEffortLevel,
 } from "@/lib/claude-client";
-import { extractContextUsage } from "@/lib/context-usage";
+import {
+  extractContextUsage,
+  type ContextUsageSnapshot,
+} from "@/lib/context-usage";
 import {
   startClaudeServer,
   getClaudeServerStatus,
@@ -162,6 +166,8 @@ export function ClaudeChatTab({
     removePendingQuestion,
     setSessionTitle,
     setContextUsage,
+    setPromptSuggestion,
+    setBackgroundTasks,
     addPendingPlanApproval,
     removePendingPlanApproval,
     getOrCreateEventSubscription,
@@ -255,6 +261,26 @@ export function ClaudeChatTab({
 
   const client = useMemo(() => clientsMap.get(environmentId), [clientsMap, environmentId]);
   const session = useMemo(() => sessionsMap.get(sessionKey), [sessionsMap, sessionKey]);
+  const promptSuggestion = useClaudeStore(
+    useCallback(
+      (state) => state.promptSuggestions.get(sessionKey),
+      [sessionKey],
+    ),
+  );
+  const applyServerSessionMetadata = useCallback(
+    (
+      key: string,
+      serverSession: Awaited<ReturnType<typeof getSession>>,
+    ) => {
+      if (!serverSession) return;
+      if (serverSession.contextUsage) {
+        setContextUsage(key, serverSession.contextUsage);
+      }
+      setPromptSuggestion(key, serverSession.promptSuggestion);
+      setBackgroundTasks(key, serverSession.backgroundTasks ?? {});
+    },
+    [setBackgroundTasks, setContextUsage, setPromptSuggestion],
+  );
   const showAddressAll = Boolean(
     isReviewTab &&
       session &&
@@ -334,6 +360,7 @@ export function ClaudeChatTab({
     if (!serverSession) {
       throw new Error("The Claude session is no longer available on the server");
     }
+    applyServerSessionMetadata(sessionKey, serverSession);
 
     const stateAfterAttempt = useClaudeStore.getState();
     const sessionAfterAttempt = stateAfterAttempt.sessions.get(sessionKey);
@@ -375,6 +402,7 @@ export function ClaudeChatTab({
       if (!refreshedApprovalIds.has(approvalId)) removePendingPlanApproval(approvalId);
     }
   }, [
+    applyServerSessionMetadata,
     addPendingPlanApproval,
     addPendingQuestion,
     environmentId,
@@ -536,6 +564,7 @@ export function ClaudeChatTab({
             // state can be stale.
             const serverSession = await getSession(existingClient, existingSession.sessionId);
             if (!mounted || !serverSession) return;
+            applyServerSessionMetadata(sessionKey, serverSession);
             const messages = await getSessionMessages(existingClient, existingSession.sessionId);
             if (!mounted) return;
 
@@ -604,6 +633,7 @@ export function ClaudeChatTab({
                 messages: restoredMessages,
                 isLoading: restoredServerSession?.status === "running",
               });
+              applyServerSessionMetadata(sessionKey, restoredServerSession);
               setConnectionState("connected");
               if (!hasActiveEventSubscription(environmentId)) {
                 startSharedEventSubscription(bridgeClient);
@@ -751,6 +781,7 @@ export function ClaudeChatTab({
               mcpServers: existing?.mcpServers || [],
               plugins: existing?.plugins || [],
               slashCommands: merged,
+              agents: existing?.agents || [],
             });
           }).catch((err) => {
             if (err instanceof DOMException && err.name === "AbortError") return;
@@ -805,6 +836,7 @@ export function ClaudeChatTab({
                 messages,
                 isLoading: serverSession?.status === "running",
               });
+              applyServerSessionMetadata(sessionKey, serverSession);
             }
           } catch (err) {
             if (err instanceof SessionNotFoundError) {
@@ -1090,6 +1122,26 @@ export function ClaudeChatTab({
               });
             }
 
+            if (eventType === "session.updated") {
+              const sessionUpdate = event.data as {
+                contextUsage?: ContextUsageSnapshot;
+                promptSuggestion?: string;
+                backgroundTasks?: Record<
+                  string,
+                  import("@/lib/claude-client").ClaudeBackgroundTask
+                >;
+              };
+              if (sessionUpdate.contextUsage) {
+                setContextUsage(sessionTabId, sessionUpdate.contextUsage);
+              }
+              if ("promptSuggestion" in sessionUpdate) {
+                setPromptSuggestion(sessionTabId, sessionUpdate.promptSuggestion);
+              }
+              if (sessionUpdate.backgroundTasks) {
+                setBackgroundTasks(sessionTabId, sessionUpdate.backgroundTasks);
+              }
+            }
+
             if (isFinalEvent) {
               setSessionLoading(sessionTabId, false);
             }
@@ -1146,6 +1198,7 @@ export function ClaudeChatTab({
                 mcpServers: initData.mcpServers || [],
                 plugins: initData.plugins || [],
                 slashCommands,
+                agents: initData.agents || existing?.agents || [],
               });
             }
           }
@@ -1295,7 +1348,7 @@ export function ClaudeChatTab({
         }
       }
     },
-    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, setEventStream, setMessages, upsertMessage, patchMessage, setSessionLoading, setSessionTitle, setContextUsage, addMessage, addPendingQuestion, removePendingQuestion, addPendingPlanApproval, removePendingPlanApproval, setPlanMode, getSessionKeyBySdkSessionId]
+    [environmentId, hasActiveEventSubscription, getOrCreateEventSubscription, setEventStream, setMessages, upsertMessage, patchMessage, setSessionLoading, setSessionTitle, setContextUsage, setPromptSuggestion, setBackgroundTasks, addMessage, addPendingQuestion, removePendingQuestion, addPendingPlanApproval, removePendingPlanApproval, setPlanMode, getSessionKeyBySdkSessionId]
   );
   startSharedEventSubscriptionRef.current = startSharedEventSubscription;
 
@@ -1362,6 +1415,12 @@ export function ClaudeChatTab({
         effort,
         permissionMode,
         fastMode: fastModeEnabled && modelSupportsFastMode,
+        agent: useClaudeStore.getState().getSelectedAgent(sessionKey),
+        includeLocalSettings: useClaudeStore
+          .getState()
+          .includesLocalSettings(sessionKey),
+        promptSuggestions:
+          useClaudeStore.getState().promptSuggestionOptIn.get(sessionKey) === true,
       });
 
       if (!success) {
@@ -1600,6 +1659,28 @@ export function ClaudeChatTab({
     [client, environmentId, sessionKey, setSession, tabId, updateTabNativeSessionId]
   );
 
+  const handleForkFromMessage = useCallback(async (messageId: string) => {
+    if (!client || !session?.sessionId) return;
+    try {
+      const fork = await forkClaudeSession(client, session.sessionId, {
+        upToMessageId: messageId,
+      });
+      const paneStore = usePaneLayoutStore.getState();
+      paneStore.addTab(
+        paneStore.getActivePaneId(environmentId),
+        {
+          id: createUuid(),
+          type: "claude-native",
+          displayTitle: fork.title ?? "Claude fork",
+          claudeNativeData: { ...data, sessionId: fork.sessionId },
+        },
+        environmentId,
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to fork Claude session");
+    }
+  }, [client, data, environmentId, session?.sessionId]);
+
   if (setupPending) {
     return (
       <SetupPendingOverlay
@@ -1666,6 +1747,18 @@ export function ClaudeChatTab({
               previousMessage={prev}
               assistantLabel="Claude"
               containerId={containerId}
+              actions={message.role === "user" ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  title="Fork from here"
+                  aria-label="Fork Claude session from this message"
+                  onClick={() => void handleForkFromMessage(message.id)}
+                >
+                  <GitFork className="h-3.5 w-3.5" />
+                </Button>
+              ) : undefined}
             />
           )}
           emptyState={
@@ -1748,16 +1841,33 @@ export function ClaudeChatTab({
       <NativeComposeDock
         centered={centerCompose}
         topAccessory={
-          !isAtBottom ? (
-            <button
-              type="button"
-              onClick={scrollToBottom}
-              className="flex items-center gap-1.5 rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
-              aria-label="Scroll to bottom of conversation"
-            >
-              <ArrowDown className="h-3.5 w-3.5" />
-              <span>Scroll down</span>
-            </button>
+          promptSuggestion || !isAtBottom ? (
+            <div className="flex min-w-0 items-center gap-2">
+              {promptSuggestion ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    useClaudeStore.getState().setDraftText(sessionKey, promptSuggestion);
+                    setPromptSuggestion(sessionKey, undefined);
+                  }}
+                  className="max-w-[min(70vw,34rem)] truncate rounded-full border border-border/60 bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground"
+                  title={promptSuggestion}
+                >
+                  Suggested: {promptSuggestion}
+                </button>
+              ) : null}
+              {!isAtBottom ? (
+                <button
+                  type="button"
+                  onClick={scrollToBottom}
+                  className="flex shrink-0 items-center gap-1.5 rounded-full bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 shadow-sm transition-colors hover:bg-zinc-700"
+                  aria-label="Scroll to bottom of conversation"
+                >
+                  <ArrowDown className="h-3.5 w-3.5" />
+                  <span>Scroll down</span>
+                </button>
+              ) : null}
+            </div>
           ) : null
         }
         actions={

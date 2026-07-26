@@ -4,7 +4,6 @@ import {
   createSession,
   getSession,
   listSessions,
-  deleteSession,
   getSessionMessages,
   sendPrompt,
   abortSession,
@@ -15,6 +14,14 @@ import {
   getStructuredPromptDispatchState,
   respondToPlanApproval,
   getPendingPlanApprovals,
+  reconcilePersistedSessions,
+  ensurePersistedSession,
+  hydratePersistedSessionMessages,
+  deleteSessionDurably,
+  renameSessionDurably,
+  forkPersistedSession,
+  rewindSessionFiles,
+  stopBackgroundTask,
 } from "../services/session-manager.js";
 import type {
   CreateSessionResponse,
@@ -67,7 +74,8 @@ session.post("/create", async (c) => {
 });
 
 // List all sessions
-session.get("/list", (c) => {
+session.get("/list", async (c) => {
+  await reconcilePersistedSessions();
   const sessions = listSessions();
 
   const response: SessionListResponse = {
@@ -84,9 +92,9 @@ session.get("/list", (c) => {
 });
 
 // Get session details
-session.get("/:id", (c) => {
+session.get("/:id", async (c) => {
   const id = c.req.param("id");
-  const sessionData = getSession(id);
+  const sessionData = getSession(id) ?? await ensurePersistedSession(id);
 
   if (!sessionData) {
     return c.json({ error: "Session not found" }, 404);
@@ -101,6 +109,9 @@ session.get("/:id", (c) => {
     error: sessionData.error,
     structuredOutputRequestId: sessionData.structuredOutputRequestId,
     structuredOutput: sessionData.structuredOutput,
+    contextUsage: sessionData.usage,
+    promptSuggestion: sessionData.promptSuggestion,
+    backgroundTasks: sessionData.backgroundTasks ?? {},
   });
 });
 
@@ -143,15 +154,18 @@ session.get("/:id/tasks", (c) => {
 });
 
 // Get session messages
-session.get("/:id/messages", (c) => {
+session.get("/:id/messages", async (c) => {
   const id = c.req.param("id");
-  const sessionData = getSession(id);
+  const sessionData = getSession(id) ?? await ensurePersistedSession(id);
 
   if (!sessionData) {
     return c.json({ error: "Session not found" }, 404);
   }
 
-  const messages = getSessionMessages(id);
+  const messages =
+    sessionData.persistedMessagesLoaded === false
+      ? await hydratePersistedSessionMessages(id)
+      : getSessionMessages(id);
   const response: MessagesResponse = { messages };
 
   return c.json(response);
@@ -160,7 +174,7 @@ session.get("/:id/messages", (c) => {
 // Send a prompt to a session
 session.post("/:id/prompt", async (c) => {
   const id = c.req.param("id");
-  const sessionData = getSession(id);
+  const sessionData = getSession(id) ?? await ensurePersistedSession(id);
 
   if (!sessionData) {
     return c.json({ error: "Session not found" }, 404);
@@ -187,6 +201,18 @@ session.post("/:id/prompt", async (c) => {
         }>
       | undefined;
     const fastMode = typeof body.fastMode === "boolean" ? body.fastMode : undefined;
+    const agent =
+      typeof body.agent === "string" && body.agent.trim()
+        ? body.agent.trim()
+        : undefined;
+    const includeLocalSettings =
+      typeof body.includeLocalSettings === "boolean"
+        ? body.includeLocalSettings
+        : undefined;
+    const promptSuggestions =
+      typeof body.promptSuggestions === "boolean"
+        ? body.promptSuggestions
+        : undefined;
     const outputSchema = body.outputSchema;
     const requestId = typeof body.requestId === "string" && body.requestId.trim().length > 0
       ? body.requestId.trim()
@@ -253,6 +279,8 @@ session.post("/:id/prompt", async (c) => {
       effort,
       permissionMode,
       fastMode,
+      agent,
+      includeLocalSettings,
       attachmentsCount: attachments?.length ?? 0,
     });
 
@@ -263,6 +291,9 @@ session.post("/:id/prompt", async (c) => {
       effort,
       permissionMode,
       fastMode,
+      agent,
+      includeLocalSettings,
+      promptSuggestions,
       outputSchema,
       requestId,
     }).catch((error) => {
@@ -316,16 +347,78 @@ session.post("/:id/abort", (c) => {
 });
 
 // Delete a session
-session.delete("/:id", (c) => {
+session.delete("/:id", async (c) => {
   const id = c.req.param("id");
 
-  const deleted = deleteSession(id);
+  const deleted = await deleteSessionDurably(id);
 
   if (deleted) {
     return c.json({ status: "deleted" });
   } else {
     return c.json({ error: "Session not found" }, 404);
   }
+});
+
+session.post("/:id/rename", async (c) => {
+  const id = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}));
+  const title = typeof body.title === "string" ? body.title.trim() : "";
+  if (!title) return c.json({ error: "Title is required" }, 400);
+  const renamed = await renameSessionDurably(id, title);
+  return renamed
+    ? c.json({ status: "renamed", title })
+    : c.json({ error: "Session not found" }, 404);
+});
+
+session.post("/:id/fork", async (c) => {
+  const id = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}));
+  const upToMessageId =
+    typeof body.upToMessageId === "string" && body.upToMessageId.trim()
+      ? body.upToMessageId.trim()
+      : undefined;
+  const title =
+    typeof body.title === "string" && body.title.trim()
+      ? body.title.trim()
+      : undefined;
+  const forked = await forkPersistedSession(id, { upToMessageId, title });
+  return c.json({
+    sessionId: forked.id,
+    title: forked.title,
+  }, 201);
+});
+
+session.post("/:id/compact", async (c) => {
+  const id = c.req.param("id");
+  const sessionData = getSession(id) ?? await ensurePersistedSession(id);
+  if (!sessionData) return c.json({ error: "Session not found" }, 404);
+  if (sessionData.status === "running") {
+    return c.json({ error: "Session is already processing a prompt" }, 409);
+  }
+  void sendPrompt(id, "/compact").catch((error) => {
+    console.error("[session] Claude compaction failed:", error);
+  });
+  return c.json({ status: "processing" }, 202);
+});
+
+session.post("/:id/rewind", async (c) => {
+  const id = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}));
+  const messageId =
+    typeof body.messageId === "string" ? body.messageId.trim() : "";
+  if (!messageId) return c.json({ error: "messageId is required" }, 400);
+  const result = await rewindSessionFiles(id, messageId, body.dryRun === true);
+  return c.json({ status: body.dryRun === true ? "previewed" : "rewound", result });
+});
+
+session.post("/:id/tasks/:taskId/stop", async (c) => {
+  const stopped = await stopBackgroundTask(
+    c.req.param("id"),
+    c.req.param("taskId"),
+  );
+  return stopped
+    ? c.json({ status: "stopped" })
+    : c.json({ error: "Task is not running" }, 404);
 });
 
 // Get pending questions for a session

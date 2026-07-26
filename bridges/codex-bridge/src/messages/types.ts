@@ -45,6 +45,8 @@ export interface NormalizedMessage {
   parts: NormalizedPart[];
   createdAt: string;
   planReview?: boolean;
+  /** Native turn boundary used for lossless "fork from here". */
+  turnId?: string;
 }
 
 export interface FileChangeDiffContext {

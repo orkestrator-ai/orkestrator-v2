@@ -34,6 +34,7 @@ import {
 } from "./engine/app-server-engine.js";
 import { codexAppServerConfigOverrides } from "./codex-config.js";
 import { APPROVAL_DECISIONS, isApprovalDecision } from "./app-server/approvals.js";
+import type { InteractionAnswer } from "./app-server/interactions.js";
 import { EventRing, parseEventCursor } from "./event-ring.js";
 import {
   BUILTIN_SLASH_COMMANDS,
@@ -116,6 +117,8 @@ interface SseEvent {
     | "message.updated"
     | "session.approval-requested"
     | "session.approval-resolved"
+    | "session.interaction-requested"
+    | "session.interaction-resolved"
     /** Emitted when a reconnecting client's cursor has aged out of the ring. */
     | "session.reconcile-required";
   sessionId?: string;
@@ -948,6 +951,114 @@ app.post("/session/:id/approvals/:approvalId", async (c) => {
     return c.json({ error: "Approval is no longer pending", status: "stale" }, 409);
   }
   return c.json({ status: "applied", decision: body.decision });
+});
+
+app.get("/session/:id/interactions", (c) => {
+  return c.json({
+    interactions: appServerRuntime.listInteractions(c.req.param("id")),
+  });
+});
+
+app.post("/session/:id/interactions/:interactionId", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  if (
+    body.action !== "accept"
+    && body.action !== "decline"
+    && body.action !== "cancel"
+  ) {
+    return c.json({ error: "action must be accept, decline, or cancel" }, 400);
+  }
+  const answer: InteractionAnswer =
+    body.action === "accept"
+      ? {
+          action: "accept",
+          ...(body.answers && typeof body.answers === "object"
+            ? { answers: body.answers }
+            : {}),
+          ...("content" in body ? { content: body.content } : {}),
+          ...("meta" in body ? { meta: body.meta } : {}),
+        }
+      : { action: body.action, ...("meta" in body ? { meta: body.meta } : {}) };
+  const outcome = appServerRuntime.respondToInteraction(
+    c.req.param("id"),
+    c.req.param("interactionId"),
+    answer,
+  );
+  if (outcome === "wrong-session") {
+    return c.json({ error: "Interaction does not belong to this session" }, 403);
+  }
+  if (outcome === "invalid") {
+    return c.json({ error: "Interaction answer is malformed" }, 400);
+  }
+  if (outcome === "unknown") {
+    return c.json({ error: "Interaction is no longer pending", status: "stale" }, 409);
+  }
+  return c.json({ status: "applied", action: answer.action });
+});
+
+app.post("/session/:id/fork", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const result = await appServerRuntime.forkSession(
+    c.req.param("id"),
+    typeof body.lastMessageId === "string" ? body.lastMessageId : undefined,
+  );
+  return result
+    ? c.json(result, 201)
+    : c.json({ error: "Session cannot be forked while it is running or before its first turn" }, 409);
+});
+
+app.post("/session/:id/compact", async (c) => {
+  const outcome = await appServerRuntime.compactSession(c.req.param("id"));
+  if (outcome === "not-found") return c.json({ error: "Session not found" }, 404);
+  if (outcome === "running") return c.json({ error: "Session is running" }, 409);
+  return c.json({ status: "accepted" }, 202);
+});
+
+app.post("/session/:id/steer", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  if (typeof body.input !== "string" || !body.input.trim()) {
+    return c.json({ error: "input is required" }, 400);
+  }
+  const outcome = await appServerRuntime.steerSession(
+    c.req.param("id"),
+    body.input.trim(),
+    typeof body.requestId === "string" ? body.requestId : undefined,
+  );
+  if (outcome === "not-found") return c.json({ error: "Session not found" }, 404);
+  if (outcome === "idle") return c.json({ error: "There is no active turn" }, 409);
+  if (outcome === "mismatch") {
+    return c.json({ error: "The active turn changed; the text was not sent" }, 409);
+  }
+  return c.json({ status: "accepted" }, 202);
+});
+
+app.post("/session/:id/review", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const target =
+    body.type === "baseBranch" && typeof body.branch === "string" && body.branch.trim()
+      ? { type: "baseBranch" as const, branch: body.branch.trim() }
+      : body.type === "commit" && typeof body.sha === "string" && body.sha.trim()
+        ? {
+            type: "commit" as const,
+            sha: body.sha.trim(),
+            title: typeof body.title === "string" ? body.title : null,
+          }
+        : body.type === "custom"
+          && typeof body.instructions === "string"
+          && body.instructions.trim()
+          ? { type: "custom" as const, instructions: body.instructions.trim() }
+          : { type: "uncommittedChanges" as const };
+  const result = await appServerRuntime.startNativeReview(c.req.param("id"), target);
+  if (result.outcome === "not-found") return c.json({ error: "Session not found" }, 404);
+  if (result.outcome === "running") return c.json({ error: "Session is running" }, 409);
+  if (result.outcome === "unavailable") return c.json({ error: "Native review failed" }, 503);
+  return result.outcome === "accepted"
+    ? c.json({ status: "processing", turnId: result.turnId }, 202)
+    : c.json({ error: "Native review failed" }, 503);
+});
+
+app.get("/session/:id/runtime-health", async (c) => {
+  return c.json(await appServerRuntime.getRuntimeHealth(c.req.param("id")));
 });
 
 app.post("/session/:id/abort", async (c) => {

@@ -2640,7 +2640,6 @@ describe("sendPrompt", () => {
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
         settings: { fastMode: true },
-        resume: undefined,
         mcpServers: { local: { command: "safe-command", args: [] } },
         plugins: [{ type: "local", path: "/plugin" }],
       });
@@ -2655,7 +2654,14 @@ describe("sendPrompt", () => {
       expect(events.some((event) => event.type === "system.message")).toBe(true);
       expect(events).toContainEqual(expect.objectContaining({
         type: "session.updated",
-        data: { contextUsage: { usedTokens: 15, totalTokens: 200000, model: "claude-test" } },
+        data: {
+          contextUsage: expect.objectContaining({
+            usedTokens: 15,
+            totalTokens: 200000,
+            modelId: "claude-test",
+            source: "claude",
+          }),
+        },
       }));
     } finally {
       if (previousCwd === undefined) delete process.env.CWD;

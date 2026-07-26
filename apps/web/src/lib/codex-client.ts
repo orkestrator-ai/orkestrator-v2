@@ -1,4 +1,5 @@
 import type { NativeMessage, NativeMessagePart } from "./chat/native-message-types";
+import type { ContextUsageSnapshot } from "./context-usage";
 import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
 import {
   isStructuredOutputResult,
@@ -119,6 +120,7 @@ interface CodexSessionStatusResponse {
   messageRevision?: number;
   structuredOutputRequestId?: string;
   structuredOutput?: StructuredOutputResult;
+  contextUsage?: ContextUsageSnapshot;
 }
 
 export interface CodexClient {
@@ -132,6 +134,7 @@ export interface CodexMessage {
   parts: NativeMessagePart[];
   createdAt: string;
   planReview?: boolean;
+  turnId?: string;
 }
 
 
@@ -161,6 +164,7 @@ export interface CodexSessionStatus {
   messageRevision?: number;
   structuredOutputRequestId?: string;
   structuredOutput?: StructuredOutputResult;
+  contextUsage?: ContextUsageSnapshot;
 }
 
 export type CodexSessionStatusLookupResult =
@@ -188,6 +192,8 @@ export interface CodexEvent {
     | "message.updated"
     | "session.approval-requested"
     | "session.approval-resolved"
+    | "session.interaction-requested"
+    | "session.interaction-resolved"
     /** The bridge could not replay our gap; refetch state from scratch. */
     | "session.reconcile-required";
   sessionId?: string;
@@ -251,6 +257,118 @@ export interface CodexApproval {
  * user is deciding, and a restart withdraws the request outright.
  */
 export type CodexApprovalResponseResult = "applied" | "stale" | "forbidden" | "error";
+
+export interface CodexInteractionOption {
+  label: string;
+  description?: string;
+}
+
+export interface CodexInteractionQuestion {
+  id: string;
+  header: string;
+  question: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options?: CodexInteractionOption[];
+}
+
+export interface CodexInteraction {
+  interactionId: string;
+  kind: "question" | "mcp-form" | "mcp-url";
+  method: string;
+  threadId: string;
+  turnId: string | null;
+  itemId: string | null;
+  requestedAt: number;
+  expiresAt: number;
+  autoResolutionMs?: number;
+  questions?: CodexInteractionQuestion[];
+  serverName?: string;
+  message?: string;
+  schema?: unknown;
+  url?: string;
+  elicitationId?: string;
+}
+
+export type CodexInteractionAnswer =
+  | { action: "accept"; answers?: Record<string, string[]>; content?: unknown }
+  | { action: "decline" | "cancel" };
+
+function parseInteractionQuestion(value: unknown): CodexInteractionQuestion | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (
+    typeof raw.id !== "string"
+    || typeof raw.question !== "string"
+    || typeof raw.header !== "string"
+  ) {
+    return null;
+  }
+  const options = Array.isArray(raw.options)
+    ? raw.options.flatMap((option) => {
+        if (!option || typeof option !== "object" || Array.isArray(option)) return [];
+        const parsed = option as Record<string, unknown>;
+        return typeof parsed.label === "string"
+          ? [{
+              label: parsed.label,
+              ...(typeof parsed.description === "string"
+                ? { description: parsed.description }
+                : {}),
+            }]
+          : [];
+      })
+    : undefined;
+  return {
+    id: raw.id,
+    header: raw.header,
+    question: raw.question,
+    isOther: raw.isOther === true,
+    isSecret: raw.isSecret === true,
+    ...(options && options.length > 0 ? { options } : {}),
+  };
+}
+
+export function parseInteraction(value: unknown): CodexInteraction | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (
+    typeof raw.interactionId !== "string"
+    || (raw.kind !== "question" && raw.kind !== "mcp-form" && raw.kind !== "mcp-url")
+    || typeof raw.method !== "string"
+    || typeof raw.threadId !== "string"
+    || typeof raw.requestedAt !== "number"
+    || typeof raw.expiresAt !== "number"
+  ) {
+    return null;
+  }
+  const questions = Array.isArray(raw.questions)
+    ? raw.questions
+        .map(parseInteractionQuestion)
+        .filter((question): question is CodexInteractionQuestion => question !== null)
+    : undefined;
+  if (raw.kind === "question" && !questions?.length) return null;
+  return {
+    interactionId: raw.interactionId,
+    kind: raw.kind,
+    method: raw.method,
+    threadId: raw.threadId,
+    turnId: typeof raw.turnId === "string" ? raw.turnId : null,
+    itemId: typeof raw.itemId === "string" ? raw.itemId : null,
+    requestedAt: raw.requestedAt,
+    expiresAt: raw.expiresAt,
+    ...(typeof raw.autoResolutionMs === "number"
+      ? { autoResolutionMs: raw.autoResolutionMs }
+      : {}),
+    ...(questions ? { questions } : {}),
+    ...(typeof raw.serverName === "string" ? { serverName: raw.serverName } : {}),
+    ...(typeof raw.message === "string" ? { message: raw.message } : {}),
+    ...("schema" in raw ? { schema: raw.schema } : {}),
+    ...(typeof raw.url === "string" ? { url: raw.url } : {}),
+    ...(typeof raw.elicitationId === "string"
+      ? { elicitationId: raw.elicitationId }
+      : {}),
+  };
+}
 
 /**
  * Reports an approval we refuse to render, and drops it.
@@ -683,6 +801,13 @@ export async function lookupSessionStatus(
         ...(isStructuredOutputResult(data.structuredOutput)
           ? { structuredOutput: data.structuredOutput }
           : {}),
+        ...(data.contextUsage
+          && typeof data.contextUsage === "object"
+          && typeof data.contextUsage.usedTokens === "number"
+          && typeof data.contextUsage.totalTokens === "number"
+          && typeof data.contextUsage.percentUsed === "number"
+          ? { contextUsage: data.contextUsage }
+          : {}),
       },
     };
   } catch (error) {
@@ -949,6 +1074,132 @@ export async function respondToApproval(
     console.error("[codex-client] Failed to respond to approval:", error);
     return "error";
   }
+}
+
+export async function fetchPendingInteractions(
+  client: CodexClient,
+  sessionId: string,
+): Promise<CodexInteraction[]> {
+  const response = await fetchWithTimeout(
+    `${client.baseUrl}/session/${sessionId}/interactions`,
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to fetch pending Codex interactions: HTTP ${response.status}`);
+  }
+  const body = (await response.json()) as { interactions?: unknown };
+  if (!Array.isArray(body.interactions)) {
+    throw new Error("Pending Codex interactions response was malformed");
+  }
+  return body.interactions
+    .map(parseInteraction)
+    .filter((interaction): interaction is CodexInteraction => interaction !== null);
+}
+
+export async function respondToInteraction(
+  client: CodexClient,
+  sessionId: string,
+  interactionId: string,
+  answer: CodexInteractionAnswer,
+): Promise<CodexApprovalResponseResult> {
+  try {
+    const response = await fetchWithTimeout(
+      `${client.baseUrl}/session/${sessionId}/interactions/${encodeURIComponent(interactionId)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(answer),
+      },
+    );
+    if (response.ok) return "applied";
+    if (response.status === 409) return "stale";
+    if (response.status === 403) return "forbidden";
+    return "error";
+  } catch (error) {
+    console.error("[codex-client] Failed to respond to interaction:", error);
+    return "error";
+  }
+}
+
+export async function forkCodexSession(
+  client: CodexClient,
+  sessionId: string,
+  lastMessageId?: string,
+): Promise<CodexSession | null> {
+  const response = await fetchWithTimeout(
+    `${client.baseUrl}/session/${sessionId}/fork`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lastMessageId }),
+    },
+  );
+  if (!response.ok) return null;
+  const body = (await response.json()) as { sessionId?: unknown; title?: unknown };
+  return typeof body.sessionId === "string"
+    ? {
+        sessionId: body.sessionId,
+        ...(typeof body.title === "string" ? { title: body.title } : {}),
+      }
+    : null;
+}
+
+export async function compactCodexSession(
+  client: CodexClient,
+  sessionId: string,
+): Promise<boolean> {
+  const response = await fetchWithTimeout(
+    `${client.baseUrl}/session/${sessionId}/compact`,
+    { method: "POST" },
+  );
+  return response.ok;
+}
+
+export async function steerCodexSession(
+  client: CodexClient,
+  sessionId: string,
+  input: string,
+  requestId: string,
+): Promise<boolean> {
+  const response = await fetchWithTimeout(
+    `${client.baseUrl}/session/${sessionId}/steer`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input, requestId }),
+    },
+  );
+  return response.ok;
+}
+
+export async function startCodexNativeReview(
+  client: CodexClient,
+  sessionId: string,
+  target:
+    | { type: "uncommittedChanges" }
+    | { type: "baseBranch"; branch: string }
+    | { type: "commit"; sha: string; title?: string }
+    | { type: "custom"; instructions: string } = { type: "uncommittedChanges" },
+): Promise<boolean> {
+  const response = await fetchWithTimeout(
+    `${client.baseUrl}/session/${sessionId}/review`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(target),
+    },
+  );
+  return response.ok;
+}
+
+export async function getCodexRuntimeHealth(
+  client: CodexClient,
+  sessionId: string,
+): Promise<unknown> {
+  const response = await fetchWithTimeout(
+    `${client.baseUrl}/session/${sessionId}/runtime-health`,
+  );
+  if (!response.ok) throw new Error(`Codex runtime health failed: HTTP ${response.status}`);
+  return response.json();
 }
 
 export async function deleteSession(

@@ -15,6 +15,7 @@ import {
   StructuredOutputReadUnavailableError,
 } from "@orkestrator/protocol/structured-output";
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
+import type { ContextUsageSnapshot } from "@/lib/context-usage";
 
 export type { ClaudeModelCatalogSnapshot };
 export type {
@@ -109,6 +110,24 @@ export interface SessionInitData {
   mcpServers: McpServerRuntimeStatus[];
   plugins: PluginRuntimeStatus[];
   slashCommands?: string[];
+  agents?: ClaudeAgentProfile[];
+}
+
+export interface ClaudeAgentProfile {
+  name: string;
+  description?: string;
+  model?: string;
+  color?: string;
+}
+
+export interface ClaudeBackgroundTask {
+  id: string;
+  description?: string;
+  status: "pending" | "running" | "completed" | "failed" | "killed" | "paused";
+  isBackgrounded?: boolean;
+  startedAt?: number;
+  endedAt?: number;
+  error?: string;
 }
 
 export interface ClaudeMessage {
@@ -237,6 +256,9 @@ export interface ClaudeSession {
   createdAt: string;
   lastActivity: string;
   error?: string;
+  contextUsage?: ContextUsageSnapshot;
+  promptSuggestion?: string;
+  backgroundTasks?: Record<string, ClaudeBackgroundTask>;
 }
 
 export type ClaudeSessionLookupResult =
@@ -588,6 +610,9 @@ export async function sendPrompt(
     effort?: ClaudeEffortLevel;
     permissionMode?: PermissionMode;
     fastMode?: boolean;
+    agent?: string;
+    includeLocalSettings?: boolean;
+    promptSuggestions?: boolean;
     outputSchema?: JsonSchema;
     requestId?: string;
   }
@@ -613,6 +638,9 @@ export async function sendPrompt(
         effort: options?.effort,
         permissionMode: options?.permissionMode,
         fastMode: options?.fastMode,
+        agent: options?.agent,
+        includeLocalSettings: options?.includeLocalSettings,
+        promptSuggestions: options?.promptSuggestions,
         outputSchema: options?.outputSchema,
         requestId: options?.requestId,
       }),
@@ -772,6 +800,74 @@ export async function deleteSession(
     console.error("[claude-client] Failed to delete session:", error);
     return false;
   }
+}
+
+export async function renameClaudeSession(
+  client: ClaudeClient,
+  sessionId: string,
+  title: string,
+): Promise<boolean> {
+  const response = await fetch(`${client.baseUrl}/session/${sessionId}/rename`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  return response.ok;
+}
+
+export async function forkClaudeSession(
+  client: ClaudeClient,
+  sessionId: string,
+  options: { upToMessageId?: string; title?: string } = {},
+): Promise<{ sessionId: string; title?: string }> {
+  const response = await fetch(`${client.baseUrl}/session/${sessionId}/fork`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fork Claude session: HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function compactClaudeSession(
+  client: ClaudeClient,
+  sessionId: string,
+): Promise<boolean> {
+  const response = await fetch(`${client.baseUrl}/session/${sessionId}/compact`, {
+    method: "POST",
+  });
+  return response.ok;
+}
+
+export async function rewindClaudeFiles(
+  client: ClaudeClient,
+  sessionId: string,
+  messageId: string,
+  dryRun = false,
+): Promise<unknown> {
+  const response = await fetch(`${client.baseUrl}/session/${sessionId}/rewind`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messageId, dryRun }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to rewind Claude files: HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function stopClaudeBackgroundTask(
+  client: ClaudeClient,
+  sessionId: string,
+  taskId: string,
+): Promise<boolean> {
+  const response = await fetch(
+    `${client.baseUrl}/session/${sessionId}/tasks/${encodeURIComponent(taskId)}/stop`,
+    { method: "POST" },
+  );
+  return response.ok;
 }
 
 /**

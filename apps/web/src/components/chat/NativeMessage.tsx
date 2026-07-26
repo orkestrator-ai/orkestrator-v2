@@ -7,6 +7,7 @@ import {
   useMemo,
   useEffect,
   type AnchorHTMLAttributes,
+  type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
@@ -103,6 +104,7 @@ interface NativeMessageProps {
   previousMessage?: NativeMessageType | null;
   assistantLabel?: string;
   containerId?: string;
+  actions?: ReactNode;
 }
 
 interface AgentExpansionContextValue {
@@ -1546,6 +1548,7 @@ export const NativeMessage = memo(function NativeMessage({
   previousMessage = null,
   assistantLabel = "Assistant",
   containerId,
+  actions: messageActions,
 }: NativeMessageProps) {
   const normalizedMessage = useMemo(() => normalizeNativeMessage(message), [message]);
   const normalizedPreviousMessage = useMemo(
@@ -1656,14 +1659,17 @@ export const NativeMessage = memo(function NativeMessage({
         showHeader={!isContinuation}
         className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
         onUserLongPress={isUser && userCopyContent ? handleUserLongPress : undefined}
-        actions={
-          (isUser ? userCopyContent : assistantCopyContent) ? (
-            <MessageCopyButton
-              content={isUser ? userCopyContent : assistantCopyContent}
-              wrapperClassName="mt-0 pr-0"
-            />
-          ) : undefined
-        }
+        actions={(isUser ? userCopyContent : assistantCopyContent) || messageActions ? (
+          <>
+            {messageActions}
+            {(isUser ? userCopyContent : assistantCopyContent) ? (
+              <MessageCopyButton
+                content={isUser ? userCopyContent : assistantCopyContent}
+                wrapperClassName="mt-0 pr-0"
+              />
+            ) : null}
+          </>
+        ) : undefined}
       >
         {renderMessageParts(message, { showTextCopy: false, containerId })}
 

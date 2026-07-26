@@ -11,6 +11,7 @@ import {
   type ApprovalResolution,
 } from "./approvals.js";
 import type { InboundServerRequest } from "./envelope-validation.js";
+import type { InteractionRequest } from "./interactions.js";
 
 interface Answer {
   generation: number;
@@ -521,5 +522,127 @@ describe("interactive approvals", () => {
       expect(h.presented).toHaveLength(0);
       expect(h.answers).toHaveLength(1);
     }
+  });
+});
+
+describe("interactive questions and MCP elicitation", () => {
+  test("parks a Codex question and maps the user's answers onto the protocol", async () => {
+    const presented: InteractionRequest[] = [];
+    const h = harness({
+      presentInteraction: (interaction) => {
+        presented.push(interaction);
+        return true;
+      },
+      approvalTimeoutMs: 5_000,
+    });
+    h.router.handle({
+      ...request("item/tool/requestUserInput"),
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        questions: [{
+          id: "language",
+          header: "Language",
+          question: "Which language?",
+          isOther: true,
+          isSecret: false,
+          options: [{ label: "TypeScript", description: "Typed JavaScript" }],
+        }],
+        autoResolutionMs: 60_000,
+      },
+    }, 1);
+    await settle();
+
+    expect(h.answers).toHaveLength(0);
+    expect(presented[0]?.kind).toBe("question");
+    expect(h.router.resolveInteraction(presented[0]!.interactionId, {
+      action: "accept",
+      answers: { language: ["TypeScript"] },
+    })).toBe(true);
+    await settle();
+
+    expect(h.answers[0]?.result).toEqual({
+      answers: { language: { answers: ["TypeScript"] } },
+    });
+    expect(h.router.getParkedInteractions()).toHaveLength(0);
+    expect(h.router.getHistory().at(-1)?.resolution).toBe("user-answered");
+  });
+
+  test("parks and accepts an MCP form with structured content", async () => {
+    const presented: InteractionRequest[] = [];
+    const h = harness({
+      presentInteraction: (interaction) => {
+        presented.push(interaction);
+        return true;
+      },
+      approvalTimeoutMs: 5_000,
+    });
+    h.router.handle({
+      ...request("mcpServer/elicitation/request"),
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        serverName: "deploy",
+        mode: "form",
+        message: "Choose a region",
+        requestedSchema: {
+          type: "object",
+          properties: { region: { type: "string" } },
+          required: ["region"],
+        },
+      },
+    }, 2);
+    await settle();
+
+    expect(presented[0]?.kind).toBe("mcp-form");
+    h.router.resolveInteraction(presented[0]!.interactionId, {
+      action: "accept",
+      content: { region: "eu-west-1" },
+    });
+    await settle();
+    expect(h.answers[0]?.result).toEqual({
+      action: "accept",
+      content: { region: "eu-west-1" },
+      _meta: null,
+    });
+  });
+
+  test("withdraws interactions from a dead generation without answering it", async () => {
+    const presented: InteractionRequest[] = [];
+    const h = harness({
+      presentInteraction: (interaction) => {
+        presented.push(interaction);
+        return true;
+      },
+      approvalTimeoutMs: 5_000,
+    });
+    h.router.handle({
+      ...request("item/tool/requestUserInput"),
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        questions: [{
+          id: "q",
+          header: "Question",
+          question: "Continue?",
+          isOther: false,
+          isSecret: false,
+          options: [{ label: "Yes", description: "" }],
+        }],
+        autoResolutionMs: null,
+      },
+    }, 7);
+    await settle();
+    h.router.abandonGeneration(7);
+    await settle();
+
+    expect(h.answers).toHaveLength(0);
+    expect(h.router.getParkedInteractions()).toHaveLength(0);
+    expect(h.router.resolveInteraction(
+      presented[0]!.interactionId,
+      { action: "accept", answers: { q: ["Yes"] } },
+    )).toBe(false);
   });
 });

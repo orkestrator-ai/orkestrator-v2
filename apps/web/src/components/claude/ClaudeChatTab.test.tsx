@@ -844,11 +844,13 @@ describe("ClaudeChatTab", () => {
           expect(useClaudeStore.getState().sessions.get(SESSION_KEY)?.title).toBe(
             "Live Claude title",
           );
-          expect(useClaudeStore.getState().contextUsage.get(SESSION_KEY)).toEqual({
+          expect(useClaudeStore.getState().contextUsage.get(SESSION_KEY)).toMatchObject({
             usedTokens: 40,
             totalTokens: 1_000,
             percentUsed: 4,
             modelId: "claude-fallback-model",
+            estimated: true,
+            source: "heuristic",
           });
         });
 
@@ -1317,6 +1319,7 @@ describe("ClaudeChatTab", () => {
             mcpServers: [{ name: "filesystem", status: "connected" }],
             plugins: [{ name: "review", status: "loaded" }],
             slashCommands: ["/eager - Eagerly discovered"],
+            agents: [],
           });
         });
         act(() => {

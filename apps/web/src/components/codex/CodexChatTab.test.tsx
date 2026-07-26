@@ -100,6 +100,7 @@ const mockAbortSession = mock<
 const mockFetchPendingApprovals = mock<
   (_client: unknown, _sessionId: string) => Promise<CodexApproval[]>
 >(async () => []);
+const mockFetchPendingInteractions = mock(async () => []);
 const mockCreateSession = mock(async () => ({ sessionId: "session-1", title: "Test session" }));
 const mockGetSessionStatus = mock<
   (
@@ -182,6 +183,7 @@ mock.module("@/lib/codex-client", () => ({
   // Called on every reconcile. Stubbed so the suite does not attempt a real fetch
   // to the fake bridge port on each state refresh.
   fetchPendingApprovals: mockFetchPendingApprovals,
+  fetchPendingInteractions: mockFetchPendingInteractions,
   getModels: mock(async () => ({ models: MOCK_MODELS, source: "fallback" })),
   getSlashCommands: mock(async () => []),
   getSessionMessages: mockGetSessionMessages,
@@ -620,6 +622,8 @@ describe("CodexChatTab", () => {
     mockAbortSession.mockImplementation(async () => ({ status: "accepted" as const }));
     mockFetchPendingApprovals.mockClear();
     mockFetchPendingApprovals.mockImplementation(async () => []);
+    mockFetchPendingInteractions.mockClear();
+    mockFetchPendingInteractions.mockImplementation(async () => []);
     mockCreateSession.mockClear();
     mockCreateSession.mockImplementation(async () => ({ sessionId: "session-1", title: "Test session" }));
     mockGetSessionStatus.mockReset();

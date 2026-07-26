@@ -75,6 +75,17 @@ const mockRespondToPlanApproval = mock(() => true);
 const mockGetStructuredPromptDispatchState = mock<
   typeof realSessionManager.getStructuredPromptDispatchState
 >(() => "new");
+const mockReconcilePersistedSessions = mock(async () => {});
+const mockEnsurePersistedSession = mock(async (id: string) => mockGetSession(id));
+const mockHydratePersistedSessionMessages = mock(async () => mockGetSessionMessages());
+const mockDeleteSessionDurably = mock(async (id: string) => mockDeleteSession(id));
+const mockRenameSessionDurably = mock(async (id: string) => id === "s-1");
+const mockForkPersistedSession = mock(async () => ({
+  id: "session-fork",
+  title: "Test (fork)",
+}));
+const mockRewindSessionFiles = mock(async () => ({ filesChanged: [] }));
+const mockStopBackgroundTask = mock(async () => true);
 
 mock.module("../services/session-manager.js", () => ({
   createSession: mockCreateSession,
@@ -84,6 +95,14 @@ mock.module("../services/session-manager.js", () => ({
   sendPrompt: mockSendPrompt,
   abortSession: mockAbortSession,
   deleteSession: mockDeleteSession,
+  reconcilePersistedSessions: mockReconcilePersistedSessions,
+  ensurePersistedSession: mockEnsurePersistedSession,
+  hydratePersistedSessionMessages: mockHydratePersistedSessionMessages,
+  deleteSessionDurably: mockDeleteSessionDurably,
+  renameSessionDurably: mockRenameSessionDurably,
+  forkPersistedSession: mockForkPersistedSession,
+  rewindSessionFiles: mockRewindSessionFiles,
+  stopBackgroundTask: mockStopBackgroundTask,
   getPendingQuestions: mockGetPendingQuestions,
   getSessionInitData: mockGetSessionInitData,
   answerQuestion: mockAnswerQuestion,
@@ -129,6 +148,10 @@ describe("session routes", () => {
     mockSendPrompt.mockClear();
     mockAbortSession.mockClear();
     mockDeleteSession.mockClear();
+    mockReconcilePersistedSessions.mockClear();
+    mockEnsurePersistedSession.mockClear();
+    mockHydratePersistedSessionMessages.mockClear();
+    mockDeleteSessionDurably.mockClear();
     mockGetPendingQuestions.mockClear();
     mockAnswerQuestion.mockClear();
     mockDismissQuestion.mockClear();

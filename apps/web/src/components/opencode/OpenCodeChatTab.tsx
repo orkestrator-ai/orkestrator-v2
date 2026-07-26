@@ -5,6 +5,7 @@ import {
   AlertCircle,
   RefreshCw,
   ArrowDown,
+  GitFork,
   History,
 } from "lucide-react";
 import { useVirtuosoScrollState, clearPersistedVirtuosoState, useElapsedTimer } from "@/hooks";
@@ -39,6 +40,9 @@ import {
   getPendingPermissions,
   getPendingQuestions,
   getAvailableSlashCommands,
+  getOpenCodeRuntimeHealth,
+  forkOpenCodeSession,
+  summarizeOpenCodeUsage,
   sendPrompt,
   formatOpenCodeError,
   abortSession,
@@ -244,6 +248,7 @@ export function OpenCodeChatTab({
     getSelectedVariant,
     getSelectedMode,
     setContextUsage,
+    setRuntimeHealth,
     addToQueue,
     addPendingPermission,
     addPendingQuestion,
@@ -422,6 +427,36 @@ export function OpenCodeChatTab({
       [environmentId],
     ),
   );
+
+  useEffect(() => {
+    const usage = summarizeOpenCodeUsage(sessionMessages, models);
+    if (usage) setContextUsage(sessionKey, usage);
+  }, [models, sessionKey, sessionMessages, setContextUsage]);
+
+  useEffect(() => {
+    if (!client) return;
+    let cancelled = false;
+    void getOpenCodeRuntimeHealth(
+      client,
+      slashCommandDirectory,
+      session?.sessionId,
+    )
+      .then((health) => {
+        if (!cancelled) setRuntimeHealth(environmentId, health);
+      })
+      .catch((error) => {
+        console.warn("[OpenCodeChatTab] Failed to load runtime health:", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    client,
+    environmentId,
+    session?.sessionId,
+    setRuntimeHealth,
+    slashCommandDirectory,
+  ]);
 
   // Activity state tracking is handled globally by useGlobalActivityMonitor
   // (in App.tsx), which derives state from this store's session data.
@@ -1396,6 +1431,33 @@ export function OpenCodeChatTab({
             }
           }
 
+          if (
+            (eventType === "todo.updated" || eventType === "session.diff")
+            && eventSessionId
+          ) {
+            const state = useOpenCodeStore.getState();
+            const affectedSession = [...state.sessions.entries()].find(
+              ([, value]) => value.sessionId === eventSessionId,
+            );
+            if (affectedSession) {
+              const current = state.runtimeHealth.get(environmentId);
+              if (current) {
+                state.setRuntimeHealth(environmentId, {
+                  ...current,
+                  ...(eventType === "todo.updated"
+                    && Array.isArray(event.properties?.todos)
+                    ? { todos: event.properties.todos }
+                    : {}),
+                  ...(eventType === "session.diff"
+                    && Array.isArray(event.properties?.diff)
+                    ? { diffs: event.properties.diff }
+                    : {}),
+                  fetchedAt: new Date().toISOString(),
+                });
+              }
+            }
+          }
+
           // Handle permission events (not session-specific, need to match by sessionID in the event)
           if (eventType === "permission.asked") {
             const permissionProps = event.properties;
@@ -1544,6 +1606,9 @@ export function OpenCodeChatTab({
         ? options?.variant
         : getSelectedVariant(environmentId);
       const selectedMode = options?.mode ?? getSelectedMode(sessionKey);
+      const selectedAgent = useOpenCodeStore
+        .getState()
+        .getSelectedAgent(sessionKey);
 
       // Add user message optimistically
       const userMessage = createOptimisticNativeMessage(
@@ -1586,10 +1651,23 @@ export function OpenCodeChatTab({
       }));
 
       // Send prompt
+      const trimmedText = text.trim();
+      const [commandName, ...commandArgumentParts] = trimmedText.split(/\s+/);
+      const nativeCommand = commandName && slashCommands.some(
+        (command) => command.name === commandName,
+      )
+        ? {
+            name: commandName,
+            arguments: commandArgumentParts.join(" ") || undefined,
+          }
+        : undefined;
       const sendResult = await sendPrompt(client, session.sessionId, text, {
         model: selectedModel,
         variant: selectedVariant,
         mode: selectedMode,
+        agent: selectedAgent,
+        directory: slashCommandDirectory,
+        command: nativeCommand,
         attachments: sdkAttachments.length > 0 ? sdkAttachments : undefined,
       });
 
@@ -1620,6 +1698,8 @@ export function OpenCodeChatTab({
       addMessage,
       removeMessage,
       setSessionLoading,
+      slashCommands,
+      slashCommandDirectory,
     ],
   );
 
@@ -1878,6 +1958,26 @@ export function OpenCodeChatTab({
     [client, environmentId, sessionKey, setSession, syncPendingRequests, tabId, updateTabNativeSessionId],
   );
 
+  const handleForkFromMessage = useCallback(async (messageId: string) => {
+    if (!client || !session?.sessionId) return;
+    try {
+      const fork = await forkOpenCodeSession(client, session.sessionId, messageId);
+      const paneStore = usePaneLayoutStore.getState();
+      paneStore.addTab(
+        paneStore.getActivePaneId(environmentId),
+        {
+          id: createUuid(),
+          type: "opencode-native",
+          displayTitle: fork.title ?? "OpenCode fork",
+          openCodeNativeData: { ...data, sessionId: fork.id },
+        },
+        environmentId,
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to fork OpenCode session");
+    }
+  }, [client, data, environmentId, session?.sessionId]);
+
   // Refresh models by re-fetching from the SDK client
   const refreshModels = useCallback(async () => {
     if (!client) return;
@@ -2003,6 +2103,18 @@ export function OpenCodeChatTab({
               message={message}
               previousMessage={prev}
               assistantLabel="OpenCode"
+              actions={message.role === "user" ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  title="Fork from here"
+                  aria-label="Fork OpenCode session from this message"
+                  onClick={() => void handleForkFromMessage(message.id)}
+                >
+                  <GitFork className="h-3.5 w-3.5" />
+                </Button>
+              ) : undefined}
             />
           )}
           emptyState={

@@ -663,9 +663,9 @@ export class AppServerSupervisor {
           // Attestation would make us responsible for answering
           // `attestation/generate`; declining keeps the request out of the flow.
           requestAttestation: false,
-          // Form elicitation would let downstream MCP servers block a turn on UI
-          // we do not have.
-          mcpServerOpenaiFormElicitation: false,
+          // The bridge parks form requests in its authoritative interaction
+          // registry and rehydrates them in the renderer.
+          mcpServerOpenaiFormElicitation: true,
         },
       });
       // app-server rejects normal requests until this lands.

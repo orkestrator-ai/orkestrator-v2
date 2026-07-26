@@ -3,6 +3,43 @@ export interface ContextUsageSnapshot {
   totalTokens: number;
   percentUsed: number;
   modelId?: string;
+  /** Exact provider token counters when the native API exposes them. */
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  /** Provider-reported totals. These are not inferred from context occupancy. */
+  lastTurnTokens?: number;
+  sessionTokens?: number;
+  costUsd?: number;
+  durationMs?: number;
+  apiDurationMs?: number;
+  /** False for exact provider data; true only for legacy heuristic extraction. */
+  estimated?: boolean;
+  source?: "claude" | "opencode" | "codex" | "heuristic";
+  updatedAt?: string;
+  rateLimits?: AgentRateLimitWindow[];
+  credits?: {
+    hasCredits?: boolean;
+    unlimited?: boolean;
+    balance?: string;
+  };
+  contextCategories?: Array<{
+    name: string;
+    tokens: number;
+    color?: string;
+  }>;
+  permissionDenials?: number;
+  linesAdded?: number;
+  linesRemoved?: number;
+}
+
+export interface AgentRateLimitWindow {
+  label: string;
+  usedPercent?: number;
+  resetsAt?: string;
+  windowMinutes?: number;
 }
 
 const USED_KEYS = [
@@ -118,6 +155,9 @@ function readUsageCandidate(node: Record<string, unknown>): ContextUsageSnapshot
     totalTokens,
     percentUsed: Math.max(0, Math.min(100, (usedTokens / totalTokens) * 100)),
     modelId: readModelField(node) ?? readModelField(source),
+    estimated: true,
+    source: "heuristic",
+    updatedAt: new Date().toISOString(),
   };
 }
 

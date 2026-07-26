@@ -180,10 +180,11 @@ const mockGetMcpServerNames = mock(async () => new Set<string>());
 const mockGetPluginsForSdk = mock(async () => [] as Array<{ type: "local"; path: string }>);
 
 /**
- * `sendPrompt` resolves both halves of the MCP config in one call so the
- * underlying files are read once per prompt. Composing it from the two
- * existing mocks keeps every per-test `mockImplementationOnce` override
- * working against the combined entry point.
+ * `sendPrompt` resolves both halves of the MCP config in one call
+ * (`getMcpRuntimeConfig`) so the underlying files are read once per prompt.
+ * That is the only entry point this module uses; the two mocks above are kept
+ * as the seams tests already drive with `mockImplementationOnce`, composed
+ * here into the shape the real function returns.
  */
 const mockGetMcpRuntimeConfig = mock(async () => ({
   servers: await mockGetMcpServersForSdk(),
@@ -191,8 +192,6 @@ const mockGetMcpRuntimeConfig = mock(async () => ({
 }));
 
 mock.module("./mcp-config.js", () => ({
-  getMcpServersForSdk: mockGetMcpServersForSdk,
-  getMcpServerNames: mockGetMcpServerNames,
   getMcpRuntimeConfig: mockGetMcpRuntimeConfig,
 }));
 
@@ -208,6 +207,11 @@ import type {
   NormalizedPart,
   SSEEvent,
 } from "../types/index.js";
+import {
+  MAX_DIFF_SIDE_BYTES,
+  MAX_TOOL_TEXT_BYTES,
+  TRUNCATED_NOTICE,
+} from "./part-budget.js";
 
 const {
   createSession,
@@ -1160,6 +1164,124 @@ describe("sendPrompt", () => {
     } finally {
       stop();
     }
+  });
+
+  test("numbers every published frame so a recipient can detect a missed one", async () => {
+    const session = createSession("revisions");
+    track(session.id);
+
+    // `message.updated` carries the live `NormalizedMessage`, whose revision
+    // keeps advancing as the turn patches it, so the revision has to be read
+    // at emit time — which is also when the SSE writer serializes it.
+    const revisions: (number | undefined)[] = [];
+    const stop = eventEmitter.subscribe((event) => {
+      if (event.type === "message.updated") {
+        const message = (event.data as {
+          message?: { role?: string; revision?: number };
+        }).message;
+        if (message?.role !== "assistant") return;
+        revisions.push(message.revision);
+        return;
+      }
+      if (event.type !== "message.patched") return;
+      revisions.push((event.data as MessagePatchEventData).revision);
+    });
+
+    try {
+      const promptPromise = sendPrompt(session.id, "Stream something");
+      const call = await nextQueryCall();
+
+      call.push({
+        type: "stream_event",
+        uuid: "rev-1",
+        session_id: "sdk-session-coalesce",
+        parent_tool_use_id: null,
+        event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      });
+      call.push(textDelta("rev-1", "one"));
+      await waitFor(() => assistantContent(session.id) === "one");
+      call.push(textDelta("rev-1", " two"));
+      await waitFor(() => assistantContent(session.id) === "one two");
+      call.push(textDelta("rev-1", " three"));
+      await waitFor(() => assistantContent(session.id) === "one two three");
+
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await promptPromise;
+
+      // The full frame is revision 1 and every patch is exactly one more than
+      // the frame before it. A recipient that sees a jump knows it missed a
+      // frame — which, for an index-addressed patch, is the difference between
+      // recovering and silently rendering the wrong transcript.
+      expect(revisions.length).toBeGreaterThan(1);
+      expect(revisions).toEqual(revisions.map((_, index) => index + 1));
+
+      // The transcript carries the same revision the last frame announced, so
+      // a client that recovers by refetching can rejoin the patch stream.
+      const finalMessage = getSessionMessages(session.id).find((m) => m.role === "assistant")!;
+      expect(finalMessage.revision).toBe(revisions[revisions.length - 1]);
+    } finally {
+      stop();
+    }
+  });
+
+  test("bounds the payloads a session retains for the rest of its life", async () => {
+    const session = createSession("budget");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "Write a big file and read a big result");
+    const call = await nextQueryCall();
+
+    // Both fields that are unbounded by construction: the whole contents of a
+    // written file, and whatever a tool chose to return.
+    const hugeFile = "f".repeat(MAX_DIFF_SIDE_BYTES + 5_000);
+    const hugeOutput = "o".repeat(MAX_TOOL_TEXT_BYTES + 5_000);
+
+    call.push({
+      type: "assistant",
+      message: {
+        id: "budget-1",
+        content: [
+          {
+            type: "tool_use",
+            id: "write-1",
+            name: "Write",
+            input: { file_path: "/big.ts", content: hugeFile },
+          },
+        ],
+      },
+    });
+    call.push({
+      type: "user",
+      message: {
+        content: [{ type: "tool_result", tool_use_id: "write-1", content: hugeOutput }],
+      },
+    });
+    await waitFor(() =>
+      getSessionMessages(session.id).some((message) =>
+        message.parts.some((part) => part.toolUseId === "write-1" && part.toolOutput),
+      ),
+    );
+
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await promptPromise;
+
+    const part = getSessionMessages(session.id)
+      .flatMap((message) => message.parts)
+      .find((candidate) => candidate.toolUseId === "write-1")!;
+
+    // Capped, not dropped: the head survives so the transcript still shows what
+    // happened, and the marker says why the tail is missing.
+    expect(part.toolOutput).toEndWith(TRUNCATED_NOTICE);
+    expect(Buffer.byteLength(part.toolOutput!, "utf8")).toBeLessThan(
+      MAX_TOOL_TEXT_BYTES + TRUNCATED_NOTICE.length + 8,
+    );
+    expect(part.toolDiff?.after).toEndWith(TRUNCATED_NOTICE);
+    expect(Buffer.byteLength(part.toolDiff!.after!, "utf8")).toBeLessThan(
+      MAX_DIFF_SIDE_BYTES + TRUNCATED_NOTICE.length + 8,
+    );
+    expect(part.toolDiff?.filePath).toBe("/big.ts");
   });
 
   test("a non-delta message observes every delta that preceded it", async () => {

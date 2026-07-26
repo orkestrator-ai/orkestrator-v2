@@ -269,13 +269,14 @@ describe("claudeStore cleanup and queue helpers", () => {
 });
 
 describe("claudeStore message patching", () => {
-  const patch = (overrides: Partial<Parameters<
-    ReturnType<typeof useClaudeStore.getState>["patchMessage"]
-  >[1]> = {}) => ({
+  type Patch = Parameters<ReturnType<typeof useClaudeStore.getState>["patchMessage"]>[1];
+
+  const patch = (overrides: Partial<Patch> = {}): Patch => ({
     messageId: "assistant-1",
     partCount: 1,
     changedParts: [{ index: 0, part: { type: "text" as const, content: "streamed" } }],
     timestamp: "2026-07-20T12:00:01.000Z",
+    revision: 2,
     ...overrides,
   });
 
@@ -290,6 +291,7 @@ describe("claudeStore message patching", () => {
           content: "",
           parts: [{ type: "text", content: "" }],
           timestamp: "2026-07-20T12:00:00.000Z",
+          revision: 1,
         },
       ],
       isLoading: true,
@@ -304,7 +306,63 @@ describe("claudeStore message patching", () => {
       id: "assistant-1",
       content: "streamed",
       parts: [{ type: "text", content: "streamed" }],
+      // Stored so the following patch has a base to be checked against.
+      revision: 2,
     });
+  });
+
+  test("applies a run of consecutive revisions", () => {
+    const store = () => useClaudeStore.getState();
+    expect(store().patchMessage(SESSION_KEY, patch({ revision: 2 }))).toBe(true);
+    expect(
+      store().patchMessage(
+        SESSION_KEY,
+        patch({
+          revision: 3,
+          changedParts: [{ index: 0, part: { type: "text", content: "streamed more" } }],
+        }),
+      ),
+    ).toBe(true);
+
+    expect(store().sessions.get(SESSION_KEY)?.messages[0]).toMatchObject({
+      content: "streamed more",
+      revision: 3,
+    });
+  });
+
+  test("reports failure without touching state when frames were missed", () => {
+    const before = useClaudeStore.getState().sessions.get(SESSION_KEY);
+
+    // The reconnect case: the store holds revision 1 but the bridge has moved
+    // past it. Applying by index would drop whatever changed in between, and
+    // the bridge never re-sends it — so this must fail and force a refetch.
+    expect(useClaudeStore.getState().patchMessage(SESSION_KEY, patch({ revision: 5 }))).toBe(
+      false,
+    );
+    expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toBe(before);
+  });
+
+  test("reports failure without touching state for a malformed payload", () => {
+    const before = useClaudeStore.getState().sessions.get(SESSION_KEY);
+
+    // A throw here would escape the SSE loop and tear down the environment's
+    // shared subscription; a clean false is a refetch instead.
+    expect(
+      useClaudeStore
+        .getState()
+        .patchMessage(SESSION_KEY, patch({ changedParts: undefined as unknown as [] })),
+    ).toBe(false);
+    expect(
+      useClaudeStore
+        .getState()
+        .patchMessage(SESSION_KEY, patch({ partCount: -1 })),
+    ).toBe(false);
+    expect(
+      useClaudeStore
+        .getState()
+        .patchMessage(SESSION_KEY, undefined as unknown as Patch),
+    ).toBe(false);
+    expect(useClaudeStore.getState().sessions.get(SESSION_KEY)).toBe(before);
   });
 
   test("reports failure without touching state when the message is unknown", () => {
@@ -341,5 +399,38 @@ describe("claudeStore message patching", () => {
     useClaudeStore.getState().patchMessage(SESSION_KEY, patch());
 
     expect(useClaudeStore.getState().sessions.get(SESSION_KEY)!.messages[1]).toBe(untouched);
+  });
+
+  test("recovers after a refetch rolls the message back", () => {
+    const store = () => useClaudeStore.getState();
+    expect(store().patchMessage(SESSION_KEY, patch({ revision: 2 }))).toBe(true);
+
+    // An in-flight `getSessionMessages` resolves with a snapshot taken before
+    // that patch and replaces the transcript wholesale. Nothing is corrupted,
+    // because the next patch no longer lines up and the tab refetches again.
+    store().setMessages(SESSION_KEY, [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        content: "",
+        parts: [{ type: "text", content: "" }],
+        timestamp: "2026-07-20T12:00:00.000Z",
+        revision: 1,
+      },
+    ]);
+
+    expect(store().patchMessage(SESSION_KEY, patch({ revision: 3 }))).toBe(false);
+    // And a transcript that caught up re-establishes a base patches build on.
+    store().setMessages(SESSION_KEY, [
+      {
+        id: "assistant-1",
+        role: "assistant",
+        content: "caught up",
+        parts: [{ type: "text", content: "caught up" }],
+        timestamp: "2026-07-20T12:00:00.000Z",
+        revision: 3,
+      },
+    ]);
+    expect(store().patchMessage(SESSION_KEY, patch({ revision: 4 }))).toBe(true);
   });
 });

@@ -1851,6 +1851,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       if (publishedMessageId !== currentAssistantMessage.id) {
         publishedMessageId = currentAssistantMessage.id;
         publishedParts = parts.slice();
+        // Stamped on the message itself, before it is serialized, so both this
+        // frame and any REST read of the transcript agree on the revision.
+        currentAssistantMessage.revision = (currentAssistantMessage.revision ?? 0) + 1;
         eventEmitter.emit({
           type: "message.updated",
           sessionId,
@@ -1868,12 +1871,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       }
 
       // Nothing moved and nothing was dropped: a frame here would only cost
-      // the client a re-render of identical content.
+      // the client a re-render of identical content. The revision must not
+      // advance either — no frame was published, so nobody fell behind.
       if (changedParts.length === 0 && parts.length === publishedParts.length) {
         return;
       }
 
       publishedParts = parts.slice();
+      currentAssistantMessage.revision = (currentAssistantMessage.revision ?? 0) + 1;
       eventEmitter.emit({
         type: "message.patched",
         sessionId,
@@ -1882,6 +1887,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           partCount: parts.length,
           changedParts,
           timestamp: currentAssistantMessage.timestamp,
+          revision: currentAssistantMessage.revision,
         } satisfies MessagePatchEventData,
       });
     };

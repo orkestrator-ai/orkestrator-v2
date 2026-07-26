@@ -12,8 +12,19 @@
 // explicitly enabled. Anything that fires at most once per turn can keep using
 // `console.log`/`console.error` directly.
 
-function readDebugFlag(): boolean {
-  const raw = process.env.CLAUDE_BRIDGE_DEBUG?.trim().toLowerCase();
+import { logger as honoLogger } from "hono/logger";
+import type { MiddlewareHandler } from "hono";
+
+/**
+ * Interpret `CLAUDE_BRIDGE_DEBUG`.
+ *
+ * Any value enables debug logging except the conventional "off" spellings, so
+ * `CLAUDE_BRIDGE_DEBUG=0` in a shell profile does not silently turn it on.
+ * Exported so the parsing can be tested without re-importing this module under
+ * a mutated environment.
+ */
+export function readDebugFlag(env: string | undefined): boolean {
+  const raw = env?.trim().toLowerCase();
   if (!raw) return false;
   return raw !== "0" && raw !== "false" && raw !== "off" && raw !== "no";
 }
@@ -23,7 +34,7 @@ function readDebugFlag(): boolean {
  * measurable at token frequency, and the flag is not meant to be toggled
  * mid-process.
  */
-export const isDebugLoggingEnabled: boolean = readDebugFlag();
+export const isDebugLoggingEnabled: boolean = readDebugFlag(process.env.CLAUDE_BRIDGE_DEBUG);
 
 /**
  * Log only when `CLAUDE_BRIDGE_DEBUG` is set.
@@ -36,4 +47,20 @@ export const isDebugLoggingEnabled: boolean = readDebugFlag();
 export function debugLog(...args: unknown[]): void {
   if (!isDebugLoggingEnabled) return;
   console.debug(...args);
+}
+
+/**
+ * Hono's per-request logging middleware, or null when debug logging is off.
+ *
+ * Request logging is debug-only. In Docker the bridge's stdout is an unrotated
+ * /tmp/claude-bridge.log, and in local mode the backend re-logs every line it
+ * reads, so per-request noise is paid for twice for no routine benefit.
+ *
+ * Takes the flag as an argument so both branches are reachable from a test;
+ * production callers use the module-load default.
+ */
+export function createRequestLogger(
+  enabled: boolean = isDebugLoggingEnabled,
+): MiddlewareHandler | null {
+  return enabled ? honoLogger() : null;
 }

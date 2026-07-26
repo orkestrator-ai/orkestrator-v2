@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   applyDiffBudget,
-  applyPartBudget,
   applyToolResultBudget,
   MAX_DIFF_SIDE_BYTES,
   MAX_TOOL_TEXT_BYTES,
@@ -34,6 +33,40 @@ describe("part budget", () => {
     expect(capped.before).toBe("");
   });
 
+  test("caps the before side independently of the after side", () => {
+    // A large `old_string` on an Edit is the mirror of a large Write, and only
+    // the oversized side may be rewritten.
+    const before = "b".repeat(MAX_DIFF_SIDE_BYTES + 100);
+    const capped = applyDiffBudget({ filePath: "/a.ts", before, after: "small" })!;
+
+    expect(capped.before).toEndWith(TRUNCATED_NOTICE);
+    expect(capped.after).toBe("small");
+    expect(capped.filePath).toBe("/a.ts");
+  });
+
+  test("leaves a payload sitting exactly on the limit alone", () => {
+    // The cap is inclusive, so a value at exactly the budget must not gain a
+    // truncation notice it does not need.
+    const exact = "x".repeat(MAX_TOOL_TEXT_BYTES);
+    const capped = applyToolResultBudget({ output: exact });
+
+    expect(capped.output).toBe(exact);
+    expect(capped.output).not.toContain(TRUNCATED_NOTICE);
+
+    const oneOver = `${exact}y`;
+    expect(applyToolResultBudget({ output: oneOver }).output).toEndWith(TRUNCATED_NOTICE);
+  });
+
+  test("passes an empty string through untouched", () => {
+    expect(applyToolResultBudget({ output: "" })).toEqual({ output: "", error: undefined });
+    const metadata = { filePath: "/a.ts", before: "", after: "" };
+    expect(applyDiffBudget(metadata)).toBe(metadata);
+  });
+
+  test("returns undefined metadata unchanged", () => {
+    expect(applyDiffBudget(undefined)).toBeUndefined();
+  });
+
   test("caps oversized tool output and error text", () => {
     const output = "o".repeat(MAX_TOOL_TEXT_BYTES + 1_000);
     const error = "e".repeat(MAX_TOOL_TEXT_BYTES + 1_000);
@@ -54,21 +87,4 @@ describe("part budget", () => {
     expect(Buffer.from(capped, "utf8").toString("utf8")).toBe(capped);
   });
 
-  test("bounds every unbounded field of a part at once", () => {
-    const part = applyPartBudget({
-      type: "tool-invocation",
-      toolName: "Write",
-      toolOutput: "o".repeat(MAX_TOOL_TEXT_BYTES + 10),
-      toolError: undefined,
-      toolDiff: {
-        filePath: "/x.ts",
-        after: "a".repeat(MAX_DIFF_SIDE_BYTES + 10),
-      },
-    });
-
-    expect(part.toolOutput).toEndWith(TRUNCATED_NOTICE);
-    expect(part.toolDiff!.after).toEndWith(TRUNCATED_NOTICE);
-    expect(part.toolError).toBeUndefined();
-    expect(part.toolName).toBe("Write");
-  });
 });

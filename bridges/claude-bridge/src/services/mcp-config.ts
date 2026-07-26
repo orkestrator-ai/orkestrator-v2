@@ -9,8 +9,8 @@
  */
 
 import { join } from "node:path";
-import { homedir } from "node:os";
-import { readJsonFileCached } from "./json-file-cache.js";
+import { claudeJsonPath } from "./claude-home.js";
+import { readJsonSliceCached } from "./json-file-cache.js";
 import type {
   ClaudeJsonConfig,
   McpJsonConfig,
@@ -50,26 +50,20 @@ type SdkMcpServerConfig = SdkMcpStdioServerConfig | SdkMcpSSEServerConfig | SdkM
 export type SdkMcpServersConfig = Record<string, SdkMcpServerConfig>;
 
 /**
- * Read and parse a JSON file, returning null if it doesn't exist or is invalid.
- * Backed by a stat-validated cache: these files are read several times per
- * prompt and change rarely.
- */
-async function readJsonFile<T>(filePath: string): Promise<T | null> {
-  return readJsonFileCached<T>(filePath);
-}
-
-/**
  * Load global MCP server configurations from ~/.claude.json
+ *
+ * Reads through a stat-validated slice cache: this file is consulted several
+ * times per prompt, changes rarely, and is mostly project history the bridge
+ * has no use for — so only the `mcpServers` record is retained.
  */
 export async function loadGlobalMcpServers(): Promise<McpServersConfig> {
-  const claudeJsonPath = join(homedir(), ".claude.json");
-  const config = await readJsonFile<ClaudeJsonConfig>(claudeJsonPath);
+  const servers = await readJsonSliceCached<ClaudeJsonConfig, McpServersConfig>(
+    claudeJsonPath(),
+    "mcpServers",
+    (config) => config?.mcpServers,
+  );
 
-  if (!config?.mcpServers) {
-    return {};
-  }
-
-  return config.mcpServers;
+  return servers ?? {};
 }
 
 /**
@@ -78,36 +72,31 @@ export async function loadGlobalMcpServers(): Promise<McpServersConfig> {
 export async function loadProjectMcpServers(
   cwd: string
 ): Promise<McpServersConfig> {
-  const mcpJsonPath = join(cwd, ".mcp.json");
-  const config = await readJsonFile<McpJsonConfig>(mcpJsonPath);
+  const servers = await readJsonSliceCached<McpJsonConfig, McpServersConfig>(
+    join(cwd, ".mcp.json"),
+    "mcpServers",
+    (config) => config?.mcpServers,
+  );
 
-  if (!config?.mcpServers) {
-    return {};
-  }
-
-  return config.mcpServers;
+  return servers ?? {};
 }
 
 /**
  * Also check for project-specific overrides in ~/.claude.json projects section
+ *
+ * The slice key carries `cwd` because the selector closes over it — two
+ * projects must not serve each other's overrides from the same entry.
  */
 export async function loadProjectOverridesFromGlobal(
   cwd: string
 ): Promise<McpServersConfig> {
-  const claudeJsonPath = join(homedir(), ".claude.json");
-  const config = await readJsonFile<ClaudeJsonConfig>(claudeJsonPath);
+  const servers = await readJsonSliceCached<ClaudeJsonConfig, McpServersConfig>(
+    claudeJsonPath(),
+    `projects:${cwd}:mcpServers`,
+    (config) => config?.projects?.[cwd]?.mcpServers,
+  );
 
-  if (!config?.projects) {
-    return {};
-  }
-
-  // Check for project entry matching the cwd
-  const projectConfig = config.projects[cwd];
-  if (!projectConfig?.mcpServers) {
-    return {};
-  }
-
-  return projectConfig.mcpServers;
+  return servers ?? {};
 }
 
 /**
@@ -186,13 +175,10 @@ export async function getMergedMcpServers(
 }
 
 /**
- * Convert merged configs to SDK-compatible MCP server config record
- * Returns Record<serverName, config>
+ * Translate a merged config record into the SDK's `mcpServers` shape, dropping
+ * (and reporting) any entry whose transport we do not recognise.
  */
-export async function getMcpServersForSdk(
-  cwd: string
-): Promise<SdkMcpServersConfig> {
-  const configs = await getMergedMcpServers(cwd);
+function toSdkServers(configs: McpServersConfig): SdkMcpServersConfig {
   const servers: SdkMcpServersConfig = {};
 
   for (const [name, config] of Object.entries(configs)) {
@@ -254,38 +240,22 @@ export async function getMcpServerInfo(cwd: string): Promise<McpServerInfo[]> {
 }
 
 /**
- * Get list of MCP server names for tracking which tools are MCP tools
- */
-export async function getMcpServerNames(cwd: string): Promise<Set<string>> {
-  const configs = await getMergedMcpServers(cwd);
-  return new Set(Object.keys(configs));
-}
-
-/**
  * Everything `sendPrompt` needs from MCP config, resolved from a single merge.
  *
- * Calling `getMcpServersForSdk` and `getMcpServerNames` separately merged the
- * same three config sources twice per prompt — and each merge reads
- * `~/.claude.json` twice, so the file was touched four times for one turn.
+ * This replaced a pair of calls (`getMcpServersForSdk` + `getMcpServerNames`)
+ * that merged the same three config sources twice per prompt — and each merge
+ * reads `~/.claude.json` twice, so the file was touched four times for one
+ * turn. It is the only entry point into this module that `sendPrompt` uses;
+ * keep the translation in `toSdkServers` so there is exactly one copy of it.
  */
 export async function getMcpRuntimeConfig(cwd: string): Promise<{
   servers: SdkMcpServersConfig;
   names: Set<string>;
 }> {
   const configs = await getMergedMcpServers(cwd);
-  const servers: SdkMcpServersConfig = {};
-
-  for (const [name, config] of Object.entries(configs)) {
-    const sdkConfig = configToSdkFormat(config);
-    if (sdkConfig) {
-      servers[name] = sdkConfig;
-    } else {
-      console.warn(`Unknown MCP server config type for "${name}":`, config);
-    }
-  }
 
   // Names come from the merged config, not from `servers`: a server whose
   // config shape we can't translate is still an MCP server as far as tool-name
   // parsing is concerned, and dropping it would misattribute its tools.
-  return { servers, names: new Set(Object.keys(configs)) };
+  return { servers: toSdkServers(configs), names: new Set(Object.keys(configs)) };
 }

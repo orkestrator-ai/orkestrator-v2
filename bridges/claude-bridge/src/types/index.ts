@@ -129,6 +129,19 @@ export interface NormalizedMessage {
   content: string;
   parts: NormalizedPart[];
   timestamp: string;
+  /**
+   * How many frames have been published for this message, starting at 1 for
+   * the full frame. Present only on assistant messages the streaming path
+   * publishes incrementally.
+   *
+   * This is what makes a `message.patched` gap detectable: a recipient applies
+   * a patch only when it is the immediate successor of the revision it holds,
+   * and otherwise refetches. It is carried on the message (rather than only on
+   * the event) so the REST transcript is a valid base for the next patch —
+   * without that, a client that recovered by refetching could never rejoin the
+   * patch stream.
+   */
+  revision?: number;
 }
 
 /** Session state */
@@ -257,8 +270,9 @@ export interface SessionInitData {
  *
  * `partCount` is authoritative for the array length so that a shrink (a
  * finalized message replacing what streamed) is representable. Recipients that
- * hold no message with `messageId` must refetch rather than guess: the REST
- * transcript stays the source of truth.
+ * hold no message with `messageId`, or whose copy is not at `revision - 1`,
+ * must refetch rather than guess: the REST transcript stays the source of
+ * truth.
  */
 export interface MessagePatchEventData {
   messageId: string;
@@ -266,6 +280,14 @@ export interface MessagePatchEventData {
   partCount: number;
   changedParts: { index: number; part: NormalizedPart }[];
   timestamp: string;
+  /**
+   * Revision this patch produces. Applying it is only valid against a copy at
+   * `revision - 1`; anything else means frames were missed (a reconnect, or a
+   * refetch that landed out of order) and the recipient must refetch. Without
+   * this, a patch addressed by index would be applied to a stale base and the
+   * missed parts would never be re-sent.
+   */
+  revision: number;
 }
 
 /** SSE event */

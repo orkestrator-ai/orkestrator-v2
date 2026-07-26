@@ -124,10 +124,12 @@ interface ClaudeState extends ClaudeChatSlice {
   /**
    * Apply an incremental part patch to an already-stored assistant message.
    *
-   * Returns false when this session holds no message with the patch's id — the
-   * caller must then fall back to an authoritative refetch, since a patch
-   * cannot reconstruct a message the store never received (a tab that mounted
-   * mid-turn, or a subscription that reconnected).
+   * Returns false when the patch cannot be applied — this session holds no
+   * message with that id (a tab that mounted mid-turn), the stored copy is not
+   * at `patch.revision - 1` (a subscription that reconnected, or a refetch
+   * that landed out of order), or the payload is malformed. The caller must
+   * then fall back to an authoritative refetch; a patch addressed by index
+   * cannot reconstruct frames the store never received.
    */
   patchMessage: (sessionKey: ClaudeSessionKey, patch: ClaudeMessagePatch) => boolean;
 
@@ -222,29 +224,36 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   pendingPlanApprovals: new Map(),
 
   patchMessage: (sessionKey, patch) => {
-    // Located twice on purpose: the read below decides the return value, and
-    // the read inside `set` is the one that actually mutates, so a message
-    // that arrives or is replaced in between cannot be patched blind.
-    const messages = get().sessions.get(sessionKey)?.messages;
-    if (!messages?.some((message) => message.id === patch.messageId)) return false;
+    if (!patch?.messageId) return false;
 
+    // Located, validated and applied in one synchronous `set`: reading the
+    // message outside and mutating inside would let a refetch replace it in
+    // between, and the patch would then be applied to a base nobody checked.
+    let applied = false;
     set((state) => {
       const session = state.sessions.get(sessionKey);
       if (!session) return state;
+
       const index = session.messages.findIndex(
         (message) => message.id === patch.messageId,
       );
       const target = index === -1 ? undefined : session.messages[index];
       if (!target) return state;
 
+      // Rejects a malformed payload and, crucially, a revision gap — see
+      // `applyClaudeMessagePatch`. Either way the caller refetches.
+      const patched = applyClaudeMessagePatch(target, patch);
+      if (!patched) return state;
+
       const nextMessages = session.messages.slice();
-      nextMessages[index] = applyClaudeMessagePatch(target, patch);
+      nextMessages[index] = patched;
       const next = new Map(state.sessions);
       next.set(sessionKey, { ...session, messages: nextMessages });
+      applied = true;
       return { sessions: next };
     });
 
-    return true;
+    return applied;
   },
 
   // Agent-specific actions

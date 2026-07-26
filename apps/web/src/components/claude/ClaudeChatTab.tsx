@@ -1065,10 +1065,14 @@ export function ClaudeChatTab({
               }
             } else if (eventType === "message.patched") {
               const patch = event.data as ClaudeMessagePatch | undefined;
-              // A patch is only meaningful against the message it extends. If
-              // this tab never saw that message — mounted mid-turn, or the
-              // subscription reconnected past the full frame — fall back to
-              // the authoritative transcript rather than dropping the update.
+              // A patch is only meaningful against the exact revision it
+              // extends. `patchMessage` returns false for every way that can
+              // fail — this tab never saw the message (mounted mid-turn), its
+              // copy is behind (the subscription reconnected past some frames,
+              // or a refetch landed out of order and rolled it back), or the
+              // payload is malformed. In all of them the authoritative
+              // transcript is the recovery, and it re-establishes a revision
+              // the next patch can build on.
               if (!patch?.messageId || !patchMessage(sessionTabId, patch)) {
                 fetchMessagesDebounced(eventSessionId, sessionTabId);
               }

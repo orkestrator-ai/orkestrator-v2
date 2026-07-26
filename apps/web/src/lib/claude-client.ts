@@ -2,6 +2,7 @@
 // Provides typed functions for interacting with the Claude bridge server
 
 import { resolveGatewayLoopbackBaseUrl } from "./gateway-url";
+import { isRendererDebugLoggingEnabled, rendererDebugLog } from "./debug-log";
 import type {
   ClaudeModelCatalogEntry,
   ClaudeModelCatalogSnapshot,
@@ -132,6 +133,13 @@ export interface ClaudeMessage {
   content: string;
   parts: ClaudeMessagePart[];
   timestamp: string;
+  /**
+   * Frames the bridge has published for this message, starting at 1. Present
+   * only on assistant messages from a streaming turn — both over SSE and in
+   * the REST transcript, which is what lets a client that recovered by
+   * refetching rejoin the patch stream. See `applyClaudeMessagePatch`.
+   */
+  revision?: number;
 }
 
 /**
@@ -142,9 +150,9 @@ export interface ClaudeMessage {
  * turn — a streaming turn publishes ~10 frames a second, and re-sending every
  * tool output and written file on each of them is O(turn size) per frame.
  *
- * A recipient holding no message with `messageId` cannot apply the patch and
- * must refetch the transcript instead; live events are never the only source
- * of truth.
+ * A recipient holding no message with `messageId`, or holding one that is not
+ * at `revision - 1`, cannot apply the patch and must refetch the transcript
+ * instead; live events are never the only source of truth.
  */
 export interface ClaudeMessagePatch {
   messageId: string;
@@ -152,6 +160,8 @@ export interface ClaudeMessagePatch {
   partCount: number;
   changedParts: { index: number; part: ClaudeMessagePart }[];
   timestamp: string;
+  /** Revision this patch produces; valid only against a copy at `revision - 1`. */
+  revision: number;
 }
 
 /**
@@ -170,7 +180,38 @@ export function contentFromParts(parts: ClaudeMessagePart[]): string {
 }
 
 /**
- * Apply a patch to a message, returning a new message.
+ * Whether `patch` is well-formed and is the immediate successor of `message`.
+ *
+ * This is a trust boundary: the payload arrives as JSON from a subprocess, and
+ * an unchecked `changedParts` or `partCount` would throw out of the SSE loop
+ * and tear down the whole environment's event subscription. Every rejection
+ * here is recoverable — the caller refetches the authoritative transcript.
+ */
+function isApplicablePatch(message: ClaudeMessage, patch: ClaudeMessagePatch): boolean {
+  if (!patch || typeof patch !== "object") return false;
+  if (!Array.isArray(patch.changedParts)) return false;
+  if (!Number.isInteger(patch.partCount) || patch.partCount < 0) return false;
+
+  // Revision continuity. A patch that is not the next revision means frames
+  // were missed — the subscription reconnected mid-turn, or a refetch landed
+  // out of order — and applying it by index would corrupt the transcript with
+  // parts that will never be re-sent.
+  const base = message.revision;
+  if (!Number.isInteger(base) || patch.revision !== (base as number) + 1) return false;
+
+  for (const change of patch.changedParts) {
+    if (!change || typeof change !== "object") return false;
+    if (!Number.isInteger(change.index)) return false;
+    if (change.index < 0 || change.index >= patch.partCount) return false;
+    if (!change.part || typeof change.part !== "object") return false;
+  }
+
+  return true;
+}
+
+/**
+ * Apply a patch to a message, returning a new message — or null when the patch
+ * cannot be applied and the caller must refetch instead.
  *
  * Indices beyond the current array are appends; `partCount` then truncates,
  * which is what makes a finalized message replacing streamed blocks
@@ -179,19 +220,21 @@ export function contentFromParts(parts: ClaudeMessagePart[]): string {
 export function applyClaudeMessagePatch(
   message: ClaudeMessage,
   patch: ClaudeMessagePatch,
-): ClaudeMessage {
+): ClaudeMessage | null {
+  if (!isApplicablePatch(message, patch)) return null;
+
   const parts = message.parts.slice();
   for (const { index, part } of patch.changedParts) {
-    if (index < 0) continue;
     parts[index] = part;
   }
   parts.length = patch.partCount;
 
-  // A sparse hole would render as a crash rather than a gap. It should not
-  // happen — the bridge always patches every index it grows past — but the
-  // renderer is not the place to find out.
+  // A hole means this copy was missing parts the patch grew past. Revision
+  // continuity should already have caught that, so treat it as a second line
+  // of defence: reject rather than paper over it with blank blocks, which is
+  // indistinguishable from real empty output once rendered.
   for (let index = 0; index < parts.length; index += 1) {
-    parts[index] ??= { type: "text", content: "" };
+    if (!parts[index]) return null;
   }
 
   return {
@@ -199,6 +242,7 @@ export function applyClaudeMessagePatch(
     parts,
     content: contentFromParts(parts),
     timestamp: patch.timestamp || message.timestamp,
+    revision: patch.revision,
   };
 }
 
@@ -518,7 +562,7 @@ export async function getSessionMessages(
   sessionId: string,
   options: { throwOnError?: boolean } = {},
 ): Promise<ClaudeMessage[]> {
-  console.debug("[claude-client] Fetching messages for session:", sessionId);
+  rendererDebugLog("[claude-client] Fetching messages for session:", sessionId);
   const response = await fetch(`${client.baseUrl}/session/${sessionId}/messages`);
   if (response.status === 404) {
     throw new SessionNotFoundError(sessionId);
@@ -531,11 +575,16 @@ export async function getSessionMessages(
     return [];
   }
   const data = await response.json();
-  console.debug("[claude-client] Received messages response:", {
-    sessionId,
-    messageCount: data.messages?.length || 0,
-    rawData: data,
-  });
+  // `rawData` is the entire transcript. A tab that refetches on every frame
+  // (BuildChatTab does) would otherwise pin a copy of the whole conversation
+  // in the console several times a second.
+  if (isRendererDebugLoggingEnabled) {
+    rendererDebugLog("[claude-client] Received messages response:", {
+      sessionId,
+      messageCount: data.messages?.length || 0,
+      rawData: data,
+    });
+  }
   return data.messages || [];
 }
 
@@ -961,10 +1010,15 @@ export function subscribeToEvents(
       const handleEvent = (event: MessageEvent) => {
         try {
           const data = JSON.parse(event.data);
-          console.debug("[claude-client] SSE event received", {
-            type: event.type,
-            sessionId: data.sessionId,
-          });
+          // Guarded rather than passed through `rendererDebugLog`: this runs on
+          // every frame of every running turn, so the object literal would be
+          // allocated per frame only to be dropped.
+          if (isRendererDebugLoggingEnabled) {
+            rendererDebugLog("[claude-client] SSE event received", {
+              type: event.type,
+              sessionId: data.sessionId,
+            });
+          }
           const claudeEvent: ClaudeEvent = {
             type: event.type as ClaudeEvent["type"],
             sessionId: data.sessionId,

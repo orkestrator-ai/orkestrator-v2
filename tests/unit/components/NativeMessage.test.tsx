@@ -1146,6 +1146,57 @@ describe("NativeMessage", () => {
     ).toBeNull();
   });
 
+  test("keeps edit diffs in step with toolDiff's values, not its identity", () => {
+    // The diff memos are keyed on the fields they read rather than on
+    // `toolDiff`'s identity, because normalization rebuilds every part object
+    // on each streaming frame and re-deriving a completed edit's diff is
+    // whole-file work. The hazard of value deps is staleness, so this pins
+    // both halves: a new object with identical values must not change what is
+    // shown, and changed values must still get through.
+    const buildMessage = (before: string, after: string): NativeMessageType => ({
+      id: "msg-edit-value-deps",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "success",
+          // A fresh object every call, exactly as a streaming frame produces.
+          toolDiff: { filePath: "/workspace/src/deps.ts", before, after },
+        },
+      ],
+    });
+
+    const { rerender } = render(
+      <TerminalContextHarness>
+        <NativeMessage message={buildMessage("first old", "first new")} />
+      </TerminalContextHarness>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /edit deps\.ts/i }));
+    expect(screen.getByText("-first old")).toBeTruthy();
+    expect(screen.getByText("+first new")).toBeTruthy();
+
+    rerender(
+      <TerminalContextHarness>
+        <NativeMessage message={buildMessage("first old", "first new")} />
+      </TerminalContextHarness>,
+    );
+    expect(screen.getByText("-first old")).toBeTruthy();
+    expect(screen.getByText("+first new")).toBeTruthy();
+
+    rerender(
+      <TerminalContextHarness>
+        <NativeMessage message={buildMessage("second old", "second new")} />
+      </TerminalContextHarness>,
+    );
+    expect(screen.getByText("-second old")).toBeTruthy();
+    expect(screen.getByText("+second new")).toBeTruthy();
+    expect(screen.queryByText("-first old")).toBeNull();
+  });
+
   test("disables edit rows that have no expandable details", () => {
     const createFileTab = mock(() => {});
     const message: NativeMessageType = {

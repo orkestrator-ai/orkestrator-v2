@@ -17,7 +17,7 @@
  * (Bash output, Read line counts), so anything hitting these limits is a
  * payload nobody was going to read in full anyway. Normal turns are untouched.
  */
-import type { NormalizedPart, ToolDiffMetadata } from "../types/index.js";
+import type { ToolDiffMetadata } from "../types/index.js";
 
 /** Per-field cap for tool output and error text. */
 export const MAX_TOOL_TEXT_BYTES = 1024 * 1024;
@@ -72,15 +72,5 @@ export function applyToolResultBudget(result: {
   return {
     output: capText(result.output, MAX_TOOL_TEXT_BYTES),
     error: capText(result.error, MAX_TOOL_TEXT_BYTES),
-  };
-}
-
-/** Bound every size-unbounded field on a part. Exported for tests. */
-export function applyPartBudget(part: NormalizedPart): NormalizedPart {
-  return {
-    ...part,
-    toolOutput: capText(part.toolOutput, MAX_TOOL_TEXT_BYTES),
-    toolError: capText(part.toolError, MAX_TOOL_TEXT_BYTES),
-    toolDiff: applyDiffBudget(part.toolDiff),
   };
 }

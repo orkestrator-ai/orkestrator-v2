@@ -673,6 +673,7 @@ describe("BuildChatTab", () => {
             partCount: 1,
             changedParts: [{ index: 0, part: { type: "text", content: "streaming" } }],
             timestamp: "2026-07-20T12:00:00.000Z",
+            revision: 2,
           },
         });
         wake();

@@ -2427,7 +2427,7 @@ describe("CodexChatTab", () => {
       }));
     });
 
-    render(
+    const { container } = render(
       <CodexChatTab
         tabId={TAB_ID}
         data={createData()}
@@ -2446,6 +2446,12 @@ describe("CodexChatTab", () => {
     expect(screen.queryByText("0s")).toBeNull();
     expect(screen.queryByText("Codex is thinking...")).not.toBeNull();
     expect(screen.queryByText(/Completed in/)).toBeNull();
+
+    // Both status states share a fixed-height row so the end-of-turn swap
+    // does not shift the transcript above it.
+    const thinkingRow = container.querySelector(".chat-status-row");
+    expect(thinkingRow?.textContent).toContain("Codex is thinking...");
+    expect(thinkingRow?.parentElement?.className).not.toContain("py-");
 
     mockedNow = 1_001_500;
     act(() => {
@@ -2469,6 +2475,11 @@ describe("CodexChatTab", () => {
       expect(screen.queryByText("Codex is thinking...")).toBeNull();
       expect(screen.queryByText("Completed in 1s")).not.toBeNull();
     });
+
+    const completedRows = container.querySelectorAll(".chat-status-row");
+    expect(completedRows).toHaveLength(1);
+    expect(completedRows[0]?.textContent).toContain("Completed in 1s");
+    expect(completedRows[0]?.parentElement?.className).not.toContain("py-");
 
     expect(clearIntervalCalls).toBeGreaterThan(0);
 

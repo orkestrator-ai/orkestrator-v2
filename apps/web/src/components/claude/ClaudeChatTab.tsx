@@ -1654,8 +1654,8 @@ export function ClaudeChatTab({
           footer={
           <>
             {session?.isLoading && (
-              <div className="px-2 @sm:px-4 py-3">
-                <div className="max-w-3xl mx-auto min-w-0">
+              <div className="px-2 @sm:px-4">
+                <div className="chat-status-row max-w-3xl mx-auto min-w-0">
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <AgentThinkingIndicator agentName="Claude" />
                     {elapsedSeconds !== null && elapsedSeconds > 0 && (
@@ -1694,8 +1694,8 @@ export function ClaudeChatTab({
             )}
 
             {!session?.isLoading && finalElapsedSeconds !== null && (
-              <div className="px-2 @sm:px-4 py-1.5">
-                <div className="max-w-3xl mx-auto min-w-0">
+              <div className="px-2 @sm:px-4">
+                <div className="chat-status-row max-w-3xl mx-auto min-w-0">
                   <span className="text-[10px] text-muted-foreground/40">
                     Completed in {formatElapsed(finalElapsedSeconds)}
                   </span>

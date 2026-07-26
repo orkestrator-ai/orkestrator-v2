@@ -205,6 +205,40 @@ body {
   }
 }
 
+/*
+ * Chat status row (thinking indicator / "Completed in ...").
+ *
+ * Fixed height, shared by both states: the row is the last thing in the
+ * transcript, so any height change there shifts everything above it. Swapping a
+ * py-3 indicator for a py-1.5 timing line used to jolt the whole view at the
+ * end of every turn.
+ */
+.chat-status-row {
+  display: flex;
+  align-items: center;
+  height: 2.5rem;
+}
+
+@keyframes chat-status-enter {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.chat-status-row > * {
+  animation: chat-status-enter 180ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-status-row > * {
+    animation: none;
+  }
+}
+
 @keyframes agent-thinking-shimmer {
   from {
     background-position: 125% 50%;

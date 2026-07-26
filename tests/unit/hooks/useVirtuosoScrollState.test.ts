@@ -6,6 +6,93 @@ import {
 } from "@/hooks/useVirtuosoScrollState";
 import { useUIStore } from "@/stores/uiStore";
 
+/**
+ * happy-dom reports 0 for every layout metric, so a scroller that can actually
+ * be pinned has to have its geometry stubbed. Appends to the document and
+ * returns the element; callers remove it in a finally block.
+ */
+function makeScroller({
+  scrollHeight,
+  clientHeight,
+}: {
+  scrollHeight: number;
+  clientHeight: number;
+}): HTMLElement {
+  const el = document.createElement("div");
+  Object.defineProperty(el, "scrollHeight", {
+    get: () => scrollHeight,
+    configurable: true,
+  });
+  Object.defineProperty(el, "clientHeight", {
+    get: () => clientHeight,
+    configurable: true,
+  });
+  document.body.appendChild(el);
+  return el;
+}
+
+type ObserverHarness = {
+  resizeObserved: Element[];
+  resizeCallback?: ResizeObserverCallback;
+  mutationObserveCalls: Array<{
+    target: Node;
+    options?: MutationObserverInit;
+  }>;
+  mutationCallback?: (
+    records: MutationRecord[],
+    observer: MutationObserver
+  ) => void;
+  restore: () => void;
+};
+
+/**
+ * Replace the global observers with hand-driven stubs, so a test can decide
+ * exactly when a resize or mutation is delivered. Callers must invoke
+ * `restore()` in a finally block.
+ */
+function installObservers(): ObserverHarness {
+  const originalResizeObserver = globalThis.ResizeObserver;
+  const originalMutationObserver = globalThis.MutationObserver;
+  const harness: ObserverHarness = {
+    resizeObserved: [],
+    mutationObserveCalls: [],
+    restore: () => {
+      (globalThis as any).ResizeObserver = originalResizeObserver;
+      (globalThis as any).MutationObserver = originalMutationObserver;
+    },
+  };
+
+  class MockResizeObserver {
+    constructor(callback: ResizeObserverCallback) {
+      harness.resizeCallback = callback;
+    }
+
+    observe(element: Element) {
+      harness.resizeObserved.push(element);
+    }
+
+    disconnect() {}
+  }
+
+  class MockMutationObserver {
+    constructor(
+      callback: (records: MutationRecord[], observer: MutationObserver) => void
+    ) {
+      harness.mutationCallback = callback;
+    }
+
+    observe(target: Node, options?: MutationObserverInit) {
+      harness.mutationObserveCalls.push({ target, options });
+    }
+
+    disconnect() {}
+  }
+
+  (globalThis as any).ResizeObserver = MockResizeObserver;
+  (globalThis as any).MutationObserver = MockMutationObserver;
+  return harness;
+}
+
 describe("useVirtuosoScrollState", () => {
   beforeEach(() => {
     // Clear any persisted state between tests
@@ -94,19 +181,22 @@ describe("useVirtuosoScrollState", () => {
   });
 
   describe("followOutput", () => {
-    test("returns 'smooth' when isAtBottom is true", () => {
+    test("returns 'auto' when isAtBottom is true", () => {
+      // Never "smooth": a native smooth scroll restarts its easing every time
+      // Virtuoso re-issues it, so it never converges while tokens stream and
+      // the tail visibly bobs. Instant follow is what reads as smooth.
       const { result } = renderHook(() => useVirtuosoScrollState());
-      expect(result.current.scrollProps.followOutput(true)).toBe("smooth");
+      expect(result.current.scrollProps.followOutput(true)).toBe("auto");
     });
 
-    test("returns 'smooth' while stick intent is still true even if not at bottom", () => {
+    test("returns 'auto' while stick intent is still true even if not at bottom", () => {
       // Content growth can push the viewport off-bottom without disengaging
       // stick intent. followOutput should still auto-scroll.
       const { result } = renderHook(() => useVirtuosoScrollState());
       act(() => {
         result.current.scrollProps.atBottomStateChange(false);
       });
-      expect(result.current.scrollProps.followOutput(false)).toBe("smooth");
+      expect(result.current.scrollProps.followOutput(false)).toBe("auto");
     });
 
     test("returns false after a user-initiated scroll up releases stick intent", () => {
@@ -129,7 +219,37 @@ describe("useVirtuosoScrollState", () => {
   });
 
   describe("scrollToBottom", () => {
-    test("scrolls when total list height grows while sticky", async () => {
+    test("pins directly to the bottom when list height grows while sticky", () => {
+      // Content growth must not go through the animated retry loop: that loop
+      // holds scrollInFlightRef for its retries plus a 400ms watch window, so
+      // every growth event in between was swallowed and the tail drifted.
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const el = makeScroller({ scrollHeight: 1200, clientHeight: 400 });
+
+      const scrollToIndexCalls: any[] = [];
+      const scrollToCalls: any[] = [];
+      result.current.virtuosoRef.current = {
+        scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
+        scrollTo: (opts: any) => scrollToCalls.push(opts),
+        getState: () => {},
+      } as any;
+
+      try {
+        act(() => result.current.scrollProps.scrollerRef(el));
+
+        act(() => {
+          result.current.scrollProps.totalListHeightChanged(1200);
+        });
+
+        expect(el.scrollTop).toBe(800);
+        expect(scrollToIndexCalls).toHaveLength(0);
+        expect(scrollToCalls).toHaveLength(0);
+      } finally {
+        document.body.removeChild(el);
+      }
+    });
+
+    test("falls back to the instant handle scroll when no scroller has mounted", async () => {
       const { result } = renderHook(() => useVirtuosoScrollState());
 
       const scrollToIndexCalls: any[] = [];
@@ -153,10 +273,11 @@ describe("useVirtuosoScrollState", () => {
         await new Promise((resolve) => setTimeout(resolve, 20));
       });
 
+      // "auto", not "smooth" — this is content catching up, not a user journey.
       expect(scrollToCalls).toEqual([
         {
           top: 10_000_000,
-          behavior: "smooth",
+          behavior: "auto",
         },
       ]);
     });
@@ -463,73 +584,12 @@ describe("useVirtuosoScrollState", () => {
   });
 
   describe("ResizeObserver fallback", () => {
-    type ObserverHarness = {
-      resizeObserved: Element[];
-      resizeCallback?: ResizeObserverCallback;
-      mutationObserveCalls: Array<{
-        target: Node;
-        options?: MutationObserverInit;
-      }>;
-      mutationCallback?: (
-        records: MutationRecord[],
-        observer: MutationObserver
-      ) => void;
-      restore: () => void;
-    };
-
-    function installObservers(): ObserverHarness {
-      const originalResizeObserver = globalThis.ResizeObserver;
-      const originalMutationObserver = globalThis.MutationObserver;
-      const harness: ObserverHarness = {
-        resizeObserved: [],
-        mutationObserveCalls: [],
-        restore: () => {
-          (globalThis as any).ResizeObserver = originalResizeObserver;
-          (globalThis as any).MutationObserver = originalMutationObserver;
-        },
-      };
-
-      class MockResizeObserver {
-        constructor(callback: ResizeObserverCallback) {
-          harness.resizeCallback = callback;
-        }
-
-        observe(element: Element) {
-          harness.resizeObserved.push(element);
-        }
-
-        disconnect() {}
-      }
-
-      class MockMutationObserver {
-        constructor(
-          callback: (
-            records: MutationRecord[],
-            observer: MutationObserver
-          ) => void
-        ) {
-          harness.mutationCallback = callback;
-        }
-
-        observe(target: Node, options?: MutationObserverInit) {
-          harness.mutationObserveCalls.push({ target, options });
-        }
-
-        disconnect() {}
-      }
-
-      (globalThis as any).ResizeObserver = MockResizeObserver;
-      (globalThis as any).MutationObserver = MockMutationObserver;
-      return harness;
-    }
-
-    test("observes subtree mutations and scrolls while sticky", async () => {
+    test("observes subtree mutations and pins while sticky", () => {
       const harness = installObservers();
       const { result, unmount } = renderHook(() => useVirtuosoScrollState());
-      const scroller = document.createElement("div");
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
       const directChild = document.createElement("div");
       scroller.appendChild(directChild);
-      document.body.appendChild(scroller);
 
       const scrollToIndexCalls: any[] = [];
       const scrollToCalls: any[] = [];
@@ -555,17 +615,21 @@ describe("useVirtuosoScrollState", () => {
           harness.mutationCallback?.([], {} as MutationObserver);
         });
 
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 30));
+        // The mutation callback runs at a microtask checkpoint, while layout
+        // is still dirty from the commit that mutated the DOM. Measuring there
+        // would force a reflow, so the pin is deferred to the ResizeObserver
+        // delivery for the same frame.
+        expect(scroller.scrollTop).toBe(0);
+
+        act(() => {
+          harness.resizeCallback?.([], {} as ResizeObserver);
         });
 
-        expect(scrollToIndexCalls).toHaveLength(1);
-        expect(scrollToCalls).toEqual([
-          {
-            top: 10_000_000,
-            behavior: "smooth",
-          },
-        ]);
+        // Pinned synchronously inside the resize callback — no animation and
+        // no trip through the handle-driven retry loop.
+        expect(scroller.scrollTop).toBe(700);
+        expect(scrollToIndexCalls).toHaveLength(0);
+        expect(scrollToCalls).toHaveLength(0);
       } finally {
         unmount();
         document.body.removeChild(scroller);
@@ -573,7 +637,7 @@ describe("useVirtuosoScrollState", () => {
       }
     });
 
-    test("scrolls when ResizeObserver fires while at bottom and sticky", async () => {
+    test("pins when ResizeObserver fires while at bottom and sticky", () => {
       // Locks in the contract that footer-only growth (which leaves Virtuoso
       // reporting atBottom=true) still triggers a follow-up scroll. The
       // earlier implementation short-circuited on isAtBottomRef.current, which
@@ -581,13 +645,11 @@ describe("useVirtuosoScrollState", () => {
       // on data-item changes.
       const harness = installObservers();
       const { result, unmount } = renderHook(() => useVirtuosoScrollState());
-      const scroller = document.createElement("div");
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
       scroller.appendChild(document.createElement("div"));
-      document.body.appendChild(scroller);
 
-      const scrollToIndexCalls: any[] = [];
       result.current.virtuosoRef.current = {
-        scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
+        scrollToIndex: () => {},
         scrollTo: () => {},
         getState: () => {},
       } as any;
@@ -601,11 +663,7 @@ describe("useVirtuosoScrollState", () => {
           harness.resizeCallback?.([], {} as ResizeObserver);
         });
 
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 30));
-        });
-
-        expect(scrollToIndexCalls).toHaveLength(1);
+        expect(scroller.scrollTop).toBe(700);
       } finally {
         unmount();
         document.body.removeChild(scroller);
@@ -613,19 +671,41 @@ describe("useVirtuosoScrollState", () => {
       }
     });
 
-    test("skips re-observing direct children on deep subtree mutations", async () => {
+    test("does not pin on content growth after a user scrolls up", () => {
       const harness = installObservers();
       const { result, unmount } = renderHook(() => useVirtuosoScrollState());
-      const scroller = document.createElement("div");
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+      scroller.appendChild(document.createElement("div"));
+
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        act(() => {
+          scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+        });
+
+        act(() => {
+          harness.resizeCallback?.([], {} as ResizeObserver);
+        });
+
+        expect(scroller.scrollTop).toBe(0);
+      } finally {
+        unmount();
+        document.body.removeChild(scroller);
+        harness.restore();
+      }
+    });
+
+    test("skips re-observing direct children on deep subtree mutations", () => {
+      const harness = installObservers();
+      const { result, unmount } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
       const directChild = document.createElement("div");
       const grandchild = document.createElement("span");
       directChild.appendChild(grandchild);
       scroller.appendChild(directChild);
-      document.body.appendChild(scroller);
 
-      const scrollToIndexCalls: any[] = [];
       result.current.virtuosoRef.current = {
-        scrollToIndex: (opts: any) => scrollToIndexCalls.push(opts),
+        scrollToIndex: () => {},
         scrollTo: () => {},
         getState: () => {},
       } as any;
@@ -653,15 +733,15 @@ describe("useVirtuosoScrollState", () => {
           harness.mutationCallback?.([deepRecord], {} as MutationObserver);
         });
 
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 30));
-        });
-
         // observeChildren() must not have re-walked: still just the original
         // direct child, no new observe() entries.
         expect(harness.resizeObserved.length).toBe(observedBeforeDeepMutation);
-        // schedule() must still have run, so a sticky scroll fired.
-        expect(scrollToIndexCalls).toHaveLength(1);
+        // The growth follow must still have been scheduled, so the resize
+        // delivery for this frame pins.
+        act(() => {
+          harness.resizeCallback?.([], {} as ResizeObserver);
+        });
+        expect(scroller.scrollTop).toBe(700);
       } finally {
         unmount();
         document.body.removeChild(scroller);
@@ -705,6 +785,421 @@ describe("useVirtuosoScrollState", () => {
         unmount();
         document.body.removeChild(scroller);
         harness.restore();
+      }
+    });
+
+    test("pins on the next frame when a mutation produces no resize notification", async () => {
+      // Backstop for growth ResizeObserver cannot see (margin-only growth).
+      // One frame late is the cost; never pinning at all would be worse.
+      const harness = installObservers();
+      const { result, unmount } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+      scroller.appendChild(document.createElement("div"));
+
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+
+        act(() => {
+          harness.mutationCallback?.([], {} as MutationObserver);
+        });
+        expect(scroller.scrollTop).toBe(0);
+
+        await act(async () => {
+          await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+          await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+        });
+
+        expect(scroller.scrollTop).toBe(700);
+      } finally {
+        unmount();
+        document.body.removeChild(scroller);
+        harness.restore();
+      }
+    });
+
+    test("a resize delivery consumes the mutation's queued backstop frame", async () => {
+      // The backstop exists only for growth ResizeObserver cannot see. Leaving
+      // it queued after a real resize landed would measure a second time every
+      // frame, which is the forced-reflow cost the deferral exists to avoid.
+      const harness = installObservers();
+      const { result, unmount } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+      scroller.appendChild(document.createElement("div"));
+
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+
+        act(() => {
+          harness.mutationCallback?.([], {} as MutationObserver);
+        });
+        act(() => {
+          harness.resizeCallback?.([], {} as ResizeObserver);
+        });
+        expect(scroller.scrollTop).toBe(700);
+
+        // Move the viewport without touching stick intent, so a surviving
+        // backstop would be visible as a second pin back to 700.
+        scroller.scrollTop = 400;
+
+        await act(async () => {
+          await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+          await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+        });
+
+        expect(scroller.scrollTop).toBe(400);
+      } finally {
+        unmount();
+        document.body.removeChild(scroller);
+        harness.restore();
+      }
+    });
+
+    test("never pins upward when the viewport already sits past the target", () => {
+      // pinToBottom's downward-only guard. Content shrinking is clamped by the
+      // browser; pulling the viewport *up* here would fight a user mid-scroll.
+      const harness = installObservers();
+      const { result, unmount } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+      scroller.appendChild(document.createElement("div"));
+
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        // Past the 700 target, with stick intent still engaged.
+        scroller.scrollTop = 900;
+
+        act(() => {
+          harness.resizeCallback?.([], {} as ResizeObserver);
+        });
+
+        expect(scroller.scrollTop).toBe(900);
+      } finally {
+        unmount();
+        document.body.removeChild(scroller);
+        harness.restore();
+      }
+    });
+
+    test("does not pin content growth while the view is inactive", () => {
+      // The scroller stays mounted when a tab goes inactive, so the isActive
+      // guard is the only thing stopping a background view from scrolling.
+      const harness = installObservers();
+      const { result, unmount } = renderHook(() =>
+        useVirtuosoScrollState({ isActive: false })
+      );
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+      scroller.appendChild(document.createElement("div"));
+
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+
+        act(() => {
+          harness.resizeCallback?.([], {} as ResizeObserver);
+        });
+
+        expect(scroller.scrollTop).toBe(0);
+      } finally {
+        unmount();
+        document.body.removeChild(scroller);
+        harness.restore();
+      }
+    });
+
+    test("does not pin content growth while a user-initiated scroll is in flight", () => {
+      // The smooth scroll-down-button journey owns the viewport until its
+      // retry loop and watch window finish; pinning underneath it would
+      // teleport past the animation the user asked for.
+      const harness = installObservers();
+      const { result, unmount } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+      scroller.appendChild(document.createElement("div"));
+
+      result.current.virtuosoRef.current = {
+        scrollToIndex: () => {},
+        scrollTo: () => {},
+        getState: () => {},
+      } as any;
+
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        // Stay off-bottom so the retry loop holds scrollInFlightRef.
+        act(() => {
+          result.current.scrollProps.atBottomStateChange(false);
+        });
+        act(() => {
+          result.current.scrollToBottom();
+        });
+
+        act(() => {
+          harness.resizeCallback?.([], {} as ResizeObserver);
+        });
+
+        expect(scroller.scrollTop).toBe(0);
+      } finally {
+        unmount();
+        document.body.removeChild(scroller);
+        harness.restore();
+      }
+    });
+  });
+
+  describe("user scroll-up detection", () => {
+    test("releases stick intent when the scrollbar is dragged up", () => {
+      // Dragging the scrollbar fires no wheel, touch or key event. Without the
+      // drag listener the user stays flagged sticky and is pinned straight
+      // back to the bottom on the next token.
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        scroller.scrollTop = 700;
+        act(() => {
+          scroller.dispatchEvent(new Event("scroll"));
+        });
+
+        act(() => {
+          scroller.dispatchEvent(new Event("pointerdown"));
+        });
+        // Drag well clear of the bottom.
+        scroller.scrollTop = 200;
+        act(() => {
+          scroller.dispatchEvent(new Event("scroll"));
+        });
+
+        expect(result.current.scrollProps.followOutput(false)).toBe(false);
+      } finally {
+        document.body.removeChild(scroller);
+      }
+    });
+
+    test("keeps stick intent for an upward scroll with no pointer held", () => {
+      // Virtuoso corrects over-estimated heights after restoring a snapshot,
+      // which moves scrollTop up with no user involved. Treating that as
+      // intent would silently stop auto-follow on mount.
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        scroller.scrollTop = 700;
+        act(() => {
+          scroller.dispatchEvent(new Event("scroll"));
+        });
+
+        scroller.scrollTop = 200;
+        act(() => {
+          scroller.dispatchEvent(new Event("scroll"));
+        });
+
+        expect(result.current.scrollProps.followOutput(false)).toBe("auto");
+      } finally {
+        document.body.removeChild(scroller);
+      }
+    });
+
+    test("stops treating scrolls as a drag once the pointer is released", () => {
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        scroller.scrollTop = 700;
+        act(() => {
+          scroller.dispatchEvent(new Event("scroll"));
+          scroller.dispatchEvent(new Event("pointerdown"));
+          // Released over the page, not the scroller — hence the window
+          // listener rather than an element one.
+          window.dispatchEvent(new Event("pointerup"));
+        });
+
+        scroller.scrollTop = 200;
+        act(() => {
+          scroller.dispatchEvent(new Event("scroll"));
+        });
+
+        expect(result.current.scrollProps.followOutput(false)).toBe("auto");
+      } finally {
+        document.body.removeChild(scroller);
+      }
+    });
+
+    test("keeps stick intent when our own pin scrolls down", () => {
+      const harness = installObservers();
+      const { result, unmount } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+      scroller.appendChild(document.createElement("div"));
+
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        act(() => {
+          harness.resizeCallback?.([], {} as ResizeObserver);
+        });
+        expect(scroller.scrollTop).toBe(700);
+
+        // Even with the pointer held (the user resting on the scrollbar), the
+        // pin's own downward scroll event must not read as them leaving.
+        act(() => {
+          scroller.dispatchEvent(new Event("pointerdown"));
+          scroller.dispatchEvent(new Event("scroll"));
+        });
+
+        expect(result.current.scrollProps.followOutput(false)).toBe("auto");
+      } finally {
+        unmount();
+        document.body.removeChild(scroller);
+        harness.restore();
+      }
+    });
+
+    test("keeps stick intent when the drag moves down, even short of the bottom", () => {
+      // Only *upward* movement is a signal to stop following. Dragging toward
+      // the bottom is the opposite intent, and lands away from it on the way.
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        scroller.scrollTop = 100;
+        act(() => {
+          scroller.dispatchEvent(new Event("scroll"));
+          scroller.dispatchEvent(new Event("pointerdown"));
+        });
+
+        // Downward, but still 300px clear of the 700 bottom.
+        scroller.scrollTop = 400;
+        act(() => {
+          scroller.dispatchEvent(new Event("scroll"));
+        });
+
+        expect(result.current.scrollProps.followOutput(false)).toBe("auto");
+      } finally {
+        document.body.removeChild(scroller);
+      }
+    });
+
+    test("keeps stick intent when a drag drops scrollTop but stays at the bottom", () => {
+      // A growing viewport (window resize) clamps scrollTop downward while
+      // leaving the user at the bottom. That is not intent to stop following.
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        scroller.scrollTop = 700;
+        act(() => {
+          scroller.dispatchEvent(new Event("scroll"));
+          scroller.dispatchEvent(new Event("pointerdown"));
+        });
+
+        // Still within AT_BOTTOM_THRESHOLD (50px) of the 700 target.
+        scroller.scrollTop = 670;
+        act(() => {
+          scroller.dispatchEvent(new Event("scroll"));
+        });
+
+        expect(result.current.scrollProps.followOutput(false)).toBe("auto");
+      } finally {
+        document.body.removeChild(scroller);
+      }
+    });
+
+    test("releases stick intent on an upward touch drag", () => {
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        scroller.scrollTop = 700;
+
+        act(() => {
+          scroller.dispatchEvent(new Event("touchstart"));
+        });
+        scroller.scrollTop = 690;
+        act(() => {
+          scroller.dispatchEvent(new Event("touchmove"));
+        });
+
+        expect(result.current.scrollProps.followOutput(false)).toBe(false);
+      } finally {
+        document.body.removeChild(scroller);
+      }
+    });
+
+    test("keeps stick intent on a downward touch drag", () => {
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        scroller.scrollTop = 500;
+
+        act(() => {
+          scroller.dispatchEvent(new Event("touchstart"));
+        });
+        scroller.scrollTop = 560;
+        act(() => {
+          scroller.dispatchEvent(new Event("touchmove"));
+        });
+
+        expect(result.current.scrollProps.followOutput(false)).toBe("auto");
+      } finally {
+        document.body.removeChild(scroller);
+      }
+    });
+
+    test.each(["ArrowUp", "PageUp", "Home"])(
+      "releases stick intent on %s",
+      (key) => {
+        const { result } = renderHook(() => useVirtuosoScrollState());
+        const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+        try {
+          act(() => result.current.scrollProps.scrollerRef(scroller));
+          act(() => {
+            scroller.dispatchEvent(new KeyboardEvent("keydown", { key }));
+          });
+
+          expect(result.current.scrollProps.followOutput(false)).toBe(false);
+        } finally {
+          document.body.removeChild(scroller);
+        }
+      }
+    );
+
+    test.each(["ArrowDown", "PageDown", "End"])(
+      "keeps stick intent on %s",
+      (key) => {
+        const { result } = renderHook(() => useVirtuosoScrollState());
+        const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+        try {
+          act(() => result.current.scrollProps.scrollerRef(scroller));
+          act(() => {
+            scroller.dispatchEvent(new KeyboardEvent("keydown", { key }));
+          });
+
+          expect(result.current.scrollProps.followOutput(false)).toBe("auto");
+        } finally {
+          document.body.removeChild(scroller);
+        }
+      }
+    );
+
+    test("stops releasing stick intent after the scroller is detached", () => {
+      const { result } = renderHook(() => useVirtuosoScrollState());
+      const scroller = makeScroller({ scrollHeight: 1000, clientHeight: 300 });
+
+      try {
+        act(() => result.current.scrollProps.scrollerRef(scroller));
+        act(() => result.current.scrollProps.scrollerRef(null));
+
+        act(() => {
+          scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+        });
+
+        expect(result.current.scrollProps.followOutput(false)).toBe("auto");
+      } finally {
+        document.body.removeChild(scroller);
       }
     });
   });
@@ -1016,7 +1511,7 @@ describe("useVirtuosoScrollState", () => {
         expect(scrollToCalls).toEqual([
           { top: 10_000_000, behavior: "auto" },
         ]);
-        expect(result.current.scrollProps.followOutput(false)).toBe("smooth");
+        expect(result.current.scrollProps.followOutput(false)).toBe("auto");
       } finally {
         document.body.removeChild(el);
       }
@@ -1345,7 +1840,7 @@ describe("useVirtuosoScrollState", () => {
           behavior: "auto",
         });
         // The forced jump also re-engages stick intent.
-        expect(result.current.scrollProps.followOutput(false)).toBe("smooth");
+        expect(result.current.scrollProps.followOutput(false)).toBe("auto");
       } finally {
         document.body.removeChild(el);
         useUIStore.setState({ selectedEnvironmentId: null });
@@ -1504,7 +1999,7 @@ describe("useVirtuosoScrollState", () => {
 
         // followOutput should still report stick intent true even though we're
         // not at bottom — this would fail if the render-time clobber returned.
-        expect(result2.current.scrollProps.followOutput(false)).toBe("smooth");
+        expect(result2.current.scrollProps.followOutput(false)).toBe("auto");
       } finally {
         document.body.removeChild(el);
         clearPersistedVirtuosoState("regress-key");
@@ -1652,6 +2147,154 @@ describe("useVirtuosoScrollState", () => {
         expect(after.current.scrollProps.restoreStateFrom).toBeUndefined();
       } finally {
         document.body.removeChild(el);
+      }
+    });
+  });
+
+  describe("persisted state eviction", () => {
+    /**
+     * Persist one snapshot under `persistKey` by mounting active, then
+     * deactivating — the deactivation effect is what writes the entry.
+     */
+    function persistSnapshot(persistKey: string, scrollTop: number) {
+      const { result, rerender, unmount } = renderHook(
+        ({ isActive }) => useVirtuosoScrollState({ isActive, persistKey }),
+        { initialProps: { isActive: true } }
+      );
+      result.current.virtuosoRef.current = {
+        scrollToIndex: () => {},
+        scrollTo: () => {},
+        getState: (cb: (state: any) => void) =>
+          cb({ ranges: [], scrollTop } as any),
+      } as any;
+      rerender({ isActive: false });
+      unmount();
+    }
+
+    function isPersisted(persistKey: string) {
+      const { result, unmount } = renderHook(() =>
+        useVirtuosoScrollState({ persistKey })
+      );
+      const persisted = result.current.scrollProps.restoreStateFrom;
+      unmount();
+      return persisted !== undefined;
+    }
+
+    test("evicts the oldest entry once the 200-key cap is exceeded", () => {
+      // Every chat tab in every environment gets its own key, so an unbounded
+      // map would retain a snapshot per tab for the life of the process.
+      persistSnapshot("evict-oldest", 10);
+      expect(isPersisted("evict-oldest")).toBe(true);
+
+      // MAX_PERSISTED_STATES is 200; fill past it.
+      for (let i = 0; i < 200; i += 1) {
+        persistSnapshot(`evict-filler-${i}`, i);
+      }
+
+      expect(isPersisted("evict-oldest")).toBe(false);
+      expect(isPersisted("evict-filler-199")).toBe(true);
+
+      for (let i = 0; i < 200; i += 1) {
+        clearPersistedVirtuosoState(`evict-filler-${i}`);
+      }
+    });
+
+    test("re-persisting a key refreshes its position in the eviction order", () => {
+      // setPersistedState deletes before re-inserting so a key still in use
+      // does not age out just because it was written early.
+      persistSnapshot("evict-refreshed", 10);
+
+      for (let i = 0; i < 150; i += 1) {
+        persistSnapshot(`refresh-filler-${i}`, i);
+      }
+
+      // Touch it again, then push the total past the cap.
+      persistSnapshot("evict-refreshed", 20);
+      for (let i = 150; i < 260; i += 1) {
+        persistSnapshot(`refresh-filler-${i}`, i);
+      }
+
+      expect(isPersisted("evict-refreshed")).toBe(true);
+      expect(isPersisted("refresh-filler-0")).toBe(false);
+
+      clearPersistedVirtuosoState("evict-refreshed");
+      for (let i = 0; i < 260; i += 1) {
+        clearPersistedVirtuosoState(`refresh-filler-${i}`);
+      }
+    });
+  });
+
+  describe("environment subscription lifecycle", () => {
+    test("unsubscribes from the environment store when the view reactivates", () => {
+      const subscribe = useUIStore.subscribe;
+      let unsubscribeCalls = 0;
+      const wrapped = ((listener: any) => {
+        const unsubscribe = subscribe(listener);
+        return () => {
+          unsubscribeCalls += 1;
+          unsubscribe();
+        };
+      }) as typeof useUIStore.subscribe;
+      (useUIStore as any).subscribe = wrapped;
+
+      try {
+        const { rerender } = renderHook(
+          ({ isActive }) =>
+            useVirtuosoScrollState({ isActive, environmentId: "env-1" }),
+          { initialProps: { isActive: false } }
+        );
+        expect(unsubscribeCalls).toBe(0);
+
+        rerender({ isActive: true });
+
+        // Reactivating tears down the inactive-period watcher; leaving it
+        // attached would leak a listener per activation cycle.
+        expect(unsubscribeCalls).toBe(1);
+      } finally {
+        (useUIStore as any).subscribe = subscribe;
+      }
+    });
+
+    test("unsubscribes from the environment store on unmount", () => {
+      const subscribe = useUIStore.subscribe;
+      let unsubscribeCalls = 0;
+      const wrapped = ((listener: any) => {
+        const unsubscribe = subscribe(listener);
+        return () => {
+          unsubscribeCalls += 1;
+          unsubscribe();
+        };
+      }) as typeof useUIStore.subscribe;
+      (useUIStore as any).subscribe = wrapped;
+
+      try {
+        const { unmount } = renderHook(() =>
+          useVirtuosoScrollState({ isActive: false, environmentId: "env-1" })
+        );
+        expect(unsubscribeCalls).toBe(0);
+
+        unmount();
+
+        expect(unsubscribeCalls).toBe(1);
+      } finally {
+        (useUIStore as any).subscribe = subscribe;
+      }
+    });
+
+    test("does not subscribe when no environmentId is provided", () => {
+      const subscribe = useUIStore.subscribe;
+      let subscribeCalls = 0;
+      const wrapped = ((listener: any) => {
+        subscribeCalls += 1;
+        return subscribe(listener);
+      }) as typeof useUIStore.subscribe;
+      (useUIStore as any).subscribe = wrapped;
+
+      try {
+        renderHook(() => useVirtuosoScrollState({ isActive: false }));
+        expect(subscribeCalls).toBe(0);
+      } finally {
+        (useUIStore as any).subscribe = subscribe;
       }
     });
   });

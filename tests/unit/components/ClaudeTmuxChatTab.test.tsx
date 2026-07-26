@@ -1362,7 +1362,7 @@ Running 1 Explore agent...
         "Streaming chunk",
       );
     });
-    expect(lastVirtuosoProps?.followOutput(true)).toBe("smooth");
+    expect(lastVirtuosoProps?.followOutput(true)).toBe("auto");
   });
 
   test("windows large tmux transcripts through Virtuoso instead of rendering every message", async () => {

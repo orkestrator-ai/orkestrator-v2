@@ -86,7 +86,7 @@ function createDependencies(
   };
 }
 
-const WORKSPACE = "workspace (web, backend, web-public)";
+const WORKSPACE = "workspace (web, backend, web-public, protocol)";
 const ROOT = "root (tests/)";
 const BRIDGES = "bridges";
 const PROTOCOL = "codex protocol lockfile";
@@ -258,6 +258,9 @@ describe("scripts/test-all.ts", () => {
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/web");
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/backend");
     expect(workspaceGroup.args).toContain("--filter=@orkestrator/web-public");
+    // The shared protocol package has its own suite (the task-list registry
+    // both backends depend on); without a filter it would never run.
+    expect(workspaceGroup.args).toContain("--filter=@orkestrator/protocol");
     expect(workspaceGroup.env?.[WORKSPACE_WORKERS_ENV]).toMatch(/^\d+$/);
   });
 

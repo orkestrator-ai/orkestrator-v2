@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test, mock, beforeEach } from "bun:test";
 import { Hono } from "hono";
+import { TaskRegistry } from "@orkestrator/protocol/task-list";
 
 // Snapshot the real session-manager BEFORE installing the route's stub mock.
 // Bun's `mock.module(...)` is process-global, so without this restore step the
@@ -19,14 +20,24 @@ const mockCreateSession = mock(() => ({
   lastActivity: new Date("2026-01-01"),
 }));
 
+// A session that has run task tools, for the task-list endpoint. The registry
+// is the real one: the endpoint's whole job is to serve what it holds.
+const sessionTaskRegistry = new TaskRegistry();
+sessionTaskRegistry.apply(
+  "TaskCreate",
+  { subject: "Rehydrated task" },
+  "Task #1 created successfully: Rehydrated task",
+);
+
 const mockGetSession = mock((id: string) =>
-  id === "s-1"
+  id === "s-1" || id === "s-tasks"
     ? {
-        id: "s-1",
+        id,
         title: "Test",
         status: "idle" as const,
         createdAt: new Date("2026-01-01"),
         lastActivity: new Date("2026-01-01"),
+        taskRegistry: id === "s-tasks" ? sessionTaskRegistry : undefined,
       }
     : undefined
 );
@@ -180,6 +191,29 @@ describe("session routes", () => {
 
     test("returns 404 for unknown session", async () => {
       const res = await app.request("/session/s-unknown/messages");
+      expect(res.status).toBe(404);
+    });
+  });
+
+  // --- GET /session/:id/tasks ---
+  describe("GET /session/:id/tasks", () => {
+    test("serves the session's authoritative task list", async () => {
+      const res = await app.request("/session/s-tasks/tasks");
+      expect(res.status).toBe(200);
+      expect(await jsonBody(res)).toEqual({
+        items: [{ id: "1", subject: "Rehydrated task", status: "pending" }],
+        complete: true,
+      });
+    });
+
+    test("reports an empty, complete list for a session that has run no task tools", async () => {
+      const res = await app.request("/session/s-1/tasks");
+      expect(res.status).toBe(200);
+      expect(await jsonBody(res)).toEqual({ items: [], complete: true });
+    });
+
+    test("returns 404 for unknown session", async () => {
+      const res = await app.request("/session/s-unknown/tasks");
       expect(res.status).toBe(404);
     });
   });

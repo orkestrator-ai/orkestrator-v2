@@ -256,6 +256,7 @@ describe("Electron tmux backend command registration", () => {
       "claude_tmux_interrupt",
       "claude_tmux_status",
       "claude_tmux_transcript",
+      "claude_tmux_tasks",
       "claude_tmux_pending_hooks",
       "claude_tmux_create_interactive_terminal",
       "claude_tmux_start_interactive_terminal",
@@ -288,6 +289,7 @@ describe("Electron tmux backend command registration", () => {
     await expect(invoke(handlers, "claude_tmux_stop", args)).resolves.toBeUndefined();
     await expect(invoke(handlers, "claude_tmux_interrupt", args)).rejects.toThrow("tmux session not running");
     await expect(invoke(handlers, "claude_tmux_pending_hooks", args)).rejects.toThrow("tmux session not running");
+    await expect(invoke(handlers, "claude_tmux_tasks", args)).rejects.toThrow("tmux session not running");
     await expect(invoke(handlers, "claude_tmux_detach_interactive_terminal", { terminalSessionId: "missing" })).resolves.toBeUndefined();
   });
 
@@ -1044,6 +1046,151 @@ exit 0
       )).resolves.toEqual(expect.objectContaining({ permission_mode: "plan" }));
 
       await invoke(handlers, "claude_tmux_stop", { tabId: "tab-tail", environmentId: environment.id }, context);
+    });
+  });
+
+  test("stamps the derived task list onto transcript lines and serves it on demand", async () => {
+    const handlers = createHandlers();
+
+    await withFakeTmuxRuntime(async ({ worktree, home, environment }) => {
+      const emitted: Array<{ event: string; payload: unknown }> = [];
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+        },
+        emit: (event: string, payload: unknown) => emitted.push({ event, payload }),
+        appRoot: "",
+        resourceRoot: "",
+      };
+
+      const status = await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: "tab-tasks", environmentId: environment.id },
+        context,
+      ) as { session_id: string; running: boolean };
+      expect(status.running).toBe(true);
+
+      const transcriptDir = path.join(home, ".claude", "projects", encodeCwd(worktree));
+      await fs.mkdir(transcriptDir, { recursive: true });
+      const transcriptPath = path.join(transcriptDir, `${status.session_id}.jsonl`);
+      const jsonl = (line: unknown) => `${JSON.stringify(line)}\n`;
+
+      // A complete task tool call spans two lines: the use carries the args,
+      // the result carries the assigned id.
+      await fs.writeFile(
+        transcriptPath,
+        jsonl({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "tu-task-1",
+                name: "TaskCreate",
+                input: { subject: "Derived in the backend" },
+              },
+            ],
+          },
+        }) +
+          jsonl({
+            type: "user",
+            message: {
+              role: "user",
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "tu-task-1",
+                  content: "Task #1 created successfully: Derived in the backend",
+                },
+              ],
+            },
+          }),
+      );
+
+      // A full read stamps each line with the list as it stood at that line.
+      const lines = await invoke(
+        handlers,
+        "claude_tmux_transcript",
+        { tabId: "tab-tasks", environmentId: environment.id },
+      ) as Array<{ taskSnapshots?: Record<string, unknown> }>;
+
+      expect(lines).toHaveLength(2);
+      // The tool_use line changed nothing; the result line carries the list,
+      // keyed by the tool call it belongs to.
+      expect(lines[0]?.taskSnapshots).toBeUndefined();
+      expect(lines[1]?.taskSnapshots).toEqual({
+        "tu-task-1": {
+          items: [{ id: "1", subject: "Derived in the backend", status: "pending" }],
+          complete: true,
+          changedTaskId: "1",
+        },
+      });
+
+      // ...and the same state is available without replaying the transcript,
+      // which is how a tab that was unmounted catches up.
+      await expect(invoke(
+        handlers,
+        "claude_tmux_tasks",
+        { tabId: "tab-tasks", environmentId: environment.id },
+      )).resolves.toEqual({
+        items: [{ id: "1", subject: "Derived in the backend", status: "pending" }],
+        complete: true,
+      });
+
+      // Live tail lines are stamped the same way.
+      await fs.appendFile(
+        transcriptPath,
+        jsonl({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "tu-task-2",
+                name: "TaskUpdate",
+                input: { taskId: "1", status: "completed" },
+              },
+            ],
+          },
+        }) +
+          jsonl({
+            type: "user",
+            message: {
+              role: "user",
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "tu-task-2",
+                  content: "Updated task #1 status",
+                },
+              ],
+            },
+          }),
+      );
+
+      await waitFor(() => emitted.some((item) =>
+        item.event === "claude-tmux:event" &&
+        (item.payload as { kind?: string }).kind === "transcript-line" &&
+        (item.payload as { line?: { taskSnapshots?: Record<string, unknown> } })
+          .line?.taskSnapshots?.["tu-task-2"] !== undefined
+      ));
+
+      const tailed = emitted
+        .map((item) => item.payload as {
+          line?: { taskSnapshots?: Record<string, { items?: unknown; changedTaskId?: string }> };
+        })
+        .filter((payload) => payload.line?.taskSnapshots)
+        .at(-1);
+      expect(tailed?.line?.taskSnapshots?.["tu-task-2"]).toEqual({
+        items: [{ id: "1", subject: "Derived in the backend", status: "completed" }],
+        complete: true,
+        changedTaskId: "1",
+      });
+
+      await invoke(handlers, "claude_tmux_stop", { tabId: "tab-tasks", environmentId: environment.id }, context);
     });
   });
 });

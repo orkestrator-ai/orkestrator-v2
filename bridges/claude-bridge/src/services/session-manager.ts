@@ -20,8 +20,10 @@ import type {
   SdkCompactBoundaryMessage,
   SdkResultMessage,
   SdkSystemMessage,
+  TaskListSnapshot,
 } from "../types/index.js";
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
+import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import {
   structuredOutputFailure,
   type StructuredOutputResult,
@@ -553,7 +555,15 @@ class ToolTracker {
   }
 
   /** Update a tool with its result */
-  updateToolResult(toolUseId: string, result: { output?: string; error?: string; state: "success" | "failure" }): void {
+  updateToolResult(
+    toolUseId: string,
+    result: {
+      output?: string;
+      error?: string;
+      state: "success" | "failure";
+      taskSnapshot?: TaskListSnapshot;
+    },
+  ): void {
     const existing = this.tools.get(toolUseId);
     if (existing) {
       this.tools.set(toolUseId, {
@@ -561,6 +571,7 @@ class ToolTracker {
         toolState: result.state,
         toolOutput: result.output,
         toolError: result.error,
+        taskSnapshot: result.taskSnapshot ?? existing.taskSnapshot,
       });
     }
   }
@@ -653,13 +664,15 @@ function isTaskToolName(toolName: string): boolean {
  * @param toolTracker - Tool tracker for managing tool invocations
  * @param mcpServerNames - Set of known MCP server names for accurate tool parsing
  * @param activeTaskIds - Set of currently active (pending) Task IDs for parent tracking
+ * @param taskRegistry - Session task list state, stamped onto Task tool results
  */
 function parseMessageContent(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   message: any,
   toolTracker?: ToolTracker,
   mcpServerNames?: Set<string>,
-  activeTaskIds?: Set<string>
+  activeTaskIds?: Set<string>,
+  taskRegistry?: Pick<TaskRegistry, "apply">
 ): {
   content: string;
   thinkingParts: NormalizedPart[];
@@ -790,10 +803,23 @@ function parseMessageContent(
       // Update tool tracker with result
       if (typeof block.tool_use_id === "string" && block.tool_use_id.length > 0) {
         const resultContent = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
+
+        // Replay successful task tool calls into the session task list so this
+        // part can carry the resulting list state. A failed call changed
+        // nothing, so it must not mutate the registry, and a call whose output
+        // the registry cannot parse yields no snapshot at all — the renderer
+        // then shows the raw call instead of a list nothing vouches for.
+        const pendingTool = toolTracker.getTool(block.tool_use_id);
+        const taskSnapshot =
+          block.is_error || !isTaskListTool(pendingTool?.toolName)
+            ? undefined
+            : taskRegistry?.apply(pendingTool?.toolName, pendingTool?.toolArgs, resultContent);
+
         toolTracker.updateToolResult(block.tool_use_id, {
           output: block.is_error ? undefined : resultContent,
           error: block.is_error ? resultContent : undefined,
           state: block.is_error ? "failure" : "success",
+          taskSnapshot,
         });
 
         // Check if this is a Task tool completing
@@ -1673,6 +1699,11 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // Tool tracker persists across all messages in this turn
     const toolTracker = new ToolTracker();
 
+    // The task list, unlike the tool tracker, persists across turns — Claude's
+    // tasks survive from one prompt to the next, so the registry hangs off the
+    // session and is created once.
+    const taskRegistry = (session.taskRegistry ??= new TaskRegistry());
+
     // Track accumulated ordered parts (text, thinking, and tools in chronological order).
     //
     // Parts are grouped by API message id (`msg_…`) and, within a message, by
@@ -2010,7 +2041,8 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           message,
           toolTracker,
           mcpServerNames,
-          activeTaskIds
+          activeTaskIds,
+          taskRegistry
         );
 
         // Update active Task tracking - add new Tasks
@@ -2076,7 +2108,8 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           message,
           toolTracker,
           mcpServerNames,
-          activeTaskIds
+          activeTaskIds,
+          taskRegistry
         );
 
         // Update active Task tracking - remove completed Tasks

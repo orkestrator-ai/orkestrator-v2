@@ -573,6 +573,42 @@ describe("native message adapters", () => {
     expect(groupNativeAgentActivity(taskOnly)).toEqual(taskOnly);
   });
 
+  test("carries the backend task snapshot through normalization untouched", () => {
+    // The whole task-list feature is invisible if this one field is dropped in
+    // translation, and nothing else in the pipeline would fail.
+    const part: ClaudeMessagePart = {
+      type: "tool-invocation",
+      toolName: "TaskUpdate",
+      toolState: "success",
+      toolArgs: { taskId: "2", status: "in_progress" },
+      toolOutput: "Updated task #2 status",
+      taskSnapshot: {
+        items: [
+          { id: "1", subject: "First", status: "completed" },
+          { id: "2", subject: "Second", status: "in_progress" },
+        ],
+        complete: false,
+        changedTaskId: "2",
+        truncated: 4,
+      },
+    };
+
+    const normalized = normalizeClaudePart(part);
+
+    expect(normalized?.taskSnapshot).toEqual(part.taskSnapshot!);
+  });
+
+  test("leaves the task snapshot absent when the backend supplied none", () => {
+    const normalized = normalizeClaudePart({
+      type: "tool-invocation",
+      toolName: "TaskCreate",
+      toolState: "success",
+      toolArgs: { subject: "No snapshot" },
+    });
+
+    expect(normalized?.taskSnapshot).toBeUndefined();
+  });
+
   test("normalizes arrays of Claude messages without changing their order", () => {
     const messages: ClaudeMessage[] = [
       {

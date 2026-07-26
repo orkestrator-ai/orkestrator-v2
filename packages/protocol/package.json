@@ -11,10 +11,13 @@
     "./review-prompt": "./src/review-prompt.ts",
     "./structured-review": "./src/structured-review.ts",
     "./structured-output": "./src/structured-output.ts",
+    "./task-list": "./src/task-list.ts",
     "./web-client": "./src/web-client.ts"
   },
   "scripts": {
     "build": "bunx tsc --noEmit -p tsconfig.json",
+    "test": "bun test src --parallel",
+    "test:workspace": "bun test src --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
     "typecheck": "bunx tsc --noEmit -p tsconfig.json"
   }
 }

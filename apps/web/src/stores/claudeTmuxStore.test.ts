@@ -141,6 +141,129 @@ describe("applyTranscriptLine", () => {
     expect(result!.toolOutput).toBe("ok\n");
   });
 
+  test("lands the backend's task snapshot on the tool invocation", () => {
+    // tmux mode does not derive the task list; the backend that reads the
+    // transcript stamps it on the result line, and it has to survive the merge
+    // onto the invocation, which is what TodoToolPart renders.
+    const useLine: TranscriptLine = {
+      type: "assistant",
+      uuid: "task-a1",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "task-tu1",
+            name: "TaskUpdate",
+            input: { taskId: "2", status: "in_progress" },
+          },
+        ],
+      },
+    };
+    const snapshot = {
+      items: [
+        { id: "1", subject: "First", status: "completed" as const },
+        { id: "2", subject: "Second", status: "in_progress" as const },
+      ],
+      complete: true,
+      changedTaskId: "2",
+    };
+    const resultLine: TranscriptLine = {
+      type: "user",
+      uuid: "task-result-uuid",
+      taskSnapshots: { "task-tu1": snapshot },
+      message: {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "task-tu1", content: "Updated task #2 status" },
+        ],
+      },
+    };
+
+    useClaudeTmuxStore.getState().applyTranscriptLine("e", useLine);
+    useClaudeTmuxStore.getState().applyTranscriptLine("e", resultLine);
+
+    const parts = useClaudeTmuxStore.getState().getTab("e").messages[0]!.parts;
+    const invocation = parts.find(
+      (p) => p.type === "tool-invocation" && p.toolUseId === "task-tu1",
+    );
+    expect(invocation?.taskSnapshot).toEqual(snapshot);
+  });
+
+  test("gives a co-located non-task result no task snapshot", () => {
+    // One user line can close several tools at once. Only the task tool's own
+    // result carries a list.
+    const useLine: TranscriptLine = {
+      type: "assistant",
+      uuid: "mixed-a1",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "mixed-task", name: "TaskCreate", input: { subject: "Task" } },
+          { type: "tool_use", id: "mixed-bash", name: "Bash", input: { cmd: "ls" } },
+        ],
+      },
+    };
+    const snapshot = {
+      items: [{ id: "1", subject: "Task", status: "pending" as const }],
+      complete: true,
+      changedTaskId: "1",
+    };
+    const resultLine: TranscriptLine = {
+      type: "user",
+      uuid: "mixed-result",
+      taskSnapshots: { "mixed-task": snapshot },
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "mixed-task",
+            content: "Task #1 created successfully: Task",
+          },
+          { type: "tool_result", tool_use_id: "mixed-bash", content: "file-a" },
+        ],
+      },
+    };
+
+    useClaudeTmuxStore.getState().applyTranscriptLine("e", useLine);
+    useClaudeTmuxStore.getState().applyTranscriptLine("e", resultLine);
+
+    const parts = useClaudeTmuxStore.getState().getTab("e").messages[0]!.parts;
+    const byId = (id: string) =>
+      parts.find((p) => p.type === "tool-invocation" && p.toolUseId === id);
+
+    expect(byId("mixed-task")?.taskSnapshot).toEqual(snapshot);
+    expect(byId("mixed-bash")?.taskSnapshot).toBeUndefined();
+  });
+
+  test("leaves the task snapshot absent on ordinary tool results", () => {
+    const useLine: TranscriptLine = {
+      type: "assistant",
+      uuid: "plain-a1",
+      message: {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "plain-tu1", name: "Bash", input: { cmd: "ls" } }],
+      },
+    };
+    const resultLine: TranscriptLine = {
+      type: "user",
+      uuid: "plain-result-uuid",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "plain-tu1", content: "ok" }],
+      },
+    };
+
+    useClaudeTmuxStore.getState().applyTranscriptLine("e", useLine);
+    useClaudeTmuxStore.getState().applyTranscriptLine("e", resultLine);
+
+    const parts = useClaudeTmuxStore.getState().getTab("e").messages[0]!.parts;
+    expect(
+      parts.find((p) => p.type === "tool-invocation")?.taskSnapshot,
+    ).toBeUndefined();
+  });
+
   test("ignores non-message line types", () => {
     useClaudeTmuxStore.getState().applyTranscriptLine("e", {
       type: "summary",

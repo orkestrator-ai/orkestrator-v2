@@ -13,8 +13,14 @@ import {
   type StructuredOutputResult,
   StructuredOutputReadUnavailableError,
 } from "@orkestrator/protocol/structured-output";
+import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 
 export type { ClaudeModelCatalogSnapshot };
+export type {
+  TaskListSnapshot,
+  TaskSnapshotItem,
+  TaskSnapshotStatus,
+} from "@orkestrator/protocol/task-list";
 
 /**
  * Session key used as the Map key in the Zustand store.
@@ -69,6 +75,14 @@ export interface ClaudeMessagePart {
   isMcpTool?: boolean;
   /** The MCP server name if this is an MCP tool */
   mcpServerName?: string;
+  /**
+   * State of the whole task list immediately after this tool call, for task
+   * tools. Always supplied by a backend that saw the call — the bridge in
+   * Native Mode, the tmux session's transcript reader in tmux mode — never
+   * derived here. Absent for TodoWrite, for output the registry could not
+   * parse, and for messages recorded before this was tracked.
+   */
+  taskSnapshot?: TaskListSnapshot;
 }
 
 /** MCP server info from the bridge server */

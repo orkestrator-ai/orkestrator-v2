@@ -4738,60 +4738,74 @@ Running 1 Explore agent...
     });
   });
 
-  test("renders repeated task tools as one current TaskList snapshot", async () => {
+  test("renders each task tool call with the task list the backend derived", async () => {
     const store = useClaudeTmuxStore.getState();
     store.setRunning("tab-1", true, {
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    store.applyTranscriptLine("tab-1", {
-      type: "assistant",
-      uuid: "task-create-1",
-      timestamp: "2026-01-01T00:00:01Z",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "task-create-1",
-            name: "TaskCreate",
-            input: { subject: "Inspect renderer" },
-          },
-        ],
+
+    // tmux mode derives nothing: the backend that reads the transcript replays
+    // the task tools and stamps the resulting list on each result line.
+    const applyCall = (
+      uuid: string,
+      timestamp: string,
+      toolUse: Record<string, unknown>,
+      result: string,
+      taskSnapshot: unknown,
+    ) => {
+      store.applyTranscriptLine("tab-1", {
+        type: "assistant",
+        uuid,
+        timestamp,
+        message: { role: "assistant", content: [toolUse] },
+      });
+      store.applyTranscriptLine("tab-1", {
+        type: "user",
+        uuid: `${uuid}-result`,
+        timestamp,
+        taskSnapshots: { [toolUse.id as string]: taskSnapshot },
+        message: {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: toolUse.id as string, content: result },
+          ],
+        },
+      } as Parameters<typeof store.applyTranscriptLine>[1]);
+    };
+
+    applyCall(
+      "task-create-1",
+      "2026-01-01T00:00:01Z",
+      {
+        type: "tool_use",
+        id: "task-create-1",
+        name: "TaskCreate",
+        input: { subject: "Inspect renderer" },
       },
-    });
-    store.applyTranscriptLine("tab-1", {
-      type: "assistant",
-      uuid: "task-create-2",
-      timestamp: "2026-01-01T00:00:02Z",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "task-create-2",
-            name: "TaskCreate",
-            input: { subject: "Add UI tests" },
-          },
-        ],
+      "Task #1 created successfully: Inspect renderer",
+      {
+        items: [{ id: "1", subject: "Inspect renderer", status: "pending" }],
+        complete: true,
+        changedTaskId: "1",
       },
-    });
-    store.applyTranscriptLine("tab-1", {
-      type: "assistant",
-      uuid: "task-update-1",
-      timestamp: "2026-01-01T00:00:03Z",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "task-update-1",
-            name: "TaskUpdate",
-            input: { taskId: "1", status: "completed" },
-          },
-        ],
+    );
+    applyCall(
+      "task-update-1",
+      "2026-01-01T00:00:02Z",
+      {
+        type: "tool_use",
+        id: "task-update-1",
+        name: "TaskUpdate",
+        input: { taskId: "1", status: "completed" },
       },
-    });
+      "Updated task #1 status",
+      {
+        items: [{ id: "1", subject: "Inspect renderer", status: "completed" }],
+        complete: true,
+        changedTaskId: "1",
+      },
+    );
 
     render(
       <ClaudeTmuxChatTab
@@ -4805,19 +4819,15 @@ Running 1 Explore agent...
     expect(renderedMessages).toHaveLength(1);
     expect(renderedMessages[0]!.parts[0]?.type).toBe("tool-group");
     if (renderedMessages[0]!.parts[0]?.type === "tool-group") {
-      expect(renderedMessages[0]!.parts[0].parts.map((part: ClaudeMessageType["parts"][number]) => part.toolName)).toEqual([
-        "TaskList",
-      ]);
-      expect(renderedMessages[0]!.parts[0].parts.map((part: ClaudeMessageType["parts"][number]) => part.toolArgs)).toEqual([
-        {
-          todos: [
-            { content: "Inspect renderer", status: "completed" },
-            { content: "Add UI tests", status: "pending" },
-          ],
-        },
+      const parts = renderedMessages[0]!.parts[0].parts as ClaudeMessageType["parts"];
+      // Both calls survive — nothing is collapsed away — and each carries the
+      // list as it stood at that point.
+      expect(parts.map((part) => part.toolName)).toEqual(["TaskCreate", "TaskUpdate"]);
+      expect(parts.at(-1)?.taskSnapshot?.items).toEqual([
+        { id: "1", subject: "Inspect renderer", status: "completed" },
       ]);
     }
-    expect(screen.getByText("Task List")).toBeTruthy();
+    expect(screen.getByText("Task Update")).toBeTruthy();
   });
 
   test("parses Claude Code in-TUI selection prompts from a tmux pane snapshot", () => {

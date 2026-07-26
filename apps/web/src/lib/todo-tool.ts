@@ -239,6 +239,11 @@ export function isTodoTool(toolName?: string): boolean {
   );
 }
 
+// Note: which task a call changed is *not* derived here. The backend that saw
+// the call resolves it and ships it on the snapshot (`changedTaskId`), so the
+// tools' plain-text output has exactly one parser — see
+// `@orkestrator/protocol/task-list`.
+
 export function getTodoToolLabel(toolName?: string): string {
   const normalized = normalizeToolName(toolName);
 

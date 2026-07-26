@@ -98,6 +98,7 @@ function toNativeToolInvocationPart(
     parentTaskUseId: part.parentTaskUseId,
     isMcpTool: part.isMcpTool,
     mcpServerName: part.mcpServerName,
+    taskSnapshot: part.taskSnapshot,
   };
 }
 

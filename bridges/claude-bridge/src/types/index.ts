@@ -4,12 +4,20 @@ import type {
   StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
 
+import type { TaskListSnapshot, TaskRegistry } from "@orkestrator/protocol/task-list";
+
 export type {
   JsonSchema,
   StructuredOutputFailure,
   StructuredOutputFailureCode,
   StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
+
+export type {
+  TaskListSnapshot,
+  TaskSnapshotItem,
+  TaskSnapshotStatus,
+} from "@orkestrator/protocol/task-list";
 
 // ============================================================================
 // Claude Agent SDK Message Types
@@ -103,6 +111,15 @@ export interface NormalizedPart {
   isMcpTool?: boolean;
   /** The MCP server name if this is an MCP tool */
   mcpServerName?: string;
+  /**
+   * State of the whole session task list immediately after this tool call, for
+   * task tools (TaskCreate/TaskUpdate/TaskGet/TaskList). Those tools each act on
+   * a single task, so their own args and output describe only that task; this is
+   * what lets the renderer show the resulting list. Absent when the call's
+   * output could not be parsed, which tells the renderer to show the raw call
+   * rather than a list it cannot vouch for.
+   */
+  taskSnapshot?: TaskListSnapshot;
 }
 
 /** Normalized message format */
@@ -134,6 +151,12 @@ export interface SessionState {
   structuredOutput?: StructuredOutputResult;
   /** Request id of the structured turn currently running or last completed. */
   structuredOutputRequestId?: string;
+  /**
+   * Session task list state, replayed from Task tool calls. Lives on the session
+   * rather than the turn because the task list outlives an individual turn, and
+   * is the authoritative copy `GET /session/:id/tasks` serves.
+   */
+  taskRegistry?: TaskRegistry;
 }
 
 /** Effort level for controlling how much thinking/reasoning Claude applies */

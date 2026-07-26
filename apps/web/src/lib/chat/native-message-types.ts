@@ -6,6 +6,8 @@
  * not on Claude/OpenCode/Codex SDK payloads.
  */
 
+import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
+
 export interface NativeToolDiffMetadata {
   filePath?: string;
   additions?: number;
@@ -16,6 +18,16 @@ export interface NativeToolDiffMetadata {
 }
 
 export type NativeToolState = "success" | "failure" | "pending";
+
+/**
+ * A point-in-time view of the agent's task list.
+ *
+ * Providers whose task tools mutate a single task per call (Claude's
+ * TaskCreate/TaskUpdate) have their backend replay those calls and supply the
+ * resulting list here, so the renderer never reconstructs it — see
+ * `@orkestrator/protocol/task-list`, the one implementation.
+ */
+export type { TaskListSnapshot, TaskSnapshotItem } from "@orkestrator/protocol/task-list";
 
 export interface NativeBasePart {
   content: string;
@@ -38,6 +50,8 @@ export interface NativeBasePart {
   parentTaskUseId?: string;
   isMcpTool?: boolean;
   mcpServerName?: string;
+  /** Task list state immediately after this tool call, for task tools. */
+  taskSnapshot?: TaskListSnapshot;
   subagentId?: string;
   subagentName?: string;
   subagentRole?: string;

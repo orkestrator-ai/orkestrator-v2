@@ -5,6 +5,10 @@ import { createHash, randomUUID } from "node:crypto";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { parseStoredDesktopConnections } from "@orkestrator/protocol/connections";
 import {
+  reviewArtifactDirectory,
+  reviewValidationArtifactPaths,
+} from "@orkestrator/protocol/review-artifacts";
+import {
   PANE_LAYOUT_VERSION,
   type Environment,
   type AppConfig,
@@ -887,6 +891,24 @@ function parseReviewRound(value: unknown): number {
   return value as number;
 }
 
+/**
+ * Anchors a validation artifact path to the round's artifact directory. Agents
+ * routinely return the bare filename they were told to write inside that
+ * directory; both forms name the same file, and the caller still enforces the
+ * deterministic name, so anchoring here avoids failing a whole round over the
+ * spelling of a path the backend already knows.
+ */
+function resolveValidationArtifactPath(
+  value: string,
+  artifactDirectory: string,
+  label: string,
+): string {
+  const relativePath = validateWorkspaceMutationPath(value, label);
+  return relativePath.includes("/")
+    ? relativePath
+    : `${artifactDirectory}/${relativePath}`;
+}
+
 function parseReviewPreparationValidation(
   value: unknown,
   packageId: string,
@@ -969,20 +991,27 @@ function parseReviewPreparationValidation(
     ) {
       throw new Error(`Validation[${index}] status does not match its exit code`);
     }
-    const ordinal = String(index + 1).padStart(2, "0");
-    const artifactDirectory = `.orkestrator/review-artifacts/${packageId}`;
-    const expectedStdoutPath = `${artifactDirectory}/validation-${ordinal}.stdout.txt`;
-    const expectedStderrPath = `${artifactDirectory}/validation-${ordinal}.stderr.txt`;
-    const stdoutPath = validateWorkspaceMutationPath(
+    const artifactDirectory = reviewArtifactDirectory(packageId);
+    const {
+      stdoutPath: expectedStdoutPath,
+      stderrPath: expectedStderrPath,
+    } = reviewValidationArtifactPaths(packageId, index);
+    const stdoutPath = resolveValidationArtifactPath(
       asString(entry.stdoutPath, `validation[${index}].stdoutPath`),
+      artifactDirectory,
       `validation[${index}].stdoutPath`,
     );
-    const stderrPath = validateWorkspaceMutationPath(
+    const stderrPath = resolveValidationArtifactPath(
       asString(entry.stderrPath, `validation[${index}].stderrPath`),
+      artifactDirectory,
       `validation[${index}].stderrPath`,
     );
     if (stdoutPath !== expectedStdoutPath || stderrPath !== expectedStderrPath) {
-      throw new Error(`Validation[${index}] artifact paths are not deterministic`);
+      throw new Error(
+        `Validation[${index}] artifact paths are not deterministic: expected `
+        + `${expectedStdoutPath} and ${expectedStderrPath}, received `
+        + `${stdoutPath} and ${stderrPath}`,
+      );
     }
     return {
       command,
@@ -1051,6 +1080,19 @@ function parseGitNameStatus(output: string): Array<{ path: string; status: strin
   return changes;
 }
 
+/**
+ * A validation artifact the preparation agent never wrote is a preparation
+ * failure, not an unexplained filesystem error. Resolving the path is the first
+ * thing that touches the disk, so it is where the distinction has to be made;
+ * every other guard below already reports itself in review terms.
+ */
+function reviewArtifactMissingError(relativePath: string, cause: unknown): Error {
+  return new Error(
+    `Review artifact was not written by preparation: ${relativePath}`,
+    { cause },
+  );
+}
+
 async function readEnvironmentWorkspaceFile(
   environment: Environment,
   runner: EnvironmentCommandRunner,
@@ -1060,7 +1102,12 @@ async function readEnvironmentWorkspaceFile(
     const worktreePath = environment.worktreePath!;
     const [root, resolved] = await Promise.all([
       fs.realpath(worktreePath),
-      fs.realpath(path.join(worktreePath, relativePath)),
+      fs.realpath(path.join(worktreePath, relativePath)).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          throw reviewArtifactMissingError(relativePath, error);
+        }
+        throw error;
+      }),
     ]);
     const relative = path.relative(root, resolved);
     if (
@@ -1081,7 +1128,16 @@ async function readEnvironmentWorkspaceFile(
   }
 
   const workspacePath = workspaceFilePath(relativePath);
-  const resolved = (await runner("realpath", ["--", workspacePath], 10_000)).trim();
+  // realpath in the container fails the same way for a missing artifact and for
+  // a broken runner, so this stays deliberately non-committal about which it
+  // was; the original failure is kept as the cause either way.
+  const resolved = (await runner("realpath", ["--", workspacePath], 10_000)
+    .catch((error) => {
+      throw new Error(
+        `Review artifact could not be read from the environment workspace: ${relativePath}`,
+        { cause: error },
+      );
+    })).trim();
   if (resolved !== workspacePath) {
     throw new Error(`Review artifact must not traverse symbolic links: ${relativePath}`);
   }
@@ -1294,7 +1350,7 @@ async function generateLoopedReviewPackage(
     throw new Error("Git returned an incomplete or ambiguous review diff");
   }
 
-  const artifactDirectory = `.orkestrator/review-artifacts/${packageId}`;
+  const artifactDirectory = reviewArtifactDirectory(packageId);
   const actualUncommittedPaths = parseGitPorcelainPaths(worktreeStatus)
     .filter((filePath) =>
       filePath !== artifactDirectory

@@ -145,6 +145,70 @@ function createEnvironment(overrides: Partial<Environment> = {}): Environment {
   };
 }
 
+/**
+ * A local worktree sitting one commit ahead of `origin/main`, with the round's
+ * Git-excluded artifact directory created but empty. Each caller writes only the
+ * validation evidence its own scenario needs.
+ */
+async function createReviewPackageWorktree(options: {
+  packageId: string;
+  extraCommittedFiles?: Record<string, Buffer>;
+}): Promise<{
+  worktreePath: string;
+  artifactDirectory: string;
+  baseRef: string;
+  headRef: string;
+  content: string;
+}> {
+  const worktreePath = await createTempDir("ork-electron-generate-package-");
+  await execFileAsync("git", ["init", worktreePath]);
+  await execFileAsync("git", ["-C", worktreePath, "config", "user.email", "test@example.invalid"]);
+  await execFileAsync("git", ["-C", worktreePath, "config", "user.name", "Test"]);
+  await fs.writeFile(path.join(worktreePath, "review.txt"), "before\n");
+  await execFileAsync("git", ["-C", worktreePath, "add", "review.txt"]);
+  await execFileAsync("git", ["-C", worktreePath, "commit", "-m", "base"]);
+  await execFileAsync("git", ["-C", worktreePath, "branch", "-M", "main"]);
+  const { stdout: baseOutput } = await execFileAsync(
+    "git",
+    ["-C", worktreePath, "rev-parse", "HEAD"],
+  );
+  const baseRef = baseOutput.trim();
+  await execFileAsync(
+    "git",
+    ["-C", worktreePath, "update-ref", "refs/remotes/origin/main", baseRef],
+  );
+  await execFileAsync("git", ["-C", worktreePath, "checkout", "-b", "feature/local"]);
+  const content = "after\n";
+  await fs.writeFile(path.join(worktreePath, "review.txt"), content);
+  const extraNames = Object.keys(options.extraCommittedFiles ?? {});
+  for (const name of extraNames) {
+    await fs.writeFile(path.join(worktreePath, name), options.extraCommittedFiles![name]);
+  }
+  await execFileAsync(
+    "git",
+    ["-C", worktreePath, "add", "review.txt", ...extraNames],
+  );
+  await execFileAsync("git", ["-C", worktreePath, "commit", "-m", "change"]);
+  const { stdout: headOutput } = await execFileAsync(
+    "git",
+    ["-C", worktreePath, "rev-parse", "HEAD"],
+  );
+  const artifactDirectory = path.join(
+    worktreePath,
+    ".orkestrator",
+    "review-artifacts",
+    options.packageId,
+  );
+  await fs.mkdir(artifactDirectory, { recursive: true });
+  return {
+    worktreePath,
+    artifactDirectory,
+    baseRef,
+    headRef: headOutput.trim(),
+    content,
+  };
+}
+
 async function withFixedDate<T>(iso: string, fn: () => Promise<T> | T): Promise<T> {
   const RealDate = Date;
   const fixedTime = new RealDate(iso).getTime();
@@ -4132,47 +4196,12 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
   });
 
   test("deterministically generates refs, diff, Git-object contents, hashes, and validation evidence", async () => {
-    const worktreePath = await createTempDir("ork-electron-generate-package-");
-    await execFileAsync("git", ["init", worktreePath]);
-    await execFileAsync("git", ["-C", worktreePath, "config", "user.email", "test@example.invalid"]);
-    await execFileAsync("git", ["-C", worktreePath, "config", "user.name", "Test"]);
-    await fs.writeFile(path.join(worktreePath, "review.txt"), "before\n");
-    await execFileAsync("git", ["-C", worktreePath, "add", "review.txt"]);
-    await execFileAsync("git", ["-C", worktreePath, "commit", "-m", "base"]);
-    await execFileAsync("git", ["-C", worktreePath, "branch", "-M", "main"]);
-    const { stdout: baseOutput } = await execFileAsync(
-      "git",
-      ["-C", worktreePath, "rev-parse", "HEAD"],
-    );
-    const baseRef = baseOutput.trim();
-    await execFileAsync(
-      "git",
-      ["-C", worktreePath, "update-ref", "refs/remotes/origin/main", baseRef],
-    );
-    await execFileAsync("git", ["-C", worktreePath, "checkout", "-b", "feature/local"]);
-    const content = "after\n";
-    await fs.writeFile(path.join(worktreePath, "review.txt"), content);
-    await fs.writeFile(
-      path.join(worktreePath, "binary.dat"),
-      Buffer.from([0, 1, 2, 255]),
-    );
-    await execFileAsync(
-      "git",
-      ["-C", worktreePath, "add", "review.txt", "binary.dat"],
-    );
-    await execFileAsync("git", ["-C", worktreePath, "commit", "-m", "change"]);
-    const { stdout: headOutput } = await execFileAsync(
-      "git",
-      ["-C", worktreePath, "rev-parse", "HEAD"],
-    );
     const packageId = "package-1";
-    const artifactDirectory = path.join(
-      worktreePath,
-      ".orkestrator",
-      "review-artifacts",
-      packageId,
-    );
-    await fs.mkdir(artifactDirectory, { recursive: true });
+    const { worktreePath, artifactDirectory, baseRef, headRef, content } =
+      await createReviewPackageWorktree({
+        packageId,
+        extraCommittedFiles: { "binary.dat": Buffer.from([0, 1, 2, 255]) },
+      });
     await fs.writeFile(
       path.join(artifactDirectory, "validation-01.stdout.txt"),
       "TOKEN=visible-for-review\nall tests passed\n",
@@ -4229,9 +4258,9 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       round: 2,
       targetBranch: "main",
       baseRef,
-      headRef: headOutput.trim(),
+      headRef,
       commit: {
-        sha: headOutput.trim(),
+        sha: headRef,
         subject: "change",
         committedFiles: ["binary.dat", "review.txt"],
       },
@@ -4299,6 +4328,356 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         }],
       },
     }, context)).rejects.toThrow("parent directory traversal");
+
+    // Agents commonly return the filename relative to the artifact directory
+    // they were told to write into. Every spelling below names the same evidence
+    // file, so all of them must produce the identical package.
+    for (const [stdoutPath, stderrPath] of [
+      ["validation-01.stdout.txt", "validation-01.stderr.txt"],
+      ["./validation-01.stdout.txt", "./validation-01.stderr.txt"],
+      [
+        `.orkestrator\\review-artifacts\\${packageId}\\validation-01.stdout.txt`,
+        `.orkestrator\\review-artifacts\\${packageId}\\validation-01.stderr.txt`,
+      ],
+      [
+        `.orkestrator/review-artifacts/${packageId}/./validation-01.stdout.txt`,
+        `.orkestrator/review-artifacts/${packageId}/./validation-01.stderr.txt`,
+      ],
+      // Only one of the pair needs rewriting for the package to stay identical.
+      [
+        "validation-01.stdout.txt",
+        `.orkestrator/review-artifacts/${packageId}/validation-01.stderr.txt`,
+      ],
+    ]) {
+      expect(await command({
+        ...args,
+        preparation: {
+          ...args.preparation,
+          validation: [{
+            ...args.preparation.validation[0],
+            stdoutPath,
+            stderrPath,
+          }],
+        },
+      }, context)).toEqual(first);
+    }
+
+    // Anchoring a bare filename must not widen which file the backend reads: the
+    // resolved path is still compared against the one the backend computed.
+    for (const stdoutPath of [
+      "validation-02.stdout.txt",
+      "validation-1.stdout.txt",
+      "validation-01.stdout.text",
+      ".orkestrator/review-artifacts/other-package/validation-01.stdout.txt",
+      `.orkestrator/review-artifacts/${packageId}/nested/validation-01.stdout.txt`,
+    ]) {
+      await expect(command({
+        ...args,
+        preparation: {
+          ...args.preparation,
+          validation: [{ ...args.preparation.validation[0], stdoutPath }],
+        },
+      }, context)).rejects.toThrow("artifact paths are not deterministic");
+    }
+
+    // The rejection has to say what was expected, or a retrying agent has no way
+    // to correct the path it sent.
+    await expect(command({
+      ...args,
+      preparation: {
+        ...args.preparation,
+        validation: [{
+          ...args.preparation.validation[0],
+          stdoutPath: "validation-02.stdout.txt",
+        }],
+      },
+    }, context)).rejects.toThrow(
+      `expected .orkestrator/review-artifacts/${packageId}/validation-01.stdout.txt`,
+    );
+
+    for (const stdoutPath of [
+      "/etc/passwd",
+      ".git/config",
+      "",
+    ]) {
+      await expect(command({
+        ...args,
+        preparation: {
+          ...args.preparation,
+          validation: [{ ...args.preparation.validation[0], stdoutPath }],
+        },
+      }, context)).rejects.toThrow(/Invalid validation\[0\]\.stdoutPath/);
+    }
+  });
+
+  test("hydrates validation evidence by array position, counting skipped commands", async () => {
+    const packageId = "package-ordinals";
+    const { worktreePath, artifactDirectory } = await createReviewPackageWorktree({
+      packageId,
+    });
+    // Entry 1 is skipped and writes nothing, so the commands that did run own
+    // ordinals 02 and 03 rather than 01 and 02.
+    await fs.writeFile(
+      path.join(artifactDirectory, "validation-02.stdout.txt"),
+      "all tests passed\n",
+    );
+    await fs.writeFile(
+      path.join(artifactDirectory, "validation-02.stderr.txt"),
+      "",
+    );
+    await fs.writeFile(
+      path.join(artifactDirectory, "validation-03.stdout.txt"),
+      "build output\n",
+    );
+    await fs.writeFile(
+      path.join(artifactDirectory, "validation-03.stderr.txt"),
+      "error TS2345: build failed\n",
+    );
+    const environment = createEnvironment({
+      worktreePath,
+      branch: "feature/local",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const command = commands.get("generate_looped_review_package")!;
+    const skipped = {
+      command: "bun run --cwd apps/ios typecheck",
+      status: "skipped",
+      exitCode: null,
+      stdoutPath: null,
+      stderrPath: null,
+      durationMs: 0,
+      limitation: "Xcode is unavailable in this environment.",
+    };
+    const passed = {
+      command: "bun test tests --parallel",
+      status: "passed",
+      exitCode: 0,
+      stdoutPath: `.orkestrator/review-artifacts/${packageId}/validation-02.stdout.txt`,
+      stderrPath: `.orkestrator/review-artifacts/${packageId}/validation-02.stderr.txt`,
+      durationMs: 4200,
+      limitation: null,
+    };
+    const failed = {
+      command: "bun run build",
+      status: "failed",
+      exitCode: 2,
+      // Bare filenames resolve against the artifact directory at their own
+      // ordinal, not against the first entry's.
+      stdoutPath: "validation-03.stdout.txt",
+      stderrPath: "validation-03.stderr.txt",
+      durationMs: 900,
+      limitation: "Build ran against a stale cache.",
+    };
+    const args = {
+      environmentId: environment.id,
+      packageId,
+      round: 1,
+      targetBranch: "main",
+      preparation: {
+        validation: [skipped, passed, failed],
+        uncommittedFiles: [],
+        limitations: [],
+      },
+    };
+
+    const generated = await command(args, context) as Record<string, unknown>;
+    expect(generated.validation).toEqual([
+      {
+        command: "bun run --cwd apps/ios typecheck",
+        status: "skipped",
+        exitCode: null,
+        stdout: "",
+        stderr: "",
+        durationMs: 0,
+        limitation: "Xcode is unavailable in this environment.",
+      },
+      {
+        command: "bun test tests --parallel",
+        status: "passed",
+        exitCode: 0,
+        stdout: "all tests passed\n",
+        stderr: "",
+        durationMs: 4200,
+        limitation: null,
+      },
+      {
+        command: "bun run build",
+        status: "failed",
+        exitCode: 2,
+        stdout: "build output\n",
+        stderr: "error TS2345: build failed\n",
+        durationMs: 900,
+        limitation: "Build ran against a stale cache.",
+      },
+    ]);
+
+    // Dropping the skipped entry shifts every later entry's ordinal. Numbering
+    // by execution order instead of array position would accept this.
+    await expect(command({
+      ...args,
+      preparation: { ...args.preparation, validation: [passed, failed] },
+    }, context)).rejects.toThrow(
+      `expected .orkestrator/review-artifacts/${packageId}/validation-01.stdout.txt`,
+    );
+  });
+
+  test("reports a validation artifact the preparation agent never wrote", async () => {
+    const packageId = "package-missing";
+    const { worktreePath, artifactDirectory } = await createReviewPackageWorktree({
+      packageId,
+    });
+    await fs.writeFile(
+      path.join(artifactDirectory, "validation-01.stdout.txt"),
+      "all tests passed\n",
+    );
+    const environment = createEnvironment({
+      worktreePath,
+      branch: "feature/local",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const command = commands.get("generate_looped_review_package")!;
+    const args = {
+      environmentId: environment.id,
+      packageId,
+      round: 1,
+      targetBranch: "main",
+      preparation: {
+        validation: [{
+          command: "bun test tests --parallel",
+          status: "passed",
+          exitCode: 0,
+          stdoutPath: `.orkestrator/review-artifacts/${packageId}/validation-01.stdout.txt`,
+          stderrPath: `.orkestrator/review-artifacts/${packageId}/validation-01.stderr.txt`,
+          durationMs: 123,
+          limitation: null,
+        }],
+        uncommittedFiles: [],
+        limitations: [],
+      },
+    };
+
+    // The stderr artifact is missing. Accepting a bare filename means a path can
+    // now pass validation and still not exist, so the read has to say so in
+    // review terms rather than surfacing a bare ENOENT.
+    await expect(command(args, context)).rejects.toThrow(
+      `Review artifact was not written by preparation: `
+      + `.orkestrator/review-artifacts/${packageId}/validation-01.stderr.txt`,
+    );
+
+    const stderrArtifact = path.join(artifactDirectory, "validation-01.stderr.txt");
+    await fs.mkdir(stderrArtifact);
+    await expect(command(args, context)).rejects.toThrow(
+      "Review artifact is not a regular file",
+    );
+    await fs.rmdir(stderrArtifact);
+
+    const outsideDirectory = await createTempDir("ork-electron-outside-artifact-");
+    const outsideFile = path.join(outsideDirectory, "stderr.txt");
+    await fs.writeFile(outsideFile, "escaped\n");
+    await fs.symlink(outsideFile, stderrArtifact);
+    await expect(command(args, context)).rejects.toThrow(
+      "Review artifact escapes the environment worktree",
+    );
+    await fs.unlink(stderrArtifact);
+
+    // Kept inside the artifact directory so it stays out of the uncommitted-file
+    // reconciliation this test is not exercising.
+    const insideFile = path.join(artifactDirectory, "real-stderr.txt");
+    await fs.writeFile(insideFile, "inside\n");
+    await fs.symlink(insideFile, stderrArtifact);
+    await expect(command(args, context)).rejects.toThrow(
+      "Review artifact must not traverse symbolic links",
+    );
+  });
+
+  test("rejects preparation validation metadata that breaks the evidence contract", async () => {
+    const environment = createEnvironment({
+      worktreePath: "/tmp/worktree-unused",
+      branch: "feature/local",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const command = commands.get("generate_looped_review_package")!;
+    const packageId = "package-contract";
+    const ran = {
+      command: "bun test tests --parallel",
+      status: "passed",
+      exitCode: 0,
+      stdoutPath: `.orkestrator/review-artifacts/${packageId}/validation-01.stdout.txt`,
+      stderrPath: `.orkestrator/review-artifacts/${packageId}/validation-01.stderr.txt`,
+      durationMs: 123,
+      limitation: null,
+    };
+    const skipped = {
+      command: "bun run --cwd apps/ios typecheck",
+      status: "skipped",
+      exitCode: null,
+      stdoutPath: null,
+      stderrPath: null,
+      durationMs: 0,
+      limitation: "Xcode is unavailable in this environment.",
+    };
+    // Every case below is rejected while parsing the arguments, before any Git
+    // command runs, so the worktree above is never touched.
+    const call = (validation: unknown) => command({
+      environmentId: environment.id,
+      packageId,
+      round: 1,
+      targetBranch: "main",
+      preparation: { validation, uncommittedFiles: [], limitations: [] },
+    }, context);
+
+    await expect(call({})).rejects.toThrow("Expected validation to be an array");
+    await expect(call([null])).rejects.toThrow("Expected validation[0] to be an object");
+    await expect(call([{ ...ran, extra: 1 }])).rejects.toThrow(
+      "Unexpected validation[0] field: extra",
+    );
+    await expect(call([{ ...ran, command: "   " }])).rejects.toThrow(
+      "Expected validation[0].command to be non-empty",
+    );
+    await expect(call([{ ...ran, status: "errored" }])).rejects.toThrow(
+      "Invalid validation[0].status",
+    );
+    for (const durationMs of [-1, 1.5, "123", null]) {
+      await expect(call([{ ...ran, durationMs }])).rejects.toThrow(
+        "Expected validation[0].durationMs to be a non-negative integer",
+      );
+    }
+    for (const limitation of ["", "   ", 7]) {
+      await expect(call([{ ...ran, limitation }])).rejects.toThrow(
+        "Expected validation[0].limitation to be a non-empty string or null",
+      );
+    }
+    for (const override of [
+      { exitCode: 0 },
+      { stdoutPath: ran.stdoutPath },
+      { stderrPath: ran.stderrPath },
+      { limitation: null },
+    ]) {
+      await expect(call([{ ...skipped, ...override }])).rejects.toThrow(
+        "Skipped validation[0] has incompatible evidence metadata",
+      );
+    }
+    for (const exitCode of [null, "0", 1.5]) {
+      await expect(call([{ ...ran, exitCode }])).rejects.toThrow(
+        "Expected validation[0].exitCode to be an integer",
+      );
+    }
+    await expect(call([{ ...ran, exitCode: 1 }])).rejects.toThrow(
+      "Validation[0] status does not match its exit code",
+    );
+    await expect(call([{ ...ran, status: "failed", exitCode: 0 }])).rejects.toThrow(
+      "Validation[0] status does not match its exit code",
+    );
+    await expect(call([{ ...ran, stderrPath: null }])).rejects.toThrow(
+      "Expected validation[0].stderrPath to be a string",
+    );
+    // The index in the message is the entry's own position, not the first one's.
+    await expect(call([skipped, { ...ran, exitCode: 1 }])).rejects.toThrow(
+      "Validation[1] status does not match its exit code",
+    );
   });
 
   test("deletes the remote head branch during merged local environment cleanup", async () => {

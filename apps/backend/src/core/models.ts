@@ -88,6 +88,8 @@ export interface Environment {
   opencodeMode?: OpenCodeMode;
   codexMode?: CodexMode;
   setupScriptsComplete?: boolean;
+  /** Durable intent to open the configured agent once setup is ready. */
+  pendingAgentLaunch?: boolean;
   initialPrompt?: string;
   /** Prompt awaiting a backend-owned rename after the environment starts. */
   pendingRenamePrompt?: string;

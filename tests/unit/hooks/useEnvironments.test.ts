@@ -3,6 +3,7 @@ import { renderHook, act, waitFor } from "@testing-library/react";
 import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import { useBuildPipelineStore } from "../../../apps/web/src/stores/buildPipelineStore";
 import { useEnvironmentStore } from "../../../apps/web/src/stores/environmentStore";
+import { useClaudeOptionsStore } from "../../../apps/web/src/stores/claudeOptionsStore";
 import { useLoopedReviewStore } from "../../../apps/web/src/stores/loopedReviewStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, StartEnvironmentResult } from "../../../apps/web/src/types";
@@ -22,6 +23,7 @@ function createDeferred<T>() {
 const mockGetEnvironments = mock<(projectId: string) => Promise<Environment[]>>(() => Promise.resolve([]));
 const mockGetEnvironmentSnapshots = mock<(projectId: string) => Promise<Environment[]>>(() => Promise.resolve([]));
 const mockGetEnvironment = mock<(environmentId: string) => Promise<Environment | null>>(() => Promise.resolve(null));
+const mockGetEnvironmentSetupSession = mock(() => Promise.resolve(null));
 const mockCreateEnvironment = mock<(
   projectId: string,
   name?: string,
@@ -52,6 +54,7 @@ mock.module("@/lib/backend", () => ({
   getEnvironments: mockGetEnvironments,
   getEnvironmentSnapshots: mockGetEnvironmentSnapshots,
   getEnvironment: mockGetEnvironment,
+  getEnvironmentSetupSession: mockGetEnvironmentSetupSession,
   createEnvironment: mockCreateEnvironment,
   deleteEnvironment: mockDeleteEnvironment,
   startEnvironment: mockStartEnvironment,
@@ -67,7 +70,10 @@ import { listen } from "@/lib/native/events";
 const mockListen = listen as ReturnType<typeof mock>;
 
 // Import hook AFTER mocking
-import { useEnvironments } from "../../../apps/web/src/hooks/useEnvironments";
+import {
+  reconcileEnvironmentSetupSnapshots,
+  useEnvironments,
+} from "../../../apps/web/src/hooks/useEnvironments";
 
 describe("useEnvironments", () => {
   beforeEach(() => {
@@ -89,6 +95,7 @@ describe("useEnvironments", () => {
       buildEnvironmentIds: new Set(),
     });
     useLoopedReviewStore.setState({ workflows: new Map() });
+    useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
     useConfigStore.setState({
       config: {
         version: "1.0",
@@ -106,6 +113,7 @@ describe("useEnvironments", () => {
     mockGetEnvironments.mockClear();
     mockGetEnvironmentSnapshots.mockClear();
     mockGetEnvironment.mockClear();
+    mockGetEnvironmentSetupSession.mockClear();
     mockCreateEnvironment.mockClear();
     mockDeleteEnvironment.mockClear();
     mockStartEnvironment.mockClear();
@@ -120,6 +128,7 @@ describe("useEnvironments", () => {
     mockGetEnvironments.mockImplementation(() => Promise.resolve([]));
     mockGetEnvironmentSnapshots.mockImplementation(() => Promise.resolve([]));
     mockGetEnvironment.mockImplementation(() => Promise.resolve(null));
+    mockGetEnvironmentSetupSession.mockImplementation(() => Promise.resolve(null));
     mockCreateEnvironment.mockImplementation((projectId) =>
       Promise.resolve(createMockEnvironment({ id: "new-env-id", projectId, name: "test-env" }))
     );
@@ -1234,6 +1243,35 @@ describe("useEnvironments", () => {
     expect(state.isWorkspaceReady("env-1")).toBe(true);
   });
 
+  test("reconciles a missed setup-completion event from the backend snapshot", async () => {
+    const environment = createMockEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      status: "running",
+      setupScriptsComplete: false,
+      pendingAgentLaunch: true,
+    });
+    useEnvironmentStore.setState({
+      environments: [environment],
+      setupCommandsResolved: new Set(["env-1"]),
+      setupScriptsRunning: new Set(["env-1"]),
+      workspaceReadyEnvironments: new Set(),
+    });
+    mockGetEnvironment.mockResolvedValue({
+      ...environment,
+      setupScriptsComplete: true,
+    });
+
+    await reconcileEnvironmentSetupSnapshots();
+
+    const state = useEnvironmentStore.getState();
+    expect(mockGetEnvironment).toHaveBeenCalledWith("env-1");
+    expect(state.getEnvironmentById("env-1")?.setupScriptsComplete).toBe(true);
+    expect(state.isSetupScriptsRunning("env-1")).toBe(false);
+    expect(state.isWorkspaceReady("env-1")).toBe(true);
+    expect(mockGetEnvironmentSetupSession).not.toHaveBeenCalled();
+  });
+
   test("does not mark the workspace ready after a failed setup completion event", async () => {
     const environment = createMockEnvironment({ id: "env-1", projectId: "project-1" });
     useEnvironmentStore.setState({ environments: [environment] });
@@ -1268,25 +1306,32 @@ describe("useEnvironments", () => {
 
   test("disposes listeners that finish registering after unmount", async () => {
     const resolvers: Array<(unlisten: () => void) => void> = [];
-    const unlisteners = [mock(() => {}), mock(() => {}), mock(() => {})];
+    const unlisteners = [
+      mock(() => {}),
+      mock(() => {}),
+      mock(() => {}),
+      mock(() => {}),
+    ];
     mockListen.mockImplementation(() => new Promise((resolve) => {
       resolvers.push(resolve);
     }));
     const { unmount } = renderHook(() => useEnvironments(null));
-    await waitFor(() => expect(resolvers).toHaveLength(2));
+    await waitFor(() => expect(resolvers).toHaveLength(3));
 
     unmount();
     await act(async () => {
       resolvers[0]?.(unlisteners[0]!);
       resolvers[1]?.(unlisteners[1]!);
-      await Promise.resolve();
       resolvers[2]?.(unlisteners[2]!);
+      await Promise.resolve();
+      resolvers[3]?.(unlisteners[3]!);
       await Promise.resolve();
     });
 
     expect(unlisteners[0]).toHaveBeenCalledTimes(1);
     expect(unlisteners[1]).toHaveBeenCalledTimes(1);
     expect(unlisteners[2]).toHaveBeenCalledTimes(1);
+    expect(unlisteners[3]).toHaveBeenCalledTimes(1);
   });
 
   // --- environment-renamed event listener tests ---

@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { createBrowserGatewayApi, installBrowserGatewayApi } from "./web-gateway";
+import {
+  createBrowserGatewayApi,
+  installBrowserGatewayApi,
+  WEB_GATEWAY_CONNECTED_EVENT,
+} from "./web-gateway";
 import {
   clearDirectGatewayTransport,
   configureDirectGatewayTransport,
@@ -268,6 +272,23 @@ describe("web gateway browser API", () => {
     }
   });
 
+  test("notifies listeners when a direct gateway stream reconnects", async () => {
+    globalThis.fetch = mock(async () =>
+      new Response(new ReadableStream({ start() {} }), { status: 200 })
+    ) as unknown as typeof fetch;
+    const api = createBrowserGatewayApi({
+      baseUrl: "https://workstation.tailnet.ts.net",
+      token: "direct-token-123456",
+    });
+
+    await new Promise<void>((resolve) => {
+      const unsubscribe = api.listen(WEB_GATEWAY_CONNECTED_EVENT, () => {
+        unsubscribe();
+        resolve();
+      });
+    });
+  });
+
   test("throws gateway invoke errors from non-ok responses", async () => {
     globalThis.fetch = mock(async () =>
       new Response(JSON.stringify({ error: "not allowed" }), { status: 403 })
@@ -377,6 +398,14 @@ describe("web gateway browser API", () => {
     expect(source.url).toBe("/__orkestrator/events");
     expect(source.options).toEqual({ withCredentials: true });
 
+    const connectedCallback = mock(() => undefined);
+    const unsubscribeConnected = api.listen(
+      WEB_GATEWAY_CONNECTED_EVENT,
+      connectedCallback,
+    );
+    source.onopen?.({} as Event);
+    expect(connectedCallback).toHaveBeenCalledTimes(1);
+
     source.onmessage?.({
       data: JSON.stringify({ event: "other", payload: "out" }),
     } as MessageEvent);
@@ -398,6 +427,7 @@ describe("web gateway browser API", () => {
       console.warn = originalWarn;
     }
 
+    unsubscribeConnected();
     unsubscribe();
 
     expect(source.closed).toBe(true);

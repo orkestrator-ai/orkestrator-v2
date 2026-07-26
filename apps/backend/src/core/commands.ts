@@ -4341,8 +4341,23 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
   register("update_port_mappings", ({ environmentId, portMappings }, { storage }) =>
     storage.updateEnvironment(asString(environmentId, "environmentId"), { portMappings: asPortMappings(portMappings) ?? [] }),
   );
-  register("update_environment_agent_settings", ({ environmentId, defaultAgent, claudeMode, claudeNativeBackend, opencodeMode, codexMode }, { storage }) =>
-    storage.updateEnvironment(asString(environmentId, "environmentId"), { defaultAgent, claudeMode, claudeNativeBackend, opencodeMode, codexMode }),
+  register("update_environment_agent_settings", ({ environmentId, defaultAgent, claudeMode, claudeNativeBackend, opencodeMode, codexMode, pendingAgentLaunch }, { storage }) => {
+    const updates = {
+      defaultAgent,
+      claudeMode,
+      claudeNativeBackend,
+      opencodeMode,
+      codexMode,
+    } as Partial<Environment>;
+    if (typeof pendingAgentLaunch === "boolean") {
+      updates.pendingAgentLaunch = pendingAgentLaunch;
+    }
+    return storage.updateEnvironment(asString(environmentId, "environmentId"), updates);
+  });
+  register("set_environment_pending_agent_launch", ({ environmentId, pending }, { storage }) =>
+    storage.updateEnvironment(asString(environmentId, "environmentId"), {
+      pendingAgentLaunch: asBoolean(pending),
+    }),
   );
   register("get_environment_extensions", async ({ environmentId, refresh }, context) => {
     const id = asString(environmentId, "environmentId");

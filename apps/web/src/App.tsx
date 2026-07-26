@@ -102,6 +102,12 @@ function App() {
     [pendingSetupCommands],
   );
   const pendingNativeLaunches = useClaudeOptionsStore((state) => state.pendingNativeLaunches);
+  const durablePendingAgentLaunchEnvironmentIds = useMemo(
+    () => environments
+      .filter((environment) => environment.pendingAgentLaunch)
+      .map((environment) => environment.id),
+    [environments],
+  );
   const paneLayoutEnvironments = usePaneLayoutStore((state) => state.environments);
   const pendingInitialPromptEnvironmentIds = useMemo(() => {
     const environmentIds: string[] = [];
@@ -200,6 +206,7 @@ function App() {
       queuedAgentPromptEnvironmentIds,
       pendingSetupEnvironmentIds,
       loopedReviews.values(),
+      durablePendingAgentLaunchEnvironmentIds,
     ),
     [
       pipelines,
@@ -212,6 +219,7 @@ function App() {
       loadingNativeSessionEnvironmentIds,
       queuedAgentPromptEnvironmentIds,
       loopedReviews,
+      durablePendingAgentLaunchEnvironmentIds,
     ],
   );
 

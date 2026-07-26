@@ -134,6 +134,11 @@ export interface Environment {
    * and so incomplete setup can be re-run on the next app session.
    */
   setupScriptsComplete?: boolean;
+  /**
+   * Durable intent to open the configured agent once setup is ready. The
+   * backend owns this flag so mobile page eviction cannot lose the launch.
+   */
+  pendingAgentLaunch?: boolean;
   /** Initial prompt used when this environment was created. */
   initialPrompt?: string;
   /** Prompt awaiting a backend-owned rename after the environment starts. */

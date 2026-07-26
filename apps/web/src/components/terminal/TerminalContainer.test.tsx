@@ -67,6 +67,19 @@ const runEnvironmentSetupMock = mock(async (environmentId: string) => ({
   setupScriptsComplete: true,
 }));
 const getEnvironmentSetupSessionMock = mock(async (_environmentId: string): Promise<EnvironmentSetupSession | null> => null);
+const setEnvironmentPendingAgentLaunchMock = mock(async (environmentId: string, pending: boolean) => ({
+  ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+  pendingAgentLaunch: pending,
+}));
+const savePaneLayoutMock = mock(async (
+  environmentId: string,
+  layout: Parameters<typeof realBackend.savePaneLayout>[1],
+): Promise<PersistedPaneLayout> => ({
+  ...layout,
+  environmentId,
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  revision: 1,
+}));
 const getPaneLayoutMock = mock(async (_environmentId: string): Promise<PersistedPaneLayout | null> => null);
 const listLoopedReviewWorkflowsMock = mock(async (_environmentId: string) => [] as Array<{
   version: number;
@@ -113,6 +126,8 @@ mock.module("@/lib/backend", () => ({
   ensureEnvironmentSetup: ensureEnvironmentSetupMock,
   runEnvironmentSetup: runEnvironmentSetupMock,
   getEnvironmentSetupSession: getEnvironmentSetupSessionMock,
+  setEnvironmentPendingAgentLaunch: setEnvironmentPendingAgentLaunchMock,
+  savePaneLayout: savePaneLayoutMock,
   getPaneLayout: getPaneLayoutMock,
   listLoopedReviewWorkflows: listLoopedReviewWorkflowsMock,
   writeContainerFile: writeContainerFileMock,
@@ -264,6 +279,12 @@ describe("TerminalContainer", () => {
     }));
     getEnvironmentSetupSessionMock.mockReset();
     getEnvironmentSetupSessionMock.mockResolvedValue(null);
+    setEnvironmentPendingAgentLaunchMock.mockReset();
+    setEnvironmentPendingAgentLaunchMock.mockImplementation(async (environmentId: string, pending: boolean) => ({
+      ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+      pendingAgentLaunch: pending,
+    }));
+    savePaneLayoutMock.mockClear();
     getPaneLayoutMock.mockReset();
     getPaneLayoutMock.mockResolvedValue(null);
     listLoopedReviewWorkflowsMock.mockReset();
@@ -1626,6 +1647,73 @@ describe("TerminalContainer", () => {
       ).toBeUndefined();
       expect(useEnvironmentStore.getState().isWorkspaceReady("env-hidden")).toBe(true);
       expect(useEnvironmentStore.getState().isSetupScriptsRunning("env-hidden")).toBe(false);
+    });
+  });
+
+  test("reconstructs and clears a durable agent launch after a full renderer reload", async () => {
+    usePaneLayoutStore.setState({
+      environments: new Map([[
+        "env-hidden",
+        {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [{ id: "default", type: "plain", isSetupTab: true }],
+            activeTabId: "default",
+          },
+          activePaneId: "default",
+          containerId: "container-hidden",
+        },
+      ]]),
+      hydration: new Map([["env-hidden", "done"]]),
+      activeEnvironmentId: null,
+    });
+    useEnvironmentStore.setState((state) => ({
+      ...state,
+      environments: state.environments.map((environment) =>
+        environment.id === "env-hidden"
+          ? {
+              ...environment,
+              defaultAgent: "codex",
+              codexMode: "native",
+              setupScriptsComplete: true,
+              pendingAgentLaunch: true,
+              initialPrompt: "Recover after mobile reload",
+            }
+          : environment
+      ),
+      setupCommandsResolved: new Set(["env-hidden"]),
+      setupScriptsRunning: new Set(),
+      workspaceReadyEnvironments: new Set(["env-hidden"]),
+    }));
+    useClaudeOptionsStore.setState({
+      options: {},
+      pendingNativeLaunches: {},
+    });
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+          isActive={false}
+        />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      const codexTab = usePaneLayoutStore.getState().getAllTabs("env-hidden")
+        .find((tab) => tab.type === "codex-native");
+      expect(codexTab?.initialPrompt).toBe("Recover after mobile reload");
+      expect(setEnvironmentPendingAgentLaunchMock).toHaveBeenCalledWith(
+        "env-hidden",
+        false,
+      );
+      expect(
+        useEnvironmentStore.getState().getEnvironmentById("env-hidden")
+          ?.pendingAgentLaunch,
+      ).toBe(false);
     });
   });
 

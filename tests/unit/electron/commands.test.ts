@@ -7274,6 +7274,7 @@ exit 0
       claudeNativeBackend: "bridge",
       opencodeMode: "native",
       codexMode: "native",
+      pendingAgentLaunch: true,
     }, context);
     expect(updates).toContainEqual({
       defaultAgent: "codex",
@@ -7281,7 +7282,13 @@ exit 0
       claudeNativeBackend: "bridge",
       opencodeMode: "native",
       codexMode: "native",
+      pendingAgentLaunch: true,
     });
+    await commands.get("set_environment_pending_agent_launch")?.({
+      environmentId: environment.id,
+      pending: false,
+    }, context);
+    expect(updates).toContainEqual({ pendingAgentLaunch: false });
     await commands.get("update_environment_allowed_domains")?.({
       environmentId: environment.id,
       domains: ["one.example.com", "two.example.com"],

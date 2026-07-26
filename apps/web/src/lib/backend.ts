@@ -1179,6 +1179,7 @@ export async function updateEnvironmentAgentSettings(
   claudeNativeBackend: ClaudeNativeBackend | null,
   opencodeMode: OpenCodeMode | null,
   codexMode: CodexMode | null,
+  pendingAgentLaunch?: boolean,
 ): Promise<Environment> {
   return invoke<Environment>("update_environment_agent_settings", {
     environmentId,
@@ -1187,6 +1188,18 @@ export async function updateEnvironmentAgentSettings(
     claudeNativeBackend,
     opencodeMode,
     codexMode,
+    ...(typeof pendingAgentLaunch === "boolean" ? { pendingAgentLaunch } : {}),
+  });
+}
+
+/** Persist or clear the post-setup agent launch intent. */
+export async function setEnvironmentPendingAgentLaunch(
+  environmentId: string,
+  pending: boolean,
+): Promise<Environment> {
+  return invoke<Environment>("set_environment_pending_agent_launch", {
+    environmentId,
+    pending,
   });
 }
 

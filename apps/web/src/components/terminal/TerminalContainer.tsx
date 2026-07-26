@@ -36,6 +36,7 @@ import {
 } from "@/lib/initial-prompt-attachments";
 import { resolveClaudeConfig } from "@/lib/claude-mode-resolver";
 import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
+import { createPersistedPaneLayoutInput } from "@/lib/pane-layout-persistence";
 import { listenForTerminalBrowserTabRequests } from "@/lib/terminal-links";
 import { createOrkestratorScriptPrompt } from "@/prompts";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
@@ -50,6 +51,7 @@ import {
   isGitFileStatus,
   type EdgeDirection,
   type PaneLeaf,
+  type PaneNode,
   type TabInfo,
 } from "@/types/paneLayout";
 import type { ClaudeNativeBackend } from "@/types";
@@ -127,6 +129,21 @@ let tabIdCounter = 0;
 function createUniqueTabId(prefix: string): string {
   tabIdCounter = (tabIdCounter + 1) % Number.MAX_SAFE_INTEGER;
   return `${prefix}-${Date.now()}-${tabIdCounter}`;
+}
+
+const STARTUP_AGENT_TAB_TYPES = new Set([
+  "claude",
+  "claude-native",
+  "claude-tmux",
+  "codex",
+  "codex-native",
+  "opencode",
+  "opencode-native",
+]);
+
+function hasStartupAgentTab(state: { root: PaneNode }): boolean {
+  return getAllLeaves(state.root)
+    .some((leaf) => leaf.tabs.some((tab) => STARTUP_AGENT_TAB_TYPES.has(tab.type)));
 }
 
 type TerminalTabDragEndAction =
@@ -530,6 +547,7 @@ export function TerminalContainer({
   const setupPlanFetchInFlightRef = useRef(false);
   const inactiveBackendSetupInFlightRef = useRef(false);
   const setupSessionBindInFlightRef = useRef(false);
+  const durableLaunchClearInFlightRef = useRef(false);
   const [setupSessionBindNonce, setSetupSessionBindNonce] = useState(0);
 
   const setupSessionKeyForTab = useCallback(
@@ -661,6 +679,79 @@ export function TerminalContainer({
       setActiveEnvironment(environmentId);
     }
   }, [isActive, environmentId, setActiveEnvironment]);
+
+  // Reconstruct the post-setup agent launch from backend-owned environment
+  // state after a mobile page reload. The transient options store is only an
+  // optimization for the uninterrupted creation path.
+  useEffect(() => {
+    if (!environment?.pendingAgentLaunch || !currentEnvState) return;
+
+    if (hasStartupAgentTab(currentEnvState)) {
+      if (durableLaunchClearInFlightRef.current) return;
+      durableLaunchClearInFlightRef.current = true;
+      // Persist the tab before clearing the launch intent. If the page is
+      // evicted between these operations, the still-pending flag retries; if
+      // clearing succeeds, rehydration is guaranteed to find the agent tab.
+      void backend.savePaneLayout(
+        environmentId,
+        createPersistedPaneLayoutInput(currentEnvState),
+      )
+        .then(() => backend.setEnvironmentPendingAgentLaunch(environmentId, false))
+        .then((updatedEnvironment) => {
+          useEnvironmentStore.getState().updateEnvironment(
+            environmentId,
+            updatedEnvironment,
+          );
+        })
+        .catch((error) => {
+          console.warn(
+            `[TerminalContainer] Failed to clear durable agent launch for ${environmentId}:`,
+            error,
+          );
+        })
+        .finally(() => {
+          durableLaunchClearInFlightRef.current = false;
+        });
+      return;
+    }
+
+    if (!isEnvironmentRunning || pendingNativeLaunch) return;
+
+    const agentType = environment.defaultAgent ?? config.global.defaultAgent ?? "claude";
+    const launchMode =
+      (agentType === "claude" && claudeMode === "native")
+      || (agentType === "codex" && codexMode === "native")
+      || (agentType === "opencode" && opencodeMode === "native")
+        ? "native"
+        : "terminal";
+
+    setPendingNativeLaunch(environmentId, {
+      containerId: isLocalEnvironment ? null : containerId,
+      environmentId,
+      initialPrompt: environment.initialPrompt?.trim() || undefined,
+      targetPaneId: currentEnvState.activePaneId,
+      agentType,
+      launchMode,
+      claudeNativeBackend:
+        agentType === "claude" && launchMode === "native"
+          ? claudeNativeBackend
+          : undefined,
+    });
+  }, [
+    claudeMode,
+    claudeNativeBackend,
+    codexMode,
+    config.global.defaultAgent,
+    containerId,
+    currentEnvState,
+    environment,
+    environmentId,
+    isEnvironmentRunning,
+    isLocalEnvironment,
+    opencodeMode,
+    pendingNativeLaunch,
+    setPendingNativeLaunch,
+  ]);
 
   // Decide setup-resolution for a running local environment on first activation
   // this app session. Handles three cases:

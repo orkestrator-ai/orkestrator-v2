@@ -257,6 +257,26 @@ describe("getBackgroundProcessingEnvironments", () => {
     expect(result).toEqual([env]);
   });
 
+  test("keeps durable pending agent launches mounted after renderer reload", () => {
+    const env = makeEnv("e1");
+
+    const result = getBackgroundProcessingEnvironments(
+      new Map(),
+      [env],
+      null,
+      new Set(),
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      ["e1"],
+    );
+
+    expect(result).toEqual([env]);
+  });
+
   test("returns environments with pending setup commands even before setup is marked running", () => {
     const env = makeEnv("e1");
 

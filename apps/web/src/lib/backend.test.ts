@@ -53,6 +53,8 @@ const {
   setGatewayToken,
   setGitHubToken,
   setEnvironmentSetupComplete,
+  setEnvironmentPendingAgentLaunch,
+  updateEnvironmentAgentSettings,
 } = backendWrappers;
 
 afterEach(() => {
@@ -72,6 +74,41 @@ describe("backend setup wrappers", () => {
 
     expect(invokeMock.mock.calls).toEqual([
       ["set_environment_setup_complete", { environmentId: "env-1", complete: true }],
+    ]);
+  });
+
+  test("persists the durable post-setup agent launch flag", async () => {
+    await setEnvironmentPendingAgentLaunch("env-1", false);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["set_environment_pending_agent_launch", {
+        environmentId: "env-1",
+        pending: false,
+      }],
+    ]);
+  });
+
+  test("configures an environment and its durable launch intent together", async () => {
+    await updateEnvironmentAgentSettings(
+      "env-1",
+      "codex",
+      null,
+      null,
+      null,
+      "native",
+      true,
+    );
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["update_environment_agent_settings", {
+        environmentId: "env-1",
+        defaultAgent: "codex",
+        claudeMode: null,
+        claudeNativeBackend: null,
+        opencodeMode: null,
+        codexMode: "native",
+        pendingAgentLaunch: true,
+      }],
     ]);
   });
 

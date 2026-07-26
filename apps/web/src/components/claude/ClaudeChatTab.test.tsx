@@ -1463,6 +1463,71 @@ describe("ClaudeChatTab", () => {
     });
   });
 
+  test("splits delayed Claude text before pinning active agent task groups", () => {
+    const delayedMessage: ClaudeMessageType = {
+      id: "assistant-delayed-agent",
+      role: "assistant",
+      content: "Parent startedParent resumed later",
+      parts: [
+        {
+          type: "text",
+          content: "Parent started",
+          timestamp: "2026-03-07T12:00:30.000Z",
+        },
+        {
+          type: "tool-invocation",
+          toolName: "Agent",
+          content: "Run worker",
+          toolUseId: "agent-delayed-1",
+          toolState: "pending",
+          toolArgs: { description: "Worker agent" },
+        },
+        {
+          type: "text",
+          content: "Parent resumed later",
+          timestamp: "2026-03-07T12:03:01.000Z",
+        },
+      ],
+      timestamp: "2026-03-07T12:00:00.000Z",
+    };
+
+    act(() => {
+      useClaudeStore.getState().setSession(SESSION_KEY, {
+        sessionId: "session-1",
+        isLoading: false,
+        messages: [delayedMessage],
+      });
+    });
+
+    render(
+      <ClaudeChatTab
+        tabId={TAB_ID}
+        data={createData()}
+        isActive={false}
+      />,
+    );
+
+    expect(lastVirtualizedMessages.map((message) => message.id)).toEqual([
+      "assistant-delayed-agent",
+      "assistant-delayed-agent:text-block:2",
+      "assistant-delayed-agent:active-agent:agent-delayed-1",
+    ]);
+    expect(
+      lastVirtualizedMessages.map((message) =>
+        message.parts.map((part: any) => part.type)
+      ),
+    ).toEqual([
+      ["text"],
+      ["text"],
+      ["task-group"],
+    ]);
+    expect(lastVirtualizedMessages.map((message) => message.content)).toEqual([
+      "Parent started",
+      "Parent resumed later",
+      "",
+    ]);
+  });
+
   test("seeds configured fast mode default when warm path creates a new session", async () => {
     useConfigStore.setState((state) => ({
       ...state,

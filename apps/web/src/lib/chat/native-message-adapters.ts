@@ -465,7 +465,10 @@ export function splitClaudeAssistantTextBlocks(
       .map((part) => part.content)
       .join(""),
     parts: segment.parts,
-    createdAt: segment.firstTextAt ?? message.createdAt,
+    createdAt:
+      index === 0
+        ? message.createdAt
+        : segment.firstTextAt ?? message.createdAt,
   }));
 }
 

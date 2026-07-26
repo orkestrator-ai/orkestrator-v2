@@ -13,6 +13,7 @@ import {
   normalizeCodexNativeMessage,
   normalizeOpenCodeNativeMessage,
   parseNativeAttachmentsFromContent,
+  splitClaudeAssistantTextBlocks,
 } from "./native-message-adapters";
 
 describe("native message adapters", () => {
@@ -176,6 +177,34 @@ describe("native message adapters", () => {
         fileUrl: "/workspace/screen.png",
       },
     ]);
+  });
+
+  test("copies Claude text and thinking timestamps onto native parts", () => {
+    const textTimestamp = "2026-06-18T12:01:00.000Z";
+    const thinkingTimestamp = "2026-06-18T12:02:00.000Z";
+
+    expect(
+      normalizeClaudePart({
+        type: "text",
+        content: "Answer",
+        timestamp: textTimestamp,
+      }),
+    ).toMatchObject({
+      type: "text",
+      content: "Answer",
+      createdAt: textTimestamp,
+    });
+    expect(
+      normalizeClaudePart({
+        type: "thinking",
+        content: "Reasoning",
+        timestamp: thinkingTimestamp,
+      }),
+    ).toMatchObject({
+      type: "thinking",
+      content: "Reasoning",
+      createdAt: thinkingTimestamp,
+    });
   });
 
   test("normalizes Claude Task tools into native task groups", () => {
@@ -743,6 +772,242 @@ describe("native message adapters", () => {
         partTypes: ["text"],
       },
     ]);
+  });
+
+  test("preserves the first row timestamp when a delayed block causes a split", () => {
+    const messageTimestamp = "2026-06-18T12:00:00.000Z";
+    const firstTextTimestamp = "2026-06-18T12:03:00.000Z";
+    const delayedTextTimestamp = "2026-06-18T12:05:01.000Z";
+    const baseMessage: ClaudeMessage = {
+      id: "assistant-stable-timestamp",
+      role: "assistant",
+      content: "First",
+      timestamp: messageTimestamp,
+      parts: [
+        {
+          type: "text",
+          content: "First",
+          timestamp: firstTextTimestamp,
+        },
+      ],
+    };
+
+    const beforeSplit = normalizeClaudeMessagesForDisplay([baseMessage]);
+    const afterSplit = normalizeClaudeMessagesForDisplay([
+      {
+        ...baseMessage,
+        content: "FirstSecond",
+        parts: [
+          ...baseMessage.parts,
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+          },
+          {
+            type: "text",
+            content: "Second",
+            timestamp: delayedTextTimestamp,
+          },
+        ],
+      },
+    ]);
+
+    expect(beforeSplit[0]?.createdAt).toBe(messageTimestamp);
+    expect(afterSplit).toHaveLength(2);
+    expect(afterSplit[0]?.id).toBe(baseMessage.id);
+    expect(afterSplit[0]?.createdAt).toBe(messageTimestamp);
+    expect(afterSplit[1]?.createdAt).toBe(delayedTextTimestamp);
+  });
+
+  test("splits delayed Claude text across a reasoning boundary", () => {
+    const displayMessages = normalizeClaudeMessagesForDisplay([
+      {
+        id: "assistant-reasoning-boundary",
+        role: "assistant",
+        content: "FirstSecond",
+        timestamp: "2026-06-18T12:00:00.000Z",
+        parts: [
+          {
+            type: "text",
+            content: "First",
+            timestamp: "2026-06-18T12:00:00.000Z",
+          },
+          {
+            type: "thinking",
+            content: "I should inspect another path.",
+            timestamp: "2026-06-18T12:01:00.000Z",
+          },
+          {
+            type: "text",
+            content: "Second",
+            timestamp: "2026-06-18T12:02:01.000Z",
+          },
+        ],
+      },
+    ]);
+
+    expect(displayMessages).toHaveLength(2);
+    expect(displayMessages.map((message) => ({
+      content: message.content,
+      partTypes: message.parts.map((part) => part.type),
+    }))).toEqual([
+      {
+        content: "First",
+        partTypes: ["text", "tool-group"],
+      },
+      {
+        content: "Second",
+        partTypes: ["text"],
+      },
+    ]);
+  });
+
+  test.each([
+    {
+      name: "an absent first timestamp",
+      firstTimestamp: undefined,
+      secondTimestamp: "2026-06-18T12:05:00.000Z",
+    },
+    {
+      name: "an absent delayed timestamp",
+      firstTimestamp: "2026-06-18T12:00:00.000Z",
+      secondTimestamp: undefined,
+    },
+    {
+      name: "an invalid first timestamp",
+      firstTimestamp: "not-a-timestamp",
+      secondTimestamp: "2026-06-18T12:05:00.000Z",
+    },
+    {
+      name: "an invalid delayed timestamp",
+      firstTimestamp: "2026-06-18T12:00:00.000Z",
+      secondTimestamp: "not-a-timestamp",
+    },
+    {
+      name: "an out-of-order delayed timestamp",
+      firstTimestamp: "2026-06-18T12:05:00.000Z",
+      secondTimestamp: "2026-06-18T12:00:00.000Z",
+    },
+  ])("does not split Claude text with $name", ({
+    firstTimestamp,
+    secondTimestamp,
+  }) => {
+    const displayMessages = normalizeClaudeMessagesForDisplay([
+      {
+        id: "assistant-unusable-timestamp",
+        role: "assistant",
+        content: "FirstSecond",
+        timestamp: "2026-06-18T12:00:00.000Z",
+        parts: [
+          {
+            type: "text",
+            content: "First",
+            timestamp: firstTimestamp,
+          },
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+          },
+          {
+            type: "text",
+            content: "Second",
+            timestamp: secondTimestamp,
+          },
+        ],
+      },
+    ]);
+
+    expect(displayMessages).toHaveLength(1);
+    expect(displayMessages[0]?.content).toBe("FirstSecond");
+  });
+
+  test("creates a new row for each successive delayed text block", () => {
+    const displayMessages = normalizeClaudeMessagesForDisplay([
+      {
+        id: "assistant-three-rows",
+        role: "assistant",
+        content: "FirstSecondThird",
+        timestamp: "2026-06-18T12:00:00.000Z",
+        parts: [
+          {
+            type: "text",
+            content: "First",
+            timestamp: "2026-06-18T12:00:00.000Z",
+          },
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+          },
+          {
+            type: "text",
+            content: "Second",
+            timestamp: "2026-06-18T12:02:01.000Z",
+          },
+          {
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+          },
+          {
+            type: "text",
+            content: "Third",
+            timestamp: "2026-06-18T12:04:02.000Z",
+          },
+        ],
+      },
+    ]);
+
+    expect(displayMessages.map((message) => ({
+      id: message.id,
+      content: message.content,
+      createdAt: message.createdAt,
+    }))).toEqual([
+      {
+        id: "assistant-three-rows",
+        content: "First",
+        createdAt: "2026-06-18T12:00:00.000Z",
+      },
+      {
+        id: "assistant-three-rows:text-block:2",
+        content: "Second",
+        createdAt: "2026-06-18T12:02:01.000Z",
+      },
+      {
+        id: "assistant-three-rows:text-block:4",
+        content: "Third",
+        createdAt: "2026-06-18T12:04:02.000Z",
+      },
+    ]);
+  });
+
+  test("passes non-assistant messages through without cloning or splitting", () => {
+    const message: NativeMessage = {
+      id: "system-message",
+      role: "system",
+      content: "FirstSecond",
+      createdAt: "2026-06-18T12:00:00.000Z",
+      parts: [
+        {
+          type: "text",
+          content: "First",
+          createdAt: "2026-06-18T12:00:00.000Z",
+        },
+        { type: "tool-invocation", content: "Read", toolName: "Read" },
+        {
+          type: "text",
+          content: "Second",
+          createdAt: "2026-06-18T12:05:00.000Z",
+        },
+      ],
+    };
+
+    const displayMessages = splitClaudeAssistantTextBlocks(message);
+
+    expect(displayMessages).toEqual([message]);
+    expect(displayMessages[0]).toBe(message);
   });
 
   test("does not split adjacent Claude text without a tool or reasoning boundary", () => {
